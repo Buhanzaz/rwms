@@ -1485,7 +1485,7 @@ function CatalogCanvas({
             type="button"
             variant="outline"
             size="sm"
-            className="absolute z-30 -translate-x-1/2 -translate-y-1/2 border-border bg-background/95 text-muted-foreground shadow-md hover:border-destructive hover:bg-background hover:text-destructive"
+            className="group/delete-link absolute z-30 -translate-x-1/2 -translate-y-1/2 border-border bg-background/95 text-muted-foreground shadow-md hover:border-foreground/70 hover:bg-muted/50 hover:text-foreground/80"
             style={{
               left: midpoint.x,
               top: midpoint.y,
@@ -1497,8 +1497,12 @@ function CatalogCanvas({
             onPointerDown={(event) => event.stopPropagation()}
             onPointerUp={(event) => event.stopPropagation()}
           >
-            <HugeiconsIcon icon={Delete01Icon} data-icon="inline-start" />
-            Удалить
+            <HugeiconsIcon
+              icon={Delete01Icon}
+              data-icon="inline-start"
+              className="text-muted-foreground transition-colors group-hover/delete-link:text-destructive/55"
+            />
+            <span>Удалить</span>
           </Button>
         )
       })}
