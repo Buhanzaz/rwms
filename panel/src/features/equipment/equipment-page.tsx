@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useNavigate } from "react-router-dom"
 import {
   ArrowRightLeft,
   ChevronDown,
@@ -82,7 +83,13 @@ function MobileCabinStockStat({ value }: { value: number }) {
   )
 }
 
-function UsageRows({ item }: { item: EquipmentItemDto }) {
+function UsageRows({
+  item,
+  onOpenRentalItem,
+}: {
+  item: EquipmentItemDto
+  onOpenRentalItem: (rentalItemId: string) => void
+}) {
   const queryClient = useQueryClient()
 
   const moveToStockMutation = useMutation({
@@ -126,29 +133,50 @@ function UsageRows({ item }: { item: EquipmentItemDto }) {
           key={usage.id}
           className="flex min-w-0 flex-col gap-3 border-b p-3 text-sm last:border-b-0 md:grid md:grid-cols-[140px_160px_120px_1fr] md:items-center md:gap-0 md:px-3 md:py-2"
         >
-          <div className="min-w-0">
-            <div className="text-[0.625rem] font-medium text-muted-foreground md:hidden">
-              Номер бытовки
+          <button
+            type="button"
+            aria-label={`Открыть карточку бытовки ${usage.rentalItemNumber}`}
+            className="grid w-full min-w-0 gap-3 rounded-md border border-transparent bg-card p-2 text-left transition-[background-color,border-color,box-shadow] hover:border-border hover:bg-muted/35 hover:shadow-[0_8px_22px_rgba(15,23,42,0.12)] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/30 focus-visible:outline-none active:bg-muted/50 md:hidden"
+            onClick={() => onOpenRentalItem(usage.rentalItemId)}
+          >
+            <div className="min-w-0">
+              <div className="text-[0.625rem] font-medium text-muted-foreground">
+                Номер бытовки
+              </div>
+
+              <div className="truncate font-medium text-primary">
+                {usage.rentalItemNumber}
+              </div>
             </div>
 
+            <div className="min-w-0">
+              <div className="text-[0.625rem] font-medium text-muted-foreground">
+                Тип
+              </div>
+
+              <div className="truncate">{usage.rentalItemType}</div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[0.625rem] font-medium text-muted-foreground">
+                Количество
+              </span>
+
+              <span className="font-semibold">{usage.quantity} шт.</span>
+            </div>
+          </button>
+
+          <div className="hidden min-w-0 md:block">
             <div className="truncate font-medium text-primary">
               {usage.rentalItemNumber}
             </div>
           </div>
 
-          <div className="min-w-0">
-            <div className="text-[0.625rem] font-medium text-muted-foreground md:hidden">
-              Тип
-            </div>
-
+          <div className="hidden min-w-0 md:block">
             <div className="truncate">{usage.rentalItemType}</div>
           </div>
 
-          <div className="flex items-center justify-between gap-2 md:block md:text-right">
-            <span className="text-[0.625rem] font-medium text-muted-foreground md:hidden">
-              Количество
-            </span>
-
+          <div className="hidden text-right md:block">
             <span className="font-semibold">{usage.quantity} шт.</span>
           </div>
 
@@ -194,6 +222,7 @@ function UsageRows({ item }: { item: EquipmentItemDto }) {
 
 export function EquipmentPage() {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const { selectedWarehouse } = useWarehouse()
 
   const [search, setSearch] = useState("")
@@ -396,7 +425,12 @@ export function EquipmentPage() {
 
                     {expanded && (
                       <div className="border-t bg-muted/20 p-3">
-                        <UsageRows item={item} />
+                        <UsageRows
+                          item={item}
+                          onOpenRentalItem={(rentalItemId) => {
+                            navigate(`/warehouse/${rentalItemId}`)
+                          }}
+                        />
                       </div>
                     )}
                   </div>
