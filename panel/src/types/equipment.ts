@@ -1,3 +1,5 @@
+import type { RentalItemStatus } from "@/features/rental-items/model/rental-item"
+
 export type EquipmentCategory = "FURNITURE" | "ELECTRICAL"
 
 export type EquipmentRentalUsageDto = {
@@ -5,6 +7,7 @@ export type EquipmentRentalUsageDto = {
   rentalItemId: string
   rentalItemNumber: string
   rentalItemType: string
+  rentalItemStatus: RentalItemStatus
   warehouseId: string
   quantity: number
 }
@@ -18,6 +21,7 @@ export type EquipmentItemDto = {
 
   totalQuantity: number
   stockQuantity: number
+  cabinStockQuantity: number
   rentedQuantity: number
   writtenOffQuantity: number
   lostQuantity: number

@@ -399,6 +399,7 @@ function buildUsagesForName(params: {
         rentalItemId: rentalItem.id,
         rentalItemNumber: rentalItem.number,
         rentalItemType: rentalItem.type,
+        rentalItemStatus: rentalItem.status,
         warehouseId: rentalItem.warehouseId,
         quantity: contentItem.quantity,
       },
@@ -455,6 +456,18 @@ async function buildEquipmentItems(
     })
 
     const rentedQuantity = usages.reduce((sum, usage) => {
+      if (usage.rentalItemStatus !== "RENTED") {
+        return sum
+      }
+
+      return sum + usage.quantity
+    }, 0)
+
+    const cabinStockQuantity = usages.reduce((sum, usage) => {
+      if (usage.rentalItemStatus === "RENTED") {
+        return sum
+      }
+
       return sum + usage.quantity
     }, 0)
 
@@ -463,7 +476,11 @@ async function buildEquipmentItems(
     const lostQuantity = masterItem?.lostQuantity ?? 0
 
     const totalQuantity =
-      stockQuantity + rentedQuantity + writtenOffQuantity + lostQuantity
+      stockQuantity +
+      cabinStockQuantity +
+      rentedQuantity +
+      writtenOffQuantity +
+      lostQuantity
 
     return {
       id: equipmentId,
@@ -473,6 +490,7 @@ async function buildEquipmentItems(
 
       totalQuantity,
       stockQuantity,
+      cabinStockQuantity,
       rentedQuantity,
       writtenOffQuantity,
       lostQuantity,

@@ -68,15 +68,15 @@ function MobileQuantityStat({
   )
 }
 
-function MobileCabinUsageStat({ value }: { value: number }) {
+function MobileCabinStockStat({ value }: { value: number }) {
   return (
     <div className="col-start-1 min-w-0 rounded-md bg-muted/40 px-2 py-1.5">
-      <div className="truncate text-[0.625rem] font-medium text-muted-foreground">
-        В бытовках
+      <div className="text-[0.625rem] font-medium leading-tight text-muted-foreground">
+        В бытовках на складе
       </div>
 
       <div className="text-sm">
-        <QuantityCell value={value} tone="rent" />
+        <QuantityCell value={value} tone="stock" />
       </div>
     </div>
   )
@@ -290,10 +290,13 @@ export function EquipmentPage() {
       <div className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-card">
         <div className="h-full overflow-y-auto overflow-x-hidden">
           <div className="w-full">
-            <div className="sticky top-0 z-10 hidden grid-cols-[minmax(220px,1fr)_120px_120px_120px_120px_120px] border-b bg-muted text-xs font-medium text-muted-foreground shadow-sm md:grid">
+            <div className="sticky top-0 z-10 hidden grid-cols-[minmax(160px,1fr)_80px_90px_128px_90px_90px_90px] border-b bg-muted text-xs font-medium text-muted-foreground shadow-sm md:grid">
               <div className="px-3 py-3">Наименование</div>
               <div className="px-3 py-3 text-right">Всего</div>
               <div className="px-3 py-3 text-right">На складе</div>
+              <div className="px-3 py-3 text-right">
+                В бытовках на складе
+              </div>
               <div className="px-3 py-3 text-right">В аренде</div>
               <div className="px-3 py-3 text-right">Списано</div>
               <div className="px-3 py-3 text-right">Утеряно</div>
@@ -315,7 +318,7 @@ export function EquipmentPage() {
                   <div key={item.id} className="border-b last:border-b-0">
                     <button
                       type="button"
-                      className="flex w-full min-w-0 flex-col gap-3 p-3 text-left text-sm hover:bg-muted/40 md:grid md:grid-cols-[minmax(220px,1fr)_120px_120px_120px_120px_120px] md:items-center md:gap-0 md:p-0"
+                      className="flex w-full min-w-0 flex-col gap-3 p-3 text-left text-sm hover:bg-muted/40 md:grid md:grid-cols-[minmax(160px,1fr)_80px_90px_128px_90px_90px_90px] md:items-center md:gap-0 md:p-0"
                       onClick={() => toggleExpanded(item)}
                     >
                       <div className="flex min-w-0 items-center gap-2 md:px-3 md:py-3">
@@ -340,7 +343,14 @@ export function EquipmentPage() {
                           value={item.stockQuantity}
                           tone="stock"
                         />
-                        <MobileCabinUsageStat value={item.rentedQuantity} />
+                        <MobileCabinStockStat
+                          value={item.cabinStockQuantity}
+                        />
+                        <MobileQuantityStat
+                          label="В аренде"
+                          value={item.rentedQuantity}
+                          tone="rent"
+                        />
                         <MobileQuantityStat
                           label="Списано"
                           value={item.writtenOffQuantity}
@@ -359,6 +369,13 @@ export function EquipmentPage() {
 
                       <div className="hidden px-3 py-3 text-right md:block">
                         <QuantityCell value={item.stockQuantity} tone="stock" />
+                      </div>
+
+                      <div className="hidden px-3 py-3 text-right md:block">
+                        <QuantityCell
+                          value={item.cabinStockQuantity}
+                          tone="stock"
+                        />
                       </div>
 
                       <div className="hidden px-3 py-3 text-right md:block">
