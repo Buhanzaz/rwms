@@ -16,6 +16,7 @@ import type {
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
 
 const STORAGE_KEY = "rwms:repair-estimate-catalog:v1"
+const DEFAULT_PARENT_LINK_COMMENT = "__anchors__:BOTTOM->TOP"
 
 type RepairEstimateCatalogState = {
   nodes: RepairEstimateCatalogNodeDto[]
@@ -54,6 +55,60 @@ function compareBySortThenName(
   return left.name.localeCompare(right.name, "ru")
 }
 
+function getLinkKey(
+  link: Pick<
+    RepairEstimateCatalogLinkDto,
+    "sourceNodeId" | "targetNodeId" | "linkType"
+  >
+) {
+  return `${link.sourceNodeId}:${link.targetNodeId}:${link.linkType}`
+}
+
+function buildParentDerivedLinks(
+  nodes: RepairEstimateCatalogNodeDto[],
+  existingLinks: RepairEstimateCatalogLinkDto[]
+) {
+  const existingKeys = new Set(existingLinks.map(getLinkKey))
+  const links: RepairEstimateCatalogLinkDto[] = []
+
+  for (const node of nodes) {
+    if (!node.parentId || node.nodeType === "CATEGORY") {
+      continue
+    }
+
+    const link: RepairEstimateCatalogLinkDto = {
+      id: `seed-parent-link:${node.parentId}:${node.id}`,
+      sourceNodeId: node.parentId,
+      targetNodeId: node.id,
+      linkType: "FOLLOW_UP",
+      active: true,
+      sortOrder: node.sortOrder,
+      comment: DEFAULT_PARENT_LINK_COMMENT,
+    }
+    const key = getLinkKey(link)
+    if (existingKeys.has(key)) {
+      continue
+    }
+
+    existingKeys.add(key)
+    links.push(link)
+  }
+
+  return links
+}
+
+function withParentDerivedLinks(state: RepairEstimateCatalogState) {
+  const derivedLinks = buildParentDerivedLinks(state.nodes, state.links)
+  if (derivedLinks.length === 0) {
+    return state
+  }
+
+  return {
+    ...state,
+    links: state.links.concat(derivedLinks),
+  }
+}
+
 function buildSeedState(): RepairEstimateCatalogState {
   const idByCode = new Map(
     REPAIR_ESTIMATE_CATALOG_SEED_NODES.map((node) => [node.code, node.id])
@@ -74,7 +129,7 @@ function buildSeedState(): RepairEstimateCatalogState {
     comment: link.comment,
   }))
 
-  return { nodes, links }
+  return withParentDerivedLinks({ nodes, links })
 }
 
 function storageAvailable() {
@@ -99,6 +154,12 @@ function readState(): RepairEstimateCatalogState {
     const parsed = JSON.parse(raw) as RepairEstimateCatalogState
     if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.links)) {
       throw new Error("Invalid catalog state")
+    }
+
+    if (parsed.links.length === 0) {
+      const state = withParentDerivedLinks(parsed)
+      writeState(state)
+      return state
     }
 
     return parsed

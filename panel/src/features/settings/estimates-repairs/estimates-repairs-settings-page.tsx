@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react"
+import { useMemo, useRef, useState, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -143,7 +143,7 @@ const ESTIMATE_CATALOG_QUERY_KEY = ["estimate-catalog"] as const
 const CATALOG_TABLE_SORT_STORAGE_PREFIX =
   "rwms:repair-estimate-catalog-table-sort:v1:"
 const CANVAS_NODE_WIDTH = 256
-const CANVAS_NODE_HEIGHT = 112
+const CANVAS_NODE_HEIGHT = 208
 const CATALOG_ANCHOR_COMMENT_PREFIX = "__anchors__:"
 
 function getEstimateActionIcon(id: EstimateCatalogSettingsActionDto["id"]) {
@@ -1216,8 +1216,41 @@ function getCanvasPosition(node: RepairEstimateCatalogNodeDto, index: number) {
   }
 
   return {
-    x: node.canvasX ?? 40 + (index % 3) * 320,
-    y: node.canvasY ?? 210 + Math.floor(index / 3) * 160,
+    x: node.canvasX ?? 40 + (index % 3) * 340,
+    y: node.canvasY ?? 270 + Math.floor(index / 3) * 260,
+  }
+}
+
+type CanvasPosition = {
+  x: number
+  y: number
+}
+
+type CanvasDragState = {
+  nodeId: string
+  pointerId: number
+  startClientX: number
+  startClientY: number
+  startX: number
+  startY: number
+  moved: boolean
+}
+
+function setPointerCaptureSafely(element: Element, pointerId: number) {
+  try {
+    element.setPointerCapture(pointerId)
+  } catch {
+    // Synthetic PointerEvents used by tests may not have an active browser pointer.
+  }
+}
+
+function releasePointerCaptureSafely(element: Element, pointerId: number) {
+  try {
+    if (element.hasPointerCapture(pointerId)) {
+      element.releasePointerCapture(pointerId)
+    }
+  } catch {
+    // Matching guard for synthetic PointerEvents.
   }
 }
 
@@ -1231,6 +1264,8 @@ function CatalogCanvas({
   onSelectLink,
   onBeginLink,
   onCompleteLink,
+  onMoveNode,
+  onEditNode,
 }: {
   nodes: RepairEstimateCatalogNodeDto[]
   links: RepairEstimateCatalogLinkDto[]
@@ -1244,11 +1279,21 @@ function CatalogCanvas({
     target: RepairEstimateCatalogNodeDto,
     targetAnchor: CatalogLinkAnchor
   ) => void
+  onMoveNode: (
+    node: RepairEstimateCatalogNodeDto,
+    position: CanvasPosition
+  ) => void
+  onEditNode: (node: RepairEstimateCatalogNodeDto) => void
 }) {
+  const dragRef = useRef<CanvasDragState | null>(null)
+  const suppressClickRef = useRef(false)
+  const [dragPositions, setDragPositions] = useState<
+    Record<string, CanvasPosition>
+  >({})
   const positionedNodes = nodes.map((node, index) => ({
     node,
     position: {
-      ...getCanvasPosition(node, index),
+      ...(dragPositions[node.id] ?? getCanvasPosition(node, index)),
       width: CANVAS_NODE_WIDTH,
       height: CANVAS_NODE_HEIGHT,
     },
@@ -1291,6 +1336,16 @@ function CatalogCanvas({
       targetAnchor === "TOP" ? target.y - curve : target.y + curve
 
     return `M ${source.x} ${source.y} C ${source.x} ${sourceControlY}, ${target.x} ${targetControlY}, ${target.x} ${target.y}`
+  }
+
+  const finishDrag = (
+    node: RepairEstimateCatalogNodeDto,
+    position: CanvasPosition
+  ) => {
+    onMoveNode(node, {
+      x: Math.round(position.x),
+      y: Math.round(position.y),
+    })
   }
 
   return (
@@ -1370,21 +1425,110 @@ function CatalogCanvas({
       {positionedNodes.map(({ node, position }) => (
         <div
           key={node.id}
-          role="button"
+          role="group"
+          aria-label={`Блок: ${node.name}`}
           tabIndex={0}
           className={cn(
-            "absolute flex min-h-28 w-64 cursor-pointer flex-col items-start gap-2 overflow-visible rounded-lg border bg-card px-3 py-3 text-left text-sm shadow-sm transition-colors select-none hover:bg-accent",
+            "absolute flex cursor-grab touch-none flex-col items-stretch gap-3 overflow-visible rounded-lg border bg-card px-3 py-3 text-left text-sm shadow-sm transition-colors select-none hover:bg-accent active:cursor-grabbing",
             node.id === selectedNodeId && "border-primary bg-accent"
           )}
-          style={{ left: position.x, top: position.y }}
-          onClick={() => onSelectNode(node)}
+          style={{
+            left: position.x,
+            top: position.y,
+            width: CANVAS_NODE_WIDTH,
+            minHeight: CANVAS_NODE_HEIGHT,
+          }}
+          onClick={() => {
+            if (suppressClickRef.current) {
+              suppressClickRef.current = false
+              return
+            }
+            onSelectNode(node)
+          }}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault()
               onSelectNode(node)
             }
           }}
+          onPointerDown={(event) => {
+            if (event.button !== 0 && event.pointerType === "mouse") {
+              return
+            }
+
+            onSelectNode(node)
+            setPointerCaptureSafely(event.currentTarget, event.pointerId)
+            dragRef.current = {
+              nodeId: node.id,
+              pointerId: event.pointerId,
+              startClientX: event.clientX,
+              startClientY: event.clientY,
+              startX: position.x,
+              startY: position.y,
+              moved: false,
+            }
+          }}
+          onPointerMove={(event) => {
+            const drag = dragRef.current
+            if (
+              drag === null ||
+              drag.nodeId !== node.id ||
+              drag.pointerId !== event.pointerId
+            ) {
+              return
+            }
+
+            const deltaX = event.clientX - drag.startClientX
+            const deltaY = event.clientY - drag.startClientY
+            if (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3) {
+              drag.moved = true
+              suppressClickRef.current = true
+            }
+
+            if (!drag.moved) {
+              return
+            }
+
+            const nextPosition = {
+              x: Math.max(16, drag.startX + deltaX),
+              y: Math.max(16, drag.startY + deltaY),
+            }
+            setDragPositions((current) => ({
+              ...current,
+              [node.id]: nextPosition,
+            }))
+          }}
           onPointerUp={(event) => {
+            const drag = dragRef.current
+            if (
+              drag !== null &&
+              drag.nodeId === node.id &&
+              drag.pointerId === event.pointerId
+            ) {
+              dragRef.current = null
+              releasePointerCaptureSafely(event.currentTarget, event.pointerId)
+              if (drag.moved) {
+                event.preventDefault()
+                event.stopPropagation()
+                const finalPosition = {
+                  x: Math.max(
+                    16,
+                    drag.startX + event.clientX - drag.startClientX
+                  ),
+                  y: Math.max(
+                    16,
+                    drag.startY + event.clientY - drag.startClientY
+                  ),
+                }
+                setDragPositions((current) => ({
+                  ...current,
+                  [node.id]: finalPosition,
+                }))
+                finishDrag(node, finalPosition)
+                return
+              }
+            }
+
             if (draftLinkStart === null || draftLinkStart.nodeId === node.id) {
               return
             }
@@ -1393,6 +1537,16 @@ function CatalogCanvas({
             const targetAnchor =
               event.clientY <= rect.top + rect.height / 2 ? "TOP" : "BOTTOM"
             onCompleteLink(node, targetAnchor)
+          }}
+          onPointerCancel={(event) => {
+            const drag = dragRef.current
+            if (
+              drag !== null &&
+              drag.nodeId === node.id &&
+              drag.pointerId === event.pointerId
+            ) {
+              dragRef.current = null
+            }
           }}
         >
           {(["TOP", "BOTTOM"] satisfies CatalogLinkAnchor[]).map((anchor) => (
@@ -1430,13 +1584,15 @@ function CatalogCanvas({
               }}
             />
           ))}
-          <span className="flex w-full items-center justify-between gap-2">
-            <span className="truncate font-medium">{node.name}</span>
-            <Badge variant="secondary">
+          <div className="flex w-full items-start justify-between gap-2">
+            <span className="min-w-0 flex-1 leading-snug font-medium break-words whitespace-normal">
+              {node.name}
+            </span>
+            <Badge variant="secondary" className="shrink-0">
               {repairEstimateCatalogNodeTypeLabel(node.nodeType)}
             </Badge>
-          </span>
-          <span className="flex flex-col gap-1 text-xs text-muted-foreground">
+          </div>
+          <span className="flex flex-1 flex-col gap-1 text-xs text-muted-foreground">
             <span>К-во. по умолчанию: {node.defaultQuantity}</span>
             <span>Единица: {node.unit ?? ""}</span>
             <span>Активно: {node.active ? "Да" : "Нет"}</span>
@@ -1445,6 +1601,20 @@ function CatalogCanvas({
               <span className="line-clamp-2">{node.comment}</span>
             )}
           </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-auto w-full"
+            onClick={(event) => {
+              event.stopPropagation()
+              onEditNode(node)
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onPointerUp={(event) => event.stopPropagation()}
+          >
+            Редактировать
+          </Button>
         </div>
       ))}
     </div>
@@ -1526,6 +1696,34 @@ function CatalogCanvasCategoryEditor({ categoryId }: { categoryId: string }) {
     },
   })
 
+  const moveNodeMutation = useMutation({
+    mutationFn: ({
+      node,
+      position,
+    }: {
+      node: RepairEstimateCatalogNodeDto
+      position: CanvasPosition
+    }) =>
+      saveRepairEstimateCatalogCanvasNode({
+        ...createNodeMutation(node),
+        canvasX: position.x,
+        canvasY: position.y,
+      }),
+    onSuccess: (node) => {
+      setError(null)
+      setSelectedNodeId(node.id)
+      setSelectedLinkId(null)
+      invalidate()
+    },
+    onError: (mutationError) => {
+      setError(
+        mutationError instanceof Error
+          ? mutationError.message
+          : "Не удалось переместить блок"
+      )
+    },
+  })
+
   const resetMutation = useMutation({
     mutationFn: resetRepairEstimateCatalogCanvasMock,
     onSuccess: () => {
@@ -1584,6 +1782,17 @@ function CatalogCanvasCategoryEditor({ categoryId }: { categoryId: string }) {
       active: true,
       sortOrder: canvasLinks.length * 10 + 10,
       comment: createCatalogAnchorComment(draftLinkStart.anchor, targetAnchor),
+    })
+  }
+
+  const openNodeEditor = (node: RepairEstimateCatalogNodeDto) => {
+    setNodeDialogState({
+      title: "Редактировать блок",
+      description: node.code,
+      submitLabel: "Сохранить",
+      allowTypeSelect: node.nodeType !== "CATEGORY",
+      value: createNodeMutation(node),
+      save: saveRepairEstimateCatalogCanvasNode,
     })
   }
 
@@ -1684,6 +1893,10 @@ function CatalogCanvasCategoryEditor({ categoryId }: { categoryId: string }) {
             setDraftLinkStart(start)
           }}
           onCompleteLink={createLinkFromAnchors}
+          onMoveNode={(node, position) =>
+            moveNodeMutation.mutate({ node, position })
+          }
+          onEditNode={openNodeEditor}
         />
       </div>
 
@@ -1697,14 +1910,7 @@ function CatalogCanvasCategoryEditor({ categoryId }: { categoryId: string }) {
               return
             }
 
-            setNodeDialogState({
-              title: "Редактировать блок",
-              description: selectedNode.code,
-              submitLabel: "Сохранить",
-              allowTypeSelect: selectedNode.nodeType !== "CATEGORY",
-              value: createNodeMutation(selectedNode),
-              save: saveRepairEstimateCatalogCanvasNode,
-            })
+            openNodeEditor(selectedNode)
           }}
         >
           <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
