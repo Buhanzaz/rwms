@@ -145,6 +145,6 @@ export function repairEstimateCatalogLinkTypeLabel(
     case "FOLLOW_UP":
       return "Путь"
     case "DEPENDENCY":
-      return "Путь + зависимость"
+      return "Зависимость"
   }
 }

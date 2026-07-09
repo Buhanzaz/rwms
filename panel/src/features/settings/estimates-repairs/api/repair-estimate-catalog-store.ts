@@ -356,6 +356,55 @@ function assertLinkValid(
   if (duplicate) {
     throw new Error("Такая связь уже существует")
   }
+
+  const graph = new Map<string, string[]>()
+  for (const link of state.links) {
+    if (link.id === input.id) {
+      continue
+    }
+    const targets = graph.get(link.sourceNodeId) ?? []
+    targets.push(link.targetNodeId)
+    graph.set(link.sourceNodeId, targets)
+  }
+  const targets = graph.get(input.sourceNodeId) ?? []
+  targets.push(input.targetNodeId)
+  graph.set(input.sourceNodeId, targets)
+
+  if (hasCatalogLinkCycle(graph)) {
+    throw new Error("Связи создают цикл в каталоге")
+  }
+}
+
+function hasCatalogLinkCycle(graph: Map<string, string[]>) {
+  const visiting = new Set<string>()
+  const visited = new Set<string>()
+
+  const visit = (nodeId: string): boolean => {
+    if (visited.has(nodeId)) {
+      return false
+    }
+    if (visiting.has(nodeId)) {
+      return true
+    }
+
+    visiting.add(nodeId)
+    for (const targetId of graph.get(nodeId) ?? []) {
+      if (visit(targetId)) {
+        return true
+      }
+    }
+    visiting.delete(nodeId)
+    visited.add(nodeId)
+    return false
+  }
+
+  for (const nodeId of graph.keys()) {
+    if (visit(nodeId)) {
+      return true
+    }
+  }
+
+  return false
 }
 
 function applyFollowUpParent(

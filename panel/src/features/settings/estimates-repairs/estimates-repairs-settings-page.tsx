@@ -8,7 +8,6 @@ import {
   CanvasIcon,
   Delete01Icon,
   HammerIcon,
-  Link01Icon,
   PackageIcon,
   PencilEdit01Icon,
   Refresh01Icon,
@@ -119,6 +118,13 @@ type CatalogTableSortState = {
   direction: "asc" | "desc"
 }
 
+type CatalogLinkAnchor = "TOP" | "BOTTOM"
+
+type CatalogLinkStart = {
+  nodeId: string
+  anchor: CatalogLinkAnchor
+}
+
 type NodeDialogState = {
   title: string
   description: string
@@ -136,6 +142,9 @@ type LinkDialogState = {
 const ESTIMATE_CATALOG_QUERY_KEY = ["estimate-catalog"] as const
 const CATALOG_TABLE_SORT_STORAGE_PREFIX =
   "rwms:repair-estimate-catalog-table-sort:v1:"
+const CANVAS_NODE_WIDTH = 256
+const CANVAS_NODE_HEIGHT = 112
+const CATALOG_ANCHOR_COMMENT_PREFIX = "__anchors__:"
 
 function getEstimateActionIcon(id: EstimateCatalogSettingsActionDto["id"]) {
   switch (id) {
@@ -423,6 +432,62 @@ function compareCatalogTableItems(
   return state.direction === "asc" ? result : -result
 }
 
+function normalizeCatalogAnchor(value: string | null | undefined) {
+  return value?.toUpperCase() === "TOP" ? "TOP" : "BOTTOM"
+}
+
+function parseCatalogAnchorComment(comment: string | null | undefined): {
+  sourceAnchor: CatalogLinkAnchor
+  targetAnchor: CatalogLinkAnchor
+} | null {
+  if (!comment?.startsWith(CATALOG_ANCHOR_COMMENT_PREFIX)) {
+    return null
+  }
+
+  const [sourceAnchor, targetAnchor] = comment
+    .slice(CATALOG_ANCHOR_COMMENT_PREFIX.length)
+    .split("->")
+
+  return {
+    sourceAnchor: normalizeCatalogAnchor(sourceAnchor),
+    targetAnchor: normalizeCatalogAnchor(targetAnchor),
+  }
+}
+
+function createCatalogAnchorComment(
+  sourceAnchor: CatalogLinkAnchor,
+  targetAnchor: CatalogLinkAnchor
+) {
+  return `${CATALOG_ANCHOR_COMMENT_PREFIX}${sourceAnchor}->${targetAnchor}`
+}
+
+function getCatalogLinkAnchors(
+  link: RepairEstimateCatalogLinkDto | RepairEstimateCatalogLinkMutation,
+  source?: { y: number } | null,
+  target?: { y: number } | null
+) {
+  const parsed = parseCatalogAnchorComment(link.comment)
+  if (parsed !== null) {
+    return parsed
+  }
+
+  if (source && target && source.y > target.y) {
+    return {
+      sourceAnchor: "TOP" as const,
+      targetAnchor: "BOTTOM" as const,
+    }
+  }
+
+  return {
+    sourceAnchor: "BOTTOM" as const,
+    targetAnchor: "TOP" as const,
+  }
+}
+
+function catalogAnchorLabel(anchor: CatalogLinkAnchor) {
+  return anchor === "TOP" ? "Сверху" : "Снизу"
+}
+
 function createNodeMutation(
   node: RepairEstimateCatalogNodeDto
 ): RepairEstimateCatalogNodeMutation {
@@ -569,45 +634,45 @@ function NodeEditorDialogContent({
         </DialogHeader>
 
         <FieldGroup>
-          <Field>
-            <FieldLabel>Тип</FieldLabel>
-            <NativeSelect
-              value={draft.nodeType}
-              disabled={!state.allowTypeSelect}
-              onChange={(value) =>
-                setDraft((current) => ({
-                  ...current,
-                  nodeType: value as RepairEstimateCatalogNodeType,
-                  includeInEstimate: value === "WORK" || value === "MATERIAL",
-                  durationMinutes:
-                    value === "WORK" ? current.durationMinutes : null,
-                  unit:
-                    value === "WORK" || value === "MATERIAL"
-                      ? current.unit
-                      : null,
-                  unitPrice:
-                    value === "WORK" || value === "MATERIAL"
-                      ? current.unitPrice
-                      : null,
-                }))
-              }
-            >
-              {(
-                [
-                  "CATEGORY",
-                  "SUBCATEGORY",
-                  "WORK",
-                  "MATERIAL",
-                  "LOCATION",
-                  "OPTION",
-                ] satisfies RepairEstimateCatalogNodeType[]
-              ).map((type) => (
-                <option key={type} value={type}>
-                  {repairEstimateCatalogNodeTypeLabel(type)}
-                </option>
-              ))}
-            </NativeSelect>
-          </Field>
+          {state.allowTypeSelect && (
+            <Field>
+              <FieldLabel>Тип</FieldLabel>
+              <NativeSelect
+                value={draft.nodeType}
+                onChange={(value) =>
+                  setDraft((current) => ({
+                    ...current,
+                    nodeType: value as RepairEstimateCatalogNodeType,
+                    includeInEstimate: value === "WORK" || value === "MATERIAL",
+                    durationMinutes:
+                      value === "WORK" ? current.durationMinutes : null,
+                    unit:
+                      value === "WORK" || value === "MATERIAL"
+                        ? current.unit
+                        : null,
+                    unitPrice:
+                      value === "WORK" || value === "MATERIAL"
+                        ? current.unitPrice
+                        : null,
+                  }))
+                }
+              >
+                {(
+                  [
+                    "SUBCATEGORY",
+                    "WORK",
+                    "MATERIAL",
+                    "LOCATION",
+                    "OPTION",
+                  ] satisfies RepairEstimateCatalogNodeType[]
+                ).map((type) => (
+                  <option key={type} value={type}>
+                    {repairEstimateCatalogNodeTypeLabel(type)}
+                  </option>
+                ))}
+              </NativeSelect>
+            </Field>
+          )}
 
           <div className="grid gap-3 md:grid-cols-2">
             <Field>
@@ -806,6 +871,13 @@ function LinkEditorDialogContent({
   onSaved: () => void
 }) {
   const [draft, setDraft] = useState(state.value)
+  const initialAnchors = getCatalogLinkAnchors(state.value)
+  const [sourceAnchor, setSourceAnchor] = useState<CatalogLinkAnchor>(
+    initialAnchors.sourceAnchor
+  )
+  const [targetAnchor, setTargetAnchor] = useState<CatalogLinkAnchor>(
+    initialAnchors.targetAnchor
+  )
   const [error, setError] = useState<string | null>(null)
   const mutation = useMutation({
     mutationFn: saveRepairEstimateCatalogCanvasLink,
@@ -891,6 +963,44 @@ function LinkEditorDialogContent({
             </NativeSelect>
           </Field>
 
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field>
+              <FieldLabel>Точка исходного блока</FieldLabel>
+              <NativeSelect
+                value={sourceAnchor}
+                onChange={(value) =>
+                  setSourceAnchor(normalizeCatalogAnchor(value))
+                }
+              >
+                {(["BOTTOM", "TOP"] satisfies CatalogLinkAnchor[]).map(
+                  (anchor) => (
+                    <option key={anchor} value={anchor}>
+                      {catalogAnchorLabel(anchor)}
+                    </option>
+                  )
+                )}
+              </NativeSelect>
+            </Field>
+
+            <Field>
+              <FieldLabel>Точка целевого блока</FieldLabel>
+              <NativeSelect
+                value={targetAnchor}
+                onChange={(value) =>
+                  setTargetAnchor(normalizeCatalogAnchor(value))
+                }
+              >
+                {(["TOP", "BOTTOM"] satisfies CatalogLinkAnchor[]).map(
+                  (anchor) => (
+                    <option key={anchor} value={anchor}>
+                      {catalogAnchorLabel(anchor)}
+                    </option>
+                  )
+                )}
+              </NativeSelect>
+            </Field>
+          </div>
+
           <BooleanField
             title="Активно"
             checked={draft.active}
@@ -909,7 +1019,12 @@ function LinkEditorDialogContent({
           <Button
             type="button"
             disabled={mutation.isPending}
-            onClick={() => mutation.mutate(draft)}
+            onClick={() =>
+              mutation.mutate({
+                ...draft,
+                comment: createCatalogAnchorComment(sourceAnchor, targetAnchor),
+              })
+            }
           >
             Сохранить связь
           </Button>
@@ -1111,35 +1226,89 @@ function CatalogCanvas({
   links,
   selectedNodeId,
   selectedLinkId,
+  draftLinkStart,
   onSelectNode,
   onSelectLink,
+  onBeginLink,
+  onCompleteLink,
 }: {
   nodes: RepairEstimateCatalogNodeDto[]
   links: RepairEstimateCatalogLinkDto[]
   selectedNodeId: string | null
   selectedLinkId: string | null
+  draftLinkStart: CatalogLinkStart | null
   onSelectNode: (node: RepairEstimateCatalogNodeDto) => void
   onSelectLink: (link: RepairEstimateCatalogLinkDto) => void
+  onBeginLink: (start: CatalogLinkStart) => void
+  onCompleteLink: (
+    target: RepairEstimateCatalogNodeDto,
+    targetAnchor: CatalogLinkAnchor
+  ) => void
 }) {
   const positionedNodes = nodes.map((node, index) => ({
     node,
-    position: getCanvasPosition(node, index),
+    position: {
+      ...getCanvasPosition(node, index),
+      width: CANVAS_NODE_WIDTH,
+      height: CANVAS_NODE_HEIGHT,
+    },
   }))
   const positionById = new Map(
     positionedNodes.map(({ node, position }) => [node.id, position])
   )
   const height = Math.max(
     520,
-    ...positionedNodes.map(({ position }) => position.y + 150)
+    ...positionedNodes.map(({ position }) => position.y + position.height + 40)
   )
   const width = Math.max(
     980,
-    ...positionedNodes.map(({ position }) => position.x + 280)
+    ...positionedNodes.map(({ position }) => position.x + position.width + 40)
   )
+
+  const anchorPoint = (
+    position: {
+      x: number
+      y: number
+      width: number
+      height: number
+    },
+    anchor: CatalogLinkAnchor
+  ) => ({
+    x: position.x + position.width / 2,
+    y: anchor === "TOP" ? position.y : position.y + position.height,
+  })
+
+  const pathD = (
+    source: { x: number; y: number },
+    target: { x: number; y: number },
+    sourceAnchor: CatalogLinkAnchor,
+    targetAnchor: CatalogLinkAnchor
+  ) => {
+    const curve = Math.max(80, Math.abs(target.y - source.y) / 2)
+    const sourceControlY =
+      sourceAnchor === "TOP" ? source.y - curve : source.y + curve
+    const targetControlY =
+      targetAnchor === "TOP" ? target.y - curve : target.y + curve
+
+    return `M ${source.x} ${source.y} C ${source.x} ${sourceControlY}, ${target.x} ${targetControlY}, ${target.x} ${target.y}`
+  }
 
   return (
     <div className="relative" style={{ width, height }}>
-      <svg className="absolute inset-0 h-full w-full" aria-hidden>
+      <svg className="absolute inset-0 h-full w-full overflow-visible">
+        <defs>
+          <marker
+            id="catalog-arrow-end"
+            viewBox="0 0 14 14"
+            refX="12"
+            refY="7"
+            markerWidth="10"
+            markerHeight="10"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 0 L 14 7 L 0 14 z" fill="context-stroke" />
+          </marker>
+        </defs>
         {links.map((link) => {
           const source = positionById.get(link.sourceNodeId)
           const target = positionById.get(link.targetNodeId)
@@ -1147,27 +1316,51 @@ function CatalogCanvas({
             return null
           }
 
+          const { sourceAnchor, targetAnchor } = getCatalogLinkAnchors(
+            link,
+            source,
+            target
+          )
+          const sourcePoint = anchorPoint(source, sourceAnchor)
+          const targetPoint = anchorPoint(target, targetAnchor)
+          const selected = link.id === selectedLinkId
+          const dependency = link.linkType === "DEPENDENCY"
+          const path = pathD(
+            sourcePoint,
+            targetPoint,
+            sourceAnchor,
+            targetAnchor
+          )
+
           return (
             <g key={link.id}>
-              <line
-                x1={source.x + 130}
-                y1={source.y + 118}
-                x2={target.x + 130}
-                y2={target.y}
-                stroke="currentColor"
-                strokeWidth={link.id === selectedLinkId ? 3 : 2}
-                className={cn(
-                  link.linkType === "DEPENDENCY"
-                    ? "text-primary"
-                    : "text-muted-foreground"
-                )}
+              <path
+                d={path}
+                fill="none"
+                stroke="transparent"
+                strokeWidth={22}
+                strokeLinecap="round"
+                pointerEvents="stroke"
+                className="cursor-pointer"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onSelectLink(link)
+                }}
               />
-              <circle
-                cx={(source.x + target.x) / 2 + 130}
-                cy={(source.y + target.y) / 2 + 59}
-                r={10}
-                className="cursor-pointer fill-background stroke-muted-foreground"
-                onClick={() => onSelectLink(link)}
+              <path
+                d={path}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={selected ? 4 : 3}
+                strokeLinecap="round"
+                strokeDasharray={dependency ? undefined : "8 8"}
+                markerStart={dependency ? "url(#catalog-arrow-end)" : undefined}
+                markerEnd="url(#catalog-arrow-end)"
+                pointerEvents="none"
+                className={cn(
+                  dependency ? "text-primary" : "text-muted-foreground",
+                  selected && "text-primary drop-shadow-sm"
+                )}
               />
             </g>
           )
@@ -1175,28 +1368,84 @@ function CatalogCanvas({
       </svg>
 
       {positionedNodes.map(({ node, position }) => (
-        <button
+        <div
           key={node.id}
-          type="button"
+          role="button"
+          tabIndex={0}
           className={cn(
-            "absolute flex min-h-28 w-64 flex-col items-start gap-2 rounded-lg border bg-card px-3 py-3 text-left text-sm shadow-sm transition-colors hover:bg-accent",
+            "absolute flex min-h-28 w-64 cursor-pointer flex-col items-start gap-2 overflow-visible rounded-lg border bg-card px-3 py-3 text-left text-sm shadow-sm transition-colors select-none hover:bg-accent",
             node.id === selectedNodeId && "border-primary bg-accent"
           )}
           style={{ left: position.x, top: position.y }}
           onClick={() => onSelectNode(node)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault()
+              onSelectNode(node)
+            }
+          }}
+          onPointerUp={(event) => {
+            if (draftLinkStart === null || draftLinkStart.nodeId === node.id) {
+              return
+            }
+
+            const rect = event.currentTarget.getBoundingClientRect()
+            const targetAnchor =
+              event.clientY <= rect.top + rect.height / 2 ? "TOP" : "BOTTOM"
+            onCompleteLink(node, targetAnchor)
+          }}
         >
+          {(["TOP", "BOTTOM"] satisfies CatalogLinkAnchor[]).map((anchor) => (
+            <button
+              key={anchor}
+              type="button"
+              aria-label={`${anchor === "TOP" ? "Верхняя" : "Нижняя"} точка связи: ${node.name}`}
+              className={cn(
+                "absolute left-1/2 z-10 size-5 -translate-x-1/2 rounded-full border-2 border-background bg-primary shadow-md",
+                anchor === "TOP" ? "-top-2.5" : "-bottom-2.5",
+                draftLinkStart?.nodeId === node.id &&
+                  draftLinkStart.anchor === anchor &&
+                  "ring-2 ring-ring ring-offset-2"
+              )}
+              onClick={(event) => event.stopPropagation()}
+              onPointerDown={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                if (
+                  draftLinkStart === null ||
+                  draftLinkStart.nodeId === node.id
+                ) {
+                  onBeginLink({ nodeId: node.id, anchor })
+                }
+              }}
+              onPointerUp={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                if (
+                  draftLinkStart !== null &&
+                  draftLinkStart.nodeId !== node.id
+                ) {
+                  onCompleteLink(node, anchor)
+                }
+              }}
+            />
+          ))}
           <span className="flex w-full items-center justify-between gap-2">
             <span className="truncate font-medium">{node.name}</span>
             <Badge variant="secondary">
               {repairEstimateCatalogNodeTypeLabel(node.nodeType)}
             </Badge>
           </span>
-          <span className="flex flex-wrap gap-1">
-            {node.includeInEstimate && <Badge variant="outline">Смета</Badge>}
-            {node.commonItem && <Badge variant="outline">Общий</Badge>}
-            {node.furnitureCategory && <Badge variant="outline">Мебель</Badge>}
+          <span className="flex flex-col gap-1 text-xs text-muted-foreground">
+            <span>К-во. по умолчанию: {node.defaultQuantity}</span>
+            <span>Единица: {node.unit ?? ""}</span>
+            <span>Активно: {node.active ? "Да" : "Нет"}</span>
+            {node.commonItem && <span>Общий</span>}
+            {node.comment && (
+              <span className="line-clamp-2">{node.comment}</span>
+            )}
           </span>
-        </button>
+        </div>
       ))}
     </div>
   )
@@ -1206,6 +1455,11 @@ function CatalogCanvasCategoryEditor({ categoryId }: { categoryId: string }) {
   const queryClient = useQueryClient()
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null)
+  const [draftLinkType, setDraftLinkType] =
+    useState<RepairEstimateCatalogLinkType>("FOLLOW_UP")
+  const [draftLinkStart, setDraftLinkStart] = useState<CatalogLinkStart | null>(
+    null
+  )
   const [nodeDialogState, setNodeDialogState] =
     useState<NodeDialogState | null>(null)
   const [linkDialogState, setLinkDialogState] =
@@ -1253,12 +1507,32 @@ function CatalogCanvasCategoryEditor({ categoryId }: { categoryId: string }) {
     },
   })
 
+  const createLinkMutation = useMutation({
+    mutationFn: saveRepairEstimateCatalogCanvasLink,
+    onSuccess: (link) => {
+      setError(null)
+      setDraftLinkStart(null)
+      setSelectedNodeId(null)
+      setSelectedLinkId(link.id)
+      invalidate()
+    },
+    onError: (mutationError) => {
+      setDraftLinkStart(null)
+      setError(
+        mutationError instanceof Error
+          ? mutationError.message
+          : "Не удалось создать связь"
+      )
+    },
+  })
+
   const resetMutation = useMutation({
     mutationFn: resetRepairEstimateCatalogCanvasMock,
     onSuccess: () => {
       setError(null)
       setSelectedNodeId(null)
       setSelectedLinkId(null)
+      setDraftLinkStart(null)
       invalidate()
     },
   })
@@ -1283,6 +1557,35 @@ function CatalogCanvasCategoryEditor({ categoryId }: { categoryId: string }) {
   const canvasLinks = data.links.filter(
     (link) => nodeIds.has(link.sourceNodeId) && nodeIds.has(link.targetNodeId)
   )
+  const createLinkFromAnchors = (
+    target: RepairEstimateCatalogNodeDto,
+    targetAnchor: CatalogLinkAnchor
+  ) => {
+    if (draftLinkStart === null) {
+      return
+    }
+
+    const sourceNode = canvasNodes.find(
+      (node) => node.id === draftLinkStart.nodeId
+    )
+    if (!sourceNode || sourceNode.id === target.id) {
+      return
+    }
+    if (target.nodeType === "CATEGORY") {
+      setDraftLinkStart(null)
+      setError("Категория не может быть целевым блоком")
+      return
+    }
+
+    createLinkMutation.mutate({
+      sourceNodeId: sourceNode.id,
+      targetNodeId: target.id,
+      linkType: draftLinkType,
+      active: true,
+      sortOrder: canvasLinks.length * 10 + 10,
+      comment: createCatalogAnchorComment(draftLinkStart.anchor, targetAnchor),
+    })
+  }
 
   if (category === null) {
     return <ErrorBox>Категория не найдена</ErrorBox>
@@ -1297,6 +1600,7 @@ function CatalogCanvasCategoryEditor({ categoryId }: { categoryId: string }) {
         <div className="flex flex-wrap gap-2">
           <Button
             type="button"
+            className="w-52 justify-start"
             onClick={() =>
               setNodeDialogState({
                 title: "Добавить блок",
@@ -1316,34 +1620,34 @@ function CatalogCanvasCategoryEditor({ categoryId }: { categoryId: string }) {
             <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
             Блок
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={canvasNodes.length < 2}
-            onClick={() => {
-              const source = selectedNode ?? canvasNodes[0]
-              const target =
-                canvasNodes.find(
-                  (node) =>
-                    node.id !== source.id && node.nodeType !== "CATEGORY"
-                ) ?? canvasNodes[1]
-
-              setLinkDialogState({
-                nodes: canvasNodes,
-                value: {
-                  sourceNodeId: source.id,
-                  targetNodeId: target.id,
-                  linkType: "FOLLOW_UP",
-                  active: true,
-                  sortOrder: canvasLinks.length * 10 + 10,
-                  comment: null,
-                },
-              })
-            }}
-          >
-            <HugeiconsIcon icon={Link01Icon} data-icon="inline-start" />
-            Связь
-          </Button>
+          <div className="w-52">
+            <NativeSelect
+              value={draftLinkType}
+              onChange={(value) =>
+                setDraftLinkType(value as RepairEstimateCatalogLinkType)
+              }
+            >
+              {(
+                [
+                  "FOLLOW_UP",
+                  "DEPENDENCY",
+                ] satisfies RepairEstimateCatalogLinkType[]
+              ).map((type) => (
+                <option key={type} value={type}>
+                  {repairEstimateCatalogLinkTypeLabel(type)}
+                </option>
+              ))}
+            </NativeSelect>
+          </div>
+          {draftLinkStart !== null && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setDraftLinkStart(null)}
+            >
+              Отменить точку
+            </Button>
+          )}
           <Button
             type="button"
             variant="outline"
@@ -1362,14 +1666,24 @@ function CatalogCanvasCategoryEditor({ categoryId }: { categoryId: string }) {
           links={canvasLinks}
           selectedNodeId={selectedNodeId}
           selectedLinkId={selectedLinkId}
+          draftLinkStart={draftLinkStart}
           onSelectNode={(node) => {
             setSelectedNodeId(node.id)
             setSelectedLinkId(null)
+            setDraftLinkStart(null)
           }}
           onSelectLink={(link) => {
             setSelectedLinkId(link.id)
             setSelectedNodeId(null)
+            setDraftLinkStart(null)
           }}
+          onBeginLink={(start) => {
+            setError(null)
+            setSelectedNodeId(start.nodeId)
+            setSelectedLinkId(null)
+            setDraftLinkStart(start)
+          }}
+          onCompleteLink={createLinkFromAnchors}
         />
       </div>
 
