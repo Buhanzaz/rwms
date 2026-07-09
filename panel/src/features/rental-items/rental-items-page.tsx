@@ -52,8 +52,8 @@ function getStorageKey(warehouseId: string, key: string) {
 }
 
 const EMPTY_FILTER_OPTIONS: RentalItemsFilterOptionSet[] = []
-const TABLET_GRID_FORMAT_MAX = 5
-const DESKTOP_GRID_FORMAT_MAX = 10
+const TABLET_GRID_FORMAT_MAX = 3
+const DESKTOP_GRID_FORMAT_MAX = 5
 const TABLET_BREAKPOINT = 768
 const DESKTOP_BREAKPOINT = 1280
 
@@ -88,7 +88,7 @@ function subscribeViewport(callback: () => void) {
 }
 
 function isMobileViewport(viewport: ViewportSnapshot) {
-  return Math.min(viewport.width, viewport.height) < TABLET_BREAKPOINT
+  return viewport.width < TABLET_BREAKPOINT
 }
 
 function getDefaultGridSize(viewport: ViewportSnapshot) {
@@ -431,7 +431,7 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
               onClick={() => setGridSettingsDialogOpen(true)}
             >
               <Grid2X2 data-icon="inline-start" className="size-4" />
-              {effectiveGridFormat.columns}x{effectiveGridFormat.rows}
+              до {effectiveGridFormat.columns}x{effectiveGridFormat.rows}
             </Button>
           )}
 
