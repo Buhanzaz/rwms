@@ -68,6 +68,20 @@ function MobileQuantityStat({
   )
 }
 
+function MobileCabinUsageStat({ value }: { value: number }) {
+  return (
+    <div className="col-start-1 min-w-0 rounded-md bg-muted/40 px-2 py-1.5">
+      <div className="truncate text-[0.625rem] font-medium text-muted-foreground">
+        В бытовках
+      </div>
+
+      <div className="text-sm">
+        <QuantityCell value={value} tone="rent" />
+      </div>
+    </div>
+  )
+}
+
 function UsageRows({ item }: { item: EquipmentItemDto }) {
   const queryClient = useQueryClient()
 
@@ -326,11 +340,7 @@ export function EquipmentPage() {
                           value={item.stockQuantity}
                           tone="stock"
                         />
-                        <MobileQuantityStat
-                          label="В аренде"
-                          value={item.rentedQuantity}
-                          tone="rent"
-                        />
+                        <MobileCabinUsageStat value={item.rentedQuantity} />
                         <MobileQuantityStat
                           label="Списано"
                           value={item.writtenOffQuantity}
