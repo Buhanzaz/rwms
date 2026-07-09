@@ -113,6 +113,8 @@ const LINOLEUM_OPTIONS: DropdownOption<LinoleumValue>[] = [
   },
 ]
 
+const formSectionActionButtonClassName = "w-full justify-center sm:w-auto"
+
 function createEmptyForm(): RentalItemCreateFormState {
   return {
     number: "",
@@ -745,6 +747,7 @@ export function RentalItemCreateDialog({
                 <Button
                   type="button"
                   variant="outline"
+                  className={formSectionActionButtonClassName}
                   onClick={() => setCharacteristicsOpen(true)}
                 >
                   <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
@@ -771,6 +774,7 @@ export function RentalItemCreateDialog({
                 <Button
                   type="button"
                   variant="outline"
+                  className={formSectionActionButtonClassName}
                   disabled={processingPhotos}
                   onClick={() => fileInputRef.current?.click()}
                 >
@@ -795,7 +799,7 @@ export function RentalItemCreateDialog({
                 type="button"
                 disabled={processingPhotos}
                 className={cn(
-                  "hidden aspect-[4/3] min-h-28 w-full items-center justify-center rounded-lg border border-dashed bg-muted/30 px-4 text-center text-sm font-medium text-muted-foreground transition xl:flex",
+                  "hidden h-28 w-full items-center justify-center rounded-lg border border-dashed bg-muted/30 px-4 text-center text-sm font-medium text-muted-foreground transition xl:flex",
                   "hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:outline-none disabled:pointer-events-none disabled:opacity-60",
                   photoDropActive && "border-primary bg-primary/5 text-primary"
                 )}
