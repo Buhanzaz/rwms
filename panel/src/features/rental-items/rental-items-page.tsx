@@ -52,8 +52,8 @@ function getStorageKey(warehouseId: string, key: string) {
 }
 
 const EMPTY_FILTER_OPTIONS: RentalItemsFilterOptionSet[] = []
-const TABLET_GRID_FORMAT_MAX = 3
-const DESKTOP_GRID_FORMAT_MAX = 5
+const TABLET_GRID_FORMAT_MAX = 5
+const DESKTOP_GRID_FORMAT_MAX = 10
 const TABLET_BREAKPOINT = 768
 const DESKTOP_BREAKPOINT = 1280
 
