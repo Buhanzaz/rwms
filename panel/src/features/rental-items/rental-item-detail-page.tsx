@@ -1,4 +1,10 @@
-import { useMemo, useState, type ReactNode } from "react"
+import {
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent,
+  type ReactNode,
+} from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { MoveContentsToRentalItemDialog } from "@/features/rental-items/move-contents-to-rental-item-dialog"
@@ -30,6 +36,7 @@ import { MoveContentsToStockDialog } from "@/features/rental-items/move-contents
 import { RentalItemPhotoDialog } from "@/features/rental-items/rental-item-photo-dialog"
 import { RentalItemStatusBadge } from "@/features/rental-items/rental-item-status-badge"
 import { useWarehouse } from "@/hooks/use-warehouse"
+import { useIsTabletOrSmaller } from "@/hooks/use-mobile"
 import {
   formatRentalItemContents,
   RENTAL_ITEM_STATUS_LABEL,
@@ -61,6 +68,12 @@ type ContentsRow = {
   name: string
   quantity: number
   unit: string
+}
+
+type SwipeBackGesture = {
+  pointerId: number
+  startX: number
+  startY: number
 }
 
 const tabs: Array<{
@@ -119,6 +132,10 @@ const tabs: Array<{
     icon: <FileText className="size-4" />,
   },
 ]
+
+const EDGE_SWIPE_START_MAX = 40
+const EDGE_SWIPE_MIN_DISTANCE = 72
+const EDGE_SWIPE_AXIS_LOCK_RATIO = 1.15
 
 function getItemPhotos(item: RentalItemDto, photos: RentalItemPhotoDto[]) {
   if (photos.length > 0) {
@@ -597,10 +614,12 @@ export function RentalItemDetailPage() {
   const navigate = useNavigate()
   const { rentalItemId } = useParams()
   const { selectedWarehouse } = useWarehouse()
+  const isTabletOrSmaller = useIsTabletOrSmaller()
 
   const [activeTab, setActiveTab] = useState<DetailTab>("overview")
   const [photoDialogOpen, setPhotoDialogOpen] = useState(false)
   const [activePhotoIndex, setActivePhotoIndex] = useState(0)
+  const swipeBackGestureRef = useRef<SwipeBackGesture | null>(null)
 
   const itemQuery = useQuery({
     queryKey: ["rental-item", rentalItemId],
@@ -633,6 +652,61 @@ export function RentalItemDetailPage() {
   const city =
     selectedWarehouse?.city ?? selectedWarehouse?.code ?? warehouseName
 
+  function navigateBack() {
+    if (window.history.length > 1) {
+      navigate(-1)
+      return
+    }
+
+    navigate("/warehouse")
+  }
+
+  function handlePointerDown(event: PointerEvent<HTMLDivElement>) {
+    if (!isTabletOrSmaller) {
+      swipeBackGestureRef.current = null
+      return
+    }
+
+    if (event.button !== 0 || event.clientX > EDGE_SWIPE_START_MAX) {
+      swipeBackGestureRef.current = null
+      return
+    }
+
+    event.currentTarget.setPointerCapture(event.pointerId)
+    swipeBackGestureRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+    }
+  }
+
+  function handlePointerUp(event: PointerEvent<HTMLDivElement>) {
+    const start = swipeBackGestureRef.current
+    swipeBackGestureRef.current = null
+
+    if (!start || !isTabletOrSmaller || event.pointerId !== start.pointerId) {
+      return
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+
+    const deltaX = event.clientX - start.startX
+    const deltaY = event.clientY - start.startY
+    const absX = Math.abs(deltaX)
+    const absY = Math.abs(deltaY)
+    const isBackSwipe =
+      deltaX >= EDGE_SWIPE_MIN_DISTANCE &&
+      absX > absY * EDGE_SWIPE_AXIS_LOCK_RATIO
+
+    if (!isBackSwipe) {
+      return
+    }
+
+    navigateBack()
+  }
+
   if (itemQuery.isLoading) {
     return (
       <div className="flex h-full items-center justify-center rounded-lg border bg-card text-sm text-muted-foreground">
@@ -658,7 +732,17 @@ export function RentalItemDetailPage() {
   const selectedTab = tabs.find((tab) => tab.id === activeTab)
 
   return (
-    <div className="h-full min-h-0 overflow-auto">
+    <div
+      className="h-full min-h-0 touch-pan-y overflow-auto"
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={(event) => {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId)
+        }
+        swipeBackGestureRef.current = null
+      }}
+    >
       <div className="flex min-h-full flex-col gap-4 pb-4">
         <nav className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
           <Link to="/warehouse" className="hover:text-foreground">
