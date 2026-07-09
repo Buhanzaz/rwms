@@ -1,5 +1,6 @@
 import { useState, type MouseEvent } from "react"
 import { Link, useLocation } from "react-router-dom"
+import { useIsTabletOrSmaller } from "@/hooks/use-mobile"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import {
   BarChart3,
@@ -42,6 +43,7 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
   SidebarRail,
+  useSidebar,
 } from "@/components/ui/sidebar"
 
 type SidebarNavItem = {
@@ -199,8 +201,25 @@ function WarehouseSelector() {
 
 export function AppSidebar() {
   const location = useLocation()
+  const { isMobile, setOpen, setOpenMobile } = useSidebar()
+  const isTabletOrSmaller = useIsTabletOrSmaller()
   const isSettingsActive = isActiveUrl(location.pathname, "/settings")
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
+
+  function handleNavigationClick() {
+    setSettingsMenuOpen(false)
+
+    if (!isTabletOrSmaller) {
+      return
+    }
+
+    if (isMobile) {
+      setOpenMobile(false)
+      return
+    }
+
+    setOpen(false)
+  }
 
   function handleSidebarClick(event: MouseEvent<HTMLElement>) {
     const target = event.target
@@ -225,7 +244,7 @@ export function AppSidebar() {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" className="h-12 px-2" asChild>
-              <Link to="/">
+              <Link to="/" onClick={handleNavigationClick}>
                 <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
                   <Warehouse className="size-4" />
                 </div>
@@ -264,7 +283,7 @@ export function AppSidebar() {
                         className={sidebarButtonClass}
                         isActive={isActiveUrl(location.pathname, item.url)}
                       >
-                        <Link to={item.url}>
+                        <Link to={item.url} onClick={handleNavigationClick}>
                           <Icon />
                           <span>{item.title}</span>
                         </Link>
@@ -295,10 +314,7 @@ export function AppSidebar() {
                       isActive={isActiveUrl(location.pathname, item.url)}
                       className={sidebarSubButtonClass}
                     >
-                      <Link
-                        to={item.url}
-                        onClick={() => setSettingsMenuOpen(false)}
-                      >
+                      <Link to={item.url} onClick={handleNavigationClick}>
                         <Icon />
                         <span>{item.title}</span>
                       </Link>
