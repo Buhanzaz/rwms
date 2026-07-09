@@ -1,11 +1,15 @@
+import { useState, type MouseEvent } from "react"
 import { Link, useLocation } from "react-router-dom"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import {
   BarChart3,
+  ChevronUp,
   ClipboardCheck,
   ClipboardList,
+  ClipboardPenLine,
   Gauge,
   Hammer,
+  Kanban,
   LayoutDashboard,
   PackageSearch,
   Settings,
@@ -34,6 +38,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarRail,
 } from "@/components/ui/sidebar"
 
@@ -111,6 +118,25 @@ const navGroups: SidebarNavGroup[] = [
   },
 ]
 
+const settingsNavItems: SidebarNavItem[] = [
+  {
+    title: "Настройка смет и ремонтов",
+    url: "/settings/estimates-repairs",
+    icon: ClipboardPenLine,
+  },
+  {
+    title: "Настройка Доски задач",
+    url: "/settings/task-board",
+    icon: Kanban,
+  },
+]
+
+const sidebarButtonClass =
+  "h-10 px-2 text-sm md:h-8 md:text-xs [&>svg]:!size-5 md:[&>svg]:!size-4"
+
+const sidebarSubButtonClass =
+  "h-10 w-full translate-x-0 px-2 text-sm md:h-8 md:text-xs [&>svg]:!size-5 md:[&>svg]:!size-4"
+
 function isActiveUrl(currentPath: string, url: string) {
   if (url === "/") {
     return currentPath === "/"
@@ -151,7 +177,7 @@ function WarehouseSelector() {
         >
           <ComboboxInput
             placeholder="Выберите склад"
-            className="h-8 w-full bg-background"
+            className="h-10 w-full bg-background text-sm md:h-8 md:text-xs"
           />
 
           <ComboboxContent>
@@ -173,10 +199,29 @@ function WarehouseSelector() {
 
 export function AppSidebar() {
   const location = useLocation()
+  const isSettingsActive = isActiveUrl(location.pathname, "/settings")
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
+
+  function handleSidebarClick(event: MouseEvent<HTMLElement>) {
+    const target = event.target
+
+    if (!(target instanceof HTMLElement)) {
+      return
+    }
+
+    if (target.closest("[data-settings-menu]")) {
+      return
+    }
+
+    setSettingsMenuOpen(false)
+  }
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader className="h-16 shrink-0 border-b p-2">
+      <SidebarHeader
+        className="h-16 shrink-0 border-b p-2"
+        onClick={handleSidebarClick}
+      >
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" className="h-12 px-2" asChild>
@@ -195,7 +240,10 @@ export function AppSidebar() {
         </SidebarMenu>
       </SidebarHeader>
 
-      <SidebarContent className="gap-0 px-2 py-2">
+      <SidebarContent
+        className="gap-0 px-2 py-2"
+        onClick={handleSidebarClick}
+      >
         <WarehouseSelector />
 
         {navGroups.map((group) => (
@@ -213,11 +261,11 @@ export function AppSidebar() {
                     <SidebarMenuItem key={item.title}>
                       <SidebarMenuButton
                         asChild
-                        className="h-8 px-2"
+                        className={sidebarButtonClass}
                         isActive={isActiveUrl(location.pathname, item.url)}
                       >
                         <Link to={item.url}>
-                          <Icon className="size-4" />
+                          <Icon />
                           <span>{item.title}</span>
                         </Link>
                       </SidebarMenuButton>
@@ -230,18 +278,49 @@ export function AppSidebar() {
         ))}
       </SidebarContent>
 
-      <SidebarFooter className="p-2">
+      <SidebarFooter className="p-2" data-settings-menu>
         <SidebarMenu>
+          {settingsMenuOpen && (
+            <SidebarMenuSub
+              id="settings-submenu"
+              className="mx-0 mb-1 w-full translate-x-0 border-l-0 px-0 group-data-[collapsible=icon]:hidden"
+            >
+              {settingsNavItems.map((item) => {
+                const Icon = item.icon
+
+                return (
+                  <SidebarMenuSubItem key={item.title}>
+                    <SidebarMenuSubButton
+                      asChild
+                      isActive={isActiveUrl(location.pathname, item.url)}
+                      className={sidebarSubButtonClass}
+                    >
+                      <Link
+                        to={item.url}
+                        onClick={() => setSettingsMenuOpen(false)}
+                      >
+                        <Icon />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuSubButton>
+                  </SidebarMenuSubItem>
+                )
+              })}
+            </SidebarMenuSub>
+          )}
+
           <SidebarMenuItem>
             <SidebarMenuButton
-              asChild
-              className="h-8 px-2"
-              isActive={isActiveUrl(location.pathname, "/settings")}
+              type="button"
+              className={sidebarButtonClass}
+              isActive={settingsMenuOpen || isSettingsActive}
+              aria-controls="settings-submenu"
+              aria-expanded={settingsMenuOpen}
+              onClick={() => setSettingsMenuOpen((current) => !current)}
             >
-              <Link to="/settings">
-                <Settings className="size-4" />
-                <span>Настройки</span>
-              </Link>
+              <Settings />
+              <span>Настройки</span>
+              <ChevronUp className="ml-auto" />
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
