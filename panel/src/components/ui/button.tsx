@@ -22,14 +22,14 @@ const buttonVariants = cva(
       },
       size: {
         default:
-          "h-7 gap-1 px-2 text-xs/relaxed has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
-        xs: "h-5 gap-1 rounded-sm px-2 text-[0.625rem] has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-2.5",
-        sm: "h-6 gap-1 px-2 text-xs/relaxed has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
-        lg: "h-8 gap-1 px-2.5 text-xs/relaxed has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2 [&_svg:not([class*='size-'])]:size-4",
-        icon: "size-7 [&_svg:not([class*='size-'])]:size-3.5",
-        "icon-xs": "size-5 rounded-sm [&_svg:not([class*='size-'])]:size-2.5",
-        "icon-sm": "size-6 [&_svg:not([class*='size-'])]:size-3",
-        "icon-lg": "size-8 [&_svg:not([class*='size-'])]:size-4",
+          "h-10 gap-2 px-3 text-sm has-data-[icon=inline-end]:pr-2.5 has-data-[icon=inline-start]:pl-2.5 md:h-7 md:gap-1 md:px-2 md:text-xs/relaxed md:has-data-[icon=inline-end]:pr-1.5 md:has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-5 md:[&_svg:not([class*='size-'])]:size-3.5",
+        xs: "h-8 gap-1.5 rounded-sm px-2 text-xs md:h-5 md:gap-1 md:text-[0.625rem] has-data-[icon=inline-end]:pr-2 md:has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-2 md:has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-4 md:[&_svg:not([class*='size-'])]:size-2.5",
+        sm: "h-9 gap-1.5 px-3 text-sm md:h-6 md:gap-1 md:px-2 md:text-xs/relaxed has-data-[icon=inline-end]:pr-2.5 md:has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-2.5 md:has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-4.5 md:[&_svg:not([class*='size-'])]:size-3",
+        lg: "h-11 gap-2 px-3.5 text-sm md:h-8 md:gap-1 md:px-2.5 md:text-xs/relaxed has-data-[icon=inline-end]:pr-3 md:has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-3 md:has-data-[icon=inline-start]:pl-2 [&_svg:not([class*='size-'])]:size-5 md:[&_svg:not([class*='size-'])]:size-4",
+        icon: "size-10 md:size-7 [&_svg:not([class*='size-'])]:size-5 md:[&_svg:not([class*='size-'])]:size-3.5",
+        "icon-xs": "size-8 rounded-sm md:size-5 [&_svg:not([class*='size-'])]:size-4 md:[&_svg:not([class*='size-'])]:size-2.5",
+        "icon-sm": "size-9 md:size-6 [&_svg:not([class*='size-'])]:size-4.5 md:[&_svg:not([class*='size-'])]:size-3",
+        "icon-lg": "size-11 md:size-8 [&_svg:not([class*='size-'])]:size-5.5 md:[&_svg:not([class*='size-'])]:size-4",
       },
     },
     defaultVariants: {

@@ -10,6 +10,7 @@ import {
   type RentalItemContentsItemDto,
   type RentalItemDto,
   type RentalItemPhotoDto,
+  type RentalItemPhotoVariantDto,
   type RentalItemsColumnConfig,
   type RentalItemsFilterKey,
   type RentalItemsFilterOptionSet,
@@ -17,8 +18,13 @@ import {
   type RentalItemsTableSchema,
   type RentalItemStatus,
 } from "@/features/rental-items/model/rental-item"
+import type {
+  CreateRentalItemPayload,
+  RentalItemCreationPhoto,
+} from "@/features/rental-items/model/rental-item-create"
 
 export const RENTAL_ITEMS_MOCK_STORAGE_KEY = "wms:mock-rental-items"
+export const RENTAL_ITEM_PHOTOS_MOCK_STORAGE_KEY = "wms:mock-rental-item-photos"
 export const RENTAL_ITEMS_MOCK_UPDATED_EVENT = "wms:mock-rental-items-updated"
 
 export type MoveRentalItemContentsToRentalItemResult = {
@@ -74,37 +80,241 @@ function createMockPhotoDto(params: {
   }
 }
 
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result)
+        return
+      }
+
+      reject(new Error("Не удалось прочитать файл изображения."))
+    }
+
+    reader.onerror = () => {
+      reject(new Error("Не удалось прочитать файл изображения."))
+    }
+
+    reader.readAsDataURL(file)
+  })
+}
+
+function loadImage(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+
+    image.onload = () => resolve(image)
+    image.onerror = () =>
+      reject(new Error("Не удалось обработать изображение."))
+    image.src = dataUrl
+  })
+}
+
+async function createWebpVariant(params: {
+  sourceDataUrl: string
+  rotation: RentalItemCreationPhoto["rotation"]
+  maxWidth: number
+  quality: number
+}): Promise<RentalItemPhotoVariantDto> {
+  const image = await loadImage(params.sourceDataUrl)
+  const baseWidth = image.naturalWidth || image.width
+  const baseHeight = image.naturalHeight || image.height
+  const scale = Math.min(1, params.maxWidth / baseWidth)
+  const targetWidth = Math.max(1, Math.round(baseWidth * scale))
+  const targetHeight = Math.max(1, Math.round(baseHeight * scale))
+  const rotated = params.rotation === 90 || params.rotation === 270
+  const canvas = document.createElement("canvas")
+  const context = canvas.getContext("2d")
+
+  if (!context) {
+    throw new Error("Браузер не поддерживает обработку изображения.")
+  }
+
+  canvas.width = rotated ? targetHeight : targetWidth
+  canvas.height = rotated ? targetWidth : targetHeight
+
+  context.translate(canvas.width / 2, canvas.height / 2)
+  context.rotate((params.rotation * Math.PI) / 180)
+  context.drawImage(
+    image,
+    -targetWidth / 2,
+    -targetHeight / 2,
+    targetWidth,
+    targetHeight
+  )
+
+  return {
+    url: canvas.toDataURL("image/webp", params.quality),
+    width: canvas.width,
+    height: canvas.height,
+    mimeType: "image/webp",
+  }
+}
+
+async function createRentalItemPhotoUpload(params: {
+  id: string
+  name: string
+  sourceDataUrl: string
+  rotation: RentalItemCreationPhoto["rotation"]
+  createdAt: string
+}): Promise<RentalItemCreationPhoto> {
+  const [small, largeWebp] = await Promise.all([
+    createWebpVariant({
+      sourceDataUrl: params.sourceDataUrl,
+      rotation: params.rotation,
+      maxWidth: 360,
+      quality: 0.72,
+    }),
+    createWebpVariant({
+      sourceDataUrl: params.sourceDataUrl,
+      rotation: params.rotation,
+      maxWidth: 1800,
+      quality: 0.9,
+    }),
+  ])
+
+  return {
+    id: params.id,
+    name: params.name,
+    sourceDataUrl: params.sourceDataUrl,
+    url: largeWebp.url,
+    rotation: params.rotation,
+    variants: {
+      small,
+      largeWebp,
+    },
+    createdAt: params.createdAt,
+  }
+}
+
 const statuses: RentalItemStatus[] = [
   "FREE",
   "RENTED",
   "AFTER_RENT",
-  "RESERVED",
-  "CAPITAL_REPAIR",
   "BOOKED",
-  "SALE",
+  "REPAIR",
+  "CAPITAL_REPAIR",
   "USED_SALE",
   "WAREHOUSE",
   "OWN_NEEDS",
 ]
 
-const types = ["БК-01", "БК-02", "БК-03", "БК-06", "Санитарная", "Контейнер 20"]
-
-const finishings = ["ДВП", "ЛДСП", "ПВХ", "Вагонка", "ОСБ"]
-
-const categories = ["Эконом", "Стандарт", "Офисная", "Санитарная", "Складская"]
-
-const characteristics = [
-  "кк.",
-  "кк. Узо",
-  "кк. Счетчик",
-  "Железная дверь, кондиционер",
-  "Усиленная электрика, железная дверь",
-  "нет",
+const types = [
+  "БК-1",
+  "БК-2",
+  "БК-3",
+  "БК-4",
+  "БК-5",
+  "БК-6",
+  "БК-Склад",
+  "БК-Санблок",
+  "БК-Модуль из 2х",
+  "БК-Модуль из 3",
+  "БК-Пост охраны",
 ]
 
-const dimensions = ["6x2.4", "6x3", "2x2", "3x2", "12x2.4"]
+const finishings = ["ДВП", "ЛДСП", "ПВХ", "ОСБ", "Вагонка", "СМЛО", "Сэндвич"]
+
+const categories = ["Обычная", "ИТР", "Новая", "Санблок"]
+
+const characteristics = [
+  "Пластиковое окно",
+  "Электрика КК",
+  "Электрика КК + УЗО",
+  "Электрика КК + УЗО + счётчик",
+  "Электрика КК + счётчик",
+  "Металлическая дверь, кондиционер",
+  "Две лампы",
+  "Мама-папа",
+]
+
+const dimensions = [
+  "2x2",
+  "2.4x2",
+  "2.4x2.4",
+  "2.4x3",
+  "2.4x4",
+  "2.4x5",
+  "2.4x6",
+  "3x3",
+  "4.8x6",
+  "7.2x6",
+]
 
 let rentalItemsCache: RentalItemDto[] | null = null
+let rentalItemPhotosCache: Record<string, RentalItemPhotoDto[]> | null = null
+
+function createMockId(prefix: string) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`
+  }
+
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+function safeParseRentalItemPhotos(
+  value: string | null
+): Record<string, RentalItemPhotoDto[]> | null {
+  if (!value) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(value)
+
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null
+    }
+
+    return parsed as Record<string, RentalItemPhotoDto[]>
+  } catch {
+    return null
+  }
+}
+
+function readRentalItemPhotosMap(): Record<string, RentalItemPhotoDto[]> {
+  if (typeof window === "undefined") {
+    return rentalItemPhotosCache ?? {}
+  }
+
+  const storedPhotos = safeParseRentalItemPhotos(
+    window.localStorage.getItem(RENTAL_ITEM_PHOTOS_MOCK_STORAGE_KEY)
+  )
+
+  rentalItemPhotosCache = storedPhotos ?? {}
+
+  return rentalItemPhotosCache
+}
+
+function writeRentalItemPhotosMap(
+  photosByItemId: Record<string, RentalItemPhotoDto[]>
+) {
+  rentalItemPhotosCache = photosByItemId
+
+  if (typeof window === "undefined") {
+    return
+  }
+
+  window.localStorage.setItem(
+    RENTAL_ITEM_PHOTOS_MOCK_STORAGE_KEY,
+    JSON.stringify(photosByItemId)
+  )
+}
+
+function mapCreationPhotoToDto(
+  photo: RentalItemCreationPhoto,
+  rentalItemId: string
+): RentalItemPhotoDto {
+  return {
+    id: photo.id,
+    rentalItemId,
+    url: photo.url,
+    variants: photo.variants,
+    createdAt: photo.createdAt,
+  }
+}
 
 function createMockContentsItems(index: number): RentalItemContentsItemDto[] {
   if (index % 4 === 0) {
@@ -447,6 +657,99 @@ export function writeRentalItems(
   }
 }
 
+export async function prepareRentalItemPhotoUpload(
+  file: File
+): Promise<RentalItemCreationPhoto> {
+  const sourceDataUrl = await readFileAsDataUrl(file)
+
+  return createRentalItemPhotoUpload({
+    id: createMockId("rental-photo"),
+    name: file.name,
+    sourceDataUrl,
+    rotation: 0,
+    createdAt: new Date().toISOString(),
+  })
+}
+
+export async function rotateRentalItemCreationPhoto(
+  photo: RentalItemCreationPhoto
+): Promise<RentalItemCreationPhoto> {
+  const nextRotation: RentalItemCreationPhoto["rotation"] =
+    photo.rotation === 0
+      ? 90
+      : photo.rotation === 90
+        ? 180
+        : photo.rotation === 180
+          ? 270
+          : 0
+
+  return delay(
+    await createRentalItemPhotoUpload({
+      id: photo.id,
+      name: photo.name,
+      sourceDataUrl: photo.sourceDataUrl,
+      rotation: nextRotation,
+      createdAt: photo.createdAt,
+    })
+  )
+}
+
+export async function createRentalItem(
+  payload: CreateRentalItemPayload
+): Promise<RentalItemDto> {
+  const items = readRentalItems()
+  const id = createMockId(payload.warehouseId)
+  const photoDtos = payload.photos.map((photo) =>
+    mapCreationPhotoToDto(photo, id)
+  )
+
+  const nextItem: RentalItemDto = normalizeRentalItem({
+    id,
+    warehouseId: payload.warehouseId,
+    locationNodeId: null,
+
+    number: payload.number.trim(),
+    type: payload.type,
+    dimensions: payload.dimensions,
+    finishing: payload.finishing,
+    category: payload.category,
+    characteristics:
+      payload.characteristics.length > 0
+        ? payload.characteristics.join(", ")
+        : null,
+    linoleum: payload.linoleum,
+
+    status: payload.status,
+    comment: null,
+
+    hasPhotos: photoDtos.length > 0,
+    photoCount: photoDtos.length,
+    mainPhotoUrl:
+      photoDtos[0]?.variants?.small?.url ?? photoDtos[0]?.url ?? null,
+    previewPhotoUrls: photoDtos.map(
+      (photo) => photo.variants?.small?.url ?? photo.url
+    ),
+
+    contents: null,
+    contentsItems: [],
+
+    shipmentDate: null,
+    tenant: null,
+    price: null,
+  })
+
+  writeRentalItems([nextItem, ...items])
+
+  if (photoDtos.length > 0) {
+    writeRentalItemPhotosMap({
+      ...readRentalItemPhotosMap(),
+      [id]: photoDtos,
+    })
+  }
+
+  return delay(nextItem)
+}
+
 function compareValues(a: unknown, b: unknown) {
   const left = a ?? ""
   const right = b ?? ""
@@ -550,6 +853,12 @@ export async function getRentalItem(id: string): Promise<RentalItemDto | null> {
 export async function getRentalItemPhotos(
   rentalItemId: string
 ): Promise<RentalItemPhotoDto[]> {
+  const storedPhotos = readRentalItemPhotosMap()[rentalItemId]
+
+  if (storedPhotos && storedPhotos.length > 0) {
+    return delay(storedPhotos)
+  }
+
   const item = readRentalItems().find((rentalItem) => {
     return rentalItem.id === rentalItemId
   })

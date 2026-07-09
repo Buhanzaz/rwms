@@ -11,6 +11,7 @@ import {
 } from "@/features/rental-items/api/rental-items-api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { RentalItemCreateDialog } from "@/features/rental-items/rental-item-create-dialog"
 import { RentalItemPhotoDialog } from "@/features/rental-items/rental-item-photo-dialog"
 import { RentalItemsColumnSettingsDialog } from "@/features/rental-items/rental-items-column-settings-dialog"
 import { RentalItemsFilters } from "@/features/rental-items/rental-items-filters"
@@ -71,14 +72,14 @@ function getInitialViewMode(warehouseId: string) {
 
 function getInitialSorting(warehouseId: string) {
   return readLocalStorage<SortingState>(
-    getStorageKey(warehouseId, "sorting"),
+    getStorageKey(warehouseId, "sorting:v2"),
     []
   )
 }
 
 function getInitialColumnsConfig(warehouseId: string) {
   return readLocalStorage<RentalItemsColumnConfig[]>(
-    getStorageKey(warehouseId, "columns"),
+    getStorageKey(warehouseId, "columns:v2"),
     []
   )
 }
@@ -141,6 +142,7 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
   const [photoItem, setPhotoItem] = useState<RentalItemDto | null>(null)
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false)
   const [columnsDialogOpen, setColumnsDialogOpen] = useState(false)
+  const [createDialogOpen, setCreateDialogOpen] = useState(false)
 
   useEffect(() => {
     writeLocalStorage(getStorageKey(warehouseId, "search"), search)
@@ -155,11 +157,14 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
   }, [viewMode, warehouseId])
 
   useEffect(() => {
-    writeLocalStorage(getStorageKey(warehouseId, "sorting"), sorting)
+    writeLocalStorage(getStorageKey(warehouseId, "sorting:v2"), sorting)
   }, [sorting, warehouseId])
 
   useEffect(() => {
-    writeLocalStorage(getStorageKey(warehouseId, "columns"), savedColumnsConfig)
+    writeLocalStorage(
+      getStorageKey(warehouseId, "columns:v2"),
+      savedColumnsConfig
+    )
   }, [savedColumnsConfig, warehouseId])
 
   const tableSchemaQuery = useQuery({
@@ -287,9 +292,9 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
             </Button>
           </div>
 
-          <Button className="h-10">
+          <Button className="h-10" onClick={() => setCreateDialogOpen(true)}>
             <Plus className="mr-2 size-4" />
-            Добавить бытовку
+            Добавить новую бытовку
           </Button>
         </div>
       </div>
@@ -365,6 +370,12 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
             setPhotoItem(null)
           }
         }}
+      />
+
+      <RentalItemCreateDialog
+        open={createDialogOpen}
+        warehouseId={warehouseId}
+        onOpenChange={setCreateDialogOpen}
       />
     </div>
   )

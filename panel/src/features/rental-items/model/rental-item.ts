@@ -1,6 +1,8 @@
 export type RentalItemStatus =
+  | "NEW"
   | "RENTED"
   | "BOOKED"
+  | "REPAIR"
   | "CAPITAL_REPAIR"
   | "AFTER_RENT"
   | "SALE"
@@ -16,13 +18,15 @@ export type MoveRentalItemContentToStockPayload = {
 }
 
 export const RENTAL_ITEM_STATUS_LABEL: Record<RentalItemStatus, string> = {
+  NEW: "Новая",
   RENTED: "Аренда",
   BOOKED: "Бронь",
-  CAPITAL_REPAIR: "Кап. ремонт",
+  REPAIR: "Ремонт",
+  CAPITAL_REPAIR: "Капремонт",
   AFTER_RENT: "После аренды",
-  SALE: "Продажа",
-  USED_SALE: "Продажа Б.У.",
-  RESERVED: "Резерв",
+  SALE: "Продажа Б/У",
+  USED_SALE: "Продажа Б/У",
+  RESERVED: "Бронь",
   FREE: "Свободная",
   WAREHOUSE: "Склад",
   OWN_NEEDS: "Собственные нужды",
@@ -166,6 +170,37 @@ export type PageResponse<T> = {
 }
 
 const EMPTY_VALUE = "—"
+const DEFAULT_VISIBLE_RENTAL_ITEM_COLUMN_IDS = new Set([
+  "number",
+  "type",
+  "dimensions",
+  "finishing",
+  "category",
+  "characteristics",
+  "linoleum",
+  "status",
+])
+
+const INTERNAL_RENTAL_ITEM_FIELD_IDS = new Set([
+  "id",
+  "warehouseId",
+  "warehouseName",
+  "categoryId",
+  "subcategoryId",
+  "typeId",
+  "subcategory",
+  "locationNodeId",
+  "mainPhotoUrl",
+  "previewPhotoUrls",
+  "photoCount",
+  "contentsItems",
+  "lastModifiedDate",
+  "lastModifiedBy",
+  "createdDate",
+  "createdBy",
+  "updatedAt",
+  "updatedBy",
+])
 
 const RENTAL_ITEM_FIELD_DEFINITIONS: RentalItemFieldDefinition[] = [
   {
@@ -369,11 +404,14 @@ function toColumnConfig(
   definition: RentalItemFieldDefinition
 ): RentalItemsColumnConfig {
   const locked = definition.locked === true
+  const visible =
+    definition.visibleByDefault ??
+    DEFAULT_VISIBLE_RENTAL_ITEM_COLUMN_IDS.has(definition.id)
 
   return {
     id: definition.id,
     label: definition.label,
-    visible: locked ? true : definition.visibleByDefault !== false,
+    visible: locked ? true : visible,
     locked: locked || undefined,
     filterable: definition.filterable !== false,
     searchable: definition.searchable === true,
@@ -394,10 +432,15 @@ function createInferredDefinition(
     dataType: inferDataType(value),
     filterable: true,
     searchable: typeof value === "string",
+    visibleByDefault: false,
     size: 160,
     minSize: 100,
     maxSize: 700,
   }
+}
+
+function canInferRentalItemColumn(fieldId: string) {
+  return !INTERNAL_RENTAL_ITEM_FIELD_IDS.has(fieldId)
 }
 
 function getObservedFieldValues(items: RentalItemDto[]) {
@@ -441,6 +484,10 @@ export function buildRentalItemsTableSchema(
 
   observedFieldValues.forEach((value, fieldId) => {
     if (knownColumnIds.has(fieldId)) {
+      return
+    }
+
+    if (!canInferRentalItemColumn(fieldId)) {
       return
     }
 

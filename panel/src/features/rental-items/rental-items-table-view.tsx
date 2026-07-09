@@ -622,17 +622,18 @@ export function RentalItemsTableView({
   })
 
   const visibleColumns = table.getVisibleLeafColumns()
+  const tableTotalSize = table.getTotalSize()
   const showLoading = loading ?? isLoading ?? false
 
   return (
     <>
-      <div className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-card">
-        <div className="h-full overflow-auto">
+      <div className="min-h-0 w-full flex-1 overflow-hidden rounded-lg border bg-card">
+        <div className="h-full w-full overflow-auto">
           <table
             className="table-fixed border-separate border-spacing-0 text-sm"
             style={{
-              width: table.getTotalSize(),
-              minWidth: table.getTotalSize(),
+              width: `max(100%, ${tableTotalSize}px)`,
+              minWidth: "100%",
             }}
           >
             <colgroup>
