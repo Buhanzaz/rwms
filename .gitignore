@@ -1,6 +1,11 @@
 HELP.md
 .gradle
 build/
+node_modules/
+dist/
+*.log
+*.class
+local.properties
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
@@ -39,3 +44,7 @@ out/
 ### LLM ###
 .agents/
 AGENTS.md
+skills-lock.json
+WMS_ARCHITECTURE_KNOWLEDGE/
+PROMPT_WMS_FULL_ANALYSIS_RWMS.md
+PROMPT_PANEL_RENTAL_TABLE_MIGRATION.md

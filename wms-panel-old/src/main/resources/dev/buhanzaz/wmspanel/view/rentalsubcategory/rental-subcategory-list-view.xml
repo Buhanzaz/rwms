@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view"
+      title="msg://RentalSubcategoryListView.title"
+      focusComponent="rentalSubcategoriesDataGrid">
+    <data>
+        <collection id="rentalSubcategoriesDc"
+                    class="dev.buhanzaz.wmspanel.entity.RentalSubcategory">
+            <fetchPlan extends="_base">
+                <property name="category" fetchPlan="_base"/>
+            </fetchPlan>
+            <loader id="rentalSubcategoriesDl" readOnly="true">
+                <query>
+                    <![CDATA[select e from RentalSubcategory e order by e.category.name, e.sortOrder, e.name]]>
+                </query>
+            </loader>
+        </collection>
+    </data>
+    <actions>
+        <action id="selectAction" type="lookup_select"/>
+        <action id="discardAction" type="lookup_discard"/>
+    </actions>
+    <facets>
+        <dataLoadCoordinator auto="true"/>
+        <urlQueryParameters>
+            <genericFilter component="genericFilter"/>
+            <pagination component="pagination"/>
+        </urlQueryParameters>
+    </facets>
+    <layout>
+        <genericFilter id="genericFilter"
+                       dataLoader="rentalSubcategoriesDl">
+            <properties include=".*"/>
+        </genericFilter>
+        <hbox id="buttonsPanel" classNames="buttons-panel">
+            <startSlot>
+                <button id="createButton" action="rentalSubcategoriesDataGrid.createAction"/>
+                <button id="editButton" action="rentalSubcategoriesDataGrid.editAction"/>
+                <button id="removeButton" action="rentalSubcategoriesDataGrid.removeAction"/>
+            </startSlot>
+            <endSlot>
+                <simplePagination id="pagination" dataLoader="rentalSubcategoriesDl"/>
+            </endSlot>
+        </hbox>
+        <dataGrid id="rentalSubcategoriesDataGrid"
+                  width="100%"
+                  minHeight="20em"
+                  dataContainer="rentalSubcategoriesDc"
+                  columnReorderingAllowed="true">
+            <actions>
+                <action id="createAction" type="list_create"/>
+                <action id="editAction" type="list_edit"/>
+                <action id="removeAction" type="list_remove"/>
+            </actions>
+            <columns resizable="true">
+                <column property="category"/>
+                <column property="name"/>
+                <column property="code"/>
+                <column property="active"/>
+                <column property="sortOrder"/>
+            </columns>
+        </dataGrid>
+        <hbox id="lookupActions" visible="false">
+            <button id="selectButton" action="selectAction"/>
+            <button id="discardButton" action="discardAction"/>
+        </hbox>
+    </layout>
+</view>

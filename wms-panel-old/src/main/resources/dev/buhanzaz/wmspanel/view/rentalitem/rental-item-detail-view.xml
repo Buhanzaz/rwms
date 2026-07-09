@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view"
+      title="msg://RentalItemDetailView.title"
+      focusComponent="form">
+    <data>
+        <instance id="rentalItemDc"
+                  class="dev.buhanzaz.wmspanel.entity.RentalItem">
+            <fetchPlan extends="_base">
+                <property name="warehouse" fetchPlan="_base"/>
+                <property name="category" fetchPlan="_base"/>
+                <property name="subcategory" fetchPlan="_base"/>
+                <property name="type" fetchPlan="_base"/>
+            </fetchPlan>
+            <loader/>
+        </instance>
+        <collection id="categoriesDc"
+                    class="dev.buhanzaz.wmspanel.entity.RentalCategory">
+            <fetchPlan extends="_base"/>
+            <loader id="categoriesDl" readOnly="true">
+                <query>
+                    <![CDATA[select e from RentalCategory e order by e.sortOrder, e.name]]>
+                </query>
+            </loader>
+        </collection>
+        <collection id="warehousesDc"
+                    class="dev.buhanzaz.wmspanel.entity.Warehouse">
+            <fetchPlan extends="_base"/>
+            <loader id="warehousesDl" readOnly="true">
+                <query>
+                    <![CDATA[select e from Warehouse e where e.active = true order by e.name]]>
+                </query>
+            </loader>
+        </collection>
+        <collection id="subcategoriesDc"
+                    class="dev.buhanzaz.wmspanel.entity.RentalSubcategory">
+            <fetchPlan extends="_base">
+                <property name="category" fetchPlan="_base"/>
+            </fetchPlan>
+            <loader id="subcategoriesDl" readOnly="true">
+                <query>
+                    <![CDATA[select e from RentalSubcategory e where :category is not null and e.category = :category order by e.sortOrder, e.name]]>
+                </query>
+            </loader>
+        </collection>
+        <collection id="typesDc"
+                    class="dev.buhanzaz.wmspanel.entity.RentalType">
+            <fetchPlan extends="_base">
+                <property name="subcategory" fetchPlan="_base"/>
+            </fetchPlan>
+            <loader id="typesDl" readOnly="true">
+                <query>
+                    <![CDATA[select e from RentalType e where :subcategory is not null and e.subcategory = :subcategory order by e.sortOrder, e.name]]>
+                </query>
+            </loader>
+        </collection>
+    </data>
+    <actions>
+        <action id="saveCloseAction" type="detail_saveClose"/>
+        <action id="closeAction" type="detail_close"/>
+    </actions>
+    <facets>
+        <dataLoadCoordinator auto="true"/>
+    </facets>
+    <layout>
+        <formLayout id="form" dataContainer="rentalItemDc">
+            <textField id="numberField" property="number" required="true"/>
+            <entityComboBox id="warehouseField" property="warehouse" itemsContainer="warehousesDc" required="true"/>
+            <entityComboBox id="categoryField" property="category" itemsContainer="categoriesDc" required="true"/>
+            <entityComboBox id="subcategoryField" property="subcategory" itemsContainer="subcategoriesDc"/>
+            <entityComboBox id="typeField" property="type" itemsContainer="typesDc"/>
+            <comboBox id="statusField" property="status" required="true"/>
+            <textArea id="commentField" property="comment"/>
+        </formLayout>
+        <hbox id="detailActions">
+            <button id="saveAndCloseButton" action="saveCloseAction"/>
+            <button id="closeButton" action="closeAction"/>
+        </hbox>
+    </layout>
+</view>

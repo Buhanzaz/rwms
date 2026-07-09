@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd"
+        objectQuotingStrategy="QUOTE_ONLY_RESERVED_WORDS">
+
+    <changeSet id="1" author="codex">
+        <addColumn tableName="WAREHOUSE">
+            <column name="CODE" type="VARCHAR(64)"/>
+            <column name="ADDRESS" type="VARCHAR(255)"/>
+            <column name="TIME_ZONE" type="VARCHAR(64)"/>
+            <column name="SORT_ORDER" type="INT"/>
+            <column name="COMMENT_" type="VARCHAR(1000)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2" author="codex">
+        <validCheckSum>9:7dd335cc1e9acb9fc17c3fa2bf6b92f5</validCheckSum>
+        <sql>
+            UPDATE WAREHOUSE
+            SET TIME_ZONE = 'Europe/Moscow'
+            WHERE TIME_ZONE IS NULL;
+        </sql>
+    </changeSet>
+
+    <changeSet id="3" author="codex">
+        <validCheckSum>9:bb686a72a6f625e952a929aae9b9d593</validCheckSum>
+        <sql>
+            UPDATE WAREHOUSE
+            SET CODE = 'WH_' || REPLACE(CAST(ID AS VARCHAR(36)), '-', '')
+            WHERE CODE IS NULL;
+        </sql>
+    </changeSet>
+
+    <changeSet id="4" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_WAREHOUSE_UNQ_CODE" tableName="WAREHOUSE"/>
+            </not>
+        </preConditions>
+        <addNotNullConstraint tableName="WAREHOUSE" columnName="CODE" columnDataType="VARCHAR(64)"/>
+        <addNotNullConstraint tableName="WAREHOUSE" columnName="TIME_ZONE" columnDataType="VARCHAR(64)"/>
+        <addUniqueConstraint tableName="WAREHOUSE" columnNames="CODE" constraintName="IDX_WAREHOUSE_UNQ_CODE"/>
+    </changeSet>
+
+</databaseChangeLog>

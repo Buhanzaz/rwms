@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="2026-07-03-144001-rename-move-to-storage-queue" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="WORK_QUEUE"/>
+            <columnExists tableName="WORK_QUEUE" columnName="CODE"/>
+            <columnExists tableName="WORK_QUEUE" columnName="NAME"/>
+        </preConditions>
+        <update tableName="WORK_QUEUE">
+            <column name="NAME" value="Перемещение с ремонта"/>
+            <where>CODE = 'MOVE_TO_STORAGE'</where>
+        </update>
+    </changeSet>
+
+</databaseChangeLog>

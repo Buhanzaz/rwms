@@ -1,0 +1,245 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd"
+        objectQuotingStrategy="QUOTE_ONLY_RESERVED_WORDS">
+
+    <changeSet id="2026-06-18-090000-repair-estimate-line-source-key" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_ESTIMATE_LINE"/>
+            <not>
+                <columnExists tableName="REPAIR_ESTIMATE_LINE" columnName="SOURCE_LINE_KEY"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="REPAIR_ESTIMATE_LINE">
+            <column name="SOURCE_LINE_KEY" type="VARCHAR(128)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-18-090001-repair-estimate-line-comment" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_ESTIMATE_LINE"/>
+            <not>
+                <columnExists tableName="REPAIR_ESTIMATE_LINE" columnName="LINE_COMMENT"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="REPAIR_ESTIMATE_LINE">
+            <column name="LINE_COMMENT" type="VARCHAR(2000)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-18-090002-repair-estimate-line-source-key-unique" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_ESTIMATE_LINE"/>
+            <not>
+                <indexExists tableName="REPAIR_ESTIMATE_LINE" indexName="IDX_REPAIR_ESTIMATE_LINE_UNQ_SOURCE_KEY"/>
+            </not>
+        </preConditions>
+        <addUniqueConstraint tableName="REPAIR_ESTIMATE_LINE"
+                             columnNames="ESTIMATE_ID, SOURCE_LINE_KEY"
+                             constraintName="IDX_REPAIR_ESTIMATE_LINE_UNQ_SOURCE_KEY"/>
+    </changeSet>
+
+    <changeSet id="2026-06-18-090003-repair-estimate-line-estimate-index" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_ESTIMATE_LINE"/>
+            <not>
+                <indexExists tableName="REPAIR_ESTIMATE_LINE" indexName="IDX_REPAIR_ESTIMATE_LINE_ON_ESTIMATE"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="REPAIR_ESTIMATE_LINE" indexName="IDX_REPAIR_ESTIMATE_LINE_ON_ESTIMATE">
+            <column name="ESTIMATE_ID"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="2026-06-18-090004-repair-estimate-catalog-node-crew-type" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_ESTIMATE_CATALOG_NODE"/>
+            <not>
+                <columnExists tableName="REPAIR_ESTIMATE_CATALOG_NODE" columnName="CREW_TYPE_ID"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="REPAIR_ESTIMATE_CATALOG_NODE">
+            <column name="CREW_TYPE_ID" type="UUID"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-18-090005-repair-estimate-catalog-node-crew-type-fk" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_ESTIMATE_CATALOG_NODE"/>
+            <not>
+                <foreignKeyConstraintExists foreignKeyTableName="REPAIR_ESTIMATE_CATALOG_NODE"
+                                            foreignKeyName="FK_REPAIR_ESTIMATE_CATALOG_NODE_ON_CREW_TYPE"/>
+            </not>
+        </preConditions>
+        <addForeignKeyConstraint baseTableName="REPAIR_ESTIMATE_CATALOG_NODE"
+                                 baseColumnNames="CREW_TYPE_ID"
+                                 referencedTableName="WORKER_CREW_TYPE"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_REPAIR_ESTIMATE_CATALOG_NODE_ON_CREW_TYPE"/>
+    </changeSet>
+
+    <changeSet id="2026-06-18-090006-repair-estimate-catalog-node-crew-type-index" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_ESTIMATE_CATALOG_NODE"/>
+            <not>
+                <indexExists tableName="REPAIR_ESTIMATE_CATALOG_NODE" indexName="IDX_REPAIR_ESTIMATE_CATALOG_NODE_ON_CREW_TYPE"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="REPAIR_ESTIMATE_CATALOG_NODE" indexName="IDX_REPAIR_ESTIMATE_CATALOG_NODE_ON_CREW_TYPE">
+            <column name="CREW_TYPE_ID"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="2026-06-18-090007-repair-estimate-task-plan-table" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="REPAIR_ESTIMATE_TASK_PLAN"/>
+            </not>
+        </preConditions>
+        <createTable tableName="REPAIR_ESTIMATE_TASK_PLAN">
+            <column name="ID" type="UUID">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="PK_REPAIR_ESTIMATE_TASK_PLAN"/>
+            </column>
+            <column name="VERSION" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="ESTIMATE_ID" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ESTIMATE_LINE_ID" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="CREW_TYPE_ID" type="UUID"/>
+            <column name="CREW_ID" type="UUID"/>
+            <column name="QUEUE_ID" type="UUID"/>
+            <column name="GROUP_COMMENT" type="VARCHAR(2000)"/>
+            <column name="FOLLOW_UP_NODE_ID" type="UUID"/>
+            <column name="GENERATED_BOARD_TASK_ID" type="UUID"/>
+            <column name="GENERATION_STATUS" type="VARCHAR(32)" defaultValue="PENDING_GENERATION">
+                <constraints nullable="false"/>
+            </column>
+            <column name="SORT_ORDER" type="INT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ACTIVE" type="BOOLEAN" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="COMMENT_" type="VARCHAR(1000)"/>
+        </createTable>
+    </changeSet>
+
+    <changeSet id="2026-06-18-090008-repair-estimate-task-plan-line-index" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_ESTIMATE_TASK_PLAN"/>
+            <not>
+                <indexExists tableName="REPAIR_ESTIMATE_TASK_PLAN" indexName="IDX_REPAIR_ESTIMATE_TASK_PLAN_ON_LINE"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="REPAIR_ESTIMATE_TASK_PLAN" indexName="IDX_REPAIR_ESTIMATE_TASK_PLAN_ON_LINE">
+            <column name="ESTIMATE_LINE_ID"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="2026-06-18-090009-repair-estimate-task-plan-unique-generated-task" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_ESTIMATE_TASK_PLAN"/>
+            <not>
+                <indexExists tableName="REPAIR_ESTIMATE_TASK_PLAN" indexName="IDX_REPAIR_ESTIMATE_TASK_PLAN_UNQ_GENERATED_TASK"/>
+            </not>
+        </preConditions>
+        <addUniqueConstraint tableName="REPAIR_ESTIMATE_TASK_PLAN"
+                             columnNames="GENERATED_BOARD_TASK_ID"
+                             constraintName="IDX_REPAIR_ESTIMATE_TASK_PLAN_UNQ_GENERATED_TASK"/>
+    </changeSet>
+
+    <changeSet id="2026-06-18-090010-repair-estimate-task-plan-estimate-index" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_ESTIMATE_TASK_PLAN"/>
+            <not>
+                <indexExists tableName="REPAIR_ESTIMATE_TASK_PLAN" indexName="IDX_REPAIR_ESTIMATE_TASK_PLAN_ON_ESTIMATE"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="REPAIR_ESTIMATE_TASK_PLAN" indexName="IDX_REPAIR_ESTIMATE_TASK_PLAN_ON_ESTIMATE">
+            <column name="ESTIMATE_ID"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="2026-06-18-090011-repair-estimate-task-plan-status-index" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_ESTIMATE_TASK_PLAN"/>
+            <not>
+                <indexExists tableName="REPAIR_ESTIMATE_TASK_PLAN" indexName="IDX_REPAIR_ESTIMATE_TASK_PLAN_ON_STATUS"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="REPAIR_ESTIMATE_TASK_PLAN" indexName="IDX_REPAIR_ESTIMATE_TASK_PLAN_ON_STATUS">
+            <column name="GENERATION_STATUS"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="2026-06-18-090012-repair-estimate-task-plan-foreign-keys" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_ESTIMATE_TASK_PLAN"/>
+        </preConditions>
+        <addForeignKeyConstraint baseTableName="REPAIR_ESTIMATE_TASK_PLAN"
+                                 baseColumnNames="ESTIMATE_ID"
+                                 referencedTableName="REPAIR_ESTIMATE"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_REPAIR_ESTIMATE_TASK_PLAN_ON_ESTIMATE"/>
+        <addForeignKeyConstraint baseTableName="REPAIR_ESTIMATE_TASK_PLAN"
+                                 baseColumnNames="ESTIMATE_LINE_ID"
+                                 referencedTableName="REPAIR_ESTIMATE_LINE"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_REPAIR_ESTIMATE_TASK_PLAN_ON_ESTIMATE_LINE"/>
+        <addForeignKeyConstraint baseTableName="REPAIR_ESTIMATE_TASK_PLAN"
+                                 baseColumnNames="CREW_TYPE_ID"
+                                 referencedTableName="WORKER_CREW_TYPE"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_REPAIR_ESTIMATE_TASK_PLAN_ON_CREW_TYPE"/>
+        <addForeignKeyConstraint baseTableName="REPAIR_ESTIMATE_TASK_PLAN"
+                                 baseColumnNames="CREW_ID"
+                                 referencedTableName="WORKER_CREW"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_REPAIR_ESTIMATE_TASK_PLAN_ON_CREW"/>
+        <addForeignKeyConstraint baseTableName="REPAIR_ESTIMATE_TASK_PLAN"
+                                 baseColumnNames="QUEUE_ID"
+                                 referencedTableName="WORK_QUEUE"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_REPAIR_ESTIMATE_TASK_PLAN_ON_QUEUE"/>
+        <addForeignKeyConstraint baseTableName="REPAIR_ESTIMATE_TASK_PLAN"
+                                 baseColumnNames="FOLLOW_UP_NODE_ID"
+                                 referencedTableName="REPAIR_ESTIMATE_CATALOG_NODE"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_REPAIR_ESTIMATE_TASK_PLAN_ON_FOLLOW_UP_NODE"/>
+        <addForeignKeyConstraint baseTableName="REPAIR_ESTIMATE_TASK_PLAN"
+                                 baseColumnNames="GENERATED_BOARD_TASK_ID"
+                                 referencedTableName="BOARD_TASK"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_REPAIR_ESTIMATE_TASK_PLAN_ON_GENERATED_BOARD_TASK"/>
+    </changeSet>
+
+    <changeSet id="2026-06-18-090013-repair-estimate-task-plan-drop-legacy-line-unique" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_ESTIMATE_TASK_PLAN"/>
+            <sqlCheck expectedResult="1">
+                SELECT COUNT(*)
+                FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+                WHERE TABLE_NAME = 'REPAIR_ESTIMATE_TASK_PLAN'
+                  AND CONSTRAINT_NAME = 'IDX_REPAIR_ESTIMATE_TASK_PLAN_UNQ_LINE'
+            </sqlCheck>
+        </preConditions>
+        <sql>
+            ALTER TABLE REPAIR_ESTIMATE_TASK_PLAN
+            DROP CONSTRAINT IDX_REPAIR_ESTIMATE_TASK_PLAN_UNQ_LINE
+        </sql>
+    </changeSet>
+
+</databaseChangeLog>

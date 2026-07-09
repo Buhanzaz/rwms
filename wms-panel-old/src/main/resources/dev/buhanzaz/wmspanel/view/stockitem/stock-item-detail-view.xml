@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view" title="msg://StockItemDetailView.title" focusComponent="form">
+    <data>
+        <instance id="stockItemDc" class="dev.buhanzaz.wmspanel.entity.StockItem">
+            <fetchPlan extends="_base"><property name="warehouse" fetchPlan="_base"/><property name="segment" fetchPlan="_base"/></fetchPlan>
+            <loader/>
+        </instance>
+        <collection id="warehousesDc" class="dev.buhanzaz.wmspanel.entity.Warehouse"><fetchPlan extends="_base"/><loader id="warehousesDl" readOnly="true"><query><![CDATA[select e from Warehouse e where e.active = true order by e.name]]></query></loader></collection>
+        <collection id="segmentsDc" class="dev.buhanzaz.wmspanel.entity.WarehouseSegment"><fetchPlan extends="_base"/><loader id="segmentsDl" readOnly="true"><query><![CDATA[select e from WarehouseSegment e where e.active = true order by e.sortOrder, e.name]]></query></loader></collection>
+    </data>
+    <actions><action id="saveCloseAction" type="detail_saveClose"/><action id="closeAction" type="detail_close"/></actions>
+    <facets><dataLoadCoordinator auto="true"/></facets>
+    <layout>
+        <formLayout id="form" dataContainer="stockItemDc">
+            <entityComboBox id="warehouseField" property="warehouse" itemsContainer="warehousesDc" required="true"/>
+            <textField id="nameField" property="name" required="true"/>
+            <entityComboBox id="segmentField" property="segment" itemsContainer="segmentsDc"/>
+            <integerField id="totalQuantityField" property="totalQuantity" required="true"/>
+            <textField id="unitField" property="unit" required="true"/>
+            <checkbox id="activeField" property="active"/>
+        </formLayout>
+        <hbox id="detailActions"><button id="saveAndCloseButton" action="saveCloseAction"/><button id="closeButton" action="closeAction"/></hbox>
+    </layout>
+</view>

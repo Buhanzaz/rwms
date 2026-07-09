@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view" title="msg://WorkerDetailView.title" focusComponent="form">
+    <data>
+        <instance id="workerDc" class="dev.buhanzaz.wmspanel.entity.Worker">
+            <fetchPlan extends="_base">
+                <property name="warehouse" fetchPlan="_base"/>
+            </fetchPlan>
+            <loader/>
+        </instance>
+    </data>
+    <actions>
+        <action id="saveCloseAction" type="detail_saveClose"/>
+        <action id="closeAction" type="detail_close"/>
+    </actions>
+    <facets><dataLoadCoordinator auto="true"/></facets>
+    <layout>
+        <formLayout id="form" dataContainer="workerDc">
+            <entityComboBox id="warehouseField" property="warehouse" required="true"/>
+            <textField id="lastNameField" property="lastName"/>
+            <textField id="firstNameField" property="firstName"/>
+            <textField id="middleNameField" property="middleName"/>
+            <textField id="appLoginField" property="appLogin"/>
+            <textField id="appPasswordField" property="appPassword"/>
+            <multiSelectComboBox id="workerGroupsField" label="msg://dev.buhanzaz.wmspanel.entity/Worker.workerGroups"/>
+            <checkbox id="activeField" property="active"/>
+            <textArea id="commentField" property="comment"/>
+        </formLayout>
+        <hbox id="detailActions">
+            <button id="saveAndCloseButton" action="saveCloseAction"/>
+            <button id="closeButton" action="closeAction"/>
+        </hbox>
+    </layout>
+</view>

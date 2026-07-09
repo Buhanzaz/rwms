@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="06-250000-user-access-step2-1" author="wms-panel" context="!cuba">
+        <addColumn tableName="USER_">
+            <column name="GLOBAL_ROLE" type="VARCHAR(32)"/>
+        </addColumn>
+        <addColumn tableName="USER_WAREHOUSE_ACCESS">
+            <column name="USER_ID" type="UUID"/>
+            <column name="ACCESS_LEVEL" type="VARCHAR(32)"/>
+            <column name="COMMENT_" type="VARCHAR(1000)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="06-250000-user-access-step2-2" author="wms-panel" context="!cuba">
+        <sql>
+            UPDATE USER_ SET GLOBAL_ROLE = 'VIEWER' WHERE GLOBAL_ROLE IS NULL;
+            UPDATE USER_ SET GLOBAL_ROLE = 'SYSTEM_ADMIN' WHERE USERNAME = 'admin';
+            UPDATE USER_WAREHOUSE_ACCESS
+               SET USER_ID = (SELECT U.ID FROM USER_ U WHERE U.USERNAME = USER_WAREHOUSE_ACCESS.USERNAME)
+             WHERE USER_ID IS NULL AND USERNAME IS NOT NULL;
+            UPDATE USER_WAREHOUSE_ACCESS
+               SET ACCESS_LEVEL = CASE
+                       WHEN ROLE_ IN ('ADMIN', 'WAREHOUSE_MANAGER') THEN 'MANAGE'
+                       WHEN ROLE_ = 'MANAGER' THEN 'EDIT'
+                       ELSE 'VIEW'
+                   END
+             WHERE ACCESS_LEVEL IS NULL;
+        </sql>
+    </changeSet>
+
+    <changeSet id="06-250000-user-access-step2-3" author="wms-panel" context="!cuba">
+        <addForeignKeyConstraint baseTableName="USER_WAREHOUSE_ACCESS"
+                                 baseColumnNames="USER_ID"
+                                 referencedTableName="USER_"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_USER_WAREHOUSE_ACCESS_ON_USER"/>
+        <createIndex indexName="IDX_USER_WAREHOUSE_ACCESS_ON_USER_ID"
+                     tableName="USER_WAREHOUSE_ACCESS">
+            <column name="USER_ID"/>
+        </createIndex>
+        <addNotNullConstraint tableName="USER_"
+                              columnName="GLOBAL_ROLE"
+                              columnDataType="VARCHAR(32)"/>
+        <addNotNullConstraint tableName="USER_WAREHOUSE_ACCESS"
+                              columnName="ACCESS_LEVEL"
+                              columnDataType="VARCHAR(32)"/>
+    </changeSet>
+
+</databaseChangeLog>

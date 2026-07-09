@@ -1,0 +1,379 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd"
+        objectQuotingStrategy="QUOTE_ONLY_RESERVED_WORDS">
+
+    <changeSet id="2026-06-28-150000-rental-item-event-history-column-status-before-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="STATUS_BEFORE"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="STATUS_BEFORE" type="varchar(32)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150001-rental-item-event-history-column-status-after-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="STATUS_AFTER"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="STATUS_AFTER" type="varchar(32)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150002-rental-item-event-history-column-actor-username-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="ACTOR_USERNAME"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="ACTOR_USERNAME" type="varchar(255)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150003-rental-item-event-history-column-actor-display-name-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="ACTOR_DISPLAY_NAME"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="ACTOR_DISPLAY_NAME" type="varchar(255)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150004-rental-item-event-history-column-repair-process-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="REPAIR_PROCESS_ID"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="REPAIR_PROCESS_ID" type="UUID"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150005-rental-item-event-history-column-board-task-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="BOARD_TASK_ID"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="BOARD_TASK_ID" type="UUID"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150006-rental-item-event-history-column-queue-entry-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="QUEUE_ENTRY_ID"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="QUEUE_ENTRY_ID" type="UUID"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150007-rental-item-event-history-column-worker-group-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="WORKER_GROUP_ID"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="WORKER_GROUP_ID" type="UUID"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150008-rental-item-event-history-column-worker-user-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="WORKER_USER_ID"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="WORKER_USER_ID" type="UUID"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150009-rental-item-event-history-column-worker-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="WORKER_ID"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="WORKER_ID" type="UUID"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150010-rental-item-event-history-column-worker-crew-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="WORKER_CREW_ID"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="WORKER_CREW_ID" type="UUID"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150011-rental-item-event-history-column-worker-crew-type-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="WORKER_CREW_TYPE_ID"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="WORKER_CREW_TYPE_ID" type="UUID"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150012-rental-item-event-history-column-parent-event-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="PARENT_EVENT_ID"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="PARENT_EVENT_ID" type="UUID"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150013-rental-item-event-history-column-event-order-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="EVENT_ORDER"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="EVENT_ORDER" type="int"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150014-rental-item-event-history-column-event-group-key-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="EVENT_GROUP_KEY"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="EVENT_GROUP_KEY" type="varchar(255)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150015-rental-item-event-history-column-source-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="SOURCE_"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="SOURCE_" type="varchar(64)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150016-rental-item-event-history-column-source-comment-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="SOURCE_COMMENT"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="SOURCE_COMMENT" type="varchar(2000)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150101-rental-item-event-history-fk-parent-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <and>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="PARENT_EVENT_ID"/>
+                <not>
+                    <foreignKeyConstraintExists foreignKeyName="FK_RENTAL_ITEM_EVENT_ON_PARENT_EVENT"/>
+                </not>
+            </and>
+        </preConditions>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="PARENT_EVENT_ID"
+                                 referencedTableName="RENTAL_ITEM_EVENT" referencedColumnNames="ID"
+                                 constraintName="FK_RENTAL_ITEM_EVENT_ON_PARENT_EVENT"/>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150102-rental-item-event-history-fk-process-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <and>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="REPAIR_PROCESS_ID"/>
+                <not>
+                    <foreignKeyConstraintExists foreignKeyName="FK_RENTAL_ITEM_EVENT_ON_REPAIR_PROCESS"/>
+                </not>
+            </and>
+        </preConditions>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="REPAIR_PROCESS_ID"
+                                 referencedTableName="REPAIR_PROCESS" referencedColumnNames="ID"
+                                 constraintName="FK_RENTAL_ITEM_EVENT_ON_REPAIR_PROCESS"/>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150103-rental-item-event-history-fk-board-task-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <and>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="BOARD_TASK_ID"/>
+                <not>
+                    <foreignKeyConstraintExists foreignKeyName="FK_RENTAL_ITEM_EVENT_ON_BOARD_TASK"/>
+                </not>
+            </and>
+        </preConditions>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="BOARD_TASK_ID"
+                                 referencedTableName="BOARD_TASK" referencedColumnNames="ID"
+                                 constraintName="FK_RENTAL_ITEM_EVENT_ON_BOARD_TASK"/>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150104-rental-item-event-history-fk-queue-entry-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <and>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="QUEUE_ENTRY_ID"/>
+                <not>
+                    <foreignKeyConstraintExists foreignKeyName="FK_RENTAL_ITEM_EVENT_ON_QUEUE_ENTRY"/>
+                </not>
+            </and>
+        </preConditions>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="QUEUE_ENTRY_ID"
+                                 referencedTableName="QUEUE_ENTRY" referencedColumnNames="ID"
+                                 constraintName="FK_RENTAL_ITEM_EVENT_ON_QUEUE_ENTRY"/>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150105-rental-item-event-history-fk-worker-group-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <and>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="WORKER_GROUP_ID"/>
+                <not>
+                    <foreignKeyConstraintExists foreignKeyName="FK_RENTAL_ITEM_EVENT_ON_WORKER_GROUP"/>
+                </not>
+            </and>
+        </preConditions>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="WORKER_GROUP_ID"
+                                 referencedTableName="WORKER_GROUP" referencedColumnNames="ID"
+                                 constraintName="FK_RENTAL_ITEM_EVENT_ON_WORKER_GROUP"/>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150106-rental-item-event-history-fk-worker-user-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <and>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="WORKER_USER_ID"/>
+                <not>
+                    <foreignKeyConstraintExists foreignKeyName="FK_RENTAL_ITEM_EVENT_ON_WORKER_USER"/>
+                </not>
+            </and>
+        </preConditions>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="WORKER_USER_ID"
+                                 referencedTableName="WORKER_USER" referencedColumnNames="ID"
+                                 constraintName="FK_RENTAL_ITEM_EVENT_ON_WORKER_USER"/>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150107-rental-item-event-history-fk-worker-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <and>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="WORKER_ID"/>
+                <not>
+                    <foreignKeyConstraintExists foreignKeyName="FK_RENTAL_ITEM_EVENT_ON_WORKER"/>
+                </not>
+            </and>
+        </preConditions>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="WORKER_ID"
+                                 referencedTableName="WORKER" referencedColumnNames="ID"
+                                 constraintName="FK_RENTAL_ITEM_EVENT_ON_WORKER"/>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150108-rental-item-event-history-fk-worker-crew-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <and>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="WORKER_CREW_ID"/>
+                <not>
+                    <foreignKeyConstraintExists foreignKeyName="FK_RENTAL_ITEM_EVENT_ON_WORKER_CREW"/>
+                </not>
+            </and>
+        </preConditions>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="WORKER_CREW_ID"
+                                 referencedTableName="WORKER_CREW" referencedColumnNames="ID"
+                                 constraintName="FK_RENTAL_ITEM_EVENT_ON_WORKER_CREW"/>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150109-rental-item-event-history-fk-worker-crew-type-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <and>
+                <columnExists tableName="RENTAL_ITEM_EVENT" columnName="WORKER_CREW_TYPE_ID"/>
+                <not>
+                    <foreignKeyConstraintExists foreignKeyName="FK_RENTAL_ITEM_EVENT_ON_WORKER_CREW_TYPE"/>
+                </not>
+            </and>
+        </preConditions>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="WORKER_CREW_TYPE_ID"
+                                 referencedTableName="WORKER_CREW_TYPE" referencedColumnNames="ID"
+                                 constraintName="FK_RENTAL_ITEM_EVENT_ON_WORKER_CREW_TYPE"/>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150201-rental-item-event-history-index-item-date-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_RENTAL_ITEM_EVENT_ITEM_DATE"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="RENTAL_ITEM_EVENT" indexName="IDX_RENTAL_ITEM_EVENT_ITEM_DATE">
+            <column name="RENTAL_ITEM_ID"/>
+            <column name="EVENT_DATE"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150202-rental-item-event-history-index-parent-order-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_RENTAL_ITEM_EVENT_PARENT_ORDER"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="RENTAL_ITEM_EVENT" indexName="IDX_RENTAL_ITEM_EVENT_PARENT_ORDER">
+            <column name="PARENT_EVENT_ID"/>
+            <column name="EVENT_ORDER"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150203-rental-item-event-history-index-type-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_RENTAL_ITEM_EVENT_TYPE"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="RENTAL_ITEM_EVENT" indexName="IDX_RENTAL_ITEM_EVENT_TYPE">
+            <column name="EVENT_TYPE"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150204-rental-item-event-history-index-process-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_RENTAL_ITEM_EVENT_REPAIR_PROCESS"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="RENTAL_ITEM_EVENT" indexName="IDX_RENTAL_ITEM_EVENT_REPAIR_PROCESS">
+            <column name="REPAIR_PROCESS_ID"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="2026-06-28-150205-rental-item-event-history-index-board-task-corrective" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_RENTAL_ITEM_EVENT_BOARD_TASK"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="RENTAL_ITEM_EVENT" indexName="IDX_RENTAL_ITEM_EVENT_BOARD_TASK">
+            <column name="BOARD_TASK_ID"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd"
+        objectQuotingStrategy="QUOTE_ONLY_RESERVED_WORDS">
+
+    <changeSet id="2026-06-30-100000-backfill-worker-group-warehouse" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="WORKER_GROUP"/>
+            <columnExists tableName="WORKER_GROUP" columnName="WAREHOUSE_ID"/>
+            <tableExists tableName="WAREHOUSE"/>
+        </preConditions>
+        <sql>
+            UPDATE WORKER_GROUP wg
+               SET WAREHOUSE_ID = COALESCE(
+                   (SELECT MIN(w.WAREHOUSE_ID)
+                      FROM WORKER_GROUP_MEMBER wgm
+                      JOIN WORKER w ON w.ID = wgm.WORKER_ID
+                     WHERE wgm.WORKER_GROUP_ID = wg.ID
+                       AND w.WAREHOUSE_ID IS NOT NULL),
+                   (SELECT MIN(q.WAREHOUSE_ID)
+                      FROM TASK_ASSIGNMENT ta
+                      JOIN QUEUE_ENTRY qe ON qe.ID = ta.QUEUE_ENTRY_ID
+                      JOIN WORK_QUEUE q ON q.ID = qe.QUEUE_ID
+                     WHERE ta.WORKER_GROUP_ID = wg.ID
+                       AND q.WAREHOUSE_ID IS NOT NULL),
+                   (SELECT MIN(q.WAREHOUSE_ID)
+                      FROM RENTAL_ITEM_EVENT rie
+                      JOIN QUEUE_ENTRY qe ON qe.ID = rie.QUEUE_ENTRY_ID
+                      JOIN WORK_QUEUE q ON q.ID = qe.QUEUE_ID
+                     WHERE rie.WORKER_GROUP_ID = wg.ID
+                       AND q.WAREHOUSE_ID IS NOT NULL),
+                   (SELECT MIN(WAREHOUSE_ID) FROM WORK_QUEUE WHERE WAREHOUSE_ID IS NOT NULL),
+                   (SELECT MIN(ID) FROM WAREHOUSE WHERE ACTIVE = TRUE),
+                   (SELECT MIN(ID) FROM WAREHOUSE)
+               )
+             WHERE wg.WAREHOUSE_ID IS NULL;
+        </sql>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100010-worker-group-warehouse-not-null" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="WORKER_GROUP"/>
+            <columnExists tableName="WORKER_GROUP" columnName="WAREHOUSE_ID"/>
+            <sqlCheck expectedResult="0">
+                select count(*) from WORKER_GROUP where WAREHOUSE_ID is null
+            </sqlCheck>
+        </preConditions>
+        <addNotNullConstraint tableName="WORKER_GROUP"
+                              columnName="WAREHOUSE_ID"
+                              columnDataType="UUID"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100100-drop-rental-item-event-worker-crew-fk" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <foreignKeyConstraintExists foreignKeyName="FK_RENTAL_ITEM_EVENT_ON_WORKER_CREW"/>
+        </preConditions>
+        <dropForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT"
+                                  constraintName="FK_RENTAL_ITEM_EVENT_ON_WORKER_CREW"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100105-drop-rental-item-event-worker-crew-type-fk" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <foreignKeyConstraintExists foreignKeyName="FK_RENTAL_ITEM_EVENT_ON_WORKER_CREW_TYPE"/>
+        </preConditions>
+        <dropForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT"
+                                  constraintName="FK_RENTAL_ITEM_EVENT_ON_WORKER_CREW_TYPE"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100110-drop-rental-item-event-worker-crew-column" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="RENTAL_ITEM_EVENT" columnName="WORKER_CREW_ID"/>
+        </preConditions>
+        <dropColumn tableName="RENTAL_ITEM_EVENT" columnName="WORKER_CREW_ID"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100115-drop-rental-item-event-worker-crew-type-column" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="RENTAL_ITEM_EVENT" columnName="WORKER_CREW_TYPE_ID"/>
+        </preConditions>
+        <dropColumn tableName="RENTAL_ITEM_EVENT" columnName="WORKER_CREW_TYPE_ID"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100200-drop-catalog-node-crew-fk" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <foreignKeyConstraintExists foreignKeyName="FK_REPAIR_ESTIMATE_CATALOG_NODE_ON_CREW_TYPE"/>
+        </preConditions>
+        <dropForeignKeyConstraint baseTableName="REPAIR_ESTIMATE_CATALOG_NODE"
+                                  constraintName="FK_REPAIR_ESTIMATE_CATALOG_NODE_ON_CREW_TYPE"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100210-drop-catalog-node-crew-index" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <indexExists tableName="REPAIR_ESTIMATE_CATALOG_NODE" indexName="IDX_REPAIR_ESTIMATE_CATALOG_NODE_ON_CREW_TYPE"/>
+        </preConditions>
+        <dropIndex tableName="REPAIR_ESTIMATE_CATALOG_NODE"
+                   indexName="IDX_REPAIR_ESTIMATE_CATALOG_NODE_ON_CREW_TYPE"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100220-drop-catalog-node-crew-column" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="REPAIR_ESTIMATE_CATALOG_NODE" columnName="CREW_TYPE_ID"/>
+        </preConditions>
+        <dropColumn tableName="REPAIR_ESTIMATE_CATALOG_NODE" columnName="CREW_TYPE_ID"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100300-drop-task-plan-crew-type-fk" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <foreignKeyConstraintExists foreignKeyName="FK_REPAIR_ESTIMATE_TASK_PLAN_ON_CREW_TYPE"/>
+        </preConditions>
+        <dropForeignKeyConstraint baseTableName="REPAIR_ESTIMATE_TASK_PLAN"
+                                  constraintName="FK_REPAIR_ESTIMATE_TASK_PLAN_ON_CREW_TYPE"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100305-drop-task-plan-crew-fk" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <foreignKeyConstraintExists foreignKeyName="FK_REPAIR_ESTIMATE_TASK_PLAN_ON_CREW"/>
+        </preConditions>
+        <dropForeignKeyConstraint baseTableName="REPAIR_ESTIMATE_TASK_PLAN"
+                                  constraintName="FK_REPAIR_ESTIMATE_TASK_PLAN_ON_CREW"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100310-drop-task-plan-crew-type-column" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="REPAIR_ESTIMATE_TASK_PLAN" columnName="CREW_TYPE_ID"/>
+        </preConditions>
+        <dropColumn tableName="REPAIR_ESTIMATE_TASK_PLAN" columnName="CREW_TYPE_ID"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100315-drop-task-plan-crew-column" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="REPAIR_ESTIMATE_TASK_PLAN" columnName="CREW_ID"/>
+        </preConditions>
+        <dropColumn tableName="REPAIR_ESTIMATE_TASK_PLAN" columnName="CREW_ID"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100400-drop-board-task-crew-type-fk" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <foreignKeyConstraintExists foreignKeyName="FK_BOARD_TASK_ON_CREW_TYPE"/>
+        </preConditions>
+        <dropForeignKeyConstraint baseTableName="BOARD_TASK" constraintName="FK_BOARD_TASK_ON_CREW_TYPE"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100405-drop-board-task-crew-fk" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <foreignKeyConstraintExists foreignKeyName="FK_BOARD_TASK_ON_CREW"/>
+        </preConditions>
+        <dropForeignKeyConstraint baseTableName="BOARD_TASK" constraintName="FK_BOARD_TASK_ON_CREW"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100410-drop-board-task-crew-type-column" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="BOARD_TASK" columnName="CREW_TYPE_ID"/>
+        </preConditions>
+        <dropColumn tableName="BOARD_TASK" columnName="CREW_TYPE_ID"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100415-drop-board-task-crew-column" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="BOARD_TASK" columnName="CREW_ID"/>
+        </preConditions>
+        <dropColumn tableName="BOARD_TASK" columnName="CREW_ID"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100500-drop-task-assignment-crew-fk" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <foreignKeyConstraintExists foreignKeyName="FK_TASK_ASSIGNMENT_ON_CREW"/>
+        </preConditions>
+        <dropForeignKeyConstraint baseTableName="TASK_ASSIGNMENT" constraintName="FK_TASK_ASSIGNMENT_ON_CREW"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100510-drop-task-assignment-crew-column" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="TASK_ASSIGNMENT" columnName="CREW_ID"/>
+        </preConditions>
+        <dropColumn tableName="TASK_ASSIGNMENT" columnName="CREW_ID"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100600-drop-adjacent-crew-rule-table" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="ADJACENT_CREW_RULE"/>
+        </preConditions>
+        <dropTable tableName="ADJACENT_CREW_RULE"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100610-drop-worker-crew-member-table" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="WORKER_CREW_MEMBER"/>
+        </preConditions>
+        <dropTable tableName="WORKER_CREW_MEMBER"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100620-drop-worker-crew-requirement-table" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="WORKER_CREW_REQUIREMENT"/>
+        </preConditions>
+        <dropTable tableName="WORKER_CREW_REQUIREMENT"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100630-drop-worker-crew-table" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="WORKER_CREW"/>
+        </preConditions>
+        <dropTable tableName="WORKER_CREW"/>
+    </changeSet>
+
+    <changeSet id="2026-06-30-100640-drop-worker-crew-type-table" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="WORKER_CREW_TYPE"/>
+        </preConditions>
+        <dropTable tableName="WORKER_CREW_TYPE"/>
+    </changeSet>
+
+</databaseChangeLog>

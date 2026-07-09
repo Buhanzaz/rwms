@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view"
+      title="msg://AccessoryStockBalanceDetailView.title"
+      focusComponent="form">
+    <data>
+        <instance id="accessoryStockBalanceDc" class="dev.buhanzaz.wmspanel.entity.AccessoryStockBalance">
+            <fetchPlan extends="_base">
+                <property name="warehouse" fetchPlan="_base"/>
+                <property name="accessoryItem" fetchPlan="_base">
+                    <property name="category" fetchPlan="_base"/>
+                    <property name="subcategory" fetchPlan="_base"/>
+                </property>
+            </fetchPlan>
+            <loader/>
+        </instance>
+        <collection id="warehousesDc" class="dev.buhanzaz.wmspanel.entity.Warehouse">
+            <fetchPlan extends="_base"/>
+            <loader id="warehousesDl" readOnly="true">
+                <query><![CDATA[select e from Warehouse e where e.active = true order by e.name]]></query>
+            </loader>
+        </collection>
+        <collection id="accessoryItemsDc" class="dev.buhanzaz.wmspanel.entity.AccessoryItem">
+            <fetchPlan extends="_base">
+                <property name="category" fetchPlan="_base"/>
+                <property name="subcategory" fetchPlan="_base"/>
+            </fetchPlan>
+            <loader id="accessoryItemsDl" readOnly="true">
+                <query><![CDATA[select e from AccessoryItem e where e.active = true order by e.category.name, e.subcategory.name, e.name]]></query>
+            </loader>
+        </collection>
+    </data>
+    <actions>
+        <action id="saveCloseAction" type="detail_saveClose"/>
+        <action id="closeAction" type="detail_close"/>
+    </actions>
+    <facets><dataLoadCoordinator auto="true"/></facets>
+    <layout>
+        <formLayout id="form" dataContainer="accessoryStockBalanceDc">
+            <entityComboBox id="warehouseField" property="warehouse" itemsContainer="warehousesDc" required="true"/>
+            <entityComboBox id="accessoryItemField" property="accessoryItem" itemsContainer="accessoryItemsDc" required="true"/>
+            <integerField id="quantityTotalField" property="quantityTotal" required="true" min="0"/>
+            <integerField id="quantityAvailableField" property="quantityAvailable" required="true" min="0"/>
+            <integerField id="quantityReservedField" property="quantityReserved" required="true" min="0"/>
+            <integerField id="quantityInRentField" property="quantityInRent" required="true" min="0"/>
+            <integerField id="quantityBrokenField" property="quantityBroken" required="true" min="0"/>
+            <integerField id="quantityWrittenOffField" property="quantityWrittenOff" required="true" min="0"/>
+            <textArea id="commentField" property="comment"/>
+        </formLayout>
+        <hbox id="detailActions">
+            <button id="saveAndCloseButton" action="saveCloseAction"/>
+            <button id="closeButton" action="closeAction"/>
+        </hbox>
+    </layout>
+</view>

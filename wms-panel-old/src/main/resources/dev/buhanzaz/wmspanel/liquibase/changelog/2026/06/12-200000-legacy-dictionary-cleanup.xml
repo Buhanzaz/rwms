@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                   http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <changeSet id="2026-06-12-200000-legacy-dictionary-cleanup-finishing" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="WAREHOUSE_FINISHING"/>
+        </preConditions>
+        <dropTable tableName="WAREHOUSE_FINISHING"/>
+    </changeSet>
+
+    <changeSet id="2026-06-12-200000-legacy-dictionary-cleanup-electric" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="WAREHOUSE_ELECTRIC"/>
+        </preConditions>
+        <dropTable tableName="WAREHOUSE_ELECTRIC"/>
+    </changeSet>
+
+    <changeSet id="2026-06-12-200000-legacy-dictionary-cleanup-linoleum" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="WAREHOUSE_LINOLEUM"/>
+        </preConditions>
+        <dropTable tableName="WAREHOUSE_LINOLEUM"/>
+    </changeSet>
+
+    <changeSet id="2026-06-12-200000-legacy-dictionary-cleanup-status" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="WAREHOUSE_STATUS"/>
+        </preConditions>
+        <dropTable tableName="WAREHOUSE_STATUS"/>
+    </changeSet>
+
+    <changeSet id="2026-06-12-200000-legacy-dictionary-cleanup-rental-item-fields" author="codex">
+        <validCheckSum>9:a5f2696f7227a59b326cef3674236715</validCheckSum>
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="RENTAL_ITEM"/>
+            <columnExists tableName="RENTAL_ITEM" columnName="FINISHING"/>
+        </preConditions>
+        <dropColumn tableName="RENTAL_ITEM" columnName="FINISHING"/>
+    </changeSet>
+
+    <changeSet id="2026-06-12-200000-legacy-dictionary-cleanup-rental-item-segment" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="RENTAL_ITEM"/>
+            <columnExists tableName="RENTAL_ITEM" columnName="SEGMENT"/>
+        </preConditions>
+        <dropColumn tableName="RENTAL_ITEM" columnName="SEGMENT"/>
+    </changeSet>
+
+    <changeSet id="2026-06-12-200000-legacy-dictionary-cleanup-rental-item-electricity" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="RENTAL_ITEM"/>
+            <columnExists tableName="RENTAL_ITEM" columnName="ELECTRICITY"/>
+        </preConditions>
+        <dropColumn tableName="RENTAL_ITEM" columnName="ELECTRICITY"/>
+    </changeSet>
+
+    <changeSet id="2026-06-12-200000-legacy-dictionary-cleanup-rental-item-linoleum" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="RENTAL_ITEM"/>
+            <columnExists tableName="RENTAL_ITEM" columnName="LINOLEUM"/>
+        </preConditions>
+        <dropColumn tableName="RENTAL_ITEM" columnName="LINOLEUM"/>
+    </changeSet>
+
+</databaseChangeLog>

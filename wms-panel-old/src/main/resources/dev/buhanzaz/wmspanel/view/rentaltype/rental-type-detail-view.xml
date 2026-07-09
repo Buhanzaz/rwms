@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view"
+      title="msg://RentalTypeDetailView.title"
+      focusComponent="form">
+    <data>
+        <instance id="rentalTypeDc"
+                  class="dev.buhanzaz.wmspanel.entity.RentalType">
+            <fetchPlan extends="_base">
+                <property name="subcategory" fetchPlan="_base">
+                    <property name="category" fetchPlan="_base"/>
+                </property>
+            </fetchPlan>
+            <loader/>
+        </instance>
+        <collection id="rentalSubcategoriesDc"
+                    class="dev.buhanzaz.wmspanel.entity.RentalSubcategory">
+            <fetchPlan extends="_base">
+                <property name="category" fetchPlan="_base"/>
+            </fetchPlan>
+            <loader id="rentalSubcategoriesDl" readOnly="true">
+                <query>
+                    <![CDATA[select e from RentalSubcategory e order by e.category.name, e.sortOrder, e.name]]>
+                </query>
+            </loader>
+        </collection>
+    </data>
+    <actions>
+        <action id="saveCloseAction" type="detail_saveClose"/>
+        <action id="closeAction" type="detail_close"/>
+    </actions>
+    <facets>
+        <dataLoadCoordinator auto="true"/>
+    </facets>
+    <layout>
+        <formLayout id="form" dataContainer="rentalTypeDc">
+            <entityComboBox id="subcategoryField" property="subcategory" itemsContainer="rentalSubcategoriesDc" required="true"/>
+            <textField id="nameField" property="name" required="true"/>
+            <textField id="codeField" property="code" required="true"/>
+            <checkbox id="activeField" property="active"/>
+            <integerField id="sortOrderField" property="sortOrder"/>
+        </formLayout>
+        <hbox id="detailActions">
+            <button id="saveAndCloseButton" action="saveCloseAction"/>
+            <button id="closeButton" action="closeAction"/>
+        </hbox>
+    </layout>
+</view>

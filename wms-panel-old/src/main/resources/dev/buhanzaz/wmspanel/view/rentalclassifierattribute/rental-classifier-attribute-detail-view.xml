@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view"
+      title="msg://RentalClassifierAttributeDetailView.title"
+      focusComponent="form">
+    <data>
+        <instance id="rentalClassifierAttributeDc"
+                  class="dev.buhanzaz.wmspanel.entity.RentalClassifierAttribute">
+            <fetchPlan extends="_base">
+                <property name="attributeDefinition" fetchPlan="_base"/>
+                <property name="category" fetchPlan="_base"/>
+            </fetchPlan>
+            <loader/>
+        </instance>
+        <collection id="attributeDefinitionsDc"
+                    class="dev.buhanzaz.wmspanel.entity.RentalAttributeDefinition">
+            <fetchPlan extends="_base"/>
+            <loader id="attributeDefinitionsDl" readOnly="true">
+                <query>
+                    <![CDATA[select e from RentalAttributeDefinition e order by e.sortOrder, e.name]]>
+                </query>
+            </loader>
+        </collection>
+        <collection id="categoriesDc"
+                    class="dev.buhanzaz.wmspanel.entity.RentalCategory">
+            <fetchPlan extends="_base"/>
+            <loader id="categoriesDl" readOnly="true">
+                <query>
+                    <![CDATA[select e from RentalCategory e order by e.sortOrder, e.name]]>
+                </query>
+            </loader>
+        </collection>
+    </data>
+    <actions>
+        <action id="saveCloseAction" type="detail_saveClose"/>
+        <action id="closeAction" type="detail_close"/>
+    </actions>
+    <facets>
+        <dataLoadCoordinator auto="true"/>
+    </facets>
+    <layout>
+        <formLayout id="form" dataContainer="rentalClassifierAttributeDc">
+            <entityComboBox id="attributeDefinitionField" property="attributeDefinition" itemsContainer="attributeDefinitionsDc" required="true"/>
+            <checkbox id="activeField" property="active"/>
+            <integerField id="sortOrderField" property="sortOrder"/>
+        </formLayout>
+        <hbox id="detailActions">
+            <button id="saveAndCloseButton" action="saveCloseAction"/>
+            <button id="closeButton" action="closeAction"/>
+        </hbox>
+    </layout>
+</view>
