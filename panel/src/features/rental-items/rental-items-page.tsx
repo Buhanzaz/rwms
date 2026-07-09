@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react"
 import { useQuery } from "@tanstack/react-query"
 import type { SortingState } from "@tanstack/react-table"
-import { Filter, Grid2X2, List, Plus, Settings2 } from "lucide-react"
+import { ChevronUp, Filter, Grid2X2, List, Plus, Settings2 } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 
 import {
@@ -19,6 +19,7 @@ import { RentalItemsGridView } from "@/features/rental-items/rental-items-grid-v
 import { RentalItemsGridSettingsDialog } from "@/features/rental-items/rental-items-grid-settings-dialog"
 import { RentalItemsTableView } from "@/features/rental-items/rental-items-table-view"
 import { useWarehouse } from "@/hooks/use-warehouse"
+import { cn } from "@/lib/utils"
 import {
   EMPTY_RENTAL_ITEMS_TABLE_SCHEMA,
   normalizeRentalItemsColumnConfig,
@@ -67,6 +68,11 @@ type ViewportSnapshot = {
   height: number
 }
 
+type RentalItemsPageProps = {
+  menuCollapsed?: boolean
+  onMenuCollapsedChange?: (collapsed: boolean) => void
+}
+
 function getViewportSnapshotKey() {
   return `${window.innerWidth}:${window.innerHeight}`
 }
@@ -104,6 +110,10 @@ function getDefaultGridSize(viewport: ViewportSnapshot) {
 }
 
 function getGridFormatMax(viewport: ViewportSnapshot) {
+  if (isMobileViewport(viewport)) {
+    return 1
+  }
+
   if (viewport.width >= DESKTOP_BREAKPOINT) {
     return DESKTOP_GRID_FORMAT_MAX
   }
@@ -126,9 +136,7 @@ function getEffectiveGridFormat(
   viewport: ViewportSnapshot
 ): GridFormat {
   if (isMobileViewport(viewport)) {
-    return viewport.width > viewport.height
-      ? { columns: 2, rows: 1 }
-      : { columns: 1, rows: 1 }
+    return { columns: 1, rows: 1 }
   }
 
   const maxSize = getGridFormatMax(viewport)
@@ -208,7 +216,10 @@ function pruneFilters(
   ) as RentalItemsFiltersState
 }
 
-export function RentalItemsPage() {
+export function RentalItemsPage({
+  menuCollapsed: controlledMenuCollapsed,
+  onMenuCollapsedChange,
+}: RentalItemsPageProps) {
   const { selectedWarehouse } = useWarehouse()
 
   if (selectedWarehouse === null) {
@@ -223,11 +234,19 @@ export function RentalItemsPage() {
     <RentalItemsPageState
       key={selectedWarehouse.id}
       warehouseId={selectedWarehouse.id}
+      menuCollapsed={controlledMenuCollapsed}
+      onMenuCollapsedChange={onMenuCollapsedChange}
     />
   )
 }
 
-function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
+function RentalItemsPageState({
+  warehouseId,
+  menuCollapsed: controlledMenuCollapsed,
+  onMenuCollapsedChange,
+}: {
+  warehouseId: string
+} & RentalItemsPageProps) {
   const navigate = useNavigate()
 
   const [search, setSearch] = useState(() => getInitialSearch(warehouseId))
@@ -261,6 +280,7 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
   const [columnsDialogOpen, setColumnsDialogOpen] = useState(false)
   const [gridSettingsDialogOpen, setGridSettingsDialogOpen] = useState(false)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const [localMenuCollapsed, setLocalMenuCollapsed] = useState(false)
 
   useEffect(() => {
     writeLocalStorage(getStorageKey(warehouseId, "search"), search)
@@ -360,119 +380,152 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
   }, [effectiveFilters])
   const gridFormatMax = getGridFormatMax(viewport)
   const effectiveGridFormat = getEffectiveGridFormat(savedGridSize, viewport)
-  const gridFormatSelectionAvailable = !isMobileViewport(viewport)
+  const gridFormatSelectionAvailable =
+    !isMobileViewport(viewport) && gridFormatMax > 1
+  const menuCollapsed = controlledMenuCollapsed ?? localMenuCollapsed
+
+  function setMenuCollapsed(nextCollapsed: boolean) {
+    if (controlledMenuCollapsed === undefined) {
+      setLocalMenuCollapsed(nextCollapsed)
+    }
+
+    onMenuCollapsedChange?.(nextCollapsed)
+  }
 
   function openRentalItem(item: RentalItemDto) {
     navigate(`/warehouse/${item.id}`)
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
-      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div className="flex min-w-0 items-center gap-3">
-          <h2 className="truncate text-xl font-semibold">Бытовки</h2>
+    <div className="flex h-full min-h-0 flex-col">
+      <div
+        className={cn(
+          "shrink-0 overflow-hidden transition-[max-height,opacity,transform,margin-bottom] duration-300 ease-out",
+          menuCollapsed
+            ? "mb-0 max-h-0 -translate-y-4 opacity-0"
+            : "mb-4 max-h-[36rem] translate-y-0 opacity-100"
+        )}
+        aria-hidden={menuCollapsed}
+      >
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex min-w-0 items-center gap-2">
+              <h2 className="truncate text-xl font-semibold">Бытовки</h2>
 
-          <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-            {rentalItemsQuery.data?.totalElements ?? 0} шт.
-          </span>
+              <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                {rentalItemsQuery.data?.totalElements ?? 0} шт.
+              </span>
 
-          {activeFiltersCount > 0 && (
-            <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-              Фильтры: {activeFiltersCount}
-            </span>
-          )}
-        </div>
+              {activeFiltersCount > 0 && (
+                <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                  Фильтры: {activeFiltersCount}
+                </span>
+              )}
 
-        <div className="flex w-full flex-wrap items-center gap-2 xl:w-auto">
-          <Button
-            variant={mobileFiltersOpen ? "secondary" : "outline"}
-            className="h-10 min-w-0 flex-1 basis-0 lg:hidden md:flex-none md:basis-auto"
-            onClick={() => setMobileFiltersOpen((current) => !current)}
-          >
-            <Filter className="mr-2 size-4" />
-            Фильтры
-          </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="ml-auto xl:ml-1"
+                aria-label="Свернуть меню бытовок"
+                title="Свернуть меню бытовок"
+                onClick={() => setMenuCollapsed(true)}
+              >
+                <ChevronUp />
+              </Button>
+            </div>
 
-          <Button
-            variant="outline"
-            className="h-10 min-w-0 flex-1 basis-0 md:flex-none md:basis-auto"
-            onClick={() => setColumnsDialogOpen(true)}
-          >
-            <Settings2 className="mr-2 size-4" />
-            Столбцы
-          </Button>
+            <div className="flex w-full flex-wrap items-center gap-2 xl:w-auto">
+              <Button
+                variant={mobileFiltersOpen ? "secondary" : "outline"}
+                className="h-10 min-w-0 flex-1 basis-0 md:flex-none md:basis-auto lg:hidden"
+                onClick={() => setMobileFiltersOpen((current) => !current)}
+              >
+                <Filter className="mr-2 size-4" />
+                Фильтры
+              </Button>
 
-          <div className="flex h-10 items-center rounded-md border bg-card p-1 md:h-7 md:p-0.5">
-            <Button
-              variant={viewMode === "table" ? "secondary" : "ghost"}
-              size="icon"
-              className="size-8 md:size-6"
-              aria-label="Список"
-              onClick={() => setViewMode("table")}
-            >
-              <List className="size-4" />
-            </Button>
+              <Button
+                variant="outline"
+                className="h-10 min-w-0 flex-1 basis-0 md:flex-none md:basis-auto"
+                onClick={() => setColumnsDialogOpen(true)}
+              >
+                <Settings2 className="mr-2 size-4" />
+                Столбцы
+              </Button>
 
-            <Button
-              variant={viewMode === "grid" ? "secondary" : "ghost"}
-              size="icon"
-              className="size-8 md:size-6"
-              aria-label="Сетка"
-              onClick={() => setViewMode("grid")}
-            >
-              <Grid2X2 className="size-4" />
-            </Button>
+              <div className="flex h-10 items-center rounded-md border bg-card p-1 md:h-7 md:p-0.5">
+                <Button
+                  variant={viewMode === "table" ? "secondary" : "ghost"}
+                  size="icon"
+                  className="size-8 md:size-6"
+                  aria-label="Список"
+                  onClick={() => setViewMode("table")}
+                >
+                  <List className="size-4" />
+                </Button>
+
+                <Button
+                  variant={viewMode === "grid" ? "secondary" : "ghost"}
+                  size="icon"
+                  className="size-8 md:size-6"
+                  aria-label="Сетка"
+                  onClick={() => setViewMode("grid")}
+                >
+                  <Grid2X2 className="size-4" />
+                </Button>
+              </div>
+
+              {viewMode === "grid" && gridFormatSelectionAvailable && (
+                <Button
+                  variant="outline"
+                  className="h-10 md:h-7"
+                  onClick={() => setGridSettingsDialogOpen(true)}
+                >
+                  <Grid2X2 data-icon="inline-start" className="size-4" />
+                  до {effectiveGridFormat.columns}x{effectiveGridFormat.rows}
+                </Button>
+              )}
+
+              <Button
+                className="h-10 w-full md:w-auto"
+                onClick={() => setCreateDialogOpen(true)}
+              >
+                <Plus className="mr-2 size-4" />
+                Добавить новую бытовку
+              </Button>
+            </div>
           </div>
 
-          {viewMode === "grid" && gridFormatSelectionAvailable && (
-            <Button
-              variant="outline"
-              className="h-10 md:h-7"
-              onClick={() => setGridSettingsDialogOpen(true)}
-            >
-              <Grid2X2 data-icon="inline-start" className="size-4" />
-              до {effectiveGridFormat.columns}x{effectiveGridFormat.rows}
-            </Button>
-          )}
+          <Input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Поиск по номеру, арендатору или комментарию..."
+            className="h-10 max-w-xl"
+          />
 
-          <Button
-            className="h-10 w-full md:w-auto"
-            onClick={() => setCreateDialogOpen(true)}
-          >
-            <Plus className="mr-2 size-4" />
-            Добавить новую бытовку
-          </Button>
+          {filterOptions.length > 0 && (
+            <>
+              <div className="hidden lg:block">
+                <RentalItemsFilters
+                  options={filterOptions}
+                  filters={filters}
+                  onFiltersChange={setFilters}
+                />
+              </div>
+
+              {mobileFiltersOpen && (
+                <div className="rounded-lg border bg-card p-2 lg:hidden">
+                  <RentalItemsFilters
+                    options={filterOptions}
+                    filters={filters}
+                    onFiltersChange={setFilters}
+                  />
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
-
-      <Input
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-        placeholder="Поиск по номеру, арендатору или комментарию..."
-        className="h-10 max-w-xl"
-      />
-
-      {filterOptions.length > 0 && (
-        <>
-          <div className="hidden lg:block">
-            <RentalItemsFilters
-              options={filterOptions}
-              filters={filters}
-              onFiltersChange={setFilters}
-            />
-          </div>
-
-          {mobileFiltersOpen && (
-            <div className="rounded-lg border bg-card p-2 lg:hidden">
-              <RentalItemsFilters
-                options={filterOptions}
-                filters={filters}
-                onFiltersChange={setFilters}
-              />
-            </div>
-          )}
-        </>
-      )}
 
       {rentalItemsQuery.isLoading ? (
         <div className="flex flex-1 items-center justify-center rounded-lg border bg-card text-sm text-muted-foreground">

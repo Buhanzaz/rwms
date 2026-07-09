@@ -1,3 +1,5 @@
+import { useState } from "react"
+import { ChevronDown, ChevronUp } from "lucide-react"
 import { Route, Routes, useLocation } from "react-router-dom"
 import { RentalItemDetailPage } from "@/features/rental-items/rental-item-detail-page"
 import { AppSidebar } from "@/components/app-sidebar"
@@ -11,6 +13,8 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
+import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 
 type PageConfig = {
   path: string
@@ -120,6 +124,9 @@ function EmptyPage({ title }: { title: string }) {
 function AppLayout() {
   const location = useLocation()
   const currentPage = getCurrentPage(location.pathname)
+  const isRentalItemsPage = location.pathname === "/warehouse"
+  const [rentalItemsMenuCollapsed, setRentalItemsMenuCollapsed] =
+    useState(false)
 
   const { selectedWarehouse, isLoading, error } = useWarehouse()
 
@@ -149,15 +156,60 @@ function AppLayout() {
 
       <SidebarInset className="h-svh overflow-hidden">
         <header className="flex h-16 shrink-0 items-center gap-3 border-b px-4">
-          <SidebarTrigger />
+          <SidebarTrigger
+            aria-label="Открыть или свернуть сайдбар"
+            title="Открыть или свернуть сайдбар"
+          />
 
-          <div className="min-w-0">
-            <h1 className="truncate text-base font-semibold">{pageTitle}</h1>
+          <div className="relative min-h-9 min-w-0 flex-1 overflow-hidden">
+            <div
+              className={cn(
+                "min-w-0 transition-all duration-300 ease-out",
+                isRentalItemsPage && rentalItemsMenuCollapsed
+                  ? "-translate-y-3 opacity-0"
+                  : "translate-y-0 opacity-100"
+              )}
+            >
+              <h1 className="truncate text-base font-semibold">{pageTitle}</h1>
 
-            <p className="truncate text-xs text-muted-foreground">
-              {currentPage.description}
-            </p>
+              <p className="truncate text-xs text-muted-foreground">
+                {currentPage.description}
+              </p>
+            </div>
+
+            {isRentalItemsPage && (
+              <div
+                className={cn(
+                  "absolute inset-0 flex items-center transition-all duration-300 ease-out",
+                  rentalItemsMenuCollapsed
+                    ? "translate-y-0 opacity-100"
+                    : "translate-y-3 opacity-0"
+                )}
+              >
+                <h1 className="truncate text-base font-semibold">Бытовки</h1>
+              </div>
+            )}
           </div>
+
+          {isRentalItemsPage && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={
+                rentalItemsMenuCollapsed
+                  ? "Развернуть меню бытовок"
+                  : "Свернуть меню бытовок"
+              }
+              title={
+                rentalItemsMenuCollapsed
+                  ? "Развернуть меню бытовок"
+                  : "Свернуть меню бытовок"
+              }
+              onClick={() => setRentalItemsMenuCollapsed((current) => !current)}
+            >
+              {rentalItemsMenuCollapsed ? <ChevronDown /> : <ChevronUp />}
+            </Button>
+          )}
         </header>
 
         <main className="flex-1 overflow-hidden p-4">
@@ -167,7 +219,15 @@ function AppLayout() {
               element={<RentalItemDetailPage />}
             />
             <Route path="/equipment" element={<EquipmentPage />} />
-            <Route path="/warehouse" element={<RentalItemsPage />} />
+            <Route
+              path="/warehouse"
+              element={
+                <RentalItemsPage
+                  menuCollapsed={rentalItemsMenuCollapsed}
+                  onMenuCollapsedChange={setRentalItemsMenuCollapsed}
+                />
+              }
+            />
             <Route
               path="/settings/estimates-repairs"
               element={<EstimatesRepairsSettingsPage />}
