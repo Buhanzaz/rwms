@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react"
 import { useQuery } from "@tanstack/react-query"
 import type { SortingState } from "@tanstack/react-table"
 import { Filter, Grid2X2, List, Plus, Settings2 } from "lucide-react"
@@ -16,6 +16,7 @@ import { RentalItemPhotoDialog } from "@/features/rental-items/rental-item-photo
 import { RentalItemsColumnSettingsDialog } from "@/features/rental-items/rental-items-column-settings-dialog"
 import { RentalItemsFilters } from "@/features/rental-items/rental-items-filters"
 import { RentalItemsGridView } from "@/features/rental-items/rental-items-grid-view"
+import { RentalItemsGridSettingsDialog } from "@/features/rental-items/rental-items-grid-settings-dialog"
 import { RentalItemsTableView } from "@/features/rental-items/rental-items-table-view"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import {
@@ -51,6 +52,94 @@ function getStorageKey(warehouseId: string, key: string) {
 }
 
 const EMPTY_FILTER_OPTIONS: RentalItemsFilterOptionSet[] = []
+const TABLET_GRID_FORMAT_MAX = 3
+const DESKTOP_GRID_FORMAT_MAX = 5
+const TABLET_BREAKPOINT = 768
+const DESKTOP_BREAKPOINT = 1280
+
+type GridFormat = {
+  columns: number
+  rows: number
+}
+
+type ViewportSnapshot = {
+  width: number
+  height: number
+}
+
+function getViewportSnapshotKey() {
+  return `${window.innerWidth}:${window.innerHeight}`
+}
+
+function parseViewportSnapshot(snapshotKey: string): ViewportSnapshot {
+  const [width, height] = snapshotKey.split(":").map(Number)
+
+  return { width, height }
+}
+
+function subscribeViewport(callback: () => void) {
+  window.addEventListener("resize", callback)
+  window.addEventListener("orientationchange", callback)
+
+  return () => {
+    window.removeEventListener("resize", callback)
+    window.removeEventListener("orientationchange", callback)
+  }
+}
+
+function isMobileViewport(viewport: ViewportSnapshot) {
+  return Math.min(viewport.width, viewport.height) < TABLET_BREAKPOINT
+}
+
+function getDefaultGridSize(viewport: ViewportSnapshot) {
+  if (viewport.width >= DESKTOP_BREAKPOINT) {
+    return 5
+  }
+
+  if (!isMobileViewport(viewport)) {
+    return 3
+  }
+
+  return 1
+}
+
+function getGridFormatMax(viewport: ViewportSnapshot) {
+  if (viewport.width >= DESKTOP_BREAKPOINT) {
+    return DESKTOP_GRID_FORMAT_MAX
+  }
+
+  return TABLET_GRID_FORMAT_MAX
+}
+
+function normalizeGridSize(value: unknown, maxSize: number) {
+  const numericValue = Number(value)
+
+  if (!Number.isFinite(numericValue)) {
+    return null
+  }
+
+  return Math.max(1, Math.min(maxSize, Math.round(numericValue)))
+}
+
+function getEffectiveGridFormat(
+  savedGridSize: number | null,
+  viewport: ViewportSnapshot
+): GridFormat {
+  if (isMobileViewport(viewport)) {
+    return viewport.width > viewport.height
+      ? { columns: 2, rows: 1 }
+      : { columns: 1, rows: 1 }
+  }
+
+  const maxSize = getGridFormatMax(viewport)
+  const size =
+    normalizeGridSize(savedGridSize, maxSize) ?? getDefaultGridSize(viewport)
+
+  return {
+    columns: size,
+    rows: size,
+  }
+}
 
 function getInitialSearch(warehouseId: string) {
   return readLocalStorage(getStorageKey(warehouseId, "search"), "")
@@ -82,6 +171,22 @@ function getInitialColumnsConfig(warehouseId: string) {
     getStorageKey(warehouseId, "columns:v2"),
     []
   )
+}
+
+function getInitialGridSize(warehouseId: string) {
+  try {
+    const value = window.localStorage.getItem(
+      getStorageKey(warehouseId, "grid-format:v1")
+    )
+
+    if (value === null) {
+      return null
+    }
+
+    return normalizeGridSize(JSON.parse(value), DESKTOP_GRID_FORMAT_MAX)
+  } catch {
+    return null
+  }
 }
 
 function getColumnsConfigKey(columnsConfig: RentalItemsColumnConfig[]) {
@@ -138,10 +243,23 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
   const [savedColumnsConfig, setSavedColumnsConfig] = useState<
     RentalItemsColumnConfig[]
   >(() => getInitialColumnsConfig(warehouseId))
+  const [savedGridSize, setSavedGridSize] = useState<number | null>(() =>
+    getInitialGridSize(warehouseId)
+  )
+  const viewportSnapshotKey = useSyncExternalStore(
+    subscribeViewport,
+    getViewportSnapshotKey,
+    getViewportSnapshotKey
+  )
+  const viewport = useMemo(
+    () => parseViewportSnapshot(viewportSnapshotKey),
+    [viewportSnapshotKey]
+  )
 
   const [photoItem, setPhotoItem] = useState<RentalItemDto | null>(null)
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false)
   const [columnsDialogOpen, setColumnsDialogOpen] = useState(false)
+  const [gridSettingsDialogOpen, setGridSettingsDialogOpen] = useState(false)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
 
   useEffect(() => {
@@ -166,6 +284,15 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
       savedColumnsConfig
     )
   }, [savedColumnsConfig, warehouseId])
+
+  useEffect(() => {
+    if (savedGridSize !== null) {
+      writeLocalStorage(
+        getStorageKey(warehouseId, "grid-format:v1"),
+        savedGridSize
+      )
+    }
+  }, [savedGridSize, warehouseId])
 
   const tableSchemaQuery = useQuery({
     queryKey: ["rental-items-table-schema", warehouseId],
@@ -231,6 +358,9 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
       (value) => value && value.length > 0
     ).length
   }, [effectiveFilters])
+  const gridFormatMax = getGridFormatMax(viewport)
+  const effectiveGridFormat = getEffectiveGridFormat(savedGridSize, viewport)
+  const gridFormatSelectionAvailable = !isMobileViewport(viewport)
 
   function openRentalItem(item: RentalItemDto) {
     navigate(`/warehouse/${item.id}`)
@@ -253,10 +383,10 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 xl:w-auto">
           <Button
             variant={mobileFiltersOpen ? "secondary" : "outline"}
-            className="h-10 lg:hidden"
+            className="h-10 min-w-0 flex-1 basis-0 lg:hidden md:flex-none md:basis-auto"
             onClick={() => setMobileFiltersOpen((current) => !current)}
           >
             <Filter className="mr-2 size-4" />
@@ -265,18 +395,19 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
 
           <Button
             variant="outline"
-            className="h-10"
+            className="h-10 min-w-0 flex-1 basis-0 md:flex-none md:basis-auto"
             onClick={() => setColumnsDialogOpen(true)}
           >
             <Settings2 className="mr-2 size-4" />
             Столбцы
           </Button>
 
-          <div className="flex h-10 items-center rounded-md border bg-card p-1">
+          <div className="flex h-10 items-center rounded-md border bg-card p-1 md:h-7 md:p-0.5">
             <Button
               variant={viewMode === "table" ? "secondary" : "ghost"}
               size="icon"
-              className="size-8"
+              className="size-8 md:size-6"
+              aria-label="Список"
               onClick={() => setViewMode("table")}
             >
               <List className="size-4" />
@@ -285,14 +416,29 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
             <Button
               variant={viewMode === "grid" ? "secondary" : "ghost"}
               size="icon"
-              className="size-8"
+              className="size-8 md:size-6"
+              aria-label="Сетка"
               onClick={() => setViewMode("grid")}
             >
               <Grid2X2 className="size-4" />
             </Button>
           </div>
 
-          <Button className="h-10" onClick={() => setCreateDialogOpen(true)}>
+          {viewMode === "grid" && gridFormatSelectionAvailable && (
+            <Button
+              variant="outline"
+              className="h-10 md:h-7"
+              onClick={() => setGridSettingsDialogOpen(true)}
+            >
+              <Grid2X2 data-icon="inline-start" className="size-4" />
+              {effectiveGridFormat.columns}x{effectiveGridFormat.rows}
+            </Button>
+          )}
+
+          <Button
+            className="h-10 w-full md:w-auto"
+            onClick={() => setCreateDialogOpen(true)}
+          >
             <Plus className="mr-2 size-4" />
             Добавить новую бытовку
           </Button>
@@ -345,6 +491,7 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
       ) : (
         <RentalItemsGridView
           items={items}
+          gridFormat={effectiveGridFormat}
           onOpenPhotos={setPhotoItem}
           onOpenItem={openRentalItem}
         />
@@ -361,6 +508,19 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
         }
         onReset={() => setSavedColumnsConfig(tableSchema.columns)}
       />
+
+      {gridFormatSelectionAvailable && (
+        <RentalItemsGridSettingsDialog
+          open={gridSettingsDialogOpen}
+          value={effectiveGridFormat.columns}
+          maxSize={gridFormatMax}
+          defaultValue={getDefaultGridSize(viewport)}
+          onOpenChange={setGridSettingsDialogOpen}
+          onValueChange={(value) =>
+            setSavedGridSize(normalizeGridSize(value, gridFormatMax))
+          }
+        />
+      )}
 
       <RentalItemPhotoDialog
         item={photoItem}

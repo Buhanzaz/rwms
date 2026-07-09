@@ -7,9 +7,7 @@ export type EstimateCatalogSettingsActionId =
 export type EstimateCatalogSectionType = "CANVAS" | "WORK" | "MATERIAL"
 
 export type EstimateCatalogCategoryScope =
-  | "ALL"
-  | "NON_FURNITURE"
-  | "FURNITURE_ONLY"
+  "ALL" | "NON_FURNITURE" | "FURNITURE_ONLY"
 
 export type EstimateCatalogSettingsActionDto = {
   id: EstimateCatalogSettingsActionId

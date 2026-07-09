@@ -1,4 +1,10 @@
 import type { EstimateCatalogSettingsActionDto } from "@/features/settings/estimates-repairs/model/estimate-repair-settings"
+import {
+  deleteRepairEstimateCatalogNode,
+  getRepairEstimateCatalogSection,
+  saveRepairEstimateCatalogNode,
+} from "@/features/settings/estimates-repairs/api/repair-estimate-catalog-store"
+import type { RepairEstimateCatalogNodeMutation } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
 
 const REPAIR_ESTIMATE_WORK_CATALOG_SETTINGS: EstimateCatalogSettingsActionDto =
   {
@@ -14,4 +20,22 @@ const REPAIR_ESTIMATE_WORK_CATALOG_SETTINGS: EstimateCatalogSettingsActionDto =
 
 export async function getRepairEstimateWorkCatalogSettings() {
   return REPAIR_ESTIMATE_WORK_CATALOG_SETTINGS
+}
+
+export async function getRepairEstimateWorkCatalogMock() {
+  return getRepairEstimateCatalogSection("works")
+}
+
+export async function saveRepairEstimateWorkCatalogItem(
+  input: RepairEstimateCatalogNodeMutation
+) {
+  return saveRepairEstimateCatalogNode({
+    ...input,
+    nodeType: "WORK",
+    furnitureCategory: false,
+  })
+}
+
+export async function deleteRepairEstimateWorkCatalogItem(id: string) {
+  return deleteRepairEstimateCatalogNode(id)
 }
