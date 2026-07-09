@@ -5,6 +5,7 @@ import { WarehouseProvider } from "@/contexts/warehouse-provider"
 import { RentalItemsPage } from "@/features/rental-items/rental-items-page"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { EquipmentPage } from "@/features/equipment/equipment-page"
+import { EstimatesRepairsSettingsPage } from "@/features/settings/estimates-repairs/estimates-repairs-settings-page"
 import {
   SidebarInset,
   SidebarProvider,
@@ -167,10 +168,19 @@ function AppLayout() {
             />
             <Route path="/equipment" element={<EquipmentPage />} />
             <Route path="/warehouse" element={<RentalItemsPage />} />
+            <Route
+              path="/settings/estimates-repairs"
+              element={<EstimatesRepairsSettingsPage />}
+            />
 
             {pages
               .filter(
-                (page) => !["/warehouse", "/equipment"].includes(page.path)
+                (page) =>
+                  ![
+                    "/warehouse",
+                    "/equipment",
+                    "/settings/estimates-repairs",
+                  ].includes(page.path)
               )
               .map((page) => (
                 <Route
