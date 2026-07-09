@@ -1254,6 +1254,38 @@ function releasePointerCaptureSafely(element: Element, pointerId: number) {
   }
 }
 
+function getCurveMidpoint(
+  source: CanvasPosition,
+  target: CanvasPosition,
+  sourceAnchor: CatalogLinkAnchor,
+  targetAnchor: CatalogLinkAnchor
+) {
+  const curve = Math.max(80, Math.abs(target.y - source.y) / 2)
+  const sourceControl = {
+    x: source.x,
+    y: sourceAnchor === "TOP" ? source.y - curve : source.y + curve,
+  }
+  const targetControl = {
+    x: target.x,
+    y: targetAnchor === "TOP" ? target.y - curve : target.y + curve,
+  }
+  const t = 0.5
+  const inverse = 1 - t
+
+  return {
+    x:
+      inverse ** 3 * source.x +
+      3 * inverse ** 2 * t * sourceControl.x +
+      3 * inverse * t ** 2 * targetControl.x +
+      t ** 3 * target.x,
+    y:
+      inverse ** 3 * source.y +
+      3 * inverse ** 2 * t * sourceControl.y +
+      3 * inverse * t ** 2 * targetControl.y +
+      t ** 3 * target.y,
+  }
+}
+
 function CatalogCanvas({
   nodes,
   links,
@@ -1266,6 +1298,7 @@ function CatalogCanvas({
   onCompleteLink,
   onMoveNode,
   onEditNode,
+  onDeleteLink,
 }: {
   nodes: RepairEstimateCatalogNodeDto[]
   links: RepairEstimateCatalogLinkDto[]
@@ -1284,6 +1317,7 @@ function CatalogCanvas({
     position: CanvasPosition
   ) => void
   onEditNode: (node: RepairEstimateCatalogNodeDto) => void
+  onDeleteLink: (link: RepairEstimateCatalogLinkDto) => void
 }) {
   const dragRef = useRef<CanvasDragState | null>(null)
   const suppressClickRef = useRef(false)
@@ -1421,6 +1455,53 @@ function CatalogCanvas({
           )
         })}
       </svg>
+
+      {links.map((link) => {
+        if (link.id !== selectedLinkId) {
+          return null
+        }
+
+        const source = positionById.get(link.sourceNodeId)
+        const target = positionById.get(link.targetNodeId)
+        if (!source || !target) {
+          return null
+        }
+
+        const { sourceAnchor, targetAnchor } = getCatalogLinkAnchors(
+          link,
+          source,
+          target
+        )
+        const midpoint = getCurveMidpoint(
+          anchorPoint(source, sourceAnchor),
+          anchorPoint(target, targetAnchor),
+          sourceAnchor,
+          targetAnchor
+        )
+
+        return (
+          <Button
+            key={`delete-${link.id}`}
+            type="button"
+            variant="outline"
+            size="sm"
+            className="absolute z-30 -translate-x-1/2 -translate-y-1/2 border-border bg-background/95 text-muted-foreground shadow-md hover:border-destructive hover:bg-background hover:text-destructive"
+            style={{
+              left: midpoint.x,
+              top: midpoint.y,
+            }}
+            onClick={(event) => {
+              event.stopPropagation()
+              onDeleteLink(link)
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onPointerUp={(event) => event.stopPropagation()}
+          >
+            <HugeiconsIcon icon={Delete01Icon} data-icon="inline-start" />
+            Удалить
+          </Button>
+        )
+      })}
 
       {positionedNodes.map(({ node, position }) => (
         <div
@@ -1897,6 +1978,7 @@ function CatalogCanvasCategoryEditor({ categoryId }: { categoryId: string }) {
             moveNodeMutation.mutate({ node, position })
           }
           onEditNode={openNodeEditor}
+          onDeleteLink={(link) => deleteLinkMutation.mutate(link.id)}
         />
       </div>
 
