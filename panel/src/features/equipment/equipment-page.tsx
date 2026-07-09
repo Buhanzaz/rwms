@@ -46,6 +46,28 @@ function QuantityCell({
   return <span className={`font-semibold ${toneClass}`}>{value}</span>
 }
 
+function MobileQuantityStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string
+  value: number
+  tone?: "default" | "stock" | "rent" | "written-off" | "lost"
+}) {
+  return (
+    <div className="min-w-0 rounded-md bg-muted/40 px-2 py-1.5">
+      <div className="truncate text-[0.625rem] font-medium text-muted-foreground">
+        {label}
+      </div>
+
+      <div className="text-sm">
+        <QuantityCell value={value} tone={tone} />
+      </div>
+    </div>
+  )
+}
+
 function UsageRows({ item }: { item: EquipmentItemDto }) {
   const queryClient = useQueryClient()
 
@@ -78,7 +100,7 @@ function UsageRows({ item }: { item: EquipmentItemDto }) {
 
   return (
     <div className="overflow-hidden rounded-md border bg-card">
-      <div className="grid grid-cols-[140px_160px_120px_1fr] border-b bg-muted px-3 py-2 text-xs font-medium text-muted-foreground">
+      <div className="hidden grid-cols-[140px_160px_120px_1fr] border-b bg-muted px-3 py-2 text-xs font-medium text-muted-foreground md:grid">
         <div>Номер бытовки</div>
         <div>Тип</div>
         <div className="text-right">Количество</div>
@@ -88,21 +110,39 @@ function UsageRows({ item }: { item: EquipmentItemDto }) {
       {item.usages.map((usage) => (
         <div
           key={usage.id}
-          className="grid grid-cols-[140px_160px_120px_1fr] items-center border-b px-3 py-2 text-sm last:border-b-0"
+          className="flex min-w-0 flex-col gap-3 border-b p-3 text-sm last:border-b-0 md:grid md:grid-cols-[140px_160px_120px_1fr] md:items-center md:gap-0 md:px-3 md:py-2"
         >
-          <div className="font-medium text-primary">
-            {usage.rentalItemNumber}
+          <div className="min-w-0">
+            <div className="text-[0.625rem] font-medium text-muted-foreground md:hidden">
+              Номер бытовки
+            </div>
+
+            <div className="truncate font-medium text-primary">
+              {usage.rentalItemNumber}
+            </div>
           </div>
 
-          <div>{usage.rentalItemType}</div>
+          <div className="min-w-0">
+            <div className="text-[0.625rem] font-medium text-muted-foreground md:hidden">
+              Тип
+            </div>
 
-          <div className="text-right font-semibold">{usage.quantity} шт.</div>
+            <div className="truncate">{usage.rentalItemType}</div>
+          </div>
 
-          <div className="flex justify-end gap-2">
+          <div className="flex items-center justify-between gap-2 md:block md:text-right">
+            <span className="text-[0.625rem] font-medium text-muted-foreground md:hidden">
+              Количество
+            </span>
+
+            <span className="font-semibold">{usage.quantity} шт.</span>
+          </div>
+
+          <div className="flex min-w-0 flex-col gap-2 md:flex-row md:justify-end">
             <Button
               size="sm"
               variant="outline"
-              className="h-8 whitespace-nowrap"
+              className="min-w-0 whitespace-normal md:h-8 md:whitespace-nowrap"
               onClick={(event) => {
                 event.stopPropagation()
 
@@ -114,21 +154,21 @@ function UsageRows({ item }: { item: EquipmentItemDto }) {
                 })
               }}
             >
-              <ArrowRightLeft className="mr-2 size-3.5" />
+              <ArrowRightLeft data-icon="inline-start" />
               Переместить
             </Button>
 
             <Button
               size="sm"
               variant="outline"
-              className="h-8 whitespace-nowrap"
+              className="min-w-0 whitespace-normal md:h-8 md:whitespace-nowrap"
               disabled={moveToStockMutation.isPending}
               onClick={(event) => {
                 event.stopPropagation()
                 moveToStockMutation.mutate(usage)
               }}
             >
-              <Warehouse className="mr-2 size-3.5" />
+              <Warehouse data-icon="inline-start" />
               Переместить на склад
             </Button>
           </div>
@@ -234,9 +274,9 @@ export function EquipmentPage() {
       />
 
       <div className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-card">
-        <div className="h-full overflow-auto">
-          <div className="min-w-[980px]">
-            <div className="sticky top-0 z-10 grid grid-cols-[minmax(220px,1fr)_120px_120px_120px_120px_120px] border-b bg-muted text-xs font-medium text-muted-foreground shadow-sm">
+        <div className="h-full overflow-y-auto overflow-x-hidden">
+          <div className="w-full">
+            <div className="sticky top-0 z-10 hidden grid-cols-[minmax(220px,1fr)_120px_120px_120px_120px_120px] border-b bg-muted text-xs font-medium text-muted-foreground shadow-sm md:grid">
               <div className="px-3 py-3">Наименование</div>
               <div className="px-3 py-3 text-right">Всего</div>
               <div className="px-3 py-3 text-right">На складе</div>
@@ -261,14 +301,14 @@ export function EquipmentPage() {
                   <div key={item.id} className="border-b last:border-b-0">
                     <button
                       type="button"
-                      className="grid w-full grid-cols-[minmax(220px,1fr)_120px_120px_120px_120px_120px] items-center text-left text-sm hover:bg-muted/40"
+                      className="flex w-full min-w-0 flex-col gap-3 p-3 text-left text-sm hover:bg-muted/40 md:grid md:grid-cols-[minmax(220px,1fr)_120px_120px_120px_120px_120px] md:items-center md:gap-0 md:p-0"
                       onClick={() => toggleExpanded(item)}
                     >
-                      <div className="flex min-w-0 items-center gap-2 px-3 py-3">
+                      <div className="flex min-w-0 items-center gap-2 md:px-3 md:py-3">
                         {expanded ? (
-                          <ChevronDown className="size-4 text-muted-foreground" />
+                          <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
                         ) : (
-                          <ChevronRight className="size-4 text-muted-foreground" />
+                          <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
                         )}
 
                         <span className="truncate font-medium">
@@ -276,26 +316,53 @@ export function EquipmentPage() {
                         </span>
                       </div>
 
-                      <div className="px-3 py-3 text-right">
+                      <div className="grid min-w-0 grid-cols-2 gap-2 md:hidden">
+                        <MobileQuantityStat
+                          label="Всего"
+                          value={item.totalQuantity}
+                        />
+                        <MobileQuantityStat
+                          label="На складе"
+                          value={item.stockQuantity}
+                          tone="stock"
+                        />
+                        <MobileQuantityStat
+                          label="В аренде"
+                          value={item.rentedQuantity}
+                          tone="rent"
+                        />
+                        <MobileQuantityStat
+                          label="Списано"
+                          value={item.writtenOffQuantity}
+                          tone="written-off"
+                        />
+                        <MobileQuantityStat
+                          label="Утеряно"
+                          value={item.lostQuantity}
+                          tone="lost"
+                        />
+                      </div>
+
+                      <div className="hidden px-3 py-3 text-right md:block">
                         <QuantityCell value={item.totalQuantity} />
                       </div>
 
-                      <div className="px-3 py-3 text-right">
+                      <div className="hidden px-3 py-3 text-right md:block">
                         <QuantityCell value={item.stockQuantity} tone="stock" />
                       </div>
 
-                      <div className="px-3 py-3 text-right">
+                      <div className="hidden px-3 py-3 text-right md:block">
                         <QuantityCell value={item.rentedQuantity} tone="rent" />
                       </div>
 
-                      <div className="px-3 py-3 text-right">
+                      <div className="hidden px-3 py-3 text-right md:block">
                         <QuantityCell
                           value={item.writtenOffQuantity}
                           tone="written-off"
                         />
                       </div>
 
-                      <div className="px-3 py-3 text-right">
+                      <div className="hidden px-3 py-3 text-right md:block">
                         <QuantityCell value={item.lostQuantity} tone="lost" />
                       </div>
                     </button>
