@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Add01Icon,
+  ArrowLeft01Icon,
   ArrowRight01Icon,
   CanvasIcon,
   Delete01Icon,
@@ -82,7 +83,6 @@ import type {
   RepairEstimateCatalogNodeMutation,
   RepairEstimateCatalogNodeType,
   RepairEstimateCatalogSectionDto,
-  RepairEstimateCatalogSectionKind,
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
 import {
   repairEstimateCatalogLinkTypeLabel,
@@ -92,6 +92,32 @@ import {
 type SettingsAction =
   | (EstimateCatalogSettingsActionDto & { group: "estimate" })
   | (RepairSettingsActionDto & { group: "repair" })
+
+type EstimateScreen =
+  | { level: "root" }
+  | { level: "action"; action: EstimateCatalogSettingsActionDto }
+  | {
+      level: "category"
+      action: EstimateCatalogSettingsActionDto
+      categoryId: string
+    }
+
+type EstimateActionData =
+  RepairEstimateCatalogCanvasDto | RepairEstimateCatalogSectionDto
+
+type CatalogTableSortColumn =
+  | "name"
+  | "unit"
+  | "unitPrice"
+  | "defaultQuantity"
+  | "durationMinutes"
+  | "includeInEstimate"
+  | "commonItem"
+
+type CatalogTableSortState = {
+  column: CatalogTableSortColumn
+  direction: "asc" | "desc"
+}
 
 type NodeDialogState = {
   title: string
@@ -108,6 +134,8 @@ type LinkDialogState = {
 }
 
 const ESTIMATE_CATALOG_QUERY_KEY = ["estimate-catalog"] as const
+const CATALOG_TABLE_SORT_STORAGE_PREFIX =
+  "rwms:repair-estimate-catalog-table-sort:v1:"
 
 function getEstimateActionIcon(id: EstimateCatalogSettingsActionDto["id"]) {
   switch (id) {
@@ -133,6 +161,38 @@ function getRepairActionIcon(id: RepairSettingsActionDto["id"]) {
     case "repair-rework-settings":
       return HammerIcon
   }
+}
+
+function getSectionKind(action: EstimateCatalogSettingsActionDto) {
+  switch (action.id) {
+    case "repair-estimate-catalog-works":
+      return "works"
+    case "repair-estimate-catalog-materials":
+      return "materials"
+    case "repair-estimate-catalog-furniture":
+      return "furniture"
+    case "repair-estimate-catalog-canvas":
+      return null
+  }
+}
+
+async function getEstimateActionData(action: EstimateCatalogSettingsActionDto) {
+  switch (action.id) {
+    case "repair-estimate-catalog-canvas":
+      return getRepairEstimateCatalogCanvasMock()
+    case "repair-estimate-catalog-works":
+      return getRepairEstimateWorkCatalogMock()
+    case "repair-estimate-catalog-materials":
+      return getRepairEstimateMaterialCatalogMock()
+    case "repair-estimate-catalog-furniture":
+      return getRepairEstimateFurnitureCatalogMock()
+  }
+}
+
+function isSectionData(
+  data: EstimateActionData
+): data is RepairEstimateCatalogSectionDto {
+  return "items" in data
 }
 
 function SettingsActionButton({
@@ -179,20 +239,13 @@ function SettingsSection({
   title,
   count,
   children,
-  className,
 }: {
   title: string
   count: number
   children: ReactNode
-  className?: string
 }) {
   return (
-    <section
-      className={cn(
-        "flex min-h-0 flex-col overflow-hidden rounded-lg border bg-card",
-        className
-      )}
-    >
+    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
         <div className="flex min-w-0 items-center gap-3">
           <h2 className="truncate text-lg font-semibold">{title}</h2>
@@ -235,6 +288,139 @@ function toNumberOrNull(value: string) {
 
   const numeric = Number(value)
   return Number.isFinite(numeric) ? numeric : null
+}
+
+function canUseLocalStorage() {
+  return (
+    typeof window !== "undefined" && typeof window.localStorage !== "undefined"
+  )
+}
+
+function isCatalogTableSortColumn(
+  value: unknown
+): value is CatalogTableSortColumn {
+  return (
+    value === "name" ||
+    value === "unit" ||
+    value === "unitPrice" ||
+    value === "defaultQuantity" ||
+    value === "durationMinutes" ||
+    value === "includeInEstimate" ||
+    value === "commonItem"
+  )
+}
+
+function readCatalogTableSortState(
+  storageKey: string
+): CatalogTableSortState | null {
+  if (!canUseLocalStorage()) {
+    return null
+  }
+
+  const raw = window.localStorage.getItem(storageKey)
+  if (!raw) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<CatalogTableSortState>
+    if (
+      isCatalogTableSortColumn(parsed.column) &&
+      (parsed.direction === "asc" || parsed.direction === "desc")
+    ) {
+      return parsed as CatalogTableSortState
+    }
+  } catch {
+    window.localStorage.removeItem(storageKey)
+  }
+
+  return null
+}
+
+function writeCatalogTableSortState(
+  storageKey: string,
+  state: CatalogTableSortState | null
+) {
+  if (!canUseLocalStorage()) {
+    return
+  }
+
+  if (state === null) {
+    window.localStorage.removeItem(storageKey)
+    return
+  }
+
+  window.localStorage.setItem(storageKey, JSON.stringify(state))
+}
+
+function getCatalogTableSortValue(
+  item: RepairEstimateCatalogNodeDto,
+  column: CatalogTableSortColumn
+) {
+  switch (column) {
+    case "name":
+      return item.name
+    case "unit":
+      return item.unit
+    case "unitPrice":
+      return item.unitPrice
+    case "defaultQuantity":
+      return item.defaultQuantity
+    case "durationMinutes":
+      return item.durationMinutes
+    case "includeInEstimate":
+      return item.includeInEstimate
+    case "commonItem":
+      return item.commonItem
+  }
+}
+
+function compareCatalogTableValues(
+  left: string | number | boolean | null,
+  right: string | number | boolean | null
+) {
+  const leftEmpty = left === null || left === ""
+  const rightEmpty = right === null || right === ""
+
+  if (leftEmpty || rightEmpty) {
+    if (leftEmpty && rightEmpty) {
+      return 0
+    }
+    return leftEmpty ? 1 : -1
+  }
+
+  if (typeof left === "string" && typeof right === "string") {
+    return left.localeCompare(right, "ru", {
+      numeric: true,
+      sensitivity: "base",
+    })
+  }
+
+  if (typeof left === "number" && typeof right === "number") {
+    return left - right
+  }
+
+  if (typeof left === "boolean" && typeof right === "boolean") {
+    return Number(left) - Number(right)
+  }
+
+  return String(left).localeCompare(String(right), "ru", {
+    numeric: true,
+    sensitivity: "base",
+  })
+}
+
+function compareCatalogTableItems(
+  left: RepairEstimateCatalogNodeDto,
+  right: RepairEstimateCatalogNodeDto,
+  state: CatalogTableSortState
+) {
+  const result = compareCatalogTableValues(
+    getCatalogTableSortValue(left, state.column),
+    getCatalogTableSortValue(right, state.column)
+  )
+
+  return state.direction === "asc" ? result : -result
 }
 
 function createNodeMutation(
@@ -296,6 +482,31 @@ function createBlankNodeMutation({
     canvasY: null,
     comment: null,
   }
+}
+
+function BooleanField({
+  title,
+  checked,
+  disabled = false,
+  onCheckedChange,
+}: {
+  title: string
+  checked: boolean
+  disabled?: boolean
+  onCheckedChange: (checked: boolean) => void
+}) {
+  return (
+    <Field orientation="horizontal" data-disabled={disabled}>
+      <Checkbox
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={(value) => onCheckedChange(value === true)}
+      />
+      <FieldContent>
+        <FieldTitle>{title}</FieldTitle>
+      </FieldContent>
+    </Field>
+  )
 }
 
 function NodeEditorDialog({
@@ -426,21 +637,7 @@ function NodeEditorDialogContent({
             </Field>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-3">
-            <Field>
-              <FieldLabel>Сортировка</FieldLabel>
-              <Input
-                value={draft.sortOrder ?? ""}
-                inputMode="numeric"
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    sortOrder: toNumberOrNull(event.target.value),
-                  }))
-                }
-              />
-            </Field>
-
+          <div className="grid gap-3 md:grid-cols-2">
             <Field>
               <FieldLabel>Единица</FieldLabel>
               <Input
@@ -487,20 +684,21 @@ function NodeEditorDialogContent({
               />
             </Field>
 
-            <Field>
-              <FieldLabel>Длительность, мин</FieldLabel>
-              <Input
-                value={draft.durationMinutes ?? ""}
-                disabled={draft.nodeType !== "WORK"}
-                inputMode="numeric"
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    durationMinutes: toNumberOrNull(event.target.value),
-                  }))
-                }
-              />
-            </Field>
+            {draft.nodeType === "WORK" && (
+              <Field>
+                <FieldLabel>Длительность, мин</FieldLabel>
+                <Input
+                  value={draft.durationMinutes ?? ""}
+                  inputMode="numeric"
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      durationMinutes: toNumberOrNull(event.target.value),
+                    }))
+                  }
+                />
+              </Field>
+            )}
           </div>
 
           <div className="grid gap-2 md:grid-cols-2">
@@ -528,17 +726,18 @@ function NodeEditorDialogContent({
                 setDraft((current) => ({ ...current, commonItem: checked }))
               }
             />
-            <BooleanField
-              title="Мебельная категория"
-              checked={draft.furnitureCategory}
-              disabled={draft.nodeType !== "CATEGORY"}
-              onCheckedChange={(checked) =>
-                setDraft((current) => ({
-                  ...current,
-                  furnitureCategory: checked,
-                }))
-              }
-            />
+            {draft.nodeType === "CATEGORY" && (
+              <BooleanField
+                title="Мебельная категория"
+                checked={draft.furnitureCategory}
+                onCheckedChange={(checked) =>
+                  setDraft((current) => ({
+                    ...current,
+                    furnitureCategory: checked,
+                  }))
+                }
+              />
+            )}
           </div>
 
           <Field>
@@ -554,11 +753,7 @@ function NodeEditorDialogContent({
             />
           </Field>
 
-          {error !== null && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-              {error}
-            </div>
-          )}
+          {error !== null && <ErrorBox>{error}</ErrorBox>}
         </FieldGroup>
 
         <DialogFooter>
@@ -575,31 +770,6 @@ function NodeEditorDialogContent({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
-}
-
-function BooleanField({
-  title,
-  checked,
-  disabled = false,
-  onCheckedChange,
-}: {
-  title: string
-  checked: boolean
-  disabled?: boolean
-  onCheckedChange: (checked: boolean) => void
-}) {
-  return (
-    <Field orientation="horizontal" data-disabled={disabled}>
-      <Checkbox
-        checked={checked}
-        disabled={disabled}
-        onCheckedChange={(value) => onCheckedChange(value === true)}
-      />
-      <FieldContent>
-        <FieldTitle>{title}</FieldTitle>
-      </FieldContent>
-    </Field>
   )
 }
 
@@ -729,11 +899,7 @@ function LinkEditorDialogContent({
             }
           />
 
-          {error !== null && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-              {error}
-            </div>
-          )}
+          {error !== null && <ErrorBox>{error}</ErrorBox>}
         </FieldGroup>
 
         <DialogFooter>
@@ -753,6 +919,14 @@ function LinkEditorDialogContent({
   )
 }
 
+function ErrorBox({ children }: { children: ReactNode }) {
+  return (
+    <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+      {children}
+    </div>
+  )
+}
+
 function CatalogMeta({
   nodeCount,
   linkCount,
@@ -768,276 +942,110 @@ function CatalogMeta({
   )
 }
 
-function CategoryList({
-  categories,
-  selectedCategoryId,
-  onSelect,
-}: {
-  categories: RepairEstimateCatalogNodeDto[]
-  selectedCategoryId: string | null
-  onSelect: (id: string) => void
-}) {
-  return (
-    <div className="flex min-h-0 flex-col gap-2 overflow-auto">
-      {categories.map((category) => (
-        <Button
-          key={category.id}
-          type="button"
-          variant={category.id === selectedCategoryId ? "secondary" : "outline"}
-          className="h-auto justify-start px-3 py-2 text-left"
-          onClick={() => onSelect(category.id)}
-        >
-          <span className="min-w-0 truncate">{category.name}</span>
-        </Button>
-      ))}
-    </div>
-  )
+function categoryItemCount(
+  data: EstimateActionData,
+  categoryId: string
+): number {
+  if (isSectionData(data)) {
+    return getItemsForCategory(data, categoryId).length
+  }
+
+  const nodesById = new Map(data.nodes.map((node) => [node.id, node]))
+  return data.nodes.filter(
+    (node) =>
+      node.id !== categoryId &&
+      includesNodeInCategory(node, categoryId, nodesById)
+  ).length
 }
 
-function CatalogSectionEditor({
-  kind,
+function EstimateActionCategoryMenu({
+  action,
+  onOpenCategory,
 }: {
-  kind: RepairEstimateCatalogSectionKind
+  action: EstimateCatalogSettingsActionDto
+  onOpenCategory: (categoryId: string) => void
 }) {
   const queryClient = useQueryClient()
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(
-    null
-  )
   const [dialogState, setDialogState] = useState<NodeDialogState | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const sectionQuery = useQuery({
-    queryKey: [...ESTIMATE_CATALOG_QUERY_KEY, "section", kind],
-    queryFn: () => {
-      switch (kind) {
-        case "works":
-          return getRepairEstimateWorkCatalogMock()
-        case "materials":
-          return getRepairEstimateMaterialCatalogMock()
-        case "furniture":
-          return getRepairEstimateFurnitureCatalogMock()
-      }
-    },
+  const dataQuery = useQuery({
+    queryKey: [...ESTIMATE_CATALOG_QUERY_KEY, "action-menu", action.id],
+    queryFn: () => getEstimateActionData(action),
   })
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => {
-      switch (kind) {
-        case "works":
-          return deleteRepairEstimateWorkCatalogItem(id)
-        case "materials":
-          return deleteRepairEstimateMaterialCatalogItem(id)
-        case "furniture":
-          return deleteRepairEstimateFurnitureCatalogItem(id)
-      }
-    },
-    onSuccess: () => {
-      setError(null)
-      void queryClient.invalidateQueries({
-        queryKey: ESTIMATE_CATALOG_QUERY_KEY,
-      })
-    },
-    onError: (mutationError) => {
-      setError(
-        mutationError instanceof Error
-          ? mutationError.message
-          : "Не удалось удалить запись"
-      )
-    },
-  })
-
-  if (sectionQuery.isLoading) {
+  if (dataQuery.isLoading) {
     return <SectionSkeleton />
   }
 
-  if (!sectionQuery.data) {
+  if (!dataQuery.data) {
     return null
   }
 
-  const section = sectionQuery.data
-  const effectiveCategoryId = section.categories.some(
-    (category) => category.id === selectedCategoryId
-  )
-    ? selectedCategoryId
-    : (section.categories[0]?.id ?? null)
-  const selectedCategory =
-    section.categories.find(
-      (category) => category.id === effectiveCategoryId
-    ) ?? null
-  const items =
-    effectiveCategoryId === null
-      ? []
-      : getItemsForCategory(section, effectiveCategoryId)
-
-  const save = (input: RepairEstimateCatalogNodeMutation) => {
-    switch (kind) {
-      case "works":
-        return saveRepairEstimateWorkCatalogItem(input)
-      case "materials":
-        return saveRepairEstimateMaterialCatalogItem(input)
-      case "furniture":
-        return saveRepairEstimateFurnitureCatalogItem(input)
-    }
-  }
+  const canCreateCategory = action.id === "repair-estimate-catalog-canvas"
+  const nodeCount = isSectionData(dataQuery.data)
+    ? dataQuery.data.items.length
+    : dataQuery.data.nodes.length
+  const linkCount = dataQuery.data.links.length
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <CatalogMeta
-          nodeCount={section.items.length}
-          linkCount={section.links.length}
-        />
-        <Button
-          type="button"
-          disabled={selectedCategory === null}
-          onClick={() => {
-            if (selectedCategory === null) {
-              return
-            }
-
-            setDialogState({
-              title: `Добавить: ${section.title}`,
-              description: selectedCategory.name,
-              submitLabel: "Сохранить",
-              allowTypeSelect: false,
-              value: createBlankNodeMutation({
-                nodeType: section.sectionType,
-                parentId: selectedCategory.id,
-                furnitureCategory:
-                  kind === "furniture" && selectedCategory.furnitureCategory,
-                sortOrder: items.length * 10 + 10,
-              }),
-              save,
-            })
-          }}
-        >
-          <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-          Добавить
-        </Button>
-      </div>
-
-      <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[18rem_minmax(0,1fr)]">
-        <CategoryList
-          categories={section.categories}
-          selectedCategoryId={effectiveCategoryId}
-          onSelect={setSelectedCategoryId}
-        />
-
-        <div className="min-h-0 overflow-auto rounded-lg border">
-          <CatalogItemsTable
-            section={section}
-            items={items}
-            onEdit={(node) =>
+        <CatalogMeta nodeCount={nodeCount} linkCount={linkCount} />
+        {canCreateCategory && (
+          <Button
+            type="button"
+            onClick={() =>
               setDialogState({
-                title: `Редактировать: ${section.title}`,
-                description: node.code,
-                submitLabel: "Сохранить",
+                title: "Создать категорию",
+                description: "Категория верхнего уровня каталога смет.",
+                submitLabel: "Создать",
                 allowTypeSelect: false,
-                value: createNodeMutation(node),
-                save,
+                value: createBlankNodeMutation({
+                  nodeType: "CATEGORY",
+                  parentId: null,
+                  furnitureCategory: false,
+                  sortOrder: dataQuery.data.categories.length * 10 + 10,
+                }),
+                save: saveRepairEstimateCatalogCanvasNode,
               })
             }
-            onDelete={(node) => deleteMutation.mutate(node.id)}
-          />
-        </div>
+          >
+            <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+            Создать категорию
+          </Button>
+        )}
       </div>
 
-      {error !== null && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          {error}
-        </div>
-      )}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {dataQuery.data.categories.map((category) => (
+          <button
+            key={category.id}
+            type="button"
+            className="flex min-h-28 flex-col items-start justify-between gap-4 rounded-lg border bg-background p-4 text-left transition-colors hover:bg-accent"
+            onClick={() => onOpenCategory(category.id)}
+          >
+            <span className="flex w-full items-center justify-between gap-2">
+              <span className="min-w-0 truncate font-medium">
+                {category.name}
+              </span>
+              <HugeiconsIcon icon={ArrowRight01Icon} />
+            </span>
+            <Badge variant="secondary">
+              {categoryItemCount(dataQuery.data, category.id)} записей
+            </Badge>
+          </button>
+        ))}
+      </div>
 
       <NodeEditorDialog
         state={dialogState}
         onClose={() => setDialogState(null)}
-        onSaved={() => {
-          setError(null)
+        onSaved={() =>
           void queryClient.invalidateQueries({
             queryKey: ESTIMATE_CATALOG_QUERY_KEY,
           })
-        }}
+        }
       />
     </div>
-  )
-}
-
-function CatalogItemsTable({
-  section,
-  items,
-  onEdit,
-  onDelete,
-}: {
-  section: RepairEstimateCatalogSectionDto
-  items: RepairEstimateCatalogNodeDto[]
-  onEdit: (node: RepairEstimateCatalogNodeDto) => void
-  onDelete: (node: RepairEstimateCatalogNodeDto) => void
-}) {
-  return (
-    <table className="w-full min-w-[56rem] border-collapse text-sm">
-      <thead className="sticky top-0 bg-muted text-muted-foreground">
-        <tr>
-          <th className="px-3 py-2 text-left font-medium">Название</th>
-          <th className="px-3 py-2 text-left font-medium">Код</th>
-          <th className="px-3 py-2 text-left font-medium">Ед.</th>
-          <th className="px-3 py-2 text-left font-medium">Цена</th>
-          <th className="px-3 py-2 text-left font-medium">Кол.</th>
-          {section.sectionType === "WORK" && (
-            <th className="px-3 py-2 text-left font-medium">Мин.</th>
-          )}
-          <th className="px-3 py-2 text-left font-medium">Смета</th>
-          <th className="px-3 py-2 text-left font-medium">Общий</th>
-          <th className="px-3 py-2 text-right font-medium">Действия</th>
-        </tr>
-      </thead>
-      <tbody>
-        {items.map((item) => (
-          <tr key={item.id} className="border-t">
-            <td className="max-w-72 px-3 py-2">
-              <div className="truncate font-medium">{item.name}</div>
-              {item.comment && (
-                <div className="truncate text-xs text-muted-foreground">
-                  {item.comment}
-                </div>
-              )}
-            </td>
-            <td className="px-3 py-2 font-mono text-xs">{item.code}</td>
-            <td className="px-3 py-2">{item.unit ?? ""}</td>
-            <td className="px-3 py-2">{item.unitPrice ?? ""}</td>
-            <td className="px-3 py-2">{item.defaultQuantity}</td>
-            {section.sectionType === "WORK" && (
-              <td className="px-3 py-2">{item.durationMinutes ?? ""}</td>
-            )}
-            <td className="px-3 py-2">
-              {item.includeInEstimate ? "Да" : "Нет"}
-            </td>
-            <td className="px-3 py-2">{item.commonItem ? "Да" : "Нет"}</td>
-            <td className="px-3 py-2">
-              <div className="flex justify-end gap-1">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => onEdit(item)}
-                >
-                  <HugeiconsIcon icon={PencilEdit01Icon} />
-                  <span className="sr-only">Редактировать</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => onDelete(item)}
-                >
-                  <HugeiconsIcon icon={Delete01Icon} />
-                  <span className="sr-only">Удалить</span>
-                </Button>
-              </div>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
   )
 }
 
@@ -1096,327 +1104,6 @@ function getCanvasPosition(node: RepairEstimateCatalogNodeDto, index: number) {
     x: node.canvasX ?? 40 + (index % 3) * 320,
     y: node.canvasY ?? 210 + Math.floor(index / 3) * 160,
   }
-}
-
-function CatalogCanvasEditor() {
-  const queryClient = useQueryClient()
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(
-    null
-  )
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
-  const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null)
-  const [nodeDialogState, setNodeDialogState] =
-    useState<NodeDialogState | null>(null)
-  const [linkDialogState, setLinkDialogState] =
-    useState<LinkDialogState | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const canvasQuery = useQuery({
-    queryKey: [...ESTIMATE_CATALOG_QUERY_KEY, "canvas"],
-    queryFn: getRepairEstimateCatalogCanvasMock,
-  })
-
-  const deleteNodeMutation = useMutation({
-    mutationFn: deleteRepairEstimateCatalogCanvasNode,
-    onSuccess: () => {
-      setError(null)
-      setSelectedNodeId(null)
-      void queryClient.invalidateQueries({
-        queryKey: ESTIMATE_CATALOG_QUERY_KEY,
-      })
-    },
-    onError: (mutationError) => {
-      setError(
-        mutationError instanceof Error
-          ? mutationError.message
-          : "Не удалось удалить блок"
-      )
-    },
-  })
-
-  const deleteLinkMutation = useMutation({
-    mutationFn: deleteRepairEstimateCatalogCanvasLink,
-    onSuccess: () => {
-      setError(null)
-      setSelectedLinkId(null)
-      void queryClient.invalidateQueries({
-        queryKey: ESTIMATE_CATALOG_QUERY_KEY,
-      })
-    },
-    onError: (mutationError) => {
-      setError(
-        mutationError instanceof Error
-          ? mutationError.message
-          : "Не удалось удалить связь"
-      )
-    },
-  })
-
-  const resetMutation = useMutation({
-    mutationFn: resetRepairEstimateCatalogCanvasMock,
-    onSuccess: () => {
-      setError(null)
-      setSelectedNodeId(null)
-      setSelectedLinkId(null)
-      void queryClient.invalidateQueries({
-        queryKey: ESTIMATE_CATALOG_QUERY_KEY,
-      })
-    },
-  })
-
-  if (canvasQuery.isLoading) {
-    return <SectionSkeleton />
-  }
-
-  if (!canvasQuery.data) {
-    return null
-  }
-
-  const data = canvasQuery.data
-  const effectiveCategoryId = data.categories.some(
-    (category) => category.id === selectedCategoryId
-  )
-    ? selectedCategoryId
-    : (data.categories[0]?.id ?? null)
-  const canvasNodes = getCanvasNodes(data, effectiveCategoryId)
-  const selectedCategory =
-    data.categories.find((category) => category.id === effectiveCategoryId) ??
-    null
-  const selectedNode =
-    data.nodes.find((node) => node.id === selectedNodeId) ?? null
-  const selectedLink =
-    data.links.find((link) => link.id === selectedLinkId) ?? null
-  const nodeIds = new Set(canvasNodes.map((node) => node.id))
-  const canvasLinks = data.links.filter(
-    (link) => nodeIds.has(link.sourceNodeId) && nodeIds.has(link.targetNodeId)
-  )
-
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <CatalogMeta
-          nodeCount={data.nodes.length}
-          linkCount={data.links.length}
-        />
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() =>
-              setNodeDialogState({
-                title: "Добавить категорию",
-                description: "Корневой раздел каталога смет",
-                submitLabel: "Сохранить",
-                allowTypeSelect: false,
-                value: createBlankNodeMutation({
-                  nodeType: "CATEGORY",
-                  parentId: null,
-                  furnitureCategory: false,
-                  sortOrder: data.categories.length * 10 + 10,
-                }),
-                save: saveRepairEstimateCatalogCanvasNode,
-              })
-            }
-          >
-            <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-            Категория
-          </Button>
-          <Button
-            type="button"
-            disabled={selectedCategory === null}
-            onClick={() => {
-              if (selectedCategory === null) {
-                return
-              }
-
-              setNodeDialogState({
-                title: "Добавить блок",
-                description: selectedCategory.name,
-                submitLabel: "Сохранить",
-                allowTypeSelect: true,
-                value: createBlankNodeMutation({
-                  nodeType: "WORK",
-                  parentId: selectedCategory.id,
-                  furnitureCategory: selectedCategory.furnitureCategory,
-                  sortOrder: canvasNodes.length * 10 + 10,
-                }),
-                save: saveRepairEstimateCatalogCanvasNode,
-              })
-            }}
-          >
-            <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-            Блок
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={canvasNodes.length < 2}
-            onClick={() => {
-              const source = selectedNode ?? canvasNodes[0]
-              const target =
-                canvasNodes.find(
-                  (node) =>
-                    node.id !== source.id && node.nodeType !== "CATEGORY"
-                ) ?? canvasNodes[1]
-
-              setLinkDialogState({
-                nodes: canvasNodes,
-                value: {
-                  sourceNodeId: source.id,
-                  targetNodeId: target.id,
-                  linkType: "FOLLOW_UP",
-                  active: true,
-                  sortOrder: canvasLinks.length * 10 + 10,
-                  comment: null,
-                },
-              })
-            }}
-          >
-            <HugeiconsIcon icon={Link01Icon} data-icon="inline-start" />
-            Связь
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={resetMutation.isPending}
-            onClick={() => resetMutation.mutate()}
-          >
-            <HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" />
-            Сбросить mock
-          </Button>
-        </div>
-      </div>
-
-      <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[18rem_minmax(0,1fr)]">
-        <CategoryList
-          categories={data.categories}
-          selectedCategoryId={effectiveCategoryId}
-          onSelect={(id) => {
-            setSelectedCategoryId(id)
-            setSelectedNodeId(null)
-            setSelectedLinkId(null)
-          }}
-        />
-
-        <div className="min-h-[28rem] overflow-auto rounded-lg border bg-background">
-          <CatalogCanvas
-            nodes={canvasNodes}
-            links={canvasLinks}
-            selectedNodeId={selectedNodeId}
-            selectedLinkId={selectedLinkId}
-            onSelectNode={(node) => {
-              setSelectedNodeId(node.id)
-              setSelectedLinkId(null)
-            }}
-            onSelectLink={(link) => {
-              setSelectedLinkId(link.id)
-              setSelectedNodeId(null)
-            }}
-          />
-        </div>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          disabled={selectedNode === null}
-          onClick={() => {
-            if (selectedNode === null) {
-              return
-            }
-
-            setNodeDialogState({
-              title: "Редактировать блок",
-              description: selectedNode.code,
-              submitLabel: "Сохранить",
-              allowTypeSelect: selectedNode.nodeType !== "CATEGORY",
-              value: createNodeMutation(selectedNode),
-              save: saveRepairEstimateCatalogCanvasNode,
-            })
-          }}
-        >
-          <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
-          Редактировать блок
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={selectedNode === null}
-          onClick={() =>
-            selectedNode && deleteNodeMutation.mutate(selectedNode.id)
-          }
-        >
-          <HugeiconsIcon icon={Delete01Icon} data-icon="inline-start" />
-          Удалить блок
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={selectedLink === null}
-          onClick={() => {
-            if (selectedLink === null) {
-              return
-            }
-
-            setLinkDialogState({
-              nodes: canvasNodes,
-              value: {
-                id: selectedLink.id,
-                sourceNodeId: selectedLink.sourceNodeId,
-                targetNodeId: selectedLink.targetNodeId,
-                linkType: selectedLink.linkType,
-                active: selectedLink.active,
-                sortOrder: selectedLink.sortOrder,
-                comment: selectedLink.comment,
-              },
-            })
-          }}
-        >
-          <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
-          Редактировать связь
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={selectedLink === null}
-          onClick={() =>
-            selectedLink && deleteLinkMutation.mutate(selectedLink.id)
-          }
-        >
-          <HugeiconsIcon icon={Delete01Icon} data-icon="inline-start" />
-          Удалить связь
-        </Button>
-      </div>
-
-      {error !== null && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          {error}
-        </div>
-      )}
-
-      <NodeEditorDialog
-        state={nodeDialogState}
-        onClose={() => setNodeDialogState(null)}
-        onSaved={() => {
-          setError(null)
-          void queryClient.invalidateQueries({
-            queryKey: ESTIMATE_CATALOG_QUERY_KEY,
-          })
-        }}
-      />
-      <LinkEditorDialog
-        state={linkDialogState}
-        onClose={() => setLinkDialogState(null)}
-        onSaved={() => {
-          setError(null)
-          void queryClient.invalidateQueries({
-            queryKey: ESTIMATE_CATALOG_QUERY_KEY,
-          })
-        }}
-      />
-    </div>
-  )
 }
 
 function CatalogCanvas({
@@ -1504,9 +1191,6 @@ function CatalogCanvas({
               {repairEstimateCatalogNodeTypeLabel(node.nodeType)}
             </Badge>
           </span>
-          <span className="font-mono text-xs text-muted-foreground">
-            {node.code}
-          </span>
           <span className="flex flex-wrap gap-1">
             {node.includeInEstimate && <Badge variant="outline">Смета</Badge>}
             {node.commonItem && <Badge variant="outline">Общий</Badge>}
@@ -1518,21 +1202,669 @@ function CatalogCanvas({
   )
 }
 
-function EstimateCatalogWorkspace({
+function CatalogCanvasCategoryEditor({ categoryId }: { categoryId: string }) {
+  const queryClient = useQueryClient()
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null)
+  const [nodeDialogState, setNodeDialogState] =
+    useState<NodeDialogState | null>(null)
+  const [linkDialogState, setLinkDialogState] =
+    useState<LinkDialogState | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const canvasQuery = useQuery({
+    queryKey: [...ESTIMATE_CATALOG_QUERY_KEY, "canvas"],
+    queryFn: getRepairEstimateCatalogCanvasMock,
+  })
+
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ESTIMATE_CATALOG_QUERY_KEY })
+  }
+
+  const deleteNodeMutation = useMutation({
+    mutationFn: deleteRepairEstimateCatalogCanvasNode,
+    onSuccess: () => {
+      setError(null)
+      setSelectedNodeId(null)
+      invalidate()
+    },
+    onError: (mutationError) => {
+      setError(
+        mutationError instanceof Error
+          ? mutationError.message
+          : "Не удалось удалить блок"
+      )
+    },
+  })
+
+  const deleteLinkMutation = useMutation({
+    mutationFn: deleteRepairEstimateCatalogCanvasLink,
+    onSuccess: () => {
+      setError(null)
+      setSelectedLinkId(null)
+      invalidate()
+    },
+    onError: (mutationError) => {
+      setError(
+        mutationError instanceof Error
+          ? mutationError.message
+          : "Не удалось удалить связь"
+      )
+    },
+  })
+
+  const resetMutation = useMutation({
+    mutationFn: resetRepairEstimateCatalogCanvasMock,
+    onSuccess: () => {
+      setError(null)
+      setSelectedNodeId(null)
+      setSelectedLinkId(null)
+      invalidate()
+    },
+  })
+
+  if (canvasQuery.isLoading) {
+    return <SectionSkeleton />
+  }
+
+  if (!canvasQuery.data) {
+    return null
+  }
+
+  const data = canvasQuery.data
+  const category =
+    data.categories.find((item) => item.id === categoryId) ?? null
+  const canvasNodes = getCanvasNodes(data, categoryId)
+  const selectedNode =
+    data.nodes.find((node) => node.id === selectedNodeId) ?? null
+  const selectedLink =
+    data.links.find((link) => link.id === selectedLinkId) ?? null
+  const nodeIds = new Set(canvasNodes.map((node) => node.id))
+  const canvasLinks = data.links.filter(
+    (link) => nodeIds.has(link.sourceNodeId) && nodeIds.has(link.targetNodeId)
+  )
+
+  if (category === null) {
+    return <ErrorBox>Категория не найдена</ErrorBox>
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <h2 className="truncate text-lg font-semibold">{category.name}</h2>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            onClick={() =>
+              setNodeDialogState({
+                title: "Добавить блок",
+                description: category.name,
+                submitLabel: "Сохранить",
+                allowTypeSelect: true,
+                value: createBlankNodeMutation({
+                  nodeType: "WORK",
+                  parentId: category.id,
+                  furnitureCategory: category.furnitureCategory,
+                  sortOrder: canvasNodes.length * 10 + 10,
+                }),
+                save: saveRepairEstimateCatalogCanvasNode,
+              })
+            }
+          >
+            <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+            Блок
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={canvasNodes.length < 2}
+            onClick={() => {
+              const source = selectedNode ?? canvasNodes[0]
+              const target =
+                canvasNodes.find(
+                  (node) =>
+                    node.id !== source.id && node.nodeType !== "CATEGORY"
+                ) ?? canvasNodes[1]
+
+              setLinkDialogState({
+                nodes: canvasNodes,
+                value: {
+                  sourceNodeId: source.id,
+                  targetNodeId: target.id,
+                  linkType: "FOLLOW_UP",
+                  active: true,
+                  sortOrder: canvasLinks.length * 10 + 10,
+                  comment: null,
+                },
+              })
+            }}
+          >
+            <HugeiconsIcon icon={Link01Icon} data-icon="inline-start" />
+            Связь
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={resetMutation.isPending}
+            onClick={() => resetMutation.mutate()}
+          >
+            <HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" />
+            Сбросить mock
+          </Button>
+        </div>
+      </div>
+
+      <div className="min-h-[28rem] flex-1 overflow-auto rounded-lg border bg-background">
+        <CatalogCanvas
+          nodes={canvasNodes}
+          links={canvasLinks}
+          selectedNodeId={selectedNodeId}
+          selectedLinkId={selectedLinkId}
+          onSelectNode={(node) => {
+            setSelectedNodeId(node.id)
+            setSelectedLinkId(null)
+          }}
+          onSelectLink={(link) => {
+            setSelectedLinkId(link.id)
+            setSelectedNodeId(null)
+          }}
+        />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={selectedNode === null}
+          onClick={() => {
+            if (selectedNode === null) {
+              return
+            }
+
+            setNodeDialogState({
+              title: "Редактировать блок",
+              description: selectedNode.code,
+              submitLabel: "Сохранить",
+              allowTypeSelect: selectedNode.nodeType !== "CATEGORY",
+              value: createNodeMutation(selectedNode),
+              save: saveRepairEstimateCatalogCanvasNode,
+            })
+          }}
+        >
+          <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
+          Редактировать блок
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={selectedNode === null}
+          onClick={() =>
+            selectedNode && deleteNodeMutation.mutate(selectedNode.id)
+          }
+        >
+          <HugeiconsIcon icon={Delete01Icon} data-icon="inline-start" />
+          Удалить блок
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={selectedLink === null}
+          onClick={() => {
+            if (selectedLink === null) {
+              return
+            }
+
+            setLinkDialogState({
+              nodes: canvasNodes,
+              value: {
+                id: selectedLink.id,
+                sourceNodeId: selectedLink.sourceNodeId,
+                targetNodeId: selectedLink.targetNodeId,
+                linkType: selectedLink.linkType,
+                active: selectedLink.active,
+                sortOrder: selectedLink.sortOrder,
+                comment: selectedLink.comment,
+              },
+            })
+          }}
+        >
+          <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
+          Редактировать связь
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={selectedLink === null}
+          onClick={() =>
+            selectedLink && deleteLinkMutation.mutate(selectedLink.id)
+          }
+        >
+          <HugeiconsIcon icon={Delete01Icon} data-icon="inline-start" />
+          Удалить связь
+        </Button>
+      </div>
+
+      {error !== null && <ErrorBox>{error}</ErrorBox>}
+
+      <NodeEditorDialog
+        state={nodeDialogState}
+        onClose={() => setNodeDialogState(null)}
+        onSaved={() => {
+          setError(null)
+          invalidate()
+        }}
+      />
+      <LinkEditorDialog
+        state={linkDialogState}
+        onClose={() => setLinkDialogState(null)}
+        onSaved={() => {
+          setError(null)
+          invalidate()
+        }}
+      />
+    </div>
+  )
+}
+
+function CatalogItemsTable({
+  section,
+  categoryId,
+  items,
+  onEdit,
+  onDelete,
+}: {
+  section: RepairEstimateCatalogSectionDto
+  categoryId: string
+  items: RepairEstimateCatalogNodeDto[]
+  onEdit: (node: RepairEstimateCatalogNodeDto) => void
+  onDelete: (node: RepairEstimateCatalogNodeDto) => void
+}) {
+  const storageKey = `${CATALOG_TABLE_SORT_STORAGE_PREFIX}${section.kind}:${categoryId}`
+  const [sortState, setSortState] = useState<CatalogTableSortState | null>(() =>
+    readCatalogTableSortState(storageKey)
+  )
+
+  const sortedItems = useMemo(() => {
+    if (sortState === null) {
+      return items
+    }
+
+    const originalIndexById = new Map(
+      items.map((item, index) => [item.id, index])
+    )
+
+    return items.slice().sort((left, right) => {
+      const result = compareCatalogTableItems(left, right, sortState)
+      if (result !== 0) {
+        return result
+      }
+
+      return (
+        (originalIndexById.get(left.id) ?? 0) -
+        (originalIndexById.get(right.id) ?? 0)
+      )
+    })
+  }, [items, sortState])
+
+  const setColumnSort = (column: CatalogTableSortColumn) => {
+    setSortState((current) => {
+      const next =
+        current?.column !== column
+          ? ({ column, direction: "asc" } satisfies CatalogTableSortState)
+          : current.direction === "asc"
+            ? ({ column, direction: "desc" } satisfies CatalogTableSortState)
+            : null
+
+      writeCatalogTableSortState(storageKey, next)
+      return next
+    })
+  }
+
+  const renderSortableHeader = (
+    column: CatalogTableSortColumn,
+    label: string
+  ) => {
+    const direction = sortState?.column === column ? sortState.direction : null
+
+    return (
+      <th
+        className="px-3 py-2 text-left font-medium"
+        aria-sort={
+          direction === "asc"
+            ? "ascending"
+            : direction === "desc"
+              ? "descending"
+              : "none"
+        }
+      >
+        <button
+          type="button"
+          className="flex w-full items-center gap-1 text-left text-inherit"
+          onClick={() => setColumnSort(column)}
+        >
+          <span>{label}</span>
+          <span
+            className={cn(
+              "text-xs text-muted-foreground",
+              direction !== null && "text-foreground"
+            )}
+            aria-hidden
+          >
+            {direction === "asc" ? "↑" : direction === "desc" ? "↓" : "↕"}
+          </span>
+        </button>
+      </th>
+    )
+  }
+
+  return (
+    <table className="w-full min-w-[56rem] border-collapse text-sm">
+      <thead className="sticky top-0 bg-muted text-muted-foreground">
+        <tr>
+          {renderSortableHeader("name", "Название")}
+          {renderSortableHeader("unit", "Ед.")}
+          {renderSortableHeader("unitPrice", "Цена")}
+          {renderSortableHeader("defaultQuantity", "Кол.")}
+          {section.sectionType === "WORK" &&
+            renderSortableHeader("durationMinutes", "Мин.")}
+          {renderSortableHeader("includeInEstimate", "Смета")}
+          {renderSortableHeader("commonItem", "Общий")}
+          <th className="px-3 py-2 text-right font-medium">Действия</th>
+        </tr>
+      </thead>
+      <tbody>
+        {sortedItems.map((item) => (
+          <tr key={item.id} className="border-t">
+            <td className="max-w-72 px-3 py-2">
+              <div className="truncate font-medium">{item.name}</div>
+              {item.comment && (
+                <div className="truncate text-xs text-muted-foreground">
+                  {item.comment}
+                </div>
+              )}
+            </td>
+            <td className="px-3 py-2">{item.unit ?? ""}</td>
+            <td className="px-3 py-2">{item.unitPrice ?? ""}</td>
+            <td className="px-3 py-2">{item.defaultQuantity}</td>
+            {section.sectionType === "WORK" && (
+              <td className="px-3 py-2">{item.durationMinutes ?? ""}</td>
+            )}
+            <td className="px-3 py-2">
+              {item.includeInEstimate ? "Да" : "Нет"}
+            </td>
+            <td className="px-3 py-2">{item.commonItem ? "Да" : "Нет"}</td>
+            <td className="px-3 py-2">
+              <div className="flex justify-end gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => onEdit(item)}
+                >
+                  <HugeiconsIcon icon={PencilEdit01Icon} />
+                  <span className="sr-only">Редактировать</span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => onDelete(item)}
+                >
+                  <HugeiconsIcon icon={Delete01Icon} />
+                  <span className="sr-only">Удалить</span>
+                </Button>
+              </div>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function CatalogSectionCategoryEditor({
   action,
+  categoryId,
 }: {
   action: EstimateCatalogSettingsActionDto
+  categoryId: string
 }) {
-  switch (action.id) {
-    case "repair-estimate-catalog-canvas":
-      return <CatalogCanvasEditor />
-    case "repair-estimate-catalog-works":
-      return <CatalogSectionEditor kind="works" />
-    case "repair-estimate-catalog-materials":
-      return <CatalogSectionEditor kind="materials" />
-    case "repair-estimate-catalog-furniture":
-      return <CatalogSectionEditor kind="furniture" />
+  const kind = getSectionKind(action)
+  const queryClient = useQueryClient()
+  const [dialogState, setDialogState] = useState<NodeDialogState | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const sectionQuery = useQuery({
+    queryKey: [...ESTIMATE_CATALOG_QUERY_KEY, "section", kind],
+    queryFn: () =>
+      kind === null
+        ? getRepairEstimateWorkCatalogMock()
+        : getEstimateActionData(action),
+    enabled: kind !== null,
+  })
+
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ESTIMATE_CATALOG_QUERY_KEY })
   }
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => {
+      switch (kind) {
+        case "works":
+          return deleteRepairEstimateWorkCatalogItem(id)
+        case "materials":
+          return deleteRepairEstimateMaterialCatalogItem(id)
+        case "furniture":
+          return deleteRepairEstimateFurnitureCatalogItem(id)
+        case null:
+          return deleteRepairEstimateWorkCatalogItem(id)
+      }
+    },
+    onSuccess: () => {
+      setError(null)
+      invalidate()
+    },
+    onError: (mutationError) => {
+      setError(
+        mutationError instanceof Error
+          ? mutationError.message
+          : "Не удалось удалить запись"
+      )
+    },
+  })
+
+  if (sectionQuery.isLoading) {
+    return <SectionSkeleton />
+  }
+
+  const section = sectionQuery.data
+  if (!section || !isSectionData(section)) {
+    return null
+  }
+
+  const category =
+    section.categories.find((item) => item.id === categoryId) ?? null
+  if (category === null) {
+    return <ErrorBox>Категория не найдена</ErrorBox>
+  }
+
+  const items = getItemsForCategory(section, categoryId)
+  const save = (input: RepairEstimateCatalogNodeMutation) => {
+    switch (kind) {
+      case "works":
+        return saveRepairEstimateWorkCatalogItem(input)
+      case "materials":
+        return saveRepairEstimateMaterialCatalogItem(input)
+      case "furniture":
+        return saveRepairEstimateFurnitureCatalogItem(input)
+      case null:
+        return saveRepairEstimateWorkCatalogItem(input)
+    }
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <h2 className="truncate text-lg font-semibold">{category.name}</h2>
+        </div>
+        <Button
+          type="button"
+          onClick={() =>
+            setDialogState({
+              title: `Добавить: ${section.title}`,
+              description: category.name,
+              submitLabel: "Сохранить",
+              allowTypeSelect: false,
+              value: createBlankNodeMutation({
+                nodeType: section.sectionType,
+                parentId: category.id,
+                furnitureCategory: kind === "furniture",
+                sortOrder: items.length * 10 + 10,
+              }),
+              save,
+            })
+          }
+        >
+          <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+          Добавить
+        </Button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-auto rounded-lg border">
+        <CatalogItemsTable
+          key={`${section.kind}:${categoryId}`}
+          section={section}
+          categoryId={categoryId}
+          items={items}
+          onEdit={(node) =>
+            setDialogState({
+              title: `Редактировать: ${section.title}`,
+              description: node.code,
+              submitLabel: "Сохранить",
+              allowTypeSelect: false,
+              value: createNodeMutation(node),
+              save,
+            })
+          }
+          onDelete={(node) => deleteMutation.mutate(node.id)}
+        />
+      </div>
+
+      {error !== null && <ErrorBox>{error}</ErrorBox>}
+
+      <NodeEditorDialog
+        state={dialogState}
+        onClose={() => setDialogState(null)}
+        onSaved={() => {
+          setError(null)
+          invalidate()
+        }}
+      />
+    </div>
+  )
+}
+
+function EstimateCategoryEditor({
+  action,
+  categoryId,
+}: {
+  action: EstimateCatalogSettingsActionDto
+  categoryId: string
+}) {
+  if (action.id === "repair-estimate-catalog-canvas") {
+    return <CatalogCanvasCategoryEditor categoryId={categoryId} />
+  }
+
+  return (
+    <CatalogSectionCategoryEditor action={action} categoryId={categoryId} />
+  )
+}
+
+function BreadcrumbTitle({
+  action,
+  categoryName,
+}: {
+  action: EstimateCatalogSettingsActionDto
+  categoryName?: string
+}) {
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
+      <span className="text-muted-foreground">Настройка смет</span>
+      <span className="text-muted-foreground">/</span>
+      <span className="font-medium">{action.title}</span>
+      {categoryName && (
+        <>
+          <span className="text-muted-foreground">/</span>
+          <span className="font-medium">{categoryName}</span>
+        </>
+      )}
+    </div>
+  )
+}
+
+function EstimateDrilldownView({
+  screen,
+  onBack,
+  onOpenCategory,
+}: {
+  screen: Exclude<EstimateScreen, { level: "root" }>
+  onBack: () => void
+  onOpenCategory: (categoryId: string) => void
+}) {
+  const categoryNameQuery = useQuery({
+    queryKey: [
+      ...ESTIMATE_CATALOG_QUERY_KEY,
+      "category-title",
+      screen.action.id,
+      screen.level === "category" ? screen.categoryId : null,
+    ],
+    queryFn: () => getEstimateActionData(screen.action),
+    enabled: screen.level === "category",
+  })
+
+  const categoryName =
+    screen.level === "category"
+      ? categoryNameQuery.data?.categories.find(
+          (category) => category.id === screen.categoryId
+        )?.name
+      : undefined
+
+  return (
+    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            className="items-center gap-1.5"
+            onClick={onBack}
+          >
+            <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
+            <span className="leading-none">Назад</span>
+          </Button>
+          <BreadcrumbTitle action={screen.action} categoryName={categoryName} />
+        </div>
+        <Badge variant="secondary">{screen.action.legacyViewId}</Badge>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        {screen.level === "action" ? (
+          <EstimateActionCategoryMenu
+            action={screen.action}
+            onOpenCategory={onOpenCategory}
+          />
+        ) : (
+          <EstimateCategoryEditor
+            action={screen.action}
+            categoryId={screen.categoryId}
+          />
+        )}
+      </div>
+    </section>
+  )
 }
 
 function RepairMockPanel({
@@ -1559,9 +1891,11 @@ function RepairMockPanel({
 }
 
 export function EstimatesRepairsSettingsPage() {
-  const [selectedAction, setSelectedAction] = useState<SettingsAction | null>(
-    null
-  )
+  const [estimateScreen, setEstimateScreen] = useState<EstimateScreen>({
+    level: "root",
+  })
+  const [selectedRepairAction, setSelectedRepairAction] =
+    useState<RepairSettingsActionDto | null>(null)
 
   const catalogCanvasQuery = useQuery({
     queryKey: ["estimate-settings", "repair-estimate-catalog-canvas"],
@@ -1614,60 +1948,62 @@ export function EstimatesRepairsSettingsPage() {
       .map((action) => ({ ...action, group: "repair" as const }))
   }, [repairSettingsQuery.data])
 
-  const selectedEstimateAction =
-    selectedAction?.group === "estimate" ? selectedAction : null
-  const selectedRepairAction =
-    selectedAction?.group === "repair" ? selectedAction : null
   const estimateLoading =
     catalogCanvasQuery.isLoading ||
     workCatalogQuery.isLoading ||
     materialCatalogQuery.isLoading ||
     furnitureCatalogQuery.isLoading
 
+  if (estimateScreen.level !== "root") {
+    return (
+      <EstimateDrilldownView
+        screen={estimateScreen}
+        onBack={() => {
+          if (estimateScreen.level === "category") {
+            setEstimateScreen({
+              level: "action",
+              action: estimateScreen.action,
+            })
+            return
+          }
+
+          setEstimateScreen({ level: "root" })
+        }}
+        onOpenCategory={(categoryId) =>
+          setEstimateScreen({
+            level: "category",
+            action: estimateScreen.action,
+            categoryId,
+          })
+        }
+      />
+    )
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
-      <SettingsSection
-        title="Настройка смет"
-        count={estimateActions.length}
-        className={selectedEstimateAction ? "flex-[3]" : "flex-1"}
-      >
-        <div className="flex min-h-0 flex-col gap-4">
-          {estimateLoading ? (
-            <SectionSkeleton />
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {estimateActions.map((action) => (
-                <SettingsActionButton
-                  key={action.id}
-                  action={action}
-                  active={selectedAction?.id === action.id}
-                  onClick={setSelectedAction}
-                />
-              ))}
-            </div>
-          )}
-
-          {selectedEstimateAction && (
-            <div className="min-h-[24rem] flex-1 overflow-hidden rounded-lg border bg-background p-3">
-              <div className="mb-3 flex flex-wrap items-center gap-2">
-                <Badge variant="secondary">
-                  {selectedEstimateAction.legacyViewId}
-                </Badge>
-                <Badge variant="outline">
-                  {selectedEstimateAction.legacyRoute}
-                </Badge>
-              </div>
-              <EstimateCatalogWorkspace action={selectedEstimateAction} />
-            </div>
-          )}
-        </div>
+      <SettingsSection title="Настройка смет" count={estimateActions.length}>
+        {estimateLoading ? (
+          <SectionSkeleton />
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {estimateActions.map((action) => (
+              <SettingsActionButton
+                key={action.id}
+                action={action}
+                active={false}
+                onClick={(selected) => {
+                  if (selected.group === "estimate") {
+                    setEstimateScreen({ level: "action", action: selected })
+                  }
+                }}
+              />
+            ))}
+          </div>
+        )}
       </SettingsSection>
 
-      <SettingsSection
-        title="Настройка ремонтов"
-        count={repairActions.length}
-        className={selectedEstimateAction ? "max-h-56" : "flex-1"}
-      >
+      <SettingsSection title="Настройка ремонтов" count={repairActions.length}>
         {repairSettingsQuery.isLoading ? (
           <SectionSkeleton />
         ) : (
@@ -1677,8 +2013,12 @@ export function EstimatesRepairsSettingsPage() {
                 <SettingsActionButton
                   key={action.id}
                   action={action}
-                  active={selectedAction?.id === action.id}
-                  onClick={setSelectedAction}
+                  active={selectedRepairAction?.id === action.id}
+                  onClick={(selected) => {
+                    if (selected.group === "repair") {
+                      setSelectedRepairAction(selected)
+                    }
+                  }}
                 />
               ))}
             </div>
