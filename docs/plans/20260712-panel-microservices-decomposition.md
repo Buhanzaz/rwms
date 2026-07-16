@@ -1192,9 +1192,11 @@ Vitest tests passed. Later Java 25 verification passed all 31 asset tests,
 including the real recovery matrix and V1-to-V2 upgrade. The affected
 Playwright flow passed the configured `desktop`, `tablet` and `mobile` projects,
 3/3, using bundled Chromium in an isolated test container. A final root `test`
-graph also completed successfully. The technical exit matrix is reconciled;
-the reviewed scoped human commit remains pending because valid branch `develop`
-has no history or `HEAD` from which to prove a scoped change.
+graph also completed successfully. The user approved an initial-history
+strategy, and reviewed root commit `3c509d6` establishes the current repository
+baseline without reconstructing missing history. The technical and memory exit
+matrix is reconciled; the separately scoped closure change advances
+`ACTIVE_STAGE.md` to the Stage 6 evidence/contract gate.
 
 ### Cutover implementation status (not full exit evidence)
 

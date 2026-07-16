@@ -3695,3 +3695,29 @@ a substitute source.
   The event schema JSON also parsed successfully. This is not a Stage 5 exit:
   the approved pre-V1 upgrade fixture, executable browser matrix and reviewed
   scoped human commit remain outstanding; no Stage 6 work began.
+
+## 2026-07-16 Stage 5 final verification and initial Git history
+
+- Replaced the Playwright projects' system `chrome` channel with bundled
+  `chromium`. The affected asset cutover flow then ran in the official
+  Playwright 1.61.1 test container and passed `desktop`, `tablet` and `mobile`,
+  3/3. Direct TypeScript, ESLint and production Vite build checks passed.
+- Added an in-place Flyway V1-to-V2 test. It installs only V1, verifies the
+  pre-V2 shape, migrates through the canonical classpath without baseline or
+  clean, validates Flyway, and proves the committed-hold and classifier-stream
+  constraints. The final focused asset suite contains 32 passing tests.
+- Updated the AMQP retirement architecture check to inspect the actual isolated
+  `rwms-media-compat` network. Its focused repeat and the migration test passed.
+- A forced root repeat reached auth-service after platform, gateway and asset
+  passed, then observed two Kafka recovery timing failures. The full recovery
+  class passed in isolation and the complete auth-service suite passed all 129
+  tests with one skip. A subsequent root `test` graph completed successfully,
+  including task-board and warehouse.
+- Git was valid but `develop` had no `HEAD`, refs, objects or remote. After the
+  user approved an initial-history strategy, secret/artifact review excluded
+  local Codex/Playwright/IDE state, lock files and build output. Root commit
+  `3c509d6` establishes the reviewed current repository baseline without
+  claiming reconstructed historical commits.
+- Stage 5 technical and memory evidence is reconciled. Its closure commit and
+  active-pointer transition are recorded separately; no Stage 6 implementation
+  was performed before this gate.

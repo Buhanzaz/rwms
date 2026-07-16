@@ -1110,3 +1110,14 @@ entry does not close F4T.
   topic. Its outbox publisher supplies byte-array aggregate keys, so the common
   binder must enforce `ByteArraySerializer`; marking an outbox row published
   remains conditional on synchronous broker acknowledgement.
+
+## 2026-07-16 Stage 5 gate closure decisions
+
+- Playwright browser projects use the bundled `chromium` channel. Headless VPS
+  verification runs in an isolated official Playwright test container instead
+  of requiring a system Google Chrome installation or GUI packages on the host.
+- The user approved establishing Git history from the reviewed current tree.
+  Root commit `3c509d6` is the explicit initial repository baseline; it does not
+  reconstruct the missing historical commit graph or alter legacy evidence.
+- An asset V1-to-V2 migration is the real previous-version gate. It must apply
+  without `baselineOnMigrate`, schema clean or fabricated legacy/browser data.
