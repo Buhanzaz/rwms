@@ -1,12 +1,12 @@
 ---
 roadmap: docs/plans/20260712-panel-microservices-decomposition.md
 roadmap_status: APPROVED_WORKING_ROADMAP
-state: STAGE_5_ASSET_SERVICE
-status: STAGE_5_IMPLEMENTATION_AND_VERIFICATION_IN_PROGRESS
-sequence: F0 -> F1 -> F2 -> F3 -> F1C -> F4K -> F4MA -> F4MT -> F4A -> F4T -> F4R -> F4G -> W1 -> STAGE_2_TASK_BOARD_SERVICE -> STAGE_3_4_MEDIA_SERVICE -> STAGE_5_ASSET_SERVICE
-service_owner: asset-service
+state: STAGE_6_MAINTENANCE_SERVICE
+status: STAGE_6_EVIDENCE_AND_CONTRACT_IN_PROGRESS
+sequence: F0 -> F1 -> F2 -> F3 -> F1C -> F4K -> F4MA -> F4MT -> F4A -> F4T -> F4R -> F4G -> W1 -> STAGE_2_TASK_BOARD_SERVICE -> STAGE_3_4_MEDIA_SERVICE -> STAGE_5_ASSET_SERVICE -> STAGE_6_MAINTENANCE_SERVICE
+service_owner: maintenance-service
 delivery_owner: RWMS lead/reviewer
-next_state: STAGE_6_MAINTENANCE_SERVICE
+next_state: STAGE_7_INVENTORY_SERVICE
 ---
 
 # Active RWMS Implementation Stage
@@ -26,7 +26,7 @@ or infer technical exit evidence, commits, test totals, or commit SHA.
 | 2 — `task-board-service` | user-confirmed | No SHA, test result, or reconstructed exit evidence is asserted here. |
 | 3–4 — combined Go `media-service` | user-confirmed | The confirmation covers the former stage numbers 3 and 4; no SHA, test result, or reconstructed exit evidence is asserted here. |
 
-## Current gate: `STAGE_5_ASSET_SERVICE`
+## Completed gate: `STAGE_5_ASSET_SERVICE`
 
 ### Allowed scope
 
@@ -64,8 +64,8 @@ or infer technical exit evidence, commits, test totals, or commit SHA.
   flows;
 - completed memory reconciliation and one reviewed scoped human commit.
 
-The gate remains in progress until the complete matrix and commit are recorded;
-no unchecked result is implied by this pointer.
+The gate remained in progress until the complete matrix and reviewed initial
+history were recorded; no unchecked result is implied by this pointer.
 
 Focused evidence recorded on 2026-07-16: the Java 26.0.1 test runtime passed
 25 `asset-service` tests and 16 shared architecture tests; panel typecheck,
@@ -118,13 +118,62 @@ test passed. A final root `test` graph completed successfully after a transient
 auth Kafka recovery timing failure was disproved by both an isolated recovery
 repeat and the complete 129-test auth-service repeat.
 
-The technical verification and memory items are reconciled. The workspace is
-a valid Git worktree on `develop`, but it has no commits and no `HEAD`; no
-reviewable baseline exists from which this Stage 5 change can be demonstrated
-as one scoped human commit. Stage 5 therefore remains in progress solely
-pending an approved baseline/history strategy and that reviewed commit.
+The technical verification and memory items are reconciled. The user approved
+an initial-history strategy, and reviewed root commit `3c509d6` establishes the
+current repository baseline while preserving the absence of reconstructed
+historical commits. The separately scoped closure change advances this sole
+pointer only after that baseline exists. Stage 5 is complete.
+
+## Current gate: `STAGE_6_MAINTENANCE_SERVICE`
+
+### Allowed scope
+
+- read-only evidence collection across approved requirements, panel ports and
+  stores, current tests, legacy Java/database artifacts and migration memory;
+- approval of `maintenance-service` ownership, aggregate/state-machine,
+  OpenAPI/events, errors, scopes, idempotency, concurrency, replay, migration
+  and integration contracts;
+- after explicit contract approval, only the Stage 6 `maintenance-service`,
+  its service-owned PostgreSQL/Flyway schema, contracts, local dependency and
+  tests, plus separately approved narrow integration prerequisites.
+
+### Forbidden scope
+
+- Stage 7 inventory implementation or contracts before the complete Stage 6
+  exit gate and reviewed commit;
+- guessing backend contracts from browser DTOs, localStorage/IndexedDB or seed
+  identifiers;
+- changing auth-service, task-board-service, asset-service, media-service or
+  gateway behavior without an approved narrow prerequisite decision;
+- panel implementation without explicit expansion beyond the service-only
+  boundary;
+- deployment/hosting/Kubernetes/CI/CD or production operations work.
+
+### Stage 6 contract entrance gate
+
+Before database or implementation work, approve the final maintenance HTTP and
+event contracts, aggregate/version boundaries, task-board service-to-service
+registration, asset lease/fenced-status authority, media-reference lifecycle,
+catalog import/version semantics, estimate/direct-repair/amendment/rework/
+acceptance state machines, compensation and actor/source snapshots. Unresolved
+items remain `UNKNOWN`; browser behavior is evidence only.
+
+### Stage 6 exit gate
+
+- `/estimates`, `/repairs`, `/acceptance`, maintenance write-off and approved
+  settings surfaces use the production HTTP boundary;
+- draft/complete/amend/direct-repair/rework transitions are versioned and
+  idempotent where retried;
+- task registration failures remain retryable, task completion is inbox-
+  deduplicated, and Kafka retry/DLT/quarantine/outage recovery passes;
+- every terminal/retry outcome releases or truthfully reconciles the canonical
+  asset operation lease, and write-off uses only the fenced asset command;
+- Flyway clean/V1-upgrade/repeat/checksum/unversioned/JPA validation,
+  deterministic replay, authorization, concurrency and legacy catalog import
+  evidence pass;
+- durable memory is reconciled and one reviewed scoped human commit exists.
 
 ## Next gate
 
-Stage 6 `maintenance-service` may begin only after this Stage 5 exit gate and
-its reviewed commit are complete.
+Stage 7 `inventory-service` may begin only after the complete Stage 6 exit gate
+and its reviewed commit.

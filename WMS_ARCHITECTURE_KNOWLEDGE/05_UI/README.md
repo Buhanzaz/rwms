@@ -928,7 +928,9 @@ logistics and dossier workflow surfaces remain explicitly deferred rather than
 using browser production fallbacks.
 
 `panel/e2e/asset-cutover.spec.ts` exercises the cutover through a test-only
-HTTP route fixture at desktop, tablet and mobile viewports. Its TypeScript and
-lint checks pass; browser execution is pending because this environment has no
-configured Chrome distribution for Playwright. The fixture is not a production
-fallback or a service mock used by the application runtime.
+HTTP route fixture at desktop, tablet and mobile viewports. Its TypeScript,
+lint and production-build checks pass. The Playwright configuration uses its
+bundled Chromium channel rather than a system Google Chrome dependency; the
+flow passed all three configured projects, 3/3, in an isolated official test
+container. The fixture is not a production fallback or a service mock used by
+the application runtime.

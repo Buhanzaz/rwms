@@ -326,6 +326,8 @@ the actual `rwms-media-compat` network, and its focused repeat passed. A final
 root `test` graph completed successfully after the full auth-service suite and
 its Kafka recovery class passed independently.
 
-Git inspection proves a valid worktree on `develop`, but there is no commit
-history or `HEAD`. An approved baseline/history strategy must therefore exist
-before the required Stage 5 commit can be reviewed as scoped.
+Git inspection initially proved a valid worktree on `develop` with no commit
+history or `HEAD`. The user approved an initial-history strategy; reviewed root
+commit `3c509d6` now establishes the current repository baseline without
+reconstructing missing history. The separately scoped Stage 5 closure change
+records the memory/pointer transition.
