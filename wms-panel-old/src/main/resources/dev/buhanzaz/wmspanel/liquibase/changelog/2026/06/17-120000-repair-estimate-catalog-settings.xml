@@ -1,0 +1,258 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd"
+        objectQuotingStrategy="QUOTE_ONLY_RESERVED_WORDS">
+
+    <changeSet id="1-create-repair-estimate-catalog-node" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="REPAIR_ESTIMATE_CATALOG_NODE"/>
+            </not>
+        </preConditions>
+        <createTable tableName="REPAIR_ESTIMATE_CATALOG_NODE">
+            <column name="ID" type="UUID">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="PK_REPAIR_ESTIMATE_CATALOG_NODE"/>
+            </column>
+            <column name="VERSION" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="CODE" type="VARCHAR(128)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="NAME" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="NODE_TYPE" type="VARCHAR(32)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="PARENT_ID" type="UUID"/>
+            <column name="ACTIVE" type="BOOLEAN" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="SORT_ORDER" type="INT"/>
+            <column name="UNIT_" type="VARCHAR(32)"/>
+            <column name="UNIT_PRICE" type="DECIMAL(19,2)"/>
+            <column name="DEFAULT_QUANTITY" type="INT" defaultValueNumeric="1"/>
+            <column name="ADDITIONAL_OPTION" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="COMMENT_" type="VARCHAR(1000)"/>
+        </createTable>
+    </changeSet>
+
+    <changeSet id="2-create-repair-estimate-catalog-link" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="REPAIR_ESTIMATE_CATALOG_LINK"/>
+            </not>
+        </preConditions>
+        <createTable tableName="REPAIR_ESTIMATE_CATALOG_LINK">
+            <column name="ID" type="UUID">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="PK_REPAIR_ESTIMATE_CATALOG_LINK"/>
+            </column>
+            <column name="VERSION" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="SOURCE_NODE_ID" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="TARGET_NODE_ID" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="LINK_TYPE" type="VARCHAR(32)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ACTIVE" type="BOOLEAN" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="SORT_ORDER" type="INT"/>
+            <column name="COMMENT_" type="VARCHAR(1000)"/>
+        </createTable>
+    </changeSet>
+
+    <changeSet id="3-node-unique-code" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_REPAIR_ESTIMATE_CATALOG_NODE_UNQ_CODE"
+                             tableName="REPAIR_ESTIMATE_CATALOG_NODE"/>
+            </not>
+        </preConditions>
+        <addUniqueConstraint tableName="REPAIR_ESTIMATE_CATALOG_NODE"
+                             columnNames="CODE"
+                             constraintName="IDX_REPAIR_ESTIMATE_CATALOG_NODE_UNQ_CODE"/>
+    </changeSet>
+
+    <changeSet id="4-link-unique" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_REPAIR_ESTIMATE_CATALOG_LINK_UNQ"
+                             tableName="REPAIR_ESTIMATE_CATALOG_LINK"/>
+            </not>
+        </preConditions>
+        <addUniqueConstraint tableName="REPAIR_ESTIMATE_CATALOG_LINK"
+                             columnNames="SOURCE_NODE_ID, TARGET_NODE_ID, LINK_TYPE"
+                             constraintName="IDX_REPAIR_ESTIMATE_CATALOG_LINK_UNQ"/>
+    </changeSet>
+
+    <changeSet id="5-node-parent-fk" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <foreignKeyConstraintExists foreignKeyTableName="REPAIR_ESTIMATE_CATALOG_NODE"
+                                            foreignKeyName="FK_REPAIR_ESTIMATE_CATALOG_NODE_ON_PARENT"/>
+            </not>
+        </preConditions>
+        <addForeignKeyConstraint baseTableName="REPAIR_ESTIMATE_CATALOG_NODE"
+                                 baseColumnNames="PARENT_ID"
+                                 referencedTableName="REPAIR_ESTIMATE_CATALOG_NODE"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_REPAIR_ESTIMATE_CATALOG_NODE_ON_PARENT"/>
+    </changeSet>
+
+    <changeSet id="6-link-source-fk" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <foreignKeyConstraintExists foreignKeyTableName="REPAIR_ESTIMATE_CATALOG_LINK"
+                                            foreignKeyName="FK_REPAIR_ESTIMATE_CATALOG_LINK_ON_SOURCE"/>
+            </not>
+        </preConditions>
+        <addForeignKeyConstraint baseTableName="REPAIR_ESTIMATE_CATALOG_LINK"
+                                 baseColumnNames="SOURCE_NODE_ID"
+                                 referencedTableName="REPAIR_ESTIMATE_CATALOG_NODE"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_REPAIR_ESTIMATE_CATALOG_LINK_ON_SOURCE"/>
+    </changeSet>
+
+    <changeSet id="7-link-target-fk" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <foreignKeyConstraintExists foreignKeyTableName="REPAIR_ESTIMATE_CATALOG_LINK"
+                                            foreignKeyName="FK_REPAIR_ESTIMATE_CATALOG_LINK_ON_TARGET"/>
+            </not>
+        </preConditions>
+        <addForeignKeyConstraint baseTableName="REPAIR_ESTIMATE_CATALOG_LINK"
+                                 baseColumnNames="TARGET_NODE_ID"
+                                 referencedTableName="REPAIR_ESTIMATE_CATALOG_NODE"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_REPAIR_ESTIMATE_CATALOG_LINK_ON_TARGET"/>
+    </changeSet>
+
+    <changeSet id="8-node-index-parent" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_REPAIR_ESTIMATE_CATALOG_NODE_ON_PARENT"
+                             tableName="REPAIR_ESTIMATE_CATALOG_NODE"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="REPAIR_ESTIMATE_CATALOG_NODE"
+                     indexName="IDX_REPAIR_ESTIMATE_CATALOG_NODE_ON_PARENT">
+            <column name="PARENT_ID"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="9-node-index-sort-order" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_REPAIR_ESTIMATE_CATALOG_NODE_ON_SORT_ORDER"
+                             tableName="REPAIR_ESTIMATE_CATALOG_NODE"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="REPAIR_ESTIMATE_CATALOG_NODE"
+                     indexName="IDX_REPAIR_ESTIMATE_CATALOG_NODE_ON_SORT_ORDER">
+            <column name="SORT_ORDER"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="10-node-index-node-type" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_REPAIR_ESTIMATE_CATALOG_NODE_ON_NODE_TYPE"
+                             tableName="REPAIR_ESTIMATE_CATALOG_NODE"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="REPAIR_ESTIMATE_CATALOG_NODE"
+                     indexName="IDX_REPAIR_ESTIMATE_CATALOG_NODE_ON_NODE_TYPE">
+            <column name="NODE_TYPE"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="11-node-index-active" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_REPAIR_ESTIMATE_CATALOG_NODE_ON_ACTIVE"
+                             tableName="REPAIR_ESTIMATE_CATALOG_NODE"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="REPAIR_ESTIMATE_CATALOG_NODE"
+                     indexName="IDX_REPAIR_ESTIMATE_CATALOG_NODE_ON_ACTIVE">
+            <column name="ACTIVE"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="12-link-index-source" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_REPAIR_ESTIMATE_CATALOG_LINK_ON_SOURCE"
+                             tableName="REPAIR_ESTIMATE_CATALOG_LINK"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="REPAIR_ESTIMATE_CATALOG_LINK"
+                     indexName="IDX_REPAIR_ESTIMATE_CATALOG_LINK_ON_SOURCE">
+            <column name="SOURCE_NODE_ID"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="13-link-index-target" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_REPAIR_ESTIMATE_CATALOG_LINK_ON_TARGET"
+                             tableName="REPAIR_ESTIMATE_CATALOG_LINK"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="REPAIR_ESTIMATE_CATALOG_LINK"
+                     indexName="IDX_REPAIR_ESTIMATE_CATALOG_LINK_ON_TARGET">
+            <column name="TARGET_NODE_ID"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="14-link-index-link-type" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_REPAIR_ESTIMATE_CATALOG_LINK_ON_LINK_TYPE"
+                             tableName="REPAIR_ESTIMATE_CATALOG_LINK"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="REPAIR_ESTIMATE_CATALOG_LINK"
+                     indexName="IDX_REPAIR_ESTIMATE_CATALOG_LINK_ON_LINK_TYPE">
+            <column name="LINK_TYPE"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="15-link-index-sort-order" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_REPAIR_ESTIMATE_CATALOG_LINK_ON_SORT_ORDER"
+                             tableName="REPAIR_ESTIMATE_CATALOG_LINK"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="REPAIR_ESTIMATE_CATALOG_LINK"
+                     indexName="IDX_REPAIR_ESTIMATE_CATALOG_LINK_ON_SORT_ORDER">
+            <column name="SORT_ORDER"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

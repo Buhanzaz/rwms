@@ -1,0 +1,1193 @@
+- generic [ref=f2e2]:
+  - generic [ref=f2e4]:
+    - generic [ref=f2e7]:
+      - list [ref=f2e9]:
+        - listitem [ref=f2e10]:
+          - link "WMS Panel СПБ" [ref=f2e11] [cursor=pointer]:
+            - /url: /
+            - generic [ref=f2e16]:
+              - generic [ref=f2e17]: WMS Panel
+              - generic [ref=f2e18]: СПБ
+      - generic [ref=f2e19]:
+        - combobox "Выбор склада" [ref=f2e22] [cursor=pointer]:
+          - generic: СПБ
+        - generic [ref=f2e23]:
+          - generic [ref=f2e24]: Обзор
+          - list [ref=f2e26]:
+            - listitem [ref=f2e27]:
+              - link "Главная" [ref=f2e28] [cursor=pointer]:
+                - /url: /
+            - listitem [ref=f2e36]:
+              - link "KPI" [ref=f2e37] [cursor=pointer]:
+                - /url: /kpi
+        - generic [ref=f2e43]:
+          - generic [ref=f2e44]: Имущество
+          - list [ref=f2e46]:
+            - listitem [ref=f2e47]:
+              - link "Склад" [ref=f2e48] [cursor=pointer]:
+                - /url: /warehouse
+            - listitem [ref=f2e54]:
+              - link "Доп. оборудование" [ref=f2e55] [cursor=pointer]:
+                - /url: /equipment
+            - listitem [ref=f2e1246]:
+              - button "Инвентаризация" [expanded] [ref=f2e1247] [cursor=pointer]
+              - list [ref=f2e1256]:
+                - listitem [ref=f2e1257]:
+                  - link "Создать инвентаризацию" [ref=f2e1258] [cursor=pointer]:
+                    - /url: /inventory
+                - listitem [ref=f2e1261]:
+                  - link "История инвентаризаций" [ref=f2e1262] [cursor=pointer]:
+                    - /url: /inventory/history
+            - listitem [ref=f2e1267]:
+              - button "Списание" [ref=f2e1268] [cursor=pointer]
+        - generic [ref=f2e104]:
+          - generic [ref=f2e105]: Логистика
+          - list [ref=f2e107]:
+            - listitem [ref=f2e108]:
+              - link "Возврат из аренды" [ref=f2e109] [cursor=pointer]:
+                - /url: /logistics/returns
+            - listitem [ref=f2e116]:
+              - link "Отгрузка в аренду" [ref=f2e117] [cursor=pointer]:
+                - /url: /logistics/shipments
+        - generic [ref=f2e125]:
+          - generic [ref=f2e126]: Ремонтный цикл
+          - list [ref=f2e128]:
+            - listitem [ref=f2e129]:
+              - link "Сметы" [ref=f2e130] [cursor=pointer]:
+                - /url: /estimates
+            - listitem [ref=f2e136]:
+              - link "Ремонты" [ref=f2e137] [cursor=pointer]:
+                - /url: /repairs
+            - listitem [ref=f2e143]:
+              - link "Доска задач" [ref=f2e144] [cursor=pointer]:
+                - /url: /task-board
+            - listitem [ref=f2e151]:
+              - link "Приёмка и доработки" [ref=f2e152] [cursor=pointer]:
+                - /url: /acceptance
+      - list [ref=f2e159]:
+        - listitem [ref=f2e160]:
+          - button "Настройки" [ref=f2e161] [cursor=pointer]
+        - listitem [ref=f2e169]:
+          - button "Локальный администратор Выйти" [ref=f2e170] [cursor=pointer]:
+            - generic [ref=f2e175]: Локальный администратор
+            - generic [ref=f2e176]: Выйти
+    - main [ref=f2e177]:
+      - generic [ref=f2e179]:
+        - button "Открыть или свернуть меню" [ref=f2e180] [cursor=pointer]
+        - navigation "Навигационная цепочка" [ref=f2e182]:
+          - list [ref=f2e183]:
+            - listitem [ref=f2e184]:
+              - link "Инвентаризация" [ref=f2e185] [cursor=pointer]:
+                - /url: /inventory
+            - listitem [ref=f2e186]
+            - listitem [ref=f2e1277]:
+              - link "История" [ref=f2e1278] [cursor=pointer]:
+                - /url: /inventory/history
+            - listitem [ref=f2e1279]
+            - listitem [ref=f2e1282]:
+              - link "Результат" [disabled] [ref=f2e1283]
+      - generic [ref=f2e1284]:
+        - button "Назад" [ref=f2e1286] [cursor=pointer]
+        - region [ref=f2e1287]:
+          - heading "Зафиксированные итоги" [level=2] [ref=f2e1288]
+          - region "Статистика инвентаризации" [ref=f2e1289]:
+            - generic [ref=f2e1290]:
+              - generic [ref=f2e1291]:
+                - generic [ref=f2e1292]: Длительность
+                - generic [ref=f2e1294]: 5 мин
+              - generic [ref=f2e1295]:
+                - generic [ref=f2e1296]: Работы
+                - generic [ref=f2e1298]:
+                  - paragraph [ref=f2e1299]: "0"
+                  - paragraph [ref=f2e1300]: 0,00 ₽
+              - generic [ref=f2e1301]:
+                - generic [ref=f2e1302]: Материалы
+                - generic [ref=f2e1304]:
+                  - paragraph [ref=f2e1305]: "0"
+                  - paragraph [ref=f2e1306]: 0,00 ₽
+              - generic [ref=f2e1307]:
+                - generic [ref=f2e1308]: Итого
+                - generic [ref=f2e1310]:
+                  - paragraph [ref=f2e1311]: 0,00 ₽
+                  - paragraph [ref=f2e1312]: 0 мин по нормативу
+            - generic [ref=f2e1313]:
+              - generic [ref=f2e1314]: "Ожидалось: 96"
+              - generic [ref=f2e1315]: "Проверено: 1"
+              - generic [ref=f2e1316]: "Не найдено: 95"
+              - generic [ref=f2e1317]: "Готовы: 1"
+              - generic [ref=f2e1318]: "С работами: 0"
+              - generic [ref=f2e1319]: "Добавлено: 0"
+              - generic [ref=f2e1320]: "Конфликты: 0"
+        - table [ref=f2e1325]:
+          - rowgroup [ref=f2e1326]:
+            - row [ref=f2e1327]:
+              - columnheader [ref=f2e1328]:
+                - button "Номер" [ref=f2e1329] [cursor=pointer]
+              - columnheader [ref=f2e1334]:
+                - button "Источник" [ref=f2e1335] [cursor=pointer]
+              - columnheader [ref=f2e1340]:
+                - button "Статус бытовки" [ref=f2e1341] [cursor=pointer]
+              - columnheader [ref=f2e1346]:
+                - button "Сверка" [ref=f2e1347] [cursor=pointer]
+              - columnheader [ref=f2e1352]:
+                - button "Передача работ" [ref=f2e1353] [cursor=pointer]
+              - columnheader [ref=f2e1358]:
+                - button "Действие" [ref=f2e1359] [cursor=pointer]
+          - rowgroup [ref=f2e1364]:
+            - row [ref=f2e1365]:
+              - cell "БЫТ-001" [ref=f2e1366]
+              - cell "Ожидалась" [ref=f2e1367]
+              - cell "Свободна" [ref=f2e1368]
+              - cell "Проверена" [ref=f2e1370]
+              - cell "Не требуется" [ref=f2e1373]
+              - cell [ref=f2e1376]:
+                - button "Открыть" [ref=f2e1377] [cursor=pointer]
+            - row [ref=f2e1378]:
+              - cell "БЫТ-003" [ref=f2e1379]
+              - cell "Ожидалась" [ref=f2e1380]
+              - cell "Ожидает осмотра" [ref=f2e1381]
+              - cell "Не проверена Не найдена" [ref=f2e1383]:
+                - generic [ref=f2e1384]:
+                  - generic [ref=f2e1385]: Не проверена
+                  - generic [ref=f2e1386]: Не найдена
+              - cell "Не требуется" [ref=f2e1387]
+              - cell "Проверить" [ref=f2e1390]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1391]:
+              - cell "БЫТ-005" [ref=f2e1392]
+              - cell "Ожидалась" [ref=f2e1393]
+              - cell "Бронь" [ref=f2e1394]
+              - cell "Не проверена Не найдена" [ref=f2e1396]:
+                - generic [ref=f2e1397]:
+                  - generic [ref=f2e1398]: Не проверена
+                  - generic [ref=f2e1399]: Не найдена
+              - cell "Не требуется" [ref=f2e1400]
+              - cell "Проверить" [ref=f2e1403]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1404]:
+              - cell "БЫТ-006" [ref=f2e1405]
+              - cell "Ожидалась" [ref=f2e1406]
+              - cell "В ремонте" [ref=f2e1407]
+              - cell "Не проверена Не найдена" [ref=f2e1409]:
+                - generic [ref=f2e1410]:
+                  - generic [ref=f2e1411]: Не проверена
+                  - generic [ref=f2e1412]: Не найдена
+              - cell "Не требуется" [ref=f2e1413]
+              - cell "Проверить" [ref=f2e1416]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1417]:
+              - cell "БЫТ-007" [ref=f2e1418]
+              - cell "Ожидалась" [ref=f2e1419]
+              - cell "Капремонт" [ref=f2e1420]
+              - cell "Не проверена Не найдена" [ref=f2e1422]:
+                - generic [ref=f2e1423]:
+                  - generic [ref=f2e1424]: Не проверена
+                  - generic [ref=f2e1425]: Не найдена
+              - cell "Не требуется" [ref=f2e1426]
+              - cell "Проверить" [ref=f2e1429]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1430]:
+              - cell "БЫТ-008" [ref=f2e1431]
+              - cell "Ожидалась" [ref=f2e1432]
+              - cell "Продажа Б/У" [ref=f2e1433]
+              - cell "Не проверена Не найдена" [ref=f2e1435]:
+                - generic [ref=f2e1436]:
+                  - generic [ref=f2e1437]: Не проверена
+                  - generic [ref=f2e1438]: Не найдена
+              - cell "Не требуется" [ref=f2e1439]
+              - cell "Проверить" [ref=f2e1442]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1443]:
+              - cell "БЫТ-009" [ref=f2e1444]
+              - cell "Ожидалась" [ref=f2e1445]
+              - cell "Склад" [ref=f2e1446]
+              - cell "Не проверена Не найдена" [ref=f2e1448]:
+                - generic [ref=f2e1449]:
+                  - generic [ref=f2e1450]: Не проверена
+                  - generic [ref=f2e1451]: Не найдена
+              - cell "Не требуется" [ref=f2e1452]
+              - cell "Проверить" [ref=f2e1455]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1456]:
+              - cell "БЫТ-010" [ref=f2e1457]
+              - cell "Ожидалась" [ref=f2e1458]
+              - cell "Собственные нужды" [ref=f2e1459]
+              - cell "Не проверена Не найдена" [ref=f2e1461]:
+                - generic [ref=f2e1462]:
+                  - generic [ref=f2e1463]: Не проверена
+                  - generic [ref=f2e1464]: Не найдена
+              - cell "Не требуется" [ref=f2e1465]
+              - cell "Проверить" [ref=f2e1468]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1469]:
+              - cell "БЫТ-011" [ref=f2e1470]
+              - cell "Ожидалась" [ref=f2e1471]
+              - cell "Свободна" [ref=f2e1472]
+              - cell "Не проверена Не найдена" [ref=f2e1474]:
+                - generic [ref=f2e1475]:
+                  - generic [ref=f2e1476]: Не проверена
+                  - generic [ref=f2e1477]: Не найдена
+              - cell "Не требуется" [ref=f2e1478]
+              - cell "Проверить" [ref=f2e1481]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1482]:
+              - cell "БЫТ-013" [ref=f2e1483]
+              - cell "Ожидалась" [ref=f2e1484]
+              - cell "Ожидает осмотра" [ref=f2e1485]
+              - cell "Не проверена Не найдена" [ref=f2e1487]:
+                - generic [ref=f2e1488]:
+                  - generic [ref=f2e1489]: Не проверена
+                  - generic [ref=f2e1490]: Не найдена
+              - cell "Не требуется" [ref=f2e1491]
+              - cell "Проверить" [ref=f2e1494]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1495]:
+              - cell "БЫТ-015" [ref=f2e1496]
+              - cell "Ожидалась" [ref=f2e1497]
+              - cell "Бронь" [ref=f2e1498]
+              - cell "Не проверена Не найдена" [ref=f2e1500]:
+                - generic [ref=f2e1501]:
+                  - generic [ref=f2e1502]: Не проверена
+                  - generic [ref=f2e1503]: Не найдена
+              - cell "Не требуется" [ref=f2e1504]
+              - cell "Проверить" [ref=f2e1507]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1508]:
+              - cell "БЫТ-016" [ref=f2e1509]
+              - cell "Ожидалась" [ref=f2e1510]
+              - cell "В ремонте" [ref=f2e1511]
+              - cell "Не проверена Не найдена" [ref=f2e1513]:
+                - generic [ref=f2e1514]:
+                  - generic [ref=f2e1515]: Не проверена
+                  - generic [ref=f2e1516]: Не найдена
+              - cell "Не требуется" [ref=f2e1517]
+              - cell "Проверить" [ref=f2e1520]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1521]:
+              - cell "БЫТ-017" [ref=f2e1522]
+              - cell "Ожидалась" [ref=f2e1523]
+              - cell "Капремонт" [ref=f2e1524]
+              - cell "Не проверена Не найдена" [ref=f2e1526]:
+                - generic [ref=f2e1527]:
+                  - generic [ref=f2e1528]: Не проверена
+                  - generic [ref=f2e1529]: Не найдена
+              - cell "Не требуется" [ref=f2e1530]
+              - cell "Проверить" [ref=f2e1533]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1534]:
+              - cell "БЫТ-018" [ref=f2e1535]
+              - cell "Ожидалась" [ref=f2e1536]
+              - cell "Продажа Б/У" [ref=f2e1537]
+              - cell "Не проверена Не найдена" [ref=f2e1539]:
+                - generic [ref=f2e1540]:
+                  - generic [ref=f2e1541]: Не проверена
+                  - generic [ref=f2e1542]: Не найдена
+              - cell "Не требуется" [ref=f2e1543]
+              - cell "Проверить" [ref=f2e1546]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1547]:
+              - cell "БЫТ-019" [ref=f2e1548]
+              - cell "Ожидалась" [ref=f2e1549]
+              - cell "Склад" [ref=f2e1550]
+              - cell "Не проверена Не найдена" [ref=f2e1552]:
+                - generic [ref=f2e1553]:
+                  - generic [ref=f2e1554]: Не проверена
+                  - generic [ref=f2e1555]: Не найдена
+              - cell "Не требуется" [ref=f2e1556]
+              - cell "Проверить" [ref=f2e1559]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1560]:
+              - cell "БЫТ-020" [ref=f2e1561]
+              - cell "Ожидалась" [ref=f2e1562]
+              - cell "Собственные нужды" [ref=f2e1563]
+              - cell "Не проверена Не найдена" [ref=f2e1565]:
+                - generic [ref=f2e1566]:
+                  - generic [ref=f2e1567]: Не проверена
+                  - generic [ref=f2e1568]: Не найдена
+              - cell "Не требуется" [ref=f2e1569]
+              - cell "Проверить" [ref=f2e1572]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1573]:
+              - cell "БЫТ-021" [ref=f2e1574]
+              - cell "Ожидалась" [ref=f2e1575]
+              - cell "Свободна" [ref=f2e1576]
+              - cell "Не проверена Не найдена" [ref=f2e1578]:
+                - generic [ref=f2e1579]:
+                  - generic [ref=f2e1580]: Не проверена
+                  - generic [ref=f2e1581]: Не найдена
+              - cell "Не требуется" [ref=f2e1582]
+              - cell "Проверить" [ref=f2e1585]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1586]:
+              - cell "БЫТ-023" [ref=f2e1587]
+              - cell "Ожидалась" [ref=f2e1588]
+              - cell "Ожидает осмотра" [ref=f2e1589]
+              - cell "Не проверена Не найдена" [ref=f2e1591]:
+                - generic [ref=f2e1592]:
+                  - generic [ref=f2e1593]: Не проверена
+                  - generic [ref=f2e1594]: Не найдена
+              - cell "Не требуется" [ref=f2e1595]
+              - cell "Проверить" [ref=f2e1598]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1599]:
+              - cell "БЫТ-025" [ref=f2e1600]
+              - cell "Ожидалась" [ref=f2e1601]
+              - cell "Бронь" [ref=f2e1602]
+              - cell "Не проверена Не найдена" [ref=f2e1604]:
+                - generic [ref=f2e1605]:
+                  - generic [ref=f2e1606]: Не проверена
+                  - generic [ref=f2e1607]: Не найдена
+              - cell "Не требуется" [ref=f2e1608]
+              - cell "Проверить" [ref=f2e1611]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1612]:
+              - cell "БЫТ-026" [ref=f2e1613]
+              - cell "Ожидалась" [ref=f2e1614]
+              - cell "В ремонте" [ref=f2e1615]
+              - cell "Не проверена Не найдена" [ref=f2e1617]:
+                - generic [ref=f2e1618]:
+                  - generic [ref=f2e1619]: Не проверена
+                  - generic [ref=f2e1620]: Не найдена
+              - cell "Не требуется" [ref=f2e1621]
+              - cell "Проверить" [ref=f2e1624]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1625]:
+              - cell "БЫТ-027" [ref=f2e1626]
+              - cell "Ожидалась" [ref=f2e1627]
+              - cell "Капремонт" [ref=f2e1628]
+              - cell "Не проверена Не найдена" [ref=f2e1630]:
+                - generic [ref=f2e1631]:
+                  - generic [ref=f2e1632]: Не проверена
+                  - generic [ref=f2e1633]: Не найдена
+              - cell "Не требуется" [ref=f2e1634]
+              - cell "Проверить" [ref=f2e1637]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1638]:
+              - cell "БЫТ-028" [ref=f2e1639]
+              - cell "Ожидалась" [ref=f2e1640]
+              - cell "Продажа Б/У" [ref=f2e1641]
+              - cell "Не проверена Не найдена" [ref=f2e1643]:
+                - generic [ref=f2e1644]:
+                  - generic [ref=f2e1645]: Не проверена
+                  - generic [ref=f2e1646]: Не найдена
+              - cell "Не требуется" [ref=f2e1647]
+              - cell "Проверить" [ref=f2e1650]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1651]:
+              - cell "БЫТ-029" [ref=f2e1652]
+              - cell "Ожидалась" [ref=f2e1653]
+              - cell "Склад" [ref=f2e1654]
+              - cell "Не проверена Не найдена" [ref=f2e1656]:
+                - generic [ref=f2e1657]:
+                  - generic [ref=f2e1658]: Не проверена
+                  - generic [ref=f2e1659]: Не найдена
+              - cell "Не требуется" [ref=f2e1660]
+              - cell "Проверить" [ref=f2e1663]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1664]:
+              - cell "БЫТ-030" [ref=f2e1665]
+              - cell "Ожидалась" [ref=f2e1666]
+              - cell "Собственные нужды" [ref=f2e1667]
+              - cell "Не проверена Не найдена" [ref=f2e1669]:
+                - generic [ref=f2e1670]:
+                  - generic [ref=f2e1671]: Не проверена
+                  - generic [ref=f2e1672]: Не найдена
+              - cell "Не требуется" [ref=f2e1673]
+              - cell "Проверить" [ref=f2e1676]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1677]:
+              - cell "БЫТ-031" [ref=f2e1678]
+              - cell "Ожидалась" [ref=f2e1679]
+              - cell "Свободна" [ref=f2e1680]
+              - cell "Не проверена Не найдена" [ref=f2e1682]:
+                - generic [ref=f2e1683]:
+                  - generic [ref=f2e1684]: Не проверена
+                  - generic [ref=f2e1685]: Не найдена
+              - cell "Не требуется" [ref=f2e1686]
+              - cell "Проверить" [ref=f2e1689]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1690]:
+              - cell "БЫТ-033" [ref=f2e1691]
+              - cell "Ожидалась" [ref=f2e1692]
+              - cell "Ожидает осмотра" [ref=f2e1693]
+              - cell "Не проверена Не найдена" [ref=f2e1695]:
+                - generic [ref=f2e1696]:
+                  - generic [ref=f2e1697]: Не проверена
+                  - generic [ref=f2e1698]: Не найдена
+              - cell "Не требуется" [ref=f2e1699]
+              - cell "Проверить" [ref=f2e1702]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1703]:
+              - cell "БЫТ-035" [ref=f2e1704]
+              - cell "Ожидалась" [ref=f2e1705]
+              - cell "Бронь" [ref=f2e1706]
+              - cell "Не проверена Не найдена" [ref=f2e1708]:
+                - generic [ref=f2e1709]:
+                  - generic [ref=f2e1710]: Не проверена
+                  - generic [ref=f2e1711]: Не найдена
+              - cell "Не требуется" [ref=f2e1712]
+              - cell "Проверить" [ref=f2e1715]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1716]:
+              - cell "БЫТ-036" [ref=f2e1717]
+              - cell "Ожидалась" [ref=f2e1718]
+              - cell "В ремонте" [ref=f2e1719]
+              - cell "Не проверена Не найдена" [ref=f2e1721]:
+                - generic [ref=f2e1722]:
+                  - generic [ref=f2e1723]: Не проверена
+                  - generic [ref=f2e1724]: Не найдена
+              - cell "Не требуется" [ref=f2e1725]
+              - cell "Проверить" [ref=f2e1728]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1729]:
+              - cell "БЫТ-037" [ref=f2e1730]
+              - cell "Ожидалась" [ref=f2e1731]
+              - cell "Капремонт" [ref=f2e1732]
+              - cell "Не проверена Не найдена" [ref=f2e1734]:
+                - generic [ref=f2e1735]:
+                  - generic [ref=f2e1736]: Не проверена
+                  - generic [ref=f2e1737]: Не найдена
+              - cell "Не требуется" [ref=f2e1738]
+              - cell "Проверить" [ref=f2e1741]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1742]:
+              - cell "БЫТ-038" [ref=f2e1743]
+              - cell "Ожидалась" [ref=f2e1744]
+              - cell "Продажа Б/У" [ref=f2e1745]
+              - cell "Не проверена Не найдена" [ref=f2e1747]:
+                - generic [ref=f2e1748]:
+                  - generic [ref=f2e1749]: Не проверена
+                  - generic [ref=f2e1750]: Не найдена
+              - cell "Не требуется" [ref=f2e1751]
+              - cell "Проверить" [ref=f2e1754]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1755]:
+              - cell "БЫТ-039" [ref=f2e1756]
+              - cell "Ожидалась" [ref=f2e1757]
+              - cell "Склад" [ref=f2e1758]
+              - cell "Не проверена Не найдена" [ref=f2e1760]:
+                - generic [ref=f2e1761]:
+                  - generic [ref=f2e1762]: Не проверена
+                  - generic [ref=f2e1763]: Не найдена
+              - cell "Не требуется" [ref=f2e1764]
+              - cell "Проверить" [ref=f2e1767]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1768]:
+              - cell "БЫТ-040" [ref=f2e1769]
+              - cell "Ожидалась" [ref=f2e1770]
+              - cell "Собственные нужды" [ref=f2e1771]
+              - cell "Не проверена Не найдена" [ref=f2e1773]:
+                - generic [ref=f2e1774]:
+                  - generic [ref=f2e1775]: Не проверена
+                  - generic [ref=f2e1776]: Не найдена
+              - cell "Не требуется" [ref=f2e1777]
+              - cell "Проверить" [ref=f2e1780]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1781]:
+              - cell "БЫТ-041" [ref=f2e1782]
+              - cell "Ожидалась" [ref=f2e1783]
+              - cell "Свободна" [ref=f2e1784]
+              - cell "Не проверена Не найдена" [ref=f2e1786]:
+                - generic [ref=f2e1787]:
+                  - generic [ref=f2e1788]: Не проверена
+                  - generic [ref=f2e1789]: Не найдена
+              - cell "Не требуется" [ref=f2e1790]
+              - cell "Проверить" [ref=f2e1793]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1794]:
+              - cell "БЫТ-043" [ref=f2e1795]
+              - cell "Ожидалась" [ref=f2e1796]
+              - cell "Ожидает осмотра" [ref=f2e1797]
+              - cell "Не проверена Не найдена" [ref=f2e1799]:
+                - generic [ref=f2e1800]:
+                  - generic [ref=f2e1801]: Не проверена
+                  - generic [ref=f2e1802]: Не найдена
+              - cell "Не требуется" [ref=f2e1803]
+              - cell "Проверить" [ref=f2e1806]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1807]:
+              - cell "БЫТ-045" [ref=f2e1808]
+              - cell "Ожидалась" [ref=f2e1809]
+              - cell "Бронь" [ref=f2e1810]
+              - cell "Не проверена Не найдена" [ref=f2e1812]:
+                - generic [ref=f2e1813]:
+                  - generic [ref=f2e1814]: Не проверена
+                  - generic [ref=f2e1815]: Не найдена
+              - cell "Не требуется" [ref=f2e1816]
+              - cell "Проверить" [ref=f2e1819]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1820]:
+              - cell "БЫТ-046" [ref=f2e1821]
+              - cell "Ожидалась" [ref=f2e1822]
+              - cell "В ремонте" [ref=f2e1823]
+              - cell "Не проверена Не найдена" [ref=f2e1825]:
+                - generic [ref=f2e1826]:
+                  - generic [ref=f2e1827]: Не проверена
+                  - generic [ref=f2e1828]: Не найдена
+              - cell "Не требуется" [ref=f2e1829]
+              - cell "Проверить" [ref=f2e1832]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1833]:
+              - cell "БЫТ-047" [ref=f2e1834]
+              - cell "Ожидалась" [ref=f2e1835]
+              - cell "Капремонт" [ref=f2e1836]
+              - cell "Не проверена Не найдена" [ref=f2e1838]:
+                - generic [ref=f2e1839]:
+                  - generic [ref=f2e1840]: Не проверена
+                  - generic [ref=f2e1841]: Не найдена
+              - cell "Не требуется" [ref=f2e1842]
+              - cell "Проверить" [ref=f2e1845]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1846]:
+              - cell "БЫТ-048" [ref=f2e1847]
+              - cell "Ожидалась" [ref=f2e1848]
+              - cell "Продажа Б/У" [ref=f2e1849]
+              - cell "Не проверена Не найдена" [ref=f2e1851]:
+                - generic [ref=f2e1852]:
+                  - generic [ref=f2e1853]: Не проверена
+                  - generic [ref=f2e1854]: Не найдена
+              - cell "Не требуется" [ref=f2e1855]
+              - cell "Проверить" [ref=f2e1858]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1859]:
+              - cell "БЫТ-049" [ref=f2e1860]
+              - cell "Ожидалась" [ref=f2e1861]
+              - cell "Склад" [ref=f2e1862]
+              - cell "Не проверена Не найдена" [ref=f2e1864]:
+                - generic [ref=f2e1865]:
+                  - generic [ref=f2e1866]: Не проверена
+                  - generic [ref=f2e1867]: Не найдена
+              - cell "Не требуется" [ref=f2e1868]
+              - cell "Проверить" [ref=f2e1871]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1872]:
+              - cell "БЫТ-050" [ref=f2e1873]
+              - cell "Ожидалась" [ref=f2e1874]
+              - cell "Собственные нужды" [ref=f2e1875]
+              - cell "Не проверена Не найдена" [ref=f2e1877]:
+                - generic [ref=f2e1878]:
+                  - generic [ref=f2e1879]: Не проверена
+                  - generic [ref=f2e1880]: Не найдена
+              - cell "Не требуется" [ref=f2e1881]
+              - cell "Проверить" [ref=f2e1884]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1885]:
+              - cell "БЫТ-051" [ref=f2e1886]
+              - cell "Ожидалась" [ref=f2e1887]
+              - cell "Свободна" [ref=f2e1888]
+              - cell "Не проверена Не найдена" [ref=f2e1890]:
+                - generic [ref=f2e1891]:
+                  - generic [ref=f2e1892]: Не проверена
+                  - generic [ref=f2e1893]: Не найдена
+              - cell "Не требуется" [ref=f2e1894]
+              - cell "Проверить" [ref=f2e1897]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1898]:
+              - cell "БЫТ-053" [ref=f2e1899]
+              - cell "Ожидалась" [ref=f2e1900]
+              - cell "Ожидает осмотра" [ref=f2e1901]
+              - cell "Не проверена Не найдена" [ref=f2e1903]:
+                - generic [ref=f2e1904]:
+                  - generic [ref=f2e1905]: Не проверена
+                  - generic [ref=f2e1906]: Не найдена
+              - cell "Не требуется" [ref=f2e1907]
+              - cell "Проверить" [ref=f2e1910]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1911]:
+              - cell "БЫТ-055" [ref=f2e1912]
+              - cell "Ожидалась" [ref=f2e1913]
+              - cell "Бронь" [ref=f2e1914]
+              - cell "Не проверена Не найдена" [ref=f2e1916]:
+                - generic [ref=f2e1917]:
+                  - generic [ref=f2e1918]: Не проверена
+                  - generic [ref=f2e1919]: Не найдена
+              - cell "Не требуется" [ref=f2e1920]
+              - cell "Проверить" [ref=f2e1923]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1924]:
+              - cell "БЫТ-056" [ref=f2e1925]
+              - cell "Ожидалась" [ref=f2e1926]
+              - cell "В ремонте" [ref=f2e1927]
+              - cell "Не проверена Не найдена" [ref=f2e1929]:
+                - generic [ref=f2e1930]:
+                  - generic [ref=f2e1931]: Не проверена
+                  - generic [ref=f2e1932]: Не найдена
+              - cell "Не требуется" [ref=f2e1933]
+              - cell "Проверить" [ref=f2e1936]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1937]:
+              - cell "БЫТ-057" [ref=f2e1938]
+              - cell "Ожидалась" [ref=f2e1939]
+              - cell "Капремонт" [ref=f2e1940]
+              - cell "Не проверена Не найдена" [ref=f2e1942]:
+                - generic [ref=f2e1943]:
+                  - generic [ref=f2e1944]: Не проверена
+                  - generic [ref=f2e1945]: Не найдена
+              - cell "Не требуется" [ref=f2e1946]
+              - cell "Проверить" [ref=f2e1949]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1950]:
+              - cell "БЫТ-058" [ref=f2e1951]
+              - cell "Ожидалась" [ref=f2e1952]
+              - cell "Продажа Б/У" [ref=f2e1953]
+              - cell "Не проверена Не найдена" [ref=f2e1955]:
+                - generic [ref=f2e1956]:
+                  - generic [ref=f2e1957]: Не проверена
+                  - generic [ref=f2e1958]: Не найдена
+              - cell "Не требуется" [ref=f2e1959]
+              - cell "Проверить" [ref=f2e1962]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1963]:
+              - cell "БЫТ-059" [ref=f2e1964]
+              - cell "Ожидалась" [ref=f2e1965]
+              - cell "Склад" [ref=f2e1966]
+              - cell "Не проверена Не найдена" [ref=f2e1968]:
+                - generic [ref=f2e1969]:
+                  - generic [ref=f2e1970]: Не проверена
+                  - generic [ref=f2e1971]: Не найдена
+              - cell "Не требуется" [ref=f2e1972]
+              - cell "Проверить" [ref=f2e1975]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1976]:
+              - cell "БЫТ-060" [ref=f2e1977]
+              - cell "Ожидалась" [ref=f2e1978]
+              - cell "Собственные нужды" [ref=f2e1979]
+              - cell "Не проверена Не найдена" [ref=f2e1981]:
+                - generic [ref=f2e1982]:
+                  - generic [ref=f2e1983]: Не проверена
+                  - generic [ref=f2e1984]: Не найдена
+              - cell "Не требуется" [ref=f2e1985]
+              - cell "Проверить" [ref=f2e1988]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e1989]:
+              - cell "БЫТ-061" [ref=f2e1990]
+              - cell "Ожидалась" [ref=f2e1991]
+              - cell "Свободна" [ref=f2e1992]
+              - cell "Не проверена Не найдена" [ref=f2e1994]:
+                - generic [ref=f2e1995]:
+                  - generic [ref=f2e1996]: Не проверена
+                  - generic [ref=f2e1997]: Не найдена
+              - cell "Не требуется" [ref=f2e1998]
+              - cell "Проверить" [ref=f2e2001]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2002]:
+              - cell "БЫТ-063" [ref=f2e2003]
+              - cell "Ожидалась" [ref=f2e2004]
+              - cell "Ожидает осмотра" [ref=f2e2005]
+              - cell "Не проверена Не найдена" [ref=f2e2007]:
+                - generic [ref=f2e2008]:
+                  - generic [ref=f2e2009]: Не проверена
+                  - generic [ref=f2e2010]: Не найдена
+              - cell "Не требуется" [ref=f2e2011]
+              - cell "Проверить" [ref=f2e2014]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2015]:
+              - cell "БЫТ-065" [ref=f2e2016]
+              - cell "Ожидалась" [ref=f2e2017]
+              - cell "Бронь" [ref=f2e2018]
+              - cell "Не проверена Не найдена" [ref=f2e2020]:
+                - generic [ref=f2e2021]:
+                  - generic [ref=f2e2022]: Не проверена
+                  - generic [ref=f2e2023]: Не найдена
+              - cell "Не требуется" [ref=f2e2024]
+              - cell "Проверить" [ref=f2e2027]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2028]:
+              - cell "БЫТ-066" [ref=f2e2029]
+              - cell "Ожидалась" [ref=f2e2030]
+              - cell "В ремонте" [ref=f2e2031]
+              - cell "Не проверена Не найдена" [ref=f2e2033]:
+                - generic [ref=f2e2034]:
+                  - generic [ref=f2e2035]: Не проверена
+                  - generic [ref=f2e2036]: Не найдена
+              - cell "Не требуется" [ref=f2e2037]
+              - cell "Проверить" [ref=f2e2040]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2041]:
+              - cell "БЫТ-067" [ref=f2e2042]
+              - cell "Ожидалась" [ref=f2e2043]
+              - cell "Капремонт" [ref=f2e2044]
+              - cell "Не проверена Не найдена" [ref=f2e2046]:
+                - generic [ref=f2e2047]:
+                  - generic [ref=f2e2048]: Не проверена
+                  - generic [ref=f2e2049]: Не найдена
+              - cell "Не требуется" [ref=f2e2050]
+              - cell "Проверить" [ref=f2e2053]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2054]:
+              - cell "БЫТ-068" [ref=f2e2055]
+              - cell "Ожидалась" [ref=f2e2056]
+              - cell "Продажа Б/У" [ref=f2e2057]
+              - cell "Не проверена Не найдена" [ref=f2e2059]:
+                - generic [ref=f2e2060]:
+                  - generic [ref=f2e2061]: Не проверена
+                  - generic [ref=f2e2062]: Не найдена
+              - cell "Не требуется" [ref=f2e2063]
+              - cell "Проверить" [ref=f2e2066]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2067]:
+              - cell "БЫТ-069" [ref=f2e2068]
+              - cell "Ожидалась" [ref=f2e2069]
+              - cell "Склад" [ref=f2e2070]
+              - cell "Не проверена Не найдена" [ref=f2e2072]:
+                - generic [ref=f2e2073]:
+                  - generic [ref=f2e2074]: Не проверена
+                  - generic [ref=f2e2075]: Не найдена
+              - cell "Не требуется" [ref=f2e2076]
+              - cell "Проверить" [ref=f2e2079]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2080]:
+              - cell "БЫТ-070" [ref=f2e2081]
+              - cell "Ожидалась" [ref=f2e2082]
+              - cell "Собственные нужды" [ref=f2e2083]
+              - cell "Не проверена Не найдена" [ref=f2e2085]:
+                - generic [ref=f2e2086]:
+                  - generic [ref=f2e2087]: Не проверена
+                  - generic [ref=f2e2088]: Не найдена
+              - cell "Не требуется" [ref=f2e2089]
+              - cell "Проверить" [ref=f2e2092]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2093]:
+              - cell "БЫТ-071" [ref=f2e2094]
+              - cell "Ожидалась" [ref=f2e2095]
+              - cell "Свободна" [ref=f2e2096]
+              - cell "Не проверена Не найдена" [ref=f2e2098]:
+                - generic [ref=f2e2099]:
+                  - generic [ref=f2e2100]: Не проверена
+                  - generic [ref=f2e2101]: Не найдена
+              - cell "Не требуется" [ref=f2e2102]
+              - cell "Проверить" [ref=f2e2105]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2106]:
+              - cell "БЫТ-073" [ref=f2e2107]
+              - cell "Ожидалась" [ref=f2e2108]
+              - cell "Ожидает осмотра" [ref=f2e2109]
+              - cell "Не проверена Не найдена" [ref=f2e2111]:
+                - generic [ref=f2e2112]:
+                  - generic [ref=f2e2113]: Не проверена
+                  - generic [ref=f2e2114]: Не найдена
+              - cell "Не требуется" [ref=f2e2115]
+              - cell "Проверить" [ref=f2e2118]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2119]:
+              - cell "БЫТ-075" [ref=f2e2120]
+              - cell "Ожидалась" [ref=f2e2121]
+              - cell "Бронь" [ref=f2e2122]
+              - cell "Не проверена Не найдена" [ref=f2e2124]:
+                - generic [ref=f2e2125]:
+                  - generic [ref=f2e2126]: Не проверена
+                  - generic [ref=f2e2127]: Не найдена
+              - cell "Не требуется" [ref=f2e2128]
+              - cell "Проверить" [ref=f2e2131]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2132]:
+              - cell "БЫТ-076" [ref=f2e2133]
+              - cell "Ожидалась" [ref=f2e2134]
+              - cell "В ремонте" [ref=f2e2135]
+              - cell "Не проверена Не найдена" [ref=f2e2137]:
+                - generic [ref=f2e2138]:
+                  - generic [ref=f2e2139]: Не проверена
+                  - generic [ref=f2e2140]: Не найдена
+              - cell "Не требуется" [ref=f2e2141]
+              - cell "Проверить" [ref=f2e2144]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2145]:
+              - cell "БЫТ-077" [ref=f2e2146]
+              - cell "Ожидалась" [ref=f2e2147]
+              - cell "Капремонт" [ref=f2e2148]
+              - cell "Не проверена Не найдена" [ref=f2e2150]:
+                - generic [ref=f2e2151]:
+                  - generic [ref=f2e2152]: Не проверена
+                  - generic [ref=f2e2153]: Не найдена
+              - cell "Не требуется" [ref=f2e2154]
+              - cell "Проверить" [ref=f2e2157]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2158]:
+              - cell "БЫТ-078" [ref=f2e2159]
+              - cell "Ожидалась" [ref=f2e2160]
+              - cell "Продажа Б/У" [ref=f2e2161]
+              - cell "Не проверена Не найдена" [ref=f2e2163]:
+                - generic [ref=f2e2164]:
+                  - generic [ref=f2e2165]: Не проверена
+                  - generic [ref=f2e2166]: Не найдена
+              - cell "Не требуется" [ref=f2e2167]
+              - cell "Проверить" [ref=f2e2170]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2171]:
+              - cell "БЫТ-079" [ref=f2e2172]
+              - cell "Ожидалась" [ref=f2e2173]
+              - cell "Склад" [ref=f2e2174]
+              - cell "Не проверена Не найдена" [ref=f2e2176]:
+                - generic [ref=f2e2177]:
+                  - generic [ref=f2e2178]: Не проверена
+                  - generic [ref=f2e2179]: Не найдена
+              - cell "Не требуется" [ref=f2e2180]
+              - cell "Проверить" [ref=f2e2183]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2184]:
+              - cell "БЫТ-080" [ref=f2e2185]
+              - cell "Ожидалась" [ref=f2e2186]
+              - cell "Собственные нужды" [ref=f2e2187]
+              - cell "Не проверена Не найдена" [ref=f2e2189]:
+                - generic [ref=f2e2190]:
+                  - generic [ref=f2e2191]: Не проверена
+                  - generic [ref=f2e2192]: Не найдена
+              - cell "Не требуется" [ref=f2e2193]
+              - cell "Проверить" [ref=f2e2196]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2197]:
+              - cell "БЫТ-081" [ref=f2e2198]
+              - cell "Ожидалась" [ref=f2e2199]
+              - cell "Свободна" [ref=f2e2200]
+              - cell "Не проверена Не найдена" [ref=f2e2202]:
+                - generic [ref=f2e2203]:
+                  - generic [ref=f2e2204]: Не проверена
+                  - generic [ref=f2e2205]: Не найдена
+              - cell "Не требуется" [ref=f2e2206]
+              - cell "Проверить" [ref=f2e2209]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2210]:
+              - cell "БЫТ-083" [ref=f2e2211]
+              - cell "Ожидалась" [ref=f2e2212]
+              - cell "Ожидает осмотра" [ref=f2e2213]
+              - cell "Не проверена Не найдена" [ref=f2e2215]:
+                - generic [ref=f2e2216]:
+                  - generic [ref=f2e2217]: Не проверена
+                  - generic [ref=f2e2218]: Не найдена
+              - cell "Не требуется" [ref=f2e2219]
+              - cell "Проверить" [ref=f2e2222]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2223]:
+              - cell "БЫТ-085" [ref=f2e2224]
+              - cell "Ожидалась" [ref=f2e2225]
+              - cell "Бронь" [ref=f2e2226]
+              - cell "Не проверена Не найдена" [ref=f2e2228]:
+                - generic [ref=f2e2229]:
+                  - generic [ref=f2e2230]: Не проверена
+                  - generic [ref=f2e2231]: Не найдена
+              - cell "Не требуется" [ref=f2e2232]
+              - cell "Проверить" [ref=f2e2235]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2236]:
+              - cell "БЫТ-086" [ref=f2e2237]
+              - cell "Ожидалась" [ref=f2e2238]
+              - cell "В ремонте" [ref=f2e2239]
+              - cell "Не проверена Не найдена" [ref=f2e2241]:
+                - generic [ref=f2e2242]:
+                  - generic [ref=f2e2243]: Не проверена
+                  - generic [ref=f2e2244]: Не найдена
+              - cell "Не требуется" [ref=f2e2245]
+              - cell "Проверить" [ref=f2e2248]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2249]:
+              - cell "БЫТ-087" [ref=f2e2250]
+              - cell "Ожидалась" [ref=f2e2251]
+              - cell "Капремонт" [ref=f2e2252]
+              - cell "Не проверена Не найдена" [ref=f2e2254]:
+                - generic [ref=f2e2255]:
+                  - generic [ref=f2e2256]: Не проверена
+                  - generic [ref=f2e2257]: Не найдена
+              - cell "Не требуется" [ref=f2e2258]
+              - cell "Проверить" [ref=f2e2261]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2262]:
+              - cell "БЫТ-088" [ref=f2e2263]
+              - cell "Ожидалась" [ref=f2e2264]
+              - cell "Продажа Б/У" [ref=f2e2265]
+              - cell "Не проверена Не найдена" [ref=f2e2267]:
+                - generic [ref=f2e2268]:
+                  - generic [ref=f2e2269]: Не проверена
+                  - generic [ref=f2e2270]: Не найдена
+              - cell "Не требуется" [ref=f2e2271]
+              - cell "Проверить" [ref=f2e2274]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2275]:
+              - cell "БЫТ-089" [ref=f2e2276]
+              - cell "Ожидалась" [ref=f2e2277]
+              - cell "Склад" [ref=f2e2278]
+              - cell "Не проверена Не найдена" [ref=f2e2280]:
+                - generic [ref=f2e2281]:
+                  - generic [ref=f2e2282]: Не проверена
+                  - generic [ref=f2e2283]: Не найдена
+              - cell "Не требуется" [ref=f2e2284]
+              - cell "Проверить" [ref=f2e2287]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2288]:
+              - cell "БЫТ-090" [ref=f2e2289]
+              - cell "Ожидалась" [ref=f2e2290]
+              - cell "Собственные нужды" [ref=f2e2291]
+              - cell "Не проверена Не найдена" [ref=f2e2293]:
+                - generic [ref=f2e2294]:
+                  - generic [ref=f2e2295]: Не проверена
+                  - generic [ref=f2e2296]: Не найдена
+              - cell "Не требуется" [ref=f2e2297]
+              - cell "Проверить" [ref=f2e2300]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2301]:
+              - cell "БЫТ-091" [ref=f2e2302]
+              - cell "Ожидалась" [ref=f2e2303]
+              - cell "Свободна" [ref=f2e2304]
+              - cell "Не проверена Не найдена" [ref=f2e2306]:
+                - generic [ref=f2e2307]:
+                  - generic [ref=f2e2308]: Не проверена
+                  - generic [ref=f2e2309]: Не найдена
+              - cell "Не требуется" [ref=f2e2310]
+              - cell "Проверить" [ref=f2e2313]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2314]:
+              - cell "БЫТ-093" [ref=f2e2315]
+              - cell "Ожидалась" [ref=f2e2316]
+              - cell "Ожидает осмотра" [ref=f2e2317]
+              - cell "Не проверена Не найдена" [ref=f2e2319]:
+                - generic [ref=f2e2320]:
+                  - generic [ref=f2e2321]: Не проверена
+                  - generic [ref=f2e2322]: Не найдена
+              - cell "Не требуется" [ref=f2e2323]
+              - cell "Проверить" [ref=f2e2326]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2327]:
+              - cell "БЫТ-095" [ref=f2e2328]
+              - cell "Ожидалась" [ref=f2e2329]
+              - cell "Бронь" [ref=f2e2330]
+              - cell "Не проверена Не найдена" [ref=f2e2332]:
+                - generic [ref=f2e2333]:
+                  - generic [ref=f2e2334]: Не проверена
+                  - generic [ref=f2e2335]: Не найдена
+              - cell "Не требуется" [ref=f2e2336]
+              - cell "Проверить" [ref=f2e2339]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2340]:
+              - cell "БЫТ-096" [ref=f2e2341]
+              - cell "Ожидалась" [ref=f2e2342]
+              - cell "В ремонте" [ref=f2e2343]
+              - cell "Не проверена Не найдена" [ref=f2e2345]:
+                - generic [ref=f2e2346]:
+                  - generic [ref=f2e2347]: Не проверена
+                  - generic [ref=f2e2348]: Не найдена
+              - cell "Не требуется" [ref=f2e2349]
+              - cell "Проверить" [ref=f2e2352]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2353]:
+              - cell "БЫТ-097" [ref=f2e2354]
+              - cell "Ожидалась" [ref=f2e2355]
+              - cell "Капремонт" [ref=f2e2356]
+              - cell "Не проверена Не найдена" [ref=f2e2358]:
+                - generic [ref=f2e2359]:
+                  - generic [ref=f2e2360]: Не проверена
+                  - generic [ref=f2e2361]: Не найдена
+              - cell "Не требуется" [ref=f2e2362]
+              - cell "Проверить" [ref=f2e2365]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2366]:
+              - cell "БЫТ-098" [ref=f2e2367]
+              - cell "Ожидалась" [ref=f2e2368]
+              - cell "Продажа Б/У" [ref=f2e2369]
+              - cell "Не проверена Не найдена" [ref=f2e2371]:
+                - generic [ref=f2e2372]:
+                  - generic [ref=f2e2373]: Не проверена
+                  - generic [ref=f2e2374]: Не найдена
+              - cell "Не требуется" [ref=f2e2375]
+              - cell "Проверить" [ref=f2e2378]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2379]:
+              - cell "БЫТ-099" [ref=f2e2380]
+              - cell "Ожидалась" [ref=f2e2381]
+              - cell "Склад" [ref=f2e2382]
+              - cell "Не проверена Не найдена" [ref=f2e2384]:
+                - generic [ref=f2e2385]:
+                  - generic [ref=f2e2386]: Не проверена
+                  - generic [ref=f2e2387]: Не найдена
+              - cell "Не требуется" [ref=f2e2388]
+              - cell "Проверить" [ref=f2e2391]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2392]:
+              - cell "БЫТ-100" [ref=f2e2393]
+              - cell "Ожидалась" [ref=f2e2394]
+              - cell "Собственные нужды" [ref=f2e2395]
+              - cell "Не проверена Не найдена" [ref=f2e2397]:
+                - generic [ref=f2e2398]:
+                  - generic [ref=f2e2399]: Не проверена
+                  - generic [ref=f2e2400]: Не найдена
+              - cell "Не требуется" [ref=f2e2401]
+              - cell "Проверить" [ref=f2e2404]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2405]:
+              - cell "БЫТ-101" [ref=f2e2406]
+              - cell "Ожидалась" [ref=f2e2407]
+              - cell "Свободна" [ref=f2e2408]
+              - cell "Не проверена Не найдена" [ref=f2e2410]:
+                - generic [ref=f2e2411]:
+                  - generic [ref=f2e2412]: Не проверена
+                  - generic [ref=f2e2413]: Не найдена
+              - cell "Не требуется" [ref=f2e2414]
+              - cell "Проверить" [ref=f2e2417]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2418]:
+              - cell "БЫТ-103" [ref=f2e2419]
+              - cell "Ожидалась" [ref=f2e2420]
+              - cell "Ожидает осмотра" [ref=f2e2421]
+              - cell "Не проверена Не найдена" [ref=f2e2423]:
+                - generic [ref=f2e2424]:
+                  - generic [ref=f2e2425]: Не проверена
+                  - generic [ref=f2e2426]: Не найдена
+              - cell "Не требуется" [ref=f2e2427]
+              - cell "Проверить" [ref=f2e2430]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2431]:
+              - cell "БЫТ-105" [ref=f2e2432]
+              - cell "Ожидалась" [ref=f2e2433]
+              - cell "Бронь" [ref=f2e2434]
+              - cell "Не проверена Не найдена" [ref=f2e2436]:
+                - generic [ref=f2e2437]:
+                  - generic [ref=f2e2438]: Не проверена
+                  - generic [ref=f2e2439]: Не найдена
+              - cell "Не требуется" [ref=f2e2440]
+              - cell "Проверить" [ref=f2e2443]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2444]:
+              - cell "БЫТ-106" [ref=f2e2445]
+              - cell "Ожидалась" [ref=f2e2446]
+              - cell "В ремонте" [ref=f2e2447]
+              - cell "Не проверена Не найдена" [ref=f2e2449]:
+                - generic [ref=f2e2450]:
+                  - generic [ref=f2e2451]: Не проверена
+                  - generic [ref=f2e2452]: Не найдена
+              - cell "Не требуется" [ref=f2e2453]
+              - cell "Проверить" [ref=f2e2456]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2457]:
+              - cell "БЫТ-107" [ref=f2e2458]
+              - cell "Ожидалась" [ref=f2e2459]
+              - cell "Капремонт" [ref=f2e2460]
+              - cell "Не проверена Не найдена" [ref=f2e2462]:
+                - generic [ref=f2e2463]:
+                  - generic [ref=f2e2464]: Не проверена
+                  - generic [ref=f2e2465]: Не найдена
+              - cell "Не требуется" [ref=f2e2466]
+              - cell "Проверить" [ref=f2e2469]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2470]:
+              - cell "БЫТ-108" [ref=f2e2471]
+              - cell "Ожидалась" [ref=f2e2472]
+              - cell "Продажа Б/У" [ref=f2e2473]
+              - cell "Не проверена Не найдена" [ref=f2e2475]:
+                - generic [ref=f2e2476]:
+                  - generic [ref=f2e2477]: Не проверена
+                  - generic [ref=f2e2478]: Не найдена
+              - cell "Не требуется" [ref=f2e2479]
+              - cell "Проверить" [ref=f2e2482]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2483]:
+              - cell "БЫТ-109" [ref=f2e2484]
+              - cell "Ожидалась" [ref=f2e2485]
+              - cell "Склад" [ref=f2e2486]
+              - cell "Не проверена Не найдена" [ref=f2e2488]:
+                - generic [ref=f2e2489]:
+                  - generic [ref=f2e2490]: Не проверена
+                  - generic [ref=f2e2491]: Не найдена
+              - cell "Не требуется" [ref=f2e2492]
+              - cell "Проверить" [ref=f2e2495]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2496]:
+              - cell "БЫТ-110" [ref=f2e2497]
+              - cell "Ожидалась" [ref=f2e2498]
+              - cell "Собственные нужды" [ref=f2e2499]
+              - cell "Не проверена Не найдена" [ref=f2e2501]:
+                - generic [ref=f2e2502]:
+                  - generic [ref=f2e2503]: Не проверена
+                  - generic [ref=f2e2504]: Не найдена
+              - cell "Не требуется" [ref=f2e2505]
+              - cell "Проверить" [ref=f2e2508]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2509]:
+              - cell "БЫТ-111" [ref=f2e2510]
+              - cell "Ожидалась" [ref=f2e2511]
+              - cell "Свободна" [ref=f2e2512]
+              - cell "Не проверена Не найдена" [ref=f2e2514]:
+                - generic [ref=f2e2515]:
+                  - generic [ref=f2e2516]: Не проверена
+                  - generic [ref=f2e2517]: Не найдена
+              - cell "Не требуется" [ref=f2e2518]
+              - cell "Проверить" [ref=f2e2521]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2522]:
+              - cell "БЫТ-113" [ref=f2e2523]
+              - cell "Ожидалась" [ref=f2e2524]
+              - cell "Ожидает осмотра" [ref=f2e2525]
+              - cell "Не проверена Не найдена" [ref=f2e2527]:
+                - generic [ref=f2e2528]:
+                  - generic [ref=f2e2529]: Не проверена
+                  - generic [ref=f2e2530]: Не найдена
+              - cell "Не требуется" [ref=f2e2531]
+              - cell "Проверить" [ref=f2e2534]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2535]:
+              - cell "БЫТ-115" [ref=f2e2536]
+              - cell "Ожидалась" [ref=f2e2537]
+              - cell "Бронь" [ref=f2e2538]
+              - cell "Не проверена Не найдена" [ref=f2e2540]:
+                - generic [ref=f2e2541]:
+                  - generic [ref=f2e2542]: Не проверена
+                  - generic [ref=f2e2543]: Не найдена
+              - cell "Не требуется" [ref=f2e2544]
+              - cell "Проверить" [ref=f2e2547]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2548]:
+              - cell "БЫТ-116" [ref=f2e2549]
+              - cell "Ожидалась" [ref=f2e2550]
+              - cell "В ремонте" [ref=f2e2551]
+              - cell "Не проверена Не найдена" [ref=f2e2553]:
+                - generic [ref=f2e2554]:
+                  - generic [ref=f2e2555]: Не проверена
+                  - generic [ref=f2e2556]: Не найдена
+              - cell "Не требуется" [ref=f2e2557]
+              - cell "Проверить" [ref=f2e2560]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2561]:
+              - cell "БЫТ-117" [ref=f2e2562]
+              - cell "Ожидалась" [ref=f2e2563]
+              - cell "Капремонт" [ref=f2e2564]
+              - cell "Не проверена Не найдена" [ref=f2e2566]:
+                - generic [ref=f2e2567]:
+                  - generic [ref=f2e2568]: Не проверена
+                  - generic [ref=f2e2569]: Не найдена
+              - cell "Не требуется" [ref=f2e2570]
+              - cell "Проверить" [ref=f2e2573]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2574]:
+              - cell "БЫТ-118" [ref=f2e2575]
+              - cell "Ожидалась" [ref=f2e2576]
+              - cell "Продажа Б/У" [ref=f2e2577]
+              - cell "Не проверена Не найдена" [ref=f2e2579]:
+                - generic [ref=f2e2580]:
+                  - generic [ref=f2e2581]: Не проверена
+                  - generic [ref=f2e2582]: Не найдена
+              - cell "Не требуется" [ref=f2e2583]
+              - cell "Проверить" [ref=f2e2586]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2587]:
+              - cell "БЫТ-119" [ref=f2e2588]
+              - cell "Ожидалась" [ref=f2e2589]
+              - cell "Склад" [ref=f2e2590]
+              - cell "Не проверена Не найдена" [ref=f2e2592]:
+                - generic [ref=f2e2593]:
+                  - generic [ref=f2e2594]: Не проверена
+                  - generic [ref=f2e2595]: Не найдена
+              - cell "Не требуется" [ref=f2e2596]
+              - cell "Проверить" [ref=f2e2599]:
+                - button "Проверить" [disabled]
+            - row [ref=f2e2600]:
+              - cell "БЫТ-120" [ref=f2e2601]
+              - cell "Ожидалась" [ref=f2e2602]
+              - cell "Собственные нужды" [ref=f2e2603]
+              - cell "Не проверена Не найдена" [ref=f2e2605]:
+                - generic [ref=f2e2606]:
+                  - generic [ref=f2e2607]: Не проверена
+                  - generic [ref=f2e2608]: Не найдена
+              - cell "Не требуется" [ref=f2e2609]
+              - cell "Проверить" [ref=f2e2612]:
+                - button "Проверить" [disabled]
+        - generic [ref=f2e2613]:
+          - generic [ref=f2e2614]: Статус передачи
+          - generic [ref=f2e2616]: Не запрашивалась
+  - region "Notifications alt+T"

@@ -1,0 +1,213 @@
+- generic [active]:
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /
+                    - generic:
+                      - generic: WMS Panel
+                      - generic: СПБ
+            - generic:
+              - generic:
+                - generic:
+                  - combobox:
+                    - generic: СПБ
+              - generic:
+                - generic: Обзор
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /
+                        - generic: Главная
+                    - listitem:
+                      - link:
+                        - /url: /kpi
+                        - generic: KPI
+              - generic:
+                - generic: Имущество
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /warehouse
+                        - generic: Склад
+                    - listitem:
+                      - link:
+                        - /url: /equipment
+                        - generic: Доп. оборудование
+                    - listitem:
+                      - button:
+                        - generic: Инвентаризация
+                    - listitem:
+                      - button:
+                        - generic: Списание
+              - generic:
+                - generic: Логистика
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /logistics/returns
+                        - generic: Возврат из аренды
+                    - listitem:
+                      - link:
+                        - /url: /logistics/shipments
+                        - generic: Отгрузка в аренду
+              - generic:
+                - generic: Ремонтный цикл
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /estimates
+                        - generic: Сметы
+                    - listitem:
+                      - link:
+                        - /url: /repairs
+                        - generic: Ремонты
+                    - listitem:
+                      - link:
+                        - /url: /task-board
+                        - generic: Доска задач
+                    - listitem:
+                      - link:
+                        - /url: /acceptance
+                        - generic: Приёмка и доработки
+            - generic:
+              - list:
+                - listitem:
+                  - button:
+                    - generic: Настройки
+                - listitem:
+                  - button:
+                    - generic: Локальный администратор
+                    - generic: Выйти
+      - main:
+        - generic:
+          - generic:
+            - button:
+              - generic: Открыть или свернуть меню
+            - navigation:
+              - list:
+                - listitem:
+                  - generic: Логистика
+                - listitem
+                - listitem:
+                  - link [disabled]: Отгрузка в аренду
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - textbox:
+                  - /placeholder: Компания, водитель или бытовка
+                - textbox
+                - textbox
+              - generic:
+                - button: Создать задание
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - table:
+                      - rowgroup:
+                        - row:
+                          - columnheader:
+                            - button:
+                              - generic: Дата
+                          - columnheader:
+                            - button:
+                              - generic: Компания
+                          - columnheader:
+                            - button:
+                              - generic: Водитель
+                          - columnheader:
+                            - button:
+                              - generic: Бытовки
+                          - columnheader:
+                            - button:
+                              - generic: Подготовка к отгрузке
+                          - columnheader:
+                            - button:
+                              - generic: Статус
+                          - columnheader:
+                            - button:
+                              - generic: Действия
+    - region "Notifications alt+T"
+  - dialog [ref=e230]:
+    - generic [ref=e231]:
+      - heading "Создать отгрузку в аренду" [level=2] [ref=e352]
+      - paragraph [ref=e233]: Выберите компанию, дату, водителя, бытовки и подготовьте их наполнение.
+    - generic [ref=e234]:
+      - group [ref=e235]:
+        - generic [ref=e236]: Компания
+        - group [ref=e237]:
+          - combobox "Компания" [ref=e353]: Тест
+          - group [ref=e239]:
+            - button [ref=e280] [cursor=pointer]
+        - textbox [ref=e241]: Тест
+      - group [ref=e242]:
+        - generic [ref=e243]: Дата отгрузки
+        - textbox "Дата отгрузки" [ref=e354]: 2026-07-11
+      - group [ref=e245]:
+        - generic [ref=e246]: Водитель
+        - combobox "Водитель" [ref=e355] [cursor=pointer]:
+          - generic: Выберите водителя
+    - group "Бытовки и наполнение" [ref=e283]:
+      - paragraph [ref=e250]: Зарезервированные за выбранной компанией бытовки показаны первыми.
+      - generic [ref=e251]:
+        - generic [ref=e284]:
+          - generic [ref=e285]: Бытовка 1
+          - generic [ref=e287]:
+            - group [ref=e288]:
+              - generic [ref=e289]: Номер бытовки
+              - generic [ref=e290]:
+                - group [ref=e291]:
+                  - combobox "Номер бытовки" [ref=e292]: БЫТ-001
+                  - group [ref=e293]:
+                    - button [ref=e294] [cursor=pointer]
+                - textbox [ref=e295]: БЫТ-001
+            - generic [ref=e356]:
+              - generic [ref=e357]:
+                - strong [ref=e358]: Планируемое наполнение
+                - button "Добавить позицию" [ref=e359] [cursor=pointer]
+              - generic [ref=e360]:
+                - generic [ref=e361]:
+                  - generic [ref=e362]: Стол
+                  - button "Уменьшить Стол" [ref=e363] [cursor=pointer]
+                  - generic "Количество Стол" [ref=e364]: "2"
+                  - button "Увеличить Стол" [ref=e365] [cursor=pointer]
+                  - button "Убрать Стол" [ref=e366] [cursor=pointer]
+                - generic [ref=e367]:
+                  - generic [ref=e368]: Стул
+                  - button "Уменьшить Стул" [ref=e369] [cursor=pointer]
+                  - generic "Количество Стул" [ref=e370]: "4"
+                  - button "Увеличить Стул" [ref=e371] [cursor=pointer]
+                  - button "Убрать Стул" [ref=e372] [cursor=pointer]
+                - generic [ref=e373]:
+                  - generic [ref=e374]: Шкаф
+                  - button "Уменьшить Шкаф" [ref=e375] [cursor=pointer]
+                  - generic "Количество Шкаф" [ref=e376]: "1"
+                  - button "Увеличить Шкаф" [ref=e377] [cursor=pointer]
+                  - button "Убрать Шкаф" [ref=e378] [cursor=pointer]
+                - generic [ref=e468]:
+                  - generic [ref=e469]: Конвектор
+                  - button "Уменьшить Конвектор" [ref=e470] [cursor=pointer]
+                  - generic "Количество Конвектор" [ref=e471]: "1"
+                  - button "Увеличить Конвектор" [ref=e472] [cursor=pointer]
+                  - button "Убрать Конвектор" [ref=e473] [cursor=pointer]
+              - generic [ref=e474]:
+                - generic [ref=e475]: Подготовка к отгрузке
+                - generic [ref=e477]:
+                  - generic [ref=e478]: Принести 1 × Конвектор
+                  - button "Создать задачу" [ref=e479] [cursor=pointer]
+        - button "Добавить ещё бытовку" [ref=e379] [cursor=pointer]
+    - generic [ref=e262]:
+      - button "Отмена" [ref=e380] [cursor=pointer]
+      - button "Отгрузить" [disabled]
+    - button "Close" [ref=e381] [cursor=pointer]

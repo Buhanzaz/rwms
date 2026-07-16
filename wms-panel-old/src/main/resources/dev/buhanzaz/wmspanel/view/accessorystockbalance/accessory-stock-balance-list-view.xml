@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view"
+      title="msg://AccessoryStockBalanceListView.title"
+      focusComponent="accessoryStockBalancesDataGrid">
+    <data>
+        <collection id="accessoryStockBalancesDc" class="dev.buhanzaz.wmspanel.entity.AccessoryStockBalance">
+            <fetchPlan extends="_base">
+                <property name="warehouse" fetchPlan="_base"/>
+                <property name="accessoryItem" fetchPlan="_base">
+                    <property name="category" fetchPlan="_base"/>
+                    <property name="subcategory" fetchPlan="_base"/>
+                </property>
+            </fetchPlan>
+            <loader id="accessoryStockBalancesDl" readOnly="true">
+                <query><![CDATA[select e from AccessoryStockBalance e where e.warehouse = :warehouse order by e.accessoryItem.category.name, e.accessoryItem.subcategory.name, e.accessoryItem.name]]></query>
+            </loader>
+        </collection>
+    </data>
+    <layout>
+        <hbox width="100%" spacing="true" alignItems="END">
+            <comboBox id="warehouseFilter" label="Склад" width="20em"/>
+        </hbox>
+        <hbox id="buttonsPanel" classNames="buttons-panel">
+            <startSlot>
+                <button id="createButton" action="accessoryStockBalancesDataGrid.createAction"/>
+                <button id="editButton" action="accessoryStockBalancesDataGrid.editAction"/>
+                <button id="removeButton" action="accessoryStockBalancesDataGrid.removeAction"/>
+            </startSlot>
+        </hbox>
+        <dataGrid id="accessoryStockBalancesDataGrid" width="100%" minHeight="20em" dataContainer="accessoryStockBalancesDc" columnReorderingAllowed="true">
+            <actions>
+                <action id="createAction" type="list_create"/>
+                <action id="editAction" type="list_edit"/>
+                <action id="removeAction" type="list_remove"/>
+            </actions>
+            <columns resizable="true">
+                <column property="warehouse"/>
+                <column key="category" header="Категория"/>
+                <column key="subcategory" header="Подкатегория"/>
+                <column property="accessoryItem"/>
+                <column property="quantityTotal"/>
+                <column property="quantityAvailable"/>
+                <column property="quantityReserved"/>
+                <column property="quantityInRent"/>
+                <column property="quantityBroken"/>
+                <column property="quantityWrittenOff"/>
+                <column property="comment"/>
+            </columns>
+        </dataGrid>
+    </layout>
+</view>

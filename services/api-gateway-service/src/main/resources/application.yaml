@@ -1,0 +1,58 @@
+server:
+  port: ${API_GATEWAY_PORT:8088}
+  forward-headers-strategy: none
+
+spring:
+  application:
+    name: api-gateway-service
+  http:
+    clients:
+      connect-timeout: ${GATEWAY_CONNECT_TIMEOUT:2s}
+      read-timeout: ${GATEWAY_READ_TIMEOUT:10s}
+  cloud:
+    gateway:
+      server:
+        webmvc:
+          forwarded-request-headers-filter:
+            enabled: false
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+  metrics:
+    tags:
+      application: api-gateway-service
+  tracing:
+    sampling:
+      probability: ${API_GATEWAY_TRACING_SAMPLING_PROBABILITY:0.1}
+
+logging:
+  structured:
+    format:
+      console: ecs
+
+rwms:
+  gateway:
+    public-base-uri: ${GATEWAY_PUBLIC_BASE_URI}
+    routes:
+      auth-uri: ${AUTH_SERVICE_URL}
+      task-board-uri: ${TASK_BOARD_SERVICE_URL}
+      warehouse-uri: ${WAREHOUSE_SERVICE_URL}
+      asset-uri: ${ASSET_SERVICE_URL}
+    security:
+      issuer: ${AUTH_ISSUER}
+      audience: ${AUTH_AUDIENCE:rwms-services}
+      jwk-set-uri: ${AUTH_JWK_SET_URI}
+    cors:
+      allowed-origins: ${PANEL_ORIGIN}

@@ -1,0 +1,7 @@
+{
+  "formatVersion": 1,
+  "version": "0003",
+  "description": "Enforce case-insensitive task-board identities",
+  "applySha256": "31a451efd2d770c7260cae5ae80335ebc6c44582568c1dada5c92e0b2db3b9af",
+  "verifySha256": "aea985f4fafcf88647fa729953ca8c384da8341b2475672beec0084ab49eab7f"
+}

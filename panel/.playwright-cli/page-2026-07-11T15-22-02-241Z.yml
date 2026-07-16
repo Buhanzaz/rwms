@@ -1,0 +1,300 @@
+- generic:
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /
+                    - generic:
+                      - generic: WMS Panel
+                      - generic: СПБ
+            - generic:
+              - generic:
+                - generic:
+                  - combobox:
+                    - generic: СПБ
+              - generic:
+                - generic: Обзор
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /
+                        - generic: Главная
+                    - listitem:
+                      - link:
+                        - /url: /kpi
+                        - generic: KPI
+              - generic:
+                - generic: Имущество
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /warehouse
+                        - generic: Склад
+                    - listitem:
+                      - link:
+                        - /url: /equipment
+                        - generic: Доп. оборудование
+                    - listitem:
+                      - button [expanded]:
+                        - generic: Инвентаризация
+                      - list:
+                        - listitem:
+                          - link:
+                            - /url: /inventory/inventory-7c894ac7-145b-4317-9f80-7e5e9ec1e8d5
+                            - generic: Продолжить инвентаризацию
+                        - listitem:
+                          - link:
+                            - /url: /inventory/inventory-7c894ac7-145b-4317-9f80-7e5e9ec1e8d5/finish
+                            - generic: Закончить инвентаризацию
+                        - listitem:
+                          - link:
+                            - /url: /inventory/history
+                            - generic: История инвентаризаций
+                    - listitem:
+                      - button:
+                        - generic: Списание
+              - generic:
+                - generic: Логистика
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /logistics/returns
+                        - generic: Возврат из аренды
+                    - listitem:
+                      - link:
+                        - /url: /logistics/shipments
+                        - generic: Отгрузка в аренду
+              - generic:
+                - generic: Ремонтный цикл
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /estimates
+                        - generic: Сметы
+                    - listitem:
+                      - link:
+                        - /url: /repairs
+                        - generic: Ремонты
+                    - listitem:
+                      - link:
+                        - /url: /task-board
+                        - generic: Доска задач
+                    - listitem:
+                      - link:
+                        - /url: /acceptance
+                        - generic: Приёмка и доработки
+            - generic:
+              - list:
+                - listitem:
+                  - button:
+                    - generic: Настройки
+                - listitem:
+                  - button:
+                    - generic: Локальный администратор
+                    - generic: Выйти
+      - main:
+        - generic:
+          - generic:
+            - button:
+              - generic: Открыть или свернуть меню
+            - navigation:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /inventory
+                    - text: Инвентаризация
+                - listitem
+                - listitem:
+                  - link [disabled]: Сессия
+        - generic:
+          - generic:
+            - generic:
+              - button: Назад
+              - generic:
+                - button: Сохранить осмотр
+            - region:
+              - status: Позиция добавлена в результат осмотра.
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic: 0 из 20
+                        - button: Добавить
+                      - generic: Фото не загружены.
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - heading [level=3]: Смета
+                          - paragraph: Работа, материал, количество и цена сохраняются отдельными полями.
+                        - button: Добавить строку
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: Строка 1
+                              - button
+                          - generic:
+                            - generic:
+                              - group:
+                                - generic: Тип
+                                - combobox:
+                                  - generic: Работа
+                              - group:
+                                - generic: Работа / материал
+                                - textbox: Монтаж кондиционера
+                              - group:
+                                - generic: Комментарий
+                                - textbox
+                              - group:
+                                - generic: Количество
+                                - group:
+                                  - group:
+                                    - button [disabled]
+                                  - textbox: "1"
+                                  - group:
+                                    - button
+                              - group:
+                                - generic: Единица
+                                - textbox: шт.
+                              - group:
+                                - generic: Цена
+                                - textbox: "21000.00"
+                              - group:
+                                - generic: Сумма
+                                - textbox: "21000.00"
+                - generic:
+                  - generic:
+                    - generic: Информация
+                    - generic: Паспортные данные и причина зафиксированы; комментарий можно дополнить.
+                  - generic:
+                    - generic:
+                      - group:
+                        - generic: Бытовка
+                        - textbox: БЫТ-001
+                      - group:
+                        - generic: Причина
+                        - textbox: Инвентаризация
+                      - group:
+                        - generic: Дата
+                        - textbox: 2026-07-11
+                      - group:
+                        - generic: Статус
+                        - textbox: Свободна
+                      - group:
+                        - generic: Арендатор
+                        - textbox: —
+                      - group:
+                        - generic: Комментарий
+                        - textbox
+                - generic:
+                  - generic:
+                    - generic: Каталог
+                    - generic: Добавьте работы и материалы, которые нужно передать в ремонт.
+                  - generic:
+                    - generic:
+                      - generic:
+                        - group:
+                          - generic: Поиск
+                          - generic:
+                            - textbox:
+                              - /placeholder: Работа или материал
+                        - group:
+                          - generic: Режим каталога
+                          - combobox:
+                            - generic: Только работы
+                      - navigation:
+                        - generic:
+                          - button: Главное меню
+                      - status: Позиция добавлена в смету
+                      - generic:
+                        - button:
+                          - generic:
+                            - generic: Окна/Витражи
+                            - generic: Категория
+                        - button:
+                          - generic:
+                            - generic: Двери
+                            - generic: Категория
+                        - button:
+                          - generic:
+                            - generic: Электрика
+                            - generic: Категория
+                        - button:
+                          - generic:
+                            - generic: Внутренняя отделка
+                            - generic: Категория
+                        - button:
+                          - generic:
+                            - generic: Внешняя отделка
+                            - generic: Категория
+                        - button:
+                          - generic:
+                            - generic: Сантехника, кондиционер, монтажи
+                            - generic: Категория
+                        - button:
+                          - generic:
+                            - generic: Мебель
+                            - generic: Категория
+                        - button:
+                          - generic:
+                            - generic: Уборка, демонтаж
+                            - generic: Категория
+                        - button:
+                          - generic:
+                            - generic: Сварочные работы
+                            - generic: Категория
+    - region "Notifications alt+T"
+  - dialog [ref=f1e523]:
+    - generic [ref=f1e524]:
+      - heading "Настройка работ по осмотру" [level=2] [ref=f1e525]
+      - paragraph [ref=f1e526]: Выберите режим, перемещения, очереди и порядок этапов. Настройка будет сохранена в снимке инвентаризации и передана в ремонт только после её завершения.
+    - generic [ref=f1e527]:
+      - generic [ref=f1e528]:
+        - group [ref=f1e529]:
+          - generic [ref=f1e530]: Режим
+          - combobox "Режим завершения" [ref=f1e531] [cursor=pointer]:
+            - generic: Выбрать вручную
+        - group [ref=f1e532]:
+          - checkbox "Создать перемещение на ремонт и возврат" [ref=f1e533] [cursor=pointer]
+          - generic [ref=f1e534]:
+            - generic [ref=f1e535]: Создать перемещение на ремонт и возврат
+            - paragraph [ref=f1e536]: Отметьте, если бытовку нужно отправить на ремонт и вернуть после завершения.
+      - generic [ref=f1e537]:
+        - generic [ref=f1e538]:
+          - heading "Планы задач" [level=3] [ref=f1e539]
+          - paragraph [ref=f1e540]: Порядок и маршрут сохраняются вместе с заданием. Планы без маршрута останутся в ожидании генерации.
+        - generic [ref=f1e541]:
+          - generic [ref=f1e543]:
+            - generic [ref=f1e544]: 1. Монтаж кондиционера
+            - generic [ref=f1e545]: PLUMBING
+          - generic [ref=f1e546]:
+            - paragraph [ref=f1e547]: Монтаж кондиционера
+            - generic [ref=f1e548]:
+              - group [ref=f1e549]:
+                - generic [ref=f1e550]: Маршрут очереди
+                - combobox "Маршрут очереди плана 1" [ref=f1e551] [cursor=pointer]:
+                  - generic: Очередь PLUMBING (из каталога)
+              - group [ref=f1e552]:
+                - generic [ref=f1e553]: Комментарий группы
+                - textbox "Комментарий группы плана 1" [ref=f1e554]
+              - generic [ref=f1e555]:
+                - button "Переместить план выше" [disabled]
+                - button "Переместить план ниже" [disabled]
+                - button "Дублировать план" [ref=f1e556] [cursor=pointer]
+                - button "Удалить план" [ref=f1e557] [cursor=pointer]
+      - generic [ref=f1e558]:
+        - button "Отмена" [ref=f1e559] [cursor=pointer]
+        - button "Сохранить осмотр" [ref=f1e560] [cursor=pointer]
+    - button "Close" [active] [ref=f1e561] [cursor=pointer]

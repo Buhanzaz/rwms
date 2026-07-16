@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view" title="msg://WorkerGroupListView.title"
+      focusComponent="workerGroupsDataGrid">
+    <data>
+        <collection id="workerGroupsDc" class="dev.buhanzaz.wmspanel.entity.WorkerGroup">
+            <fetchPlan extends="_base">
+                <property name="warehouse" fetchPlan="_base"/>
+                <property name="workerClass" fetchPlan="_base"/>
+            </fetchPlan>
+            <loader id="workerGroupsDl" readOnly="true">
+                <query><![CDATA[
+                    select e from WorkerGroup e
+                    where e.warehouse.id in :warehouseIds
+                    order by e.warehouse.sortOrder, e.warehouse.name, e.workerClass.sortOrder, e.name
+                ]]></query>
+            </loader>
+        </collection>
+    </data>
+    <layout>
+        <hbox id="buttonsPanel" classNames="buttons-panel">
+            <startSlot>
+                <button id="createButton" action="workerGroupsDataGrid.createAction"/>
+                <button id="editButton" action="workerGroupsDataGrid.editAction"/>
+                <button id="removeButton" action="workerGroupsDataGrid.removeAction"/>
+            </startSlot>
+        </hbox>
+        <dataGrid id="workerGroupsDataGrid" width="100%" minHeight="20em" dataContainer="workerGroupsDc">
+            <actions>
+                <action id="createAction" type="list_create"/>
+                <action id="editAction" type="list_edit"/>
+                <action id="removeAction" type="list_remove"/>
+            </actions>
+            <columns resizable="true">
+                <column property="warehouse"/>
+                <column property="workerClass"/>
+                <column property="name"/>
+                <column property="description"/>
+                <column property="active"/>
+            </columns>
+        </dataGrid>
+    </layout>
+</view>

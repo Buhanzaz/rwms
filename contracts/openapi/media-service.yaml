@@ -1,0 +1,193 @@
+openapi: 3.1.0
+info:
+  title: RWMS Media Service API
+  version: 1.0.0
+  license:
+    name: UNLICENSED
+  description: >-
+    Go media API. The service authorizes an operation and returns short-lived
+    signed MinIO URLs; it never proxies media bytes through the gateway.
+servers:
+  - url: /
+security:
+  - bearerJwt: []
+paths:
+  /api/media/v1/upload-sessions:
+    post:
+      summary: Authorize a direct media upload
+      operationId: createUploadSession
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateUploadSessionRequest' }
+      responses:
+        '201':
+          description: Authorized direct MinIO upload session.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadSession' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '415': { $ref: '#/components/responses/UnsupportedMedia' }
+  /api/media/v1/upload-sessions/{uploadSessionId}/complete:
+    post:
+      summary: Finalize an uploaded media object
+      operationId: finalizeUploadSession
+      parameters:
+        - $ref: '#/components/parameters/UploadSessionId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Media is queued for copying or processing. A new generation becomes current only after the worker succeeds.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaAsset' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/media/v1/assets:
+    get:
+      summary: List authorized owner media
+      operationId: listOwnerMedia
+      parameters:
+        - name: ownerType
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 64 }
+        - name: ownerId
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+        - name: viewerContext
+          in: query
+          required: true
+          schema: { enum: [ESTIMATE, INSPECTION, WORK, WAREHOUSE, HISTORY] }
+      responses:
+        '200':
+          description: Images ordered first and videos last. URLs are short-lived.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/MediaAsset' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/media/v1/assets/{mediaId}/rotation:
+    post:
+      summary: Queue a new rotated media generation
+      operationId: rotateMedia
+      parameters:
+        - $ref: '#/components/parameters/MediaId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [rotationDegrees, expectedVersion]
+              properties:
+                rotationDegrees: { enum: [0, 90, 180, 270] }
+                expectedVersion: { type: integer, minimum: 0 }
+      responses:
+        '202':
+          description: A new MinIO generation is queued and becomes current when ready.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaAsset' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+components:
+  securitySchemes:
+    bearerJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+    UploadSessionId:
+      name: uploadSessionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    MediaId:
+      name: mediaId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  schemas:
+    CreateUploadSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [ownerType, ownerId, warehouseId, fileName, contentType, contentLength]
+      properties:
+        ownerType: { type: string, minLength: 1, maxLength: 64 }
+        ownerId: { type: string, minLength: 1, maxLength: 128 }
+        warehouseId: { type: string, format: uuid }
+        fileName: { type: string, minLength: 1, maxLength: 512 }
+        contentType: { type: string, minLength: 1, maxLength: 255 }
+        contentLength: { type: integer, minimum: 1 }
+        sortOrder: { type: integer, minimum: 0 }
+    UploadSession:
+      type: object
+      additionalProperties: false
+      required: [uploadSessionId, mediaId, expiresAt, uploadUrl, requiredHeaders]
+      properties:
+        uploadSessionId: { type: string, format: uuid }
+        mediaId: { type: string, format: uuid }
+        expiresAt: { type: string, format: date-time }
+        uploadUrl: { type: string, format: uri }
+        requiredHeaders:
+          type: object
+          additionalProperties: { type: string }
+    MediaAsset:
+      type: object
+      additionalProperties: false
+      required: [id, fileName, contentType, kind, status, version, generation, rotationDegrees, sortOrder, createdAt, variants]
+      properties:
+        id: { type: string, format: uuid }
+        fileName: { type: string, minLength: 1, maxLength: 512 }
+        contentType: { type: string, minLength: 1, maxLength: 255 }
+        kind: { enum: [IMAGE, VIDEO] }
+        status: { enum: [UPLOADING, PROCESSING, READY, FAILED, DELETED] }
+        version: { type: integer, minimum: 0 }
+        generation: { type: integer, minimum: 0 }
+        rotationDegrees: { enum: [0, 90, 180, 270] }
+        sortOrder: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        variants:
+          description: >-
+            A ready image has SMALL, MEDIUM, LARGE and conditionally authorized
+            ORIGINAL URLs. A ready video has only its ORIGINAL URL.
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [kind, contentType, url]
+            properties:
+              kind: { enum: [SMALL, MEDIUM, LARGE, ORIGINAL] }
+              contentType: { type: string }
+              url: { type: string, format: uri }
+              width: { type: [integer, 'null'], minimum: 1 }
+              height: { type: [integer, 'null'], minimum: 1 }
+  responses:
+    BadRequest: { description: Invalid request. }
+    Unauthorized: { description: Missing or invalid Bearer JWT. }
+    Forbidden: { description: Insufficient warehouse access or original-media capability. }
+    NotFound: { description: Media asset or upload session not found. }
+    Conflict: { description: "Idempotency, state or optimistic-version conflict." }
+    UnsupportedMedia: { description: Unsupported content type or codec. }

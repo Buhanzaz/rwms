@@ -1,0 +1,821 @@
+- generic [ref=e2]:
+  - generic [ref=e4]:
+    - generic [ref=e7]:
+      - list [ref=e9]:
+        - listitem [ref=e10]:
+          - link "WMS Panel СПБ" [ref=e11] [cursor=pointer]:
+            - /url: /
+            - generic [ref=e16]:
+              - generic [ref=e17]: WMS Panel
+              - generic [ref=e18]: СПБ
+      - generic [ref=e19]:
+        - combobox "Выбор склада" [ref=e22] [cursor=pointer]:
+          - generic: СПБ
+        - generic [ref=e23]:
+          - generic [ref=e24]: Обзор
+          - list [ref=e26]:
+            - listitem [ref=e27]:
+              - link "Главная" [ref=e28] [cursor=pointer]:
+                - /url: /
+            - listitem [ref=e36]:
+              - link "KPI" [ref=e37] [cursor=pointer]:
+                - /url: /kpi
+        - generic [ref=e43]:
+          - generic [ref=e44]: Имущество
+          - list [ref=e46]:
+            - listitem [ref=e47]:
+              - link "Склад" [ref=e48] [cursor=pointer]:
+                - /url: /warehouse
+            - listitem [ref=e54]:
+              - link "Доп. оборудование" [ref=e55] [cursor=pointer]:
+                - /url: /equipment
+            - listitem [ref=e2660]:
+              - button "Инвентаризация" [expanded] [ref=e2661] [cursor=pointer]
+              - list [ref=e2670]:
+                - listitem [ref=e2671]:
+                  - link "Продолжить инвентаризацию" [ref=e2672] [cursor=pointer]:
+                    - /url: /inventory/inventory-d1b483e0-f234-4c61-94fb-04fe99fa79a1
+                - listitem [ref=e2678]:
+                  - link "Закончить инвентаризацию" [ref=e2679] [cursor=pointer]:
+                    - /url: /inventory/inventory-d1b483e0-f234-4c61-94fb-04fe99fa79a1/finish
+                - listitem [ref=e2684]:
+                  - link "История инвентаризаций" [ref=e2685] [cursor=pointer]:
+                    - /url: /inventory/history
+            - listitem [ref=e2690]:
+              - button "Списание" [ref=e2691] [cursor=pointer]
+        - generic [ref=e95]:
+          - generic [ref=e96]: Логистика
+          - list [ref=e98]:
+            - listitem [ref=e99]:
+              - link "Возврат из аренды" [ref=e100] [cursor=pointer]:
+                - /url: /logistics/returns
+            - listitem [ref=e107]:
+              - link "Отгрузка в аренду" [ref=e108] [cursor=pointer]:
+                - /url: /logistics/shipments
+        - generic [ref=e116]:
+          - generic [ref=e117]: Ремонтный цикл
+          - list [ref=e119]:
+            - listitem [ref=e120]:
+              - link "Сметы" [ref=e121] [cursor=pointer]:
+                - /url: /estimates
+            - listitem [ref=e127]:
+              - link "Ремонты" [ref=e128] [cursor=pointer]:
+                - /url: /repairs
+            - listitem [ref=e134]:
+              - link "Доска задач" [ref=e135] [cursor=pointer]:
+                - /url: /task-board
+            - listitem [ref=e142]:
+              - link "Приёмка и доработки" [ref=e143] [cursor=pointer]:
+                - /url: /acceptance
+      - list [ref=e150]:
+        - listitem [ref=e151]:
+          - button "Настройки" [ref=e152] [cursor=pointer]
+        - listitem [ref=e160]:
+          - button "Локальный администратор Выйти" [ref=e161] [cursor=pointer]:
+            - generic [ref=e166]: Локальный администратор
+            - generic [ref=e167]: Выйти
+    - main [ref=e168]:
+      - generic [ref=e170]:
+        - button "Открыть или свернуть меню" [ref=e171] [cursor=pointer]
+        - navigation "Навигационная цепочка" [ref=e173]:
+          - list [ref=e174]:
+            - listitem [ref=e175]:
+              - link "Инвентаризация" [ref=e246] [cursor=pointer]:
+                - /url: /inventory
+            - listitem [ref=e247]
+            - listitem [ref=e250]:
+              - link "Сессия" [ref=e2700] [cursor=pointer]:
+                - /url: /inventory/inventory-d1b483e0-f234-4c61-94fb-04fe99fa79a1
+            - listitem [ref=e2701]
+            - listitem [ref=e2704]:
+              - link "Сверка" [disabled] [ref=e2705]
+      - generic [ref=e2706]:
+        - button "Назад" [ref=e2708] [cursor=pointer]
+        - generic [ref=e2709]:
+          - generic [ref=e2710]:
+            - generic [ref=e2711]: Итоговая сверка
+            - generic [ref=e2712]: Завершение зафиксирует неизменяемый снимок результатов.
+          - generic [ref=e2713]:
+            - generic [ref=e2714]:
+              - generic [ref=e2715]: "Всего: 96"
+              - generic [ref=e2716]: "Не найдено: 0"
+              - generic [ref=e2717]: "Конфликты: 0"
+              - generic [ref=e2718]: "С работами: 0"
+            - button "Завершить" [ref=e2720] [cursor=pointer]
+        - region [ref=e2721]:
+          - heading "Предварительные итоги" [level=2] [ref=e2722]
+          - region "Статистика инвентаризации" [ref=e2723]:
+            - generic [ref=e2724]:
+              - generic [ref=e2725]:
+                - generic [ref=e2726]: Длительность
+                - generic [ref=e2728]: 2 мин
+              - generic [ref=e2729]:
+                - generic [ref=e2730]: Работы
+                - generic [ref=e2732]:
+                  - paragraph [ref=e2733]: "0"
+                  - paragraph [ref=e2734]: 0,00 ₽
+              - generic [ref=e2735]:
+                - generic [ref=e2736]: Материалы
+                - generic [ref=e2738]:
+                  - paragraph [ref=e2739]: "0"
+                  - paragraph [ref=e2740]: 0,00 ₽
+              - generic [ref=e2741]:
+                - generic [ref=e2742]: Итого
+                - generic [ref=e2744]:
+                  - paragraph [ref=e2745]: 0,00 ₽
+                  - paragraph [ref=e2746]: 0 мин по нормативу
+            - generic [ref=e2747]:
+              - generic [ref=e2748]: "Ожидалось: 96"
+              - generic [ref=e2749]: "Проверено: 1"
+              - generic [ref=e2750]: "Не найдено: 0"
+              - generic [ref=e2751]: "Готовы: 1"
+              - generic [ref=e2752]: "С работами: 0"
+              - generic [ref=e2753]: "Добавлено: 0"
+              - generic [ref=e2754]: "Конфликты: 0"
+        - table [ref=e2758]:
+          - rowgroup [ref=e2759]:
+            - row [ref=e2760]:
+              - columnheader [ref=e2761]:
+                - button "Номер" [ref=e2762] [cursor=pointer]
+              - columnheader [ref=e2767]:
+                - button "Источник" [ref=e2768] [cursor=pointer]
+              - columnheader [ref=e2773]:
+                - button "Статус бытовки" [ref=e2774] [cursor=pointer]
+              - columnheader [ref=e2779]:
+                - button "Сверка" [ref=e2780] [cursor=pointer]
+              - columnheader [ref=e2785]:
+                - button "Действие" [ref=e2786] [cursor=pointer]
+          - rowgroup [ref=e2791]:
+            - row [ref=e2792]:
+              - cell "БЫТ-001" [ref=e2793]
+              - cell "Ожидалась" [ref=e2794]
+              - cell "Свободна" [ref=e2795]
+              - cell "Проверена" [ref=e2797]
+              - cell [ref=e2800]:
+                - button "Открыть" [ref=e2801] [cursor=pointer]
+            - row [ref=e2802]:
+              - cell "БЫТ-003" [ref=e2803]
+              - cell "Ожидалась" [ref=e2804]
+              - cell "Ожидает осмотра" [ref=e2805]
+              - cell "Не проверена" [ref=e2807]
+              - cell "Проверить" [ref=e2810]:
+                - button "Проверить" [disabled]
+            - row [ref=e2811]:
+              - cell "БЫТ-005" [ref=e2812]
+              - cell "Ожидалась" [ref=e2813]
+              - cell "Бронь" [ref=e2814]
+              - cell "Не проверена" [ref=e2816]
+              - cell "Проверить" [ref=e2819]:
+                - button "Проверить" [disabled]
+            - row [ref=e2820]:
+              - cell "БЫТ-006" [ref=e2821]
+              - cell "Ожидалась" [ref=e2822]
+              - cell "В ремонте" [ref=e2823]
+              - cell "Не проверена" [ref=e2825]
+              - cell "Проверить" [ref=e2828]:
+                - button "Проверить" [disabled]
+            - row [ref=e2829]:
+              - cell "БЫТ-007" [ref=e2830]
+              - cell "Ожидалась" [ref=e2831]
+              - cell "Капремонт" [ref=e2832]
+              - cell "Не проверена" [ref=e2834]
+              - cell "Проверить" [ref=e2837]:
+                - button "Проверить" [disabled]
+            - row [ref=e2838]:
+              - cell "БЫТ-008" [ref=e2839]
+              - cell "Ожидалась" [ref=e2840]
+              - cell "Продажа Б/У" [ref=e2841]
+              - cell "Не проверена" [ref=e2843]
+              - cell "Проверить" [ref=e2846]:
+                - button "Проверить" [disabled]
+            - row [ref=e2847]:
+              - cell "БЫТ-009" [ref=e2848]
+              - cell "Ожидалась" [ref=e2849]
+              - cell "Склад" [ref=e2850]
+              - cell "Не проверена" [ref=e2852]
+              - cell "Проверить" [ref=e2855]:
+                - button "Проверить" [disabled]
+            - row [ref=e2856]:
+              - cell "БЫТ-010" [ref=e2857]
+              - cell "Ожидалась" [ref=e2858]
+              - cell "Собственные нужды" [ref=e2859]
+              - cell "Не проверена" [ref=e2861]
+              - cell "Проверить" [ref=e2864]:
+                - button "Проверить" [disabled]
+            - row [ref=e2865]:
+              - cell "БЫТ-011" [ref=e2866]
+              - cell "Ожидалась" [ref=e2867]
+              - cell "Свободна" [ref=e2868]
+              - cell "Не проверена" [ref=e2870]
+              - cell "Проверить" [ref=e2873]:
+                - button "Проверить" [disabled]
+            - row [ref=e2874]:
+              - cell "БЫТ-013" [ref=e2875]
+              - cell "Ожидалась" [ref=e2876]
+              - cell "Ожидает осмотра" [ref=e2877]
+              - cell "Не проверена" [ref=e2879]
+              - cell "Проверить" [ref=e2882]:
+                - button "Проверить" [disabled]
+            - row [ref=e2883]:
+              - cell "БЫТ-015" [ref=e2884]
+              - cell "Ожидалась" [ref=e2885]
+              - cell "Бронь" [ref=e2886]
+              - cell "Не проверена" [ref=e2888]
+              - cell "Проверить" [ref=e2891]:
+                - button "Проверить" [disabled]
+            - row [ref=e2892]:
+              - cell "БЫТ-016" [ref=e2893]
+              - cell "Ожидалась" [ref=e2894]
+              - cell "В ремонте" [ref=e2895]
+              - cell "Не проверена" [ref=e2897]
+              - cell "Проверить" [ref=e2900]:
+                - button "Проверить" [disabled]
+            - row [ref=e2901]:
+              - cell "БЫТ-017" [ref=e2902]
+              - cell "Ожидалась" [ref=e2903]
+              - cell "Капремонт" [ref=e2904]
+              - cell "Не проверена" [ref=e2906]
+              - cell "Проверить" [ref=e2909]:
+                - button "Проверить" [disabled]
+            - row [ref=e2910]:
+              - cell "БЫТ-018" [ref=e2911]
+              - cell "Ожидалась" [ref=e2912]
+              - cell "Продажа Б/У" [ref=e2913]
+              - cell "Не проверена" [ref=e2915]
+              - cell "Проверить" [ref=e2918]:
+                - button "Проверить" [disabled]
+            - row [ref=e2919]:
+              - cell "БЫТ-019" [ref=e2920]
+              - cell "Ожидалась" [ref=e2921]
+              - cell "Склад" [ref=e2922]
+              - cell "Не проверена" [ref=e2924]
+              - cell "Проверить" [ref=e2927]:
+                - button "Проверить" [disabled]
+            - row [ref=e2928]:
+              - cell "БЫТ-020" [ref=e2929]
+              - cell "Ожидалась" [ref=e2930]
+              - cell "Собственные нужды" [ref=e2931]
+              - cell "Не проверена" [ref=e2933]
+              - cell "Проверить" [ref=e2936]:
+                - button "Проверить" [disabled]
+            - row [ref=e2937]:
+              - cell "БЫТ-021" [ref=e2938]
+              - cell "Ожидалась" [ref=e2939]
+              - cell "Свободна" [ref=e2940]
+              - cell "Не проверена" [ref=e2942]
+              - cell "Проверить" [ref=e2945]:
+                - button "Проверить" [disabled]
+            - row [ref=e2946]:
+              - cell "БЫТ-023" [ref=e2947]
+              - cell "Ожидалась" [ref=e2948]
+              - cell "Ожидает осмотра" [ref=e2949]
+              - cell "Не проверена" [ref=e2951]
+              - cell "Проверить" [ref=e2954]:
+                - button "Проверить" [disabled]
+            - row [ref=e2955]:
+              - cell "БЫТ-025" [ref=e2956]
+              - cell "Ожидалась" [ref=e2957]
+              - cell "Бронь" [ref=e2958]
+              - cell "Не проверена" [ref=e2960]
+              - cell "Проверить" [ref=e2963]:
+                - button "Проверить" [disabled]
+            - row [ref=e2964]:
+              - cell "БЫТ-026" [ref=e2965]
+              - cell "Ожидалась" [ref=e2966]
+              - cell "В ремонте" [ref=e2967]
+              - cell "Не проверена" [ref=e2969]
+              - cell "Проверить" [ref=e2972]:
+                - button "Проверить" [disabled]
+            - row [ref=e2973]:
+              - cell "БЫТ-027" [ref=e2974]
+              - cell "Ожидалась" [ref=e2975]
+              - cell "Капремонт" [ref=e2976]
+              - cell "Не проверена" [ref=e2978]
+              - cell "Проверить" [ref=e2981]:
+                - button "Проверить" [disabled]
+            - row [ref=e2982]:
+              - cell "БЫТ-028" [ref=e2983]
+              - cell "Ожидалась" [ref=e2984]
+              - cell "Продажа Б/У" [ref=e2985]
+              - cell "Не проверена" [ref=e2987]
+              - cell "Проверить" [ref=e2990]:
+                - button "Проверить" [disabled]
+            - row [ref=e2991]:
+              - cell "БЫТ-029" [ref=e2992]
+              - cell "Ожидалась" [ref=e2993]
+              - cell "Склад" [ref=e2994]
+              - cell "Не проверена" [ref=e2996]
+              - cell "Проверить" [ref=e2999]:
+                - button "Проверить" [disabled]
+            - row [ref=e3000]:
+              - cell "БЫТ-030" [ref=e3001]
+              - cell "Ожидалась" [ref=e3002]
+              - cell "Собственные нужды" [ref=e3003]
+              - cell "Не проверена" [ref=e3005]
+              - cell "Проверить" [ref=e3008]:
+                - button "Проверить" [disabled]
+            - row [ref=e3009]:
+              - cell "БЫТ-031" [ref=e3010]
+              - cell "Ожидалась" [ref=e3011]
+              - cell "Свободна" [ref=e3012]
+              - cell "Не проверена" [ref=e3014]
+              - cell "Проверить" [ref=e3017]:
+                - button "Проверить" [disabled]
+            - row [ref=e3018]:
+              - cell "БЫТ-033" [ref=e3019]
+              - cell "Ожидалась" [ref=e3020]
+              - cell "Ожидает осмотра" [ref=e3021]
+              - cell "Не проверена" [ref=e3023]
+              - cell "Проверить" [ref=e3026]:
+                - button "Проверить" [disabled]
+            - row [ref=e3027]:
+              - cell "БЫТ-035" [ref=e3028]
+              - cell "Ожидалась" [ref=e3029]
+              - cell "Бронь" [ref=e3030]
+              - cell "Не проверена" [ref=e3032]
+              - cell "Проверить" [ref=e3035]:
+                - button "Проверить" [disabled]
+            - row [ref=e3036]:
+              - cell "БЫТ-036" [ref=e3037]
+              - cell "Ожидалась" [ref=e3038]
+              - cell "В ремонте" [ref=e3039]
+              - cell "Не проверена" [ref=e3041]
+              - cell "Проверить" [ref=e3044]:
+                - button "Проверить" [disabled]
+            - row [ref=e3045]:
+              - cell "БЫТ-037" [ref=e3046]
+              - cell "Ожидалась" [ref=e3047]
+              - cell "Капремонт" [ref=e3048]
+              - cell "Не проверена" [ref=e3050]
+              - cell "Проверить" [ref=e3053]:
+                - button "Проверить" [disabled]
+            - row [ref=e3054]:
+              - cell "БЫТ-038" [ref=e3055]
+              - cell "Ожидалась" [ref=e3056]
+              - cell "Продажа Б/У" [ref=e3057]
+              - cell "Не проверена" [ref=e3059]
+              - cell "Проверить" [ref=e3062]:
+                - button "Проверить" [disabled]
+            - row [ref=e3063]:
+              - cell "БЫТ-039" [ref=e3064]
+              - cell "Ожидалась" [ref=e3065]
+              - cell "Склад" [ref=e3066]
+              - cell "Не проверена" [ref=e3068]
+              - cell "Проверить" [ref=e3071]:
+                - button "Проверить" [disabled]
+            - row [ref=e3072]:
+              - cell "БЫТ-040" [ref=e3073]
+              - cell "Ожидалась" [ref=e3074]
+              - cell "Собственные нужды" [ref=e3075]
+              - cell "Не проверена" [ref=e3077]
+              - cell "Проверить" [ref=e3080]:
+                - button "Проверить" [disabled]
+            - row [ref=e3081]:
+              - cell "БЫТ-041" [ref=e3082]
+              - cell "Ожидалась" [ref=e3083]
+              - cell "Свободна" [ref=e3084]
+              - cell "Не проверена" [ref=e3086]
+              - cell "Проверить" [ref=e3089]:
+                - button "Проверить" [disabled]
+            - row [ref=e3090]:
+              - cell "БЫТ-043" [ref=e3091]
+              - cell "Ожидалась" [ref=e3092]
+              - cell "Ожидает осмотра" [ref=e3093]
+              - cell "Не проверена" [ref=e3095]
+              - cell "Проверить" [ref=e3098]:
+                - button "Проверить" [disabled]
+            - row [ref=e3099]:
+              - cell "БЫТ-045" [ref=e3100]
+              - cell "Ожидалась" [ref=e3101]
+              - cell "Бронь" [ref=e3102]
+              - cell "Не проверена" [ref=e3104]
+              - cell "Проверить" [ref=e3107]:
+                - button "Проверить" [disabled]
+            - row [ref=e3108]:
+              - cell "БЫТ-046" [ref=e3109]
+              - cell "Ожидалась" [ref=e3110]
+              - cell "В ремонте" [ref=e3111]
+              - cell "Не проверена" [ref=e3113]
+              - cell "Проверить" [ref=e3116]:
+                - button "Проверить" [disabled]
+            - row [ref=e3117]:
+              - cell "БЫТ-047" [ref=e3118]
+              - cell "Ожидалась" [ref=e3119]
+              - cell "Капремонт" [ref=e3120]
+              - cell "Не проверена" [ref=e3122]
+              - cell "Проверить" [ref=e3125]:
+                - button "Проверить" [disabled]
+            - row [ref=e3126]:
+              - cell "БЫТ-048" [ref=e3127]
+              - cell "Ожидалась" [ref=e3128]
+              - cell "Продажа Б/У" [ref=e3129]
+              - cell "Не проверена" [ref=e3131]
+              - cell "Проверить" [ref=e3134]:
+                - button "Проверить" [disabled]
+            - row [ref=e3135]:
+              - cell "БЫТ-049" [ref=e3136]
+              - cell "Ожидалась" [ref=e3137]
+              - cell "Склад" [ref=e3138]
+              - cell "Не проверена" [ref=e3140]
+              - cell "Проверить" [ref=e3143]:
+                - button "Проверить" [disabled]
+            - row [ref=e3144]:
+              - cell "БЫТ-050" [ref=e3145]
+              - cell "Ожидалась" [ref=e3146]
+              - cell "Собственные нужды" [ref=e3147]
+              - cell "Не проверена" [ref=e3149]
+              - cell "Проверить" [ref=e3152]:
+                - button "Проверить" [disabled]
+            - row [ref=e3153]:
+              - cell "БЫТ-051" [ref=e3154]
+              - cell "Ожидалась" [ref=e3155]
+              - cell "Свободна" [ref=e3156]
+              - cell "Не проверена" [ref=e3158]
+              - cell "Проверить" [ref=e3161]:
+                - button "Проверить" [disabled]
+            - row [ref=e3162]:
+              - cell "БЫТ-053" [ref=e3163]
+              - cell "Ожидалась" [ref=e3164]
+              - cell "Ожидает осмотра" [ref=e3165]
+              - cell "Не проверена" [ref=e3167]
+              - cell "Проверить" [ref=e3170]:
+                - button "Проверить" [disabled]
+            - row [ref=e3171]:
+              - cell "БЫТ-055" [ref=e3172]
+              - cell "Ожидалась" [ref=e3173]
+              - cell "Бронь" [ref=e3174]
+              - cell "Не проверена" [ref=e3176]
+              - cell "Проверить" [ref=e3179]:
+                - button "Проверить" [disabled]
+            - row [ref=e3180]:
+              - cell "БЫТ-056" [ref=e3181]
+              - cell "Ожидалась" [ref=e3182]
+              - cell "В ремонте" [ref=e3183]
+              - cell "Не проверена" [ref=e3185]
+              - cell "Проверить" [ref=e3188]:
+                - button "Проверить" [disabled]
+            - row [ref=e3189]:
+              - cell "БЫТ-057" [ref=e3190]
+              - cell "Ожидалась" [ref=e3191]
+              - cell "Капремонт" [ref=e3192]
+              - cell "Не проверена" [ref=e3194]
+              - cell "Проверить" [ref=e3197]:
+                - button "Проверить" [disabled]
+            - row [ref=e3198]:
+              - cell "БЫТ-058" [ref=e3199]
+              - cell "Ожидалась" [ref=e3200]
+              - cell "Продажа Б/У" [ref=e3201]
+              - cell "Не проверена" [ref=e3203]
+              - cell "Проверить" [ref=e3206]:
+                - button "Проверить" [disabled]
+            - row [ref=e3207]:
+              - cell "БЫТ-059" [ref=e3208]
+              - cell "Ожидалась" [ref=e3209]
+              - cell "Склад" [ref=e3210]
+              - cell "Не проверена" [ref=e3212]
+              - cell "Проверить" [ref=e3215]:
+                - button "Проверить" [disabled]
+            - row [ref=e3216]:
+              - cell "БЫТ-060" [ref=e3217]
+              - cell "Ожидалась" [ref=e3218]
+              - cell "Собственные нужды" [ref=e3219]
+              - cell "Не проверена" [ref=e3221]
+              - cell "Проверить" [ref=e3224]:
+                - button "Проверить" [disabled]
+            - row [ref=e3225]:
+              - cell "БЫТ-061" [ref=e3226]
+              - cell "Ожидалась" [ref=e3227]
+              - cell "Свободна" [ref=e3228]
+              - cell "Не проверена" [ref=e3230]
+              - cell "Проверить" [ref=e3233]:
+                - button "Проверить" [disabled]
+            - row [ref=e3234]:
+              - cell "БЫТ-063" [ref=e3235]
+              - cell "Ожидалась" [ref=e3236]
+              - cell "Ожидает осмотра" [ref=e3237]
+              - cell "Не проверена" [ref=e3239]
+              - cell "Проверить" [ref=e3242]:
+                - button "Проверить" [disabled]
+            - row [ref=e3243]:
+              - cell "БЫТ-065" [ref=e3244]
+              - cell "Ожидалась" [ref=e3245]
+              - cell "Бронь" [ref=e3246]
+              - cell "Не проверена" [ref=e3248]
+              - cell "Проверить" [ref=e3251]:
+                - button "Проверить" [disabled]
+            - row [ref=e3252]:
+              - cell "БЫТ-066" [ref=e3253]
+              - cell "Ожидалась" [ref=e3254]
+              - cell "В ремонте" [ref=e3255]
+              - cell "Не проверена" [ref=e3257]
+              - cell "Проверить" [ref=e3260]:
+                - button "Проверить" [disabled]
+            - row [ref=e3261]:
+              - cell "БЫТ-067" [ref=e3262]
+              - cell "Ожидалась" [ref=e3263]
+              - cell "Капремонт" [ref=e3264]
+              - cell "Не проверена" [ref=e3266]
+              - cell "Проверить" [ref=e3269]:
+                - button "Проверить" [disabled]
+            - row [ref=e3270]:
+              - cell "БЫТ-068" [ref=e3271]
+              - cell "Ожидалась" [ref=e3272]
+              - cell "Продажа Б/У" [ref=e3273]
+              - cell "Не проверена" [ref=e3275]
+              - cell "Проверить" [ref=e3278]:
+                - button "Проверить" [disabled]
+            - row [ref=e3279]:
+              - cell "БЫТ-069" [ref=e3280]
+              - cell "Ожидалась" [ref=e3281]
+              - cell "Склад" [ref=e3282]
+              - cell "Не проверена" [ref=e3284]
+              - cell "Проверить" [ref=e3287]:
+                - button "Проверить" [disabled]
+            - row [ref=e3288]:
+              - cell "БЫТ-070" [ref=e3289]
+              - cell "Ожидалась" [ref=e3290]
+              - cell "Собственные нужды" [ref=e3291]
+              - cell "Не проверена" [ref=e3293]
+              - cell "Проверить" [ref=e3296]:
+                - button "Проверить" [disabled]
+            - row [ref=e3297]:
+              - cell "БЫТ-071" [ref=e3298]
+              - cell "Ожидалась" [ref=e3299]
+              - cell "Свободна" [ref=e3300]
+              - cell "Не проверена" [ref=e3302]
+              - cell "Проверить" [ref=e3305]:
+                - button "Проверить" [disabled]
+            - row [ref=e3306]:
+              - cell "БЫТ-073" [ref=e3307]
+              - cell "Ожидалась" [ref=e3308]
+              - cell "Ожидает осмотра" [ref=e3309]
+              - cell "Не проверена" [ref=e3311]
+              - cell "Проверить" [ref=e3314]:
+                - button "Проверить" [disabled]
+            - row [ref=e3315]:
+              - cell "БЫТ-075" [ref=e3316]
+              - cell "Ожидалась" [ref=e3317]
+              - cell "Бронь" [ref=e3318]
+              - cell "Не проверена" [ref=e3320]
+              - cell "Проверить" [ref=e3323]:
+                - button "Проверить" [disabled]
+            - row [ref=e3324]:
+              - cell "БЫТ-076" [ref=e3325]
+              - cell "Ожидалась" [ref=e3326]
+              - cell "В ремонте" [ref=e3327]
+              - cell "Не проверена" [ref=e3329]
+              - cell "Проверить" [ref=e3332]:
+                - button "Проверить" [disabled]
+            - row [ref=e3333]:
+              - cell "БЫТ-077" [ref=e3334]
+              - cell "Ожидалась" [ref=e3335]
+              - cell "Капремонт" [ref=e3336]
+              - cell "Не проверена" [ref=e3338]
+              - cell "Проверить" [ref=e3341]:
+                - button "Проверить" [disabled]
+            - row [ref=e3342]:
+              - cell "БЫТ-078" [ref=e3343]
+              - cell "Ожидалась" [ref=e3344]
+              - cell "Продажа Б/У" [ref=e3345]
+              - cell "Не проверена" [ref=e3347]
+              - cell "Проверить" [ref=e3350]:
+                - button "Проверить" [disabled]
+            - row [ref=e3351]:
+              - cell "БЫТ-079" [ref=e3352]
+              - cell "Ожидалась" [ref=e3353]
+              - cell "Склад" [ref=e3354]
+              - cell "Не проверена" [ref=e3356]
+              - cell "Проверить" [ref=e3359]:
+                - button "Проверить" [disabled]
+            - row [ref=e3360]:
+              - cell "БЫТ-080" [ref=e3361]
+              - cell "Ожидалась" [ref=e3362]
+              - cell "Собственные нужды" [ref=e3363]
+              - cell "Не проверена" [ref=e3365]
+              - cell "Проверить" [ref=e3368]:
+                - button "Проверить" [disabled]
+            - row [ref=e3369]:
+              - cell "БЫТ-081" [ref=e3370]
+              - cell "Ожидалась" [ref=e3371]
+              - cell "Свободна" [ref=e3372]
+              - cell "Не проверена" [ref=e3374]
+              - cell "Проверить" [ref=e3377]:
+                - button "Проверить" [disabled]
+            - row [ref=e3378]:
+              - cell "БЫТ-083" [ref=e3379]
+              - cell "Ожидалась" [ref=e3380]
+              - cell "Ожидает осмотра" [ref=e3381]
+              - cell "Не проверена" [ref=e3383]
+              - cell "Проверить" [ref=e3386]:
+                - button "Проверить" [disabled]
+            - row [ref=e3387]:
+              - cell "БЫТ-085" [ref=e3388]
+              - cell "Ожидалась" [ref=e3389]
+              - cell "Бронь" [ref=e3390]
+              - cell "Не проверена" [ref=e3392]
+              - cell "Проверить" [ref=e3395]:
+                - button "Проверить" [disabled]
+            - row [ref=e3396]:
+              - cell "БЫТ-086" [ref=e3397]
+              - cell "Ожидалась" [ref=e3398]
+              - cell "В ремонте" [ref=e3399]
+              - cell "Не проверена" [ref=e3401]
+              - cell "Проверить" [ref=e3404]:
+                - button "Проверить" [disabled]
+            - row [ref=e3405]:
+              - cell "БЫТ-087" [ref=e3406]
+              - cell "Ожидалась" [ref=e3407]
+              - cell "Капремонт" [ref=e3408]
+              - cell "Не проверена" [ref=e3410]
+              - cell "Проверить" [ref=e3413]:
+                - button "Проверить" [disabled]
+            - row [ref=e3414]:
+              - cell "БЫТ-088" [ref=e3415]
+              - cell "Ожидалась" [ref=e3416]
+              - cell "Продажа Б/У" [ref=e3417]
+              - cell "Не проверена" [ref=e3419]
+              - cell "Проверить" [ref=e3422]:
+                - button "Проверить" [disabled]
+            - row [ref=e3423]:
+              - cell "БЫТ-089" [ref=e3424]
+              - cell "Ожидалась" [ref=e3425]
+              - cell "Склад" [ref=e3426]
+              - cell "Не проверена" [ref=e3428]
+              - cell "Проверить" [ref=e3431]:
+                - button "Проверить" [disabled]
+            - row [ref=e3432]:
+              - cell "БЫТ-090" [ref=e3433]
+              - cell "Ожидалась" [ref=e3434]
+              - cell "Собственные нужды" [ref=e3435]
+              - cell "Не проверена" [ref=e3437]
+              - cell "Проверить" [ref=e3440]:
+                - button "Проверить" [disabled]
+            - row [ref=e3441]:
+              - cell "БЫТ-091" [ref=e3442]
+              - cell "Ожидалась" [ref=e3443]
+              - cell "Свободна" [ref=e3444]
+              - cell "Не проверена" [ref=e3446]
+              - cell "Проверить" [ref=e3449]:
+                - button "Проверить" [disabled]
+            - row [ref=e3450]:
+              - cell "БЫТ-093" [ref=e3451]
+              - cell "Ожидалась" [ref=e3452]
+              - cell "Ожидает осмотра" [ref=e3453]
+              - cell "Не проверена" [ref=e3455]
+              - cell "Проверить" [ref=e3458]:
+                - button "Проверить" [disabled]
+            - row [ref=e3459]:
+              - cell "БЫТ-095" [ref=e3460]
+              - cell "Ожидалась" [ref=e3461]
+              - cell "Бронь" [ref=e3462]
+              - cell "Не проверена" [ref=e3464]
+              - cell "Проверить" [ref=e3467]:
+                - button "Проверить" [disabled]
+            - row [ref=e3468]:
+              - cell "БЫТ-096" [ref=e3469]
+              - cell "Ожидалась" [ref=e3470]
+              - cell "В ремонте" [ref=e3471]
+              - cell "Не проверена" [ref=e3473]
+              - cell "Проверить" [ref=e3476]:
+                - button "Проверить" [disabled]
+            - row [ref=e3477]:
+              - cell "БЫТ-097" [ref=e3478]
+              - cell "Ожидалась" [ref=e3479]
+              - cell "Капремонт" [ref=e3480]
+              - cell "Не проверена" [ref=e3482]
+              - cell "Проверить" [ref=e3485]:
+                - button "Проверить" [disabled]
+            - row [ref=e3486]:
+              - cell "БЫТ-098" [ref=e3487]
+              - cell "Ожидалась" [ref=e3488]
+              - cell "Продажа Б/У" [ref=e3489]
+              - cell "Не проверена" [ref=e3491]
+              - cell "Проверить" [ref=e3494]:
+                - button "Проверить" [disabled]
+            - row [ref=e3495]:
+              - cell "БЫТ-099" [ref=e3496]
+              - cell "Ожидалась" [ref=e3497]
+              - cell "Склад" [ref=e3498]
+              - cell "Не проверена" [ref=e3500]
+              - cell "Проверить" [ref=e3503]:
+                - button "Проверить" [disabled]
+            - row [ref=e3504]:
+              - cell "БЫТ-100" [ref=e3505]
+              - cell "Ожидалась" [ref=e3506]
+              - cell "Собственные нужды" [ref=e3507]
+              - cell "Не проверена" [ref=e3509]
+              - cell "Проверить" [ref=e3512]:
+                - button "Проверить" [disabled]
+            - row [ref=e3513]:
+              - cell "БЫТ-101" [ref=e3514]
+              - cell "Ожидалась" [ref=e3515]
+              - cell "Свободна" [ref=e3516]
+              - cell "Не проверена" [ref=e3518]
+              - cell "Проверить" [ref=e3521]:
+                - button "Проверить" [disabled]
+            - row [ref=e3522]:
+              - cell "БЫТ-103" [ref=e3523]
+              - cell "Ожидалась" [ref=e3524]
+              - cell "Ожидает осмотра" [ref=e3525]
+              - cell "Не проверена" [ref=e3527]
+              - cell "Проверить" [ref=e3530]:
+                - button "Проверить" [disabled]
+            - row [ref=e3531]:
+              - cell "БЫТ-105" [ref=e3532]
+              - cell "Ожидалась" [ref=e3533]
+              - cell "Бронь" [ref=e3534]
+              - cell "Не проверена" [ref=e3536]
+              - cell "Проверить" [ref=e3539]:
+                - button "Проверить" [disabled]
+            - row [ref=e3540]:
+              - cell "БЫТ-106" [ref=e3541]
+              - cell "Ожидалась" [ref=e3542]
+              - cell "В ремонте" [ref=e3543]
+              - cell "Не проверена" [ref=e3545]
+              - cell "Проверить" [ref=e3548]:
+                - button "Проверить" [disabled]
+            - row [ref=e3549]:
+              - cell "БЫТ-107" [ref=e3550]
+              - cell "Ожидалась" [ref=e3551]
+              - cell "Капремонт" [ref=e3552]
+              - cell "Не проверена" [ref=e3554]
+              - cell "Проверить" [ref=e3557]:
+                - button "Проверить" [disabled]
+            - row [ref=e3558]:
+              - cell "БЫТ-108" [ref=e3559]
+              - cell "Ожидалась" [ref=e3560]
+              - cell "Продажа Б/У" [ref=e3561]
+              - cell "Не проверена" [ref=e3563]
+              - cell "Проверить" [ref=e3566]:
+                - button "Проверить" [disabled]
+            - row [ref=e3567]:
+              - cell "БЫТ-109" [ref=e3568]
+              - cell "Ожидалась" [ref=e3569]
+              - cell "Склад" [ref=e3570]
+              - cell "Не проверена" [ref=e3572]
+              - cell "Проверить" [ref=e3575]:
+                - button "Проверить" [disabled]
+            - row [ref=e3576]:
+              - cell "БЫТ-110" [ref=e3577]
+              - cell "Ожидалась" [ref=e3578]
+              - cell "Собственные нужды" [ref=e3579]
+              - cell "Не проверена" [ref=e3581]
+              - cell "Проверить" [ref=e3584]:
+                - button "Проверить" [disabled]
+            - row [ref=e3585]:
+              - cell "БЫТ-111" [ref=e3586]
+              - cell "Ожидалась" [ref=e3587]
+              - cell "Свободна" [ref=e3588]
+              - cell "Не проверена" [ref=e3590]
+              - cell "Проверить" [ref=e3593]:
+                - button "Проверить" [disabled]
+            - row [ref=e3594]:
+              - cell "БЫТ-113" [ref=e3595]
+              - cell "Ожидалась" [ref=e3596]
+              - cell "Ожидает осмотра" [ref=e3597]
+              - cell "Не проверена" [ref=e3599]
+              - cell "Проверить" [ref=e3602]:
+                - button "Проверить" [disabled]
+            - row [ref=e3603]:
+              - cell "БЫТ-115" [ref=e3604]
+              - cell "Ожидалась" [ref=e3605]
+              - cell "Бронь" [ref=e3606]
+              - cell "Не проверена" [ref=e3608]
+              - cell "Проверить" [ref=e3611]:
+                - button "Проверить" [disabled]
+            - row [ref=e3612]:
+              - cell "БЫТ-116" [ref=e3613]
+              - cell "Ожидалась" [ref=e3614]
+              - cell "В ремонте" [ref=e3615]
+              - cell "Не проверена" [ref=e3617]
+              - cell "Проверить" [ref=e3620]:
+                - button "Проверить" [disabled]
+            - row [ref=e3621]:
+              - cell "БЫТ-117" [ref=e3622]
+              - cell "Ожидалась" [ref=e3623]
+              - cell "Капремонт" [ref=e3624]
+              - cell "Не проверена" [ref=e3626]
+              - cell "Проверить" [ref=e3629]:
+                - button "Проверить" [disabled]
+            - row [ref=e3630]:
+              - cell "БЫТ-118" [ref=e3631]
+              - cell "Ожидалась" [ref=e3632]
+              - cell "Продажа Б/У" [ref=e3633]
+              - cell "Не проверена" [ref=e3635]
+              - cell "Проверить" [ref=e3638]:
+                - button "Проверить" [disabled]
+            - row [ref=e3639]:
+              - cell "БЫТ-119" [ref=e3640]
+              - cell "Ожидалась" [ref=e3641]
+              - cell "Склад" [ref=e3642]
+              - cell "Не проверена" [ref=e3644]
+              - cell "Проверить" [ref=e3647]:
+                - button "Проверить" [disabled]
+            - row [ref=e3648]:
+              - cell "БЫТ-120" [ref=e3649]
+              - cell "Ожидалась" [ref=e3650]
+              - cell "Собственные нужды" [ref=e3651]
+              - cell "Не проверена" [ref=e3653]
+              - cell "Проверить" [ref=e3656]:
+                - button "Проверить" [disabled]
+  - region "Notifications alt+T"

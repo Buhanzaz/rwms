@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="2026-07-02-103000-remove-empty-legacy-holding-queue" author="codex">
+        <sql>
+            DELETE FROM WORK_QUEUE_WORKER_GROUP
+             WHERE QUEUE_ID IN (
+                 SELECT q.ID
+                   FROM WORK_QUEUE q
+                  WHERE q.CODE = 'HOLDING'
+                    AND q.QUEUE_KIND = 'HOLDING'
+                    AND NOT EXISTS (SELECT 1 FROM QUEUE_ENTRY e WHERE e.QUEUE_ID = q.ID)
+             );
+        </sql>
+        <sql>
+            DELETE FROM WORK_QUEUE
+             WHERE CODE = 'HOLDING'
+               AND QUEUE_KIND = 'HOLDING'
+               AND NOT EXISTS (SELECT 1 FROM QUEUE_ENTRY e WHERE e.QUEUE_ID = WORK_QUEUE.ID);
+        </sql>
+    </changeSet>
+
+</databaseChangeLog>

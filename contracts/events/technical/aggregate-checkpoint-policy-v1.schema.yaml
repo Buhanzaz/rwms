@@ -1,0 +1,45 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://rwms.example/contracts/events/technical/aggregate-checkpoint-policy-v1.schema.yaml
+title: RWMS Aggregate Consumer Checkpoint Policy V1
+description: Framework-neutral aggregate ordering and version-gap quarantine state.
+type: object
+required:
+  - consumerGroup
+  - aggregateType
+  - aggregateId
+  - appliedVersion
+  - blocked
+  - gapExpectedVersion
+  - quarantinedVersion
+properties:
+  consumerGroup:
+    type: string
+  aggregateType:
+    type: string
+  aggregateId:
+    type: string
+  appliedVersion:
+    type: integer
+    format: int64
+    minimum: -1
+  blocked:
+    type: boolean
+  gapExpectedVersion:
+    oneOf:
+      - type: integer
+        format: int64
+        minimum: 0
+      - type: "null"
+  quarantinedVersion:
+    oneOf:
+      - type: integer
+        format: int64
+        minimum: 1
+      - type: "null"
+additionalProperties: false
+x-rwms-policy:
+  decisions: [DUPLICATE, APPLY_NEXT, QUARANTINE_GAP, BLOCKED]
+  initialAppliedVersion: -1
+  gapBlocksAggregate: true
+  explicitReconciliationRequired: true
+  quarantinedEventRequiresRedeliveryAfterReconciliation: true

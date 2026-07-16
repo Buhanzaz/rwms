@@ -1,0 +1,14 @@
+rwms:
+  gateway:
+    public-base-uri: ${GATEWAY_PUBLIC_BASE_URI:http://localhost:8080}
+    routes:
+      auth-uri: ${AUTH_SERVICE_URL:http://127.0.0.1:9000}
+      task-board-uri: ${TASK_BOARD_SERVICE_URL:http://127.0.0.1:8081}
+      warehouse-uri: ${WAREHOUSE_SERVICE_URL:http://127.0.0.1:8083}
+      asset-uri: ${ASSET_SERVICE_URL:http://127.0.0.1:8086}
+    security:
+      issuer: ${AUTH_ISSUER:http://localhost:8080/auth}
+      audience: ${AUTH_AUDIENCE:rwms-services}
+      jwk-set-uri: ${AUTH_JWK_SET_URI:http://127.0.0.1:9000/oauth2/jwks}
+    cors:
+      allowed-origins: ${PANEL_ORIGIN:http://localhost:8080}

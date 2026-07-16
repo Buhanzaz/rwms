@@ -1,0 +1,260 @@
+asyncapi: 3.1.0
+info:
+  title: RWMS Task Board Domain Events
+  version: 1.0.0
+  description: >-
+    Committed board-task facts published by task-board-service through its
+    transactional outbox. Delivery is at-least-once; eventId is the inbox
+    deduplication identity. Consumers must ignore additive optional fields.
+defaultContentType: application/json
+servers:
+  rabbitmq:
+    host: rabbitmq:5672
+    protocol: amqp
+    description: Runtime address is supplied by deployment configuration.
+channels:
+  boardTaskCreated:
+    address: task-board.board-task.created.v1
+    bindings:
+      amqp:
+        is: routingKey
+        exchange:
+          name: rwms.domain.v1
+          type: topic
+          durable: true
+          autoDelete: false
+        bindingVersion: 0.3.0
+    messages:
+      boardTaskCreatedV1:
+        $ref: '#/components/messages/BoardTaskCreatedV1'
+  boardTaskCancelled:
+    address: task-board.board-task.cancelled.v1
+    bindings:
+      amqp:
+        is: routingKey
+        exchange:
+          name: rwms.domain.v1
+          type: topic
+          durable: true
+          autoDelete: false
+        bindingVersion: 0.3.0
+    messages:
+      boardTaskCancelledV1:
+        $ref: '#/components/messages/BoardTaskCancelledV1'
+  deliveryAudit:
+    address: task-board-service.delivery-audit.q
+    description: >-
+      Service-owned durable inbox consumer. The runtime queue is dead-lettered
+      to task-board-service.delivery-audit.dlq after three bounded retries.
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          name: task-board-service.delivery-audit.q
+          durable: true
+          exclusive: false
+          autoDelete: false
+          vhost: /
+        bindingVersion: 0.3.0
+    messages:
+      boardTaskCreatedV1:
+        $ref: '#/components/messages/BoardTaskCreatedV1'
+      boardTaskCancelledV1:
+        $ref: '#/components/messages/BoardTaskCancelledV1'
+operations:
+  publishBoardTaskCreated:
+    action: send
+    channel:
+      $ref: '#/channels/boardTaskCreated'
+  publishBoardTaskCancelled:
+    action: send
+    channel:
+      $ref: '#/channels/boardTaskCancelled'
+  auditCommittedBoardTaskFacts:
+    action: receive
+    channel:
+      $ref: '#/channels/deliveryAudit'
+    messages:
+      - $ref: '#/channels/deliveryAudit/messages/boardTaskCreatedV1'
+      - $ref: '#/channels/deliveryAudit/messages/boardTaskCancelledV1'
+components:
+  messages:
+    BoardTaskCreatedV1:
+      name: task-board.board-task.created
+      title: Board task created
+      correlationId:
+        location: $message.payload#/correlation/correlationId
+      headers:
+        $ref: '#/components/schemas/BoardTaskCreatedHeadersV1'
+      description: >-
+        Persistent mandatory publication. AMQP messageId MUST equal
+        payload.eventId and contentEncoding MUST be UTF-8.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/EventEnvelopeV1'
+          - type: object
+            properties:
+              eventType:
+                const: task-board.board-task.created
+              payload:
+                $ref: '#/components/schemas/BoardTaskCreatedPayloadV1'
+    BoardTaskCancelledV1:
+      name: task-board.board-task.cancelled
+      title: Board task cancelled
+      correlationId:
+        location: $message.payload#/correlation/correlationId
+      headers:
+        $ref: '#/components/schemas/BoardTaskCancelledHeadersV1'
+      description: >-
+        Persistent mandatory publication. AMQP messageId MUST equal
+        payload.eventId and contentEncoding MUST be UTF-8.
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/EventEnvelopeV1'
+          - type: object
+            properties:
+              eventType:
+                const: task-board.board-task.cancelled
+              payload:
+                $ref: '#/components/schemas/BoardTaskCancelledPayloadV1'
+  schemas:
+    BoardTaskCreatedHeadersV1:
+      type: object
+      required: [rwms-event-type, rwms-event-version]
+      properties:
+        rwms-event-type:
+          type: string
+          const: task-board.board-task.created
+        rwms-event-version:
+          type: integer
+          const: 1
+      additionalProperties: true
+    BoardTaskCancelledHeadersV1:
+      type: object
+      required: [rwms-event-type, rwms-event-version]
+      properties:
+        rwms-event-type:
+          type: string
+          const: task-board.board-task.cancelled
+        rwms-event-version:
+          type: integer
+          const: 1
+      additionalProperties: true
+    EventEnvelopeV1:
+      type: object
+      required:
+        - eventId
+        - eventType
+        - eventVersion
+        - occurredAt
+        - producer
+        - aggregateType
+        - aggregateId
+        - aggregateVersion
+        - correlation
+        - actor
+        - payload
+      properties:
+        eventId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+        eventVersion:
+          type: integer
+          const: 1
+        occurredAt:
+          type: string
+          format: date-time
+        producer:
+          type: string
+          const: task-board-service
+        aggregateType:
+          type: string
+          const: BOARD_TASK
+        aggregateId:
+          type: string
+          format: uuid
+        aggregateVersion:
+          type: integer
+          format: int64
+          minimum: 0
+        correlation:
+          $ref: '#/components/schemas/CorrelationContext'
+        actor:
+          oneOf:
+            - $ref: '#/components/schemas/ActorSnapshot'
+            - type: 'null'
+        payload:
+          type: object
+      additionalProperties: true
+    CorrelationContext:
+      type: object
+      required: [correlationId, causationId]
+      properties:
+        correlationId:
+          type: string
+          format: uuid
+        causationId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+      additionalProperties: true
+    ActorSnapshot:
+      type: object
+      required: [actorId, actorType, displayName]
+      properties:
+        actorId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        actorType:
+          type: string
+          maxLength: 64
+          enum: [USER, WORKER, SERVICE]
+        displayName:
+          oneOf:
+            - type: string
+              maxLength: 256
+            - type: 'null'
+      additionalProperties: true
+    BoardTaskCreatedPayloadV1:
+      type: object
+      required: [warehouseId, externalTaskId, status]
+      properties:
+        warehouseId:
+          type: string
+          format: uuid
+        externalTaskId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        status:
+          type: string
+          const: ACTIVE
+      additionalProperties: true
+    BoardTaskCancelledPayloadV1:
+      type: object
+      required: [warehouseId, externalTaskId, status, reason, cancelledAt]
+      properties:
+        warehouseId:
+          type: string
+          format: uuid
+        externalTaskId:
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        status:
+          type: string
+          const: CANCELLED
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        cancelledAt:
+          type: string
+          format: date-time
+      additionalProperties: true

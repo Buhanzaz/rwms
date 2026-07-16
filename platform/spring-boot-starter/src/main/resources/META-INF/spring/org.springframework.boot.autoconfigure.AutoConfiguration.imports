@@ -1,0 +1,8 @@
+dev.buhanzaz.rwms.platform.autoconfigure.RwmsCoreAutoConfiguration
+dev.buhanzaz.rwms.platform.autoconfigure.RwmsJacksonAutoConfiguration
+dev.buhanzaz.rwms.platform.autoconfigure.RwmsWebAutoConfiguration
+dev.buhanzaz.rwms.platform.autoconfigure.RwmsAudienceAutoConfiguration
+dev.buhanzaz.rwms.platform.autoconfigure.RwmsJpaSafetyAutoConfiguration
+dev.buhanzaz.rwms.platform.autoconfigure.RwmsObservabilityAutoConfiguration
+dev.buhanzaz.rwms.platform.autoconfigure.RwmsKafkaAutoConfiguration
+dev.buhanzaz.rwms.platform.autoconfigure.RwmsKafkaBinderAutoConfiguration

@@ -1,0 +1,213 @@
+- generic [ref=f1e2]:
+  - generic [ref=f1e3]:
+    - generic [ref=f1e6]:
+      - list [ref=f1e8]:
+        - listitem [ref=f1e9]:
+          - link "WMS Panel СПБ" [ref=f1e10] [cursor=pointer]:
+            - /url: /
+            - generic [ref=f1e15]:
+              - generic [ref=f1e16]: WMS Panel
+              - generic [ref=f1e17]: СПБ
+      - generic [ref=f1e18]:
+        - combobox "Выбор склада" [ref=f1e21] [cursor=pointer]:
+          - generic: СПБ
+        - generic [ref=f1e22]:
+          - generic [ref=f1e23]: Обзор
+          - list [ref=f1e25]:
+            - listitem [ref=f1e26]:
+              - link "Главная" [ref=f1e27] [cursor=pointer]:
+                - /url: /
+            - listitem [ref=f1e35]:
+              - link "KPI" [ref=f1e36] [cursor=pointer]:
+                - /url: /kpi
+        - generic [ref=f1e42]:
+          - generic [ref=f1e43]: Имущество
+          - list [ref=f1e45]:
+            - listitem [ref=f1e46]:
+              - link "Склад" [ref=f1e47] [cursor=pointer]:
+                - /url: /warehouse
+            - listitem [ref=f1e53]:
+              - link "Доп. оборудование" [ref=f1e54] [cursor=pointer]:
+                - /url: /equipment
+            - listitem [ref=f1e63]:
+              - button "Инвентаризация" [expanded] [ref=f1e64] [cursor=pointer]
+              - list [ref=f1e73]:
+                - listitem [ref=f1e74]:
+                  - link "Продолжить инвентаризацию" [ref=f1e75] [cursor=pointer]:
+                    - /url: /inventory/inventory-7c894ac7-145b-4317-9f80-7e5e9ec1e8d5
+                - listitem [ref=f1e81]:
+                  - link "Закончить инвентаризацию" [ref=f1e82] [cursor=pointer]:
+                    - /url: /inventory/inventory-7c894ac7-145b-4317-9f80-7e5e9ec1e8d5/finish
+                - listitem [ref=f1e87]:
+                  - link "История инвентаризаций" [ref=f1e88] [cursor=pointer]:
+                    - /url: /inventory/history
+            - listitem [ref=f1e93]:
+              - button "Списание" [ref=f1e94] [cursor=pointer]
+        - generic [ref=f1e103]:
+          - generic [ref=f1e104]: Логистика
+          - list [ref=f1e106]:
+            - listitem [ref=f1e107]:
+              - link "Возврат из аренды" [ref=f1e108] [cursor=pointer]:
+                - /url: /logistics/returns
+            - listitem [ref=f1e115]:
+              - link "Отгрузка в аренду" [ref=f1e116] [cursor=pointer]:
+                - /url: /logistics/shipments
+        - generic [ref=f1e124]:
+          - generic [ref=f1e125]: Ремонтный цикл
+          - list [ref=f1e127]:
+            - listitem [ref=f1e128]:
+              - link "Сметы" [ref=f1e129] [cursor=pointer]:
+                - /url: /estimates
+            - listitem [ref=f1e135]:
+              - link "Ремонты" [ref=f1e136] [cursor=pointer]:
+                - /url: /repairs
+            - listitem [ref=f1e142]:
+              - link "Доска задач" [ref=f1e143] [cursor=pointer]:
+                - /url: /task-board
+            - listitem [ref=f1e150]:
+              - link "Приёмка и доработки" [ref=f1e151] [cursor=pointer]:
+                - /url: /acceptance
+      - list [ref=f1e158]:
+        - listitem [ref=f1e159]:
+          - button "Настройки" [ref=f1e160] [cursor=pointer]
+        - listitem [ref=f1e168]:
+          - button "Локальный администратор Выйти" [ref=f1e169] [cursor=pointer]:
+            - generic [ref=f1e174]: Локальный администратор
+            - generic [ref=f1e175]: Выйти
+    - main [ref=f1e176]:
+      - generic [ref=f1e178]:
+        - button "Открыть или свернуть меню" [ref=f1e179] [cursor=pointer]
+        - navigation "Навигационная цепочка" [ref=f1e181]:
+          - list [ref=f1e182]:
+            - listitem [ref=f1e183]:
+              - link "Инвентаризация" [ref=f1e184] [cursor=pointer]:
+                - /url: /inventory
+            - listitem [ref=f1e185]
+            - listitem [ref=f1e188]:
+              - link "Сессия" [disabled] [ref=f1e189]
+      - generic [ref=f1e1714]:
+        - generic [ref=f1e1715]:
+          - button "Назад" [ref=f1e1716] [cursor=pointer]
+          - button "Сохранить осмотр" [ref=f1e1718] [cursor=pointer]
+        - region "Осмотр бытовки при инвентаризации" [ref=f1e1719]:
+          - generic [ref=f1e1720]:
+            - generic [ref=f1e1723]:
+              - generic [ref=f1e1724]:
+                - generic [ref=f1e1725]: 0 из 20
+                - button "Добавить" [ref=f1e1726] [cursor=pointer]
+              - generic [ref=f1e1727]: Фото не загружены.
+            - generic [ref=f1e1735]:
+              - generic [ref=f1e1736]:
+                - generic [ref=f1e1737]:
+                  - heading "Смета" [level=3] [ref=f1e1738]
+                  - paragraph [ref=f1e1739]: Работа, материал, количество и цена сохраняются отдельными полями.
+                - button "Добавить строку" [ref=f1e1740] [cursor=pointer]
+              - generic [ref=f1e1742]:
+                - generic [ref=f1e1744]:
+                  - generic [ref=f1e1745]: Строка 1
+                  - button "Удалить строку 1" [ref=f1e1746] [cursor=pointer]
+                - generic [ref=f1e1748]:
+                  - group [ref=f1e1749]:
+                    - generic [ref=f1e1750]: Тип
+                    - combobox "Тип строки 1" [ref=f1e1751] [cursor=pointer]:
+                      - generic: Работа
+                  - group [ref=f1e1752]:
+                    - generic [ref=f1e1753]: Работа / материал
+                    - textbox "Работа или материал строки 1" [ref=f1e1754]: Монтаж кондиционера
+                  - group [ref=f1e1755]:
+                    - generic [ref=f1e1756]: Комментарий
+                    - textbox "Комментарий 1" [ref=f1e1757]
+                  - group [ref=f1e1758]:
+                    - generic [ref=f1e1759]: Количество
+                    - group [ref=f1e1760]:
+                      - group [ref=f1e1761]:
+                        - button "Уменьшить количество строки 1" [disabled]
+                      - textbox "Количество строки 1" [ref=f1e1762]: "1"
+                      - group [ref=f1e1763]:
+                        - button "Увеличить количество строки 1" [ref=f1e1764] [cursor=pointer]
+                  - group [ref=f1e1765]:
+                    - generic [ref=f1e1766]: Единица
+                    - textbox "Единица измерения строки 1" [ref=f1e1767]: шт.
+                  - group [ref=f1e1768]:
+                    - generic [ref=f1e1769]: Цена
+                    - textbox "Цена строки 1" [ref=f1e1770]: "21000.00"
+                  - group [ref=f1e1771]:
+                    - generic [ref=f1e1772]: Сумма
+                    - textbox "Сумма строки 1" [ref=f1e1773]: "21000.00"
+            - generic [ref=f1e1774]:
+              - generic [ref=f1e1775]:
+                - generic [ref=f1e1776]: Информация
+                - generic [ref=f1e1777]: Паспортные данные и причина зафиксированы; комментарий можно дополнить.
+              - generic [ref=f1e1779]:
+                - group [ref=f1e1780]:
+                  - generic [ref=f1e1781]: Бытовка
+                  - textbox "Бытовка" [ref=f1e1782]: БЫТ-001
+                - group [ref=f1e1783]:
+                  - generic [ref=f1e1784]: Причина
+                  - textbox "Причина" [ref=f1e1785]: Инвентаризация
+                - group [ref=f1e1786]:
+                  - generic [ref=f1e1787]: Дата
+                  - textbox "Дата" [ref=f1e1788]: 2026-07-11
+                - group [ref=f1e1789]:
+                  - generic [ref=f1e1790]: Статус
+                  - textbox "Статус" [ref=f1e1791]: Свободна
+                - group [ref=f1e1792]:
+                  - generic [ref=f1e1793]: Арендатор
+                  - textbox "Арендатор" [ref=f1e1794]: —
+                - group [ref=f1e1795]:
+                  - generic [ref=f1e1796]: Комментарий
+                  - textbox "Комментарий" [ref=f1e1797]
+            - generic [ref=f1e1798]:
+              - generic [ref=f1e1799]:
+                - generic [ref=f1e1800]: Каталог
+                - generic [ref=f1e1801]: Добавьте работы и материалы, которые нужно передать в ремонт.
+              - generic [ref=f1e1803]:
+                - generic [ref=f1e1804]:
+                  - group [ref=f1e1805]:
+                    - generic [ref=f1e1806]: Поиск
+                    - textbox "Поиск по каталогу сметы" [ref=f1e1808]:
+                      - /placeholder: Работа или материал
+                  - group [ref=f1e1809]:
+                    - generic [ref=f1e1810]: Режим каталога
+                    - combobox "Режим каталога" [ref=f1e1811] [cursor=pointer]:
+                      - generic: Работы + материалы
+                - navigation "Путь по каталогу" [ref=f1e1812]:
+                  - button "Главное меню" [ref=f1e1814] [cursor=pointer]
+                - generic [ref=f1e1815]:
+                  - 'button "Открыть: Окна/Витражи" [ref=f1e1816] [cursor=pointer]':
+                    - generic [ref=f1e1817]:
+                      - generic [ref=f1e1818]: Окна/Витражи
+                      - generic [ref=f1e1820]: Категория
+                  - 'button "Открыть: Двери" [ref=f1e1823] [cursor=pointer]':
+                    - generic [ref=f1e1824]:
+                      - generic [ref=f1e1825]: Двери
+                      - generic [ref=f1e1827]: Категория
+                  - 'button "Открыть: Электрика" [ref=f1e1830] [cursor=pointer]':
+                    - generic [ref=f1e1831]:
+                      - generic [ref=f1e1832]: Электрика
+                      - generic [ref=f1e1834]: Категория
+                  - 'button "Открыть: Внутренняя отделка" [ref=f1e1837] [cursor=pointer]':
+                    - generic [ref=f1e1838]:
+                      - generic [ref=f1e1839]: Внутренняя отделка
+                      - generic [ref=f1e1841]: Категория
+                  - 'button "Открыть: Внешняя отделка" [ref=f1e1844] [cursor=pointer]':
+                    - generic [ref=f1e1845]:
+                      - generic [ref=f1e1846]: Внешняя отделка
+                      - generic [ref=f1e1848]: Категория
+                  - 'button "Открыть: Сантехника, кондиционер, монтажи" [ref=f1e1851] [cursor=pointer]':
+                    - generic [ref=f1e1852]:
+                      - generic [ref=f1e1853]: Сантехника, кондиционер, монтажи
+                      - generic [ref=f1e1855]: Категория
+                  - 'button "Открыть: Мебель" [ref=f1e1858] [cursor=pointer]':
+                    - generic [ref=f1e1859]:
+                      - generic [ref=f1e1860]: Мебель
+                      - generic [ref=f1e1862]: Категория
+                  - 'button "Открыть: Уборка, демонтаж" [ref=f1e1865] [cursor=pointer]':
+                    - generic [ref=f1e1866]:
+                      - generic [ref=f1e1867]: Уборка, демонтаж
+                      - generic [ref=f1e1869]: Категория
+                  - 'button "Открыть: Сварочные работы" [ref=f1e1872] [cursor=pointer]':
+                    - generic [ref=f1e1873]:
+                      - generic [ref=f1e1874]: Сварочные работы
+                      - generic [ref=f1e1876]: Категория
+  - region "Notifications alt+T"

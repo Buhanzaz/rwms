@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="2026-07-03-170000-repair-process-rework-columns" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_PROCESS"/>
+        </preConditions>
+
+        <dropNotNullConstraint tableName="REPAIR_PROCESS"
+                               columnName="ESTIMATE_ID"
+                               columnDataType="UUID"/>
+
+        <addColumn tableName="REPAIR_PROCESS">
+            <column name="PROCESS_KIND" type="VARCHAR(32)" defaultValue="ESTIMATE_REPAIR">
+                <constraints nullable="false"/>
+            </column>
+            <column name="SOURCE_PROCESS_ID" type="UUID"/>
+            <column name="REQUESTED_WORKER_GROUP_ID" type="UUID"/>
+            <column name="REQUESTED_WORKER_ID" type="UUID"/>
+        </addColumn>
+
+        <addForeignKeyConstraint baseTableName="REPAIR_PROCESS"
+                                 baseColumnNames="SOURCE_PROCESS_ID"
+                                 referencedTableName="REPAIR_PROCESS"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_REPAIR_PROCESS_ON_SOURCE_PROCESS"/>
+        <addForeignKeyConstraint baseTableName="REPAIR_PROCESS"
+                                 baseColumnNames="REQUESTED_WORKER_GROUP_ID"
+                                 referencedTableName="WORKER_GROUP"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_REPAIR_PROCESS_ON_REQUESTED_WORKER_GROUP"/>
+        <addForeignKeyConstraint baseTableName="REPAIR_PROCESS"
+                                 baseColumnNames="REQUESTED_WORKER_ID"
+                                 referencedTableName="WORKER"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_REPAIR_PROCESS_ON_REQUESTED_WORKER"/>
+        <createIndex tableName="REPAIR_PROCESS" indexName="IDX_REPAIR_PROCESS_ON_SOURCE_PROCESS">
+            <column name="SOURCE_PROCESS_ID"/>
+        </createIndex>
+        <createIndex tableName="REPAIR_PROCESS" indexName="IDX_REPAIR_PROCESS_ON_PROCESS_KIND">
+            <column name="PROCESS_KIND"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

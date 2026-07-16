@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                   http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="06-260000-user-access-step2-cleanup-1" author="wms-panel" context="!cuba">
+        <validCheckSum>9:04c74b1cde742d8ffda520d4909a9c82</validCheckSum>
+        <validCheckSum>9:cfe5b4bda0ffd21d893fff2a9ba7fd20</validCheckSum>
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="USER_WAREHOUSE_ACCESS"/>
+            <columnExists tableName="USER_WAREHOUSE_ACCESS" columnName="USER_ID"/>
+            <columnExists tableName="USER_WAREHOUSE_ACCESS" columnName="WAREHOUSE_ID"/>
+            <columnExists tableName="USER_WAREHOUSE_ACCESS" columnName="USERNAME"/>
+            <columnExists tableName="USER_WAREHOUSE_ACCESS" columnName="ACCESS_LEVEL"/>
+        </preConditions>
+        <sql>
+            UPDATE USER_WAREHOUSE_ACCESS
+               SET USER_ID = (SELECT U.ID FROM USER_ U WHERE U.USERNAME = USER_WAREHOUSE_ACCESS.USERNAME)
+             WHERE USER_ID IS NULL
+               AND USERNAME IS NOT NULL;
+        </sql>
+        <sql>
+            UPDATE USER_WAREHOUSE_ACCESS
+               SET ACCESS_LEVEL = 'VIEW'
+             WHERE ACCESS_LEVEL IS NULL;
+        </sql>
+    </changeSet>
+
+    <changeSet id="06-260000-user-access-step2-cleanup-2" author="wms-panel" context="!cuba">
+        <validCheckSum>9:696c2517144e25c94d344d3dff5d9216</validCheckSum>
+        <validCheckSum>9:ce1e278f49475e774a780dede0bae5b7</validCheckSum>
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="USER_WAREHOUSE_ACCESS"/>
+            <columnExists tableName="USER_WAREHOUSE_ACCESS" columnName="USER_ID"/>
+            <sqlCheck expectedResult="0">
+                SELECT COUNT(*)
+                FROM USER_WAREHOUSE_ACCESS
+                WHERE USER_ID IS NULL
+            </sqlCheck>
+        </preConditions>
+        <addNotNullConstraint tableName="USER_WAREHOUSE_ACCESS"
+                              columnName="USER_ID"
+                              columnDataType="UUID"/>
+    </changeSet>
+
+    <changeSet id="06-260000-user-access-step2-cleanup-3" author="wms-panel" context="!cuba">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="USER_WAREHOUSE_ACCESS"/>
+            <columnExists tableName="USER_WAREHOUSE_ACCESS" columnName="USER_ID"/>
+            <columnExists tableName="USER_WAREHOUSE_ACCESS" columnName="WAREHOUSE_ID"/>
+            <sqlCheck expectedResult="0">
+                SELECT COUNT(*)
+                FROM (
+                    SELECT USER_ID, WAREHOUSE_ID
+                    FROM USER_WAREHOUSE_ACCESS
+                    GROUP BY USER_ID, WAREHOUSE_ID
+                    HAVING COUNT(*) &gt; 1
+                ) dup
+            </sqlCheck>
+            <not>
+                <uniqueConstraintExists tableName="USER_WAREHOUSE_ACCESS"
+                                        constraintName="IDX_USER_WAREHOUSE_ACCESS_UNQ"/>
+            </not>
+            <not>
+                <indexExists tableName="USER_WAREHOUSE_ACCESS"
+                             indexName="IDX_USER_WAREHOUSE_ACCESS_UNQ"/>
+            </not>
+        </preConditions>
+        <addUniqueConstraint tableName="USER_WAREHOUSE_ACCESS"
+                             columnNames="USER_ID, WAREHOUSE_ID"
+                             constraintName="IDX_USER_WAREHOUSE_ACCESS_UNQ"/>
+    </changeSet>
+
+</databaseChangeLog>

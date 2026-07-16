@@ -1,0 +1,41 @@
+spring:
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    clean-disabled: true
+    out-of-order: false
+    validate-migration-naming: true
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  sql:
+    init:
+      mode: never
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:9000
+          audiences: rwms-services
+      client:
+        registration:
+          auth-service:
+            provider: auth-service
+            client-id: task-board-service
+            client-secret: test-secret
+            authorization-grant-type: client_credentials
+            scope: worker-credentials.manage
+        provider:
+          auth-service:
+            token-uri: http://localhost:9000/oauth2/token
+
+rwms:
+  auth:
+    worker-credentials-url: http://localhost:9000/api/internal/worker-credentials
+    connect-timeout: 250ms
+    read-timeout: 500ms
+    credential-operation-timeout: 1s
+  cors:
+    allowed-origins: http://localhost:8080,http://localhost:8082

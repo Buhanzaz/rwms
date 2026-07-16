@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd"
+        objectQuotingStrategy="QUOTE_ONLY_RESERVED_WORDS">
+
+    <changeSet id="1" author="codex">
+        <createTable tableName="REPAIR_ESTIMATE">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_REPAIR_ESTIMATE"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="RENTAL_ITEM_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="WAREHOUSE_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="CABIN_NUMBER" type="VARCHAR(128)"><constraints nullable="false"/></column>
+            <column name="SOURCE_PARTY" type="VARCHAR(255)"/>
+            <column name="DESTINATION_PARTY" type="VARCHAR(255)"/>
+            <column name="COMMENT_" type="VARCHAR(2000)"/>
+            <column name="DISPATCH_DATE" type="timestamp with time zone"/>
+            <column name="STATUS" type="VARCHAR(32)"><constraints nullable="false"/></column>
+            <column name="TOTAL_AMOUNT" type="DECIMAL(19,2)"><constraints nullable="false"/></column>
+            <column name="LATEST_EVENT_ID" type="UUID"/>
+        </createTable>
+
+        <createTable tableName="REPAIR_ESTIMATE_LINE">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_REPAIR_ESTIMATE_LINE"/></column>
+            <column name="ESTIMATE_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="LINE_TYPE" type="VARCHAR(32)"><constraints nullable="false"/></column>
+            <column name="DESCRIPTION" type="VARCHAR(2000)"><constraints nullable="false"/></column>
+            <column name="UNIT_" type="VARCHAR(32)"><constraints nullable="false"/></column>
+            <column name="QUANTITY_" type="INT"><constraints nullable="false"/></column>
+            <column name="UNIT_PRICE" type="DECIMAL(19,2)"><constraints nullable="false"/></column>
+            <column name="LINE_TOTAL" type="DECIMAL(19,2)"><constraints nullable="false"/></column>
+            <column name="ROW_ORDER" type="INT"><constraints nullable="false"/></column>
+            <column name="CATALOG_CODE" type="VARCHAR(128)"/>
+        </createTable>
+
+        <createTable tableName="RENTAL_ITEM_EVENT">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_RENTAL_ITEM_EVENT"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="RENTAL_ITEM_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="WAREHOUSE_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="EVENT_TYPE" type="VARCHAR(32)"><constraints nullable="false"/></column>
+            <column name="TITLE" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="COMMENT_" type="VARCHAR(2000)"/>
+            <column name="EVENT_DATE" type="timestamp with time zone"><constraints nullable="false"/></column>
+            <column name="ESTIMATE_ID" type="UUID"/>
+        </createTable>
+
+        <createTable tableName="RENTAL_ITEM_EVENT_PHOTO">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_RENTAL_ITEM_EVENT_PHOTO"/></column>
+            <column name="EVENT_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="STORAGE_PATH" type="VARCHAR(1000)"><constraints nullable="false"/></column>
+            <column name="ORIGINAL_FILE_NAME" type="VARCHAR(255)"/>
+            <column name="CONTENT_TYPE" type="VARCHAR(128)"/>
+            <column name="SIZE_BYTES" type="BIGINT"/>
+            <column name="SORT_ORDER" type="INT"><constraints nullable="false"/></column>
+        </createTable>
+    </changeSet>
+
+    <changeSet id="2" author="codex">
+        <addForeignKeyConstraint baseTableName="REPAIR_ESTIMATE" baseColumnNames="RENTAL_ITEM_ID" referencedTableName="RENTAL_ITEM" referencedColumnNames="ID" constraintName="FK_REPAIR_ESTIMATE_ON_RENTAL_ITEM"/>
+        <addForeignKeyConstraint baseTableName="REPAIR_ESTIMATE" baseColumnNames="WAREHOUSE_ID" referencedTableName="WAREHOUSE" referencedColumnNames="ID" constraintName="FK_REPAIR_ESTIMATE_ON_WAREHOUSE"/>
+        <addForeignKeyConstraint baseTableName="REPAIR_ESTIMATE_LINE" baseColumnNames="ESTIMATE_ID" referencedTableName="REPAIR_ESTIMATE" referencedColumnNames="ID" constraintName="FK_REPAIR_ESTIMATE_LINE_ON_ESTIMATE"/>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="RENTAL_ITEM_ID" referencedTableName="RENTAL_ITEM" referencedColumnNames="ID" constraintName="FK_RENTAL_ITEM_EVENT_ON_RENTAL_ITEM"/>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="WAREHOUSE_ID" referencedTableName="WAREHOUSE" referencedColumnNames="ID" constraintName="FK_RENTAL_ITEM_EVENT_ON_WAREHOUSE"/>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="ESTIMATE_ID" referencedTableName="REPAIR_ESTIMATE" referencedColumnNames="ID" constraintName="FK_RENTAL_ITEM_EVENT_ON_ESTIMATE"/>
+        <addForeignKeyConstraint baseTableName="REPAIR_ESTIMATE" baseColumnNames="LATEST_EVENT_ID" referencedTableName="RENTAL_ITEM_EVENT" referencedColumnNames="ID" constraintName="FK_REPAIR_ESTIMATE_ON_LATEST_EVENT"/>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT_PHOTO" baseColumnNames="EVENT_ID" referencedTableName="RENTAL_ITEM_EVENT" referencedColumnNames="ID" constraintName="FK_RENTAL_ITEM_EVENT_PHOTO_ON_EVENT"/>
+
+        <createIndex tableName="REPAIR_ESTIMATE" indexName="IDX_REPAIR_ESTIMATE_WAREHOUSE">
+            <column name="WAREHOUSE_ID"/>
+            <column name="CREATED_DATE"/>
+        </createIndex>
+        <createIndex tableName="REPAIR_ESTIMATE_LINE" indexName="IDX_REPAIR_ESTIMATE_LINE_ORDER">
+            <column name="ESTIMATE_ID"/>
+            <column name="ROW_ORDER"/>
+        </createIndex>
+        <createIndex tableName="RENTAL_ITEM_EVENT" indexName="IDX_RENTAL_ITEM_EVENT_ITEM_DATE">
+            <column name="RENTAL_ITEM_ID"/>
+            <column name="EVENT_DATE"/>
+        </createIndex>
+        <createIndex tableName="RENTAL_ITEM_EVENT_PHOTO" indexName="IDX_RENTAL_ITEM_EVENT_PHOTO_ORDER">
+            <column name="EVENT_ID"/>
+            <column name="SORT_ORDER"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

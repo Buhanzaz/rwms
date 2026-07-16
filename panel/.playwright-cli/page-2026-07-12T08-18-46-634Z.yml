@@ -1,0 +1,214 @@
+- generic [ref=f1e2]:
+  - generic [ref=f1e4]:
+    - generic [ref=f1e7]:
+      - list [ref=f1e9]:
+        - listitem [ref=f1e10]:
+          - link "WMS Panel СПБ" [ref=f1e11] [cursor=pointer]:
+            - /url: /
+            - generic [ref=f1e16]:
+              - generic [ref=f1e17]: WMS Panel
+              - generic [ref=f1e18]: СПБ
+      - generic [ref=f1e19]:
+        - combobox "Выбор склада" [ref=f1e22] [cursor=pointer]:
+          - generic: СПБ
+        - generic [ref=f1e23]:
+          - generic [ref=f1e24]: Обзор
+          - list [ref=f1e26]:
+            - listitem [ref=f1e27]:
+              - link "Главная" [ref=f1e28] [cursor=pointer]:
+                - /url: /
+            - listitem [ref=f1e36]:
+              - link "KPI" [ref=f1e37] [cursor=pointer]:
+                - /url: /kpi
+        - generic [ref=f1e43]:
+          - generic [ref=f1e44]: Имущество
+          - list [ref=f1e46]:
+            - listitem [ref=f1e47]:
+              - link "Склад" [ref=f1e48] [cursor=pointer]:
+                - /url: /warehouse
+            - listitem [ref=f1e54]:
+              - link "Доп. оборудование" [ref=f1e55] [cursor=pointer]:
+                - /url: /equipment
+            - listitem [ref=f1e3156]:
+              - button "Инвентаризация" [ref=f1e3157] [cursor=pointer]
+            - listitem [ref=f1e3166]:
+              - button "Списание" [ref=f1e3167] [cursor=pointer]
+        - generic [ref=f1e84]:
+          - generic [ref=f1e85]: Логистика
+          - list [ref=f1e87]:
+            - listitem [ref=f1e88]:
+              - link "Возврат из аренды" [ref=f1e89] [cursor=pointer]:
+                - /url: /logistics/returns
+            - listitem [ref=f1e96]:
+              - link "Отгрузка в аренду" [ref=f1e97] [cursor=pointer]:
+                - /url: /logistics/shipments
+        - generic [ref=f1e105]:
+          - generic [ref=f1e106]: Ремонтный цикл
+          - list [ref=f1e108]:
+            - listitem [ref=f1e109]:
+              - link "Сметы" [ref=f1e110] [cursor=pointer]:
+                - /url: /estimates
+            - listitem [ref=f1e116]:
+              - link "Ремонты" [ref=f1e117] [cursor=pointer]:
+                - /url: /repairs
+            - listitem [ref=f1e123]:
+              - link "Доска задач" [ref=f1e124] [cursor=pointer]:
+                - /url: /task-board
+            - listitem [ref=f1e131]:
+              - link "Приёмка и доработки" [ref=f1e132] [cursor=pointer]:
+                - /url: /acceptance
+      - list [ref=f1e139]:
+        - listitem [ref=f1e140]:
+          - button "Настройки" [ref=f1e141] [cursor=pointer]
+        - listitem [ref=f1e149]:
+          - button "Локальный администратор Выйти" [ref=f1e150] [cursor=pointer]:
+            - generic [ref=f1e155]: Локальный администратор
+            - generic [ref=f1e156]: Выйти
+    - main [ref=f1e157]:
+      - generic [ref=f1e159]:
+        - button "Открыть или свернуть меню" [ref=f1e160] [cursor=pointer]
+        - navigation "Навигационная цепочка" [ref=f1e162]:
+          - list [ref=f1e163]:
+            - listitem [ref=f1e164]:
+              - link "Склад" [ref=f1e3176] [cursor=pointer]:
+                - /url: /warehouse
+            - listitem [ref=f1e3177]: /
+            - listitem [ref=f1e3178]:
+              - link "Санкт-Петербург" [ref=f1e3179] [cursor=pointer]:
+                - /url: /warehouse
+            - listitem [ref=f1e3180]: /
+            - listitem [ref=f1e3181]:
+              - link "БЫТ-006" [disabled] [ref=f1e3182]
+      - generic [ref=f1e3183]:
+        - button "Назад" [ref=f1e3184] [cursor=pointer]
+        - generic [ref=f1e3186]:
+          - region "Фотографии" [ref=f1e3187]:
+            - generic [ref=f1e3189]:
+              - group "1 из 6" [ref=f1e3190]:
+                - button "Открыть фото 1" [ref=f1e3191]:
+                  - img "Фото 1 из 6" [ref=f1e3192]
+              - group "2 из 6" [ref=f1e3193]:
+                - button "Открыть фото 2" [ref=f1e3194]:
+                  - img "Фото 2 из 6" [ref=f1e3195]
+              - group "3 из 6" [ref=f1e3196]:
+                - button "Открыть фото 3" [ref=f1e3197]:
+                  - img "Фото 3 из 6" [ref=f1e3198]
+              - group "4 из 6" [ref=f1e3199]:
+                - button "Открыть фото 4" [ref=f1e3200]:
+                  - img "Фото 4 из 6" [ref=f1e3201]
+              - group "5 из 6" [ref=f1e3202]:
+                - button "Открыть фото 5" [ref=f1e3203]:
+                  - img "Фото 5 из 6" [ref=f1e3204]
+              - group "6 из 6" [ref=f1e3205]:
+                - button "Открыть фото 6" [ref=f1e3206]:
+                  - img "Фото 6 из 6" [ref=f1e3207]
+            - generic [ref=f1e3208]: "6"
+            - button "Предыдущее фото" [ref=f1e3209] [cursor=pointer]
+            - button "Следующее фото" [ref=f1e3212] [cursor=pointer]
+          - complementary [ref=f1e3215]:
+            - generic [ref=f1e3216]:
+              - heading "БЫТ-006" [level=1] [ref=f1e3217]
+              - generic [ref=f1e3218]: В ремонте
+              - generic [ref=f1e3219]: БК-6
+            - generic [ref=f1e3220]:
+              - button "Добавить фото" [ref=f1e3221] [cursor=pointer]
+              - button "Изменить статус" [disabled]
+            - generic [ref=f1e3222]:
+              - term [ref=f1e3223]: Склад
+              - definition [ref=f1e3224]: Склад СПБ
+              - term [ref=f1e3225]: Габариты
+              - definition [ref=f1e3226]: 2.4x5
+              - term [ref=f1e3227]: Отделка
+              - definition [ref=f1e3228]: СМЛО
+              - term [ref=f1e3229]: Категория
+              - definition [ref=f1e3230]: ИТР
+              - term [ref=f1e3231]: Характеристики
+              - definition [ref=f1e3232]:
+                - generic [ref=f1e3233]: Металлическая дверь, кондиционер
+              - term [ref=f1e3235]: Линолеум
+              - definition [ref=f1e3236]: Нет
+              - term [ref=f1e3237]: Статус
+              - definition [ref=f1e3238]: В ремонте
+              - term [ref=f1e3239]: Комментарий
+              - definition [ref=f1e3240]: Нужна проверка перед выдачей клиенту
+              - term [ref=f1e3241]: Фото
+              - definition [ref=f1e3242]:
+                - button "6 фото" [ref=f1e3243] [cursor=pointer]
+              - term [ref=f1e3244]: Наполнение
+              - definition [ref=f1e3245]: —
+              - term [ref=f1e3246]: Отгрузка
+              - definition [ref=f1e3247]: Дата не зафиксирована
+              - term [ref=f1e3248]: Арендатор
+              - definition [ref=f1e3249]: —
+              - term [ref=f1e3250]: Цена
+              - definition [ref=f1e3251]: —
+              - term [ref=f1e3252]: Версия
+              - definition [ref=f1e3253]: "0"
+        - generic [ref=f1e3254]:
+          - tablist [ref=f1e3256]:
+            - tab "Обзор" [selected] [ref=f1e3257] [cursor=pointer]
+            - tab "Фото" [ref=f1e3258] [cursor=pointer]
+            - tab "Осмотры" [ref=f1e3259] [cursor=pointer]
+            - tab "Сметы" [ref=f1e3260] [cursor=pointer]
+            - tab "Ремонт" [ref=f1e3261] [cursor=pointer]
+            - tab "Резервы" [ref=f1e3262] [cursor=pointer]
+            - tab "Отгрузки" [ref=f1e3263] [cursor=pointer]
+            - tab "Возвраты" [ref=f1e3264] [cursor=pointer]
+            - tab "История" [ref=f1e3265] [cursor=pointer]
+            - tab "Комментарии" [ref=f1e3266] [cursor=pointer]
+          - tabpanel "Обзор" [ref=f1e3267]:
+            - generic [ref=f1e3268]:
+              - generic [ref=f1e3269]: Статус и расположение
+              - generic [ref=f1e3271]:
+                - generic [ref=f1e3272]:
+                  - paragraph [ref=f1e3273]: Текущий статус
+                  - generic [ref=f1e3274]: В ремонте
+                - generic [ref=f1e3276]:
+                  - paragraph [ref=f1e3277]: Склад
+                  - paragraph [ref=f1e3278]: Склад СПБ
+                - generic [ref=f1e3279]:
+                  - paragraph [ref=f1e3280]: Последний осмотр
+                  - paragraph [ref=f1e3281]: Дата не зафиксирована
+                - generic [ref=f1e3282]:
+                  - paragraph [ref=f1e3283]: Активные ремонты
+                  - paragraph [ref=f1e3284]: "0"
+            - generic [ref=f1e3285]:
+              - generic [ref=f1e3286]: Клиент и документы
+              - generic [ref=f1e3288]:
+                - generic [ref=f1e3289]:
+                  - generic [ref=f1e3290]:
+                    - paragraph [ref=f1e3291]: Арендатор
+                    - paragraph [ref=f1e3292]: —
+                  - generic [ref=f1e3293]:
+                    - paragraph [ref=f1e3294]: Дата отгрузки
+                    - paragraph [ref=f1e3295]: Дата не зафиксирована
+                - generic [ref=f1e3296]: Связанных документов нет.
+            - generic [ref=f1e3298]:
+              - generic [ref=f1e3299]: Характеристики
+              - generic [ref=f1e3301]: Металлическая дверь, кондиционер
+            - generic [ref=f1e3304]:
+              - generic [ref=f1e3305]: Осмотр и ремонт
+              - generic [ref=f1e3307]:
+                - generic [ref=f1e3308]:
+                  - paragraph [ref=f1e3309]: Осмотров
+                  - paragraph [ref=f1e3310]: "0"
+                - generic [ref=f1e3311]:
+                  - paragraph [ref=f1e3312]: Ремонтов всего
+                  - paragraph [ref=f1e3313]: "0"
+                - generic [ref=f1e3314]:
+                  - paragraph [ref=f1e3315]: Активные ремонты
+                  - paragraph [ref=f1e3316]: "0"
+                - generic [ref=f1e3317]:
+                  - paragraph [ref=f1e3318]: Смет
+                  - paragraph [ref=f1e3319]: "0"
+            - generic [ref=f1e3320]:
+              - generic [ref=f1e3322]:
+                - generic [ref=f1e3323]:
+                  - generic [ref=f1e3324]: Наполнение
+                  - generic [ref=f1e3325]: Мебель и оборудование, закреплённые за бытовкой.
+                - generic [ref=f1e3326]:
+                  - button "Добавить" [ref=f1e3327] [cursor=pointer]
+                  - button "В другую бытовку" [disabled]
+                  - button "На склад" [disabled]
+              - paragraph [ref=f1e3329]: Наполнение не указано.
+  - region "Notifications alt+T"

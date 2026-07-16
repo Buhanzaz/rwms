@@ -1,0 +1,307 @@
+- generic:
+  - generic:
+    - generic:
+      - main:
+        - generic:
+          - generic:
+            - button:
+              - generic: Открыть или свернуть меню
+            - navigation:
+              - list:
+                - listitem:
+                  - link [disabled]: Доска задач
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - group:
+                  - group
+                  - textbox:
+                    - /placeholder: Бытовка, причина или исполнитель
+              - generic:
+                - generic:
+                  - combobox:
+                    - generic: Иван Петров
+                  - button:
+                    - generic: "2"
+                - generic:
+                  - link:
+                    - /url: /repairs?create=1
+                    - text: Создать задание
+                  - button: Неактивные
+                - generic:
+                  - generic: "Текущих: 7"
+                  - generic: "Будущих: 2"
+            - generic:
+              - generic:
+                - region:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - heading [level=2]: Перемещение
+                        - generic:
+                          - generic: "1"
+                          - generic: Перемещение
+                      - button
+                    - generic:
+                      - button [disabled]: Начать
+                      - button: Завершить
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: БЫТ-002
+                          - generic: REAL
+                        - generic: Демонстрационное задание browser MOCK
+                        - generic:
+                          - button [disabled]
+                      - generic:
+                        - paragraph: Переместить мебель
+                        - generic:
+                          - generic: В работе
+                          - generic: Этап 1 из 1
+                        - generic:
+                          - term: Группа
+                          - definition: Разнорабочие 1
+                          - term: Работники
+                          - definition: Иван Петров, Сергей Волков
+                          - term: Время
+                          - definition: 00:00
+                      - generic:
+                        - button: Пауза
+                - region:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - heading [level=2]: Внутренние работы
+                        - generic:
+                          - generic: "2"
+                          - generic: Ремонт
+                      - button
+                    - generic:
+                      - button: Начать
+                      - button [disabled]: Завершить
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: БЫТ-001
+                          - generic: REAL
+                        - generic: Демонстрационное задание browser MOCK
+                        - generic:
+                          - button
+                      - generic:
+                        - paragraph: Внутренняя отделка
+                        - generic:
+                          - generic: На паузе
+                          - generic: Этап 1 из 1
+                        - generic:
+                          - term: Группа
+                          - definition: Разнорабочие 1
+                          - term: Работники
+                          - definition: Иван Петров, Сергей Волков
+                          - term: Время
+                          - definition: 30:00
+                      - generic:
+                        - button: Продолжить
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: БЫТ-007
+                          - generic: REAL
+                        - generic: Демонстрационное задание browser MOCK
+                        - generic:
+                          - button
+                      - generic:
+                        - paragraph: Внутренние работы
+                        - generic:
+                          - generic: Ожидает
+                          - generic: Этап 1 из 3
+                        - generic:
+                          - term: Группа
+                          - definition: Не назначена
+                          - term: Работники
+                          - definition: Не назначены
+                          - term: Время
+                          - definition: 00:00
+                - region:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - heading [level=2]: Внешние работы
+                        - generic:
+                          - generic: "0"
+                          - generic: Ремонт
+                      - button
+                    - generic:
+                      - button [disabled]: Начать
+                      - button [disabled]: Завершить
+                - region:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - heading [level=2]: Электрика
+                        - generic:
+                          - generic: "1"
+                          - generic: Ремонт
+                      - button
+                    - generic:
+                      - button: Начать
+                      - button [disabled]: Завершить
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: БЫТ-003
+                          - generic: REAL
+                        - generic: Демонстрационное задание browser MOCK
+                        - generic:
+                          - button
+                      - generic:
+                        - paragraph: Проверить электрику
+                        - generic:
+                          - generic: Ожидает
+                          - generic: Этап 1 из 1
+                        - generic:
+                          - term: Группа
+                          - definition: Не назначена
+                          - term: Работники
+                          - definition: Не назначены
+                          - term: Время
+                          - definition: 00:00
+                - region:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - heading [level=2]: Сантехника
+                        - generic:
+                          - generic: "1"
+                          - generic: Ремонт
+                      - button
+                    - generic:
+                      - button: Начать
+                      - button [disabled]: Завершить
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: БЫТ-004
+                          - generic: REAL
+                        - generic: Демонстрационное задание browser MOCK
+                        - generic:
+                          - button
+                      - generic:
+                        - paragraph: Заменить смеситель
+                        - generic:
+                          - generic: Ожидает
+                          - generic: Этап 1 из 1
+                        - generic:
+                          - term: Группа
+                          - definition: Не назначена
+                          - term: Работники
+                          - definition: Не назначены
+                          - term: Время
+                          - definition: 00:00
+                - region:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - heading [level=2]: Сварка
+                        - generic:
+                          - generic: "1"
+                          - generic: Ремонт
+                      - button
+                    - generic:
+                      - button: Начать
+                      - button [disabled]: Завершить
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: БЫТ-005
+                          - generic: REAL
+                        - generic: Демонстрационное задание browser MOCK
+                        - generic:
+                          - button
+                      - generic:
+                        - paragraph: Ремонт каркаса
+                        - generic:
+                          - generic: Ожидает
+                          - generic: Этап 1 из 1
+                        - generic:
+                          - term: Группа
+                          - definition: Не назначена
+                          - term: Работники
+                          - definition: Не назначены
+                          - term: Время
+                          - definition: 00:00
+                - region:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - heading [level=2]: СЭС и санитария
+                        - generic:
+                          - generic: "1"
+                          - generic: Ремонт
+                      - button
+                    - generic:
+                      - button: Начать
+                      - button [disabled]: Завершить
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: БЫТ-006
+                          - generic: REAL
+                        - generic: Демонстрационное задание browser MOCK
+                        - generic:
+                          - button
+                      - generic:
+                        - paragraph: Санитарная обработка
+                        - generic:
+                          - generic: Ожидает
+                          - generic: Этап 1 из 1
+                        - generic:
+                          - term: Группа
+                          - definition: Не назначена
+                          - term: Работники
+                          - definition: Не назначены
+                          - term: Время
+                          - definition: 00:00
+                - region:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - heading [level=2]: Без очереди
+                        - generic:
+                          - generic: "0"
+                          - generic: Без маршрута
+                      - button
+                    - generic:
+                      - button [disabled]: Начать
+                      - button [disabled]: Завершить
+                - region:
+                  - button
+                  - generic: "0"
+                  - generic: Ожидание
+            - status
+    - region "Notifications alt+T"
+  - dialog [ref=f1e328]:
+    - generic [ref=f1e329]:
+      - heading "Завершение этапа" [level=2] [ref=f1e330]
+      - paragraph [ref=f1e331]: Добавьте фотографии результата для выбранной рабочей группы.
+    - generic [ref=f1e332]:
+      - generic [ref=f1e334]:
+        - generic [ref=f1e335]:
+          - generic [ref=f1e336]:
+            - generic [ref=f1e337]: 0 из 20
+            - group [ref=f1e338]:
+              - checkbox "Оригиналы" [ref=f1e339] [cursor=pointer]
+              - generic [ref=f1e340]: Оригиналы
+          - button "Добавить" [active] [ref=f1e341] [cursor=pointer]
+        - generic [ref=f1e342]: Фото не загружены.
+      - paragraph [ref=f1e348]: Для этого этапа фотографии необязательны.
+      - generic [ref=f1e349]:
+        - button "Отмена" [ref=f1e350] [cursor=pointer]
+        - button "Завершить этап" [ref=f1e351] [cursor=pointer]
+    - button "Close" [ref=f1e352] [cursor=pointer]

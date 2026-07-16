@@ -1,0 +1,228 @@
+openapi: 3.1.0
+info:
+  title: RWMS Warehouse Service API
+  version: 1.0.0
+  description: >-
+    Canonical Stage 1 warehouse identity API. Public endpoints require a USER
+    JWT and local issuer/audience validation. Internal existence validation has
+    separate least-privilege paths for auth-service and asset-service client credentials.
+servers:
+  - url: /
+security:
+  - bearerJwt: []
+paths:
+  /api/warehouse/v1/warehouses:
+    get:
+      operationId: listWarehouses
+      description: Requires USER and warehouse.read. includeInactive is SYSTEM_ADMIN-only.
+      parameters:
+        - name: includeInactive
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Active warehouses ordered by nullable sortOrder and code.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Warehouse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createWarehouse
+      description: Requires USER, rwms.write, and exactly global role SYSTEM_ADMIN.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateWarehouseRequest' }
+      responses:
+        '201':
+          description: Warehouse created, or the original successful response replayed.
+          headers:
+            Idempotency-Replayed:
+              required: false
+              schema: { type: string, const: 'true' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Warehouse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/warehouse/v1/warehouses/{id}:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: getWarehouse
+      description: Requires USER and warehouse.read. Inactive warehouses are hidden from non-admin users.
+      responses:
+        '200':
+          description: Warehouse metadata.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Warehouse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: replaceWarehouse
+      description: Full mutable replacement. Requires USER, rwms.write, and exactly SYSTEM_ADMIN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReplaceWarehouseRequest' }
+      responses:
+        '200':
+          description: Warehouse replaced. A semantic no-op does not increment version or append an event.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Warehouse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      operationId: deactivateWarehouse
+      description: Soft deactivation. Reactivation is a PUT with active=true.
+      parameters:
+        - $ref: '#/components/parameters/ExpectedVersion'
+      responses:
+        '204': { description: Warehouse deactivated. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/warehouse/v1/warehouses/{id}/existence:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: getWarehouseExistence
+      description: >-
+        Requires principal_type SERVICE, client_id auth-service, and exactly
+        one scope: warehouse.read. The response has no extra fields.
+      responses:
+        '200':
+          description: Exact existence and state response for auth-service validation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InternalWarehouseExistence' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/internal/warehouse/v1/warehouses/asset/{id}/existence:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: getWarehouseExistenceForAssetService
+      description: >-
+        Requires principal_type SERVICE, client_id asset-service, and exactly
+        one scope: warehouse.read. This narrow private route is not gateway-routable.
+      responses:
+        '200':
+          description: Exact existence and active-state response for asset-service validation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InternalWarehouseExistence' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+components:
+  securitySchemes:
+    bearerJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    WarehouseId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ExpectedVersion:
+      name: expectedVersion
+      in: query
+      required: true
+      schema: { type: integer, minimum: 0 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+  schemas:
+    Warehouse:
+      type: object
+      additionalProperties: false
+      required: [id, version, code, name, city, address, timeZone, active, sortOrder]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, minimum: 0 }
+        code: { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{0,63}$', maxLength: 64 }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        city: { type: string, minLength: 1, maxLength: 255 }
+        address: { type: [string, 'null'], maxLength: 1000 }
+        timeZone: { type: string, minLength: 1, maxLength: 64 }
+        active: { type: boolean }
+        sortOrder: { type: [integer, 'null'], minimum: 0 }
+    CreateWarehouseRequest:
+      type: object
+      additionalProperties: false
+      required: [code, name, city, timeZone]
+      properties:
+        code: { type: string, minLength: 1, maxLength: 64 }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        city: { type: string, minLength: 1, maxLength: 255 }
+        address: { type: [string, 'null'], maxLength: 1000 }
+        timeZone: { type: string, minLength: 1, maxLength: 64 }
+        sortOrder: { type: [integer, 'null'], minimum: 0 }
+    ReplaceWarehouseRequest:
+      type: object
+      additionalProperties: false
+      required: [code, name, city, timeZone, active, expectedVersion]
+      properties:
+        code: { type: string, minLength: 1, maxLength: 64 }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        city: { type: string, minLength: 1, maxLength: 255 }
+        address: { type: [string, 'null'], maxLength: 1000 }
+        timeZone: { type: string, minLength: 1, maxLength: 64 }
+        active: { type: boolean }
+        sortOrder: { type: [integer, 'null'], minimum: 0 }
+        expectedVersion: { type: integer, minimum: 0 }
+    InternalWarehouseExistence:
+      type: object
+      additionalProperties: false
+      required: [id, version, active]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, minimum: 0 }
+        active: { type: boolean }
+    ApiProblem:
+      type: object
+      additionalProperties: true
+      required: [status, code]
+      properties:
+        status: { type: integer }
+        code: { type: string }
+  responses:
+    BadRequest:
+      description: Invalid request.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
+    Unauthorized:
+      description: Missing or invalid Bearer JWT.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
+    Forbidden:
+      description: Principal, scope, role, or internal client contract is insufficient.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
+    NotFound:
+      description: Warehouse not found or hidden inactive warehouse.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
+    Conflict:
+      description: Optimistic, uniqueness, or idempotency conflict.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }

@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd"
+        objectQuotingStrategy="QUOTE_ONLY_RESERVED_WORDS">
+
+    <changeSet id="2026-06-28-090000-rental-item-event-history-additions-columns" author="codex">
+        <validCheckSum>9:0d4316bdb730bd435952835f301e699e</validCheckSum>
+        <addColumn tableName="RENTAL_ITEM_EVENT">
+            <column name="STATUS_BEFORE" type="varchar(32)"/>
+            <column name="STATUS_AFTER" type="varchar(32)"/>
+            <column name="ACTOR_USERNAME" type="varchar(255)"/>
+            <column name="ACTOR_DISPLAY_NAME" type="varchar(255)"/>
+            <column name="REPAIR_PROCESS_ID" type="UUID"/>
+            <column name="BOARD_TASK_ID" type="UUID"/>
+            <column name="QUEUE_ENTRY_ID" type="UUID"/>
+            <column name="WORKER_GROUP_ID" type="UUID"/>
+            <column name="WORKER_USER_ID" type="UUID"/>
+            <column name="WORKER_ID" type="UUID"/>
+            <column name="WORKER_CREW_ID" type="UUID"/>
+            <column name="WORKER_CREW_TYPE_ID" type="UUID"/>
+            <column name="PARENT_EVENT_ID" type="UUID"/>
+            <column name="EVENT_ORDER" type="int"/>
+            <column name="EVENT_GROUP_KEY" type="varchar(255)"/>
+            <column name="SOURCE_" type="varchar(64)"/>
+            <column name="SOURCE_COMMENT" type="varchar(2000)"/>
+        </addColumn>
+
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="PARENT_EVENT_ID" referencedTableName="RENTAL_ITEM_EVENT" referencedColumnNames="ID" constraintName="FK_RENTAL_ITEM_EVENT_ON_PARENT_EVENT"/>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="REPAIR_PROCESS_ID" referencedTableName="REPAIR_PROCESS" referencedColumnNames="ID" constraintName="FK_RENTAL_ITEM_EVENT_ON_REPAIR_PROCESS"/>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="BOARD_TASK_ID" referencedTableName="BOARD_TASK" referencedColumnNames="ID" constraintName="FK_RENTAL_ITEM_EVENT_ON_BOARD_TASK"/>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="QUEUE_ENTRY_ID" referencedTableName="QUEUE_ENTRY" referencedColumnNames="ID" constraintName="FK_RENTAL_ITEM_EVENT_ON_QUEUE_ENTRY"/>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="WORKER_GROUP_ID" referencedTableName="WORKER_GROUP" referencedColumnNames="ID" constraintName="FK_RENTAL_ITEM_EVENT_ON_WORKER_GROUP"/>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="WORKER_USER_ID" referencedTableName="WORKER_USER" referencedColumnNames="ID" constraintName="FK_RENTAL_ITEM_EVENT_ON_WORKER_USER"/>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="WORKER_ID" referencedTableName="WORKER" referencedColumnNames="ID" constraintName="FK_RENTAL_ITEM_EVENT_ON_WORKER"/>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="WORKER_CREW_ID" referencedTableName="WORKER_CREW" referencedColumnNames="ID" constraintName="FK_RENTAL_ITEM_EVENT_ON_WORKER_CREW"/>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM_EVENT" baseColumnNames="WORKER_CREW_TYPE_ID" referencedTableName="WORKER_CREW_TYPE" referencedColumnNames="ID" constraintName="FK_RENTAL_ITEM_EVENT_ON_WORKER_CREW_TYPE"/>
+    </changeSet>
+
+    <changeSet id="2026-06-28-090001-rental-item-event-history-item-date-index" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="IDX_RENTAL_ITEM_EVENT_ITEM_DATE"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="RENTAL_ITEM_EVENT" indexName="IDX_RENTAL_ITEM_EVENT_ITEM_DATE">
+            <column name="RENTAL_ITEM_ID"/>
+            <column name="EVENT_DATE"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="2026-06-28-090002-rental-item-event-history-new-indexes" author="codex">
+        <validCheckSum>9:2846fdbe064210ccfbc9bc09a827bc10</validCheckSum>
+        <createIndex tableName="RENTAL_ITEM_EVENT" indexName="IDX_RENTAL_ITEM_EVENT_PARENT_ORDER">
+            <column name="PARENT_EVENT_ID"/>
+            <column name="EVENT_ORDER"/>
+        </createIndex>
+        <createIndex tableName="RENTAL_ITEM_EVENT" indexName="IDX_RENTAL_ITEM_EVENT_TYPE">
+            <column name="EVENT_TYPE"/>
+        </createIndex>
+        <createIndex tableName="RENTAL_ITEM_EVENT" indexName="IDX_RENTAL_ITEM_EVENT_REPAIR_PROCESS">
+            <column name="REPAIR_PROCESS_ID"/>
+        </createIndex>
+        <createIndex tableName="RENTAL_ITEM_EVENT" indexName="IDX_RENTAL_ITEM_EVENT_BOARD_TASK">
+            <column name="BOARD_TASK_ID"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

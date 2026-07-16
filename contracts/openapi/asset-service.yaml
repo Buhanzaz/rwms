@@ -1,0 +1,560 @@
+openapi: 3.1.0
+info:
+  title: RWMS Asset Service API
+  version: 1.0.0
+  description: >-
+    Stage 5 canonical asset boundary. Rental-item comments and manual-note text
+    are readable only through this HTTP API and are never Kafka facts. New
+    production databases start empty; browser fixtures and legacy rows are not
+    an import source.
+servers:
+  - url: /
+security:
+  - bearerJwt: []
+paths:
+  /api/asset/v1/rental-items:
+    get:
+      operationId: listRentalItems
+      description: Requires USER rwms.read and warehouse VIEW access.
+      parameters:
+        - $ref: '#/components/parameters/WarehouseIdQuery'
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: search, in: query, schema: { type: string, maxLength: 128 } }
+      responses:
+        '200': { description: Page of canonical rental items, content: { application/json: { schema: { $ref: '#/components/schemas/RentalItemPage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createRentalItem
+      description: Requires USER rwms.write and warehouse EDIT access. Number is globally unique, normalized, and never reusable.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateRentalItemRequest' } } }
+      responses:
+        '201': { $ref: '#/components/responses/RentalItemCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/DependencyFailure' }
+  /api/asset/v1/rental-items/{id}:
+    parameters: [ { $ref: '#/components/parameters/RentalItemId' } ]
+    get:
+      operationId: getRentalItem
+      description: Requires USER rwms.read and the item's warehouse VIEW access.
+      responses:
+        '200': { description: Canonical rental-item passport, status, editable general comment and contents., content: { application/json: { schema: { $ref: '#/components/schemas/RentalItem' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/asset/v1/rental-items/{id}/passport:
+    parameters: [ { $ref: '#/components/parameters/RentalItemId' } ]
+    put:
+      operationId: updateRentalItemPassport
+      description: Requires USER rwms.write and warehouse EDIT access. expectedVersion is mandatory.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdatePassportRequest' } } } }
+      responses:
+        '200': { description: Updated rental item., content: { application/json: { schema: { $ref: '#/components/schemas/RentalItem' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/asset/v1/rental-items/{id}/status:
+    parameters: [ { $ref: '#/components/parameters/RentalItemId' } ]
+    put:
+      operationId: updateRentalItemStatus
+      description: Public manual status changes cannot set IN_TRANSFER or WRITTEN_OFF and require expectedVersion.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateStatusRequest' } } } }
+      responses:
+        '200': { description: Updated rental item., content: { application/json: { schema: { $ref: '#/components/schemas/RentalItem' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/asset/v1/rental-items/{id}/warehouse:
+    parameters: [ { $ref: '#/components/parameters/RentalItemId' } ]
+    put:
+      operationId: updateRentalItemWarehouse
+      description: Requires EDIT access to both source and target warehouse, an active target warehouse registry response, and no equipment contents; move contents through the equipment transfer command first.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateWarehouseRequest' } } } }
+      responses:
+        '200': { description: Updated rental item., content: { application/json: { schema: { $ref: '#/components/schemas/RentalItem' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/DependencyFailure' }
+  /api/asset/v1/rental-items/{id}/general-comment:
+    parameters: [ { $ref: '#/components/parameters/RentalItemId' } ]
+    put:
+      operationId: updateRentalItemGeneralComment
+      description: The general comment is editable service-local data and does not enter Kafka or DLT.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateGeneralCommentRequest' } } } }
+      responses:
+        '200': { description: Updated rental item., content: { application/json: { schema: { $ref: '#/components/schemas/RentalItem' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/asset/v1/rental-items/{id}/manual-notes:
+    parameters: [ { $ref: '#/components/parameters/RentalItemId' } ]
+    get:
+      operationId: listRentalItemManualNotes
+      description: Append-only service-local notes. Requires VIEW access and is never a Kafka read model.
+      responses:
+        '200': { description: Notes ordered by creation time., content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ManualNote' } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: addRentalItemManualNote
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AddManualNoteRequest' } } } }
+      responses:
+        '201': { $ref: '#/components/responses/ManualNoteCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/asset/v1/equipment:
+    get:
+      operationId: listWarehouseEquipment
+      description: Returns global catalog items with warehouse ledger totals. total = stock + non-rented cabin + rented cabin + written-off + lost; active holds only reduce availableStock.
+      parameters: [ { $ref: '#/components/parameters/WarehouseIdQuery' } ]
+      responses:
+        '200': { description: Equipment and balance summaries., content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/EquipmentWarehouse' } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/asset/v1/equipment/catalog:
+    get:
+      operationId: listEquipmentCatalog
+      description: Requires USER rwms.read. Catalog writes are global-admin only.
+      responses:
+        '200': { description: Global catalog., content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Equipment' } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createEquipmentCatalogItem
+      description: Requires SYSTEM_ADMIN or WMS_ADMIN plus rwms.write.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateEquipmentRequest' } } } }
+      responses:
+        '201': { $ref: '#/components/responses/EquipmentCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/asset/v1/equipment/catalog/{id}:
+    parameters: [ { $ref: '#/components/parameters/EquipmentId' } ]
+    get:
+      operationId: getEquipmentCatalogItem
+      responses:
+        '200': { description: Catalog item., content: { application/json: { schema: { $ref: '#/components/schemas/Equipment' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: updateEquipmentCatalogItem
+      description: Global-admin write; expectedVersion is mandatory.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateEquipmentRequest' } } } }
+      responses:
+        '200': { description: Updated catalog item., content: { application/json: { schema: { $ref: '#/components/schemas/Equipment' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/asset/v1/equipment/{equipmentId}/totals:
+    parameters:
+      - $ref: '#/components/parameters/EquipmentIdPath'
+      - $ref: '#/components/parameters/WarehouseIdQuery'
+    get:
+      operationId: getEquipmentTotals
+      responses:
+        '200': { description: Immutable-ledger balance view., content: { application/json: { schema: { $ref: '#/components/schemas/EquipmentTotals' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/asset/v1/equipment/transfers:
+    post:
+      operationId: transferEquipment
+      description: One local PostgreSQL transaction changes both balance streams and immutable movement ledger lines. Requires MANAGE in both warehouses.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/TransferEquipmentRequest' } } } }
+      responses:
+        '201': { $ref: '#/components/responses/MovementCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/DependencyFailure' }
+  /api/asset/v1/equipment/dispositions:
+    get:
+      operationId: listEquipmentDispositions
+      parameters: [ { $ref: '#/components/parameters/WarehouseIdQuery' } ]
+      responses:
+        '200': { description: Written-off and lost movements., content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/EquipmentDisposition' } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: disposeEquipment
+      description: Moves equipment to written-off or lost ledger bucket. Requires MANAGE and expected source balance version.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DispositionEquipmentRequest' } } } }
+      responses:
+        '201': { $ref: '#/components/responses/MovementCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/asset/v1/classifiers:
+    get:
+      operationId: listAssetClassifiers
+      parameters: [ { name: type, in: query, schema: { type: string, enum: [CATEGORY, SUBCATEGORY, TYPE, CONDITION] } } ]
+      responses:
+        '200': { description: Global classifier list., content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Classifier' } } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createAssetClassifier
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateClassifierRequest' } } } }
+      responses:
+        '201': { $ref: '#/components/responses/ClassifierCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/asset/v1/classifiers/{id}:
+    parameters: [ { $ref: '#/components/parameters/ClassifierId' } ]
+    put:
+      operationId: updateAssetClassifier
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ClassifierRequest' } } } }
+      responses:
+        '200': { description: Updated classifier., content: { application/json: { schema: { $ref: '#/components/schemas/Classifier' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/equipment-holds:
+    post:
+      operationId: acquireEquipmentHold
+      description: Private only. Requires SERVICE principal with exactly asset.internal; renewable hold TTL is 15 minutes by default.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AcquireEquipmentHoldRequest' } } } }
+      responses:
+        '201': { $ref: '#/components/responses/EquipmentHoldCreated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/equipment-holds/{id}/renew:
+    parameters: [ { $ref: '#/components/parameters/HoldId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+    put:
+      operationId: renewEquipmentHold
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExpectedVersionRequest' } } } }
+      responses:
+        '200': { description: Renewed hold., content: { application/json: { schema: { $ref: '#/components/schemas/EquipmentHold' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/equipment-holds/{id}/release:
+    parameters: [ { $ref: '#/components/parameters/HoldId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+    put:
+      operationId: releaseEquipmentHold
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExpectedVersionRequest' } } } }
+      responses:
+        '200': { description: Released hold., content: { application/json: { schema: { $ref: '#/components/schemas/EquipmentHold' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/equipment-holds/{id}/commit:
+    parameters: [ { $ref: '#/components/parameters/HoldId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+    put:
+      operationId: commitEquipmentHold
+      description: >-
+        Commits an active physical-stock hold without inferring a logistics movement. A committed hold
+        continues to reduce available stock until a compensating release is accepted.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExpectedVersionRequest' } } } }
+      responses:
+        '200': { description: Committed hold., content: { application/json: { schema: { $ref: '#/components/schemas/EquipmentHold' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/operation-leases:
+    post:
+      operationId: acquireOperationLease
+      description: Private only. Fencing tokens prevent stale status commands; lease TTL is 15 minutes by default.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AcquireOperationLeaseRequest' } } } }
+      responses:
+        '201': { $ref: '#/components/responses/OperationLeaseCreated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/operation-leases/{id}/renew:
+    parameters: [ { $ref: '#/components/parameters/LeaseId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+    put:
+      operationId: renewOperationLease
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RenewOperationLeaseRequest' } } } }
+      responses:
+        '200': { description: Renewed lease., content: { application/json: { schema: { $ref: '#/components/schemas/OperationLease' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/operation-leases/{id}/release:
+    parameters: [ { $ref: '#/components/parameters/LeaseId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+    put:
+      operationId: releaseOperationLease
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReleaseOperationLeaseRequest' } } } }
+      responses:
+        '200': { description: Released lease., content: { application/json: { schema: { $ref: '#/components/schemas/OperationLease' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/rental-items/{id}/fenced-status:
+    parameters: [ { $ref: '#/components/parameters/RentalItemId' } ]
+    put:
+      operationId: updateFencedRentalItemStatus
+      description: Private status command rejected unless lease ID and fencing token match the active lease.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/FencedStatusRequest' } } } }
+      responses:
+        '200': { description: Updated rental item., content: { application/json: { schema: { $ref: '#/components/schemas/RentalItem' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+components:
+  securitySchemes:
+    bearerJwt: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    RentalItemId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    EquipmentId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    EquipmentIdPath: { name: equipmentId, in: path, required: true, schema: { type: string, format: uuid } }
+    ClassifierId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    HoldId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    LeaseId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    WarehouseIdQuery: { name: warehouseId, in: query, required: true, schema: { type: string, format: uuid } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, format: uuid } }
+  responses:
+    RentalItemCreated:
+      description: Created item or original successful replay.
+      headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/RentalItem' } } }
+    ManualNoteCreated:
+      description: Appended service-local note or replay.
+      headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/ManualNote' } } }
+    EquipmentCreated:
+      description: Created catalog item or replay.
+      headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Equipment' } } }
+    MovementCreated:
+      description: Committed ledger movement or replay.
+      headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Movement' } } }
+    ClassifierCreated:
+      description: Created classifier or replay.
+      headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Classifier' } } }
+    EquipmentHoldCreated:
+      description: Hold acquired or replay.
+      headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/EquipmentHold' } } }
+    OperationLeaseCreated:
+      description: Lease acquired or replay.
+      headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/OperationLease' } } }
+    BadRequest: { description: Invalid request., content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    Unauthorized: { description: Missing or invalid token., content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    Forbidden: { description: Insufficient USER or exact service credential., content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    NotFound: { description: Canonical asset not found., content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    Conflict: { description: Unified expected-version, idempotency, invariant or fencing conflict., content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    DependencyFailure: { description: Required private warehouse registry is unavailable or rejects the request., content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+  schemas:
+    ExpectedVersion: { type: integer, format: int64, minimum: 0 }
+    NullableUuid: { oneOf: [ { type: string, format: uuid }, { type: 'null' } ] }
+    RentalItemStatus: { type: string, enum: [NEW, RENTED, BOOKED, REPAIR, WAITING_REPAIR_CHECK, WRITTEN_OFF, CAPITAL_REPAIR, AFTER_RENT, WAITING_ESTIMATE_CONFIRMATION, SALE, USED_SALE, RESERVED, FREE, WAREHOUSE, OWN_NEEDS, IN_TRANSFER] }
+    BalanceLocationKind: { type: string, enum: [STOCK, CABIN_NON_RENTED, CABIN_RENTED, WRITTEN_OFF, LOST] }
+    EquipmentCategory: { type: string, enum: [FURNITURE, ELECTRICAL, OTHER] }
+    Passport: { type: object, additionalProperties: true }
+    CreateRentalItemRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, number]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        number: { type: string, minLength: 1, maxLength: 128 }
+        rentalType: { type: [string, 'null'], maxLength: 255 }
+        dimensions: { type: [string, 'null'], maxLength: 255 }
+        finishing: { type: [string, 'null'], maxLength: 255 }
+        category: { type: [string, 'null'], maxLength: 255 }
+        characteristics: { type: [string, 'null'], maxLength: 2000 }
+        linoleum: { type: [boolean, 'null'] }
+        passport: { $ref: '#/components/schemas/Passport' }
+        tags: { type: array, maxItems: 128, items: { type: string, minLength: 1, maxLength: 128 } }
+    UpdatePassportRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        rentalType: { type: [string, 'null'], maxLength: 255 }
+        dimensions: { type: [string, 'null'], maxLength: 255 }
+        finishing: { type: [string, 'null'], maxLength: 255 }
+        category: { type: [string, 'null'], maxLength: 255 }
+        characteristics: { type: [string, 'null'], maxLength: 2000 }
+        linoleum: { type: [boolean, 'null'] }
+        passport: { $ref: '#/components/schemas/Passport' }
+        tags: { type: array, maxItems: 128, items: { type: string, minLength: 1, maxLength: 128 } }
+    UpdateStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, status]
+      properties: { expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }, status: { $ref: '#/components/schemas/RentalItemStatus' } }
+    UpdateWarehouseRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, warehouseId]
+      properties: { expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }, warehouseId: { type: string, format: uuid } }
+    UpdateGeneralCommentRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties: { expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }, comment: { type: [string, 'null'], maxLength: 4000 } }
+    AddManualNoteRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, text]
+      properties: { expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }, text: { type: string, minLength: 1, maxLength: 4000 } }
+    EquipmentContent:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, equipmentCode, quantity, locationKind]
+      properties: { equipmentId: { type: string, format: uuid }, equipmentCode: { type: string }, quantity: { type: integer, format: int64, minimum: 0 }, locationKind: { $ref: '#/components/schemas/BalanceLocationKind' } }
+    RentalItem:
+      type: object
+      additionalProperties: false
+      required: [id, version, warehouseId, number, status, passport, tags, contents, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        warehouseId: { type: string, format: uuid }
+        number: { type: string }
+        status: { $ref: '#/components/schemas/RentalItemStatus' }
+        rentalType: { type: [string, 'null'] }
+        dimensions: { type: [string, 'null'] }
+        finishing: { type: [string, 'null'] }
+        category: { type: [string, 'null'] }
+        characteristics: { type: [string, 'null'] }
+        linoleum: { type: [boolean, 'null'] }
+        generalComment: { type: [string, 'null'] }
+        passport: { $ref: '#/components/schemas/Passport' }
+        tags: { type: array, items: { type: string } }
+        contents: { type: array, items: { $ref: '#/components/schemas/EquipmentContent' } }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    RentalItemPage:
+      type: object
+      additionalProperties: false
+      required: [content, page, size, totalElements, totalPages]
+      properties: { content: { type: array, items: { $ref: '#/components/schemas/RentalItem' } }, page: { type: integer }, size: { type: integer }, totalElements: { type: integer, format: int64 }, totalPages: { type: integer, format: int64 } }
+    ManualNote:
+      type: object
+      additionalProperties: false
+      required: [id, rentalItemId, text, createdAt]
+      properties: { id: { type: string, format: uuid }, rentalItemId: { type: string, format: uuid }, text: { type: string }, createdAt: { type: string, format: date-time } }
+    CreateEquipmentRequest:
+      type: object
+      additionalProperties: false
+      required: [code, name, category]
+      properties: { code: { type: string, maxLength: 64 }, name: { type: string, maxLength: 255 }, category: { $ref: '#/components/schemas/EquipmentCategory' }, comment: { type: [string, 'null'], maxLength: 2000 } }
+    UpdateEquipmentRequest:
+      allOf:
+        - $ref: '#/components/schemas/CreateEquipmentRequest'
+        - type: object
+          required: [expectedVersion, active]
+          properties: { expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }, active: { type: boolean } }
+    Equipment:
+      type: object
+      additionalProperties: false
+      required: [id, version, code, name, category, active, createdAt, updatedAt]
+      properties: { id: { type: string, format: uuid }, version: { $ref: '#/components/schemas/ExpectedVersion' }, code: { type: string }, name: { type: string }, category: { $ref: '#/components/schemas/EquipmentCategory' }, active: { type: boolean }, comment: { type: [string, 'null'] }, createdAt: { type: string, format: date-time }, updatedAt: { type: string, format: date-time } }
+    EquipmentBalance:
+      type: object
+      additionalProperties: false
+      required: [id, version, equipmentId, warehouseId, locationKind, quantity, activeHeldQuantity, availableStock]
+      properties: { id: { type: string, format: uuid }, version: { $ref: '#/components/schemas/ExpectedVersion' }, equipmentId: { type: string, format: uuid }, warehouseId: { type: string, format: uuid }, rentalItemId: { $ref: '#/components/schemas/NullableUuid' }, locationKind: { $ref: '#/components/schemas/BalanceLocationKind' }, quantity: { type: integer, format: int64, minimum: 0 }, activeHeldQuantity: { type: integer, format: int64, minimum: 0 }, availableStock: { type: integer, format: int64, minimum: 0 } }
+    EquipmentTotals:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, warehouseId, totalQuantity, stockQuantity, nonRentedCabinQuantity, rentedCabinQuantity, writtenOffQuantity, lostQuantity, activeHeldQuantity, availableStock, balances]
+      properties: { equipmentId: { type: string, format: uuid }, warehouseId: { type: string, format: uuid }, totalQuantity: { type: integer, format: int64, minimum: 0 }, stockQuantity: { type: integer, format: int64, minimum: 0 }, nonRentedCabinQuantity: { type: integer, format: int64, minimum: 0 }, rentedCabinQuantity: { type: integer, format: int64, minimum: 0 }, writtenOffQuantity: { type: integer, format: int64, minimum: 0 }, lostQuantity: { type: integer, format: int64, minimum: 0 }, activeHeldQuantity: { type: integer, format: int64, minimum: 0 }, availableStock: { type: integer, format: int64, minimum: 0 }, balances: { type: array, items: { $ref: '#/components/schemas/EquipmentBalance' } } }
+    EquipmentWarehouse:
+      type: object
+      additionalProperties: false
+      required: [equipment, totals]
+      properties: { equipment: { $ref: '#/components/schemas/Equipment' }, totals: { $ref: '#/components/schemas/EquipmentTotals' } }
+    TransferEquipmentRequest:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, sourceWarehouseId, sourceLocationKind, sourceExpectedVersion, targetWarehouseId, targetLocationKind, targetExpectedVersion, quantity]
+      properties: { equipmentId: { type: string, format: uuid }, sourceWarehouseId: { type: string, format: uuid }, sourceRentalItemId: { $ref: '#/components/schemas/NullableUuid' }, sourceLocationKind: { $ref: '#/components/schemas/BalanceLocationKind' }, sourceExpectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }, targetWarehouseId: { type: string, format: uuid }, targetRentalItemId: { $ref: '#/components/schemas/NullableUuid' }, targetLocationKind: { $ref: '#/components/schemas/BalanceLocationKind' }, targetExpectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }, quantity: { type: integer, format: int64, minimum: 1 } }
+    DispositionEquipmentRequest:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, warehouseId, sourceLocationKind, sourceExpectedVersion, quantity, disposition]
+      properties: { equipmentId: { type: string, format: uuid }, warehouseId: { type: string, format: uuid }, sourceRentalItemId: { $ref: '#/components/schemas/NullableUuid' }, sourceLocationKind: { $ref: '#/components/schemas/BalanceLocationKind' }, sourceExpectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }, quantity: { type: integer, format: int64, minimum: 1 }, disposition: { type: string, enum: [WRITE_OFF, LOSS] } }
+    Movement:
+      type: object
+      additionalProperties: false
+      required: [id, version, equipmentId, sourceBalanceId, targetBalanceId, quantity, kind, occurredAt]
+      properties: { id: { type: string, format: uuid }, version: { $ref: '#/components/schemas/ExpectedVersion' }, equipmentId: { type: string, format: uuid }, sourceBalanceId: { type: string, format: uuid }, targetBalanceId: { type: string, format: uuid }, quantity: { type: integer, format: int64 }, kind: { type: string }, occurredAt: { type: string, format: date-time } }
+    EquipmentDisposition:
+      type: object
+      additionalProperties: false
+      required: [movement, equipmentCode, equipmentName]
+      properties: { movement: { $ref: '#/components/schemas/Movement' }, equipmentCode: { type: string }, equipmentName: { type: string } }
+    CreateClassifierRequest:
+      type: object
+      additionalProperties: false
+      required: [type, code, name, active]
+      properties: { type: { type: string, enum: [CATEGORY, SUBCATEGORY, TYPE, CONDITION] }, parentId: { $ref: '#/components/schemas/NullableUuid' }, code: { type: string, maxLength: 64 }, name: { type: string, maxLength: 255 }, active: { type: boolean }, sortOrder: { type: [integer, 'null'], minimum: 0 } }
+    ClassifierRequest:
+      allOf:
+        - $ref: '#/components/schemas/CreateClassifierRequest'
+        - type: object
+          required: [expectedVersion]
+          properties: { expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' } }
+    Classifier:
+      type: object
+      additionalProperties: false
+      required: [id, version, type, code, name, active]
+      properties: { id: { type: string, format: uuid }, version: { $ref: '#/components/schemas/ExpectedVersion' }, type: { type: string }, parentId: { $ref: '#/components/schemas/NullableUuid' }, code: { type: string }, name: { type: string }, active: { type: boolean }, sortOrder: { type: [integer, 'null'] } }
+    ExpectedVersionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties: { expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' } }
+    AcquireEquipmentHoldRequest:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, warehouseId, ownerType, ownerId, quantity, expectedStockVersion]
+      properties: { equipmentId: { type: string, format: uuid }, warehouseId: { type: string, format: uuid }, ownerType: { type: string, maxLength: 64 }, ownerId: { type: string, maxLength: 128 }, quantity: { type: integer, minimum: 1 }, expectedStockVersion: { $ref: '#/components/schemas/ExpectedVersion' } }
+    EquipmentHold:
+      type: object
+      additionalProperties: false
+      required: [id, version, equipmentId, warehouseId, ownerType, ownerId, quantity, state, expiresAt, committedAt]
+      properties: { id: { type: string, format: uuid }, version: { $ref: '#/components/schemas/ExpectedVersion' }, equipmentId: { type: string, format: uuid }, warehouseId: { type: string, format: uuid }, ownerType: { type: string }, ownerId: { type: string }, quantity: { type: integer, minimum: 1 }, state: { type: string, enum: [ACTIVE, COMMITTED, RELEASED, EXPIRED] }, expiresAt: { type: string, format: date-time }, committedAt: { type: [string, 'null'], format: date-time } }
+    AcquireOperationLeaseRequest:
+      type: object
+      additionalProperties: false
+      required: [rentalItemId, ownerType, ownerId, expectedRentalItemVersion]
+      properties: { rentalItemId: { type: string, format: uuid }, ownerType: { type: string, maxLength: 64 }, ownerId: { type: string, maxLength: 128 }, expectedRentalItemVersion: { $ref: '#/components/schemas/ExpectedVersion' } }
+    RenewOperationLeaseRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, fencingToken]
+      properties: { expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }, fencingToken: { type: integer, format: int64, minimum: 1 } }
+    ReleaseOperationLeaseRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, fencingToken]
+      properties: { expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }, fencingToken: { type: integer, format: int64, minimum: 1 } }
+    OperationLease:
+      type: object
+      additionalProperties: false
+      required: [id, version, rentalItemId, ownerType, ownerId, fencingToken, state, expiresAt]
+      properties: { id: { type: string, format: uuid }, version: { $ref: '#/components/schemas/ExpectedVersion' }, rentalItemId: { type: string, format: uuid }, ownerType: { type: string }, ownerId: { type: string }, fencingToken: { type: integer, format: int64 }, state: { type: string, enum: [ACTIVE, RELEASED, EXPIRED] }, expiresAt: { type: string, format: date-time } }
+    FencedStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, status, leaseId, fencingToken]
+      properties: { expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }, status: { $ref: '#/components/schemas/RentalItemStatus' }, leaseId: { type: string, format: uuid }, fencingToken: { type: integer, format: int64, minimum: 1 } }
+    Problem:
+      type: object
+      additionalProperties: true
+      required: [status, code]
+      properties: { status: { type: integer }, code: { type: string }, detail: { type: string }, correlation: { type: object } }

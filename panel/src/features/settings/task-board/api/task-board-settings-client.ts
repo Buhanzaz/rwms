@@ -1,0 +1,101 @@
+import type {
+  WorkerClassDto,
+  WorkerClassRequest,
+  WorkerDto,
+  WorkerGroupDto,
+  WorkerGroupRequest,
+  WorkerRequest,
+  WorkQueueDto,
+  WorkQueueRequest,
+} from "@/features/settings/task-board/model/task-board-settings"
+
+export type QueueOrderItem = { queueId: string; expectedVersion: number }
+
+export interface TaskBoardSettingsClient {
+  listQueues(token: string, warehouseId: string): Promise<WorkQueueDto[]>
+  createQueue(
+    token: string,
+    warehouseId: string,
+    request: WorkQueueRequest
+  ): Promise<WorkQueueDto>
+  updateQueue(
+    token: string,
+    warehouseId: string,
+    id: string,
+    request: WorkQueueRequest
+  ): Promise<WorkQueueDto>
+  deleteQueue(
+    token: string,
+    warehouseId: string,
+    id: string,
+    expectedVersion: number
+  ): Promise<void>
+  reorderQueues(
+    token: string,
+    warehouseId: string,
+    queues: QueueOrderItem[]
+  ): Promise<WorkQueueDto[]>
+
+  listClasses(token: string): Promise<WorkerClassDto[]>
+  createClass(
+    token: string,
+    request: WorkerClassRequest
+  ): Promise<WorkerClassDto>
+  updateClass(
+    token: string,
+    id: string,
+    request: WorkerClassRequest
+  ): Promise<WorkerClassDto>
+  deleteClass(token: string, id: string, expectedVersion: number): Promise<void>
+
+  listWorkers(token: string, warehouseId: string): Promise<WorkerDto[]>
+  createWorker(
+    token: string,
+    warehouseId: string,
+    request: WorkerRequest
+  ): Promise<WorkerDto>
+  updateWorker(
+    token: string,
+    warehouseId: string,
+    id: string,
+    request: WorkerRequest
+  ): Promise<WorkerDto>
+  deleteWorker(
+    token: string,
+    warehouseId: string,
+    id: string,
+    expectedVersion: number
+  ): Promise<void>
+  resetWorkerCredentials(
+    token: string,
+    warehouseId: string,
+    id: string,
+    expectedVersion: number,
+    password: string
+  ): Promise<WorkerDto>
+  disableWorkerCredentials(
+    token: string,
+    warehouseId: string,
+    id: string,
+    expectedVersion: number
+  ): Promise<WorkerDto>
+
+  listGroups(token: string, warehouseId: string): Promise<WorkerGroupDto[]>
+  createGroup(
+    token: string,
+    warehouseId: string,
+    request: WorkerGroupRequest
+  ): Promise<WorkerGroupDto>
+  updateGroup(
+    token: string,
+    warehouseId: string,
+    id: string,
+    request: WorkerGroupRequest
+  ): Promise<WorkerGroupDto>
+  deleteGroup(
+    token: string,
+    warehouseId: string,
+    id: string,
+    expectedVersion: number
+  ): Promise<void>
+}

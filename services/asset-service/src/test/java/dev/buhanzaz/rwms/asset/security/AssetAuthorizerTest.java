@@ -1,0 +1,66 @@
+package dev.buhanzaz.rwms.asset.security;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.time.Instant;
+import java.util.Map;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.springframework.mock.env.MockEnvironment;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.oauth2.jwt.Jwt;
+
+class AssetAuthorizerTest {
+  private final UUID warehouseId = UUID.randomUUID();
+
+  @Test
+  void appliesWarehouseViewEditManageAndGlobalCatalogRules() {
+    AssetAuthorizer authorizer = new AssetAuthorizer(new MockEnvironment(), false);
+    Jwt manager = user("rwms.read rwms.write", "WAREHOUSE_MANAGER", "MANAGE");
+
+    authorizer.requireRead(manager, warehouseId);
+    authorizer.requireEdit(manager, warehouseId);
+    authorizer.requireManage(manager, warehouseId);
+    assertThatThrownBy(() -> authorizer.requireGlobalCatalogManagement(manager))
+        .isInstanceOf(AccessDeniedException.class);
+
+    authorizer.requireGlobalCatalogManagement(user("rwms.read rwms.write", "WMS_ADMIN", "VIEW"));
+    assertThatThrownBy(() -> authorizer.requireEdit(user("rwms.read", "VIEWER", "VIEW"), warehouseId))
+        .isInstanceOf(AccessDeniedException.class);
+  }
+
+  @Test
+  void requiresAServiceCredentialWithExactlyAssetInternal() {
+    AssetAuthorizer authorizer = new AssetAuthorizer(new MockEnvironment(), false);
+
+    Jwt valid = service("asset.internal", "maintenance-service");
+    authorizer.requireInternalAssetAccess(valid);
+    assertThat(authorizer.internalSubjectId(valid)).isNotNull();
+    assertThatThrownBy(() -> authorizer.requireInternalAssetAccess(service("asset.internal rwms.read", "maintenance-service")))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireInternalAssetAccess(user("asset.internal", "SYSTEM_ADMIN", "MANAGE")))
+        .isInstanceOf(AccessDeniedException.class);
+  }
+
+  private Jwt user(String scope, String globalRole, String level) {
+    return jwt(Map.of(
+        "sub", UUID.randomUUID().toString(),
+        "principal_type", "USER",
+        "scope", scope,
+        "global_role", globalRole,
+        "warehouse_access", java.util.List.of(Map.of("warehouseId", warehouseId.toString(), "level", level))));
+  }
+
+  private static Jwt service(String scope, String clientId) {
+    return jwt(Map.of(
+        "sub", clientId,
+        "principal_type", "SERVICE",
+        "scope", scope,
+        "client_id", clientId));
+  }
+
+  private static Jwt jwt(Map<String, Object> claims) {
+    return new Jwt("token", Instant.now(), Instant.now().plusSeconds(60), Map.of("alg", "none"), claims);
+  }
+}

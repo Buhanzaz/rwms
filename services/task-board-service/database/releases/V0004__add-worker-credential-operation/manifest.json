@@ -1,0 +1,7 @@
+{
+  "formatVersion": 1,
+  "version": "0004",
+  "description": "Add durable worker credential operation metadata",
+  "applySha256": "e07114131235f5de1dc6df68382a762c8abaeaf63db308bfbead3bb9bf4f23cc",
+  "verifySha256": "f53f2e1820afeaebb904d5ad4ad8a9c3a94a7f194d06a07de84beb18d460859f"
+}

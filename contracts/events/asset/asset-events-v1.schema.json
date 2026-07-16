@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/asset/asset-events-v1.schema.json",
+  "title": "RWMS asset-service sanitized facts v1",
+  "description": "Committed asset facts from the transactional outbox. Comment text, manual-note text, tenant references, media URLs and PII are forbidden in Kafka and DLT payloads.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelopeVersion", "eventId", "eventType", "eventVersion", "occurredAt", "recordedAt", "producer", "aggregateType", "aggregateId", "aggregateVersion", "correlation", "actorRef", "payload"],
+  "properties": {
+    "envelopeVersion": {"const": 2},
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {"enum": [
+      "asset.rental-item.created.v1", "asset.rental-item.passport-changed.v1", "asset.rental-item.status-changed.v1", "asset.rental-item.warehouse-changed.v1", "asset.rental-item.general-comment-changed.v1", "asset.rental-item.manual-note-added.v1",
+      "asset.equipment-catalog.created.v1", "asset.equipment-catalog.changed.v1",
+      "asset.equipment-balance.changed.v1",
+      "asset.equipment-movement.transferred.v1", "asset.equipment-movement.written-off.v1", "asset.equipment-movement.lost.v1",
+      "asset.equipment-allocation-hold.acquired.v1", "asset.equipment-allocation-hold.renewed.v1", "asset.equipment-allocation-hold.committed.v1", "asset.equipment-allocation-hold.released.v1", "asset.equipment-allocation-hold.expired.v1",
+      "asset.operation-lease.acquired.v1", "asset.operation-lease.renewed.v1", "asset.operation-lease.released.v1", "asset.operation-lease.expired.v1",
+      "asset.classifier.created.v1", "asset.classifier.changed.v1"
+    ]},
+    "eventVersion": {"const": 1},
+    "occurredAt": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "producer": {"const": "asset-service"},
+    "aggregateType": {"enum": ["RENTAL_ITEM", "EQUIPMENT_CATALOG", "EQUIPMENT_BALANCE", "EQUIPMENT_MOVEMENT", "EQUIPMENT_ALLOCATION_HOLD", "OPERATION_LEASE", "CLASSIFIER"]},
+    "aggregateId": {"type": "string", "format": "uuid"},
+    "aggregateVersion": {"type": "integer", "minimum": 0},
+    "correlation": {"$ref": "#/$defs/correlation"},
+    "actorRef": {"oneOf": [{"$ref": "#/$defs/actor"}, {"type": "null"}]},
+    "payload": {"oneOf": [
+      {"$ref": "#/$defs/rentalFact"}, {"$ref": "#/$defs/rentalCommentFact"}, {"$ref": "#/$defs/rentalNoteFact"},
+      {"$ref": "#/$defs/equipmentCatalogFact"}, {"$ref": "#/$defs/balanceFact"}, {"$ref": "#/$defs/movementFact"},
+      {"$ref": "#/$defs/holdFact"}, {"$ref": "#/$defs/leaseFact"}, {"$ref": "#/$defs/classifierFact"}
+    ]}
+  },
+  "oneOf": [
+    {"properties": {"aggregateType": {"const": "RENTAL_ITEM"}, "eventType": {"enum": ["asset.rental-item.created.v1", "asset.rental-item.passport-changed.v1", "asset.rental-item.status-changed.v1", "asset.rental-item.warehouse-changed.v1"]}, "payload": {"$ref": "#/$defs/rentalFact"}}},
+    {"properties": {"aggregateType": {"const": "RENTAL_ITEM"}, "eventType": {"const": "asset.rental-item.general-comment-changed.v1"}, "payload": {"$ref": "#/$defs/rentalCommentFact"}}},
+    {"properties": {"aggregateType": {"const": "RENTAL_ITEM"}, "eventType": {"const": "asset.rental-item.manual-note-added.v1"}, "payload": {"$ref": "#/$defs/rentalNoteFact"}}},
+    {"properties": {"aggregateType": {"const": "EQUIPMENT_CATALOG"}, "eventType": {"enum": ["asset.equipment-catalog.created.v1", "asset.equipment-catalog.changed.v1"]}, "payload": {"$ref": "#/$defs/equipmentCatalogFact"}}},
+    {"properties": {"aggregateType": {"const": "EQUIPMENT_BALANCE"}, "eventType": {"const": "asset.equipment-balance.changed.v1"}, "payload": {"$ref": "#/$defs/balanceFact"}}},
+    {"properties": {"aggregateType": {"const": "EQUIPMENT_MOVEMENT"}, "eventType": {"enum": ["asset.equipment-movement.transferred.v1", "asset.equipment-movement.written-off.v1", "asset.equipment-movement.lost.v1"]}, "payload": {"$ref": "#/$defs/movementFact"}}},
+    {"properties": {"aggregateType": {"const": "EQUIPMENT_ALLOCATION_HOLD"}, "eventType": {"enum": ["asset.equipment-allocation-hold.acquired.v1", "asset.equipment-allocation-hold.renewed.v1", "asset.equipment-allocation-hold.committed.v1", "asset.equipment-allocation-hold.released.v1", "asset.equipment-allocation-hold.expired.v1"]}, "payload": {"$ref": "#/$defs/holdFact"}}},
+    {"properties": {"aggregateType": {"const": "OPERATION_LEASE"}, "eventType": {"enum": ["asset.operation-lease.acquired.v1", "asset.operation-lease.renewed.v1", "asset.operation-lease.released.v1", "asset.operation-lease.expired.v1"]}, "payload": {"$ref": "#/$defs/leaseFact"}}},
+    {"properties": {"aggregateType": {"const": "CLASSIFIER"}, "eventType": {"enum": ["asset.classifier.created.v1", "asset.classifier.changed.v1"]}, "payload": {"$ref": "#/$defs/classifierFact"}}}
+  ],
+  "x-rwms-topics": ["rwms.asset.rental-item.v1", "rwms.asset.equipment-catalog.v1", "rwms.asset.equipment-balance.v1", "rwms.asset.equipment-movement.v1", "rwms.asset.equipment-allocation-hold.v1", "rwms.asset.operation-lease.v1", "rwms.asset.classifier.v1"],
+  "x-rwms-delivery": {"producer": "transactional-postgresql-outbox", "key": "aggregateId", "atLeastOnce": true, "retriesSeconds": [1, 2, 4], "validationFailure": "SANITIZED_DLT", "versionGap": "QUARANTINE"},
+  "$defs": {
+    "uuid": {"type": "string", "format": "uuid"},
+    "correlation": {"type": "object", "additionalProperties": false, "required": ["correlationId", "causationId"], "properties": {"correlationId": {"$ref": "#/$defs/uuid"}, "causationId": {"oneOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]}}},
+    "actor": {"type": "object", "additionalProperties": false, "required": ["subjectId", "principalType", "profileRevision"], "properties": {"subjectId": {"$ref": "#/$defs/uuid"}, "principalType": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"}, "profileRevision": {"oneOf": [{"type": "string", "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$"}, {"type": "null"}]}}},
+    "rentalFact": {"type": "object", "additionalProperties": false, "required": ["rentalItemId", "warehouseId", "status", "numberSha256"], "properties": {"rentalItemId": {"$ref": "#/$defs/uuid"}, "warehouseId": {"$ref": "#/$defs/uuid"}, "status": {"type": "string"}, "numberSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+    "rentalCommentFact": {"type": "object", "additionalProperties": false, "required": ["rentalItemId", "commentRevision"], "properties": {"rentalItemId": {"$ref": "#/$defs/uuid"}, "commentRevision": {"type": "integer", "minimum": 0}}},
+    "rentalNoteFact": {"type": "object", "additionalProperties": false, "required": ["rentalItemId", "noteId"], "properties": {"rentalItemId": {"$ref": "#/$defs/uuid"}, "noteId": {"$ref": "#/$defs/uuid"}}},
+    "equipmentCatalogFact": {"type": "object", "additionalProperties": false, "required": ["equipmentId", "code", "category", "active"], "properties": {"equipmentId": {"$ref": "#/$defs/uuid"}, "code": {"type": "string", "pattern": "^[A-Z0-9][A-Z0-9_-]{0,63}$"}, "category": {"enum": ["FURNITURE", "ELECTRICAL", "OTHER"]}, "active": {"type": "boolean"}}},
+    "balanceFact": {"type": "object", "additionalProperties": false, "required": ["balanceId", "equipmentId", "warehouseId", "rentalItemId", "locationKind", "quantity"], "properties": {"balanceId": {"$ref": "#/$defs/uuid"}, "equipmentId": {"$ref": "#/$defs/uuid"}, "warehouseId": {"$ref": "#/$defs/uuid"}, "rentalItemId": {"oneOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]}, "locationKind": {"enum": ["STOCK", "CABIN_NON_RENTED", "CABIN_RENTED", "WRITTEN_OFF", "LOST"]}, "quantity": {"type": "integer", "minimum": 0}}},
+    "movementFact": {"type": "object", "additionalProperties": false, "required": ["movementId", "equipmentId", "sourceBalanceId", "targetBalanceId", "quantity", "movementKind"], "properties": {"movementId": {"$ref": "#/$defs/uuid"}, "equipmentId": {"$ref": "#/$defs/uuid"}, "sourceBalanceId": {"$ref": "#/$defs/uuid"}, "targetBalanceId": {"$ref": "#/$defs/uuid"}, "quantity": {"type": "integer", "minimum": 1}, "movementKind": {"enum": ["STOCK_TO_CABIN", "CABIN_TO_STOCK", "CABIN_TO_CABIN", "WAREHOUSE_TO_WAREHOUSE", "WRITE_OFF", "LOSS"]}}},
+    "holdFact": {"type": "object", "additionalProperties": false, "required": ["holdId", "equipmentId", "warehouseId", "quantity", "state"], "properties": {"holdId": {"$ref": "#/$defs/uuid"}, "equipmentId": {"$ref": "#/$defs/uuid"}, "warehouseId": {"$ref": "#/$defs/uuid"}, "quantity": {"type": "integer", "minimum": 1}, "state": {"enum": ["ACTIVE", "COMMITTED", "RELEASED", "EXPIRED"]}}},
+    "leaseFact": {"type": "object", "additionalProperties": false, "required": ["leaseId", "rentalItemId", "fencingToken", "state"], "properties": {"leaseId": {"$ref": "#/$defs/uuid"}, "rentalItemId": {"$ref": "#/$defs/uuid"}, "fencingToken": {"type": "integer", "minimum": 1}, "state": {"enum": ["ACTIVE", "RELEASED", "EXPIRED"]}}},
+    "classifierFact": {"type": "object", "additionalProperties": false, "required": ["classifierId", "type", "parentId", "code", "label", "active", "sortOrder"], "properties": {"classifierId": {"$ref": "#/$defs/uuid"}, "type": {"enum": ["CATEGORY", "SUBCATEGORY", "TYPE", "CONDITION"]}, "parentId": {"oneOf": [{"$ref": "#/$defs/uuid"}, {"type": "null"}]}, "code": {"type": "string", "pattern": "^[A-Z0-9][A-Z0-9_-]{0,63}$"}, "label": {"type": "string", "minLength": 1, "maxLength": 255}, "active": {"type": "boolean"}, "sortOrder": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]}}}
+  }
+}

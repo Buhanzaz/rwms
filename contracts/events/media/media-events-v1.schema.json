@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/media/media-events-v1.schema.json",
+  "title": "RWMS media-service events v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelopeVersion", "eventId", "eventType", "eventVersion", "occurredAt", "recordedAt", "producer", "aggregateType", "aggregateId", "aggregateVersion", "correlation", "actorRef", "payload"],
+  "properties": {
+    "envelopeVersion": {"const": 2},
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {"enum": ["media.processing.request.v1", "media.media.uploaded.v1", "media.media.ready.v1", "media.media.failed.v1", "media.media.rotated.v1", "media.media.deleted.v1"]},
+    "eventVersion": {"const": 1},
+    "occurredAt": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "producer": {"const": "media-service"},
+    "aggregateType": {"const": "MEDIA"},
+    "aggregateId": {"type": "string", "format": "uuid"},
+    "aggregateVersion": {"type": "integer", "minimum": 0},
+    "correlation": {"$ref": "#/$defs/correlation"},
+    "actorRef": {"oneOf": [{"$ref": "#/$defs/actor"}, {"type": "null"}]},
+    "payload": {"$ref": "#/$defs/payload"}
+  },
+  "x-rwms-topics": ["rwms.media.media.v1", "rwms.media.processing.v1"],
+  "$defs": {
+    "correlation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["correlationId", "causationId"],
+      "properties": {
+        "correlationId": {"type": "string", "format": "uuid"},
+        "causationId": {"oneOf": [{"type": "string", "format": "uuid"}, {"type": "null"}]}
+      }
+    },
+    "actor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["subjectId", "principalType", "profileRevision"],
+      "properties": {
+        "subjectId": {"type": "string", "format": "uuid"},
+        "principalType": {"type": "string"},
+        "profileRevision": {"oneOf": [{"type": "string"}, {"type": "null"}]}
+      }
+    },
+    "payload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mediaId", "ownerType", "ownerId", "warehouseId", "kind", "status", "generation", "rotationDegrees"],
+      "properties": {
+        "mediaId": {"type": "string", "format": "uuid"},
+        "ownerType": {"type": "string", "maxLength": 64},
+        "ownerId": {"type": "string", "maxLength": 128},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "kind": {"enum": ["IMAGE", "VIDEO"]},
+        "status": {"enum": ["UPLOADING", "PROCESSING", "READY", "FAILED", "DELETED"]},
+        "generation": {"type": "integer", "minimum": 0},
+        "rotationDegrees": {"enum": [0, 90, 180, 270]}
+      }
+    }
+  }
+}

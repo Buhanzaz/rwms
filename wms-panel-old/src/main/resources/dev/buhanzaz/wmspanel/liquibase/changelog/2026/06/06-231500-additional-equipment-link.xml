@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd"
+        objectQuotingStrategy="QUOTE_ONLY_RESERVED_WORDS">
+
+    <changeSet id="1" author="codex">
+        <addColumn tableName="RESERVATION">
+            <column name="RENTAL_ITEM_ID" type="UUID"/>
+        </addColumn>
+
+        <addForeignKeyConstraint baseTableName="RESERVATION"
+                                 baseColumnNames="RENTAL_ITEM_ID"
+                                 referencedTableName="RENTAL_ITEM"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_RESERVATION_ON_RENTAL_ITEM"/>
+    </changeSet>
+
+    <changeSet id="2" author="codex">
+        <update tableName="WAREHOUSE_SEGMENT">
+            <column name="NAME" value="__TMP_206__"/>
+            <where>ID = '00000000-0000-0000-0000-000000000206'</where>
+        </update>
+        <update tableName="WAREHOUSE_SEGMENT">
+            <column name="NAME" value="__TMP_207__"/>
+            <where>ID = '00000000-0000-0000-0000-000000000207'</where>
+        </update>
+        <update tableName="WAREHOUSE_SEGMENT">
+            <column name="NAME" value="Мебель"/>
+            <where>ID = '00000000-0000-0000-0000-000000000201'</where>
+        </update>
+        <update tableName="WAREHOUSE_SEGMENT">
+            <column name="NAME" value="Строительные леса"/>
+            <where>ID = '00000000-0000-0000-0000-000000000202'</where>
+        </update>
+        <update tableName="WAREHOUSE_SEGMENT">
+            <column name="NAME" value="Климатическое оборудование"/>
+            <where>ID = '00000000-0000-0000-0000-000000000203'</where>
+        </update>
+        <update tableName="WAREHOUSE_SEGMENT">
+            <column name="NAME" value="Электрооборудование"/>
+            <where>ID = '00000000-0000-0000-0000-000000000204'</where>
+        </update>
+        <update tableName="WAREHOUSE_SEGMENT">
+            <column name="NAME" value="Санитарное оборудование"/>
+            <where>ID = '00000000-0000-0000-0000-000000000205'</where>
+        </update>
+        <update tableName="WAREHOUSE_SEGMENT">
+            <column name="NAME" value="Бытовая техника"/>
+            <where>ID = '00000000-0000-0000-0000-000000000206'</where>
+        </update>
+        <update tableName="WAREHOUSE_SEGMENT">
+            <column name="NAME" value="Прочее доп. оборудование"/>
+            <where>ID = '00000000-0000-0000-0000-000000000207'</where>
+        </update>
+    </changeSet>
+</databaseChangeLog>

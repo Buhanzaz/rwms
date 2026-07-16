@@ -1,0 +1,255 @@
+- generic:
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /
+                    - generic:
+                      - generic: WMS Panel
+                      - generic: СПБ
+            - generic:
+              - generic:
+                - generic:
+                  - combobox:
+                    - generic: СПБ
+              - generic:
+                - generic: Обзор
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /
+                        - generic: Главная
+                    - listitem:
+                      - link:
+                        - /url: /kpi
+                        - generic: KPI
+              - generic:
+                - generic: Имущество
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /warehouse
+                        - generic: Склад
+                    - listitem:
+                      - link:
+                        - /url: /equipment
+                        - generic: Доп. оборудование
+                    - listitem:
+                      - button:
+                        - generic: Инвентаризация
+                    - listitem:
+                      - button:
+                        - generic: Списание
+              - generic:
+                - generic: Логистика
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /logistics/returns
+                        - generic: Возврат из аренды
+                    - listitem:
+                      - link:
+                        - /url: /logistics/shipments
+                        - generic: Отгрузка в аренду
+              - generic:
+                - generic: Ремонтный цикл
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /estimates
+                        - generic: Сметы
+                    - listitem:
+                      - link:
+                        - /url: /repairs
+                        - generic: Ремонты
+                    - listitem:
+                      - link:
+                        - /url: /task-board
+                        - generic: Доска задач
+                    - listitem:
+                      - link:
+                        - /url: /acceptance
+                        - generic: Приёмка и доработки
+            - generic:
+              - list:
+                - listitem:
+                  - button:
+                    - generic: Настройки
+                - listitem:
+                  - button:
+                    - generic: Локальный администратор
+                    - generic: Выйти
+      - main:
+        - generic:
+          - generic:
+            - button:
+              - generic: Открыть или свернуть меню
+            - navigation:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /warehouse
+                    - text: Склад
+                - listitem: /
+                - listitem:
+                  - link:
+                    - /url: /warehouse
+                    - text: Санкт-Петербург
+                - listitem: /
+                - listitem:
+                  - link [disabled]: БЫТ-002
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - button
+                    - generic: "2"
+                    - button
+                    - button
+                  - complementary:
+                    - generic:
+                      - generic:
+                        - heading [level=2]: БЫТ-002
+                        - generic: Аренда
+                        - generic: БК-2
+                      - generic:
+                        - button: Создать осмотр
+                        - button: Добавить фото
+                        - button: Создать ремонт
+                        - button: Изменить статус
+                    - generic:
+                      - generic:
+                        - generic: Номер
+                        - generic: БЫТ-002
+                      - generic:
+                        - generic: Тип
+                        - generic: БК-2
+                      - generic:
+                        - generic: Габариты
+                        - generic: 2.4x2
+                      - generic:
+                        - generic: Отделка
+                        - generic: ЛДСП
+                      - generic:
+                        - generic: Категория
+                        - generic: ИТР
+                      - generic:
+                        - generic: Характеристики
+                        - generic: Электрика КК
+                      - generic:
+                        - generic: Линолеум
+                        - generic: Нет
+                      - generic:
+                        - generic: Статус
+                        - generic: Аренда
+                      - generic:
+                        - generic: Наполнение
+                        - generic: —
+                      - generic:
+                        - generic: Комментарий
+                        - generic: —
+                      - generic:
+                        - generic: Фото
+                        - generic:
+                          - button: "2"
+                      - generic:
+                        - generic: Цена
+                        - generic: —
+              - generic:
+                - generic:
+                  - button: Обзор
+                  - button: Фото
+                  - button: Осмотры
+                  - button: Сметы
+                  - button: Ремонт
+                  - button: Резервы
+                  - button: Отгрузки
+                  - button: Возвраты
+                  - button: История
+                  - button: Комментарии
+              - generic:
+                - generic:
+                  - generic:
+                    - generic: Статус и расположение
+                    - generic:
+                      - generic:
+                        - generic: Текущий статус
+                        - generic: Аренда
+                      - generic:
+                        - generic: Склад
+                        - generic: Склад СПБ
+                      - generic:
+                        - generic: Расположение
+                        - generic: Ряд В, место 11
+                      - generic:
+                        - generic: Готовность к аренде
+                        - generic: Готова
+                  - generic:
+                    - generic: Клиент и резерв
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: ИП Петров А.В.
+                          - generic: Истёк
+                        - generic:
+                          - generic: "Поставлено: 20.05.2026 12:00"
+                          - generic: "Истекает: 20.05.2026 12:30"
+                      - generic:
+                        - generic:
+                          - generic: ООО СтройПроект
+                          - generic: Истёк
+                        - generic:
+                          - generic: "Поставлено: 18.05.2026 09:20"
+                          - generic: "Истекает: 18.05.2026 09:50"
+                      - generic:
+                        - generic:
+                          - generic: ООО Монтаж Север
+                          - generic: Истёк
+                        - generic:
+                          - generic: "Поставлено: 15.05.2026 16:10"
+                          - generic: "Истекает: 15.05.2026 16:40"
+                  - generic:
+                    - generic: Осмотр и ремонт
+                    - generic:
+                      - generic:
+                        - generic: Последний осмотр
+                        - generic: 13.05.2026
+                      - generic:
+                        - generic: Ремонт
+                        - generic: Нет
+                      - generic:
+                        - generic: Плановый осмотр
+                        - generic: 13.05.2027
+                      - generic:
+                        - generic: Ремонтные задачи
+                        - generic: "0"
+                  - generic:
+                    - generic: Характеристики
+                    - generic: Электрика КК
+                  - generic:
+                    - generic: Наполнение
+                    - generic:
+                      - generic: Наполнение не указано.
+                      - generic:
+                        - button: Добавить
+                        - button: Переместить
+    - region "Notifications alt+T"
+  - dialog [ref=e3365]:
+    - heading "Фото — БЫТ-002" [level=2] [ref=e3367]
+    - button "Закрыть" [active] [ref=e3370] [cursor=pointer]
+    - generic [ref=e3371]:
+      - button [ref=e3372]:
+        - img "Фото 1" [ref=e3373]
+      - button "Предыдущее фото" [ref=e3374] [cursor=pointer]
+      - button "Следующее фото" [ref=e3377] [cursor=pointer]

@@ -1,0 +1,225 @@
+package dev.buhanzaz.rwms.asset.eventing;
+
+import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
+import dev.buhanzaz.rwms.asset.domain.AssetEventType;
+import dev.buhanzaz.rwms.asset.service.AssetChecksum;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+
+/**
+ * Rebuilds the non-secret asset projection from ordered domain facts and
+ * compares it with the live relational projection. It never rewrites a live
+ * aggregate: the only durable output is the separately named shadow
+ * checkpoint, so a corrupt stream cannot silently change production state.
+ */
+@Service
+public class AssetReplayVerifier {
+  public static final String SHADOW_PROJECTION = "asset-replay-shadow-v1";
+
+  private final JdbcTemplate jdbc;
+  private final ObjectMapper mapper;
+  private final AssetEventPayloadPolicy payloads;
+
+  public AssetReplayVerifier(JdbcTemplate jdbc, ObjectMapper mapper, AssetEventPayloadPolicy payloads) {
+    this.jdbc = jdbc;
+    this.mapper = mapper;
+    this.payloads = payloads;
+  }
+
+  @Transactional
+  public ReplayParityResult rebuildAndVerify() {
+    Map<StreamKey, ReplayState> replayed = replay();
+    verifyLiveProjection(replayed);
+    replayed.entrySet().stream().sorted(Map.Entry.comparingByKey()).forEach(entry -> checkpoint(entry.getKey(), entry.getValue()));
+    String checksum = AssetChecksum.sha256(replayed.entrySet().stream()
+        .sorted(Map.Entry.comparingByKey())
+        .map(entry -> entry.getKey().type().name() + ':' + entry.getKey().id() + ':'
+            + entry.getValue().version() + ':' + canonicalHash(entry.getValue().fact()))
+        .reduce("", (left, right) -> left + '\n' + right)
+        .getBytes(StandardCharsets.UTF_8));
+    return new ReplayParityResult(replayed.size(), checksum);
+  }
+
+  private Map<StreamKey, ReplayState> replay() {
+    Map<StreamKey, ReplayState> state = new LinkedHashMap<>();
+    List<EventRow> events = jdbc.query("""
+        select event_id,aggregate_type,aggregate_id,aggregate_version,event_type,payload::text,payload_sha256
+        from domain_event order by aggregate_type,aggregate_id,aggregate_version
+        """, (rs, row) -> new EventRow(
+        rs.getObject("event_id", UUID.class),
+        AssetAggregateType.valueOf(rs.getString("aggregate_type")),
+        UUID.fromString(rs.getString("aggregate_id")),
+        rs.getLong("aggregate_version"),
+        AssetEventType.require(rs.getString("event_type")),
+        rs.getString("payload"),
+        rs.getString("payload_sha256").trim()));
+    for (EventRow event : events) {
+      StreamKey key = new StreamKey(event.type(), event.aggregateId());
+      ReplayState previous = state.get(key);
+      long expected = previous == null ? 0 : Math.addExact(previous.version(), 1);
+      if (event.aggregateVersion() != expected) {
+        throw new IllegalStateException("Asset replay version gap for " + key + ": expected " + expected);
+      }
+      JsonNode payload = read(event.payload());
+      payloads.validateNode(event.eventType().value(), event.type(), event.aggregateId(), payload);
+      if (!canonicalHash(payload).equals(event.payloadSha256())) {
+        throw new IllegalStateException("Asset replay checksum mismatch for " + key);
+      }
+      if (outboxCount(event.eventId()) != 1) {
+        throw new IllegalStateException("Asset replay corruption: canonical outbox row is missing for " + event.eventId());
+      }
+      state.put(key, new ReplayState(event.aggregateVersion(), apply(previous == null ? null : previous.fact(), event), event.eventId()));
+    }
+    state.forEach(this::verifyHead);
+    return Map.copyOf(state);
+  }
+
+  private JsonNode apply(JsonNode previous, EventRow event) {
+    if (event.type() == AssetAggregateType.RENTAL_ITEM
+        && (event.eventType() == AssetEventType.RENTAL_ITEM_GENERAL_COMMENT_CHANGED
+        || event.eventType() == AssetEventType.RENTAL_ITEM_MANUAL_NOTE_ADDED)) {
+      if (previous == null) throw new IllegalStateException("Asset replay rental stream lacks its creation fact");
+      return previous;
+    }
+    return read(event.payload());
+  }
+
+  private void verifyHead(StreamKey key, ReplayState replayed) {
+    StreamHead head = jdbc.query("""
+        select current_version,last_event_id from event_stream_head
+        where aggregate_type=? and aggregate_id=?
+        """, (rs, row) -> new StreamHead(rs.getLong("current_version"), rs.getObject("last_event_id", UUID.class)),
+        key.type().name(), key.id().toString()).stream().findFirst()
+        .orElseThrow(() -> new IllegalStateException("Asset replay stream head is missing for " + key));
+    if (head.version() != replayed.version() || !head.eventId().equals(replayed.eventId())) {
+      throw new IllegalStateException("Asset replay stream head does not match facts for " + key);
+    }
+  }
+
+  private void verifyLiveProjection(Map<StreamKey, ReplayState> replayed) {
+    Map<StreamKey, JsonNode> live = liveProjection();
+    if (!live.keySet().equals(replayed.keySet())) {
+      throw new IllegalStateException("Asset replay stream set does not match the live projection");
+    }
+    replayed.forEach((key, state) -> {
+      JsonNode projected = live.get(key);
+      if (!state.fact().equals(projected)) {
+        throw new IllegalStateException("Asset replay parity mismatch for " + key);
+      }
+    });
+  }
+
+  private Map<StreamKey, JsonNode> liveProjection() {
+    Map<StreamKey, JsonNode> result = new LinkedHashMap<>();
+    jdbc.query("select id,warehouse_id,status,number from rental_item", rs -> {
+      UUID id = rs.getObject("id", UUID.class);
+      result.put(new StreamKey(AssetAggregateType.RENTAL_ITEM, id), node(Map.of(
+          "rentalItemId", id.toString(), "warehouseId", rs.getObject("warehouse_id", UUID.class).toString(),
+          "status", rs.getString("status"), "numberSha256", AssetChecksum.sha256(rs.getString("number").getBytes(StandardCharsets.UTF_8)))));
+    });
+    jdbc.query("select id,code,category,active from equipment_catalog_item", rs -> {
+      UUID id = rs.getObject("id", UUID.class);
+      result.put(new StreamKey(AssetAggregateType.EQUIPMENT_CATALOG, id), node(Map.of(
+          "equipmentId", id.toString(), "code", rs.getString("code"), "category", rs.getString("category"), "active", rs.getBoolean("active"))));
+    });
+    jdbc.query("select id,equipment_id,warehouse_id,rental_item_id,location_kind,quantity from equipment_balance", rs -> {
+      UUID id = rs.getObject("id", UUID.class);
+      Map<String, Object> value = new LinkedHashMap<>();
+      value.put("balanceId", id.toString());
+      value.put("equipmentId", rs.getObject("equipment_id", UUID.class).toString());
+      value.put("warehouseId", rs.getObject("warehouse_id", UUID.class).toString());
+      UUID rentalItemId = rs.getObject("rental_item_id", UUID.class);
+      value.put("rentalItemId", rentalItemId == null ? null : rentalItemId.toString());
+      value.put("locationKind", rs.getString("location_kind"));
+      value.put("quantity", rs.getLong("quantity"));
+      result.put(new StreamKey(AssetAggregateType.EQUIPMENT_BALANCE, id), node(value));
+    });
+    jdbc.query("select id,equipment_id,source_balance_id,target_balance_id,quantity,movement_kind from equipment_movement", rs -> {
+      UUID id = rs.getObject("id", UUID.class);
+      result.put(new StreamKey(AssetAggregateType.EQUIPMENT_MOVEMENT, id), node(Map.of(
+          "movementId", id.toString(), "equipmentId", rs.getObject("equipment_id", UUID.class).toString(),
+          "sourceBalanceId", rs.getObject("source_balance_id", UUID.class).toString(),
+          "targetBalanceId", rs.getObject("target_balance_id", UUID.class).toString(),
+          "quantity", rs.getLong("quantity"), "movementKind", rs.getString("movement_kind"))));
+    });
+    jdbc.query("select id,equipment_id,warehouse_id,quantity,state from equipment_allocation_hold", rs -> {
+      UUID id = rs.getObject("id", UUID.class);
+      result.put(new StreamKey(AssetAggregateType.EQUIPMENT_ALLOCATION_HOLD, id), node(Map.of(
+          "holdId", id.toString(), "equipmentId", rs.getObject("equipment_id", UUID.class).toString(),
+          "warehouseId", rs.getObject("warehouse_id", UUID.class).toString(), "quantity", rs.getLong("quantity"), "state", rs.getString("state"))));
+    });
+    jdbc.query("select id,rental_item_id,fencing_token,state from operation_lease", rs -> {
+      UUID id = rs.getObject("id", UUID.class);
+      result.put(new StreamKey(AssetAggregateType.OPERATION_LEASE, id), node(Map.of(
+          "leaseId", id.toString(), "rentalItemId", rs.getObject("rental_item_id", UUID.class).toString(),
+          "fencingToken", rs.getLong("fencing_token"), "state", rs.getString("state"))));
+    });
+    jdbc.query("select id,classifier_type,parent_id,code,name,active,sort_order from asset_classifier", rs -> {
+      UUID id = rs.getObject("id", UUID.class);
+      Map<String, Object> value = new LinkedHashMap<>();
+      value.put("classifierId", id.toString());
+      value.put("type", rs.getString("classifier_type"));
+      UUID parentId = rs.getObject("parent_id", UUID.class);
+      value.put("parentId", parentId == null ? null : parentId.toString());
+      value.put("code", rs.getString("code"));
+      value.put("label", rs.getString("name"));
+      value.put("active", rs.getBoolean("active"));
+      value.put("sortOrder", rs.getObject("sort_order", Integer.class));
+      result.put(new StreamKey(AssetAggregateType.CLASSIFIER, id), node(value));
+    });
+    return Map.copyOf(result);
+  }
+
+  private void checkpoint(StreamKey key, ReplayState state) {
+    jdbc.update("""
+        insert into projection_checkpoint(projection_name,aggregate_type,aggregate_id,aggregate_version,projection_sha256,updated_at)
+        values (?, ?, ?, ?, ?, clock_timestamp())
+        on conflict (projection_name,aggregate_type,aggregate_id) do update
+        set aggregate_version=excluded.aggregate_version,projection_sha256=excluded.projection_sha256,updated_at=excluded.updated_at
+        """, SHADOW_PROJECTION, key.type().name(), key.id().toString(), state.version(), canonicalHash(state.fact()));
+  }
+
+  private int outboxCount(UUID eventId) {
+    Integer count = jdbc.queryForObject("select count(*) from outbox_event where event_id=?", Integer.class, eventId);
+    return count == null ? 0 : count;
+  }
+
+  private JsonNode node(Map<String, ?> value) { return mapper.valueToTree(value); }
+  private JsonNode read(String value) {
+    try { return mapper.readTree(value); }
+    catch (JacksonException exception) { throw new IllegalStateException("Asset replay event is not JSON", exception); }
+  }
+  private String canonicalHash(JsonNode value) {
+    try {
+      String json = mapper.writeValueAsString(value);
+      String canonical = jdbc.queryForObject("select (?::jsonb)::text", String.class, json);
+      if (canonical == null) throw new IllegalStateException("PostgreSQL did not canonicalize replay JSON");
+      return AssetChecksum.sha256(canonical.getBytes(StandardCharsets.UTF_8));
+    } catch (JacksonException exception) {
+      throw new IllegalStateException("Asset replay state cannot be serialized", exception);
+    }
+  }
+
+  public record ReplayParityResult(int aggregateCount, String canonicalChecksum) {}
+  private record StreamKey(AssetAggregateType type, UUID id) implements Comparable<StreamKey> {
+    @Override public int compareTo(StreamKey other) {
+      int typeOrder = type.name().compareTo(other.type.name());
+      return typeOrder == 0 ? id.toString().compareTo(other.id.toString()) : typeOrder;
+    }
+  }
+  private record ReplayState(long version, JsonNode fact, UUID eventId) {}
+  private record EventRow(UUID eventId, AssetAggregateType type, UUID aggregateId, long aggregateVersion,
+                          AssetEventType eventType, String payload, String payloadSha256) {}
+  private record StreamHead(long version, UUID eventId) {}
+}

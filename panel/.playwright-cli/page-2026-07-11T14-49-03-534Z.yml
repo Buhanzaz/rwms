@@ -1,0 +1,133 @@
+- generic:
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /
+                    - generic:
+                      - generic: WMS Panel
+                      - generic: СПБ
+            - generic:
+              - generic:
+                - generic:
+                  - combobox:
+                    - generic: СПБ
+              - generic:
+                - generic: Обзор
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /
+                        - generic: Главная
+                    - listitem:
+                      - link:
+                        - /url: /kpi
+                        - generic: KPI
+              - generic:
+                - generic: Имущество
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /warehouse
+                        - generic: Склад
+                    - listitem:
+                      - link:
+                        - /url: /equipment
+                        - generic: Доп. оборудование
+                    - listitem:
+                      - button [expanded]:
+                        - generic: Инвентаризация
+                      - list:
+                        - listitem:
+                          - link:
+                            - /url: /inventory
+                            - generic: Создать инвентаризацию
+                        - listitem:
+                          - link:
+                            - /url: /inventory/history
+                            - generic: История инвентаризаций
+                    - listitem:
+                      - button:
+                        - generic: Списание
+              - generic:
+                - generic: Логистика
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /logistics/returns
+                        - generic: Возврат из аренды
+                    - listitem:
+                      - link:
+                        - /url: /logistics/shipments
+                        - generic: Отгрузка в аренду
+              - generic:
+                - generic: Ремонтный цикл
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /estimates
+                        - generic: Сметы
+                    - listitem:
+                      - link:
+                        - /url: /repairs
+                        - generic: Ремонты
+                    - listitem:
+                      - link:
+                        - /url: /task-board
+                        - generic: Доска задач
+                    - listitem:
+                      - link:
+                        - /url: /acceptance
+                        - generic: Приёмка и доработки
+            - generic:
+              - list:
+                - listitem:
+                  - button:
+                    - generic: Настройки
+                - listitem:
+                  - button:
+                    - generic: Локальный администратор
+                    - generic: Выйти
+      - main:
+        - generic:
+          - generic:
+            - button:
+              - generic: Открыть или свернуть меню
+            - navigation:
+              - list:
+                - listitem:
+                  - link [disabled]: Инвентаризация
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - generic: Инвентаризация склада
+                - generic: Активной сессии для склада «Склад СПБ» нет.
+              - generic:
+                - button: Создать инвентаризацию
+                - button: История
+    - region "Notifications alt+T"
+  - dialog [ref=e187]:
+    - generic [ref=e188]:
+      - heading "Начать инвентаризацию" [level=2] [ref=e189]
+      - paragraph [ref=e190]: При старте будет зафиксирован текущий состав склада. На одном складе может быть только одна активная сессия.
+    - generic [ref=e191]:
+      - group "Склад" [ref=e192]:
+        - paragraph: Склад СПБ
+      - group "Автор" [ref=e194]:
+        - paragraph: Локальный администратор
+      - group "Дата" [ref=e196]:
+        - paragraph: 2026-07-11
+    - generic [ref=e198]:
+      - button "Отмена" [active] [ref=e199] [cursor=pointer]
+      - button "Начать" [ref=e200] [cursor=pointer]
+    - button "Close" [ref=e201] [cursor=pointer]
