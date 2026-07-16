@@ -537,3 +537,9 @@ this prevents separate listeners in one consumer group from receiving a topic
 belonging to another family. The outbox binding is synchronous and uses the
 byte-array aggregate key serializer, so `PUBLISHED` follows broker acknowledgement
 rather than local channel acceptance.
+
+Final Stage 5 verification adds an in-place Flyway V1-to-V2 upgrade test,
+passes the affected asset cutover flow in all three responsive Playwright
+projects, and completes a successful root Gradle `test` graph. The earlier
+missing replay, real-broker and browser evidence statements above are retained
+as chronological audit findings and are superseded by this completion record.

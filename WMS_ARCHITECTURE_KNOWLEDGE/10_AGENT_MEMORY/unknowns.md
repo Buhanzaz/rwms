@@ -592,11 +592,24 @@ real asset Kafka recovery gaps. The common binder serializer now matches the
 byte-array aggregate key. This update does not claim a successful full root
 suite or Stage 5 exit.
 
-Remaining `UNKNOWN`/gate evidence:
+Resolved Stage 5 gate evidence:
 
-- No approved pre-V1 asset target schema exists, so a real prior-version
-  upgrade fixture remains unavailable; do not infer one from legacy/browser
-  data.
-- Playwright asset flows remain unexecuted because configured Chrome is absent.
-- The workspace still exposes no valid Git repository for the required reviewed
-  scoped human commit.
+- The previous-version migration gate is now concrete: the asset suite installs
+  V1 alone, then applies V2 in place without baseline or clean and validates the
+  resulting constraints and Flyway history. No legacy/browser schema was
+  invented.
+- The responsive asset flow passed the configured `desktop`, `tablet` and
+  `mobile` Playwright projects, 3/3, using bundled Chromium in an isolated test
+  container. The earlier absent-system-Chrome observation is historical only.
+- The obsolete AMQP isolation assertion and byte-array Kafka serializer mismatch
+  are fixed and focused tests pass. The final root `test` graph is green; the
+  earlier forced root repeat's two auth recovery timing failures were not
+  reproduced by either the isolated recovery class or the complete 129-test
+  auth-service repeat.
+- Git inspection proved a valid repository with empty history. The user approved
+  creating an initial reviewed baseline; root commit `3c509d6` now establishes
+  `HEAD`. The earlier “no valid Git repository” conclusion is superseded.
+
+No Stage 5 technical `UNKNOWN` remains. Stage 6 contract questions below remain
+owned by the Stage 6 evidence/contract gate and are not silently answered by
+the Stage 5 closure.
