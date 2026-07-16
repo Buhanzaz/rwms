@@ -330,4 +330,4 @@ Git inspection initially proved a valid worktree on `develop` with no commit
 history or `HEAD`. The user approved an initial-history strategy; reviewed root
 commit `3c509d6` now establishes the current repository baseline without
 reconstructing missing history. The separately scoped Stage 5 closure change
-records the memory/pointer transition.
+records the memory/pointer transition in commit `4e473ac`.

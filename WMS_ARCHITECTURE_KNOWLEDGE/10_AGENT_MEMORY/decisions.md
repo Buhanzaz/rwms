@@ -1119,5 +1119,7 @@ entry does not close F4T.
 - The user approved establishing Git history from the reviewed current tree.
   Root commit `3c509d6` is the explicit initial repository baseline; it does not
   reconstruct the missing historical commit graph or alter legacy evidence.
+  Scoped commit `4e473ac` records Stage 5 closure and advances the sole active
+  pointer to Stage 6 evidence/contract work.
 - An asset V1-to-V2 migration is the real previous-version gate. It must apply
   without `baselineOnMigrate`, schema clean or fabricated legacy/browser data.

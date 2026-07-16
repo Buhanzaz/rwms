@@ -3718,6 +3718,6 @@ a substitute source.
   local Codex/Playwright/IDE state, lock files and build output. Root commit
   `3c509d6` establishes the reviewed current repository baseline without
   claiming reconstructed historical commits.
-- Stage 5 technical and memory evidence is reconciled. Its closure commit and
-  active-pointer transition are recorded separately; no Stage 6 implementation
-  was performed before this gate.
+- Stage 5 technical and memory evidence is reconciled. Scoped commit `4e473ac`
+  records its closure and advances the active pointer to Stage 6 evidence and
+  contract work; no Stage 6 implementation was performed before this gate.

@@ -1196,7 +1196,7 @@ graph also completed successfully. The user approved an initial-history
 strategy, and reviewed root commit `3c509d6` establishes the current repository
 baseline without reconstructing missing history. The technical and memory exit
 matrix is reconciled; the separately scoped closure change advances
-`ACTIVE_STAGE.md` to the Stage 6 evidence/contract gate.
+`ACTIVE_STAGE.md` to the Stage 6 evidence/contract gate in commit `4e473ac`.
 
 ### Cutover implementation status (not full exit evidence)
 

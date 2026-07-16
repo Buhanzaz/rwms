@@ -122,7 +122,8 @@ The technical verification and memory items are reconciled. The user approved
 an initial-history strategy, and reviewed root commit `3c509d6` establishes the
 current repository baseline while preserving the absence of reconstructed
 historical commits. The separately scoped closure change advances this sole
-pointer only after that baseline exists. Stage 5 is complete.
+pointer only after that baseline exists. Scoped commit `4e473ac` records the
+verified closure and Stage 6 transition. Stage 5 is complete.
 
 ## Current gate: `STAGE_6_MAINTENANCE_SERVICE`
 
