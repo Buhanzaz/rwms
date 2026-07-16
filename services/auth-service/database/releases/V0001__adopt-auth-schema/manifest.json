@@ -1,0 +1,7 @@
+{
+  "formatVersion": 1,
+  "version": "0001",
+  "description": "Adopt current auth and OAuth schema",
+  "applySha256": "33e3e80bcbcaefae473649b87cc8fac89525e6218c615329b09eeb443877aa49",
+  "verifySha256": "618f065f4dc0dc02847a43b110f19215df2d7a097a3cd0db53e57a6a58ed1661"
+}

@@ -1,0 +1,37 @@
+asyncapi: 3.1.0
+info:
+  title: RWMS Media Events
+  version: 1.0.0
+  description: >-
+    Versioned media facts and internal processing requests. Delivery is
+    at-least-once; media UUID is the Kafka record key and event UUID is the
+    consumer deduplication identity.
+defaultContentType: application/json
+servers:
+  kafka:
+    host: configured-at-runtime
+    protocol: kafka
+channels:
+  mediaFacts:
+    address: rwms.media.media.v1
+    messages:
+      mediaFactV1: { $ref: '#/components/messages/MediaFactV1' }
+  processingRequests:
+    address: rwms.media.processing.v1
+    messages:
+      processingRequestV1: { $ref: '#/components/messages/MediaProcessingRequestV1' }
+operations:
+  publishMediaFact:
+    action: send
+    channel: { $ref: '#/channels/mediaFacts' }
+  processMedia:
+    action: receive
+    channel: { $ref: '#/channels/processingRequests' }
+components:
+  messages:
+    MediaFactV1:
+      name: media.media.ready.v1
+      payload: { $ref: './media/media-events-v1.schema.json' }
+    MediaProcessingRequestV1:
+      name: media.processing.request.v1
+      payload: { $ref: './media/media-events-v1.schema.json' }

@@ -1,0 +1,252 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd"
+        objectQuotingStrategy="QUOTE_ONLY_RESERVED_WORDS">
+
+    <changeSet id="1" author="codex">
+        <validCheckSum>9:085e007c2c8ac243f905e6e329f73930</validCheckSum>
+        <createTable tableName="WORKER_CLASS">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_WORKER_CLASS"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="CODE" type="VARCHAR(64)"><constraints nullable="false"/></column>
+            <column name="NAME" type="VARCHAR(128)"><constraints nullable="false"/></column>
+            <column name="DESCRIPTION" type="VARCHAR(1000)"/>
+            <column name="SORT_ORDER" type="INT"/>
+            <column name="ACTIVE" type="BOOLEAN"/>
+        </createTable>
+        <addUniqueConstraint tableName="WORKER_CLASS" columnNames="CODE" constraintName="IDX_WORKER_CLASS_UNQ_CODE"/>
+
+        <createTable tableName="WORKER_USER">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_WORKER_USER"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="USER_ID" type="UUID"/>
+            <column name="DISPLAY_NAME" type="VARCHAR(128)"><constraints nullable="false"/></column>
+            <column name="AVATAR_URL" type="VARCHAR(500)"/>
+            <column name="ACTIVE" type="BOOLEAN"/>
+        </createTable>
+
+        <createTable tableName="WORKER_GROUP">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_WORKER_GROUP"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="WORKER_CLASS_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="NAME" type="VARCHAR(128)"><constraints nullable="false"/></column>
+            <column name="DESCRIPTION" type="VARCHAR(1000)"/>
+            <column name="ACTIVE" type="BOOLEAN"/>
+        </createTable>
+
+        <createTable tableName="WORKER_GROUP_MEMBER">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_WORKER_GROUP_MEMBER"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="WORKER_GROUP_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="WORKER_USER_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="ROLE_IN_GROUP" type="VARCHAR(128)"/>
+            <column name="ACTIVE" type="BOOLEAN"/>
+        </createTable>
+        <addUniqueConstraint tableName="WORKER_GROUP_MEMBER" columnNames="WORKER_GROUP_ID, WORKER_USER_ID" constraintName="IDX_WORKER_GROUP_MEMBER_UNQ"/>
+
+        <createTable tableName="WORK_QUEUE">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_WORK_QUEUE"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="WAREHOUSE_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="CODE" type="VARCHAR(64)"><constraints nullable="false"/></column>
+            <column name="NAME" type="VARCHAR(128)"><constraints nullable="false"/></column>
+            <column name="DESCRIPTION" type="VARCHAR(1000)"/>
+            <column name="SORT_ORDER" type="INT"/>
+            <column name="ACTIVE" type="BOOLEAN"/>
+            <column name="COLLAPSED" type="BOOLEAN"/>
+            <column name="HIDDEN" type="BOOLEAN"/>
+            <column name="SINK_QUEUE" type="BOOLEAN"/>
+            <column name="QUEUE_KIND" type="VARCHAR(32)"/>
+            <column name="NOTIFICATION_THRESHOLD" type="INT"/>
+            <column name="NOTIFY_WHEN_THRESHOLD_REACHED" type="BOOLEAN"/>
+        </createTable>
+        <addUniqueConstraint tableName="WORK_QUEUE" columnNames="WAREHOUSE_ID, CODE" constraintName="IDX_WORK_QUEUE_UNQ_WAREHOUSE_CODE"/>
+
+        <createTable tableName="WORK_QUEUE_WORKER_GROUP">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_WORK_QUEUE_WORKER_GROUP"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="QUEUE_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="WORKER_CLASS_ID" type="UUID"><constraints nullable="false"/></column>
+        </createTable>
+        <addUniqueConstraint tableName="WORK_QUEUE_WORKER_GROUP" columnNames="QUEUE_ID, WORKER_CLASS_ID" constraintName="IDX_WORK_QUEUE_WORKER_GROUP_UNQ"/>
+
+        <createTable tableName="BOARD_TASK">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_BOARD_TASK"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="TITLE" type="VARCHAR(200)"><constraints nullable="false"/></column>
+            <column name="UNIT_NUMBER" type="VARCHAR(64)"/>
+            <column name="WAREHOUSE_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="RENTAL_ITEM_ID" type="UUID"/>
+            <column name="DESCRIPTION" type="VARCHAR(2000)"/>
+            <column name="STATUS" type="VARCHAR(32)"><constraints nullable="false"/></column>
+            <column name="PLANNED_DURATION_MINUTES" type="INT"/>
+            <column name="DEADLINE_AT" type="timestamp with time zone"/>
+            <column name="DONE_AT" type="timestamp with time zone"/>
+        </createTable>
+
+        <createTable tableName="QUEUE_ENTRY">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_QUEUE_ENTRY"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="TASK_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="QUEUE_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="ROUTE_INDEX" type="INT"><constraints nullable="false"/></column>
+            <column name="POSITION" type="INT"><constraints nullable="false"/></column>
+            <column name="ENTRY_TYPE" type="VARCHAR(32)"><constraints nullable="false"/></column>
+            <column name="STATUS" type="VARCHAR(32)"><constraints nullable="false"/></column>
+            <column name="TASK_TEXT" type="VARCHAR(2000)"/>
+            <column name="PLANNED_DURATION_MINUTES" type="INT"/>
+            <column name="ACTIVE_STARTED_AT" type="timestamp with time zone"/>
+            <column name="PAUSED_AT" type="timestamp with time zone"/>
+            <column name="DONE_AT" type="timestamp with time zone"/>
+            <column name="ACTIVE_WORK_SECONDS" type="BIGINT"/>
+        </createTable>
+
+        <createTable tableName="TASK_ASSIGNMENT">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_TASK_ASSIGNMENT"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="QUEUE_ENTRY_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="WORKER_GROUP_ID" type="UUID"/>
+            <column name="WORKER_USER_ID" type="UUID"/>
+            <column name="ASSIGNED_AT" type="timestamp with time zone"/>
+            <column name="STARTED_AT" type="timestamp with time zone"/>
+            <column name="PAUSED_AT" type="timestamp with time zone"/>
+            <column name="FINISHED_AT" type="timestamp with time zone"/>
+            <column name="STATUS" type="VARCHAR(32)"><constraints nullable="false"/></column>
+        </createTable>
+
+        <createTable tableName="TASK_TIME_EVENT">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_TASK_TIME_EVENT"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="QUEUE_ENTRY_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="WORKER_USER_ID" type="UUID"/>
+            <column name="EVENT_TYPE" type="VARCHAR(32)"><constraints nullable="false"/></column>
+            <column name="REASON" type="VARCHAR(1000)"/>
+            <column name="CREATED_AT" type="timestamp with time zone"/>
+        </createTable>
+    </changeSet>
+
+    <changeSet id="2" author="codex">
+        <validCheckSum>9:6bbe02b4f4caa77e30b2c5d4874d78f7</validCheckSum>
+        <addForeignKeyConstraint baseTableName="WORKER_USER" baseColumnNames="USER_ID" referencedTableName="USER_" referencedColumnNames="ID" constraintName="FK_WORKER_USER_ON_USER"/>
+        <addForeignKeyConstraint baseTableName="WORKER_GROUP" baseColumnNames="WORKER_CLASS_ID" referencedTableName="WORKER_CLASS" referencedColumnNames="ID" constraintName="FK_WORKER_GROUP_ON_CLASS"/>
+        <addForeignKeyConstraint baseTableName="WORKER_GROUP_MEMBER" baseColumnNames="WORKER_GROUP_ID" referencedTableName="WORKER_GROUP" referencedColumnNames="ID" constraintName="FK_WORKER_GROUP_MEMBER_ON_GROUP"/>
+        <addForeignKeyConstraint baseTableName="WORKER_GROUP_MEMBER" baseColumnNames="WORKER_USER_ID" referencedTableName="WORKER_USER" referencedColumnNames="ID" constraintName="FK_WORKER_GROUP_MEMBER_ON_USER"/>
+        <addForeignKeyConstraint baseTableName="WORK_QUEUE" baseColumnNames="WAREHOUSE_ID" referencedTableName="WAREHOUSE" referencedColumnNames="ID" constraintName="FK_WORK_QUEUE_ON_WAREHOUSE"/>
+        <addForeignKeyConstraint baseTableName="WORK_QUEUE_WORKER_GROUP" baseColumnNames="QUEUE_ID" referencedTableName="WORK_QUEUE" referencedColumnNames="ID" constraintName="FK_WORK_QUEUE_GROUP_ON_QUEUE"/>
+        <addForeignKeyConstraint baseTableName="WORK_QUEUE_WORKER_GROUP" baseColumnNames="WORKER_CLASS_ID" referencedTableName="WORKER_CLASS" referencedColumnNames="ID" constraintName="FK_WORK_QUEUE_GROUP_ON_CLASS"/>
+        <addForeignKeyConstraint baseTableName="BOARD_TASK" baseColumnNames="WAREHOUSE_ID" referencedTableName="WAREHOUSE" referencedColumnNames="ID" constraintName="FK_BOARD_TASK_ON_WAREHOUSE"/>
+        <addForeignKeyConstraint baseTableName="BOARD_TASK" baseColumnNames="RENTAL_ITEM_ID" referencedTableName="RENTAL_ITEM" referencedColumnNames="ID" constraintName="FK_BOARD_TASK_ON_RENTAL_ITEM"/>
+        <addForeignKeyConstraint baseTableName="QUEUE_ENTRY" baseColumnNames="TASK_ID" referencedTableName="BOARD_TASK" referencedColumnNames="ID" constraintName="FK_QUEUE_ENTRY_ON_TASK"/>
+        <addForeignKeyConstraint baseTableName="QUEUE_ENTRY" baseColumnNames="QUEUE_ID" referencedTableName="WORK_QUEUE" referencedColumnNames="ID" constraintName="FK_QUEUE_ENTRY_ON_QUEUE"/>
+        <addForeignKeyConstraint baseTableName="TASK_ASSIGNMENT" baseColumnNames="QUEUE_ENTRY_ID" referencedTableName="QUEUE_ENTRY" referencedColumnNames="ID" constraintName="FK_TASK_ASSIGNMENT_ON_ENTRY"/>
+        <addForeignKeyConstraint baseTableName="TASK_ASSIGNMENT" baseColumnNames="WORKER_GROUP_ID" referencedTableName="WORKER_GROUP" referencedColumnNames="ID" constraintName="FK_TASK_ASSIGNMENT_ON_GROUP"/>
+        <addForeignKeyConstraint baseTableName="TASK_ASSIGNMENT" baseColumnNames="WORKER_USER_ID" referencedTableName="WORKER_USER" referencedColumnNames="ID" constraintName="FK_TASK_ASSIGNMENT_ON_USER"/>
+        <addForeignKeyConstraint baseTableName="TASK_TIME_EVENT" baseColumnNames="QUEUE_ENTRY_ID" referencedTableName="QUEUE_ENTRY" referencedColumnNames="ID" constraintName="FK_TASK_TIME_EVENT_ON_ENTRY"/>
+        <addForeignKeyConstraint baseTableName="TASK_TIME_EVENT" baseColumnNames="WORKER_USER_ID" referencedTableName="WORKER_USER" referencedColumnNames="ID" constraintName="FK_TASK_TIME_EVENT_ON_USER"/>
+    </changeSet>
+
+    <changeSet id="3" author="codex">
+        <validCheckSum>9:efad1d9b5021b13158833b5d89b67889</validCheckSum>
+        <insert tableName="WORKER_CLASS"><column name="ID" value="10000000-0000-0000-0000-000000000001"/><column name="VERSION" valueNumeric="0"/><column name="CODE" value="DRIVERS"/><column name="NAME" value="Водители"/><column name="SORT_ORDER" valueNumeric="10"/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="WORKER_CLASS"><column name="ID" value="10000000-0000-0000-0000-000000000002"/><column name="VERSION" valueNumeric="0"/><column name="CODE" value="SES"/><column name="NAME" value="СЭС"/><column name="SORT_ORDER" valueNumeric="20"/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="WORKER_CLASS"><column name="ID" value="10000000-0000-0000-0000-000000000003"/><column name="VERSION" valueNumeric="0"/><column name="CODE" value="PLUMBERS"/><column name="NAME" value="Сантехники"/><column name="SORT_ORDER" valueNumeric="30"/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="WORKER_CLASS"><column name="ID" value="10000000-0000-0000-0000-000000000004"/><column name="VERSION" valueNumeric="0"/><column name="CODE" value="ELECTRICIANS"/><column name="NAME" value="Электрики"/><column name="SORT_ORDER" valueNumeric="40"/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="WORKER_CLASS"><column name="ID" value="10000000-0000-0000-0000-000000000005"/><column name="VERSION" valueNumeric="0"/><column name="CODE" value="WORKERS"/><column name="NAME" value="Разнорабочие"/><column name="SORT_ORDER" valueNumeric="50"/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="WORKER_CLASS"><column name="ID" value="10000000-0000-0000-0000-000000000006"/><column name="VERSION" valueNumeric="0"/><column name="CODE" value="SLINGERS"/><column name="NAME" value="Стропальщики"/><column name="SORT_ORDER" valueNumeric="60"/><column name="ACTIVE" valueBoolean="true"/></insert>
+
+        <insert tableName="WORKER_USER"><column name="ID" value="11000000-0000-0000-0000-000000000001"/><column name="VERSION" valueNumeric="0"/><column name="DISPLAY_NAME" value="Иван водитель"/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="WORKER_USER"><column name="ID" value="11000000-0000-0000-0000-000000000002"/><column name="VERSION" valueNumeric="0"/><column name="DISPLAY_NAME" value="Сергей электрик"/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="WORKER_USER"><column name="ID" value="11000000-0000-0000-0000-000000000003"/><column name="VERSION" valueNumeric="0"/><column name="DISPLAY_NAME" value="Бригада СЭС"/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="WORKER_USER"><column name="ID" value="11000000-0000-0000-0000-000000000004"/><column name="VERSION" valueNumeric="0"/><column name="DISPLAY_NAME" value="Рабочий Алексей"/><column name="ACTIVE" valueBoolean="true"/></insert>
+
+        <insert tableName="WORKER_GROUP"><column name="ID" value="12000000-0000-0000-0000-000000000001"/><column name="VERSION" valueNumeric="0"/><column name="WORKER_CLASS_ID" value="10000000-0000-0000-0000-000000000001"/><column name="NAME" value="Водитель Иван"/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="WORKER_GROUP"><column name="ID" value="12000000-0000-0000-0000-000000000002"/><column name="VERSION" valueNumeric="0"/><column name="WORKER_CLASS_ID" value="10000000-0000-0000-0000-000000000005"/><column name="NAME" value="Бригада рабочих 1"/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="WORKER_GROUP"><column name="ID" value="12000000-0000-0000-0000-000000000003"/><column name="VERSION" valueNumeric="0"/><column name="WORKER_CLASS_ID" value="10000000-0000-0000-0000-000000000004"/><column name="NAME" value="Электрик Сергей"/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="WORKER_GROUP"><column name="ID" value="12000000-0000-0000-0000-000000000004"/><column name="VERSION" valueNumeric="0"/><column name="WORKER_CLASS_ID" value="10000000-0000-0000-0000-000000000002"/><column name="NAME" value="СЭС бригада 1"/><column name="ACTIVE" valueBoolean="true"/></insert>
+
+        <insert tableName="WORKER_GROUP_MEMBER"><column name="ID" value="13000000-0000-0000-0000-000000000001"/><column name="VERSION" valueNumeric="0"/><column name="WORKER_GROUP_ID" value="12000000-0000-0000-0000-000000000001"/><column name="WORKER_USER_ID" value="11000000-0000-0000-0000-000000000001"/><column name="ROLE_IN_GROUP" value="Водитель"/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="WORKER_GROUP_MEMBER"><column name="ID" value="13000000-0000-0000-0000-000000000002"/><column name="VERSION" valueNumeric="0"/><column name="WORKER_GROUP_ID" value="12000000-0000-0000-0000-000000000002"/><column name="WORKER_USER_ID" value="11000000-0000-0000-0000-000000000004"/><column name="ROLE_IN_GROUP" value="Рабочий"/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="WORKER_GROUP_MEMBER"><column name="ID" value="13000000-0000-0000-0000-000000000003"/><column name="VERSION" valueNumeric="0"/><column name="WORKER_GROUP_ID" value="12000000-0000-0000-0000-000000000003"/><column name="WORKER_USER_ID" value="11000000-0000-0000-0000-000000000002"/><column name="ROLE_IN_GROUP" value="Электрик"/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="WORKER_GROUP_MEMBER"><column name="ID" value="13000000-0000-0000-0000-000000000004"/><column name="VERSION" valueNumeric="0"/><column name="WORKER_GROUP_ID" value="12000000-0000-0000-0000-000000000004"/><column name="WORKER_USER_ID" value="11000000-0000-0000-0000-000000000003"/><column name="ROLE_IN_GROUP" value="СЭС"/><column name="ACTIVE" valueBoolean="true"/></insert>
+
+        <insert tableName="WORK_QUEUE"><column name="ID" value="14000000-0000-0000-0000-000000000001"/><column name="VERSION" valueNumeric="0"/><column name="WAREHOUSE_ID" value="00000000-0000-0000-0000-000000000001"/><column name="CODE" value="MOVE_TO_REPAIR"/><column name="NAME" value="Перемещение на ремонт"/><column name="SORT_ORDER" valueNumeric="10"/><column name="ACTIVE" valueBoolean="true"/><column name="COLLAPSED" valueBoolean="false"/><column name="HIDDEN" valueBoolean="false"/><column name="SINK_QUEUE" valueBoolean="false"/><column name="QUEUE_KIND" value="REPAIR"/><column name="NOTIFY_WHEN_THRESHOLD_REACHED" valueBoolean="false"/></insert>
+        <insert tableName="WORK_QUEUE"><column name="ID" value="14000000-0000-0000-0000-000000000002"/><column name="VERSION" valueNumeric="0"/><column name="WAREHOUSE_ID" value="00000000-0000-0000-0000-000000000001"/><column name="CODE" value="WORKERS"/><column name="NAME" value="Рабочие"/><column name="SORT_ORDER" valueNumeric="20"/><column name="ACTIVE" valueBoolean="true"/><column name="COLLAPSED" valueBoolean="false"/><column name="HIDDEN" valueBoolean="false"/><column name="SINK_QUEUE" valueBoolean="false"/><column name="QUEUE_KIND" value="REPAIR"/><column name="NOTIFY_WHEN_THRESHOLD_REACHED" valueBoolean="false"/></insert>
+        <insert tableName="WORK_QUEUE"><column name="ID" value="14000000-0000-0000-0000-000000000003"/><column name="VERSION" valueNumeric="0"/><column name="WAREHOUSE_ID" value="00000000-0000-0000-0000-000000000001"/><column name="CODE" value="ELECTRICIAN"/><column name="NAME" value="Электрик"/><column name="SORT_ORDER" valueNumeric="30"/><column name="ACTIVE" valueBoolean="true"/><column name="COLLAPSED" valueBoolean="false"/><column name="HIDDEN" valueBoolean="false"/><column name="SINK_QUEUE" valueBoolean="false"/><column name="QUEUE_KIND" value="REPAIR"/><column name="NOTIFY_WHEN_THRESHOLD_REACHED" valueBoolean="false"/></insert>
+        <insert tableName="WORK_QUEUE"><column name="ID" value="14000000-0000-0000-0000-000000000004"/><column name="VERSION" valueNumeric="0"/><column name="WAREHOUSE_ID" value="00000000-0000-0000-0000-000000000001"/><column name="CODE" value="SES"/><column name="NAME" value="СЭС"/><column name="SORT_ORDER" valueNumeric="40"/><column name="ACTIVE" valueBoolean="true"/><column name="COLLAPSED" valueBoolean="false"/><column name="HIDDEN" valueBoolean="false"/><column name="SINK_QUEUE" valueBoolean="true"/><column name="QUEUE_KIND" value="CAPITAL_REPAIR"/><column name="NOTIFICATION_THRESHOLD" valueNumeric="20"/><column name="NOTIFY_WHEN_THRESHOLD_REACHED" valueBoolean="true"/></insert>
+        <insert tableName="WORK_QUEUE"><column name="ID" value="14000000-0000-0000-0000-000000000005"/><column name="VERSION" valueNumeric="0"/><column name="WAREHOUSE_ID" value="00000000-0000-0000-0000-000000000001"/><column name="CODE" value="MOVE_TO_STORAGE"/><column name="NAME" value="Перемещение на хранение"/><column name="SORT_ORDER" valueNumeric="50"/><column name="ACTIVE" valueBoolean="true"/><column name="COLLAPSED" valueBoolean="false"/><column name="HIDDEN" valueBoolean="false"/><column name="SINK_QUEUE" valueBoolean="false"/><column name="QUEUE_KIND" value="REPAIR"/><column name="NOTIFY_WHEN_THRESHOLD_REACHED" valueBoolean="false"/></insert>
+
+        <insert tableName="WORK_QUEUE_WORKER_GROUP"><column name="ID" value="15000000-0000-0000-0000-000000000001"/><column name="VERSION" valueNumeric="0"/><column name="QUEUE_ID" value="14000000-0000-0000-0000-000000000001"/><column name="WORKER_CLASS_ID" value="10000000-0000-0000-0000-000000000001"/></insert>
+        <insert tableName="WORK_QUEUE_WORKER_GROUP"><column name="ID" value="15000000-0000-0000-0000-000000000002"/><column name="VERSION" valueNumeric="0"/><column name="QUEUE_ID" value="14000000-0000-0000-0000-000000000002"/><column name="WORKER_CLASS_ID" value="10000000-0000-0000-0000-000000000005"/></insert>
+        <insert tableName="WORK_QUEUE_WORKER_GROUP"><column name="ID" value="15000000-0000-0000-0000-000000000003"/><column name="VERSION" valueNumeric="0"/><column name="QUEUE_ID" value="14000000-0000-0000-0000-000000000003"/><column name="WORKER_CLASS_ID" value="10000000-0000-0000-0000-000000000004"/></insert>
+        <insert tableName="WORK_QUEUE_WORKER_GROUP"><column name="ID" value="15000000-0000-0000-0000-000000000004"/><column name="VERSION" valueNumeric="0"/><column name="QUEUE_ID" value="14000000-0000-0000-0000-000000000004"/><column name="WORKER_CLASS_ID" value="10000000-0000-0000-0000-000000000002"/></insert>
+        <insert tableName="WORK_QUEUE_WORKER_GROUP"><column name="ID" value="15000000-0000-0000-0000-000000000005"/><column name="VERSION" valueNumeric="0"/><column name="QUEUE_ID" value="14000000-0000-0000-0000-000000000005"/><column name="WORKER_CLASS_ID" value="10000000-0000-0000-0000-000000000001"/></insert>
+
+        <insert tableName="BOARD_TASK"><column name="ID" value="16000000-0000-0000-0000-000000000001"/><column name="VERSION" valueNumeric="0"/><column name="TITLE" value="Бытовка 240101"/><column name="UNIT_NUMBER" value="240101"/><column name="WAREHOUSE_ID" value="00000000-0000-0000-0000-000000000001"/><column name="DESCRIPTION" value="Подготовить бытовку после аренды"/><column name="STATUS" value="ACTIVE"/><column name="PLANNED_DURATION_MINUTES" valueNumeric="240"/></insert>
+        <insert tableName="QUEUE_ENTRY"><column name="ID" value="17000000-0000-0000-0000-000000000001"/><column name="VERSION" valueNumeric="0"/><column name="TASK_ID" value="16000000-0000-0000-0000-000000000001"/><column name="QUEUE_ID" value="14000000-0000-0000-0000-000000000001"/><column name="ROUTE_INDEX" valueNumeric="0"/><column name="POSITION" valueNumeric="0"/><column name="ENTRY_TYPE" value="REAL"/><column name="STATUS" value="WAITING"/><column name="TASK_TEXT" value="Переместить бытовку в ремонтную зону"/><column name="PLANNED_DURATION_MINUTES" valueNumeric="45"/><column name="ACTIVE_WORK_SECONDS" valueNumeric="0"/></insert>
+        <insert tableName="QUEUE_ENTRY"><column name="ID" value="17000000-0000-0000-0000-000000000002"/><column name="VERSION" valueNumeric="0"/><column name="TASK_ID" value="16000000-0000-0000-0000-000000000001"/><column name="QUEUE_ID" value="14000000-0000-0000-0000-000000000002"/><column name="ROUTE_INDEX" valueNumeric="1"/><column name="POSITION" valueNumeric="0"/><column name="ENTRY_TYPE" value="SHADOW"/><column name="STATUS" value="WAITING"/><column name="TASK_TEXT" value="Осмотреть отделку и подготовить фронт работ"/><column name="PLANNED_DURATION_MINUTES" valueNumeric="120"/><column name="ACTIVE_WORK_SECONDS" valueNumeric="0"/></insert>
+        <insert tableName="QUEUE_ENTRY"><column name="ID" value="17000000-0000-0000-0000-000000000003"/><column name="VERSION" valueNumeric="0"/><column name="TASK_ID" value="16000000-0000-0000-0000-000000000001"/><column name="QUEUE_ID" value="14000000-0000-0000-0000-000000000003"/><column name="ROUTE_INDEX" valueNumeric="2"/><column name="POSITION" valueNumeric="0"/><column name="ENTRY_TYPE" value="SHADOW"/><column name="STATUS" value="WAITING"/><column name="TASK_TEXT" value="Проверить электрику"/><column name="PLANNED_DURATION_MINUTES" valueNumeric="60"/><column name="ACTIVE_WORK_SECONDS" valueNumeric="0"/></insert>
+    </changeSet>
+</databaseChangeLog>

@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view"
+      title="msg://RepairEstimateCatalogNodeDetailView.title"
+      focusComponent="form">
+    <data>
+        <instance id="repairEstimateCatalogNodeDc" class="dev.buhanzaz.wmspanel.entity.RepairEstimateCatalogNode">
+            <fetchPlan extends="_base">
+                <property name="parent" fetchPlan="_base"/>
+                <property name="workQueue">
+                    <property name="warehouse" fetchPlan="_base"/>
+                </property>
+            </fetchPlan>
+            <loader/>
+        </instance>
+        <collection id="parentNodesDc" class="dev.buhanzaz.wmspanel.entity.RepairEstimateCatalogNode">
+            <fetchPlan extends="_base"/>
+            <loader id="parentNodesDl" readOnly="true">
+                <query><![CDATA[
+                    select e from RepairEstimateCatalogNode e
+                    order by coalesce(e.sortOrder, 2147483647), e.name
+                ]]></query>
+            </loader>
+        </collection>
+        <collection id="workQueuesDc" class="dev.buhanzaz.wmspanel.entity.WorkQueue">
+            <fetchPlan extends="_base">
+                <property name="warehouse" fetchPlan="_base"/>
+            </fetchPlan>
+            <loader id="workQueuesDl" readOnly="true">
+                <query><![CDATA[
+                    select e from WorkQueue e
+                    where e.active = true
+                    order by e.warehouse.sortOrder, e.warehouse.name, e.sortOrder, e.name
+                ]]></query>
+            </loader>
+        </collection>
+    </data>
+    <actions>
+        <action id="saveCloseAction" type="detail_saveClose"/>
+        <action id="closeAction" type="detail_close"/>
+    </actions>
+    <facets>
+        <dataLoadCoordinator auto="true"/>
+    </facets>
+    <layout>
+        <formLayout id="form" dataContainer="repairEstimateCatalogNodeDc">
+            <textField id="nameField" property="name" required="true"/>
+            <textField id="codeField" property="code" required="true"/>
+            <comboBox id="nodeTypeField" property="nodeType" required="true"/>
+            <entityComboBox id="parentField" property="parent" itemsContainer="parentNodesDc"/>
+            <entityComboBox id="workQueueField" property="workQueue" itemsContainer="workQueuesDc"/>
+            <checkbox id="includeInEstimateField" property="includeInEstimate"/>
+            <checkbox id="commonItemField" property="commonItem"/>
+            <checkbox id="activeField" property="active"/>
+            <integerField id="sortOrderField" property="sortOrder"/>
+            <checkbox id="showInMainMenuField" property="showInMainMenu"/>
+            <integerField id="mainMenuOrderField" property="mainMenuOrder"/>
+            <textField id="mainMenuTitleField" property="mainMenuTitle"/>
+            <textField id="unitField" property="unit"/>
+            <bigDecimalField id="unitPriceField" property="unitPrice"/>
+            <integerField id="defaultQuantityField" property="defaultQuantity"/>
+            <checkbox id="additionalOptionField" property="additionalOption"/>
+            <integerField id="canvasXField" property="canvasX"/>
+            <integerField id="canvasYField" property="canvasY"/>
+            <textArea id="commentField" property="comment"/>
+        </formLayout>
+        <hbox id="detailActions">
+            <button id="saveAndCloseButton" action="saveCloseAction"/>
+            <button id="closeButton" action="closeAction"/>
+        </hbox>
+    </layout>
+</view>

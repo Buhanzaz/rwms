@@ -1,0 +1,62 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://rwms.example/contracts/events/technical/event-store-convention-v1.schema.yaml
+title: RWMS Service-local Event Store Convention V1
+description: >-
+  Technical persistence convention only. Each stateful service owns its SQL,
+  JPA mappings, event payloads, projections and lifecycle.
+type: object
+required: [serviceOwner, tables]
+properties:
+  serviceOwner:
+    type: string
+  tables:
+    type: array
+    uniqueItems: true
+    minItems: 7
+    maxItems: 7
+    items:
+      enum:
+        - event_stream_head
+        - domain_event
+        - aggregate_snapshot
+        - projection_checkpoint
+        - outbox_event
+        - inbox_message
+        - consumer_aggregate_checkpoint
+additionalProperties: false
+x-rwms-convention:
+  snapshotThreshold: 100
+  tables:
+    event_stream_head:
+      purpose: CAS serialization point per aggregate stream
+      unique: [aggregate_type, aggregate_id]
+    domain_event:
+      purpose: append-only authoritative non-secret domain facts
+      unique: [aggregate_type, aggregate_id, aggregate_version]
+      occurredAtNullable: true
+      recordedAtRequired: true
+    aggregate_snapshot:
+      purpose: optional replay acceleration, never canonical history
+    projection_checkpoint:
+      purpose: service-local projection replay progress
+    outbox_event:
+      purpose: transactional transport intent marked published only after broker acknowledgement
+    inbox_message:
+      purpose: consumer-owned eventId deduplication in the same transaction as the effect
+      unique: [consumer_group, event_id]
+    consumer_aggregate_checkpoint:
+      purpose: per-consumer aggregate ordering, gap block and reconciliation state
+      unique: [consumer_group, aggregate_type, aggregate_id]
+  transaction:
+    appendProjectionAndOutbox: ONE_POSTGRES_TRANSACTION
+    consumerEffectInboxAndCheckpoint: ONE_POSTGRES_TRANSACTION
+    streamMutation: COMPARE_AND_SET_EXPECTED_VERSION
+    multiStream:
+      streamHeadLockOrder: STABLE_AGGREGATE_TYPE_AND_ID
+      casAppendsAndProjections: ONE_POSTGRES_TRANSACTION
+    kafkaTransactionReplacesOutbox: false
+    chainedTransactionManagerAllowed: false
+  ownership:
+    serviceLocalSqlAndMappings: true
+    crossDatabaseForeignKeys: false
+    sharedJpaEntities: false

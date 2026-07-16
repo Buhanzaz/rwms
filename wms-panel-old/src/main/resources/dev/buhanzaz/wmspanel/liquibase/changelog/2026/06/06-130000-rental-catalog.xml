@@ -1,0 +1,429 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd"
+        objectQuotingStrategy="QUOTE_ONLY_RESERVED_WORDS">
+
+    <changeSet id="1" author="codex">
+        <createTable tableName="RENTAL_CATEGORY">
+            <column name="ID" type="UUID">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="PK_RENTAL_CATEGORY"/>
+            </column>
+            <column name="VERSION" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="NAME" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="CODE" type="VARCHAR(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ACTIVE" type="BOOLEAN"/>
+            <column name="SORT_ORDER" type="INT"/>
+        </createTable>
+
+        <createTable tableName="RENTAL_SUBCATEGORY">
+            <column name="ID" type="UUID">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="PK_RENTAL_SUBCATEGORY"/>
+            </column>
+            <column name="VERSION" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="CATEGORY_ID" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="NAME" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="CODE" type="VARCHAR(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ACTIVE" type="BOOLEAN"/>
+            <column name="SORT_ORDER" type="INT"/>
+        </createTable>
+
+        <createTable tableName="RENTAL_TYPE">
+            <column name="ID" type="UUID">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="PK_RENTAL_TYPE"/>
+            </column>
+            <column name="VERSION" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="SUBCATEGORY_ID" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="NAME" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="CODE" type="VARCHAR(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="ACTIVE" type="BOOLEAN"/>
+            <column name="SORT_ORDER" type="INT"/>
+        </createTable>
+
+        <createTable tableName="RENTAL_ITEM">
+            <column name="ID" type="UUID">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="PK_RENTAL_ITEM"/>
+            </column>
+            <column name="VERSION" type="INT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="NUMBER" type="VARCHAR(128)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="CATEGORY_ID" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="SUBCATEGORY_ID" type="UUID"/>
+            <column name="TYPE_ID" type="UUID"/>
+            <column name="STATUS" type="VARCHAR(64)"/>
+            <column name="COMMENT_" type="VARCHAR(1000)"/>
+        </createTable>
+
+        <addUniqueConstraint tableName="RENTAL_CATEGORY"
+                             columnNames="CODE"
+                             constraintName="IDX_RENTAL_CATEGORY_UNQ_CODE"/>
+        <addUniqueConstraint tableName="RENTAL_SUBCATEGORY"
+                             columnNames="CATEGORY_ID, CODE"
+                             constraintName="IDX_RENTAL_SUBCATEGORY_UNQ_CODE"/>
+        <addUniqueConstraint tableName="RENTAL_TYPE"
+                             columnNames="SUBCATEGORY_ID, CODE"
+                             constraintName="IDX_RENTAL_TYPE_UNQ_CODE"/>
+        <addUniqueConstraint tableName="RENTAL_ITEM"
+                             columnNames="NUMBER"
+                             constraintName="IDX_RENTAL_ITEM_UNQ_NUMBER"/>
+
+        <addForeignKeyConstraint baseTableName="RENTAL_SUBCATEGORY"
+                                 baseColumnNames="CATEGORY_ID"
+                                 referencedTableName="RENTAL_CATEGORY"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_RENTAL_SUBCATEGORY_ON_CATEGORY"/>
+        <addForeignKeyConstraint baseTableName="RENTAL_TYPE"
+                                 baseColumnNames="SUBCATEGORY_ID"
+                                 referencedTableName="RENTAL_SUBCATEGORY"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_RENTAL_TYPE_ON_SUBCATEGORY"/>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM"
+                                 baseColumnNames="CATEGORY_ID"
+                                 referencedTableName="RENTAL_CATEGORY"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_RENTAL_ITEM_ON_CATEGORY"/>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM"
+                                 baseColumnNames="SUBCATEGORY_ID"
+                                 referencedTableName="RENTAL_SUBCATEGORY"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_RENTAL_ITEM_ON_SUBCATEGORY"/>
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM"
+                                 baseColumnNames="TYPE_ID"
+                                 referencedTableName="RENTAL_TYPE"
+                                 referencedColumnNames="ID"
+                                 constraintName="FK_RENTAL_ITEM_ON_TYPE"/>
+    </changeSet>
+
+    <changeSet id="2" author="codex">
+        <insert tableName="RENTAL_CATEGORY">
+            <column name="ID" value="11111111-1111-1111-1111-111111111111"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="NAME" value="Бытовки"/>
+            <column name="CODE" value="CABINS"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="10"/>
+        </insert>
+        <insert tableName="RENTAL_CATEGORY">
+            <column name="ID" value="22222222-2222-2222-2222-222222222222"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="NAME" value="Контейнеры"/>
+            <column name="CODE" value="CONTAINERS"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="20"/>
+        </insert>
+        <insert tableName="RENTAL_CATEGORY">
+            <column name="ID" value="33333333-3333-3333-3333-333333333333"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="NAME" value="Строительные леса"/>
+            <column name="CODE" value="SCAFFOLDING"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="30"/>
+        </insert>
+        <insert tableName="RENTAL_CATEGORY">
+            <column name="ID" value="44444444-4444-4444-4444-444444444444"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="NAME" value="Мебель"/>
+            <column name="CODE" value="FURNITURE"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="40"/>
+        </insert>
+
+        <insert tableName="RENTAL_SUBCATEGORY">
+            <column name="ID" value="11111111-1111-1111-1111-111111111201"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="CATEGORY_ID" value="11111111-1111-1111-1111-111111111111"/>
+            <column name="NAME" value="Обычная бытовка"/>
+            <column name="CODE" value="STANDARD_CABIN"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="10"/>
+        </insert>
+        <insert tableName="RENTAL_SUBCATEGORY">
+            <column name="ID" value="11111111-1111-1111-1111-111111111202"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="CATEGORY_ID" value="11111111-1111-1111-1111-111111111111"/>
+            <column name="NAME" value="Модуль"/>
+            <column name="CODE" value="MODULE"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="20"/>
+        </insert>
+        <insert tableName="RENTAL_SUBCATEGORY">
+            <column name="ID" value="11111111-1111-1111-1111-111111111203"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="CATEGORY_ID" value="11111111-1111-1111-1111-111111111111"/>
+            <column name="NAME" value="Пост охраны"/>
+            <column name="CODE" value="GUARD_POST"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="30"/>
+        </insert>
+        <insert tableName="RENTAL_SUBCATEGORY">
+            <column name="ID" value="11111111-1111-1111-1111-111111111204"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="CATEGORY_ID" value="11111111-1111-1111-1111-111111111111"/>
+            <column name="NAME" value="Санблок"/>
+            <column name="CODE" value="SANITARY_BLOCK"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="40"/>
+        </insert>
+        <insert tableName="RENTAL_SUBCATEGORY">
+            <column name="ID" value="22222222-2222-2222-2222-222222222201"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="CATEGORY_ID" value="22222222-2222-2222-2222-222222222222"/>
+            <column name="NAME" value="Контейнер"/>
+            <column name="CODE" value="CONTAINER"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="10"/>
+        </insert>
+        <insert tableName="RENTAL_SUBCATEGORY">
+            <column name="ID" value="33333333-3333-3333-3333-333333333201"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="CATEGORY_ID" value="33333333-3333-3333-3333-333333333333"/>
+            <column name="NAME" value="Строительные леса"/>
+            <column name="CODE" value="SCAFFOLDING"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="10"/>
+        </insert>
+        <insert tableName="RENTAL_SUBCATEGORY">
+            <column name="ID" value="44444444-4444-4444-4444-444444444201"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="CATEGORY_ID" value="44444444-4444-4444-4444-444444444444"/>
+            <column name="NAME" value="Столы"/>
+            <column name="CODE" value="TABLES"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="10"/>
+        </insert>
+        <insert tableName="RENTAL_SUBCATEGORY">
+            <column name="ID" value="44444444-4444-4444-4444-444444444202"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="CATEGORY_ID" value="44444444-4444-4444-4444-444444444444"/>
+            <column name="NAME" value="Лавки"/>
+            <column name="CODE" value="BENCHES"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="20"/>
+        </insert>
+        <insert tableName="RENTAL_SUBCATEGORY">
+            <column name="ID" value="44444444-4444-4444-4444-444444444203"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="CATEGORY_ID" value="44444444-4444-4444-4444-444444444444"/>
+            <column name="NAME" value="Стулья"/>
+            <column name="CODE" value="CHAIRS"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="30"/>
+        </insert>
+
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111301"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="11111111-1111-1111-1111-111111111201"/>
+            <column name="NAME" value="БК1"/>
+            <column name="CODE" value="BK1"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="10"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111302"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="11111111-1111-1111-1111-111111111201"/>
+            <column name="NAME" value="БК2"/>
+            <column name="CODE" value="BK2"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="20"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111303"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="11111111-1111-1111-1111-111111111201"/>
+            <column name="NAME" value="БК3"/>
+            <column name="CODE" value="BK3"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="30"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111304"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="11111111-1111-1111-1111-111111111202"/>
+            <column name="NAME" value="Модуль из 2"/>
+            <column name="CODE" value="MODULE_2"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="10"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111305"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="11111111-1111-1111-1111-111111111202"/>
+            <column name="NAME" value="Модуль из 3"/>
+            <column name="CODE" value="MODULE_3"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="20"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111306"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="11111111-1111-1111-1111-111111111203"/>
+            <column name="NAME" value="ПО 1x1"/>
+            <column name="CODE" value="POST_1X1"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="10"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111307"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="11111111-1111-1111-1111-111111111203"/>
+            <column name="NAME" value="ПО 2x2"/>
+            <column name="CODE" value="POST_2X2"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="20"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111308"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="11111111-1111-1111-1111-111111111203"/>
+            <column name="NAME" value="ПО 3x3"/>
+            <column name="CODE" value="POST_3X3"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="30"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111309"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="11111111-1111-1111-1111-111111111204"/>
+            <column name="NAME" value="СБ1"/>
+            <column name="CODE" value="SB1"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="10"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111310"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="11111111-1111-1111-1111-111111111204"/>
+            <column name="NAME" value="СБ2"/>
+            <column name="CODE" value="SB2"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="20"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111311"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="11111111-1111-1111-1111-111111111204"/>
+            <column name="NAME" value="СБ3"/>
+            <column name="CODE" value="SB3"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="30"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111312"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="22222222-2222-2222-2222-222222222201"/>
+            <column name="NAME" value="20 футов"/>
+            <column name="CODE" value="20FT"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="10"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111313"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="22222222-2222-2222-2222-222222222201"/>
+            <column name="NAME" value="40 футов"/>
+            <column name="CODE" value="40FT"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="20"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111314"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="33333333-3333-3333-3333-333333333201"/>
+            <column name="NAME" value="Леса строительные"/>
+            <column name="CODE" value="SCAFFOLD_SET"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="10"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111315"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="44444444-4444-4444-4444-444444444201"/>
+            <column name="NAME" value="Стол обычный"/>
+            <column name="CODE" value="TABLE_STANDARD"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="10"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111316"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="44444444-4444-4444-4444-444444444201"/>
+            <column name="NAME" value="Стол складной"/>
+            <column name="CODE" value="TABLE_FOLDING"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="20"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111317"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="44444444-4444-4444-4444-444444444202"/>
+            <column name="NAME" value="Лавка обычная"/>
+            <column name="CODE" value="BENCH_STANDARD"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="10"/>
+        </insert>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="11111111-1111-1111-1111-111111111318"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" value="44444444-4444-4444-4444-444444444203"/>
+            <column name="NAME" value="Стул обычный"/>
+            <column name="CODE" value="CHAIR_STANDARD"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="10"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

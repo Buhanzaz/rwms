@@ -1,0 +1,196 @@
+- generic [ref=e2]:
+  - generic [ref=e4]:
+    - generic [ref=e7]:
+      - list [ref=e9]:
+        - listitem [ref=e10]:
+          - link "WMS Panel СПБ" [ref=e11] [cursor=pointer]:
+            - /url: /
+            - generic [ref=e16]:
+              - generic [ref=e17]: WMS Panel
+              - generic [ref=e18]: СПБ
+      - generic [ref=e19]:
+        - combobox "Выбор склада" [ref=e22] [cursor=pointer]:
+          - generic: СПБ
+        - generic [ref=e23]:
+          - generic [ref=e24]: Обзор
+          - list [ref=e26]:
+            - listitem [ref=e27]:
+              - link "Главная" [ref=e28] [cursor=pointer]:
+                - /url: /
+            - listitem [ref=e36]:
+              - link "KPI" [ref=e37] [cursor=pointer]:
+                - /url: /kpi
+        - generic [ref=e43]:
+          - generic [ref=e44]: Имущество
+          - list [ref=e46]:
+            - listitem [ref=e47]:
+              - link "Склад" [ref=e48] [cursor=pointer]:
+                - /url: /warehouse
+            - listitem [ref=e54]:
+              - link "Доп. оборудование" [ref=e55] [cursor=pointer]:
+                - /url: /equipment
+            - listitem [ref=e203]:
+              - button "Инвентаризация" [expanded] [ref=e204] [cursor=pointer]
+              - list [ref=e213]:
+                - listitem [ref=e214]:
+                  - link "Продолжить инвентаризацию" [ref=e215] [cursor=pointer]:
+                    - /url: /inventory/inventory-7c894ac7-145b-4317-9f80-7e5e9ec1e8d5
+                - listitem [ref=e221]:
+                  - link "Закончить инвентаризацию" [ref=e222] [cursor=pointer]:
+                    - /url: /inventory/inventory-7c894ac7-145b-4317-9f80-7e5e9ec1e8d5/finish
+                - listitem [ref=e227]:
+                  - link "История инвентаризаций" [ref=e228] [cursor=pointer]:
+                    - /url: /inventory/history
+            - listitem [ref=e233]:
+              - button "Списание" [ref=e234] [cursor=pointer]
+        - generic [ref=e95]:
+          - generic [ref=e96]: Логистика
+          - list [ref=e98]:
+            - listitem [ref=e99]:
+              - link "Возврат из аренды" [ref=e100] [cursor=pointer]:
+                - /url: /logistics/returns
+            - listitem [ref=e107]:
+              - link "Отгрузка в аренду" [ref=e108] [cursor=pointer]:
+                - /url: /logistics/shipments
+        - generic [ref=e116]:
+          - generic [ref=e117]: Ремонтный цикл
+          - list [ref=e119]:
+            - listitem [ref=e120]:
+              - link "Сметы" [ref=e121] [cursor=pointer]:
+                - /url: /estimates
+            - listitem [ref=e127]:
+              - link "Ремонты" [ref=e128] [cursor=pointer]:
+                - /url: /repairs
+            - listitem [ref=e134]:
+              - link "Доска задач" [ref=e135] [cursor=pointer]:
+                - /url: /task-board
+            - listitem [ref=e142]:
+              - link "Приёмка и доработки" [ref=e143] [cursor=pointer]:
+                - /url: /acceptance
+      - list [ref=e150]:
+        - listitem [ref=e151]:
+          - button "Настройки" [ref=e152] [cursor=pointer]
+        - listitem [ref=e160]:
+          - button "Локальный администратор Выйти" [ref=e161] [cursor=pointer]:
+            - generic [ref=e166]: Локальный администратор
+            - generic [ref=e167]: Выйти
+    - main [ref=e168]:
+      - generic [ref=e170]:
+        - button "Открыть или свернуть меню" [ref=e171] [cursor=pointer]
+        - navigation "Навигационная цепочка" [ref=e173]:
+          - list [ref=e174]:
+            - listitem [ref=e175]:
+              - link "Инвентаризация" [ref=e243] [cursor=pointer]:
+                - /url: /inventory
+            - listitem [ref=e244]
+            - listitem [ref=e247]:
+              - link "Сессия" [disabled] [ref=e248]
+      - generic [ref=e1358]:
+        - generic [ref=e1359]:
+          - button "Назад" [ref=e1360] [cursor=pointer]
+          - button "Сохранить осмотр" [ref=e1362] [cursor=pointer]
+        - region "Осмотр бытовки при инвентаризации" [ref=e1363]:
+          - generic [ref=e1364]:
+            - generic [ref=e1367]:
+              - generic [ref=e1368]:
+                - generic [ref=e1369]: 0 из 20
+                - button "Добавить" [ref=e1370] [cursor=pointer]
+              - generic [ref=e1371]: Фото не загружены.
+            - generic [ref=e1379]:
+              - generic [ref=e1380]:
+                - generic [ref=e1381]:
+                  - heading "Смета" [level=3] [ref=e1382]
+                  - paragraph [ref=e1383]: Работа, материал, количество и цена сохраняются отдельными полями.
+                - button "Добавить строку" [ref=e1384] [cursor=pointer]
+              - generic [ref=e1385]:
+                - generic [ref=e1386]: Строк пока нет
+                - generic [ref=e1388]: Пустую смету можно сохранить или завершить. Для добавления выберите позицию каталога либо создайте ручную строку.
+            - generic [ref=e1389]:
+              - generic [ref=e1390]:
+                - generic [ref=e1391]: Информация
+                - generic [ref=e1392]: Паспортные данные и причина зафиксированы; комментарий можно дополнить.
+              - generic [ref=e1394]:
+                - group [ref=e1395]:
+                  - generic [ref=e1396]: Бытовка
+                  - textbox "Бытовка" [ref=e1397]: БЫТ-001
+                - group [ref=e1398]:
+                  - generic [ref=e1399]: Причина
+                  - textbox "Причина" [ref=e1400]: Инвентаризация
+                - group [ref=e1401]:
+                  - generic [ref=e1402]: Дата
+                  - textbox "Дата" [ref=e1403]: 2026-07-11
+                - group [ref=e1404]:
+                  - generic [ref=e1405]: Статус
+                  - textbox "Статус" [ref=e1406]: Свободна
+                - group [ref=e1407]:
+                  - generic [ref=e1408]: Арендатор
+                  - textbox "Арендатор" [ref=e1409]: —
+                - group [ref=e1410]:
+                  - generic [ref=e1411]: Комментарий
+                  - textbox "Комментарий" [ref=e1412]
+            - generic [ref=e1413]:
+              - generic [ref=e1414]:
+                - generic [ref=e1415]: Каталог
+                - generic [ref=e1416]: Добавьте работы и материалы, которые нужно передать в ремонт.
+              - generic [ref=e1418]:
+                - generic [ref=e1419]:
+                  - group [ref=e1420]:
+                    - generic [ref=e1421]: Поиск
+                    - textbox "Поиск по каталогу сметы" [ref=e1423]:
+                      - /placeholder: Работа или материал
+                  - group [ref=e1424]:
+                    - generic [ref=e1425]: Режим каталога
+                    - combobox "Режим каталога" [ref=e1426] [cursor=pointer]:
+                      - generic: Работы + материалы
+                - navigation "Путь по каталогу" [ref=e1427]:
+                  - button "Главное меню" [ref=e1429] [cursor=pointer]
+                  - generic [ref=e1494]:
+                    - generic [ref=e1495]: /
+                    - button "Окна/Витражи" [ref=e1496] [cursor=pointer]
+                  - button "Назад" [ref=e1497] [cursor=pointer]
+                - generic [ref=e1430]:
+                  - 'button "Открыть: Окна ПВХ" [ref=e1498] [cursor=pointer]':
+                    - generic [ref=e1499]:
+                      - generic [ref=e1500]: Окна ПВХ
+                      - generic [ref=e1502]: Подкатегория
+                  - 'button "Открыть: Ремонт/Замена Витражи ПВХ" [ref=e1505] [cursor=pointer]':
+                    - generic [ref=e1506]:
+                      - generic [ref=e1507]: Ремонт/Замена Витражи ПВХ
+                      - generic [ref=e1509]: Подкатегория
+                  - 'button "Выбрать: Витраж ПВХ в сборе 2000х2000 мм" [ref=e1512] [cursor=pointer]':
+                    - generic [ref=e1513]:
+                      - generic [ref=e1514]: Витраж ПВХ в сборе 2000х2000 мм
+                      - generic [ref=e1517]:
+                        - generic [ref=e1518]: Материал
+                        - generic [ref=e1519]: Смета
+                  - 'button "Выбрать: Окно ПВХ 800*1000" [ref=e1520] [cursor=pointer]':
+                    - generic [ref=e1521]:
+                      - generic [ref=e1522]: Окно ПВХ 800*1000
+                      - generic [ref=e1525]:
+                        - generic [ref=e1526]: Материал
+                        - generic [ref=e1527]: Смета
+                  - 'button "Выбрать: Окно ПВХ 900*1100" [ref=e1528] [cursor=pointer]':
+                    - generic [ref=e1529]:
+                      - generic [ref=e1530]: Окно ПВХ 900*1100
+                      - generic [ref=e1533]:
+                        - generic [ref=e1534]: Материал
+                        - generic [ref=e1535]: Смета
+                  - 'button "Выбрать: Оконная решетка металлическая" [ref=e1536] [cursor=pointer]':
+                    - generic [ref=e1537]:
+                      - generic [ref=e1538]: Оконная решетка металлическая
+                      - generic [ref=e1541]:
+                        - generic [ref=e1542]: Материал
+                        - generic [ref=e1543]: Смета
+                  - 'button "Выбрать: Ручка оконная для ПВХ окон" [ref=e1544] [cursor=pointer]':
+                    - generic [ref=e1545]:
+                      - generic [ref=e1546]: Ручка оконная для ПВХ окон
+                      - generic [ref=e1549]:
+                        - generic [ref=e1550]: Материал
+                        - generic [ref=e1551]: Смета
+                  - 'button "Выбрать: Стеклопакет витраж ПВХ 907х1866 мм" [ref=e1552] [cursor=pointer]':
+                    - generic [ref=e1553]:
+                      - generic [ref=e1554]: Стеклопакет витраж ПВХ 907х1866 мм
+                      - generic [ref=e1557]:
+                        - generic [ref=e1558]: Материал
+                        - generic [ref=e1559]: Смета
+  - region "Notifications alt+T"

@@ -1,0 +1,1136 @@
+openapi: 3.1.0
+info:
+  title: RWMS Task Board Service API
+  version: 1.0.0
+  description: >-
+    Canonical F2 inventory of the active task-board, workforce and queue
+    registry HTTP API. All warehouse-scoped operations validate the warehouse
+    claim locally. Internal queue-reference operations require a SERVICE
+    principal, queue-registry.write and an allow-listed client_id.
+servers:
+  - url: /api
+security:
+  - bearerJwt: []
+paths:
+  /warehouses/{warehouseId}/work-queues:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: listWorkQueues
+      responses:
+        '200': { $ref: '#/components/responses/WorkQueueListOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createWorkQueue
+      requestBody:
+        $ref: '#/components/requestBodies/WorkQueue'
+      responses:
+        '201': { $ref: '#/components/responses/WorkQueueCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/work-queues/{id}:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/Id'
+    put:
+      operationId: updateWorkQueue
+      requestBody:
+        $ref: '#/components/requestBodies/WorkQueue'
+      responses:
+        '200': { $ref: '#/components/responses/WorkQueueOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      operationId: deleteWorkQueue
+      parameters:
+        - $ref: '#/components/parameters/ExpectedVersion'
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/work-queue-order:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    put:
+      operationId: reorderWorkQueues
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QueueOrderRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/WorkQueueListOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /internal/work-queues/{queueId}/references:
+    parameters:
+      - $ref: '#/components/parameters/QueueId'
+    post:
+      operationId: registerQueueReference
+      description: Requires SERVICE, queue-registry.write and an allow-listed client_id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QueueReferenceRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/QueueReferenceOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /internal/work-queues/references/{type}/{externalReferenceId}:
+    parameters:
+      - $ref: '#/components/parameters/QueueReferenceType'
+      - $ref: '#/components/parameters/ExternalReferenceId'
+    delete:
+      operationId: deleteQueueReference
+      description: Requires SERVICE, queue-registry.write and an allow-listed client_id.
+      parameters:
+        - $ref: '#/components/parameters/ExpectedVersion'
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /worker-classes:
+    get:
+      operationId: listWorkerClasses
+      responses:
+        '200': { $ref: '#/components/responses/WorkerClassListOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createWorkerClass
+      requestBody:
+        $ref: '#/components/requestBodies/WorkerClass'
+      responses:
+        '201': { $ref: '#/components/responses/WorkerClassCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /worker-classes/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    put:
+      operationId: updateWorkerClass
+      requestBody:
+        $ref: '#/components/requestBodies/WorkerClass'
+      responses:
+        '200': { $ref: '#/components/responses/WorkerClassOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      operationId: deleteWorkerClass
+      parameters:
+        - $ref: '#/components/parameters/ExpectedVersion'
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: getTaskBoard
+      parameters:
+        - name: includeShadow
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        '200': { $ref: '#/components/responses/TaskBoardSnapshotOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /warehouses/{warehouseId}/task-board/queues/{queueId}/eligible-groups:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/QueueId'
+    get:
+      operationId: listEligibleWorkerGroups
+      responses:
+        '200': { $ref: '#/components/responses/WorkerGroupListOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /warehouses/{warehouseId}/task-board/entries/{entryId}/history:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/EntryId'
+    get:
+      operationId: getTaskEntryHistory
+      responses:
+        '200': { $ref: '#/components/responses/TimeEventListOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /warehouses/{warehouseId}/task-board/tasks:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    post:
+      operationId: registerBoardTask
+      description: >-
+        Requires USER, rwms.write and EDIT. An identical externalTaskId replay
+        returns the current snapshot without another event; changed immutable
+        data or another warehouse returns 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateBoardTaskRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/TaskBoardSnapshotCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board/tasks/by-external-id/{externalTaskId}:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/ExternalTaskId'
+    get:
+      operationId: getBoardTaskByExternalId
+      responses:
+        '200':
+          description: Current registered task and its complete route
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BoardTaskRegistration' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /warehouses/{warehouseId}/task-board/tasks/by-external-id/{externalTaskId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/ExternalTaskId'
+    post:
+      operationId: cancelBoardTaskByExternalId
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CancelTaskRequest' }
+      responses:
+        '200':
+          description: Current cancelled task state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CancelledTask' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board/entries/{entryId}/take:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/EntryId'
+    post:
+      operationId: takeTaskEntry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TakeEntryRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/BoardEntryOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board/entries/{entryId}/pause:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/EntryId'
+    post:
+      operationId: pauseTaskEntry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PauseEntryRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/BoardEntryOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board/entries/{entryId}/resume:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/EntryId'
+    post:
+      operationId: resumeTaskEntry
+      requestBody:
+        $ref: '#/components/requestBodies/VersionCommand'
+      responses:
+        '200': { $ref: '#/components/responses/BoardEntryOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board/entries/{entryId}/complete:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/EntryId'
+    post:
+      operationId: completeTaskEntry
+      requestBody:
+        $ref: '#/components/requestBodies/VersionCommand'
+      responses:
+        '200': { $ref: '#/components/responses/BoardEntryOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board/entries/{entryId}/move:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/EntryId'
+    post:
+      operationId: moveTaskEntry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MoveEntryRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/TaskBoardSnapshotOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/workers:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: listWorkers
+      responses:
+        '200': { $ref: '#/components/responses/WorkerListOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createWorker
+      requestBody:
+        $ref: '#/components/requestBodies/Worker'
+      responses:
+        '201': { $ref: '#/components/responses/WorkerCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/workers/{id}:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/Id'
+    put:
+      operationId: updateWorker
+      requestBody:
+        $ref: '#/components/requestBodies/Worker'
+      responses:
+        '200': { $ref: '#/components/responses/WorkerOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+    delete:
+      operationId: deleteWorker
+      parameters:
+        - $ref: '#/components/parameters/ExpectedVersion'
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+  /warehouses/{warehouseId}/workers/{id}/credentials/reset:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: resetWorkerCredentials
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CredentialPasswordRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/WorkerOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+  /warehouses/{warehouseId}/workers/{id}/credentials/disable:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: disableWorkerCredentials
+      requestBody:
+        $ref: '#/components/requestBodies/VersionCommand'
+      responses:
+        '200': { $ref: '#/components/responses/WorkerOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+  /warehouses/{warehouseId}/workers/{id}/credentials/reconcile-disable:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: reconcileWorkerCredentialDisable
+      description: >-
+        Reconcile an expired or failed credential operation against auth-service state;
+        configure/reset may converge to ACTIVE, while disable/clear/legacy states are
+        forced to NOT_CONFIGURED.
+      requestBody:
+        $ref: '#/components/requestBodies/VersionCommand'
+      responses:
+        '200': { $ref: '#/components/responses/WorkerOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+  /warehouses/{warehouseId}/workers/{id}/deletion/reconcile:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: reconcileWorkerDeletion
+      requestBody:
+        $ref: '#/components/requestBodies/VersionCommand'
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+  /warehouses/{warehouseId}/worker-groups:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: listWorkerGroups
+      responses:
+        '200': { $ref: '#/components/responses/WorkerGroupListOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createWorkerGroup
+      requestBody:
+        $ref: '#/components/requestBodies/WorkerGroup'
+      responses:
+        '201': { $ref: '#/components/responses/WorkerGroupCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/worker-groups/{id}:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/Id'
+    put:
+      operationId: updateWorkerGroup
+      requestBody:
+        $ref: '#/components/requestBodies/WorkerGroup'
+      responses:
+        '200': { $ref: '#/components/responses/WorkerGroupOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      operationId: deleteWorkerGroup
+      parameters:
+        - $ref: '#/components/parameters/ExpectedVersion'
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+components:
+  securitySchemes:
+    bearerJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    WarehouseId:
+      name: warehouseId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    QueueId:
+      name: queueId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    EntryId:
+      name: entryId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ExternalTaskId:
+      name: externalTaskId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    QueueReferenceType:
+      name: type
+      in: path
+      required: true
+      schema: { type: string, enum: [REPAIR_PLAN, CATALOG_POSITION] }
+    ExternalReferenceId:
+      name: externalReferenceId
+      in: path
+      required: true
+      schema: { type: string }
+    ExpectedVersion:
+      name: expectedVersion
+      in: query
+      required: true
+      schema: { type: integer, format: int64, minimum: 0 }
+  requestBodies:
+    WorkQueue:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkQueueRequest' }
+    WorkerClass:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkerClassRequest' }
+    Worker:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkerRequest' }
+    WorkerGroup:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkerGroupRequest' }
+    VersionCommand:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/VersionCommand' }
+  schemas:
+    WorkerClass:
+      type: object
+      required: [id, version, code, name, description, comment, sortOrder, active]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64 }
+        code: { type: string }
+        name: { type: string }
+        description: { oneOf: [{ type: string }, { type: 'null' }] }
+        comment: { oneOf: [{ type: string }, { type: 'null' }] }
+        sortOrder: { type: integer }
+        active: { type: boolean }
+      additionalProperties: false
+    WorkerClassList:
+      type: array
+      items: { $ref: '#/components/schemas/WorkerClass' }
+    QueueBinding:
+      type: object
+      required: [id, version, workerClass, stopTaskOnTake]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64 }
+        workerClass: { $ref: '#/components/schemas/WorkerClass' }
+        stopTaskOnTake: { type: boolean }
+      additionalProperties: false
+    WorkQueue:
+      type: object
+      required: [id, version, warehouseId, code, name, description, type, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, bindings]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64 }
+        warehouseId: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        description: { oneOf: [{ type: string }, { type: 'null' }] }
+        type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING] }
+        sortOrder: { type: integer }
+        active: { type: boolean }
+        hidden: { type: boolean }
+        collapsed: { type: boolean }
+        holdingPeriodMinutes: { oneOf: [{ type: integer }, { type: 'null' }] }
+        notificationThreshold: { oneOf: [{ type: integer }, { type: 'null' }] }
+        notifyWhenThresholdReached: { type: boolean }
+        bindings:
+          type: array
+          items: { $ref: '#/components/schemas/QueueBinding' }
+      additionalProperties: false
+    WorkQueueList:
+      type: array
+      items: { $ref: '#/components/schemas/WorkQueue' }
+    QueueReference:
+      type: object
+      required: [id, version, queueId, type, externalReferenceId]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64 }
+        queueId: { type: string, format: uuid }
+        type: { type: string, enum: [REPAIR_PLAN, CATALOG_POSITION] }
+        externalReferenceId: { type: string }
+      additionalProperties: false
+    Qualification:
+      type: object
+      required: [id, version, workerClass, active, comment]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64 }
+        workerClass: { $ref: '#/components/schemas/WorkerClass' }
+        active: { type: boolean }
+        comment: { oneOf: [{ type: string }, { type: 'null' }] }
+      additionalProperties: false
+    Worker:
+      type: object
+      required: [id, version, warehouseId, displayName, firstName, lastName, middleName, active, comment, appLogin, credentialStatus, credentialError, qualifications]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64 }
+        warehouseId: { type: string, format: uuid }
+        displayName: { type: string }
+        firstName: { oneOf: [{ type: string }, { type: 'null' }] }
+        lastName: { oneOf: [{ type: string }, { type: 'null' }] }
+        middleName: { oneOf: [{ type: string }, { type: 'null' }] }
+        active: { type: boolean }
+        comment: { oneOf: [{ type: string }, { type: 'null' }] }
+        appLogin: { oneOf: [{ type: string }, { type: 'null' }] }
+        credentialStatus: { type: string, enum: [NOT_CONFIGURED, PENDING, ACTIVE, ERROR] }
+        credentialError: { oneOf: [{ type: string }, { type: 'null' }] }
+        qualifications:
+          type: array
+          items: { $ref: '#/components/schemas/Qualification' }
+      additionalProperties: false
+    WorkerList:
+      type: array
+      items: { $ref: '#/components/schemas/Worker' }
+    GroupMember:
+      type: object
+      required: [id, version, workerId, workerName, roleInGroup, active]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64 }
+        workerId: { type: string, format: uuid }
+        workerName: { type: string }
+        roleInGroup: { oneOf: [{ type: string }, { type: 'null' }] }
+        active: { type: boolean }
+      additionalProperties: false
+    WorkerGroup:
+      type: object
+      required: [id, version, warehouseId, workerClass, name, description, active, members]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64 }
+        warehouseId: { type: string, format: uuid }
+        workerClass: { $ref: '#/components/schemas/WorkerClass' }
+        name: { type: string }
+        description: { oneOf: [{ type: string }, { type: 'null' }] }
+        active: { type: boolean }
+        members:
+          type: array
+          items: { $ref: '#/components/schemas/GroupMember' }
+      additionalProperties: false
+    WorkerGroupList:
+      type: array
+      items: { $ref: '#/components/schemas/WorkerGroup' }
+    Assignment:
+      type: object
+      required: [id, version, workerId, workerName, workerGroupId, workerGroupName, status, assignedAt, startedAt, pausedAt, finishedAt]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64 }
+        workerId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        workerName: { oneOf: [{ type: string }, { type: 'null' }] }
+        workerGroupId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        workerGroupName: { oneOf: [{ type: string }, { type: 'null' }] }
+        status: { type: string, enum: [ACTIVE, PAUSED, DONE, CANCELLED] }
+        assignedAt: { type: string, format: date-time }
+        startedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        pausedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        finishedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+      additionalProperties: false
+    BoardEntry:
+      type: object
+      required: [id, version, taskId, externalTaskId, taskVersion, title, unitNumber, taskStatus, queueId, queueCode, routeIndex, queuePosition, entryType, status, taskText, plannedDurationMinutes, activeStartedAt, pausedAt, activeWorkSeconds, assignments]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64 }
+        taskId: { type: string, format: uuid }
+        externalTaskId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        taskVersion: { type: integer, format: int64 }
+        title: { type: string }
+        unitNumber: { oneOf: [{ type: string }, { type: 'null' }] }
+        taskStatus: { type: string, enum: [ACTIVE, DONE, CANCELLED] }
+        queueId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        queueCode: { type: string }
+        routeIndex: { type: integer }
+        queuePosition: { type: integer }
+        entryType: { type: string, enum: [REAL, SHADOW] }
+        status: { type: string, enum: [WAITING, IN_PROGRESS, PAUSED, DONE, CANCELLED] }
+        taskText: { oneOf: [{ type: string }, { type: 'null' }] }
+        plannedDurationMinutes: { oneOf: [{ type: integer }, { type: 'null' }] }
+        activeStartedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        pausedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        activeWorkSeconds: { type: integer, format: int64, minimum: 0 }
+        assignments:
+          type: array
+          items: { $ref: '#/components/schemas/Assignment' }
+      additionalProperties: false
+    BoardColumn:
+      type: object
+      required: [queueId, queueCode, queueName, queueType, sortOrder, virtual, entries]
+      properties:
+        queueId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        queueCode: { type: string }
+        queueName: { type: string }
+        queueType: { oneOf: [{ type: string, enum: [MOVEMENT, REPAIR, HOLDING] }, { type: 'null' }] }
+        sortOrder: { type: integer }
+        virtual: { type: boolean }
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/BoardEntry' }
+      additionalProperties: false
+    TaskBoardSnapshot:
+      type: object
+      required: [warehouseId, columns]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        columns:
+          type: array
+          items: { $ref: '#/components/schemas/BoardColumn' }
+      additionalProperties: false
+    TimeEvent:
+      type: object
+      required: [id, version, entryId, workerId, workerName, workerGroupName, eventType, reason, createdAt, relatedEntryId]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64 }
+        entryId: { type: string, format: uuid }
+        workerId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        workerName: { oneOf: [{ type: string }, { type: 'null' }] }
+        workerGroupName: { oneOf: [{ type: string }, { type: 'null' }] }
+        eventType: { type: string, enum: [STARTED, PAUSED, RESUMED, FINISHED, CANCELLED, AUTO_INTERRUPTED, AUTO_RESUMED] }
+        reason: { oneOf: [{ type: string }, { type: 'null' }] }
+        createdAt: { type: string, format: date-time }
+        relatedEntryId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+      additionalProperties: false
+    TimeEventList:
+      type: array
+      items: { $ref: '#/components/schemas/TimeEvent' }
+    WorkerClassRequest:
+      type: object
+      required: [version, code, name]
+      properties:
+        version: { type: integer, format: int64, minimum: 0 }
+        code: { type: string, minLength: 1, maxLength: 64 }
+        name: { type: string, minLength: 1, maxLength: 128 }
+        description: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
+        comment: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
+        sortOrder: { type: integer }
+        active: { type: boolean }
+      additionalProperties: false
+    QueueBindingRequest:
+      type: object
+      required: [workerClassId]
+      properties:
+        workerClassId: { type: string, format: uuid }
+        stopTaskOnTake: { type: boolean }
+      additionalProperties: false
+    WorkQueueRequest:
+      type: object
+      required: [version, code, name, type]
+      properties:
+        version: { type: integer, format: int64, minimum: 0 }
+        code: { type: string, minLength: 1, maxLength: 64 }
+        name: { type: string, minLength: 1, maxLength: 128 }
+        description: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
+        type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING] }
+        active: { type: boolean }
+        hidden: { type: boolean }
+        collapsed: { type: boolean }
+        holdingPeriodMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        notificationThreshold: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        notifyWhenThresholdReached: { type: boolean }
+        bindings:
+          oneOf:
+            - type: array
+              items: { $ref: '#/components/schemas/QueueBindingRequest' }
+            - type: 'null'
+      additionalProperties: false
+    QueueOrderRequest:
+      type: object
+      required: [queues]
+      properties:
+        queues:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [queueId, expectedVersion]
+            properties:
+              queueId: { type: string, format: uuid }
+              expectedVersion: { type: integer, format: int64, minimum: 0 }
+            additionalProperties: false
+      additionalProperties: false
+    QueueReferenceRequest:
+      type: object
+      required: [type, externalReferenceId]
+      properties:
+        type: { type: string, enum: [REPAIR_PLAN, CATALOG_POSITION] }
+        externalReferenceId: { type: string, minLength: 1, maxLength: 128 }
+      additionalProperties: false
+    QualificationRequest:
+      type: object
+      required: [workerClassId]
+      properties:
+        workerClassId: { type: string, format: uuid }
+        active: { type: boolean }
+        comment: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
+      additionalProperties: false
+    WorkerRequest:
+      type: object
+      required: [version, displayName]
+      properties:
+        version: { type: integer, format: int64, minimum: 0 }
+        displayName: { type: string, minLength: 1, maxLength: 256 }
+        firstName: { oneOf: [{ type: string, maxLength: 128 }, { type: 'null' }] }
+        lastName: { oneOf: [{ type: string, maxLength: 128 }, { type: 'null' }] }
+        middleName: { oneOf: [{ type: string, maxLength: 128 }, { type: 'null' }] }
+        active: { type: boolean }
+        comment: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
+        appLogin: { oneOf: [{ type: string, maxLength: 128 }, { type: 'null' }] }
+        password: { oneOf: [{ type: string, minLength: 8, maxLength: 256, writeOnly: true }, { type: 'null' }] }
+        qualifications:
+          oneOf:
+            - type: array
+              items: { $ref: '#/components/schemas/QualificationRequest' }
+            - type: 'null'
+      additionalProperties: false
+    CredentialPasswordRequest:
+      type: object
+      required: [expectedVersion, password]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        password: { type: string, minLength: 8, maxLength: 256, writeOnly: true }
+      additionalProperties: false
+    GroupMemberRequest:
+      type: object
+      required: [workerId]
+      properties:
+        workerId: { type: string, format: uuid }
+        roleInGroup: { oneOf: [{ type: string, maxLength: 128 }, { type: 'null' }] }
+        active: { type: boolean }
+      additionalProperties: false
+    WorkerGroupRequest:
+      type: object
+      required: [version, workerClassId, name]
+      properties:
+        version: { type: integer, format: int64, minimum: 0 }
+        workerClassId: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 128 }
+        description: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
+        active: { type: boolean }
+        members:
+          oneOf:
+            - type: array
+              items: { $ref: '#/components/schemas/GroupMemberRequest' }
+            - type: 'null'
+      additionalProperties: false
+    RouteStepRequest:
+      type: object
+      properties:
+        queueId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        queueCode: { oneOf: [{ type: string, maxLength: 64 }, { type: 'null' }] }
+        taskText: { oneOf: [{ type: string, maxLength: 2000 }, { type: 'null' }] }
+        plannedDurationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+      additionalProperties: false
+    CreateBoardTaskRequest:
+      type: object
+      required: [title, route]
+      properties:
+        externalTaskId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        title: { type: string, minLength: 1, maxLength: 256 }
+        unitNumber: { oneOf: [{ type: string, maxLength: 64 }, { type: 'null' }] }
+        description: { oneOf: [{ type: string, maxLength: 2000 }, { type: 'null' }] }
+        plannedDurationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        deadlineAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        route:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/RouteStepRequest' }
+      additionalProperties: false
+    TakeEntryRequest:
+      type: object
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        workerGroupId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        workerId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+      additionalProperties: false
+    VersionCommand:
+      type: object
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+      additionalProperties: false
+    PauseEntryRequest:
+      type: object
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        reason: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
+      additionalProperties: false
+    MoveEntryRequest:
+      type: object
+      required: [expectedVersion, targetIndex]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        targetQueueId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        targetIndex: { type: integer, minimum: 0 }
+      additionalProperties: false
+    CancelTaskRequest:
+      type: object
+      required: [expectedTaskVersion, reason]
+      properties:
+        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
+        reason: { type: string, minLength: 1, maxLength: 1000 }
+      additionalProperties: false
+    CancelledTask:
+      type: object
+      required: [taskId, externalTaskId, taskVersion, status, cancelledAt]
+      properties:
+        taskId: { type: string, format: uuid }
+        externalTaskId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        taskVersion: { type: integer, format: int64, minimum: 0 }
+        status: { type: string, const: CANCELLED }
+        cancelledAt: { type: string, format: date-time }
+      additionalProperties: false
+    BoardTaskRegistration:
+      type: object
+      required: [taskId, taskVersion, warehouseId, externalTaskId, title, unitNumber, description, status, plannedDurationMinutes, deadlineAt, doneAt, route]
+      properties:
+        taskId: { type: string, format: uuid }
+        taskVersion: { type: integer, format: int64, minimum: 0 }
+        warehouseId: { type: string, format: uuid }
+        externalTaskId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        title: { type: string }
+        unitNumber: { oneOf: [{ type: string }, { type: 'null' }] }
+        description: { oneOf: [{ type: string }, { type: 'null' }] }
+        status: { type: string, enum: [ACTIVE, DONE, CANCELLED] }
+        plannedDurationMinutes: { oneOf: [{ type: integer }, { type: 'null' }] }
+        deadlineAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        doneAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        route:
+          type: array
+          items: { $ref: '#/components/schemas/RegisteredRouteStep' }
+      additionalProperties: false
+    RegisteredRouteStep:
+      type: object
+      required: [entryId, entryVersion, queueId, queueCode, routeIndex, queuePosition, entryType, status, taskText, plannedDurationMinutes]
+      properties:
+        entryId: { type: string, format: uuid }
+        entryVersion: { type: integer, format: int64, minimum: 0 }
+        queueId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        queueCode: { oneOf: [{ type: string }, { type: 'null' }] }
+        routeIndex: { type: integer, minimum: 0 }
+        queuePosition: { type: integer, minimum: 0 }
+        entryType: { type: string, enum: [REAL, SHADOW] }
+        status: { type: string, enum: [WAITING, IN_PROGRESS, PAUSED, DONE, CANCELLED] }
+        taskText: { oneOf: [{ type: string }, { type: 'null' }] }
+        plannedDurationMinutes: { oneOf: [{ type: integer }, { type: 'null' }] }
+      additionalProperties: false
+    FieldViolation:
+      type: object
+      required: [field, code, message]
+      properties:
+        field: { type: string, minLength: 1 }
+        code: { type: string, minLength: 1 }
+        message: { type: string, minLength: 1 }
+      additionalProperties: false
+    CorrelationContext:
+      type: object
+      required: [correlationId, causationId]
+      properties:
+        correlationId: { type: string, format: uuid }
+        causationId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+      additionalProperties: false
+    ApiProblem:
+      type: object
+      required: [type, title, status, detail, instance, code, violations, correlation]
+      properties:
+        type: { type: string, format: uri-reference }
+        title: { type: string, minLength: 1 }
+        status: { type: integer, minimum: 100, maximum: 599 }
+        detail: { oneOf: [{ type: string }, { type: 'null' }] }
+        instance: { oneOf: [{ type: string, format: uri-reference }, { type: 'null' }] }
+        code: { type: string, minLength: 1 }
+        violations:
+          type: array
+          items: { $ref: '#/components/schemas/FieldViolation' }
+        correlation: { $ref: '#/components/schemas/CorrelationContext' }
+      additionalProperties: false
+  responses:
+    WorkerClassOk:
+      description: Worker class
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkerClass' }
+    WorkerClassCreated:
+      description: Worker class created
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkerClass' }
+    WorkerClassListOk:
+      description: Worker classes
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkerClassList' }
+    WorkQueueOk:
+      description: Work queue
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkQueue' }
+    WorkQueueCreated:
+      description: Work queue created
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkQueue' }
+    WorkQueueListOk:
+      description: Work queues
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkQueueList' }
+    QueueReferenceOk:
+      description: Queue usage reference
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/QueueReference' }
+    WorkerOk:
+      description: Worker
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Worker' }
+    WorkerCreated:
+      description: Worker created; credential provisioning may remain pending or fail asynchronously
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Worker' }
+    WorkerListOk:
+      description: Workers
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkerList' }
+    WorkerGroupOk:
+      description: Worker group
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkerGroup' }
+    WorkerGroupCreated:
+      description: Worker group created
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkerGroup' }
+    WorkerGroupListOk:
+      description: Worker groups
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkerGroupList' }
+    TaskBoardSnapshotOk:
+      description: Current task-board snapshot
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TaskBoardSnapshot' }
+    TaskBoardSnapshotCreated:
+      description: Current snapshot after task registration or idempotent replay
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TaskBoardSnapshot' }
+    BoardEntryOk:
+      description: Current task-board entry
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/BoardEntry' }
+    TimeEventListOk:
+      description: Entry time-event history
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TimeEventList' }
+    NoContent:
+      description: Command completed without a response body
+    BadRequest:
+      description: Invalid command
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ApiProblem' }
+    Unauthorized:
+      description: Bearer token is missing, invalid or expired
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ApiProblem' }
+    Forbidden:
+      description: Principal, scope, type or warehouse access is insufficient
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ApiProblem' }
+    NotFound:
+      description: Requested resource does not exist in the scoped context
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ApiProblem' }
+    Conflict:
+      description: Stale version, conflicting state, or changed idempotent command
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ApiProblem' }
+    BadGateway:
+      description: Auth-service credential operation failed
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ApiProblem' }

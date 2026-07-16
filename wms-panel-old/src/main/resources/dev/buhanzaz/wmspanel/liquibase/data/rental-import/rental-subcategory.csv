@@ -1,0 +1,6 @@
+﻿id,version,category_id,name,code,active,sort_order
+d2f8d8fc-4e68-52ea-8f09-4c7ef0bdcf44,0,4c8db3cf-6f40-5b76-a2a5-79143ecf2611,Бытовка,STANDARD_CABIN,true,10
+d4cc94e2-f7d0-5ae0-a728-179b6d648be3,0,4c8db3cf-6f40-5b76-a2a5-79143ecf2611,Модуль,MODULE,true,20
+31b4474b-daaa-5186-a9ef-4b95486800da,0,4c8db3cf-6f40-5b76-a2a5-79143ecf2611,Пост охраны,GUARD_POST,true,30
+f31b6dc2-863f-5c97-955e-f09a3b5175c1,0,4c8db3cf-6f40-5b76-a2a5-79143ecf2611,Санблок,SANITARY_BLOCK,true,40
+725799d6-7d9b-5f29-9a1f-ae95d4a0f4a7,0,4c8db3cf-6f40-5b76-a2a5-79143ecf2611,Склад,STORAGE,true,50

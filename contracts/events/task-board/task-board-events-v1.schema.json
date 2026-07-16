@@ -1,0 +1,410 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/task-board/task-board-events-v1.schema.json",
+  "title": "RWMS task-board-service event facts v1",
+  "description": "Sanitized F4T task-board facts. Human-readable names, comments, descriptions, task text, credentials and PII stay in service-local projections and are never published.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelopeVersion", "eventId", "eventType", "eventVersion", "occurredAt",
+    "recordedAt", "producer", "aggregateType", "aggregateId", "aggregateVersion",
+    "correlation", "actorRef", "payload"
+  ],
+  "properties": {
+    "envelopeVersion": {"const": 2},
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {"enum": [
+      "task-board.worker-class.created.v1",
+      "task-board.worker-class.changed.v1",
+      "task-board.worker-class.deleted.v1",
+      "task-board.worker.created.v1",
+      "task-board.worker.changed.v1",
+      "task-board.worker.qualifications-changed.v1",
+      "task-board.worker.credential-audit.v1",
+      "task-board.worker.deleted.v1",
+      "task-board.worker-group.created.v1",
+      "task-board.worker-group.changed.v1",
+      "task-board.worker-group.members-changed.v1",
+      "task-board.worker-group.deleted.v1",
+      "task-board.work-queue.created.v1",
+      "task-board.work-queue.changed.v1",
+      "task-board.work-queue.reordered.v1",
+      "task-board.work-queue.deleted.v1",
+      "task-board.queue-usage-reference.created.v1",
+      "task-board.queue-usage-reference.deleted.v1",
+      "task-board.board-task.created.v1",
+      "task-board.board-task.changed.v1",
+      "task-board.board-task.completed.v1",
+      "task-board.board-task.cancelled.v1",
+      "task-board.queue-entry.created.v1",
+      "task-board.queue-entry.changed.v1",
+      "task-board.queue-entry.taken.v1",
+      "task-board.queue-entry.paused.v1",
+      "task-board.queue-entry.resumed.v1",
+      "task-board.queue-entry.completed.v1",
+      "task-board.queue-entry.moved.v1",
+      "task-board.queue-entry.cancelled.v1",
+      "task-board.queue-entry.interrupted.v1",
+      "task-board.queue-entry.returning.v1"
+    ]},
+    "eventVersion": {"const": 1},
+    "occurredAt": {"$ref": "#/$defs/nullableDateTime"},
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "producer": {"const": "task-board-service"},
+    "aggregateType": {"enum": [
+      "WORKER_CLASS", "WORKER", "WORKER_GROUP", "WORK_QUEUE",
+      "QUEUE_USAGE_REFERENCE", "BOARD_TASK", "QUEUE_ENTRY"
+    ]},
+    "aggregateId": {"type": "string", "format": "uuid"},
+    "aggregateVersion": {"type": "integer", "minimum": 0},
+    "correlation": {"$ref": "#/$defs/correlationContext"},
+    "actorRef": {"oneOf": [{"$ref": "#/$defs/opaqueActorReference"}, {"type": "null"}]},
+    "payload": {"oneOf": [
+      {"$ref": "#/$defs/workerClassFact"},
+      {"$ref": "#/$defs/workerFact"},
+      {"$ref": "#/$defs/workerGroupFact"},
+      {"$ref": "#/$defs/workQueueFact"},
+      {"$ref": "#/$defs/queueUsageReferenceFact"},
+      {"$ref": "#/$defs/boardTaskFact"},
+      {"$ref": "#/$defs/queueEntryFact"}
+    ]}
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/workerClassEnvelope"},
+    {"$ref": "#/$defs/workerEnvelope"},
+    {"$ref": "#/$defs/workerGroupEnvelope"},
+    {"$ref": "#/$defs/workQueueEnvelope"},
+    {"$ref": "#/$defs/queueUsageReferenceEnvelope"},
+    {"$ref": "#/$defs/boardTaskEnvelope"},
+    {"$ref": "#/$defs/queueEntryEnvelope"}
+  ],
+  "x-rwms-topics": [
+    "rwms.task-board.worker-class.v1",
+    "rwms.task-board.worker.v1",
+    "rwms.task-board.worker-group.v1",
+    "rwms.task-board.work-queue.v1",
+    "rwms.task-board.queue-usage-reference.v1",
+    "rwms.task-board.board-task.v1",
+    "rwms.task-board.queue-entry.v1"
+  ],
+  "x-rwms-cutover": {
+    "baselinePublished": false,
+    "consumerGroup": "task-board-shadow-v1",
+    "legacyRabbitV1RetainedUntil": "F4R"
+  },
+  "$defs": {
+    "nullableUuid": {"oneOf": [{"type": "string", "format": "uuid"}, {"type": "null"}]},
+    "nullableDateTime": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+    "nullableInteger": {"oneOf": [{"type": "integer"}, {"type": "null"}]},
+    "correlationContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correlationId", "causationId"],
+      "properties": {
+        "correlationId": {"type": "string", "format": "uuid"},
+        "causationId": {"$ref": "#/$defs/nullableUuid"}
+      }
+    },
+    "opaqueActorReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subjectId", "principalType", "profileRevision"],
+      "properties": {
+        "subjectId": {"type": "string", "format": "uuid"},
+        "principalType": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"},
+        "profileRevision": {
+          "oneOf": [
+            {"type": "string", "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "workerClassEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "WORKER_CLASS"},
+        "eventType": {"enum": [
+          "task-board.worker-class.created.v1",
+          "task-board.worker-class.changed.v1",
+          "task-board.worker-class.deleted.v1"
+        ]},
+        "payload": {"$ref": "#/$defs/workerClassFact"}
+      }
+    },
+    "workerEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "WORKER"},
+        "eventType": {"enum": [
+          "task-board.worker.created.v1",
+          "task-board.worker.changed.v1",
+          "task-board.worker.qualifications-changed.v1",
+          "task-board.worker.credential-audit.v1",
+          "task-board.worker.deleted.v1"
+        ]},
+        "payload": {"$ref": "#/$defs/workerFact"}
+      }
+    },
+    "workerGroupEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "WORKER_GROUP"},
+        "eventType": {"enum": [
+          "task-board.worker-group.created.v1",
+          "task-board.worker-group.changed.v1",
+          "task-board.worker-group.members-changed.v1",
+          "task-board.worker-group.deleted.v1"
+        ]},
+        "payload": {"$ref": "#/$defs/workerGroupFact"}
+      }
+    },
+    "workQueueEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "WORK_QUEUE"},
+        "eventType": {"enum": [
+          "task-board.work-queue.created.v1",
+          "task-board.work-queue.changed.v1",
+          "task-board.work-queue.reordered.v1",
+          "task-board.work-queue.deleted.v1"
+        ]},
+        "payload": {"$ref": "#/$defs/workQueueFact"}
+      }
+    },
+    "queueUsageReferenceEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "QUEUE_USAGE_REFERENCE"},
+        "eventType": {"enum": [
+          "task-board.queue-usage-reference.created.v1",
+          "task-board.queue-usage-reference.deleted.v1"
+        ]},
+        "payload": {"$ref": "#/$defs/queueUsageReferenceFact"}
+      }
+    },
+    "boardTaskEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "BOARD_TASK"},
+        "eventType": {"enum": [
+          "task-board.board-task.created.v1",
+          "task-board.board-task.changed.v1",
+          "task-board.board-task.completed.v1",
+          "task-board.board-task.cancelled.v1"
+        ]},
+        "payload": {"$ref": "#/$defs/boardTaskFact"}
+      }
+    },
+    "queueEntryEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "QUEUE_ENTRY"},
+        "eventType": {"enum": [
+          "task-board.queue-entry.created.v1",
+          "task-board.queue-entry.changed.v1",
+          "task-board.queue-entry.taken.v1",
+          "task-board.queue-entry.paused.v1",
+          "task-board.queue-entry.resumed.v1",
+          "task-board.queue-entry.completed.v1",
+          "task-board.queue-entry.moved.v1",
+          "task-board.queue-entry.cancelled.v1",
+          "task-board.queue-entry.interrupted.v1",
+          "task-board.queue-entry.returning.v1"
+        ]},
+        "payload": {"$ref": "#/$defs/queueEntryFact"}
+      }
+    },
+    "workerClassFact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["workerClassId", "revisionMarker", "code", "sortOrder", "active", "deleted"],
+      "properties": {
+        "workerClassId": {"type": "string", "format": "uuid"},
+        "revisionMarker": {"type": "string", "format": "uuid"},
+        "code": {"type": "string"},
+        "sortOrder": {"type": "integer"},
+        "active": {"type": "boolean"},
+        "deleted": {"type": "boolean"}
+      }
+    },
+    "qualificationFact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["assignmentId", "version", "workerClassId", "active"],
+      "properties": {
+        "assignmentId": {"type": "string", "format": "uuid"},
+        "version": {"type": "integer", "minimum": 0},
+        "workerClassId": {"type": "string", "format": "uuid"},
+        "active": {"type": "boolean"}
+      }
+    },
+    "workerFact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["workerId", "warehouseId", "active", "profileRevision", "qualifications", "deleted"],
+      "properties": {
+        "workerId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "active": {"type": "boolean"},
+        "profileRevision": {"type": "string", "format": "uuid"},
+        "qualifications": {"type": "array", "items": {"$ref": "#/$defs/qualificationFact"}},
+        "deleted": {"type": "boolean"}
+      }
+    },
+    "groupMemberFact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["membershipId", "version", "workerId", "active"],
+      "properties": {
+        "membershipId": {"type": "string", "format": "uuid"},
+        "version": {"type": "integer", "minimum": 0},
+        "workerId": {"type": "string", "format": "uuid"},
+        "active": {"type": "boolean"}
+      }
+    },
+    "workerGroupFact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["workerGroupId", "revisionMarker", "warehouseId", "workerClassId", "active", "members", "deleted"],
+      "properties": {
+        "workerGroupId": {"type": "string", "format": "uuid"},
+        "revisionMarker": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "workerClassId": {"type": "string", "format": "uuid"},
+        "active": {"type": "boolean"},
+        "members": {"type": "array", "items": {"$ref": "#/$defs/groupMemberFact"}},
+        "deleted": {"type": "boolean"}
+      }
+    },
+    "queueBindingFact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["bindingId", "version", "workerClassId", "stopTaskOnTake"],
+      "properties": {
+        "bindingId": {"type": "string", "format": "uuid"},
+        "version": {"type": "integer", "minimum": 0},
+        "workerClassId": {"type": "string", "format": "uuid"},
+        "stopTaskOnTake": {"type": "boolean"}
+      }
+    },
+    "workQueueFact": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "workQueueId", "revisionMarker", "warehouseId", "code", "queueType", "sortOrder",
+        "active", "hidden", "collapsed", "holdingPeriodMinutes", "notificationThreshold",
+        "notifyWhenThresholdReached", "classBindings", "deleted"
+      ],
+      "properties": {
+        "workQueueId": {"type": "string", "format": "uuid"},
+        "revisionMarker": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "code": {"type": "string"},
+        "queueType": {"enum": ["MOVEMENT", "REPAIR", "HOLDING"]},
+        "sortOrder": {"type": "integer"},
+        "active": {"type": "boolean"},
+        "hidden": {"type": "boolean"},
+        "collapsed": {"type": "boolean"},
+        "holdingPeriodMinutes": {"$ref": "#/$defs/nullableInteger"},
+        "notificationThreshold": {"$ref": "#/$defs/nullableInteger"},
+        "notifyWhenThresholdReached": {"type": "boolean"},
+        "classBindings": {"type": "array", "items": {"$ref": "#/$defs/queueBindingFact"}},
+        "deleted": {"type": "boolean"}
+      }
+    },
+    "queueUsageReferenceFact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["queueUsageReferenceId", "revisionMarker", "queueId", "referenceType", "externalReferenceHash", "deleted"],
+      "properties": {
+        "queueUsageReferenceId": {"type": "string", "format": "uuid"},
+        "revisionMarker": {"type": "string", "format": "uuid"},
+        "queueId": {"type": "string", "format": "uuid"},
+        "referenceType": {"enum": ["REPAIR_PLAN", "CATALOG_POSITION"]},
+        "externalReferenceHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "deleted": {"type": "boolean"}
+      }
+    },
+    "boardTaskFact": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "boardTaskId", "warehouseId", "externalTaskId", "status", "plannedDurationMinutes",
+        "deadlineAt", "doneAt", "deleted"
+      ],
+      "properties": {
+        "boardTaskId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "externalTaskId": {"$ref": "#/$defs/nullableUuid"},
+        "status": {"enum": ["ACTIVE", "DONE", "CANCELLED"]},
+        "plannedDurationMinutes": {"$ref": "#/$defs/nullableInteger"},
+        "deadlineAt": {"$ref": "#/$defs/nullableDateTime"},
+        "doneAt": {"$ref": "#/$defs/nullableDateTime"},
+        "deleted": {"type": "boolean"}
+      }
+    },
+    "assignmentFact": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "assignmentId", "version", "workerGroupId", "workerId", "status",
+        "assignedAt", "startedAt", "pausedAt", "finishedAt"
+      ],
+      "properties": {
+        "assignmentId": {"type": "string", "format": "uuid"},
+        "version": {"type": "integer", "minimum": 0},
+        "workerGroupId": {"$ref": "#/$defs/nullableUuid"},
+        "workerId": {"$ref": "#/$defs/nullableUuid"},
+        "status": {"enum": ["ACTIVE", "PAUSED", "DONE", "CANCELLED"]},
+        "assignedAt": {"$ref": "#/$defs/nullableDateTime"},
+        "startedAt": {"$ref": "#/$defs/nullableDateTime"},
+        "pausedAt": {"$ref": "#/$defs/nullableDateTime"},
+        "finishedAt": {"$ref": "#/$defs/nullableDateTime"}
+      }
+    },
+    "timeEventFact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["timeEventId", "version", "workerId", "eventType", "createdAt", "relatedEntryId"],
+      "properties": {
+        "timeEventId": {"type": "string", "format": "uuid"},
+        "version": {"type": "integer", "minimum": 0},
+        "workerId": {"$ref": "#/$defs/nullableUuid"},
+        "eventType": {"enum": [
+          "STARTED", "PAUSED", "RESUMED", "FINISHED", "CANCELLED",
+          "AUTO_INTERRUPTED", "AUTO_RESUMED"
+        ]},
+        "createdAt": {"type": "string", "format": "date-time"},
+        "relatedEntryId": {"$ref": "#/$defs/nullableUuid"}
+      }
+    },
+    "interruptionFact": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "interruptionId", "version", "workerId", "interruptedEntryId", "interruptingEntryId",
+        "active", "createdAt", "resolvedAt"
+      ],
+      "properties": {
+        "interruptionId": {"type": "string", "format": "uuid"},
+        "version": {"type": "integer", "minimum": 0},
+        "workerId": {"type": "string", "format": "uuid"},
+        "interruptedEntryId": {"type": "string", "format": "uuid"},
+        "interruptingEntryId": {"type": "string", "format": "uuid"},
+        "active": {"type": "boolean"},
+        "createdAt": {"type": "string", "format": "date-time"},
+        "resolvedAt": {"$ref": "#/$defs/nullableDateTime"}
+      }
+    },
+    "queueEntryFact": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "queueEntryId", "taskId", "queueId", "queueCode", "routeIndex", "queuePosition",
+        "entryType", "status", "plannedDurationMinutes", "activeStartedAt", "pausedAt", "doneAt",
+        "activeWorkSeconds", "pauseOrigin", "assignments", "timeEvents", "interruptions", "deleted"
+      ],
+      "properties": {
+        "queueEntryId": {"type": "string", "format": "uuid"},
+        "taskId": {"type": "string", "format": "uuid"},
+        "queueId": {"$ref": "#/$defs/nullableUuid"},
+        "queueCode": {"type": "string"},
+        "routeIndex": {"type": "integer"},
+        "queuePosition": {"type": "integer"},
+        "entryType": {"enum": ["REAL", "SHADOW"]},
+        "status": {"enum": ["WAITING", "IN_PROGRESS", "PAUSED", "DONE", "CANCELLED"]},
+        "plannedDurationMinutes": {"$ref": "#/$defs/nullableInteger"},
+        "activeStartedAt": {"$ref": "#/$defs/nullableDateTime"},
+        "pausedAt": {"$ref": "#/$defs/nullableDateTime"},
+        "doneAt": {"$ref": "#/$defs/nullableDateTime"},
+        "activeWorkSeconds": {"type": "integer", "minimum": 0},
+        "pauseOrigin": {"oneOf": [{"enum": ["MANUAL", "AUTO"]}, {"type": "null"}]},
+        "assignments": {"type": "array", "items": {"$ref": "#/$defs/assignmentFact"}},
+        "timeEvents": {"type": "array", "items": {"$ref": "#/$defs/timeEventFact"}},
+        "interruptions": {"type": "array", "items": {"$ref": "#/$defs/interruptionFact"}},
+        "deleted": {"type": "boolean"}
+      }
+    }
+  }
+}

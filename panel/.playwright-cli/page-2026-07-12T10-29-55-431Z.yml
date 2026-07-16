@@ -1,0 +1,204 @@
+- generic:
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /
+                    - generic:
+                      - generic: WMS Panel
+                      - generic: СПБ
+            - generic:
+              - generic:
+                - generic:
+                  - combobox:
+                    - generic: СПБ
+              - generic:
+                - generic: Обзор
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /
+                        - generic: Главная
+                    - listitem:
+                      - link:
+                        - /url: /kpi
+                        - generic: KPI
+              - generic:
+                - generic: Имущество
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /warehouse
+                        - generic: Склад
+                    - listitem:
+                      - link:
+                        - /url: /equipment
+                        - generic: Доп. оборудование
+                    - listitem:
+                      - button:
+                        - generic: Инвентаризация
+                    - listitem:
+                      - button:
+                        - generic: Списание
+              - generic:
+                - generic: Логистика
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /logistics/returns
+                        - generic: Возврат из аренды
+                    - listitem:
+                      - link:
+                        - /url: /logistics/shipments
+                        - generic: Отгрузка в аренду
+              - generic:
+                - generic: Ремонтный цикл
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /estimates
+                        - generic: Сметы
+                    - listitem:
+                      - link:
+                        - /url: /repairs
+                        - generic: Ремонты
+                    - listitem:
+                      - link:
+                        - /url: /task-board
+                        - generic: Доска задач
+                    - listitem:
+                      - link:
+                        - /url: /acceptance
+                        - generic: Приёмка и доработки
+            - generic:
+              - list:
+                - listitem:
+                  - button:
+                    - generic: Настройки
+                - listitem:
+                  - button:
+                    - generic: Локальный администратор
+                    - generic: Выйти
+      - main:
+        - generic:
+          - generic:
+            - button:
+              - generic: Открыть или свернуть меню
+            - navigation:
+              - list:
+                - listitem:
+                  - generic: Логистика
+                - listitem
+                - listitem:
+                  - link [disabled]: Возврат из аренды
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - textbox:
+                  - /placeholder: Компания или номер бытовки
+                - textbox
+                - textbox
+              - generic:
+                - button: Добавить бытовку из аренды
+                - button: Добавить возврат
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - table:
+                      - rowgroup:
+                        - row:
+                          - columnheader:
+                            - button:
+                              - generic: От кого
+                          - columnheader:
+                            - button:
+                              - generic: Дата возврата
+                          - columnheader:
+                            - button:
+                              - generic: Водитель
+                          - columnheader:
+                            - button:
+                              - generic: Возвращённые бытовки
+                          - columnheader:
+                            - button:
+                              - generic: Этап
+                          - columnheader:
+                            - button:
+                              - generic: Повреждения
+                          - columnheader:
+                            - button:
+                              - generic: Смета
+                          - columnheader:
+                            - button:
+                              - generic: Действия
+    - region "Notifications alt+T"
+  - dialog:
+    - generic:
+      - heading [level=2]: Добавить бытовку из аренды
+      - paragraph: Сначала зафиксируйте бытовку как арендованную у контрагента. Затем откроется предзаполненный возврат для приёмки на склад.
+    - generic:
+      - group:
+        - generic: Номер бытовки
+        - textbox:
+          - /placeholder: Например, БЫТ-121
+          - text: ИМП-BROWSER-2
+      - group:
+        - generic: У кого в аренде
+        - group:
+          - combobox: ООО Браузер
+          - group:
+            - button
+        - textbox: ООО Браузер
+      - group:
+        - generic: Дата отгрузки
+        - textbox: 2026-07-12
+      - group:
+        - generic: Водитель
+        - combobox [expanded]:
+          - generic: Выберите водителя
+      - group:
+        - generic: Паспорт бытовки
+        - generic:
+          - group:
+            - generic: Тип
+            - combobox:
+              - generic: БК-2
+          - group:
+            - generic: Габариты
+            - combobox:
+              - generic: 2.4x6
+          - group:
+            - generic: Отделка
+            - combobox:
+              - generic: ЛДСП
+      - group:
+        - generic: Мебель и наполнение
+        - paragraph: Наполнение бытовки ведётся отдельно от доп. оборудования.
+        - generic:
+          - generic:
+            - strong: Фактическое наполнение
+            - button: Добавить мебель
+          - paragraph: Наполнение не выбрано
+      - group:
+        - generic: Фотографии
+        - button
+        - paragraph: Фотографии необязательны; при наличии они будут прикреплены к новой бытовке.
+    - generic:
+      - button: Отмена
+      - button [disabled]: Создать и добавить возврат
+    - button:
+      - generic: Close
+  - listbox [ref=f1e319]:
+    - group [ref=f1e320]:
+      - option "Иван водитель" [active] [ref=f1e321]

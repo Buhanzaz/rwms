@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view" title="msg://WorkerClassAssignmentListView.title" focusComponent="workerClassAssignmentsDataGrid">
+    <data>
+        <collection id="workerClassAssignmentsDc" class="dev.buhanzaz.wmspanel.entity.WorkerClassAssignment">
+            <fetchPlan extends="_base">
+                <property name="worker" fetchPlan="_base">
+                    <property name="warehouse" fetchPlan="_base"/>
+                </property>
+                <property name="workerClass" fetchPlan="_base"/>
+            </fetchPlan>
+            <loader id="workerClassAssignmentsDl" readOnly="true">
+                <query><![CDATA[
+                    select e from WorkerClassAssignment e
+                    where e.worker.warehouse.id in :warehouseIds
+                    order by e.worker.warehouse.sortOrder, e.worker.warehouse.name, e.worker.displayName, e.workerClass.sortOrder, e.workerClass.name
+                ]]></query>
+            </loader>
+        </collection>
+    </data>
+    <layout>
+        <hbox id="buttonsPanel" classNames="buttons-panel">
+            <startSlot>
+                <button id="createButton" action="workerClassAssignmentsDataGrid.createAction"/>
+                <button id="editButton" action="workerClassAssignmentsDataGrid.editAction"/>
+                <button id="removeButton" action="workerClassAssignmentsDataGrid.removeAction"/>
+            </startSlot>
+        </hbox>
+        <dataGrid id="workerClassAssignmentsDataGrid" width="100%" minHeight="20em" dataContainer="workerClassAssignmentsDc">
+            <actions>
+                <action id="createAction" type="list_create"/>
+                <action id="editAction" type="list_edit"/>
+                <action id="removeAction" type="list_remove"/>
+            </actions>
+            <columns resizable="true">
+                <column property="worker"/>
+                <column property="workerClass"/>
+                <column property="active"/>
+            </columns>
+        </dataGrid>
+    </layout>
+</view>

@@ -1,0 +1,352 @@
+- generic:
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /
+                    - generic:
+                      - generic: WMS Panel
+                      - generic: СПБ
+            - generic:
+              - generic:
+                - generic:
+                  - combobox:
+                    - generic: СПБ
+              - generic:
+                - generic: Обзор
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /
+                        - generic: Главная
+                    - listitem:
+                      - link:
+                        - /url: /kpi
+                        - generic: KPI
+              - generic:
+                - generic: Имущество
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /warehouse
+                        - generic: Склад
+                    - listitem:
+                      - link:
+                        - /url: /equipment
+                        - generic: Доп. оборудование
+                    - listitem:
+                      - button [expanded]:
+                        - generic: Инвентаризация
+                      - list:
+                        - listitem:
+                          - link:
+                            - /url: /inventory/inventory-7c894ac7-145b-4317-9f80-7e5e9ec1e8d5
+                            - generic: Продолжить инвентаризацию
+                        - listitem:
+                          - link:
+                            - /url: /inventory/inventory-7c894ac7-145b-4317-9f80-7e5e9ec1e8d5/finish
+                            - generic: Закончить инвентаризацию
+                        - listitem:
+                          - link:
+                            - /url: /inventory/history
+                            - generic: История инвентаризаций
+                    - listitem:
+                      - button:
+                        - generic: Списание
+              - generic:
+                - generic: Логистика
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /logistics/returns
+                        - generic: Возврат из аренды
+                    - listitem:
+                      - link:
+                        - /url: /logistics/shipments
+                        - generic: Отгрузка в аренду
+              - generic:
+                - generic: Ремонтный цикл
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /estimates
+                        - generic: Сметы
+                    - listitem:
+                      - link:
+                        - /url: /repairs
+                        - generic: Ремонты
+                    - listitem:
+                      - link:
+                        - /url: /task-board
+                        - generic: Доска задач
+                    - listitem:
+                      - link:
+                        - /url: /acceptance
+                        - generic: Приёмка и доработки
+            - generic:
+              - list:
+                - listitem:
+                  - button:
+                    - generic: Настройки
+                - listitem:
+                  - button:
+                    - generic: Локальный администратор
+                    - generic: Выйти
+      - main:
+        - generic:
+          - generic:
+            - button:
+              - generic: Открыть или свернуть меню
+            - navigation:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /inventory
+                    - text: Инвентаризация
+                - listitem
+                - listitem:
+                  - link [disabled]: Сессия
+        - generic:
+          - generic:
+            - generic:
+              - button: Назад
+              - generic:
+                - button: Сохранить осмотр
+            - region:
+              - status: Позиция добавлена в результат осмотра.
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic: 0 из 20
+                        - button: Добавить
+                      - generic: Фото не загружены.
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - heading [level=3]: Смета
+                          - paragraph: Работа, материал, количество и цена сохраняются отдельными полями.
+                        - button: Добавить строку
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: Строка 1
+                              - button
+                          - generic:
+                            - generic:
+                              - group:
+                                - generic: Тип
+                                - combobox:
+                                  - generic: Работа
+                              - group:
+                                - generic: Работа / материал
+                                - textbox: Демонтаж и монтаж витража ПВХ
+                              - group:
+                                - generic: Комментарий
+                                - textbox
+                              - group:
+                                - generic: Количество
+                                - group:
+                                  - group:
+                                    - button [disabled]
+                                  - textbox: "1"
+                                  - group:
+                                    - button
+                              - group:
+                                - generic: Единица
+                                - textbox: ед
+                              - group:
+                                - generic: Цена
+                                - textbox: "6000.00"
+                              - group:
+                                - generic: Сумма
+                                - textbox: "6000.00"
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic: Строка 2
+                              - button
+                          - generic:
+                            - generic:
+                              - group:
+                                - generic: Тип
+                                - combobox:
+                                  - generic: Материал
+                              - group:
+                                - generic: Работа / материал
+                                - textbox: Витраж ПВХ в сборе 2000х2000 мм
+                              - group:
+                                - generic: Комментарий
+                                - textbox
+                              - group:
+                                - generic: Количество
+                                - group:
+                                  - group:
+                                    - button [disabled]
+                                  - textbox: "1"
+                                  - group:
+                                    - button
+                              - group:
+                                - generic: Единица
+                                - textbox: шт
+                              - group:
+                                - generic: Цена
+                                - textbox: "27000.00"
+                              - group:
+                                - generic: Сумма
+                                - textbox: "27000.00"
+                - generic:
+                  - generic:
+                    - generic: Информация
+                    - generic: Паспортные данные и причина зафиксированы; комментарий можно дополнить.
+                  - generic:
+                    - generic:
+                      - group:
+                        - generic: Бытовка
+                        - textbox: БЫТ-001
+                      - group:
+                        - generic: Причина
+                        - textbox: Инвентаризация
+                      - group:
+                        - generic: Дата
+                        - textbox: 2026-07-11
+                      - group:
+                        - generic: Статус
+                        - textbox: Свободна
+                      - group:
+                        - generic: Арендатор
+                        - textbox: —
+                      - group:
+                        - generic: Комментарий
+                        - textbox
+                - generic:
+                  - generic:
+                    - generic: Каталог
+                    - generic: Добавьте работы и материалы, которые нужно передать в ремонт.
+                  - generic:
+                    - generic:
+                      - generic:
+                        - group:
+                          - generic: Поиск
+                          - generic:
+                            - textbox:
+                              - /placeholder: Работа или материал
+                        - group:
+                          - generic: Режим каталога
+                          - combobox:
+                            - generic: Работы + материалы
+                      - navigation:
+                        - generic:
+                          - button: Главное меню
+                        - generic:
+                          - generic: /
+                          - button: Окна/Витражи
+                        - button: Назад
+                      - status: Позиция добавлена в смету
+                      - generic:
+                        - button:
+                          - generic:
+                            - generic: Окна ПВХ
+                            - generic: Подкатегория
+                        - button:
+                          - generic:
+                            - generic: Ремонт/Замена Витражи ПВХ
+                            - generic: Подкатегория
+                        - button:
+                          - generic:
+                            - generic: Витраж ПВХ в сборе 2000х2000 мм
+                            - generic:
+                              - generic:
+                                - generic: Материал
+                                - generic: Смета
+                        - button:
+                          - generic:
+                            - generic: Окно ПВХ 800*1000
+                            - generic:
+                              - generic:
+                                - generic: Материал
+                                - generic: Смета
+                        - button:
+                          - generic:
+                            - generic: Окно ПВХ 900*1100
+                            - generic:
+                              - generic:
+                                - generic: Материал
+                                - generic: Смета
+                        - button:
+                          - generic:
+                            - generic: Оконная решетка металлическая
+                            - generic:
+                              - generic:
+                                - generic: Материал
+                                - generic: Смета
+                        - button:
+                          - generic:
+                            - generic: Ручка оконная для ПВХ окон
+                            - generic:
+                              - generic:
+                                - generic: Материал
+                                - generic: Смета
+                        - button:
+                          - generic:
+                            - generic: Стеклопакет витраж ПВХ 907х1866 мм
+                            - generic:
+                              - generic:
+                                - generic: Материал
+                                - generic: Смета
+    - region "Notifications alt+T"
+  - dialog [ref=e1645]:
+    - generic [ref=e1646]:
+      - heading "Настройка работ по осмотру" [level=2] [ref=e1647]
+      - paragraph [ref=e1648]: Выберите режим, перемещения, очереди и порядок этапов. Настройка будет сохранена в снимке инвентаризации и передана в ремонт только после её завершения.
+    - generic [ref=e1649]:
+      - generic [ref=e1650]:
+        - group [ref=e1651]:
+          - generic [ref=e1652]: Режим
+          - combobox "Режим завершения" [ref=e1653] [cursor=pointer]:
+            - generic: Выбрать вручную
+        - group [ref=e1654]:
+          - checkbox "Создать перемещение на ремонт и возврат" [ref=e1655] [cursor=pointer]
+          - generic [ref=e1656]:
+            - generic [ref=e1657]: Создать перемещение на ремонт и возврат
+            - paragraph [ref=e1658]: Отметьте, если бытовку нужно отправить на ремонт и вернуть после завершения.
+      - generic [ref=e1659]:
+        - generic [ref=e1660]:
+          - heading "Планы задач" [level=3] [ref=e1661]
+          - paragraph [ref=e1662]: Порядок и маршрут сохраняются вместе с заданием. Планы без маршрута останутся в ожидании генерации.
+        - generic [ref=e1663]:
+          - generic [ref=e1665]:
+            - generic [ref=e1666]: 1. Демонтаж и монтаж витража ПВХ
+            - generic [ref=e1667]: INTERNAL_WORKS
+          - generic [ref=e1668]:
+            - paragraph [ref=e1669]: Демонтаж и монтаж витража ПВХ; Витраж ПВХ в сборе 2000х2000 мм
+            - generic [ref=e1670]:
+              - group [ref=e1671]:
+                - generic [ref=e1672]: Маршрут очереди
+                - combobox "Маршрут очереди плана 1" [ref=e1673] [cursor=pointer]:
+                  - generic: Очередь INTERNAL_WORKS (из каталога)
+              - group [ref=e1674]:
+                - generic [ref=e1675]: Комментарий группы
+                - textbox "Комментарий группы плана 1" [ref=e1676]
+              - generic [ref=e1677]:
+                - button "Переместить план выше" [disabled]
+                - button "Переместить план ниже" [disabled]
+                - button "Дублировать план" [ref=e1678] [cursor=pointer]
+                - button "Удалить план" [ref=e1679] [cursor=pointer]
+      - generic [ref=e1680]:
+        - button "Отмена" [ref=e1681] [cursor=pointer]
+        - button "Сохранить осмотр" [ref=e1682] [cursor=pointer]
+    - button "Close" [active] [ref=e1683] [cursor=pointer]

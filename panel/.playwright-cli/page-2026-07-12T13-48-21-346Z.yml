@@ -1,0 +1,171 @@
+- generic:
+  - generic:
+    - generic:
+      - main:
+        - generic:
+          - generic:
+            - button:
+              - generic: Открыть или свернуть меню
+            - navigation:
+              - list:
+                - listitem:
+                  - link [disabled]: Перемещения
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - textbox:
+                  - /placeholder: Бытовка, водитель, машина или склад
+                - textbox
+                - textbox
+                - combobox:
+                  - generic: Все направления
+                - combobox:
+                  - generic: Все статусы
+              - generic:
+                - button: Коррекции
+                - button: Создать перемещение
+            - generic:
+              - generic:
+                - status: Перемещения не найдены
+    - region "Notifications alt+T"
+  - dialog [ref=f1e240]:
+    - generic [ref=f1e241]:
+      - heading "Новое межскладское перемещение" [level=2] [ref=f1e242]
+      - paragraph [ref=f1e243]: Для каждой бытовки будет создано отдельное задание отправления.
+    - generic [ref=f1e244]:
+      - group [ref=f1e245]:
+        - generic [ref=f1e246]: Склад отправления
+        - textbox [disabled]: Склад СПБ
+      - group [ref=f1e247]:
+        - generic [ref=f1e248]: Склад назначения
+        - combobox "Склад назначения" [active] [ref=f1e249] [cursor=pointer]:
+          - generic: Склад МСК
+      - generic [ref=f1e250]:
+        - group [ref=f1e251]:
+          - generic [ref=f1e252]: Плановая дата
+          - textbox "Плановая дата" [ref=f1e253]: 2026-07-12
+        - group [ref=f1e254]:
+          - generic [ref=f1e255]: Водитель
+          - textbox "Водитель" [ref=f1e256]
+      - group [ref=f1e257]:
+        - generic [ref=f1e258]: Машина
+        - textbox "Машина" [ref=f1e259]
+      - group [ref=f1e260]:
+        - generic [ref=f1e261]: Комментарий
+        - textbox "Комментарий" [ref=f1e262]
+      - group "Бытовки" [ref=f1e263]:
+        - paragraph [ref=f1e265]: Доступны свободные бытовки, склад и собственные нужды.
+        - generic [ref=f1e266]:
+          - group [ref=f1e267]:
+            - checkbox "БЫТ-001 · 3 поз." [ref=f1e268] [cursor=pointer]
+            - generic [ref=f1e269]: БЫТ-001 · 3 поз.
+          - group [ref=f1e270]:
+            - checkbox "БЫТ-009 · 3 поз." [ref=f1e271] [cursor=pointer]
+            - generic [ref=f1e272]: БЫТ-009 · 3 поз.
+          - group [ref=f1e273]:
+            - checkbox "БЫТ-010 · 3 поз." [ref=f1e274] [cursor=pointer]
+            - generic [ref=f1e275]: БЫТ-010 · 3 поз.
+          - group [ref=f1e276]:
+            - checkbox "БЫТ-011 · без наполнения" [ref=f1e277] [cursor=pointer]
+            - generic [ref=f1e278]: БЫТ-011 · без наполнения
+          - group [ref=f1e279]:
+            - checkbox "БЫТ-019 · 2 поз." [ref=f1e280] [cursor=pointer]
+            - generic [ref=f1e281]: БЫТ-019 · 2 поз.
+          - group [ref=f1e282]:
+            - checkbox "БЫТ-020 · без наполнения" [ref=f1e283] [cursor=pointer]
+            - generic [ref=f1e284]: БЫТ-020 · без наполнения
+          - group [ref=f1e285]:
+            - checkbox "БЫТ-021 · 3 поз." [ref=f1e286] [cursor=pointer]
+            - generic [ref=f1e287]: БЫТ-021 · 3 поз.
+          - group [ref=f1e288]:
+            - checkbox "БЫТ-029 · 3 поз." [ref=f1e289] [cursor=pointer]
+            - generic [ref=f1e290]: БЫТ-029 · 3 поз.
+          - group [ref=f1e291]:
+            - checkbox "БЫТ-030 · без наполнения" [ref=f1e292] [cursor=pointer]
+            - generic [ref=f1e293]: БЫТ-030 · без наполнения
+          - group [ref=f1e294]:
+            - checkbox "БЫТ-031 · 2 поз." [ref=f1e295] [cursor=pointer]
+            - generic [ref=f1e296]: БЫТ-031 · 2 поз.
+          - group [ref=f1e297]:
+            - checkbox "БЫТ-039 · без наполнения" [ref=f1e298] [cursor=pointer]
+            - generic [ref=f1e299]: БЫТ-039 · без наполнения
+          - group [ref=f1e300]:
+            - checkbox "БЫТ-040 · без наполнения" [ref=f1e301] [cursor=pointer]
+            - generic [ref=f1e302]: БЫТ-040 · без наполнения
+          - group [ref=f1e303]:
+            - checkbox "БЫТ-041 · 3 поз." [ref=f1e304] [cursor=pointer]
+            - generic [ref=f1e305]: БЫТ-041 · 3 поз.
+          - group [ref=f1e306]:
+            - checkbox "БЫТ-049 · 3 поз." [ref=f1e307] [cursor=pointer]
+            - generic [ref=f1e308]: БЫТ-049 · 3 поз.
+          - group [ref=f1e309]:
+            - checkbox "БЫТ-050 · без наполнения" [ref=f1e310] [cursor=pointer]
+            - generic [ref=f1e311]: БЫТ-050 · без наполнения
+          - group [ref=f1e312]:
+            - checkbox "БЫТ-051 · без наполнения" [ref=f1e313] [cursor=pointer]
+            - generic [ref=f1e314]: БЫТ-051 · без наполнения
+          - group [ref=f1e315]:
+            - checkbox "БЫТ-059 · без наполнения" [ref=f1e316] [cursor=pointer]
+            - generic [ref=f1e317]: БЫТ-059 · без наполнения
+          - group [ref=f1e318]:
+            - checkbox "БЫТ-060 · без наполнения" [ref=f1e319] [cursor=pointer]
+            - generic [ref=f1e320]: БЫТ-060 · без наполнения
+          - group [ref=f1e321]:
+            - checkbox "БЫТ-061 · 3 поз." [ref=f1e322] [cursor=pointer]
+            - generic [ref=f1e323]: БЫТ-061 · 3 поз.
+          - group [ref=f1e324]:
+            - checkbox "БЫТ-069 · 3 поз." [ref=f1e325] [cursor=pointer]
+            - generic [ref=f1e326]: БЫТ-069 · 3 поз.
+          - group [ref=f1e327]:
+            - checkbox "БЫТ-070 · без наполнения" [ref=f1e328] [cursor=pointer]
+            - generic [ref=f1e329]: БЫТ-070 · без наполнения
+          - group [ref=f1e330]:
+            - checkbox "БЫТ-071 · без наполнения" [ref=f1e331] [cursor=pointer]
+            - generic [ref=f1e332]: БЫТ-071 · без наполнения
+          - group [ref=f1e333]:
+            - checkbox "БЫТ-079 · 2 поз." [ref=f1e334] [cursor=pointer]
+            - generic [ref=f1e335]: БЫТ-079 · 2 поз.
+          - group [ref=f1e336]:
+            - checkbox "БЫТ-080 · без наполнения" [ref=f1e337] [cursor=pointer]
+            - generic [ref=f1e338]: БЫТ-080 · без наполнения
+          - group [ref=f1e339]:
+            - checkbox "БЫТ-081 · 3 поз." [ref=f1e340] [cursor=pointer]
+            - generic [ref=f1e341]: БЫТ-081 · 3 поз.
+          - group [ref=f1e342]:
+            - checkbox "БЫТ-089 · 3 поз." [ref=f1e343] [cursor=pointer]
+            - generic [ref=f1e344]: БЫТ-089 · 3 поз.
+          - group [ref=f1e345]:
+            - checkbox "БЫТ-090 · без наполнения" [ref=f1e346] [cursor=pointer]
+            - generic [ref=f1e347]: БЫТ-090 · без наполнения
+          - group [ref=f1e348]:
+            - checkbox "БЫТ-091 · 2 поз." [ref=f1e349] [cursor=pointer]
+            - generic [ref=f1e350]: БЫТ-091 · 2 поз.
+          - group [ref=f1e351]:
+            - checkbox "БЫТ-099 · без наполнения" [ref=f1e352] [cursor=pointer]
+            - generic [ref=f1e353]: БЫТ-099 · без наполнения
+          - group [ref=f1e354]:
+            - checkbox "БЫТ-100 · 3 поз." [ref=f1e355] [cursor=pointer]
+            - generic [ref=f1e356]: БЫТ-100 · 3 поз.
+          - group [ref=f1e357]:
+            - checkbox "БЫТ-101 · 3 поз." [ref=f1e358] [cursor=pointer]
+            - generic [ref=f1e359]: БЫТ-101 · 3 поз.
+          - group [ref=f1e360]:
+            - checkbox "БЫТ-109 · 3 поз." [ref=f1e361] [cursor=pointer]
+            - generic [ref=f1e362]: БЫТ-109 · 3 поз.
+          - group [ref=f1e363]:
+            - checkbox "БЫТ-110 · без наполнения" [ref=f1e364] [cursor=pointer]
+            - generic [ref=f1e365]: БЫТ-110 · без наполнения
+          - group [ref=f1e366]:
+            - checkbox "БЫТ-111 · без наполнения" [ref=f1e367] [cursor=pointer]
+            - generic [ref=f1e368]: БЫТ-111 · без наполнения
+          - group [ref=f1e369]:
+            - checkbox "БЫТ-119 · без наполнения" [ref=f1e370] [cursor=pointer]
+            - generic [ref=f1e371]: БЫТ-119 · без наполнения
+          - group [ref=f1e372]:
+            - checkbox "БЫТ-120 · без наполнения" [ref=f1e373] [cursor=pointer]
+            - generic [ref=f1e374]: БЫТ-120 · без наполнения
+    - generic [ref=f1e375]:
+      - button "Отмена" [ref=f1e376] [cursor=pointer]
+      - button "Создать перемещение" [disabled]
+    - button "Close" [ref=f1e377] [cursor=pointer]

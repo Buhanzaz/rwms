@@ -1,0 +1,1223 @@
+- generic:
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /
+                    - generic:
+                      - generic: WMS Panel
+                      - generic: СПБ
+            - generic:
+              - generic:
+                - generic:
+                  - combobox:
+                    - generic: СПБ
+              - generic:
+                - generic: Обзор
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /
+                        - generic: Главная
+                    - listitem:
+                      - link:
+                        - /url: /kpi
+                        - generic: KPI
+              - generic:
+                - generic: Имущество
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /warehouse
+                        - generic: Склад
+                    - listitem:
+                      - link:
+                        - /url: /equipment
+                        - generic: Доп. оборудование
+                    - listitem:
+                      - button [expanded]:
+                        - generic: Инвентаризация
+                      - list:
+                        - listitem:
+                          - link:
+                            - /url: /inventory/inventory-d1b483e0-f234-4c61-94fb-04fe99fa79a1
+                            - generic: Продолжить инвентаризацию
+                        - listitem:
+                          - link:
+                            - /url: /inventory/inventory-d1b483e0-f234-4c61-94fb-04fe99fa79a1/finish
+                            - generic: Закончить инвентаризацию
+                        - listitem:
+                          - link:
+                            - /url: /inventory/history
+                            - generic: История инвентаризаций
+                    - listitem:
+                      - button:
+                        - generic: Списание
+              - generic:
+                - generic: Логистика
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /logistics/returns
+                        - generic: Возврат из аренды
+                    - listitem:
+                      - link:
+                        - /url: /logistics/shipments
+                        - generic: Отгрузка в аренду
+              - generic:
+                - generic: Ремонтный цикл
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /estimates
+                        - generic: Сметы
+                    - listitem:
+                      - link:
+                        - /url: /repairs
+                        - generic: Ремонты
+                    - listitem:
+                      - link:
+                        - /url: /task-board
+                        - generic: Доска задач
+                    - listitem:
+                      - link:
+                        - /url: /acceptance
+                        - generic: Приёмка и доработки
+            - generic:
+              - list:
+                - listitem:
+                  - button:
+                    - generic: Настройки
+                - listitem:
+                  - button:
+                    - generic: Локальный администратор
+                    - generic: Выйти
+      - main:
+        - generic:
+          - generic:
+            - button:
+              - generic: Открыть или свернуть меню
+            - navigation:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /inventory
+                    - text: Инвентаризация
+                - listitem
+                - listitem:
+                  - link [disabled]: Сессия
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - generic: Проверено 1 из 96
+                - progressbar
+              - generic:
+                - button: Добавить бытовку
+                - button: Закончить инвентаризацию
+            - radiogroup:
+              - radio [checked]: Все
+              - radio: Проверены
+              - radio: С работами
+              - radio: Конфликты
+              - radio: Добавлены
+              - radio: Не найдены
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - table:
+                      - rowgroup:
+                        - row:
+                          - columnheader:
+                            - button:
+                              - generic: Номер
+                          - columnheader:
+                            - button:
+                              - generic: Источник
+                          - columnheader:
+                            - button:
+                              - generic: Статус бытовки
+                          - columnheader:
+                            - button:
+                              - generic: Сверка
+                          - columnheader:
+                            - button:
+                              - generic: Действие
+                      - rowgroup:
+                        - row:
+                          - cell: БЫТ-001
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Свободна
+                          - cell:
+                            - generic: Проверена
+                          - cell:
+                            - button: Открыть
+                        - row:
+                          - cell: БЫТ-003
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Ожидает осмотра
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-005
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Бронь
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-006
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: В ремонте
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-007
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Капремонт
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-008
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Продажа Б/У
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-009
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Склад
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-010
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Собственные нужды
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-011
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Свободна
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-013
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Ожидает осмотра
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-015
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Бронь
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-016
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: В ремонте
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-017
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Капремонт
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-018
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Продажа Б/У
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-019
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Склад
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-020
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Собственные нужды
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-021
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Свободна
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-023
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Ожидает осмотра
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-025
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Бронь
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-026
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: В ремонте
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-027
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Капремонт
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-028
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Продажа Б/У
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-029
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Склад
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-030
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Собственные нужды
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-031
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Свободна
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-033
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Ожидает осмотра
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-035
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Бронь
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-036
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: В ремонте
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-037
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Капремонт
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-038
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Продажа Б/У
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-039
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Склад
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-040
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Собственные нужды
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-041
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Свободна
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-043
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Ожидает осмотра
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-045
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Бронь
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-046
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: В ремонте
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-047
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Капремонт
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-048
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Продажа Б/У
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-049
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Склад
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-050
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Собственные нужды
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-051
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Свободна
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-053
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Ожидает осмотра
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-055
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Бронь
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-056
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: В ремонте
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-057
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Капремонт
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-058
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Продажа Б/У
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-059
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Склад
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-060
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Собственные нужды
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-061
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Свободна
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-063
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Ожидает осмотра
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-065
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Бронь
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-066
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: В ремонте
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-067
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Капремонт
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-068
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Продажа Б/У
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-069
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Склад
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-070
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Собственные нужды
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-071
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Свободна
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-073
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Ожидает осмотра
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-075
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Бронь
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-076
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: В ремонте
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-077
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Капремонт
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-078
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Продажа Б/У
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-079
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Склад
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-080
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Собственные нужды
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-081
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Свободна
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-083
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Ожидает осмотра
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-085
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Бронь
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-086
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: В ремонте
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-087
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Капремонт
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-088
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Продажа Б/У
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-089
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Склад
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-090
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Собственные нужды
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-091
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Свободна
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-093
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Ожидает осмотра
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-095
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Бронь
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-096
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: В ремонте
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-097
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Капремонт
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-098
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Продажа Б/У
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-099
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Склад
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-100
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Собственные нужды
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-101
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Свободна
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-103
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Ожидает осмотра
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-105
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Бронь
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-106
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: В ремонте
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-107
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Капремонт
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-108
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Продажа Б/У
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-109
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Склад
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-110
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Собственные нужды
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-111
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Свободна
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-113
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Ожидает осмотра
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-115
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Бронь
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-116
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: В ремонте
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-117
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Капремонт
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-118
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Продажа Б/У
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-119
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Склад
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+                        - row:
+                          - cell: БЫТ-120
+                          - cell: Ожидалась
+                          - cell:
+                            - generic: Собственные нужды
+                          - cell:
+                            - generic:
+                              - generic: Не проверена
+                              - generic: Не найдена
+                          - cell:
+                            - button: Проверить
+    - region "Notifications alt+T"
+  - dialog [ref=e2614]:
+    - generic [ref=e2615]:
+      - heading "Добавить бытовку" [level=2] [ref=e2616]
+      - paragraph [ref=e2617]: Введите точный номер. Поиск повторно проверит весь реестр.
+    - generic [ref=e2618]:
+      - group [ref=e2619]:
+        - generic [ref=e2620]: Номер бытовки
+        - textbox "Номер бытовки" [active] [ref=e2621]
+      - generic [ref=e2622]:
+        - button "Отмена" [ref=e2623] [cursor=pointer]
+        - button "Найти" [disabled]
+    - button "Close" [ref=e2624] [cursor=pointer]

@@ -1,0 +1,121 @@
+- generic [ref=f1e2]:
+  - generic [ref=f1e3]:
+    - generic [ref=f1e6]:
+      - list [ref=f1e8]:
+        - listitem [ref=f1e9]:
+          - link "WMS Panel СПБ" [ref=f1e10] [cursor=pointer]:
+            - /url: /
+            - generic [ref=f1e15]:
+              - generic [ref=f1e16]: WMS Panel
+              - generic [ref=f1e17]: СПБ
+      - generic [ref=f1e18]:
+        - combobox "Выбор склада" [ref=f1e21] [cursor=pointer]:
+          - generic: СПБ
+        - generic [ref=f1e22]:
+          - generic [ref=f1e23]: Обзор
+          - list [ref=f1e25]:
+            - listitem [ref=f1e26]:
+              - link "Главная" [ref=f1e27] [cursor=pointer]:
+                - /url: /
+            - listitem [ref=f1e35]:
+              - link "KPI" [ref=f1e36] [cursor=pointer]:
+                - /url: /kpi
+        - generic [ref=f1e42]:
+          - generic [ref=f1e43]: Имущество
+          - list [ref=f1e45]:
+            - listitem [ref=f1e46]:
+              - link "Склад" [ref=f1e47] [cursor=pointer]:
+                - /url: /warehouse
+            - listitem [ref=f1e53]:
+              - link "Доп. оборудование" [ref=f1e54] [cursor=pointer]:
+                - /url: /equipment
+            - listitem [ref=f1e63]:
+              - button "Инвентаризация" [ref=f1e64] [cursor=pointer]
+            - listitem [ref=f1e73]:
+              - button "Списание" [ref=f1e74] [cursor=pointer]
+        - generic [ref=f1e83]:
+          - generic [ref=f1e84]: Логистика
+          - list [ref=f1e86]:
+            - listitem [ref=f1e87]:
+              - link "Возврат из аренды" [ref=f1e88] [cursor=pointer]:
+                - /url: /logistics/returns
+            - listitem [ref=f1e95]:
+              - link "Отгрузка в аренду" [ref=f1e96] [cursor=pointer]:
+                - /url: /logistics/shipments
+        - generic [ref=f1e104]:
+          - generic [ref=f1e105]: Ремонтный цикл
+          - list [ref=f1e107]:
+            - listitem [ref=f1e108]:
+              - link "Сметы" [ref=f1e109] [cursor=pointer]:
+                - /url: /estimates
+            - listitem [ref=f1e115]:
+              - link "Ремонты" [ref=f1e116] [cursor=pointer]:
+                - /url: /repairs
+            - listitem [ref=f1e122]:
+              - link "Доска задач" [ref=f1e123] [cursor=pointer]:
+                - /url: /task-board
+            - listitem [ref=f1e130]:
+              - link "Приёмка и доработки" [ref=f1e131] [cursor=pointer]:
+                - /url: /acceptance
+      - list [ref=f1e138]:
+        - listitem [ref=f1e139]:
+          - button "Настройки" [ref=f1e140] [cursor=pointer]
+        - listitem [ref=f1e148]:
+          - button "Локальный администратор Выйти" [ref=f1e149] [cursor=pointer]:
+            - generic [ref=f1e154]: Локальный администратор
+            - generic [ref=f1e155]: Выйти
+    - main [ref=f1e156]:
+      - generic [ref=f1e158]:
+        - button "Открыть или свернуть меню" [ref=f1e159] [cursor=pointer]
+        - navigation "Навигационная цепочка" [ref=f1e161]:
+          - list [ref=f1e162]:
+            - listitem [ref=f1e163]:
+              - generic [ref=f1e164]: Логистика
+            - listitem [ref=f1e165]
+            - listitem [ref=f1e168]:
+              - link "Возврат из аренды" [disabled] [ref=f1e169]
+      - generic [ref=f1e171]:
+        - generic [ref=f1e172]:
+          - generic [ref=f1e173]:
+            - textbox "Поиск возвратов" [ref=f1e174]:
+              - /placeholder: Компания или номер бытовки
+            - textbox "Возврат с даты" [ref=f1e175]
+            - textbox "Возврат по дату" [ref=f1e176]
+          - generic [ref=f1e177]:
+            - button "Добавить бытовку из аренды" [ref=f1e178] [cursor=pointer]
+            - button "Добавить возврат" [ref=f1e179] [cursor=pointer]
+        - table [ref=f1e184]:
+          - rowgroup [ref=f1e185]:
+            - row [ref=f1e186]:
+              - columnheader [ref=f1e187]:
+                - button "От кого" [ref=f1e188] [cursor=pointer]
+              - columnheader [ref=f1e193]:
+                - button "Дата возврата" [ref=f1e194] [cursor=pointer]
+              - columnheader [ref=f1e199]:
+                - button "Водитель" [ref=f1e200] [cursor=pointer]
+              - columnheader [ref=f1e205]:
+                - button "Возвращённые бытовки" [ref=f1e206] [cursor=pointer]
+              - columnheader [ref=f1e211]:
+                - button "Этап" [ref=f1e212] [cursor=pointer]
+              - columnheader [ref=f1e217]:
+                - button "Повреждения" [ref=f1e218] [cursor=pointer]
+              - columnheader [ref=f1e223]:
+                - button "Смета" [ref=f1e224] [cursor=pointer]
+              - columnheader [ref=f1e229]:
+                - button "Действия" [ref=f1e230] [cursor=pointer]
+          - rowgroup [ref=f1e370]:
+            - row [ref=f1e371]:
+              - cell "ООО Браузер" [ref=f1e372]
+              - cell "12 июл. 2026 г." [ref=f1e373]
+              - cell "Иван водитель" [ref=f1e374]
+              - cell "ИМП-BROWSER-2" [ref=f1e375]
+              - cell "Ожидает осмотра" [ref=f1e378]
+              - cell "Не указано" [ref=f1e381]
+              - cell "Не указано" [ref=f1e384]
+              - cell [ref=f1e387]:
+                - generic [ref=f1e389]:
+                  - button "Редактировать" [ref=f1e390] [cursor=pointer]
+                  - generic [ref=f1e391]:
+                    - button "Принять без повреждений" [ref=f1e392] [cursor=pointer]
+                    - button "Создать смету" [ref=f1e393] [cursor=pointer]
+  - region "Notifications alt+T"

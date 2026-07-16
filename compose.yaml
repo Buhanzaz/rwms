@@ -1,0 +1,147 @@
+# Local development and test dependencies only. This is not a deployment manifest.
+name: rwms
+
+services:
+  auth-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_auth
+      POSTGRES_USER: rwms_auth
+      POSTGRES_PASSWORD: ${RWMS_AUTH_DB_PASSWORD:-rwms_auth_dev}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - rwms-auth-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_auth -d rwms_auth"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  task-board-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_task_board
+      POSTGRES_USER: rwms_task_board
+      POSTGRES_PASSWORD: ${RWMS_TASK_BOARD_DB_PASSWORD:-rwms_task_board_dev}
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - rwms-task-board-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_task_board -d rwms_task_board"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  warehouse-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_warehouse
+      POSTGRES_USER: rwms_warehouse
+      POSTGRES_PASSWORD: ${RWMS_WAREHOUSE_DB_PASSWORD:-rwms_warehouse_dev}
+    ports:
+      - "127.0.0.1:5435:5432"
+    volumes:
+      - rwms-warehouse-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_warehouse -d rwms_warehouse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  asset-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_asset
+      POSTGRES_USER: rwms_asset
+      POSTGRES_PASSWORD: ${RWMS_ASSET_DB_PASSWORD:-rwms_asset_dev}
+    ports:
+      - "127.0.0.1:5436:5432"
+    volumes:
+      - rwms-asset-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_asset -d rwms_asset"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kafka:
+    image: apache/kafka:4.3.1
+    profiles: ["core"]
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT_HOST://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT_HOST://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT_HOST:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+    ports:
+      - "127.0.0.1:9092:9092"
+    volumes:
+      - rwms-kafka:/var/lib/kafka/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  media-compat-rabbitmq:
+    image: rabbitmq:4.1-management-alpine
+    profiles: ["media-compat-rabbit"]
+    hostname: rabbitmq
+    labels:
+      com.rwms.compatibility-scope: media-only
+      com.rwms.target-integration: "false"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RWMS_RABBITMQ_USER:-rwms}
+      RABBITMQ_DEFAULT_PASS: ${RWMS_RABBITMQ_PASSWORD:-rwms_dev}
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rwms-rabbitmq:/var/lib/rabbitmq
+    networks:
+      rwms-media-compat:
+        aliases:
+          - rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  rwms-auth-db:
+  rwms-task-board-db:
+  rwms-warehouse-db:
+  rwms-asset-db:
+  rwms-kafka:
+  rwms-rabbitmq:
+
+networks:
+  rwms-core:
+  rwms-media-compat:
+    internal: true

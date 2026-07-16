@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view"
+      title="msg://RentalAttributeDefinitionDetailView.title"
+      focusComponent="form">
+    <data>
+        <instance id="rentalAttributeDefinitionDc"
+                  class="dev.buhanzaz.wmspanel.entity.RentalAttributeDefinition">
+            <fetchPlan extends="_base"/>
+            <loader/>
+        </instance>
+    </data>
+    <actions>
+        <action id="saveCloseAction" type="detail_saveClose"/>
+        <action id="closeAction" type="detail_close"/>
+    </actions>
+    <facets>
+        <dataLoadCoordinator auto="true"/>
+    </facets>
+    <layout>
+        <formLayout id="form" dataContainer="rentalAttributeDefinitionDc">
+            <textField id="nameField" property="name" required="true"/>
+            <textField id="codeField" property="code" required="true"/>
+            <comboBox id="dataTypeField" property="dataType" required="true"/>
+            <checkbox id="activeField" property="active"/>
+            <integerField id="sortOrderField" property="sortOrder"/>
+        </formLayout>
+        <hbox id="detailActions">
+            <button id="saveAndCloseButton" action="saveCloseAction"/>
+            <button id="closeButton" action="closeAction"/>
+        </hbox>
+    </layout>
+</view>

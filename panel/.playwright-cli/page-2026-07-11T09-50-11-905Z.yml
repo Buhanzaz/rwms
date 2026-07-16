@@ -1,0 +1,6 @@
+- generic [ref=f3e2]:
+  - main [ref=f3e3]:
+    - generic [ref=f3e4]:
+      - generic [ref=f3e5]: Завершаем вход
+      - paragraph [ref=f3e8]: Проверяем сессию…
+  - region "Notifications alt+T"

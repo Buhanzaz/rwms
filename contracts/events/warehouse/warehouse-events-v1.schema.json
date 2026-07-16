@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/warehouse/warehouse-events-v1.schema.json",
+  "title": "RWMS warehouse-service event facts v1",
+  "description": "Sanitized warehouse lifecycle facts. Warehouse name, city and address remain in the warehouse-service projection and are not published.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelopeVersion", "eventId", "eventType", "eventVersion", "occurredAt", "recordedAt", "producer", "aggregateType", "aggregateId", "aggregateVersion", "correlation", "actorRef", "payload"],
+  "properties": {
+    "envelopeVersion": {"const": 2},
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {"enum": ["warehouse.warehouse.created.v1", "warehouse.warehouse.changed.v1", "warehouse.warehouse.deactivated.v1"]},
+    "eventVersion": {"const": 1},
+    "occurredAt": {"type": "string", "format": "date-time"},
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "producer": {"const": "warehouse-service"},
+    "aggregateType": {"const": "WAREHOUSE"},
+    "aggregateId": {"type": "string", "format": "uuid"},
+    "aggregateVersion": {"type": "integer", "minimum": 0},
+    "correlation": {"$ref": "#/$defs/correlationContext"},
+    "actorRef": {"oneOf": [{"$ref": "#/$defs/opaqueActorReference"}, {"type": "null"}]},
+    "payload": {"$ref": "#/$defs/warehouseFact"}
+  },
+  "x-rwms-topics": ["rwms.warehouse.warehouse.v1"],
+  "$defs": {
+    "correlationContext": {
+      "type": "object", "additionalProperties": false,
+      "required": ["correlationId", "causationId"],
+      "properties": {
+        "correlationId": {"type": "string", "format": "uuid"},
+        "causationId": {"oneOf": [{"type": "string", "format": "uuid"}, {"type": "null"}]}
+      }
+    },
+    "opaqueActorReference": {
+      "type": "object", "additionalProperties": false,
+      "required": ["subjectId", "principalType", "profileRevision"],
+      "properties": {
+        "subjectId": {"type": "string", "format": "uuid"},
+        "principalType": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"},
+        "profileRevision": {"oneOf": [{"type": "string", "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$"}, {"type": "null"}]}
+      }
+    },
+    "warehouseFact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["warehouseId", "code", "timeZone", "active", "sortOrder"],
+      "properties": {
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "code": {"type": "string", "pattern": "^[A-Z0-9][A-Z0-9_-]{0,63}$"},
+        "timeZone": {"type": "string", "minLength": 1, "maxLength": 64},
+        "active": {"type": "boolean"},
+        "sortOrder": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]}
+      }
+    }
+  }
+}

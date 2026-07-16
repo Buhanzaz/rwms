@@ -1,0 +1,28 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  datasource:
+    url: ${WAREHOUSE_DB_URL:jdbc:postgresql://127.0.0.1:5435/rwms_warehouse}
+    username: ${WAREHOUSE_DB_USERNAME:rwms_warehouse}
+    password: ${WAREHOUSE_DB_PASSWORD:rwms_warehouse_dev}
+  cloud:
+    stream:
+      kafka:
+        binder:
+          brokers: ${WAREHOUSE_KAFKA_BROKERS:127.0.0.1:9092}
+          auto-create-topics: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTH_ISSUER:http://localhost:9000}
+
+rwms:
+  platform:
+    kafka:
+      enabled: ${WAREHOUSE_KAFKA_ENABLED:true}
+  security:
+    dev-auth-bypass: true
+  cors:
+    allowed-origins: ${PANEL_ORIGIN:http://localhost:8080}
