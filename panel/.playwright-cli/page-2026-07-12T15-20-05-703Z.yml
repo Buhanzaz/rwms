@@ -1,0 +1,189 @@
+- generic:
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /
+                    - generic:
+                      - generic: WMS Panel
+                      - generic: СПБ
+            - generic:
+              - generic:
+                - generic:
+                  - combobox:
+                    - generic: СПБ
+              - generic:
+                - generic: Обзор
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /
+                        - generic: Главная
+                    - listitem:
+                      - link:
+                        - /url: /kpi
+                        - generic: KPI
+              - generic:
+                - generic: Имущество
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /warehouse
+                        - generic: Склад
+                    - listitem:
+                      - link:
+                        - /url: /equipment
+                        - generic: Доп. оборудование
+                    - listitem:
+                      - button:
+                        - generic: Инвентаризация
+                    - listitem:
+                      - button:
+                        - generic: Списание
+              - generic:
+                - generic: Логистика
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /logistics/returns
+                        - generic: Возврат из аренды
+                    - listitem:
+                      - link:
+                        - /url: /logistics/shipments
+                        - generic: Отгрузка в аренду
+                    - listitem:
+                      - link:
+                        - /url: /logistics/transfers
+                        - generic: Перемещения
+              - generic:
+                - generic: Ремонтный цикл
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /estimates
+                        - generic: Сметы
+                    - listitem:
+                      - link:
+                        - /url: /repairs
+                        - generic: Ремонты
+                    - listitem:
+                      - link:
+                        - /url: /task-board
+                        - generic: Доска задач
+                    - listitem:
+                      - link:
+                        - /url: /acceptance
+                        - generic: Приёмка и доработки
+            - generic:
+              - list:
+                - listitem:
+                  - button:
+                    - generic: Настройки
+                - listitem:
+                  - button:
+                    - generic: Локальный администратор
+                    - generic: Выйти
+      - main:
+        - generic:
+          - generic:
+            - button:
+              - generic: Открыть или свернуть меню
+            - navigation:
+              - list:
+                - listitem:
+                  - generic: Логистика
+                - listitem
+                - listitem:
+                  - link [disabled]: Перемещения
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - textbox:
+                  - /placeholder: Бытовка, водитель, машина или склад
+                - textbox
+                - textbox
+                - combobox:
+                  - generic: Все направления
+                - combobox:
+                  - generic: Все статусы
+              - generic:
+                - button: Коррекции
+                - button: Создать перемещение
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - table:
+                      - rowgroup:
+                        - row:
+                          - columnheader:
+                            - button:
+                              - generic: Дата
+                          - columnheader:
+                            - button:
+                              - generic: Направление
+                          - columnheader:
+                            - button:
+                              - generic: Бытовка
+                          - columnheader:
+                            - button:
+                              - generic: Водитель
+                          - columnheader:
+                            - button:
+                              - generic: Наполнение
+                          - columnheader:
+                            - button:
+                              - generic: Статус
+                          - columnheader:
+                            - button:
+                              - generic: Действия
+    - region "Notifications alt+T"
+  - dialog [ref=e239]:
+    - generic [ref=e240]:
+      - heading "Новое межскладское перемещение" [level=2] [ref=e241]
+      - paragraph [ref=e242]: Для каждой бытовки будет создано отдельное задание отправления.
+    - generic [ref=e243]:
+      - group [ref=e244]:
+        - generic [ref=e245]: Склад отправления
+        - textbox [disabled]: Склад СПБ
+      - group [ref=e246]:
+        - generic [ref=e247]: Склад назначения
+        - combobox "Склад назначения" [active] [ref=e248] [cursor=pointer]:
+          - generic: Склад МСК
+      - generic [ref=e249]:
+        - group [ref=e250]:
+          - generic [ref=e251]: Плановая дата
+          - textbox "Плановая дата" [ref=e252]: 2026-07-12
+        - group [ref=e253]:
+          - generic [ref=e254]: Водитель
+          - textbox "Водитель" [ref=e255]
+      - group [ref=e256]:
+        - generic [ref=e257]: Комментарий
+        - textbox "Комментарий" [ref=e258]
+      - group "Бытовки и наполнение" [ref=e259]:
+        - paragraph [ref=e261]: Выберите бытовки, которые нужно переместить на другой склад.
+        - generic [ref=e262]:
+          - generic [ref=e263]:
+            - generic [ref=e264]: Бытовка 1
+            - group [ref=e268]:
+              - generic [ref=e269]: Номер бытовки
+              - group [ref=e270]:
+                - combobox "Номер бытовки" [ref=e271]
+                - group [ref=e272]:
+                  - button [ref=e273] [cursor=pointer]
+              - textbox [ref=e274]
+          - button "Добавить ещё бытовку" [ref=e275] [cursor=pointer]
+    - generic [ref=e276]:
+      - button "Отмена" [ref=e277] [cursor=pointer]
+      - button "Создать перемещение" [disabled]
+    - button "Close" [ref=e278] [cursor=pointer]

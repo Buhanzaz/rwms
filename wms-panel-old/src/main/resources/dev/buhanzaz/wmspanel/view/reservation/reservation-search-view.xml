@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view"
+      title="msg://dev.buhanzaz.wmspanel.view.reservation/ReservationSearchView.title"
+      focusComponent="warehouseField">
+    <layout>
+        <vbox width="100%" spacing="true" padding="false">
+            <formLayout id="filtersForm" width="100%">
+                <comboBox id="warehouseField" width="100%"/>
+                <comboBox id="categoryField" width="100%"/>
+                <comboBox id="subcategoryField" width="100%"/>
+                <comboBox id="typeField" width="100%"/>
+                <integerField id="quantityField" width="100%"/>
+            </formLayout>
+
+            <hbox id="filterActions" classNames="buttons-panel">
+                <button id="searchButton"/>
+                <button id="createTemporaryButton"/>
+                <button id="reservationsButton"/>
+            </hbox>
+
+            <span id="warningSpan"/>
+
+            <textArea id="selectedItemsField" readOnly="true" width="100%" minHeight="8em"/>
+
+            <dataGrid id="searchResultsDataGrid"
+                      width="100%"
+                      height="24em"
+                      pageSize="50"
+                      metaClass="RentalItem"
+                      themeNames="column-borders row-stripes compact">
+                <columns resizable="true">
+                    <column property="number"/>
+                    <column property="warehouse"/>
+                    <column property="category" visible="false"/>
+                    <column property="subcategory"/>
+                    <column property="type"/>
+                    <column key="status" header="Статус"/>
+                    <column key="available" header="Доступно"/>
+                    <column property="comment"/>
+                </columns>
+            </dataGrid>
+        </vbox>
+    </layout>
+</view>

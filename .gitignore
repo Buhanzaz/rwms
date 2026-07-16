@@ -1,6 +1,11 @@
 HELP.md
 .gradle
 build/
+node_modules/
+dist/
+*.log
+*.class
+local.properties
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
@@ -38,4 +43,19 @@ out/
 
 ### LLM ###
 .agents/
-AGENTS.md
+.codex/
+.codex-remote-attachments/
+skills-lock.json
+PROMPT_WMS_FULL_ANALYSIS_RWMS.md
+PROMPT_PANEL_RENTAL_TABLE_MIGRATION.md
+.rwms-migration-backups/
+
+### Playwright CLI ###
+/\.playwright-cli/
+/\.playwright-mcp/
+/services/auth-service/ui/.playwright-cli/
+
+### Local IDE and legacy runtime artifacts ###
+/amplicode.xml
+/old_db/**/target/
+*.lck

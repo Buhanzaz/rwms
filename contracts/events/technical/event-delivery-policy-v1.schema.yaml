@@ -1,0 +1,30 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://rwms.example/contracts/events/technical/event-delivery-policy-v1.schema.yaml
+title: RWMS Event Delivery Policy V1
+description: Framework-neutral bounded failure policy for service-owned Kafka consumers.
+type: object
+required: [topic, consumerGroup, failureCategory, failedDeliveryAttempt]
+properties:
+  topic:
+    type: string
+    maxLength: 249
+    pattern: "^rwms\\.[a-z0-9]+(?:-[a-z0-9]+)*\\.[a-z0-9]+(?:-[a-z0-9]+)*\\.v[1-9][0-9]*$"
+  consumerGroup:
+    type: string
+    maxLength: 128
+    pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+  failureCategory:
+    enum: [VALIDATION, TRANSIENT_INFRASTRUCTURE]
+  failedDeliveryAttempt:
+    type: integer
+    minimum: 1
+    maximum: 4
+additionalProperties: false
+x-rwms-policy:
+  totalDeliveryAttempts: 4
+  retryBackoffSeconds: [1, 2, 4]
+  deadLetterTopic: <topic>.<consumer-group>.dlt
+  failureDisposition:
+    validation: DEAD_LETTER
+    transientInfrastructure: RETRY_THEN_DEAD_LETTER
+  infiniteRequeue: false

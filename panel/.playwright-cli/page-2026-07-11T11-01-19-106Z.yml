@@ -1,0 +1,44 @@
+- generic:
+  - generic:
+    - generic:
+      - main:
+        - generic:
+          - generic:
+            - button:
+              - generic: Открыть или свернуть меню
+            - navigation:
+              - list:
+                - listitem:
+                  - link [disabled]: Возврат из аренды
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - textbox:
+                  - /placeholder: Бытовка или компания
+                - textbox
+                - textbox
+                - combobox:
+                  - generic: Все статусы
+              - generic:
+                - button: Добавить возврат
+    - region "Notifications alt+T"
+  - dialog [ref=f3e222]:
+    - generic [ref=f3e223]:
+      - heading "Добавить возврат из аренды" [level=2] [ref=f3e224]
+      - paragraph [ref=f3e225]: Выберите бытовку, укажите компанию и дату фактического возврата.
+    - generic [ref=f3e226]:
+      - group [ref=f3e227]:
+        - generic [ref=f3e228]: Бытовка
+        - combobox [active] [ref=f3e229] [cursor=pointer]:
+          - generic: Выберите бытовку
+      - group [ref=f3e230]:
+        - generic [ref=f3e231]: От кого
+        - textbox "От кого" [ref=f3e232]
+      - group [ref=f3e233]:
+        - generic [ref=f3e234]: Дата возврата
+        - textbox "Дата возврата" [ref=f3e235]: 2026-07-11
+    - generic [ref=f3e236]:
+      - button "Отмена" [ref=f3e237] [cursor=pointer]
+      - button "Создать" [disabled]
+    - button "Close" [ref=f3e238] [cursor=pointer]

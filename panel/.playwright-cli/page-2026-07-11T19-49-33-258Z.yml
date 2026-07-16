@@ -1,0 +1,283 @@
+- generic:
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /
+                    - generic:
+                      - generic: WMS Panel
+                      - generic: СПБ
+            - generic:
+              - generic:
+                - generic:
+                  - combobox:
+                    - generic: СПБ
+              - generic:
+                - generic: Обзор
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /
+                        - generic: Главная
+                    - listitem:
+                      - link:
+                        - /url: /kpi
+                        - generic: KPI
+              - generic:
+                - generic: Имущество
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /warehouse
+                        - generic: Склад
+                    - listitem:
+                      - link:
+                        - /url: /equipment
+                        - generic: Доп. оборудование
+                    - listitem:
+                      - button:
+                        - generic: Инвентаризация
+                    - listitem:
+                      - button:
+                        - generic: Списание
+              - generic:
+                - generic: Логистика
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /logistics/returns
+                        - generic: Возврат из аренды
+                    - listitem:
+                      - link:
+                        - /url: /logistics/shipments
+                        - generic: Отгрузка в аренду
+              - generic:
+                - generic: Ремонтный цикл
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /estimates
+                        - generic: Сметы
+                    - listitem:
+                      - link:
+                        - /url: /repairs
+                        - generic: Ремонты
+                    - listitem:
+                      - link:
+                        - /url: /task-board
+                        - generic: Доска задач
+                    - listitem:
+                      - link:
+                        - /url: /acceptance
+                        - generic: Приёмка и доработки
+            - generic:
+              - list:
+                - listitem:
+                  - button:
+                    - generic: Настройки
+                - listitem:
+                  - button:
+                    - generic: Локальный администратор
+                    - generic: Выйти
+      - main:
+        - generic:
+          - generic:
+            - button:
+              - generic: Открыть или свернуть меню
+            - navigation:
+              - list:
+                - listitem:
+                  - generic: Логистика
+                - listitem
+                - listitem:
+                  - link [disabled]: Возврат из аренды
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - textbox:
+                  - /placeholder: Компания или номер бытовки
+                - textbox
+                - textbox
+              - generic:
+                - button: Добавить возврат
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - table:
+                      - rowgroup:
+                        - row:
+                          - columnheader:
+                            - button:
+                              - generic: От кого
+                          - columnheader:
+                            - button:
+                              - generic: Дата возврата
+                          - columnheader:
+                            - button:
+                              - generic: Водитель
+                          - columnheader:
+                            - button:
+                              - generic: Возвращённые бытовки
+                          - columnheader:
+                            - button:
+                              - generic: Способ приёмки
+                          - columnheader:
+                            - button:
+                              - generic: Этап
+                          - columnheader:
+                            - button:
+                              - generic: Повреждения
+                          - columnheader:
+                            - button:
+                              - generic: Смета
+                          - columnheader:
+                            - button:
+                              - generic: Действия
+    - region "Notifications alt+T"
+  - dialog:
+    - generic:
+      - heading [level=2]: Добавить возврат из аренды
+      - paragraph: Выберите клиента, фактически вернувшиеся бытовки и дату возврата.
+    - generic:
+      - group:
+        - generic: От кого
+        - group:
+          - combobox: ИП Петров А.В.
+          - group:
+            - button
+        - textbox: ИП Петров А.В.
+      - group:
+        - generic: Дата возврата
+        - textbox: 2026-07-11
+      - group:
+        - generic: Водитель
+        - combobox:
+          - generic: Иван водитель
+      - group:
+        - generic: Бытовки для возврата
+        - paragraph: Выберите бытовки, которые фактически вернулись из аренды.
+        - generic:
+          - generic:
+            - generic: Бытовка 1
+            - generic:
+              - group:
+                - generic: Номер бытовки
+                - generic:
+                  - group:
+                    - combobox: БЫТ-002
+                    - group:
+                      - button
+                  - textbox: БЫТ-002
+              - generic:
+                - generic:
+                  - strong: Фактическое наполнение
+                  - button: Добавить мебель
+                - paragraph: Наполнение не выбрано
+          - button: Добавить ещё бытовку
+    - generic:
+      - button: Отмена
+      - button: Создать возврат
+    - button:
+      - generic: Close
+  - dialog [ref=e377]:
+    - generic [ref=e378]:
+      - heading "Добавить мебель и оборудование" [level=2] [ref=e379]
+      - paragraph [ref=e380]: Укажите позиции, фактически обнаруженные в вернувшейся бытовке.
+    - group "Доступные позиции" [ref=e381]:
+      - generic [ref=e383]:
+        - group [ref=e384]:
+          - 'checkbox "Конвектор Учтено в реестре: 36" [active] [ref=e385] [cursor=pointer]'
+          - generic [ref=e386]:
+            - generic [ref=e387]: Конвектор
+            - generic [ref=e388]: "Учтено в реестре: 36"
+          - generic [ref=e389]:
+            - button "Уменьшить Конвектор" [disabled]
+            - generic [ref=e390]: "0"
+            - button "Увеличить Конвектор" [disabled]
+        - group [ref=e391]:
+          - 'checkbox "Кондиционер Учтено в реестре: 12" [ref=e392] [cursor=pointer]'
+          - generic [ref=e393]:
+            - generic [ref=e394]: Кондиционер
+            - generic [ref=e395]: "Учтено в реестре: 12"
+          - generic [ref=e396]:
+            - button "Уменьшить Кондиционер" [disabled]
+            - generic [ref=e397]: "0"
+            - button "Увеличить Кондиционер" [disabled]
+        - group [ref=e398]:
+          - 'checkbox "Кровать Учтено в реестре: 40" [ref=e399] [cursor=pointer]'
+          - generic [ref=e400]:
+            - generic [ref=e401]: Кровать
+            - generic [ref=e402]: "Учтено в реестре: 40"
+          - generic [ref=e403]:
+            - button "Уменьшить Кровать" [disabled]
+            - generic [ref=e404]: "0"
+            - button "Увеличить Кровать" [disabled]
+        - group [ref=e405]:
+          - 'checkbox "Кровать 2-ярусная Учтено в реестре: 32" [ref=e406] [cursor=pointer]'
+          - generic [ref=e407]:
+            - generic [ref=e408]: Кровать 2-ярусная
+            - generic [ref=e409]: "Учтено в реестре: 32"
+          - generic [ref=e410]:
+            - button "Уменьшить Кровать 2-ярусная" [disabled]
+            - generic [ref=e411]: "0"
+            - button "Увеличить Кровать 2-ярусная" [disabled]
+        - group [ref=e412]:
+          - 'checkbox "Лавка Учтено в реестре: 22" [ref=e413] [cursor=pointer]'
+          - generic [ref=e414]:
+            - generic [ref=e415]: Лавка
+            - generic [ref=e416]: "Учтено в реестре: 22"
+          - generic [ref=e417]:
+            - button "Уменьшить Лавка" [disabled]
+            - generic [ref=e418]: "0"
+            - button "Увеличить Лавка" [disabled]
+        - group [ref=e419]:
+          - 'checkbox "Стол Учтено в реестре: 63" [ref=e420] [cursor=pointer]'
+          - generic [ref=e421]:
+            - generic [ref=e422]: Стол
+            - generic [ref=e423]: "Учтено в реестре: 63"
+          - generic [ref=e424]:
+            - button "Уменьшить Стол" [disabled]
+            - generic [ref=e425]: "0"
+            - button "Увеличить Стол" [disabled]
+        - group [ref=e426]:
+          - 'checkbox "Стол офисный Учтено в реестре: 36" [ref=e427] [cursor=pointer]'
+          - generic [ref=e428]:
+            - generic [ref=e429]: Стол офисный
+            - generic [ref=e430]: "Учтено в реестре: 36"
+          - generic [ref=e431]:
+            - button "Уменьшить Стол офисный" [disabled]
+            - generic [ref=e432]: "0"
+            - button "Увеличить Стол офисный" [disabled]
+        - group [ref=e433]:
+          - 'checkbox "Стул Учтено в реестре: 128" [ref=e434] [cursor=pointer]'
+          - generic [ref=e435]:
+            - generic [ref=e436]: Стул
+            - generic [ref=e437]: "Учтено в реестре: 128"
+          - generic [ref=e438]:
+            - button "Уменьшить Стул" [disabled]
+            - generic [ref=e439]: "0"
+            - button "Увеличить Стул" [disabled]
+        - group [ref=e440]:
+          - 'checkbox "Шкаф Учтено в реестре: 30" [ref=e441] [cursor=pointer]'
+          - generic [ref=e442]:
+            - generic [ref=e443]: Шкаф
+            - generic [ref=e444]: "Учтено в реестре: 30"
+          - generic [ref=e445]:
+            - button "Уменьшить Шкаф" [disabled]
+            - generic [ref=e446]: "0"
+            - button "Увеличить Шкаф" [disabled]
+    - generic [ref=e447]:
+      - button "Отмена" [ref=e448] [cursor=pointer]
+      - button "Добавить" [disabled]
+    - button "Close" [ref=e449] [cursor=pointer]

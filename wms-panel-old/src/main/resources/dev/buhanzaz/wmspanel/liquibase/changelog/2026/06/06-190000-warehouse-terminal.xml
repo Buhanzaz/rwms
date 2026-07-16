@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd"
+        objectQuotingStrategy="QUOTE_ONLY_RESERVED_WORDS">
+
+    <changeSet id="1" author="codex">
+        <createTable tableName="WAREHOUSE">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_WAREHOUSE"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="NAME" type="VARCHAR(128)"><constraints nullable="false"/></column>
+            <column name="CITY" type="VARCHAR(128)"/>
+            <column name="ACTIVE" type="BOOLEAN"/>
+        </createTable>
+        <addUniqueConstraint tableName="WAREHOUSE" columnNames="NAME" constraintName="IDX_WAREHOUSE_UNQ_NAME"/>
+
+        <createTable tableName="WAREHOUSE_SEGMENT">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_WAREHOUSE_SEGMENT"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="NAME" type="VARCHAR(128)"><constraints nullable="false"/></column>
+            <column name="ACTIVE" type="BOOLEAN"/>
+            <column name="SORT_ORDER" type="INT"/>
+        </createTable>
+        <addUniqueConstraint tableName="WAREHOUSE_SEGMENT" columnNames="NAME" constraintName="IDX_WAREHOUSE_SEGMENT_UNQ_NAME"/>
+
+        <createTable tableName="WAREHOUSE_FINISHING">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_WAREHOUSE_FINISHING"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="NAME" type="VARCHAR(128)"><constraints nullable="false"/></column>
+            <column name="ACTIVE" type="BOOLEAN"/>
+            <column name="SORT_ORDER" type="INT"/>
+        </createTable>
+        <addUniqueConstraint tableName="WAREHOUSE_FINISHING" columnNames="NAME" constraintName="IDX_WAREHOUSE_FINISHING_UNQ_NAME"/>
+
+        <createTable tableName="WAREHOUSE_ELECTRIC">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_WAREHOUSE_ELECTRIC"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="NAME" type="VARCHAR(128)"><constraints nullable="false"/></column>
+            <column name="ACTIVE" type="BOOLEAN"/>
+            <column name="SORT_ORDER" type="INT"/>
+        </createTable>
+        <addUniqueConstraint tableName="WAREHOUSE_ELECTRIC" columnNames="NAME" constraintName="IDX_WAREHOUSE_ELECTRIC_UNQ_NAME"/>
+
+        <createTable tableName="WAREHOUSE_LINOLEUM">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_WAREHOUSE_LINOLEUM"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="NAME" type="VARCHAR(128)"><constraints nullable="false"/></column>
+            <column name="ACTIVE" type="BOOLEAN"/>
+            <column name="SORT_ORDER" type="INT"/>
+        </createTable>
+        <addUniqueConstraint tableName="WAREHOUSE_LINOLEUM" columnNames="NAME" constraintName="IDX_WAREHOUSE_LINOLEUM_UNQ_NAME"/>
+
+        <createTable tableName="WAREHOUSE_STATUS">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_WAREHOUSE_STATUS"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="NAME" type="VARCHAR(128)"><constraints nullable="false"/></column>
+            <column name="COLOR" type="VARCHAR(32)"/>
+            <column name="ICON" type="VARCHAR(64)"/>
+            <column name="ACTIVE" type="BOOLEAN"/>
+            <column name="SORT_ORDER" type="INT"/>
+        </createTable>
+        <addUniqueConstraint tableName="WAREHOUSE_STATUS" columnNames="NAME" constraintName="IDX_WAREHOUSE_STATUS_UNQ_NAME"/>
+
+        <createTable tableName="STOCK_ITEM">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_STOCK_ITEM"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="WAREHOUSE_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="NAME" type="VARCHAR(255)"><constraints nullable="false"/></column>
+            <column name="SEGMENT_ID" type="UUID"/>
+            <column name="CATEGORY_ID" type="UUID"/>
+            <column name="TOTAL_QUANTITY" type="INT"><constraints nullable="false"/></column>
+            <column name="UNIT_" type="VARCHAR(64)"><constraints nullable="false"/></column>
+            <column name="COMMENT_" type="VARCHAR(1000)"/>
+            <column name="ACTIVE" type="BOOLEAN"/>
+        </createTable>
+
+        <createTable tableName="RESERVATION">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_RESERVATION"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="WAREHOUSE_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="RESERVATION_TYPE" type="VARCHAR(32)"><constraints nullable="false"/></column>
+            <column name="RESERVATION_STATUS" type="VARCHAR(32)"><constraints nullable="false"/></column>
+            <column name="COMPANY_NAME" type="VARCHAR(255)"/>
+            <column name="LEGAL_ENTITY" type="VARCHAR(255)"/>
+            <column name="CONTACT_PERSON" type="VARCHAR(255)"/>
+            <column name="RESERVED_BY" type="VARCHAR(128)"/>
+            <column name="RESERVED_AT" type="timestamp with time zone"/>
+            <column name="EXPIRES_AT" type="timestamp with time zone"/>
+            <column name="COMMENT_" type="VARCHAR(1000)"/>
+        </createTable>
+
+        <createTable tableName="RESERVATION_LINE">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_RESERVATION_LINE"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="RESERVATION_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="WAREHOUSE_ITEM_ID" type="UUID"/>
+            <column name="STOCK_ITEM_ID" type="UUID"/>
+            <column name="QUANTITY" type="INT"><constraints nullable="false"/></column>
+        </createTable>
+
+        <createTable tableName="USER_WAREHOUSE_ACCESS">
+            <column name="ID" type="UUID"><constraints nullable="false" primaryKey="true" primaryKeyName="PK_USER_WAREHOUSE_ACCESS"/></column>
+            <column name="VERSION" type="INT"><constraints nullable="false"/></column>
+            <column name="DELETED_BY" type="VARCHAR(255)"/>
+            <column name="DELETED_DATE" type="timestamp with time zone"/>
+            <column name="LAST_MODIFIED_BY" type="VARCHAR(255)"/>
+            <column name="LAST_MODIFIED_DATE" type="timestamp with time zone"/>
+            <column name="CREATED_BY" type="VARCHAR(255)"/>
+            <column name="CREATED_DATE" type="timestamp with time zone"/>
+            <column name="USERNAME" type="VARCHAR(128)"><constraints nullable="false"/></column>
+            <column name="WAREHOUSE_ID" type="UUID"><constraints nullable="false"/></column>
+            <column name="ROLE_" type="VARCHAR(32)"><constraints nullable="false"/></column>
+            <column name="ACTIVE" type="BOOLEAN"/>
+        </createTable>
+
+        <addColumn tableName="RENTAL_ITEM">
+            <column name="WAREHOUSE_ID" type="UUID"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2" author="codex">
+        <insert tableName="WAREHOUSE"><column name="ID" value="00000000-0000-0000-0000-000000000001"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="СПБ"/><column name="CITY" value="Санкт-Петербург"/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="WAREHOUSE"><column name="ID" value="00000000-0000-0000-0000-000000000002"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Москва"/><column name="CITY" value="Москва"/><column name="ACTIVE" valueBoolean="true"/></insert>
+
+        <update tableName="RENTAL_ITEM">
+            <column name="WAREHOUSE_ID" value="00000000-0000-0000-0000-000000000001"/>
+        </update>
+        <addNotNullConstraint tableName="RENTAL_ITEM" columnName="WAREHOUSE_ID" columnDataType="UUID"/>
+
+        <insert tableName="USER_WAREHOUSE_ACCESS"><column name="ID" value="00000000-0000-0000-0000-000000000101"/><column name="VERSION" valueNumeric="0"/><column name="USERNAME" value="admin"/><column name="WAREHOUSE_ID" value="00000000-0000-0000-0000-000000000001"/><column name="ROLE_" value="ADMIN"/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="USER_WAREHOUSE_ACCESS"><column name="ID" value="00000000-0000-0000-0000-000000000102"/><column name="VERSION" valueNumeric="0"/><column name="USERNAME" value="admin"/><column name="WAREHOUSE_ID" value="00000000-0000-0000-0000-000000000002"/><column name="ROLE_" value="ADMIN"/><column name="ACTIVE" valueBoolean="true"/></insert>
+
+        <insert tableName="WAREHOUSE_SEGMENT"><column name="ID" value="00000000-0000-0000-0000-000000000201"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Бытовка"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="10"/></insert>
+        <insert tableName="WAREHOUSE_SEGMENT"><column name="ID" value="00000000-0000-0000-0000-000000000202"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Контейнер"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="20"/></insert>
+        <insert tableName="WAREHOUSE_SEGMENT"><column name="ID" value="00000000-0000-0000-0000-000000000203"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Модуль"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="30"/></insert>
+        <insert tableName="WAREHOUSE_SEGMENT"><column name="ID" value="00000000-0000-0000-0000-000000000204"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Пост охраны"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="40"/></insert>
+        <insert tableName="WAREHOUSE_SEGMENT"><column name="ID" value="00000000-0000-0000-0000-000000000205"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Санблок"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="50"/></insert>
+        <insert tableName="WAREHOUSE_SEGMENT"><column name="ID" value="00000000-0000-0000-0000-000000000206"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Мебель"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="60"/></insert>
+        <insert tableName="WAREHOUSE_SEGMENT"><column name="ID" value="00000000-0000-0000-0000-000000000207"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Строительные леса"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="70"/></insert>
+
+        <insert tableName="WAREHOUSE_FINISHING"><column name="ID" value="00000000-0000-0000-0000-000000000301"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="ОСБ"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="10"/></insert>
+        <insert tableName="WAREHOUSE_FINISHING"><column name="ID" value="00000000-0000-0000-0000-000000000302"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="ДВП"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="20"/></insert>
+        <insert tableName="WAREHOUSE_FINISHING"><column name="ID" value="00000000-0000-0000-0000-000000000303"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="ПВХ"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="30"/></insert>
+        <insert tableName="WAREHOUSE_FINISHING"><column name="ID" value="00000000-0000-0000-0000-000000000304"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Металл"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="40"/></insert>
+        <insert tableName="WAREHOUSE_FINISHING"><column name="ID" value="00000000-0000-0000-0000-000000000305"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Нет"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="50"/></insert>
+
+        <insert tableName="WAREHOUSE_ELECTRIC"><column name="ID" value="00000000-0000-0000-0000-000000000401"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Есть"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="10"/></insert>
+        <insert tableName="WAREHOUSE_ELECTRIC"><column name="ID" value="00000000-0000-0000-0000-000000000402"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Нет"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="20"/></insert>
+        <insert tableName="WAREHOUSE_ELECTRIC"><column name="ID" value="00000000-0000-0000-0000-000000000403"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Требуется ремонт"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="30"/></insert>
+        <insert tableName="WAREHOUSE_ELECTRIC"><column name="ID" value="00000000-0000-0000-0000-000000000404"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Частично"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="40"/></insert>
+
+        <insert tableName="WAREHOUSE_LINOLEUM"><column name="ID" value="00000000-0000-0000-0000-000000000501"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Есть"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="10"/></insert>
+        <insert tableName="WAREHOUSE_LINOLEUM"><column name="ID" value="00000000-0000-0000-0000-000000000502"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Нет"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="20"/></insert>
+        <insert tableName="WAREHOUSE_LINOLEUM"><column name="ID" value="00000000-0000-0000-0000-000000000503"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Требуется замена"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="30"/></insert>
+        <insert tableName="WAREHOUSE_LINOLEUM"><column name="ID" value="00000000-0000-0000-0000-000000000504"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Частично"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="40"/></insert>
+
+        <insert tableName="WAREHOUSE_STATUS"><column name="ID" value="00000000-0000-0000-0000-000000000601"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Свободная"/><column name="COLOR" value="green"/><column name="ICON" value="CHECK"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="10"/></insert>
+        <insert tableName="WAREHOUSE_STATUS"><column name="ID" value="00000000-0000-0000-0000-000000000602"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="На доработку"/><column name="COLOR" value="orange"/><column name="ICON" value="WRENCH"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="20"/></insert>
+        <insert tableName="WAREHOUSE_STATUS"><column name="ID" value="00000000-0000-0000-0000-000000000603"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Временный резерв"/><column name="COLOR" value="blue"/><column name="ICON" value="CLOCK"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="30"/></insert>
+        <insert tableName="WAREHOUSE_STATUS"><column name="ID" value="00000000-0000-0000-0000-000000000604"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Резерв клиента"/><column name="COLOR" value="purple"/><column name="ICON" value="LOCK"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="40"/></insert>
+        <insert tableName="WAREHOUSE_STATUS"><column name="ID" value="00000000-0000-0000-0000-000000000605"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="В аренде"/><column name="COLOR" value="gray"/><column name="ICON" value="TRUCK"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="50"/></insert>
+        <insert tableName="WAREHOUSE_STATUS"><column name="ID" value="00000000-0000-0000-0000-000000000606"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="После аренды"/><column name="COLOR" value="yellow"/><column name="ICON" value="UNDO"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="60"/></insert>
+        <insert tableName="WAREHOUSE_STATUS"><column name="ID" value="00000000-0000-0000-0000-000000000607"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Ремонт"/><column name="COLOR" value="red"/><column name="ICON" value="COG"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="70"/></insert>
+        <insert tableName="WAREHOUSE_STATUS"><column name="ID" value="00000000-0000-0000-0000-000000000608"/><column name="VERSION" valueNumeric="0"/><column name="NAME" value="Капитальный ремонт"/><column name="COLOR" value="red"/><column name="ICON" value="HAMMER"/><column name="ACTIVE" valueBoolean="true"/><column name="SORT_ORDER" valueNumeric="80"/></insert>
+
+        <insert tableName="STOCK_ITEM"><column name="ID" value="00000000-0000-0000-0000-000000000701"/><column name="VERSION" valueNumeric="0"/><column name="WAREHOUSE_ID" value="00000000-0000-0000-0000-000000000001"/><column name="NAME" value="Стул"/><column name="SEGMENT_ID" value="00000000-0000-0000-0000-000000000206"/><column name="TOTAL_QUANTITY" valueNumeric="20"/><column name="UNIT_" value="шт."/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="STOCK_ITEM"><column name="ID" value="00000000-0000-0000-0000-000000000702"/><column name="VERSION" valueNumeric="0"/><column name="WAREHOUSE_ID" value="00000000-0000-0000-0000-000000000001"/><column name="NAME" value="Стол"/><column name="SEGMENT_ID" value="00000000-0000-0000-0000-000000000206"/><column name="TOTAL_QUANTITY" valueNumeric="5"/><column name="UNIT_" value="шт."/><column name="ACTIVE" valueBoolean="true"/></insert>
+        <insert tableName="STOCK_ITEM"><column name="ID" value="00000000-0000-0000-0000-000000000703"/><column name="VERSION" valueNumeric="0"/><column name="WAREHOUSE_ID" value="00000000-0000-0000-0000-000000000001"/><column name="NAME" value="Строительные леса"/><column name="SEGMENT_ID" value="00000000-0000-0000-0000-000000000207"/><column name="TOTAL_QUANTITY" valueNumeric="100"/><column name="UNIT_" value="секций"/><column name="ACTIVE" valueBoolean="true"/></insert>
+    </changeSet>
+
+    <changeSet id="3" author="codex">
+        <addForeignKeyConstraint baseTableName="RENTAL_ITEM" baseColumnNames="WAREHOUSE_ID" referencedTableName="WAREHOUSE" referencedColumnNames="ID" constraintName="FK_RENTAL_ITEM_ON_WAREHOUSE"/>
+        <addForeignKeyConstraint baseTableName="STOCK_ITEM" baseColumnNames="WAREHOUSE_ID" referencedTableName="WAREHOUSE" referencedColumnNames="ID" constraintName="FK_STOCK_ITEM_ON_WAREHOUSE"/>
+        <addForeignKeyConstraint baseTableName="STOCK_ITEM" baseColumnNames="SEGMENT_ID" referencedTableName="WAREHOUSE_SEGMENT" referencedColumnNames="ID" constraintName="FK_STOCK_ITEM_ON_SEGMENT"/>
+        <addForeignKeyConstraint baseTableName="STOCK_ITEM" baseColumnNames="CATEGORY_ID" referencedTableName="RENTAL_CATEGORY" referencedColumnNames="ID" constraintName="FK_STOCK_ITEM_ON_CATEGORY"/>
+        <addForeignKeyConstraint baseTableName="RESERVATION" baseColumnNames="WAREHOUSE_ID" referencedTableName="WAREHOUSE" referencedColumnNames="ID" constraintName="FK_RESERVATION_ON_WAREHOUSE"/>
+        <addForeignKeyConstraint baseTableName="RESERVATION_LINE" baseColumnNames="RESERVATION_ID" referencedTableName="RESERVATION" referencedColumnNames="ID" constraintName="FK_RESERVATION_LINE_ON_RESERVATION"/>
+        <addForeignKeyConstraint baseTableName="RESERVATION_LINE" baseColumnNames="WAREHOUSE_ITEM_ID" referencedTableName="RENTAL_ITEM" referencedColumnNames="ID" constraintName="FK_RESERVATION_LINE_ON_WAREHOUSE_ITEM"/>
+        <addForeignKeyConstraint baseTableName="RESERVATION_LINE" baseColumnNames="STOCK_ITEM_ID" referencedTableName="STOCK_ITEM" referencedColumnNames="ID" constraintName="FK_RESERVATION_LINE_ON_STOCK_ITEM"/>
+        <addForeignKeyConstraint baseTableName="USER_WAREHOUSE_ACCESS" baseColumnNames="WAREHOUSE_ID" referencedTableName="WAREHOUSE" referencedColumnNames="ID" constraintName="FK_USER_WAREHOUSE_ACCESS_ON_WAREHOUSE"/>
+    </changeSet>
+</databaseChangeLog>

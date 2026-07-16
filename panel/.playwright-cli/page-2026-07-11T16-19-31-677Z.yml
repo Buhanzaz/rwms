@@ -1,0 +1,110 @@
+- generic:
+  - generic:
+    - generic:
+      - main:
+        - generic:
+          - generic:
+            - button:
+              - generic: Открыть или свернуть меню
+            - navigation:
+              - list:
+                - listitem:
+                  - link [disabled]: Возврат из аренды
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - textbox:
+                  - /placeholder: Компания или номер бытовки
+                - textbox
+                - textbox
+              - generic:
+                - button: Добавить возврат
+            - generic:
+              - generic:
+                - status: Возвраты не найдены
+    - region "Notifications alt+T"
+  - dialog [ref=e236]:
+    - generic [ref=e237]:
+      - heading [level=2] [ref=e368]: Добавить возврат из аренды
+      - paragraph [ref=e239]: Выберите клиента, фактически вернувшиеся бытовки и дату возврата.
+    - generic [ref=e240]:
+      - group [ref=e241]:
+        - generic [ref=e242]: От кого
+        - group [ref=e243]:
+          - combobox [ref=e369]: ИП Петров А.В.
+          - group [ref=e245]:
+            - button [ref=e283] [cursor=pointer]
+        - textbox [ref=e247]: ИП Петров А.В.
+      - group [ref=e248]:
+        - generic [ref=e249]: Дата возврата
+        - textbox [ref=e370]: 2026-07-11
+      - group "Бытовки для возврата" [ref=e285]:
+        - paragraph [ref=e253]: Выберите бытовки, которые фактически вернулись из аренды.
+        - generic [ref=e254]:
+          - generic [ref=e286]:
+            - generic [ref=e287]: Бытовка 1
+            - group [ref=e290]:
+              - generic [ref=e291]: Номер бытовки
+              - generic [ref=e292]:
+                - group [ref=e293]:
+                  - combobox [ref=e371]: БЫТ-002
+                  - group [ref=e295]:
+                    - button [ref=e296] [cursor=pointer]
+                - textbox [ref=e297]: БЫТ-002
+                - button [ref=e372] [cursor=pointer]
+          - generic [ref=e355]:
+            - generic [ref=e356]: Бытовка 2
+            - group [ref=e359]:
+              - generic [ref=e360]: Номер бытовки
+              - generic [ref=e361]:
+                - group [ref=e362]:
+                  - button "Dismiss" [ref=e373] [cursor=pointer]
+                  - combobox "Номер бытовки" [expanded] [active] [ref=e363]
+                  - group [ref=e364]:
+                    - button [expanded] [ref=e365] [cursor=pointer]
+                - textbox [ref=e366]
+                - button [ref=e374] [cursor=pointer]
+          - button [disabled]: Добавить ещё бытовку
+    - generic [ref=e266]:
+      - button [ref=e375] [cursor=pointer]: Отмена
+      - button [disabled]: Создать возврат
+    - button [ref=e376] [cursor=pointer]:
+      - generic [ref=e269]: Close
+    - generic:
+      - listbox [ref=e378]:
+        - group "Бытовки клиента" [ref=e379]:
+          - option "БЫТ-012 Клиент" [ref=e381]:
+            - generic [ref=e382]: БЫТ-012
+            - generic [ref=e383]: Клиент
+          - option "БЫТ-022 Клиент" [ref=e384]:
+            - generic [ref=e385]: БЫТ-022
+            - generic [ref=e386]: Клиент
+          - option "БЫТ-032 Клиент" [ref=e387]:
+            - generic [ref=e388]: БЫТ-032
+            - generic [ref=e389]: Клиент
+          - option "БЫТ-042 Клиент" [ref=e390]:
+            - generic [ref=e391]: БЫТ-042
+            - generic [ref=e392]: Клиент
+          - option "БЫТ-052 Клиент" [ref=e393]:
+            - generic [ref=e394]: БЫТ-052
+            - generic [ref=e395]: Клиент
+          - option "БЫТ-062 Клиент" [ref=e396]:
+            - generic [ref=e397]: БЫТ-062
+            - generic [ref=e398]: Клиент
+          - option "БЫТ-072 Клиент" [ref=e399]:
+            - generic [ref=e400]: БЫТ-072
+            - generic [ref=e401]: Клиент
+          - option "БЫТ-082 Клиент" [ref=e402]:
+            - generic [ref=e403]: БЫТ-082
+            - generic [ref=e404]: Клиент
+          - option "БЫТ-092 Клиент" [ref=e405]:
+            - generic [ref=e406]: БЫТ-092
+            - generic [ref=e407]: Клиент
+          - option "БЫТ-102 Клиент" [ref=e408]:
+            - generic [ref=e409]: БЫТ-102
+            - generic [ref=e410]: Клиент
+          - option "БЫТ-112 Клиент" [ref=e411]:
+            - generic [ref=e412]: БЫТ-112
+            - generic [ref=e413]: Клиент
+      - button "Dismiss" [ref=e414] [cursor=pointer]

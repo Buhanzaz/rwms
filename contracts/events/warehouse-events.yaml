@@ -1,0 +1,35 @@
+asyncapi: 3.1.0
+info:
+  title: RWMS Warehouse Domain Events
+  version: 1.0.0
+  description: >-
+    Committed warehouse lifecycle facts published through the warehouse-service
+    transactional outbox. Delivery is at-least-once; aggregateId is the Kafka
+    key and eventId is the consumer deduplication identity.
+defaultContentType: application/json
+servers:
+  kafka:
+    host: configured-at-runtime
+    protocol: kafka
+channels:
+  warehouseFacts:
+    address: rwms.warehouse.warehouse.v1
+    messages:
+      warehouseCreatedV1: { $ref: '#/components/messages/WarehouseCreatedV1' }
+      warehouseChangedV1: { $ref: '#/components/messages/WarehouseChangedV1' }
+      warehouseDeactivatedV1: { $ref: '#/components/messages/WarehouseDeactivatedV1' }
+operations:
+  publishWarehouseFact:
+    action: send
+    channel: { $ref: '#/channels/warehouseFacts' }
+components:
+  messages:
+    WarehouseCreatedV1:
+      name: warehouse.warehouse.created.v1
+      payload: { $ref: './warehouse/warehouse-events-v1.schema.json' }
+    WarehouseChangedV1:
+      name: warehouse.warehouse.changed.v1
+      payload: { $ref: './warehouse/warehouse-events-v1.schema.json' }
+    WarehouseDeactivatedV1:
+      name: warehouse.warehouse.deactivated.v1
+      payload: { $ref: './warehouse/warehouse-events-v1.schema.json' }

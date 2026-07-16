@@ -1,0 +1,2374 @@
+- generic:
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /
+                    - generic:
+                      - generic: WMS Panel
+                      - generic: СПБ
+            - generic:
+              - generic:
+                - generic:
+                  - combobox:
+                    - generic: СПБ
+              - generic:
+                - generic: Обзор
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /
+                        - generic: Главная
+                    - listitem:
+                      - link:
+                        - /url: /kpi
+                        - generic: KPI
+              - generic:
+                - generic: Имущество
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /warehouse
+                        - generic: Склад
+                    - listitem:
+                      - link:
+                        - /url: /equipment
+                        - generic: Доп. оборудование
+                    - listitem:
+                      - button:
+                        - generic: Инвентаризация
+                    - listitem:
+                      - button:
+                        - generic: Списание
+              - generic:
+                - generic: Логистика
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /logistics/returns
+                        - generic: Возврат из аренды
+                    - listitem:
+                      - link:
+                        - /url: /logistics/shipments
+                        - generic: Отгрузка в аренду
+              - generic:
+                - generic: Ремонтный цикл
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /estimates
+                        - generic: Сметы
+                    - listitem:
+                      - link:
+                        - /url: /repairs
+                        - generic: Ремонты
+                    - listitem:
+                      - link:
+                        - /url: /task-board
+                        - generic: Доска задач
+                    - listitem:
+                      - link:
+                        - /url: /acceptance
+                        - generic: Приёмка и доработки
+            - generic:
+              - list:
+                - listitem:
+                  - button:
+                    - generic: Настройки
+                - listitem:
+                  - button:
+                    - generic: Локальный администратор
+                    - generic: Выйти
+      - main:
+        - generic:
+          - generic:
+            - button:
+              - generic: Открыть или свернуть меню
+            - navigation:
+              - list:
+                - listitem:
+                  - link [disabled]: Склад
+        - generic:
+          - generic:
+            - generic:
+              - generic:
+                - generic:
+                  - generic:
+                    - textbox:
+                      - /placeholder: Поиск по номеру, арендатору или комментарию…
+                  - generic:
+                    - button: Столбцы
+                    - radiogroup:
+                      - radio [checked]
+                      - radio
+                    - button: Добавить новую бытовку
+                - generic:
+                  - generic:
+                    - button:
+                      - generic: Номер
+                    - button:
+                      - generic: Тип
+                    - button:
+                      - generic: Габариты
+                    - button:
+                      - generic: Отделка
+                    - button:
+                      - generic: Категория
+                    - button:
+                      - generic: Характеристики
+                    - button:
+                      - generic: Линолеум
+                    - button:
+                      - generic: Статус
+            - generic:
+              - generic:
+                - table:
+                  - rowgroup:
+                    - row:
+                      - columnheader:
+                        - generic:
+                          - button:
+                            - generic: Номер
+                        - button
+                      - columnheader:
+                        - generic:
+                          - button:
+                            - generic: Тип
+                        - button
+                      - columnheader:
+                        - generic:
+                          - button:
+                            - generic: Габариты
+                        - button
+                      - columnheader:
+                        - generic:
+                          - button:
+                            - generic: Отделка
+                        - button
+                      - columnheader:
+                        - generic:
+                          - button:
+                            - generic: Категория
+                        - button
+                      - columnheader:
+                        - generic:
+                          - button:
+                            - generic: Характеристики
+                        - button
+                      - columnheader:
+                        - generic:
+                          - button:
+                            - generic: Линолеум
+                        - button
+                      - columnheader:
+                        - generic:
+                          - button:
+                            - generic: Статус
+                        - button
+                  - rowgroup:
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-001
+                      - cell:
+                        - generic: БК-1
+                      - cell:
+                        - generic: 2x2
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Пластиковое окно
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Свободна
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-002
+                      - cell:
+                        - generic: БК-2
+                      - cell:
+                        - generic: 2.4x2
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Электрика КК
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Аренда
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-003
+                      - cell:
+                        - generic: БК-3
+                      - cell:
+                        - generic: 2.4x2.4
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Электрика КК + УЗО
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Ожидает осмотра
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-004
+                      - cell:
+                        - generic: БК-4
+                      - cell:
+                        - generic: 2.4x3
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Электрика КК + УЗО + счётчик
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Ожидает подтверждения сметы
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-005
+                      - cell:
+                        - generic: БК-5
+                      - cell:
+                        - generic: 2.4x4
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Электрика КК + счётчик
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Бронь
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-006
+                      - cell:
+                        - generic: БК-6
+                      - cell:
+                        - generic: 2.4x5
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Металлическая дверь, кондиционер
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: В ремонте
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-007
+                      - cell:
+                        - generic: БК-Склад
+                      - cell:
+                        - generic: 2.4x6
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Две лампы
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Капремонт
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-008
+                      - cell:
+                        - generic: БК-Санблок
+                      - cell:
+                        - generic: 3x3
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Мама-папа
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Продажа Б/У
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-009
+                      - cell:
+                        - generic: БК-Модуль из 2х
+                      - cell:
+                        - generic: 4.8x6
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Пластиковое окно
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Склад
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-010
+                      - cell:
+                        - generic: БК-Модуль из 3
+                      - cell:
+                        - generic: 7.2x6
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Электрика КК
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Собственные нужды
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-011
+                      - cell:
+                        - generic: БК-Пост охраны
+                      - cell:
+                        - generic: 2x2
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Электрика КК + УЗО
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Свободна
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-012
+                      - cell:
+                        - generic: БК-1
+                      - cell:
+                        - generic: 2.4x2
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Электрика КК + УЗО + счётчик
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Аренда
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-013
+                      - cell:
+                        - generic: БК-2
+                      - cell:
+                        - generic: 2.4x2.4
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Электрика КК + счётчик
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Ожидает осмотра
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-014
+                      - cell:
+                        - generic: БК-3
+                      - cell:
+                        - generic: 2.4x3
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Металлическая дверь, кондиционер
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Ожидает подтверждения сметы
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-015
+                      - cell:
+                        - generic: БК-4
+                      - cell:
+                        - generic: 2.4x4
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Две лампы
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Бронь
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-016
+                      - cell:
+                        - generic: БК-5
+                      - cell:
+                        - generic: 2.4x5
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Мама-папа
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: В ремонте
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-017
+                      - cell:
+                        - generic: БК-6
+                      - cell:
+                        - generic: 2.4x6
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Пластиковое окно
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Капремонт
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-018
+                      - cell:
+                        - generic: БК-Склад
+                      - cell:
+                        - generic: 3x3
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Электрика КК
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Продажа Б/У
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-019
+                      - cell:
+                        - generic: БК-Санблок
+                      - cell:
+                        - generic: 4.8x6
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Электрика КК + УЗО
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Склад
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-020
+                      - cell:
+                        - generic: БК-Модуль из 2х
+                      - cell:
+                        - generic: 7.2x6
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Электрика КК + УЗО + счётчик
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Собственные нужды
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-021
+                      - cell:
+                        - generic: БК-Модуль из 3
+                      - cell:
+                        - generic: 2x2
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Электрика КК + счётчик
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Свободна
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-022
+                      - cell:
+                        - generic: БК-Пост охраны
+                      - cell:
+                        - generic: 2.4x2
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Металлическая дверь, кондиционер
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Аренда
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-023
+                      - cell:
+                        - generic: БК-1
+                      - cell:
+                        - generic: 2.4x2.4
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Две лампы
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Ожидает осмотра
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-024
+                      - cell:
+                        - generic: БК-2
+                      - cell:
+                        - generic: 2.4x3
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Мама-папа
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Ожидает подтверждения сметы
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-025
+                      - cell:
+                        - generic: БК-3
+                      - cell:
+                        - generic: 2.4x4
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Пластиковое окно
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Бронь
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-026
+                      - cell:
+                        - generic: БК-4
+                      - cell:
+                        - generic: 2.4x5
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Электрика КК
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: В ремонте
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-027
+                      - cell:
+                        - generic: БК-5
+                      - cell:
+                        - generic: 2.4x6
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Электрика КК + УЗО
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Капремонт
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-028
+                      - cell:
+                        - generic: БК-6
+                      - cell:
+                        - generic: 3x3
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Электрика КК + УЗО + счётчик
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Продажа Б/У
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-029
+                      - cell:
+                        - generic: БК-Склад
+                      - cell:
+                        - generic: 4.8x6
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Электрика КК + счётчик
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Склад
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-030
+                      - cell:
+                        - generic: БК-Санблок
+                      - cell:
+                        - generic: 7.2x6
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Металлическая дверь, кондиционер
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Собственные нужды
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-031
+                      - cell:
+                        - generic: БК-Модуль из 2х
+                      - cell:
+                        - generic: 2x2
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Две лампы
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Свободна
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-032
+                      - cell:
+                        - generic: БК-Модуль из 3
+                      - cell:
+                        - generic: 2.4x2
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Мама-папа
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Аренда
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-033
+                      - cell:
+                        - generic: БК-Пост охраны
+                      - cell:
+                        - generic: 2.4x2.4
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Пластиковое окно
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Ожидает осмотра
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-034
+                      - cell:
+                        - generic: БК-1
+                      - cell:
+                        - generic: 2.4x3
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Электрика КК
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Ожидает подтверждения сметы
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-035
+                      - cell:
+                        - generic: БК-2
+                      - cell:
+                        - generic: 2.4x4
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Электрика КК + УЗО
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Бронь
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-036
+                      - cell:
+                        - generic: БК-3
+                      - cell:
+                        - generic: 2.4x5
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Электрика КК + УЗО + счётчик
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: В ремонте
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-037
+                      - cell:
+                        - generic: БК-4
+                      - cell:
+                        - generic: 2.4x6
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Электрика КК + счётчик
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Капремонт
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-038
+                      - cell:
+                        - generic: БК-5
+                      - cell:
+                        - generic: 3x3
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Металлическая дверь, кондиционер
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Продажа Б/У
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-039
+                      - cell:
+                        - generic: БК-6
+                      - cell:
+                        - generic: 4.8x6
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Две лампы
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Склад
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-040
+                      - cell:
+                        - generic: БК-Склад
+                      - cell:
+                        - generic: 7.2x6
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Мама-папа
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Собственные нужды
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-041
+                      - cell:
+                        - generic: БК-Санблок
+                      - cell:
+                        - generic: 2x2
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Пластиковое окно
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Свободна
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-042
+                      - cell:
+                        - generic: БК-Модуль из 2х
+                      - cell:
+                        - generic: 2.4x2
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Электрика КК
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Аренда
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-043
+                      - cell:
+                        - generic: БК-Модуль из 3
+                      - cell:
+                        - generic: 2.4x2.4
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Электрика КК + УЗО
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Ожидает осмотра
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-044
+                      - cell:
+                        - generic: БК-Пост охраны
+                      - cell:
+                        - generic: 2.4x3
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Электрика КК + УЗО + счётчик
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Ожидает подтверждения сметы
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-045
+                      - cell:
+                        - generic: БК-1
+                      - cell:
+                        - generic: 2.4x4
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Электрика КК + счётчик
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Бронь
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-046
+                      - cell:
+                        - generic: БК-2
+                      - cell:
+                        - generic: 2.4x5
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Металлическая дверь, кондиционер
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: В ремонте
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-047
+                      - cell:
+                        - generic: БК-3
+                      - cell:
+                        - generic: 2.4x6
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Две лампы
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Капремонт
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-048
+                      - cell:
+                        - generic: БК-4
+                      - cell:
+                        - generic: 3x3
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Мама-папа
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Продажа Б/У
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-049
+                      - cell:
+                        - generic: БК-5
+                      - cell:
+                        - generic: 4.8x6
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Пластиковое окно
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Склад
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-050
+                      - cell:
+                        - generic: БК-6
+                      - cell:
+                        - generic: 7.2x6
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Электрика КК
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Собственные нужды
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-051
+                      - cell:
+                        - generic: БК-Склад
+                      - cell:
+                        - generic: 2x2
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Электрика КК + УЗО
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Свободна
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-052
+                      - cell:
+                        - generic: БК-Санблок
+                      - cell:
+                        - generic: 2.4x2
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Электрика КК + УЗО + счётчик
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Аренда
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-053
+                      - cell:
+                        - generic: БК-Модуль из 2х
+                      - cell:
+                        - generic: 2.4x2.4
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Электрика КК + счётчик
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Ожидает осмотра
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-054
+                      - cell:
+                        - generic: БК-Модуль из 3
+                      - cell:
+                        - generic: 2.4x3
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Металлическая дверь, кондиционер
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Ожидает подтверждения сметы
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-055
+                      - cell:
+                        - generic: БК-Пост охраны
+                      - cell:
+                        - generic: 2.4x4
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Две лампы
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Бронь
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-056
+                      - cell:
+                        - generic: БК-1
+                      - cell:
+                        - generic: 2.4x5
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Мама-папа
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: В ремонте
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-057
+                      - cell:
+                        - generic: БК-2
+                      - cell:
+                        - generic: 2.4x6
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Пластиковое окно
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Капремонт
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-058
+                      - cell:
+                        - generic: БК-3
+                      - cell:
+                        - generic: 3x3
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Электрика КК
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Продажа Б/У
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-059
+                      - cell:
+                        - generic: БК-4
+                      - cell:
+                        - generic: 4.8x6
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Электрика КК + УЗО
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Склад
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-060
+                      - cell:
+                        - generic: БК-5
+                      - cell:
+                        - generic: 7.2x6
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Электрика КК + УЗО + счётчик
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Собственные нужды
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-061
+                      - cell:
+                        - generic: БК-6
+                      - cell:
+                        - generic: 2x2
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Электрика КК + счётчик
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Свободна
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-062
+                      - cell:
+                        - generic: БК-Склад
+                      - cell:
+                        - generic: 2.4x2
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Металлическая дверь, кондиционер
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Аренда
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-063
+                      - cell:
+                        - generic: БК-Санблок
+                      - cell:
+                        - generic: 2.4x2.4
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Две лампы
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Ожидает осмотра
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-064
+                      - cell:
+                        - generic: БК-Модуль из 2х
+                      - cell:
+                        - generic: 2.4x3
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Мама-папа
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Ожидает подтверждения сметы
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-065
+                      - cell:
+                        - generic: БК-Модуль из 3
+                      - cell:
+                        - generic: 2.4x4
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Пластиковое окно
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Бронь
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-066
+                      - cell:
+                        - generic: БК-Пост охраны
+                      - cell:
+                        - generic: 2.4x5
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Электрика КК
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: В ремонте
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-067
+                      - cell:
+                        - generic: БК-1
+                      - cell:
+                        - generic: 2.4x6
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Электрика КК + УЗО
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Капремонт
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-068
+                      - cell:
+                        - generic: БК-2
+                      - cell:
+                        - generic: 3x3
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Электрика КК + УЗО + счётчик
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Продажа Б/У
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-069
+                      - cell:
+                        - generic: БК-3
+                      - cell:
+                        - generic: 4.8x6
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Электрика КК + счётчик
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Склад
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-070
+                      - cell:
+                        - generic: БК-4
+                      - cell:
+                        - generic: 7.2x6
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Металлическая дверь, кондиционер
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Собственные нужды
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-071
+                      - cell:
+                        - generic: БК-5
+                      - cell:
+                        - generic: 2x2
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Две лампы
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Свободна
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-072
+                      - cell:
+                        - generic: БК-6
+                      - cell:
+                        - generic: 2.4x2
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Мама-папа
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Аренда
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-073
+                      - cell:
+                        - generic: БК-Склад
+                      - cell:
+                        - generic: 2.4x2.4
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Пластиковое окно
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Ожидает осмотра
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-074
+                      - cell:
+                        - generic: БК-Санблок
+                      - cell:
+                        - generic: 2.4x3
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Электрика КК
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Ожидает подтверждения сметы
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-075
+                      - cell:
+                        - generic: БК-Модуль из 2х
+                      - cell:
+                        - generic: 2.4x4
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Электрика КК + УЗО
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Бронь
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-076
+                      - cell:
+                        - generic: БК-Модуль из 3
+                      - cell:
+                        - generic: 2.4x5
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Электрика КК + УЗО + счётчик
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: В ремонте
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-077
+                      - cell:
+                        - generic: БК-Пост охраны
+                      - cell:
+                        - generic: 2.4x6
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Электрика КК + счётчик
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Капремонт
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-078
+                      - cell:
+                        - generic: БК-1
+                      - cell:
+                        - generic: 3x3
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Металлическая дверь, кондиционер
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Продажа Б/У
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-079
+                      - cell:
+                        - generic: БК-2
+                      - cell:
+                        - generic: 4.8x6
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Две лампы
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Склад
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-080
+                      - cell:
+                        - generic: БК-3
+                      - cell:
+                        - generic: 7.2x6
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Мама-папа
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Собственные нужды
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-081
+                      - cell:
+                        - generic: БК-4
+                      - cell:
+                        - generic: 2x2
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Пластиковое окно
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Свободна
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-082
+                      - cell:
+                        - generic: БК-5
+                      - cell:
+                        - generic: 2.4x2
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Электрика КК
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Аренда
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-083
+                      - cell:
+                        - generic: БК-6
+                      - cell:
+                        - generic: 2.4x2.4
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Электрика КК + УЗО
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Ожидает осмотра
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-084
+                      - cell:
+                        - generic: БК-Склад
+                      - cell:
+                        - generic: 2.4x3
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Электрика КК + УЗО + счётчик
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Ожидает подтверждения сметы
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-085
+                      - cell:
+                        - generic: БК-Санблок
+                      - cell:
+                        - generic: 2.4x4
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Электрика КК + счётчик
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Бронь
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-086
+                      - cell:
+                        - generic: БК-Модуль из 2х
+                      - cell:
+                        - generic: 2.4x5
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Металлическая дверь, кондиционер
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: В ремонте
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-087
+                      - cell:
+                        - generic: БК-Модуль из 3
+                      - cell:
+                        - generic: 2.4x6
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Две лампы
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Капремонт
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-088
+                      - cell:
+                        - generic: БК-Пост охраны
+                      - cell:
+                        - generic: 3x3
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Мама-папа
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Продажа Б/У
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-089
+                      - cell:
+                        - generic: БК-1
+                      - cell:
+                        - generic: 4.8x6
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Пластиковое окно
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Склад
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-090
+                      - cell:
+                        - generic: БК-2
+                      - cell:
+                        - generic: 7.2x6
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Электрика КК
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Собственные нужды
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-091
+                      - cell:
+                        - generic: БК-3
+                      - cell:
+                        - generic: 2x2
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Электрика КК + УЗО
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Свободна
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-092
+                      - cell:
+                        - generic: БК-4
+                      - cell:
+                        - generic: 2.4x2
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Электрика КК + УЗО + счётчик
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Аренда
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-093
+                      - cell:
+                        - generic: БК-5
+                      - cell:
+                        - generic: 2.4x2.4
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Электрика КК + счётчик
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Ожидает осмотра
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-094
+                      - cell:
+                        - generic: БК-6
+                      - cell:
+                        - generic: 2.4x3
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Металлическая дверь, кондиционер
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Ожидает подтверждения сметы
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-095
+                      - cell:
+                        - generic: БК-Склад
+                      - cell:
+                        - generic: 2.4x4
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Две лампы
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Бронь
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-096
+                      - cell:
+                        - generic: БК-Санблок
+                      - cell:
+                        - generic: 2.4x5
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Мама-папа
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: В ремонте
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-097
+                      - cell:
+                        - generic: БК-Модуль из 2х
+                      - cell:
+                        - generic: 2.4x6
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Пластиковое окно
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Капремонт
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-098
+                      - cell:
+                        - generic: БК-Модуль из 3
+                      - cell:
+                        - generic: 3x3
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Электрика КК
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Продажа Б/У
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-099
+                      - cell:
+                        - generic: БК-Пост охраны
+                      - cell:
+                        - generic: 4.8x6
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Электрика КК + УЗО
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Склад
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-100
+                      - cell:
+                        - generic: БК-1
+                      - cell:
+                        - generic: 7.2x6
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Электрика КК + УЗО + счётчик
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Собственные нужды
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-101
+                      - cell:
+                        - generic: БК-2
+                      - cell:
+                        - generic: 2x2
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Электрика КК + счётчик
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Свободна
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-102
+                      - cell:
+                        - generic: БК-3
+                      - cell:
+                        - generic: 2.4x2
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Металлическая дверь, кондиционер
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Аренда
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-103
+                      - cell:
+                        - generic: БК-4
+                      - cell:
+                        - generic: 2.4x2.4
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Две лампы
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Ожидает осмотра
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-104
+                      - cell:
+                        - generic: БК-5
+                      - cell:
+                        - generic: 2.4x3
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Мама-папа
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Ожидает подтверждения сметы
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-105
+                      - cell:
+                        - generic: БК-6
+                      - cell:
+                        - generic: 2.4x4
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Пластиковое окно
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Бронь
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-106
+                      - cell:
+                        - generic: БК-Склад
+                      - cell:
+                        - generic: 2.4x5
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Электрика КК
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: В ремонте
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-107
+                      - cell:
+                        - generic: БК-Санблок
+                      - cell:
+                        - generic: 2.4x6
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Электрика КК + УЗО
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Капремонт
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-108
+                      - cell:
+                        - generic: БК-Модуль из 2х
+                      - cell:
+                        - generic: 3x3
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Электрика КК + УЗО + счётчик
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Продажа Б/У
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-109
+                      - cell:
+                        - generic: БК-Модуль из 3
+                      - cell:
+                        - generic: 4.8x6
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Электрика КК + счётчик
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Склад
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-110
+                      - cell:
+                        - generic: БК-Пост охраны
+                      - cell:
+                        - generic: 7.2x6
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Металлическая дверь, кондиционер
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Собственные нужды
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-111
+                      - cell:
+                        - generic: БК-1
+                      - cell:
+                        - generic: 2x2
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Две лампы
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Свободна
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-112
+                      - cell:
+                        - generic: БК-2
+                      - cell:
+                        - generic: 2.4x2
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Мама-папа
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Аренда
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-113
+                      - cell:
+                        - generic: БК-3
+                      - cell:
+                        - generic: 2.4x2.4
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Пластиковое окно
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Ожидает осмотра
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-114
+                      - cell:
+                        - generic: БК-4
+                      - cell:
+                        - generic: 2.4x3
+                      - cell:
+                        - generic: ЛДСП
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Электрика КК
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Ожидает подтверждения сметы
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-115
+                      - cell:
+                        - generic: БК-5
+                      - cell:
+                        - generic: 2.4x4
+                      - cell:
+                        - generic: ПВХ
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Электрика КК + УЗО
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Бронь
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-116
+                      - cell:
+                        - generic: БК-6
+                      - cell:
+                        - generic: 2.4x5
+                      - cell:
+                        - generic: ОСБ
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Электрика КК + УЗО + счётчик
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: В ремонте
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-117
+                      - cell:
+                        - generic: БК-Склад
+                      - cell:
+                        - generic: 2.4x6
+                      - cell:
+                        - generic: Вагонка
+                      - cell:
+                        - generic: Обычная
+                      - cell:
+                        - generic: Электрика КК + счётчик
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Капремонт
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-118
+                      - cell:
+                        - generic: БК-Санблок
+                      - cell:
+                        - generic: 3x3
+                      - cell:
+                        - generic: СМЛО
+                      - cell:
+                        - generic: ИТР
+                      - cell:
+                        - generic: Металлическая дверь, кондиционер
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Продажа Б/У
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-119
+                      - cell:
+                        - generic: БК-Модуль из 2х
+                      - cell:
+                        - generic: 4.8x6
+                      - cell:
+                        - generic: Сэндвич
+                      - cell:
+                        - generic: Новая
+                      - cell:
+                        - generic: Две лампы
+                      - cell:
+                        - generic: Да
+                      - cell:
+                        - generic: Склад
+                    - row:
+                      - cell:
+                        - generic:
+                          - button: БЫТ-120
+                      - cell:
+                        - generic: БК-Модуль из 3
+                      - cell:
+                        - generic: 7.2x6
+                      - cell:
+                        - generic: ДВП
+                      - cell:
+                        - generic: Санблок
+                      - cell:
+                        - generic: Мама-папа
+                      - cell:
+                        - generic: Нет
+                      - cell:
+                        - generic: Собственные нужды
+    - region "Notifications alt+T"
+  - dialog [ref=e3157]:
+    - heading "Создание новой бытовки" [level=2] [ref=e3159]
+    - generic [ref=e3160]:
+      - generic [ref=e3161]:
+        - group [ref=e3162]:
+          - generic [ref=e3163]: Номер бытовки
+          - textbox "Номер бытовки" [active] [ref=e3164]:
+            - /placeholder: Например, БЫТ-121
+        - generic [ref=e3165]:
+          - group [ref=e3166]:
+            - generic [ref=e3167]: Тип бытовки
+            - button "Выберите тип" [ref=e3168] [cursor=pointer]
+          - group [ref=e3170]:
+            - generic [ref=e3171]: Габариты
+            - button "Сначала выберите тип" [disabled]
+        - generic [ref=e3172]:
+          - group [ref=e3173]:
+            - generic [ref=e3174]: Отделка
+            - button "Выберите отделку" [ref=e3175] [cursor=pointer]
+          - group [ref=e3177]:
+            - generic [ref=e3178]: Линолеум
+            - button "Нет" [ref=e3179] [cursor=pointer]
+      - group [ref=e3181]:
+        - generic [ref=e3182]:
+          - generic [ref=e3183]: Характеристики
+          - button "Добавить характеристики" [ref=e3184] [cursor=pointer]
+        - generic [ref=e3185]: Пластиковое окно
+      - group [ref=e3187]:
+        - generic [ref=e3188]:
+          - generic [ref=e3189]: Фото бытовки
+          - button "Загрузить фото" [ref=e3190] [cursor=pointer]
+        - button "Перетащите несколько изображений" [ref=e3191] [cursor=pointer]
+      - generic [ref=e3192]:
+        - button "Отмена" [ref=e3193] [cursor=pointer]
+        - button "Создать бытовку" [ref=e3194] [cursor=pointer]
+    - button "Close" [ref=e3195] [cursor=pointer]

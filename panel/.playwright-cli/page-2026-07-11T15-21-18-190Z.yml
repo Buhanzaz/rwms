@@ -1,0 +1,229 @@
+- generic:
+  - generic:
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - generic:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /
+                    - generic:
+                      - generic: WMS Panel
+                      - generic: СПБ
+            - generic:
+              - generic:
+                - generic:
+                  - combobox:
+                    - generic: СПБ
+              - generic:
+                - generic: Обзор
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /
+                        - generic: Главная
+                    - listitem:
+                      - link:
+                        - /url: /kpi
+                        - generic: KPI
+              - generic:
+                - generic: Имущество
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /warehouse
+                        - generic: Склад
+                    - listitem:
+                      - link:
+                        - /url: /equipment
+                        - generic: Доп. оборудование
+                    - listitem:
+                      - button [expanded]:
+                        - generic: Инвентаризация
+                      - list:
+                        - listitem:
+                          - link:
+                            - /url: /inventory/inventory-7c894ac7-145b-4317-9f80-7e5e9ec1e8d5
+                            - generic: Продолжить инвентаризацию
+                        - listitem:
+                          - link:
+                            - /url: /inventory/inventory-7c894ac7-145b-4317-9f80-7e5e9ec1e8d5/finish
+                            - generic: Закончить инвентаризацию
+                        - listitem:
+                          - link:
+                            - /url: /inventory/history
+                            - generic: История инвентаризаций
+                    - listitem:
+                      - button:
+                        - generic: Списание
+              - generic:
+                - generic: Логистика
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /logistics/returns
+                        - generic: Возврат из аренды
+                    - listitem:
+                      - link:
+                        - /url: /logistics/shipments
+                        - generic: Отгрузка в аренду
+              - generic:
+                - generic: Ремонтный цикл
+                - generic:
+                  - list:
+                    - listitem:
+                      - link:
+                        - /url: /estimates
+                        - generic: Сметы
+                    - listitem:
+                      - link:
+                        - /url: /repairs
+                        - generic: Ремонты
+                    - listitem:
+                      - link:
+                        - /url: /task-board
+                        - generic: Доска задач
+                    - listitem:
+                      - link:
+                        - /url: /acceptance
+                        - generic: Приёмка и доработки
+            - generic:
+              - list:
+                - listitem:
+                  - button:
+                    - generic: Настройки
+                - listitem:
+                  - button:
+                    - generic: Локальный администратор
+                    - generic: Выйти
+      - main:
+        - generic:
+          - generic:
+            - button:
+              - generic: Открыть или свернуть меню
+            - navigation:
+              - list:
+                - listitem:
+                  - link:
+                    - /url: /inventory
+                    - text: Инвентаризация
+                - listitem
+                - listitem:
+                  - link [disabled]: Сессия
+        - generic:
+          - generic:
+            - generic:
+              - button: Назад
+              - generic:
+                - button: Сохранить осмотр
+            - region:
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic: 0 из 20
+                        - button: Добавить
+                      - generic: Фото не загружены.
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - heading [level=3]: Смета
+                          - paragraph: Работа, материал, количество и цена сохраняются отдельными полями.
+                        - button: Добавить строку
+                      - generic:
+                        - generic: Строк пока нет
+                        - generic: Пустую смету можно сохранить или завершить. Для добавления выберите позицию каталога либо создайте ручную строку.
+                - generic:
+                  - generic:
+                    - generic: Информация
+                    - generic: Паспортные данные и причина зафиксированы; комментарий можно дополнить.
+                  - generic:
+                    - generic:
+                      - group:
+                        - generic: Бытовка
+                        - textbox: БЫТ-001
+                      - group:
+                        - generic: Причина
+                        - textbox: Инвентаризация
+                      - group:
+                        - generic: Дата
+                        - textbox: 2026-07-11
+                      - group:
+                        - generic: Статус
+                        - textbox: Свободна
+                      - group:
+                        - generic: Арендатор
+                        - textbox: —
+                      - group:
+                        - generic: Комментарий
+                        - textbox
+                - generic:
+                  - generic:
+                    - generic: Каталог
+                    - generic: Добавьте работы и материалы, которые нужно передать в ремонт.
+                  - generic:
+                    - generic:
+                      - generic:
+                        - group:
+                          - generic: Поиск
+                          - generic:
+                            - textbox:
+                              - /placeholder: Работа или материал
+                        - group:
+                          - generic: Режим каталога
+                          - combobox [expanded]:
+                            - generic: Работы + материалы
+                      - navigation:
+                        - generic:
+                          - button: Главное меню
+                      - generic:
+                        - button:
+                          - generic:
+                            - generic: Окна/Витражи
+                            - generic: Категория
+                        - button:
+                          - generic:
+                            - generic: Двери
+                            - generic: Категория
+                        - button:
+                          - generic:
+                            - generic: Электрика
+                            - generic: Категория
+                        - button:
+                          - generic:
+                            - generic: Внутренняя отделка
+                            - generic: Категория
+                        - button:
+                          - generic:
+                            - generic: Внешняя отделка
+                            - generic: Категория
+                        - button:
+                          - generic:
+                            - generic: Сантехника, кондиционер, монтажи
+                            - generic: Категория
+                        - button:
+                          - generic:
+                            - generic: Мебель
+                            - generic: Категория
+                        - button:
+                          - generic:
+                            - generic: Уборка, демонтаж
+                            - generic: Категория
+                        - button:
+                          - generic:
+                            - generic: Сварочные работы
+                            - generic: Категория
+    - region "Notifications alt+T"
+  - listbox [ref=f1e327]:
+    - group [ref=f1e328]:
+      - option "Работы + материалы" [active] [selected] [ref=f1e329]
+      - option "Только работы" [ref=f1e331]
+      - option "Только материалы" [ref=f1e333]

@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd"
+        objectQuotingStrategy="QUOTE_ONLY_RESERVED_WORDS">
+
+    <changeSet id="2026-06-17-230100-repair-catalog-node-show-in-main-menu" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_ESTIMATE_CATALOG_NODE"/>
+            <not>
+                <columnExists tableName="REPAIR_ESTIMATE_CATALOG_NODE" columnName="SHOW_IN_MAIN_MENU"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="REPAIR_ESTIMATE_CATALOG_NODE">
+            <column name="SHOW_IN_MAIN_MENU" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-17-230101-repair-catalog-node-main-menu-order" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_ESTIMATE_CATALOG_NODE"/>
+            <not>
+                <columnExists tableName="REPAIR_ESTIMATE_CATALOG_NODE" columnName="MAIN_MENU_ORDER"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="REPAIR_ESTIMATE_CATALOG_NODE">
+            <column name="MAIN_MENU_ORDER" type="INT"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-17-230102-repair-catalog-node-main-menu-title" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="REPAIR_ESTIMATE_CATALOG_NODE"/>
+            <not>
+                <columnExists tableName="REPAIR_ESTIMATE_CATALOG_NODE" columnName="MAIN_MENU_TITLE"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="REPAIR_ESTIMATE_CATALOG_NODE">
+            <column name="MAIN_MENU_TITLE" type="VARCHAR(255)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-17-230103-rental-type-display-template" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="RENTAL_TYPE"/>
+            <not>
+                <columnExists tableName="RENTAL_TYPE" columnName="DISPLAY_TEMPLATE"/>
+            </not>
+        </preConditions>
+        <addColumn tableName="RENTAL_TYPE">
+            <column name="DISPLAY_TEMPLATE" type="VARCHAR(255)"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="2026-06-17-230104-rental-taxonomy-seeds" author="codex">
+        <validCheckSum>9:4280cf2a6798e9df7919b52e1c0ed648</validCheckSum>
+
+        <preConditions onFail="MARK_RAN">
+            <tableExists tableName="RENTAL_TYPE"/>
+        </preConditions>
+        <sql splitStatements="true" stripComments="true">
+            UPDATE RENTAL_TYPE
+            SET DISPLAY_TEMPLATE = 'D{SHOWERS}/T{TOILETS}/R{SINKS}/B{BOILER}'
+            WHERE CODE = 'SANITARY_BLOCK_STANDARD'
+              AND COALESCE(DISPLAY_TEMPLATE, '') = '';
+        </sql>
+    </changeSet>
+
+    <changeSet id="2026-06-17-230105-rental-taxonomy-module-4-seed" author="codex">
+        <preConditions onFail="MARK_RAN" onError="HALT">
+            <sqlCheck expectedResult="1">
+                SELECT COUNT(*)
+                FROM RENTAL_SUBCATEGORY
+                WHERE CODE = 'MODULE'
+            </sqlCheck>
+            <sqlCheck expectedResult="0">
+                SELECT COUNT(*)
+                FROM RENTAL_TYPE
+                WHERE CODE = 'MODULE_4'
+            </sqlCheck>
+        </preConditions>
+        <insert tableName="RENTAL_TYPE">
+            <column name="ID" value="7600d6d5-bc2c-5b4a-97fb-f917073cf447"/>
+            <column name="VERSION" valueNumeric="0"/>
+            <column name="SUBCATEGORY_ID" valueComputed="(SELECT ID FROM RENTAL_SUBCATEGORY WHERE CODE = 'MODULE')"/>
+            <column name="NAME" value="4X"/>
+            <column name="CODE" value="MODULE_4"/>
+            <column name="ACTIVE" valueBoolean="true"/>
+            <column name="SORT_ORDER" valueNumeric="40"/>
+        </insert>
+    </changeSet>
+
+</databaseChangeLog>

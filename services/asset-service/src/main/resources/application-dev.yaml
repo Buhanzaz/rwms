@@ -1,0 +1,21 @@
+spring:
+  datasource:
+    url: ${ASSET_DB_URL:jdbc:postgresql://127.0.0.1:5436/rwms_asset}
+    username: ${ASSET_DB_USERNAME:rwms_asset}
+    password: ${ASSET_DB_PASSWORD:rwms_asset}
+  cloud:
+    stream:
+      kafka:
+        binder:
+          brokers: ${ASSET_KAFKA_BROKERS:localhost:9092}
+          auto-create-topics: true
+
+rwms:
+  platform:
+    kafka:
+      enabled: ${ASSET_KAFKA_ENABLED:true}
+  security:
+    dev-auth-bypass: ${ASSET_DEV_AUTH_BYPASS:true}
+  asset:
+    warehouse-registry:
+      enabled: ${ASSET_WAREHOUSE_REGISTRY_ENABLED:false}

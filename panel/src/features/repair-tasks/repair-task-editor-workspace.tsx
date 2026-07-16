@@ -1,0 +1,446 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Link, useNavigate } from "react-router-dom"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { HugeiconsIcon } from "@hugeicons/react"
+import {
+  ArrowLeft01Icon,
+  ArrowRight01Icon,
+  Settings02Icon,
+} from "@hugeicons/core-free-icons"
+
+import { Button } from "@/components/ui/button"
+import { Separator } from "@/components/ui/separator"
+import {
+  assertEstimateLinesValid,
+  calculateEstimateTotal,
+  toLocalCalendarDateValue,
+} from "@/features/repair-estimates/domain/repair-estimate-domain"
+import {
+  RepairEstimateCatalogPicker,
+  type RepairEstimateCatalogPager,
+} from "@/features/repair-estimates/repair-estimate-catalog-picker"
+import { RepairEstimateLinesEditor } from "@/features/repair-estimates/repair-estimate-lines-editor"
+import { RepairEstimatePhotos } from "@/features/repair-estimates/repair-estimate-photos"
+import { RepairEstimateWorkspaceLayout } from "@/features/repair-estimates/repair-estimate-workspace-layout"
+import {
+  RepairWorkCompletionDialog,
+  type RepairWorkCompletionResult,
+} from "@/features/repair-estimates/repair-work-completion-dialog"
+import { RepairWorkInformationFields } from "@/features/repair-estimates/repair-work-information-fields"
+import {
+  REPAIR_TASKS_QUERY_KEY,
+  queueRepairTask,
+  repairTaskDetailQueryKey,
+  saveRepairTaskDraft,
+  writeOffRepairDraft,
+} from "@/features/repair-tasks/api/repair-tasks-api"
+import {
+  assertRepairTaskCanBeQueued,
+  createNewRepairTaskDraft,
+  toRepairTaskEditorDraft,
+} from "@/features/repair-tasks/domain/repair-task-domain"
+import type {
+  RepairTaskDto,
+  RepairTaskEditorDraft,
+  RepairTaskReworkSeed,
+} from "@/features/repair-tasks/model/repair-task"
+import { RepairTaskWriteOffDialog } from "@/features/repair-tasks/repair-task-write-off-dialog"
+import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
+
+type RepairTaskEditorWorkspaceProps = {
+  warehouseId: string
+  task: RepairTaskDto | null
+  loading?: boolean
+  seed?: RepairTaskReworkSeed
+  initialRentalItemId?: string
+  onClose: () => void
+  onSaved: (task: RepairTaskDto) => void
+}
+
+export function RepairTaskEditorWorkspace({
+  warehouseId,
+  task,
+  loading = false,
+  seed,
+  initialRentalItemId,
+  onClose,
+  onSaved,
+}: RepairTaskEditorWorkspaceProps) {
+  const editorKey = task
+    ? `${task.id}:${task.version}`
+    : seed
+      ? `rework:${seed.sourceRepairTaskId}:${seed.sourceRepairTaskVersion}`
+      : `new:${warehouseId}:${initialRentalItemId ?? "unselected"}`
+  if (loading) {
+    return (
+      <p role="status" className="text-sm text-muted-foreground">
+        Загрузка задания...
+      </p>
+    )
+  }
+  return (
+    <RepairTaskEditorContent
+      key={editorKey}
+      warehouseId={warehouseId}
+      task={task}
+      seed={seed}
+      initialRentalItemId={initialRentalItemId}
+      onClose={onClose}
+      onSaved={onSaved}
+    />
+  )
+}
+
+function RepairTaskEditorContent({
+  warehouseId,
+  task,
+  seed,
+  initialRentalItemId,
+  onClose,
+  onSaved,
+}: Omit<RepairTaskEditorWorkspaceProps, "loading">) {
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const [draft, setDraft] = useState<RepairTaskEditorDraft>(() =>
+    task
+      ? toRepairTaskEditorDraft(task)
+      : {
+          ...createNewRepairTaskDraft(
+            toLocalCalendarDateValue(new Date()),
+            seed
+          ),
+          rentalItemId: seed?.rentalItemId ?? initialRentalItemId ?? "",
+        }
+  )
+  const [catalogPager, setCatalogPager] =
+    useState<RepairEstimateCatalogPager | null>(null)
+  const [completionOpen, setCompletionOpen] = useState(false)
+  const [writeOffOpen, setWriteOffOpen] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [writeOffError, setWriteOffError] = useState<string | null>(null)
+  const pendingUploadsRef = useRef(draft.pendingUploads)
+
+  useEffect(() => {
+    pendingUploadsRef.current = draft.pendingUploads
+  }, [draft.pendingUploads])
+
+  useEffect(() => {
+    return () => {
+      pendingUploadsRef.current.forEach((upload) =>
+        URL.revokeObjectURL(upload.previewUrl)
+      )
+    }
+  }, [])
+
+  function handleSuccess(saved: RepairTaskDto) {
+    queryClient.setQueryData(
+      repairTaskDetailQueryKey(warehouseId, saved.id),
+      saved
+    )
+    void queryClient.invalidateQueries({ queryKey: REPAIR_TASKS_QUERY_KEY })
+    onSaved(saved)
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: () => saveRepairTaskDraft({ draft, warehouseId }),
+    onSuccess: handleSuccess,
+    onError: (unknownError) =>
+      setError(
+        unknownError instanceof Error
+          ? unknownError.message
+          : "Не удалось сохранить задание"
+      ),
+  })
+  const queueMutation = useMutation({
+    mutationFn: (completion: RepairWorkCompletionResult) =>
+      queueRepairTask({ draft, warehouseId, ...completion }),
+    onSuccess: handleSuccess,
+    onError: (unknownError) =>
+      setError(
+        unknownError instanceof Error
+          ? unknownError.message
+          : "Не удалось завершить задание"
+      ),
+  })
+  const writeOffMutation = useMutation({
+    mutationFn: (writeOffReason: string) =>
+      writeOffRepairDraft({
+        warehouseId,
+        origin: draft.origin,
+        taskId: draft.taskId,
+        expectedVersion: draft.expectedVersion,
+        rentalItemId: draft.rentalItemId,
+        sourceEstimateId: null,
+        sourceEstimateVersion: null,
+        reason: draft.reason,
+        dispatchDate: draft.dispatchDate,
+        comment: draft.comment,
+        lines: draft.lines,
+        media: draft.media,
+        pendingUploads: draft.pendingUploads,
+        writeOffReason,
+      }),
+    onSuccess: (saved) => {
+      setWriteOffOpen(false)
+      void queryClient.invalidateQueries({ queryKey: REPAIR_TASKS_QUERY_KEY })
+      void queryClient.invalidateQueries({ queryKey: ["rental-items"] })
+      void queryClient.invalidateQueries({
+        queryKey: ["rental-item-filter-options"],
+      })
+      void queryClient.invalidateQueries({ queryKey: ["rental-item"] })
+      navigate(`/write-offs?writeOffId=${encodeURIComponent(saved.id)}`, {
+        ...workspaceEntryNavigationOptions,
+        replace: true,
+      })
+    },
+    onError: (unknownError) =>
+      setWriteOffError(
+        unknownError instanceof Error
+          ? unknownError.message
+          : "Не удалось списать бытовку"
+      ),
+  })
+  const mutationPending =
+    saveMutation.isPending ||
+    queueMutation.isPending ||
+    writeOffMutation.isPending
+  const totalAmount = useMemo(() => {
+    try {
+      return calculateEstimateTotal(draft.lines)
+    } catch {
+      return "—"
+    }
+  }, [draft.lines])
+
+  function validateDraft(forQueue = false) {
+    if (!draft.rentalItemId) {
+      setError("Выберите бытовку")
+      return false
+    }
+    try {
+      assertEstimateLinesValid(draft.lines)
+      if (forQueue) assertRepairTaskCanBeQueued(draft.lines)
+      setError(null)
+      return true
+    } catch (unknownError) {
+      setError(
+        unknownError instanceof Error
+          ? unknownError.message
+          : "Проверьте строки задания"
+      )
+      return false
+    }
+  }
+
+  function closeEditor() {
+    draft.pendingUploads.forEach((upload) =>
+      URL.revokeObjectURL(upload.previewUrl)
+    )
+    onClose()
+  }
+
+  const handleCatalogPagerChange = useCallback(
+    (nextPager: RepairEstimateCatalogPager | null) => {
+      setCatalogPager(nextPager)
+    },
+    []
+  )
+
+  const information = (
+    <RepairWorkInformationFields
+      warehouseId={warehouseId}
+      rentalItemId={draft.rentalItemId}
+      contextLabel="Причина"
+      contextValue={draft.reason}
+      dispatchDate={draft.dispatchDate}
+      comment={draft.comment}
+      disabled={mutationPending}
+      rentalItemDisabled={draft.kind === "REWORK"}
+      rentalItemInvalid={Boolean(error && !draft.rentalItemId)}
+      onRentalItemChange={(rentalItemId) =>
+        setDraft((current) => ({ ...current, rentalItemId }))
+      }
+      onContextChange={(reason) =>
+        setDraft((current) => ({ ...current, reason }))
+      }
+      onDispatchDateChange={(dispatchDate) =>
+        setDraft((current) => ({ ...current, dispatchDate }))
+      }
+      onCommentChange={(comment) =>
+        setDraft((current) => ({ ...current, comment }))
+      }
+    />
+  )
+
+  const taskLines = (
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+        <RepairEstimateLinesEditor
+          lines={draft.lines}
+          readOnly={mutationPending}
+          mode="TASK"
+          onChange={(lines) => setDraft((current) => ({ ...current, lines }))}
+        />
+      </div>
+      <div className="shrink-0">
+        <Separator />
+        <div className="flex justify-end pt-3 text-sm font-medium">
+          Итого: {totalAmount}
+        </div>
+      </div>
+    </div>
+  )
+
+  const controls = (
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+        <RepairEstimateCatalogPicker
+          lines={draft.lines}
+          readOnly={mutationPending}
+          onChange={(lines) => setDraft((current) => ({ ...current, lines }))}
+          onPagerChange={handleCatalogPagerChange}
+        />
+      </div>
+      <Separator />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant={catalogPager?.canGoBack ? "default" : "outline"}
+            size="icon-sm"
+            aria-label="Предыдущая страница каталога"
+            disabled={!catalogPager?.canGoBack || mutationPending}
+            onClick={() => catalogPager?.goBack()}
+          >
+            <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
+          </Button>
+          <Button
+            type="button"
+            variant={catalogPager?.canGoForward ? "default" : "outline"}
+            size="icon-sm"
+            aria-label="Следующая страница каталога"
+            disabled={!catalogPager?.canGoForward || mutationPending}
+            onClick={() => catalogPager?.goForward()}
+          >
+            <HugeiconsIcon icon={ArrowRight01Icon} data-icon="inline-start" />
+          </Button>
+        </div>
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={
+              !draft.rentalItemId || mutationPending || draft.kind === "REWORK"
+            }
+            onClick={() => {
+              setWriteOffError(null)
+              setWriteOffOpen(true)
+            }}
+          >
+            Списать
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={mutationPending}
+            onClick={closeEditor}
+          >
+            Отмена
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={mutationPending}
+            onClick={() => {
+              if (validateDraft()) {
+                saveMutation.mutate()
+              }
+            }}
+          >
+            {saveMutation.isPending ? "Сохранение..." : "Сохранить черновик"}
+          </Button>
+          <Button
+            type="button"
+            disabled={mutationPending}
+            onClick={() => {
+              if (validateDraft(true)) {
+                setCompletionOpen(true)
+              }
+            }}
+          >
+            {queueMutation.isPending ? "Завершение..." : "Завершить"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+
+  const catalogAction = (
+    <Button variant="outline" size="sm" asChild>
+      <Link to="/settings/estimates-repairs">
+        <HugeiconsIcon icon={Settings02Icon} data-icon="inline-start" />
+        Настроить каталог
+      </Link>
+    </Button>
+  )
+
+  return (
+    <>
+      <RepairEstimateWorkspaceLayout
+        ariaLabel="Редактор ремонтного задания"
+        informationDescription="Заполните бытовку, причину, дату прибытия и общий комментарий."
+        message={
+          error ? (
+            <p role="alert" className="text-xs text-destructive">
+              {error}
+            </p>
+          ) : null
+        }
+        photos={
+          <RepairEstimatePhotos
+            viewerContext="WORK"
+            media={draft.media}
+            pendingUploads={draft.pendingUploads}
+            readOnly={mutationPending}
+            onMediaChange={(media) =>
+              setDraft((current) => ({ ...current, media }))
+            }
+            onPendingUploadsChange={(pendingUploads) =>
+              setDraft((current) => ({ ...current, pendingUploads }))
+            }
+          />
+        }
+        information={information}
+        estimate={taskLines}
+        controls={controls}
+        catalogAction={catalogAction}
+      />
+      <RepairWorkCompletionDialog
+        open={completionOpen}
+        lines={draft.lines}
+        pending={queueMutation.isPending}
+        error={completionOpen ? error : null}
+        title="Завершение задания"
+        description="Выберите режим, перемещения, очереди и порядок этапов. Задание будет поставлено на доску одной командой."
+        completeLabel="Создать задание"
+        pendingLabel="Создание..."
+        previewKey={`direct-repair:${draft.taskId ?? "new"}:${draft.expectedVersion ?? 0}`}
+        onOpenChange={(open) => {
+          setCompletionOpen(open)
+          setError(null)
+        }}
+        onComplete={(completion) => queueMutation.mutate(completion)}
+      />
+      <RepairTaskWriteOffDialog
+        open={writeOffOpen}
+        pending={writeOffMutation.isPending}
+        error={writeOffError}
+        onOpenChange={(open) => {
+          setWriteOffOpen(open)
+          if (!open) setWriteOffError(null)
+        }}
+        onConfirm={(reason) => writeOffMutation.mutate(reason)}
+      />
+    </>
+  )
+}

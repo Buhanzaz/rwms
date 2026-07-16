@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view" title="msg://StockItemListView.title" focusComponent="stockItemsDataGrid">
+    <data>
+        <collection id="stockItemsDc" class="dev.buhanzaz.wmspanel.entity.StockItem">
+            <fetchPlan extends="_base"><property name="warehouse" fetchPlan="_base"/><property name="segment" fetchPlan="_base"/><property name="category" fetchPlan="_base"/></fetchPlan>
+            <loader id="stockItemsDl" readOnly="true"><query><![CDATA[select e from StockItem e order by e.warehouse.name, e.name]]></query></loader>
+        </collection>
+    </data>
+    <facets><dataLoadCoordinator auto="true"/></facets>
+    <layout>
+        <hbox id="buttonsPanel" classNames="buttons-panel"><startSlot><button id="createButton" action="stockItemsDataGrid.createAction"/><button id="editButton" action="stockItemsDataGrid.editAction"/><button id="removeButton" action="stockItemsDataGrid.removeAction"/></startSlot></hbox>
+        <dataGrid id="stockItemsDataGrid" width="100%" minHeight="20em" dataContainer="stockItemsDc">
+            <actions><action id="createAction" type="list_create"/><action id="editAction" type="list_edit"/><action id="removeAction" type="list_remove"/></actions>
+            <columns resizable="true">
+                <column property="warehouse"/>
+                <column property="name"/>
+                <column property="segment"/>
+                <column property="totalQuantity"/>
+                <column key="reservedQuantity" header="В резерве"/>
+                <column key="availableQuantity" header="Доступно"/>
+                <column property="unit"/>
+                <column property="active"/>
+            </columns>
+        </dataGrid>
+    </layout>
+</view>

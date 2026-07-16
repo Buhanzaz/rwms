@@ -1,0 +1,74 @@
+@import url('wms-panel.css');
+@import url('view/main-view.css');
+@import url('view/main-view-top-menu.css');
+@import url('view/login-view.css');
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  padding-inline: 0.6rem;
+}
+
+.status-badge__icon {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex: 0 0 auto;
+  margin-inline-end: 0.1rem;
+}
+
+.status-free {
+  background: #e7f5ec;
+  color: #16784a;
+}
+
+.status-repair {
+  background: #fff1e5;
+  color: #c16a17;
+}
+
+.status-capital-repair {
+  background: #fdebec;
+  color: #c93c47;
+}
+
+.status-paint {
+  background: #e8efff;
+  color: #2f63d8;
+}
+
+.status-inspection {
+  background: #fff4d8;
+  color: #a56a00;
+}
+
+.status-reserved {
+  background: #eef1f6;
+  color: #40536f;
+}
+
+.status-muted {
+  background: #f2f4f7;
+  color: #66758d;
+}
+
+.warehouse-details {
+  background: linear-gradient(180deg, #fbfcfe 0%, #f5f8fc 100%);
+  border-inline-start: 1px solid var(--lumo-contrast-10pct);
+  box-sizing: border-box;
+}
+
+.warehouse-details h3 {
+  margin: 0;
+  font-size: var(--lumo-font-size-l);
+}
+
+.warehouse-details__hint {
+  color: var(--lumo-secondary-text-color);
+  font-size: var(--lumo-font-size-s);
+  line-height: 1.4;
+  margin-bottom: var(--lumo-space-xs);
+}

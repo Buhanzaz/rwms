@@ -1,0 +1,97 @@
+server:
+  servlet:
+    session:
+      cookie:
+        secure: false
+
+spring:
+  cloud:
+    stream:
+      kafka:
+        binder:
+          brokers: ${AUTH_KAFKA_BROKERS:localhost:9092}
+          auto-create-topics: true
+  jpa:
+    hibernate:
+      ddl-auto: validate
+
+rwms:
+  platform:
+    kafka:
+      enabled: ${AUTH_KAFKA_ENABLED:true}
+  auth:
+    issuer: ${AUTH_ISSUER:http://localhost:9000}
+    dev-default-credentials: true
+    bootstrap-admin-username: ${AUTH_BOOTSTRAP_ADMIN_USERNAME:admin}
+    bootstrap-admin-password: ${AUTH_BOOTSTRAP_ADMIN_PASSWORD:admin}
+    signing-key-store: ${AUTH_SIGNING_KEY_STORE:}
+    signing-key-store-password: ${AUTH_SIGNING_KEY_STORE_PASSWORD:}
+    signing-key-alias: ${AUTH_SIGNING_KEY_ALIAS:rwms-auth-dev}
+    warehouse-validation:
+      enabled: ${AUTH_WAREHOUSE_VALIDATION_ENABLED:false}
+      base-url: ${WAREHOUSE_SERVICE_INTERNAL_BASE_URL:}
+      token-uri: ${AUTH_WAREHOUSE_TOKEN_URI:}
+      client-id: auth-service
+      client-secret: ${AUTH_WAREHOUSE_CLIENT_SECRET:}
+      connect-timeout: ${AUTH_WAREHOUSE_CONNECT_TIMEOUT:2s}
+      read-timeout: ${AUTH_WAREHOUSE_READ_TIMEOUT:3s}
+    oauth:
+      clients:
+        - client-id: rwms-panel
+          client-name: RWMS Panel
+          enabled: true
+          revision: 2
+          authentication-methods: [none]
+          grant-types: [authorization_code]
+          redirect-uris: ["${PANEL_REDIRECT_URI:http://localhost:8080/auth/callback}"]
+          post-logout-redirect-uris: ["${PANEL_POST_LOGOUT_REDIRECT_URI:http://localhost:8080/}"]
+          scopes: [openid, profile, rwms.read, rwms.write, warehouse.read]
+          require-proof-key: true
+          allowed-principal-types: [USER]
+          audiences: [rwms-services]
+          allowed-origins: ["${PANEL_ORIGIN:http://localhost:8080}"]
+          access-token-ttl: 5m
+        - client-id: rwms-worker
+          client-name: RWMS Worker
+          enabled: true
+          revision: 1
+          authentication-methods: [none]
+          grant-types: [authorization_code]
+          redirect-uris: ["${WORKER_REDIRECT_URI:http://localhost:8082/auth/callback}"]
+          post-logout-redirect-uris: ["${WORKER_POST_LOGOUT_REDIRECT_URI:http://localhost:8082/}"]
+          scopes: [openid, profile, worker.tasks]
+          require-proof-key: true
+          allowed-principal-types: [WORKER]
+          audiences: [rwms-services]
+          allowed-origins: ["${WORKER_ORIGIN:http://localhost:8082}"]
+          access-token-ttl: 5m
+        - client-id: task-board-service
+          client-name: Task Board Service
+          enabled: true
+          revision: 1
+          authentication-methods: [client_secret_basic]
+          grant-types: [client_credentials]
+          scopes: [worker-credentials.manage]
+          development-secret: task-board-dev-secret
+          audiences: [rwms-services]
+          access-token-ttl: 5m
+        - client-id: auth-service
+          client-name: Auth Service Warehouse Client
+          enabled: ${AUTH_WAREHOUSE_CLIENT_ENABLED:false}
+          revision: ${AUTH_WAREHOUSE_CLIENT_REVISION:1}
+          authentication-methods: [client_secret_basic]
+          grant-types: [client_credentials]
+          scopes: [warehouse.read]
+          secret-environment: AUTH_WAREHOUSE_CLIENT_SECRET
+          audiences: [rwms-services]
+          access-token-ttl: 5m
+        - client-id: asset-service
+          client-name: Asset Service Warehouse Registry Client
+          enabled: ${ASSET_WAREHOUSE_CLIENT_ENABLED:false}
+          revision: ${ASSET_WAREHOUSE_CLIENT_REVISION:1}
+          authentication-methods: [client_secret_basic]
+          grant-types: [client_credentials]
+          scopes: [warehouse.read]
+          secret-environment: ASSET_WAREHOUSE_CLIENT_SECRET
+          audiences: [rwms-services]
+          access-token-ttl: 5m

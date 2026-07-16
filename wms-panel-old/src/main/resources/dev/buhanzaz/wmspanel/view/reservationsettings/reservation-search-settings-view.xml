@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view"
+      title="msg://ReservationSearchSettingsView.title"
+      focusComponent="reservationSearchRefreshSecondsField">
+    <layout>
+        <vbox width="100%" spacing="true" padding="false">
+            <formLayout id="form" width="100%">
+                <integerField id="reservationSearchRefreshSecondsField"
+                              label="msg://dev.buhanzaz.wmspanel.entity/ReservationSearchSettings.reservationSearchRefreshSeconds"
+                              width="100%"/>
+            </formLayout>
+            <hbox id="actions" classNames="buttons-panel">
+                <button id="saveButton" text="msg://actions.Save"/>
+            </hbox>
+        </vbox>
+    </layout>
+</view>

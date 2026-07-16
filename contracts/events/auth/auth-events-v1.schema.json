@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/auth/auth-events-v1.schema.json",
+  "title": "RWMS auth-service event facts v1",
+  "description": "Sanitized F4A authorization facts. Baseline facts are service-local and are never published.",
+  "type": "object",
+  "required": [
+    "envelopeVersion",
+    "eventId",
+    "eventType",
+    "eventVersion",
+    "occurredAt",
+    "recordedAt",
+    "producer",
+    "aggregateType",
+    "aggregateId",
+    "aggregateVersion",
+    "correlation",
+    "actorRef",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "envelopeVersion": {"const": 2},
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {
+      "enum": [
+        "auth.user-authorization.created.v1",
+        "auth.user-authorization.changed.v1",
+        "auth.user-authorization.profile-changed.v1",
+        "auth.user-authorization.password-changed.v1",
+        "auth.user-authorization.warehouse-grants-changed.v1",
+        "auth.user-authorization.bootstrapped.v1",
+        "auth.worker-access.configured.v1",
+        "auth.worker-access.password-reset.v1",
+        "auth.worker-access.disabled.v1",
+        "auth.worker-access.deleted.v1"
+      ]
+    },
+    "eventVersion": {"const": 1},
+    "occurredAt": {
+      "oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]
+    },
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "producer": {"const": "auth-service"},
+    "aggregateType": {"enum": ["USER_AUTHORIZATION", "WORKER_ACCESS"]},
+    "aggregateId": {"type": "string", "format": "uuid"},
+    "aggregateVersion": {"type": "integer", "minimum": 0},
+    "correlation": {"$ref": "#/$defs/correlationContext"},
+    "actorRef": {
+      "oneOf": [{"$ref": "#/$defs/opaqueActorReference"}, {"type": "null"}]
+    },
+    "payload": {"oneOf": [{"$ref": "#/$defs/userAuthorization"}, {"$ref": "#/$defs/workerAccess"}]}
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "eventType": {"enum": [
+          "auth.user-authorization.created.v1",
+          "auth.user-authorization.changed.v1",
+          "auth.user-authorization.profile-changed.v1",
+          "auth.user-authorization.password-changed.v1",
+          "auth.user-authorization.warehouse-grants-changed.v1",
+          "auth.user-authorization.bootstrapped.v1"
+        ]},
+        "aggregateType": {"const": "USER_AUTHORIZATION"},
+        "payload": {"$ref": "#/$defs/userAuthorization"}
+      }
+    },
+    {
+      "properties": {
+        "eventType": {"enum": [
+          "auth.worker-access.configured.v1",
+          "auth.worker-access.password-reset.v1",
+          "auth.worker-access.disabled.v1",
+          "auth.worker-access.deleted.v1"
+        ]},
+        "aggregateType": {"const": "WORKER_ACCESS"},
+        "payload": {"$ref": "#/$defs/workerAccess"}
+      }
+    }
+  ],
+  "x-rwms-topics": ["rwms.auth.user-authorization.v1", "rwms.auth.worker-access.v1"],
+  "x-rwms-sanitized-dlt-topics": [
+    "rwms.auth.user-authorization.v1.auth-shadow-v1.dlt",
+    "rwms.auth.worker-access.v1.auth-shadow-v1.dlt"
+  ],
+  "x-rwms-cutover": {
+    "baselinePublished": false,
+    "consumerBootstrap": "Before accepting the first runtime fact, the consumer anchors its checkpoint to the authoritative service-local baseline. Baselines are never published or synthesized as Kafka history.",
+    "taskBoardWorkerCorrelation": "UNKNOWN until F4T ADR"
+  },
+  "$defs": {
+    "correlationContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correlationId", "causationId"],
+      "properties": {
+        "correlationId": {"type": "string", "format": "uuid"},
+        "causationId": {
+          "oneOf": [{"type": "string", "format": "uuid"}, {"type": "null"}]
+        }
+      }
+    },
+    "opaqueActorReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subjectId", "principalType", "profileRevision"],
+      "properties": {
+        "subjectId": {"type": "string", "format": "uuid"},
+        "principalType": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"},
+        "profileRevision": {
+          "oneOf": [
+            {"type": "string", "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "sanitizedDltBody": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["failureCode", "messageSha256", "recordedAt"],
+      "properties": {
+        "failureCode": {"enum": ["VALIDATION_REJECTED", "PROCESSING_FAILED"]},
+        "messageSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "recordedAt": {"type": "string", "format": "date-time"}
+      }
+    },
+    "warehouseGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accessId", "warehouseId", "level", "active", "noteRevision"],
+      "properties": {
+        "accessId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "level": {"enum": ["VIEW", "EDIT", "MANAGE"]},
+        "active": {"type": "boolean"},
+        "noteRevision": {"type": "string", "format": "uuid"}
+      }
+    },
+    "userAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subjectId", "active", "globalRole", "profileRevision", "warehouseAccess"],
+      "properties": {
+        "subjectId": {"type": "string", "format": "uuid"},
+        "active": {"type": "boolean"},
+        "globalRole": {"enum": ["SYSTEM_ADMIN", "WMS_ADMIN", "WAREHOUSE_MANAGER", "RENTAL_MANAGER", "VIEWER"]},
+        "profileRevision": {"type": "string", "format": "uuid"},
+        "warehouseAccess": {"type": "array", "items": {"$ref": "#/$defs/warehouseGrant"}}
+      }
+    },
+    "workerAccess": {
+      "type": "object",
+      "description": "workerLink is the auth-owned opaque subject UUID. It is not the task-board workerId.",
+      "additionalProperties": false,
+      "required": ["subjectId", "workerLink", "warehouseId", "active", "credentialStatus"],
+      "properties": {
+        "subjectId": {"type": "string", "format": "uuid"},
+        "workerLink": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "active": {"type": "boolean"},
+        "credentialStatus": {"enum": ["ACTIVE", "DISABLED"]}
+      }
+    }
+  }
+}

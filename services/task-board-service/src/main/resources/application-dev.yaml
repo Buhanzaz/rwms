@@ -1,0 +1,28 @@
+spring:
+  datasource:
+    url: ${TASK_BOARD_DB_URL:jdbc:postgresql://127.0.0.1:5434/rwms_task_board}
+    username: ${TASK_BOARD_DB_USERNAME:rwms_task_board}
+    password: ${TASK_BOARD_DB_PASSWORD:rwms_task_board}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTH_ISSUER:http://localhost:9000}
+      client:
+        registration:
+          auth-service:
+            client-secret: ${TASK_BOARD_CLIENT_SECRET:task-board-dev-secret}
+        provider:
+          auth-service:
+            token-uri: ${AUTH_TOKEN_URI:http://localhost:9000/oauth2/token}
+
+rwms:
+  security:
+    dev-auth-bypass: true
+  auth:
+    worker-credentials-url: ${AUTH_WORKER_CREDENTIALS_URL:http://localhost:9000/api/internal/worker-credentials}
+  cors:
+    allowed-origins: ${PANEL_ORIGIN:http://localhost:8080},${WORKER_ORIGIN:http://localhost:8082}

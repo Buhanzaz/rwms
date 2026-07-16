@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<view xmlns="http://jmix.io/schema/flowui/view"
+      title="msg://RepairEstimateCatalogNodeListView.title"
+      focusComponent="repairEstimateCatalogNodesDataGrid">
+    <data>
+        <collection id="repairEstimateCatalogNodesDc" class="dev.buhanzaz.wmspanel.entity.RepairEstimateCatalogNode">
+            <fetchPlan extends="_base">
+                <property name="parent" fetchPlan="_base"/>
+                <property name="workQueue">
+                    <property name="warehouse" fetchPlan="_base"/>
+                </property>
+            </fetchPlan>
+            <loader id="repairEstimateCatalogNodesDl" readOnly="true">
+                <query><![CDATA[
+                    select e from RepairEstimateCatalogNode e
+                    order by coalesce(e.sortOrder, 2147483647), e.name
+                ]]></query>
+            </loader>
+        </collection>
+    </data>
+    <facets>
+        <dataLoadCoordinator auto="true"/>
+    </facets>
+    <layout>
+        <hbox id="buttonsPanel" classNames="buttons-panel">
+            <startSlot>
+                <button id="createButton" action="repairEstimateCatalogNodesDataGrid.createAction"/>
+                <button id="editButton" action="repairEstimateCatalogNodesDataGrid.editAction"/>
+                <button id="removeButton" action="repairEstimateCatalogNodesDataGrid.removeAction"/>
+            </startSlot>
+        </hbox>
+        <dataGrid id="repairEstimateCatalogNodesDataGrid"
+                  width="100%"
+                  minHeight="20em"
+                  dataContainer="repairEstimateCatalogNodesDc">
+            <actions>
+                <action id="createAction" type="list_create"/>
+                <action id="editAction" type="list_edit"/>
+                <action id="removeAction" type="list_remove"/>
+            </actions>
+            <columns resizable="true">
+                <column property="code"/>
+                <column property="name"/>
+                <column property="nodeType"/>
+                <column property="parent"/>
+                <column property="workQueue"/>
+                <column property="showInMainMenu"/>
+                <column property="commonItem"/>
+                <column property="mainMenuOrder"/>
+                <column property="mainMenuTitle"/>
+                <column property="additionalOption"/>
+                <column property="active"/>
+                <column property="sortOrder"/>
+                <column property="unit"/>
+                <column property="unitPrice"/>
+                <column property="defaultQuantity"/>
+                <column property="comment"/>
+            </columns>
+        </dataGrid>
+    </layout>
+</view>
