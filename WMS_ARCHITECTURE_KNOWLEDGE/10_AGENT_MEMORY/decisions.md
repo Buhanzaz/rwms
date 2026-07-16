@@ -1123,3 +1123,21 @@ entry does not close F4T.
   pointer to Stage 6 evidence/contract work.
 - An asset V1-to-V2 migration is the real previous-version gate. It must apply
   without `baselineOnMigrate`, schema clean or fabricated legacy/browser data.
+
+## 2026-07-16 Stage 6 maintenance contract approval
+
+- The user's `Продолжай` response approves
+  `docs/plans/20260716-maintenance-service-contract.md` as the canonical Stage 6
+  contract, including its aggregate/state boundaries, catalog migration,
+  HTTP/idempotency/error rules, event families, asset lease/fencing table,
+  media reference policy and four narrow prerequisites.
+- `auth-service` may add only the disabled-by-default maintenance client and
+  exact downstream scopes; `asset-service` may add only maintenance-scoped
+  lease/fenced status authority; `task-board-service` may add only source-bound
+  task sync and contract reconciliation; the stateless gateway may add only the
+  public maintenance route.
+- The Stage 6 panel cutover is explicitly authorized for catalog, estimates,
+  repairs, acceptance and write-off features. Unrelated panel/future-stage work
+  remains forbidden.
+- Stage 7 remains closed until the complete Stage 6 verification, memory review
+  and scoped implementation commit.

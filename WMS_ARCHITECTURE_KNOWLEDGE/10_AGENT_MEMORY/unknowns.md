@@ -614,3 +614,45 @@ Resolved Stage 5 gate evidence:
 No Stage 5 technical `UNKNOWN` remains. Stage 6 contract questions below remain
 owned by the Stage 6 evidence/contract gate and are not silently answered by
 the Stage 5 closure.
+
+## 2026-07-16 Stage 6 maintenance contract gate
+
+- `docs/plans/20260716-maintenance-service-contract.md` is a proposal awaiting
+  explicit product approval. Its aggregate/status boundaries, catalog version
+  activation, zero-line amendment rule, movement-stage semantics, general-only
+  routing, asset source/target allowlist, seven-day idempotency retention,
+  event names and actor/media PII boundary are not approved facts yet.
+- The four proposed cross-service prerequisites remain unauthorized:
+  disabled-by-default maintenance OAuth client; least-privilege
+  `asset.maintenance`; source-bound `task-board.task-sync` with pre-start
+  update; and the stateless public maintenance gateway route.
+- The canonical task-board AsyncAPI still needs reconciliation with already
+  implemented Kafka V2 board-task/queue-entry facts. SERVICE task registration
+  and pre-start amendment sync are not implemented.
+- The media OpenAPI/JWT runtime is not proved by current source. Stage 6 can
+  validate opaque media through canonical events, but end-to-end upload,
+  owner-type authorization and panel cutover evidence remain unavailable until
+  the owning prior-stage runtime or equivalent external evidence is supplied.
+- Exact public OpenAPI request/response schemas and event payload schemas must
+  be generated only after the proposal is approved; paths and field policies in
+  the proposal are not yet canonical contracts.
+- Panel cutover is outside the currently authorized service-only boundary.
+  Stage 6 cannot satisfy its production-route exit evidence without a later
+  explicit panel-scope expansion.
+- Display-name resolution for the operator-facing author column remains
+  `UNKNOWN`; the proposal deliberately persists only opaque actor ID/type.
+- Stage 7 and later evidence/contracts/implementation remain forbidden until
+  the complete Stage 6 exit gate and reviewed commit.
+
+### Stage 6 approval resolution
+
+The preceding contract-gate UNKNOWNs are retained as audit history. The user's
+`Продолжай` response approves the combined contract, its four prerequisites and
+the Stage 6 panel cutover. Aggregate/status, catalog activation/import,
+zero-line amendment, movement/routing, asset transition allowlist,
+idempotency/event and actor/media policies are no longer product UNKNOWNs.
+
+Implementation evidence remains outstanding: exact OpenAPI/AsyncAPI files,
+Flyway V1, service/runtime behavior, prerequisite tests, media event projection,
+panel cutover, recovery matrix and reviewed scoped commit must still be built
+and verified. Stage 7 remains forbidden until that exit gate closes.

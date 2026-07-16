@@ -3721,3 +3721,43 @@ a substitute source.
 - Stage 5 technical and memory evidence is reconciled. Scoped commit `4e473ac`
   records its closure and advances the active pointer to Stage 6 evidence and
   contract work; no Stage 6 implementation was performed before this gate.
+
+## 2026-07-16 Stage 6 maintenance evidence and contract proposal
+
+- Three bounded read-only agent audits covered legacy catalog/import,
+  estimate/repair/rework state, and current target integration/security. No
+  subagent edited or committed files.
+- Final `old_db` evidence contains 232 active catalog nodes and 254 active
+  links. The exact combined INSERT-line evidence hash is
+  `94bacdcf7114e9dfb1935a162b29714e25ed36b406980c3b9551c7d27c687721`.
+  The packaged 33-byte bootstrap JSON is empty; the historical workbook
+  importer is a flattening in-place WORK/MATERIAL upsert and is not a safe
+  target migration contract.
+- Legacy estimate completion is a split save/plan/generate orchestration and
+  legacy statuses do not enforce the approved target state machine. Target
+  authority instead requires one local estimate/plan/repair/outbox
+  transaction, retryable downstream task sync, empty-estimate FREE behavior,
+  split execution/acceptance state, child rework and fenced asset transitions.
+- Asset already exposes leases/fenced status but gates all internal operations,
+  including equipment holds, with broad `asset.internal`. Task-board already
+  implements stable external-task replay and Kafka V2 completion facts, but
+  registration is USER-only and its top-level canonical AsyncAPI remains the
+  historical Rabbit created/cancelled document. Auth has no maintenance client.
+- Media supplies canonical schemas/events and transformation foundations, but
+  current source does not prove its HTTP/JWT runtime. The proposal therefore
+  uses an inbox-deduplicated media-fact projection rather than inventing a
+  maintenance media credential.
+- Added `docs/plans/20260716-maintenance-service-contract.md` with status
+  `PROPOSED_AWAITING_PRODUCT_APPROVAL`. It proposes aggregate/state boundaries,
+  catalog migration identity, HTTP/error/idempotency rules, exact event
+  families, asset lease/fencing policy and four narrow auth/asset/task-board/
+  gateway prerequisites. No Flyway, application, panel or future-stage code
+  was created, and the proposal remains uncommitted until approved.
+
+## 2026-07-16 Stage 6 contract approval and implementation entrance
+
+- The user responded `Продолжай` to the explicit combined approval request.
+  The maintenance contract, four narrow prerequisites and Stage 6 panel cutover
+  are approved.
+- `ACTIVE_STAGE.md` advances only its Stage 6 status to database/implementation
+  in progress. Stage 7 remains closed.
