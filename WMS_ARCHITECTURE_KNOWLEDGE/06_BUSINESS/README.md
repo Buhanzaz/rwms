@@ -487,3 +487,20 @@ The allocation lifecycle now records a `COMMITTED` hold without inventing a
 shipment or transfer effect. Classifier create/change operations append
 sanitized classifier facts, and replay twice rebuilds the same shadow checksum
 and validates live projection parity.
+
+## Stage 6 target contract evidence update (2026-07-16)
+
+Legacy repair facts remain migration evidence, not target authority. Legacy
+completion is split across estimate save, plan preparation and task generation;
+legacy services also lack command-level expected-version/idempotency contracts.
+The approved roadmap instead requires one local estimate/lines/plan/repair/
+outbox transaction and retryable task-board synchronization.
+
+The approved Stage 6 contract uses separate repair execution and acceptance
+axes, makes child rework DRAFT creation side-effect-free, changes the source to
+`IN_REWORK` only when the child is queued, and makes only an all-`DONE` plan
+eligible for acceptance. It preserves the approved target overrides that an
+empty estimate creates no repair and frees the cabin, while every non-empty
+estimate retains material-only/unassigned lines in one repair snapshot. These
+details were approved by the user's `Продолжай` response; implementation and
+verification evidence remain outstanding until the Stage 6 exit gate.

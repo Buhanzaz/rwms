@@ -1220,6 +1220,11 @@ are stable and the cost of asset/equipment sagas is accepted.
 
 ## Stage 6 — `maintenance-service`
 
+Evidence/contract work is recorded in
+`docs/plans/20260716-maintenance-service-contract.md`. Its
+`APPROVED` status authorizes Stage 6 implementation, the four recorded narrow
+prerequisites and the maintenance panel cutover. It does not authorize Stage 7.
+
 ### Ownership
 
 One initial maintenance bounded context:

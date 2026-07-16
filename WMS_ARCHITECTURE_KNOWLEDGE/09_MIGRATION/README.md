@@ -331,3 +331,17 @@ history or `HEAD`. The user approved an initial-history strategy; reviewed root
 commit `3c509d6` now establishes the current repository baseline without
 reconstructing missing history. The separately scoped Stage 5 closure change
 records the memory/pointer transition in commit `4e473ac`.
+
+## Stage 6 maintenance evidence and approved import contract (2026-07-16)
+
+Stage 6 has not created a database or migration. The approved contract rejects
+automatic startup bootstrap, browser storage and the destructive historical
+workbook upsert as target migration inputs. Reviewed legacy database evidence
+contains 232 catalog nodes and 254 links with combined textual INSERT identity
+`94bacdcf7114e9dfb1935a162b29714e25ed36b406980c3b9551c7d27c687721`.
+
+The approved controlled import creates an immutable DRAFT catalog version
+with source hash, row counts and validation report; activation is a separate
+MANAGE/CAS command. This approval is not permission to copy the whole legacy
+database. Flyway V1 is authorized but remains unproved until its migration
+matrix passes; direct legacy-database copying remains forbidden.

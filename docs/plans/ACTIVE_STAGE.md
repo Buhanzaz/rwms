@@ -2,7 +2,7 @@
 roadmap: docs/plans/20260712-panel-microservices-decomposition.md
 roadmap_status: APPROVED_WORKING_ROADMAP
 state: STAGE_6_MAINTENANCE_SERVICE
-status: STAGE_6_EVIDENCE_AND_CONTRACT_IN_PROGRESS
+status: STAGE_6_DATABASE_AND_IMPLEMENTATION_IN_PROGRESS
 sequence: F0 -> F1 -> F2 -> F3 -> F1C -> F4K -> F4MA -> F4MT -> F4A -> F4T -> F4R -> F4G -> W1 -> STAGE_2_TASK_BOARD_SERVICE -> STAGE_3_4_MEDIA_SERVICE -> STAGE_5_ASSET_SERVICE -> STAGE_6_MAINTENANCE_SERVICE
 service_owner: maintenance-service
 delivery_owner: RWMS lead/reviewer
@@ -136,7 +136,9 @@ verified closure and Stage 6 transition. Stage 5 is complete.
   and integration contracts;
 - after explicit contract approval, only the Stage 6 `maintenance-service`,
   its service-owned PostgreSQL/Flyway schema, contracts, local dependency and
-  tests, plus separately approved narrow integration prerequisites.
+  tests, plus the approved narrow auth/asset/task-board/gateway prerequisites;
+- the explicitly approved Stage 6 panel cutover for maintenance catalog,
+  estimates, repairs, acceptance and write-off surfaces.
 
 ### Forbidden scope
 
@@ -146,8 +148,7 @@ verified closure and Stage 6 transition. Stage 5 is complete.
   identifiers;
 - changing auth-service, task-board-service, asset-service, media-service or
   gateway behavior without an approved narrow prerequisite decision;
-- panel implementation without explicit expansion beyond the service-only
-  boundary;
+- panel work outside the approved Stage 6 maintenance cutover;
 - deployment/hosting/Kubernetes/CI/CD or production operations work.
 
 ### Stage 6 contract entrance gate
@@ -158,6 +159,14 @@ registration, asset lease/fenced-status authority, media-reference lifecycle,
 catalog import/version semantics, estimate/direct-repair/amendment/rework/
 acceptance state machines, compensation and actor/source snapshots. Unresolved
 items remain `UNKNOWN`; browser behavior is evidence only.
+
+Evidence update on 2026-07-16: three read-only audits reconciled final legacy
+catalog evidence (232 nodes, 254 links), target estimate/repair state conflicts
+and current service security/integration capabilities. The consolidated
+contract is `docs/plans/20260716-maintenance-service-contract.md` with status
+`APPROVED`. The user's `Продолжай` response approves the combined contract,
+four narrow prerequisites and Stage 6 panel cutover. Flyway and implementation
+may proceed; Stage 7 remains forbidden until the complete Stage 6 exit commit.
 
 ### Stage 6 exit gate
 
