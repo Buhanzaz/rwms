@@ -608,7 +608,8 @@ Resolved Stage 5 gate evidence:
   auth-service repeat.
 - Git inspection proved a valid repository with empty history. The user approved
   creating an initial reviewed baseline; root commit `3c509d6` now establishes
-  `HEAD`. The earlier “no valid Git repository” conclusion is superseded.
+  `HEAD`, and scoped commit `4e473ac` closes Stage 5. The earlier “no valid Git
+  repository” conclusion is superseded.
 
 No Stage 5 technical `UNKNOWN` remains. Stage 6 contract questions below remain
 owned by the Stage 6 evidence/contract gate and are not silently answered by
