@@ -2,7 +2,7 @@
 roadmap: docs/plans/20260712-panel-microservices-decomposition.md
 roadmap_status: APPROVED_WORKING_ROADMAP
 state: STAGE_6_MAINTENANCE_SERVICE
-status: STAGE_6_DATABASE_AND_IMPLEMENTATION_IN_PROGRESS
+status: STAGE_6_COMPLETE_AWAITING_EXPLICIT_STAGE_7_START
 sequence: F0 -> F1 -> F2 -> F3 -> F1C -> F4K -> F4MA -> F4MT -> F4A -> F4T -> F4R -> F4G -> W1 -> STAGE_2_TASK_BOARD_SERVICE -> STAGE_3_4_MEDIA_SERVICE -> STAGE_5_ASSET_SERVICE -> STAGE_6_MAINTENANCE_SERVICE
 service_owner: maintenance-service
 delivery_owner: RWMS lead/reviewer
@@ -125,7 +125,7 @@ historical commits. The separately scoped closure change advances this sole
 pointer only after that baseline exists. Scoped commit `4e473ac` records the
 verified closure and Stage 6 transition. Stage 5 is complete.
 
-## Current gate: `STAGE_6_MAINTENANCE_SERVICE`
+## Completed gate: `STAGE_6_MAINTENANCE_SERVICE`
 
 ### Allowed scope
 
@@ -151,7 +151,7 @@ verified closure and Stage 6 transition. Stage 5 is complete.
 - panel work outside the approved Stage 6 maintenance cutover;
 - deployment/hosting/Kubernetes/CI/CD or production operations work.
 
-### Stage 6 contract entrance gate
+### Stage 6 contract entrance gate (completed)
 
 Before database or implementation work, approve the final maintenance HTTP and
 event contracts, aggregate/version boundaries, task-board service-to-service
@@ -168,7 +168,7 @@ contract is `docs/plans/20260716-maintenance-service-contract.md` with status
 four narrow prerequisites and Stage 6 panel cutover. Flyway and implementation
 may proceed; Stage 7 remains forbidden until the complete Stage 6 exit commit.
 
-### Stage 6 exit gate
+### Stage 6 exit gate (completed)
 
 - `/estimates`, `/repairs`, `/acceptance`, maintenance write-off and approved
   settings surfaces use the production HTTP boundary;
@@ -183,7 +183,15 @@ may proceed; Stage 7 remains forbidden until the complete Stage 6 exit commit.
   evidence pass;
 - durable memory is reconciled and one reviewed scoped human commit exists.
 
+Final verification on 2026-07-17 passed 18 maintenance-service test classes,
+116 tests with 0 failures, errors or skips in 3m20s, including the exact 11/11
+legacy catalog import matrix. Panel verification passed 261 Vitest tests and
+the affected Playwright desktop/tablet/mobile matrix, 3/3. Reviewed scoped
+commit `1e15a4b` (`Complete Stage 6 maintenance service`) records the Stage 6
+implementation. Stage 6 is complete.
+
 ## Next gate
 
-Stage 7 `inventory-service` may begin only after the complete Stage 6 exit gate
-and its reviewed commit.
+Stage 7 `inventory-service` is **NOT STARTED**. The `next_state` frontmatter
+value is metadata only: Stage 7 requires separate explicit user authorization
+before any evidence, contract, schema or implementation work begins.

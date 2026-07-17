@@ -3784,3 +3784,18 @@ a substitute source.
   102 (one expected skip), auth 131 (one expected skip) and gateway 34.
 - `ACTIVE_STAGE.md` remains on Stage 6 until the reviewed implementation commit
   exists. No Stage 7 contract or code was created.
+
+## 2026-07-17 Stage 6 maintenance closure
+
+- Reviewed scoped implementation commit `1e15a4b` (`Complete Stage 6
+  maintenance service`) now exists.
+- The final Java 25/Testcontainers maintenance-service suite passed 18 test
+  classes and 116 tests with 0 failures, errors or skips in 3m20s. The exact
+  legacy catalog matrix passed 11/11. Panel verification passed 261 Vitest
+  tests and the affected Playwright desktop/tablet/mobile matrix, 3/3.
+- Stage 6 is complete. The sole operational pointer intentionally remains
+  `STAGE_6_MAINTENANCE_SERVICE` with status
+  `STAGE_6_COMPLETE_AWAITING_EXPLICIT_STAGE_7_START`.
+- Stage 7 is not started. Its `next_state` pointer is metadata only; evidence,
+  contract, schema and implementation work require separate explicit user
+  authorization.
