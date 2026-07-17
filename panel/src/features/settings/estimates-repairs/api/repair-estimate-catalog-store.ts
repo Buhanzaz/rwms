@@ -14,6 +14,14 @@ import type {
   RepairEstimateCatalogSectionKind,
   RepairEstimateCatalogSnapshotDto,
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
+import { DEV_MAINTENANCE_FIXTURES_ENABLED } from "@/features/maintenance/maintenance-runtime"
+import {
+  deleteHttpMaintenanceCatalogLink,
+  deleteHttpMaintenanceCatalogNode,
+  getHttpMaintenanceCatalogSnapshot,
+  saveHttpMaintenanceCatalogLink,
+  saveHttpMaintenanceCatalogNode,
+} from "@/features/settings/estimates-repairs/api/http-maintenance-catalog-settings"
 
 const STORAGE_KEY = "rwms:repair-estimate-catalog:v2"
 const MUTATION_LOCK_NAME = "rwms:repair-estimate-catalog:mutation"
@@ -48,6 +56,14 @@ function normalizeNullableText(value: string | null | undefined) {
   return normalized ? normalized : null
 }
 
+function requireProductionWarehouseId(warehouseId: string | undefined) {
+  const normalized = warehouseId?.trim()
+  if (!normalized) {
+    throw new Error("Не выбран склад каталога ремонта.")
+  }
+  return normalized
+}
+
 function normalizeMoneyDecimal(value: unknown) {
   if (value === null || value === undefined || value === "") {
     return null
@@ -56,7 +72,9 @@ function normalizeMoneyDecimal(value: unknown) {
   const normalized = String(value).trim().replace(",", ".")
   const match = /^(\d+)(?:\.(\d{0,2}))?$/.exec(normalized)
   if (!match) {
-    throw new Error("Цена должна быть неотрицательным числом с точностью до копеек")
+    throw new Error(
+      "Цена должна быть неотрицательным числом с точностью до копеек"
+    )
   }
 
   const whole = BigInt(match[1]).toString()
@@ -127,7 +145,9 @@ function readState(): RepairEstimateCatalogState {
   }
 
   try {
-    const parsed = JSON.parse(raw) as Partial<RepairEstimateCatalogStorageEnvelope>
+    const parsed = JSON.parse(
+      raw
+    ) as Partial<RepairEstimateCatalogStorageEnvelope>
     if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.links)) {
       throw new Error("Invalid catalog state")
     }
@@ -565,13 +585,17 @@ function hasCatalogLinkCycle(graph: Map<string, string[]>) {
   return false
 }
 
-export async function getRepairEstimateCatalogSnapshot() {
+export async function getRepairEstimateCatalogSnapshot(warehouseId?: string) {
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
+    return getHttpMaintenanceCatalogSnapshot(
+      requireProductionWarehouseId(warehouseId)
+    )
+  }
   return toSnapshot(readState())
 }
 
-export async function getRepairEstimateCatalogCanvas() {
-  const state = readState()
-  const snapshot = toSnapshot(state)
+export async function getRepairEstimateCatalogCanvas(warehouseId?: string) {
+  const snapshot = await getRepairEstimateCatalogSnapshot(warehouseId)
 
   return {
     ...snapshot,
@@ -580,10 +604,10 @@ export async function getRepairEstimateCatalogCanvas() {
 }
 
 export async function getRepairEstimateCatalogSection(
-  kind: RepairEstimateCatalogSectionKind
+  kind: RepairEstimateCatalogSectionKind,
+  warehouseId?: string
 ) {
-  const state = readState()
-  const snapshot = toSnapshot(state)
+  const snapshot = await getRepairEstimateCatalogSnapshot(warehouseId)
   const sectionType = getSectionType(kind)
   const scope = getSectionScope(kind)
 
@@ -598,8 +622,15 @@ export async function getRepairEstimateCatalogSection(
 }
 
 export async function saveRepairEstimateCatalogNode(
-  input: RepairEstimateCatalogNodeMutation
+  input: RepairEstimateCatalogNodeMutation,
+  warehouseId?: string
 ) {
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
+    return saveHttpMaintenanceCatalogNode(
+      requireProductionWarehouseId(warehouseId),
+      input
+    )
+  }
   if (!input.name.trim()) {
     throw new Error("Заполните название")
   }
@@ -623,7 +654,16 @@ export async function saveRepairEstimateCatalogNode(
   })
 }
 
-export async function deleteRepairEstimateCatalogNode(id: string) {
+export async function deleteRepairEstimateCatalogNode(
+  id: string,
+  warehouseId?: string
+) {
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
+    return deleteHttpMaintenanceCatalogNode(
+      requireProductionWarehouseId(warehouseId),
+      id
+    )
+  }
   const expectedRevision = readState().revision
   return runSerializedMutation(async () => {
     const state = readState()
@@ -650,8 +690,15 @@ export async function deleteRepairEstimateCatalogNode(id: string) {
 }
 
 export async function saveRepairEstimateCatalogLink(
-  input: RepairEstimateCatalogLinkMutation
+  input: RepairEstimateCatalogLinkMutation,
+  warehouseId?: string
 ) {
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
+    return saveHttpMaintenanceCatalogLink(
+      requireProductionWarehouseId(warehouseId),
+      input
+    )
+  }
   const expectedRevision = readState().revision
   return runSerializedMutation(async () => {
     const state = readState()
@@ -680,7 +727,16 @@ export async function saveRepairEstimateCatalogLink(
   })
 }
 
-export async function deleteRepairEstimateCatalogLink(id: string) {
+export async function deleteRepairEstimateCatalogLink(
+  id: string,
+  warehouseId?: string
+) {
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
+    return deleteHttpMaintenanceCatalogLink(
+      requireProductionWarehouseId(warehouseId),
+      id
+    )
+  }
   const expectedRevision = readState().revision
   return runSerializedMutation(async () => {
     const state = readState()
@@ -694,7 +750,13 @@ export async function deleteRepairEstimateCatalogLink(id: string) {
   })
 }
 
-export async function resetRepairEstimateCatalogMock() {
+export async function resetRepairEstimateCatalogMock(warehouseId?: string) {
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
+    requireProductionWarehouseId(warehouseId)
+    throw new Error(
+      "Производственный каталог нельзя сбросить браузерным mock-действием."
+    )
+  }
   const expectedRevision = readState().revision
   return runSerializedMutation(async () => {
     const state = readState()

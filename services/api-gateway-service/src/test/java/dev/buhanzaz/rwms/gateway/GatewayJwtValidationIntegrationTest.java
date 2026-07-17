@@ -90,6 +90,7 @@ class GatewayJwtValidationIntegrationTest {
     registry.add("rwms.gateway.routes.task-board-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
     registry.add("rwms.gateway.routes.warehouse-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
     registry.add("rwms.gateway.routes.asset-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
+    registry.add("rwms.gateway.routes.maintenance-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
     registry.add("rwms.gateway.security.issuer", () -> ISSUER);
     registry.add("rwms.gateway.security.audience", () -> AUDIENCE);
     registry.add(

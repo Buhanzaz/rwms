@@ -36,7 +36,7 @@ abstract class PostgresIntegrationTestSupport {
             outbox_event, domain_event, event_stream_head,
             task_board_inbox, task_board_outbox,
             task_auto_interruption, task_time_event, task_assignment,
-            queue_entry, board_task, queue_usage_reference,
+            task_sync_source, queue_entry, board_task, queue_usage_reference,
             work_queue_class_binding, worker_deletion_intent,
             worker_group_member, worker_class_assignment,
             worker_group, worker, work_queue, worker_class

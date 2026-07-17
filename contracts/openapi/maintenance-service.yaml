@@ -1,0 +1,1119 @@
+openapi: 3.1.0
+info:
+  title: RWMS Maintenance Service API
+  version: 1.0.0
+  x-rwms-owner: maintenance-service
+  x-rwms-stability: approved-stage-6
+  description: >-
+    Stage 6 canonical maintenance boundary for immutable repair catalogs,
+    estimates, primary/direct repairs, reworks, acceptance and maintenance
+    write-off decisions. All resources are warehouse-scoped. Business text is
+    service-local and is never copied to Kafka facts. Locally committed
+    commands return 200 with delivery state even while downstream delivery is
+    pending; they never return 202 and are never rolled back for broker outage.
+servers:
+  - url: /
+security:
+  - bearerJwt: []
+tags:
+  - { name: Catalog }
+  - { name: Estimates }
+  - { name: Repairs }
+  - { name: Decisions }
+paths:
+  /api/maintenance/v1/catalog/versions:
+    get:
+      tags: [Catalog]
+      operationId: listCatalogVersions
+      description: Requires USER, rwms.read and warehouse VIEW access.
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseIdQuery' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+        - name: lifecycle
+          in: query
+          schema: { $ref: '#/components/schemas/CatalogLifecycle' }
+      responses:
+        '200': { description: Catalog versions., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersionPage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/maintenance/v1/catalog/versions/{id}/nodes:
+    parameters:
+      - { $ref: '#/components/parameters/CatalogVersionId' }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+    get:
+      tags: [Catalog]
+      operationId: listCatalogNodes
+      description: Requires USER, rwms.read and warehouse VIEW access.
+      responses:
+        '200':
+          description: Frozen nodes in the selected catalog version.
+          headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CatalogNode' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Catalog]
+      operationId: replaceDraftCatalogNodes
+      description: Requires USER, rwms.write and warehouse EDIT access. Only a DRAFT version may change.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceCatalogNodesRequest' } } } }
+      responses:
+        '200': { description: Changed draft version., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersion' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/maintenance/v1/catalog/versions/{id}/links:
+    parameters:
+      - { $ref: '#/components/parameters/CatalogVersionId' }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+    get:
+      tags: [Catalog]
+      operationId: listCatalogLinks
+      description: Requires USER, rwms.read and warehouse VIEW access.
+      responses:
+        '200':
+          description: Frozen links in the selected catalog version.
+          headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+          content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CatalogLink' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Catalog]
+      operationId: replaceDraftCatalogLinks
+      description: Requires USER, rwms.write and warehouse EDIT access. Only a DRAFT version may change.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceCatalogLinksRequest' } } } }
+      responses:
+        '200': { description: Changed draft version., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersion' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/maintenance/v1/catalog/imports:
+    post:
+      tags: [Catalog]
+      operationId: importCatalogVersion
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE access. A valid reviewed
+        source snapshot creates one complete DRAFT version. The same source
+        SHA-256 replays its original response; invalid rows commit nothing.
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogImportRequest' } } } }
+      responses:
+        '201': { description: Imported DRAFT catalog version., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersion' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/maintenance/v1/catalog/versions/{id}/activate:
+    parameters:
+      - { $ref: '#/components/parameters/CatalogVersionId' }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Catalog]
+      operationId: activateCatalogVersion
+      description: Requires USER, rwms.write and warehouse MANAGE access. Activation is CAS and supersedes the previous active version atomically.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExpectedVersionRequest' } } } }
+      responses:
+        '200': { description: Active catalog version., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersion' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/maintenance/v1/estimates:
+    get:
+      tags: [Estimates]
+      operationId: listEstimates
+      description: Requires USER, rwms.read and warehouse VIEW access.
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseIdQuery' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+        - name: lifecycle
+          in: query
+          schema: { $ref: '#/components/schemas/EstimateLifecycle' }
+        - name: rentalItemId
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Estimate page., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/EstimatePage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Estimates]
+      operationId: createEstimate
+      description: Requires USER, rwms.write and warehouse EDIT access.
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateEstimateRequest' } } } }
+      responses:
+        '201': { description: Created DRAFT estimate., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/Estimate' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/maintenance/v1/estimates/{id}:
+    parameters:
+      - { $ref: '#/components/parameters/EstimateId' }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+    get:
+      tags: [Estimates]
+      operationId: getEstimate
+      description: Requires USER, rwms.read and warehouse VIEW access.
+      responses:
+        '200': { description: Estimate and immutable revision history., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/Estimate' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Estimates]
+      operationId: replaceDraftEstimate
+      description: Requires USER, rwms.write and warehouse EDIT access. Ordinary replacement is forbidden after completion.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceEstimateRequest' } } } }
+      responses:
+        '200': { description: Updated DRAFT estimate., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/Estimate' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/maintenance/v1/estimates/{id}/complete:
+    parameters:
+      - { $ref: '#/components/parameters/EstimateId' }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Estimates]
+      operationId: completeEstimate
+      description: >-
+        Completes the DRAFT estimate using CAS. Empty completion creates no
+        repair or task and fences the cabin to FREE. Non-empty completion
+        atomically creates the ESTIMATE primary repair and publication intents.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExpectedVersionRequest' } } } }
+      responses:
+        '200': { description: Locally committed completion and downstream delivery truth., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/EstimateCommandResult' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/maintenance/v1/estimates/{id}/amendments:
+    parameters:
+      - { $ref: '#/components/parameters/EstimateId' }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Estimates]
+      operationId: amendCompletedEstimate
+      description: >-
+        Appends an immutable revision while the linked repair has not started.
+        Both expectedVersion and expectedLinkedRepairVersion are checked in one
+        local transaction. A zero-line amendment is rejected when a repair exists.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AmendEstimateRequest' } } } }
+      responses:
+        '201': { description: Appended estimate revision and delivery truth., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/EstimateCommandResult' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/maintenance/v1/repairs:
+    get:
+      tags: [Repairs]
+      operationId: listRepairs
+      description: Requires USER, rwms.read and warehouse VIEW access.
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseIdQuery' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+        - name: executionState
+          in: query
+          schema: { $ref: '#/components/schemas/RepairExecutionState' }
+        - name: acceptanceState
+          in: query
+          schema: { $ref: '#/components/schemas/RepairAcceptanceState' }
+        - name: rentalItemId
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Repair page., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/maintenance/v1/repairs/direct:
+    post:
+      tags: [Repairs]
+      operationId: createDirectRepair
+      description: Requires USER, rwms.write and warehouse EDIT access. Creates a DIRECT_REPAIR primary repair in DRAFT without an estimate or downstream side effect.
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateDirectRepairRequest' } } } }
+      responses:
+        '201': { description: Created direct DRAFT repair., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/Repair' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/maintenance/v1/repairs/{id}:
+    parameters:
+      - { $ref: '#/components/parameters/RepairId' }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+    get:
+      tags: [Repairs]
+      operationId: getRepair
+      description: Requires USER, rwms.read and warehouse VIEW access.
+      responses:
+        '200': { description: Repair with stages, lease reconciliation and task synchronization truth., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/Repair' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/maintenance/v1/repairs/{id}/plan:
+    parameters:
+      - { $ref: '#/components/parameters/RepairId' }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+    get:
+      tags: [Repairs]
+      operationId: getRepairPlan
+      description: Requires USER, rwms.read and warehouse VIEW access.
+      responses:
+        '200': { description: Current ordered plan., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlan' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Repairs]
+      operationId: replaceDraftRepairPlan
+      description: Requires USER, rwms.write and warehouse EDIT access. Replaces only an unqueued DRAFT plan using CAS.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceRepairPlanRequest' } } } }
+      responses:
+        '200': { description: Changed DRAFT repair., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/Repair' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+    post:
+      tags: [Repairs]
+      operationId: queueRepairPlan
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT access. Acquires or reuses
+        the root lease, fences the cabin to REPAIR, and locally commits stable
+        task publication intents. Queueing a rework also moves its source from
+        PENDING to IN_REWORK atomically.
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExpectedVersionRequest' } } } }
+      responses:
+        '200': { description: Queued repair and downstream delivery truth., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairCommandResult' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/maintenance/v1/repairs/{id}/reworks:
+    parameters:
+      - { $ref: '#/components/parameters/RepairId' }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Repairs]
+      operationId: createRework
+      description: >-
+        Creates a child REWORK in DRAFT and leaves the source unchanged. Only a
+        queued or in-progress sibling blocks creation; the child is queued
+        later through its own /plan command and reuses the root lease.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateReworkRequest' } } } }
+      responses:
+        '201': { description: Created child DRAFT repair., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/Repair' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/maintenance/v1/repairs/{id}/accept:
+    parameters:
+      - { $ref: '#/components/parameters/RepairId' }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Decisions]
+      operationId: acceptRepair
+      description: Requires USER, rwms.write and warehouse EDIT access. Fences the cabin to FREE and cascades ACCEPTED through the source repair chain.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RepairDecisionRequest' } } } }
+      responses:
+        '200': { description: Accepted repair and lease reconciliation truth., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairCommandResult' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/maintenance/v1/repairs/{id}/write-off:
+    parameters:
+      - { $ref: '#/components/parameters/RepairId' }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Decisions]
+      operationId: writeOffRepair
+      description: Requires USER, rwms.write and warehouse MANAGE access. Fences the cabin to WRITTEN_OFF and cascades the terminal decision through the source chain.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/WriteOffRepairRequest' } } } }
+      responses:
+        '200': { description: Written-off repair and lease reconciliation truth., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairCommandResult' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/maintenance/v1/acceptance:
+    get:
+      tags: [Decisions]
+      operationId: listAcceptanceProjection
+      description: Read-only repair projection; not a command aggregate. Requires USER, rwms.read and warehouse VIEW access.
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseIdQuery' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+        - name: state
+          in: query
+          schema: { $ref: '#/components/schemas/RepairAcceptanceState' }
+      responses:
+        '200': { description: Acceptance projection page., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/AcceptanceProjectionPage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/maintenance/v1/write-offs:
+    get:
+      tags: [Decisions]
+      operationId: listWriteOffProjection
+      description: Read-only repair projection; not a command aggregate. Requires USER, rwms.read and warehouse VIEW access.
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseIdQuery' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+      responses:
+        '200': { description: Write-off projection page., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/WriteOffProjectionPage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+components:
+  securitySchemes:
+    bearerJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Public reads require a USER token with rwms.read and warehouse VIEW;
+        writes require rwms.write and EDIT. Catalog import/activation and
+        maintenance write-off additionally require warehouse MANAGE.
+  parameters:
+    WarehouseIdQuery:
+      name: warehouseId
+      in: query
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        UUID key scoped to authenticated subject and command for seven days.
+        An identical canonical request replays the original successful status
+        and body; reuse with another request hash returns 409.
+      schema: { type: string, format: uuid }
+    CatalogVersionId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    EstimateId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    RepairId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    Page: { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+    Size: { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token; production fails closed.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } }
+    Forbidden:
+      description: Missing scope, principal type or warehouse access.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } }
+    BadRequest:
+      description: Malformed input.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } }
+    NotFound:
+      description: Resource is absent in the authorized warehouse scope.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } }
+    Conflict:
+      description: Version, idempotency, state, lease, fence or task-sync conflict.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } }
+    ValidationFailure:
+      description: Domain validation failed, including catalog graph or media-reference validation.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } }
+    DependencyUnavailable:
+      description: Required dependency was unavailable before any local commit.
+      headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ProblemDetail' } } }
+  headers:
+    X-Correlation-Id:
+      description: Request correlation identifier emitted by the platform correlation filter.
+      schema: { type: string, format: uuid }
+    Idempotency-Replayed:
+      description: Present with value `true` only when the original successful response is replayed.
+      schema: { type: string, const: 'true' }
+  schemas:
+    ProblemDetail:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, detail, instance, code, violations, correlation]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string, minLength: 1, maxLength: 256 }
+        status: { type: integer, enum: [400, 401, 403, 404, 409, 422, 503] }
+        detail:
+          oneOf: [ { type: string, maxLength: 2000 }, { type: 'null' } ]
+        instance:
+          oneOf: [ { type: string, format: uri-reference }, { type: 'null' } ]
+        code:
+          enum:
+            - MAINTENANCE_UNAUTHORIZED
+            - MAINTENANCE_VALIDATION_FAILED
+            - MAINTENANCE_NOT_FOUND
+            - MAINTENANCE_VERSION_CONFLICT
+            - MAINTENANCE_IDEMPOTENCY_CONFLICT
+            - MAINTENANCE_STATE_CONFLICT
+            - MAINTENANCE_LEASE_CONFLICT
+            - MAINTENANCE_FENCE_CONFLICT
+            - MAINTENANCE_MEDIA_NOT_READY
+            - MAINTENANCE_TASK_SYNC_CONFLICT
+            - MAINTENANCE_DEPENDENCY_UNAVAILABLE
+            - MAINTENANCE_FORBIDDEN
+        violations:
+          type: array
+          items: { $ref: '#/components/schemas/FieldViolation' }
+        correlation: { $ref: '#/components/schemas/CorrelationContext' }
+    FieldViolation:
+      type: object
+      additionalProperties: false
+      required: [field, code, message]
+      properties:
+        field: { type: string, minLength: 1 }
+        code: { type: string, minLength: 1 }
+        message: { type: string, minLength: 1 }
+    CorrelationContext:
+      type: object
+      additionalProperties: false
+      required: [correlationId, causationId]
+      properties:
+        correlationId: { type: string, format: uuid }
+        causationId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+    CatalogLifecycle: { enum: [DRAFT, ACTIVE, SUPERSEDED] }
+    EstimateLifecycle: { enum: [DRAFT, COMPLETED] }
+    RepairOrigin: { enum: [ESTIMATE, DIRECT_REPAIR] }
+    RepairKind: { enum: [PRIMARY, REWORK] }
+    RepairExecutionState: { enum: [DRAFT, QUEUED, IN_PROGRESS, COMPLETED, CANCELLED] }
+    RepairAcceptanceState: { enum: [NOT_READY, PENDING, IN_REWORK, ACCEPTED, WRITTEN_OFF] }
+    RepairStageKind: { enum: [REPAIR_WORK, MOVE_TO_REPAIR, MOVE_FROM_REPAIR] }
+    RepairStageState: { enum: [PLANNED, QUEUED, IN_PROGRESS, DONE, CANCELLED] }
+    GenerationState: { enum: [PENDING_GENERATION, GENERATED, FAILED] }
+    DeliveryState: { enum: [PENDING, RETRY_PENDING, DELIVERED, QUARANTINED] }
+    LeaseReconciliationState: { enum: [NOT_ACQUIRED, ACTIVE, RELEASED, RECONCILIATION_REQUIRED] }
+    CatalogNodeType: { enum: [CATEGORY, SUBCATEGORY, WORK, MATERIAL, LOCATION, OPTION] }
+    CatalogLinkType: { enum: [DEPENDENCY, FOLLOW_UP] }
+    ExpectedVersionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+    ActorSnapshot:
+      description: Opaque local audit snapshot; login and display name are forbidden.
+      type: object
+      additionalProperties: false
+      required: [actorId, actorType]
+      properties:
+        actorId: { type: string, minLength: 1, maxLength: 128 }
+        actorType: { enum: [USER, SERVICE] }
+    MediaReference:
+      description: >-
+        Opaque READY media generation from the maintenance-owned media inbox
+        projection. Signed URLs and object keys are never persisted here.
+      type: object
+      additionalProperties: false
+      required: [mediaId, generation]
+      properties:
+        mediaId: { type: string, format: uuid }
+        generation: { type: integer, minimum: 0 }
+      x-rwms-approved-owner-types:
+        - MAINTENANCE_ESTIMATE
+        - MAINTENANCE_REPAIR
+        - MAINTENANCE_ACCEPTANCE
+        - MAINTENANCE_CATALOG_NODE
+    Money:
+      type: string
+      pattern: '^(?:0|[1-9][0-9]*)(?:\.[0-9]{2})$'
+      examples: ['1250.00']
+    DecimalQuantity:
+      type: string
+      pattern: '^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,3})?$'
+      examples: ['2.5']
+    CatalogCounts:
+      type: object
+      additionalProperties: false
+      required: [nodes, links]
+      properties:
+        nodes: { type: integer, minimum: 0 }
+        links: { type: integer, minimum: 0 }
+    CatalogValidationReport:
+      type: object
+      additionalProperties: false
+      required: [valid, errorCount, warningCount, reportSha256]
+      properties:
+        valid: { type: boolean }
+        errorCount: { type: integer, minimum: 0 }
+        warningCount: { type: integer, minimum: 0 }
+        reportSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+    CatalogVersion:
+      type: object
+      additionalProperties: false
+      required: [id, warehouseId, version, lifecycle, sourceSha256, counts, validation, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        lifecycle: { $ref: '#/components/schemas/CatalogLifecycle' }
+        sourceSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        counts: { $ref: '#/components/schemas/CatalogCounts' }
+        validation: { $ref: '#/components/schemas/CatalogValidationReport' }
+        createdAt: { type: string, format: date-time }
+        activatedAt:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+    CatalogVersionPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, size, totalElements]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/CatalogVersion' } }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+    RoutingSnapshot:
+      type: object
+      additionalProperties: false
+      required: [queueId, queueCode, queueKind]
+      properties:
+        queueId: { type: string, format: uuid }
+        queueCode: { type: string, minLength: 1, maxLength: 64 }
+        queueKind: { type: string, minLength: 1, maxLength: 64 }
+    OpaqueCatalogReference:
+      type: object
+      additionalProperties: false
+      required: [referenceId, code]
+      properties:
+        referenceId: { type: string, minLength: 1, maxLength: 128 }
+        code: { type: string, minLength: 1, maxLength: 64 }
+    CatalogNodeInput:
+      type: object
+      additionalProperties: false
+      required: [id, code, nodeType, name, active, durationMinutes, unitPrice, routing, references, mediaReferences]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{0,63}$' }
+        nodeType: { $ref: '#/components/schemas/CatalogNodeType' }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        active: { type: boolean }
+        parentNodeId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        unit:
+          oneOf: [ { type: string, minLength: 1, maxLength: 32 }, { type: 'null' } ]
+        unitPrice:
+          oneOf: [ { $ref: '#/components/schemas/Money' }, { type: 'null' } ]
+        durationMinutes: { type: integer, minimum: 0, maximum: 525600 }
+        includeInEstimate: { type: boolean, default: true }
+        commonItem: { type: boolean, default: false }
+        showInMainMenu: { type: boolean, default: false }
+        photoRequired: { type: boolean, default: false }
+        routing:
+          oneOf: [ { $ref: '#/components/schemas/RoutingSnapshot' }, { type: 'null' } ]
+        references:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/OpaqueCatalogReference' }
+        comment:
+          description: Service-local catalog text; never published to Kafka.
+          oneOf: [ { type: string, maxLength: 2000 }, { type: 'null' } ]
+        mediaReferences:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/MediaReference' }
+    CatalogNode:
+      type: object
+      additionalProperties: false
+      required: [id, catalogVersionId, code, nodeType, name, active, durationMinutes, unitPrice, includeInEstimate, commonItem, showInMainMenu, photoRequired, routing, references, mediaReferences]
+      properties:
+        id: { type: string, format: uuid }
+        catalogVersionId: { type: string, format: uuid }
+        code: { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{0,63}$' }
+        nodeType: { $ref: '#/components/schemas/CatalogNodeType' }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        active: { type: boolean }
+        parentNodeId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        unit:
+          oneOf: [ { type: string, minLength: 1, maxLength: 32 }, { type: 'null' } ]
+        unitPrice:
+          oneOf: [ { $ref: '#/components/schemas/Money' }, { type: 'null' } ]
+        durationMinutes: { type: integer, minimum: 0, maximum: 525600 }
+        includeInEstimate: { type: boolean }
+        commonItem: { type: boolean }
+        showInMainMenu: { type: boolean }
+        photoRequired: { type: boolean }
+        routing:
+          oneOf: [ { $ref: '#/components/schemas/RoutingSnapshot' }, { type: 'null' } ]
+        references:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/OpaqueCatalogReference' }
+        comment:
+          description: Service-local catalog text; never published to Kafka.
+          oneOf: [ { type: string, maxLength: 2000 }, { type: 'null' } ]
+        mediaReferences:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/MediaReference' }
+    CatalogLink:
+      type: object
+      additionalProperties: false
+      required: [id, catalogVersionId, fromNodeId, toNodeId, linkType, sortOrder]
+      properties:
+        id: { type: string, format: uuid }
+        catalogVersionId: { type: string, format: uuid }
+        fromNodeId: { type: string, format: uuid }
+        toNodeId: { type: string, format: uuid }
+        linkType: { $ref: '#/components/schemas/CatalogLinkType' }
+        sortOrder: { type: integer, minimum: 0 }
+    CatalogLinkInput:
+      type: object
+      additionalProperties: false
+      required: [id, fromNodeId, toNodeId, linkType, sortOrder]
+      properties:
+        id: { type: string, format: uuid }
+        fromNodeId: { type: string, format: uuid }
+        toNodeId: { type: string, format: uuid }
+        linkType: { $ref: '#/components/schemas/CatalogLinkType' }
+        sortOrder: { type: integer, minimum: 0 }
+    ReplaceCatalogNodesRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, nodes]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        nodes: { type: array, maxItems: 10000, items: { $ref: '#/components/schemas/CatalogNodeInput' } }
+    ReplaceCatalogLinksRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, links]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        links: { type: array, maxItems: 20000, items: { $ref: '#/components/schemas/CatalogLinkInput' } }
+    CatalogImportRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, sourceSha256, nodes, links]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        sourceSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        nodes: { type: array, maxItems: 10000, items: { $ref: '#/components/schemas/CatalogNodeInput' } }
+        links: { type: array, maxItems: 20000, items: { $ref: '#/components/schemas/CatalogLinkInput' } }
+    CatalogNodeSnapshot:
+      type: object
+      additionalProperties: false
+      required: [catalogVersionId, nodeId, code, nodeType, name, unit, unitPrice, durationMinutes, routing]
+      properties:
+        catalogVersionId: { type: string, format: uuid }
+        nodeId: { type: string, format: uuid }
+        code: { type: string, minLength: 1, maxLength: 64 }
+        nodeType: { $ref: '#/components/schemas/CatalogNodeType' }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        unit:
+          oneOf: [ { type: string, minLength: 1, maxLength: 32 }, { type: 'null' } ]
+        unitPrice:
+          oneOf: [ { $ref: '#/components/schemas/Money' }, { type: 'null' } ]
+        durationMinutes: { type: integer, minimum: 0 }
+        routing:
+          oneOf: [ { $ref: '#/components/schemas/RoutingSnapshot' }, { type: 'null' } ]
+    EstimateLineInput:
+      type: object
+      additionalProperties: false
+      required: [id, catalogSnapshot, description, quantity, unitPrice, mediaReferences]
+      properties:
+        id: { type: string, format: uuid }
+        catalogSnapshot:
+          oneOf: [ { $ref: '#/components/schemas/CatalogNodeSnapshot' }, { type: 'null' } ]
+        description: { type: string, minLength: 1, maxLength: 1000 }
+        quantity: { $ref: '#/components/schemas/DecimalQuantity' }
+        unitPrice: { $ref: '#/components/schemas/Money' }
+        comment:
+          description: Service-local estimate text; never published to Kafka.
+          oneOf: [ { type: string, maxLength: 2000 }, { type: 'null' } ]
+        mediaReferences:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/MediaReference' }
+    EstimateLine:
+      type: object
+      additionalProperties: false
+      required: [id, catalogSnapshot, description, quantity, unitPrice, lineTotal, mediaReferences]
+      properties:
+        id: { type: string, format: uuid }
+        catalogSnapshot:
+          oneOf: [ { $ref: '#/components/schemas/CatalogNodeSnapshot' }, { type: 'null' } ]
+        description: { type: string, minLength: 1, maxLength: 1000 }
+        quantity: { $ref: '#/components/schemas/DecimalQuantity' }
+        unitPrice: { $ref: '#/components/schemas/Money' }
+        lineTotal: { $ref: '#/components/schemas/Money' }
+        comment:
+          description: Service-local estimate text; never published to Kafka.
+          oneOf: [ { type: string, maxLength: 2000 }, { type: 'null' } ]
+        mediaReferences:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/MediaReference' }
+    PlanStageInput:
+      type: object
+      additionalProperties: false
+      required: [id, kind, order, routing]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: '#/components/schemas/RepairStageKind' }
+        order: { type: integer, minimum: 0 }
+        routing: { $ref: '#/components/schemas/RoutingSnapshot' }
+        taskDeadline:
+          description: Explicit offset date-time; never inferred from dispatchDate.
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+    CreateEstimateRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, rentalItemId, dispatchDate, lines, plan, mediaReferences]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        dispatchDate: { type: string, format: date }
+        sourceParty:
+          description: Service-local business text; never published to Kafka.
+          oneOf: [ { type: string, minLength: 1, maxLength: 512 }, { type: 'null' } ]
+        lines: { type: array, maxItems: 2000, items: { $ref: '#/components/schemas/EstimateLineInput' } }
+        plan: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/PlanStageInput' } }
+        mediaReferences: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
+    ReplaceEstimateRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, dispatchDate, lines, plan, mediaReferences]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        dispatchDate: { type: string, format: date }
+        sourceParty:
+          description: Service-local business text; never published to Kafka.
+          oneOf: [ { type: string, minLength: 1, maxLength: 512 }, { type: 'null' } ]
+        lines: { type: array, maxItems: 2000, items: { $ref: '#/components/schemas/EstimateLineInput' } }
+        plan: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/PlanStageInput' } }
+        mediaReferences: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
+    AmendEstimateRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, expectedLinkedRepairVersion, dispatchDate, reason, lines, plan, mediaReferences]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        expectedLinkedRepairVersion:
+          oneOf: [ { type: integer, format: int64, minimum: 0 }, { type: 'null' } ]
+        dispatchDate: { type: string, format: date }
+        reason:
+          description: Service-local business text; never published to Kafka.
+          type: string
+          minLength: 1
+          maxLength: 2000
+        sourceParty:
+          description: Service-local business text; never published to Kafka.
+          oneOf: [ { type: string, minLength: 1, maxLength: 512 }, { type: 'null' } ]
+        lines: { type: array, maxItems: 2000, items: { $ref: '#/components/schemas/EstimateLineInput' } }
+        plan: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/PlanStageInput' } }
+        mediaReferences: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
+    EstimateRevision:
+      type: object
+      additionalProperties: false
+      required: [revision, dispatchDate, lines, plan, total, recordedAt]
+      properties:
+        revision: { type: integer, minimum: 1 }
+        dispatchDate: { type: string, format: date }
+        sourceParty:
+          oneOf: [ { type: string, minLength: 1, maxLength: 512 }, { type: 'null' } ]
+        lines: { type: array, items: { $ref: '#/components/schemas/EstimateLine' } }
+        plan: { type: array, items: { $ref: '#/components/schemas/PlanStageInput' } }
+        total: { $ref: '#/components/schemas/Money' }
+        reason:
+          oneOf: [ { type: string, maxLength: 2000 }, { type: 'null' } ]
+        recordedAt: { type: string, format: date-time }
+    Estimate:
+      type: object
+      additionalProperties: false
+      required: [id, warehouseId, rentalItemId, version, lifecycle, currentRevision, revisions, repairId, mediaReferences, createdAt, completedAt, actor]
+      properties:
+        id: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        lifecycle: { $ref: '#/components/schemas/EstimateLifecycle' }
+        currentRevision: { type: integer, minimum: 1 }
+        revisions: { type: array, minItems: 1, items: { $ref: '#/components/schemas/EstimateRevision' } }
+        repairId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        mediaReferences: { type: array, items: { $ref: '#/components/schemas/MediaReference' } }
+        createdAt: { type: string, format: date-time }
+        completedAt:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+        actor: { $ref: '#/components/schemas/ActorSnapshot' }
+    EstimatePage:
+      type: object
+      additionalProperties: false
+      required: [items, page, size, totalElements]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Estimate' } }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+    DeliverySnapshot:
+      type: object
+      additionalProperties: false
+      required: [state, attempts, updatedAt]
+      properties:
+        state: { $ref: '#/components/schemas/DeliveryState' }
+        attempts: { type: integer, minimum: 0 }
+        updatedAt: { type: string, format: date-time }
+    LeaseSnapshot:
+      description: >-
+        Opaque asset lease/fence truth. The default TTL is 15 minutes and the
+        lease is renewed before the final five minutes. Unknown renewal or
+        release truth is RECONCILIATION_REQUIRED and blocks fenced transitions;
+        it never permits reacquisition over an unexpired lease or fence bypass.
+      type: object
+      additionalProperties: false
+      required: [leaseId, fencingToken, expiresAt, reconciliationState]
+      properties:
+        leaseId: { type: string, format: uuid }
+        fencingToken: { type: integer, format: int64, minimum: 1 }
+        expiresAt: { type: string, format: date-time }
+        reconciliationState: { $ref: '#/components/schemas/LeaseReconciliationState' }
+    TaskSyncSnapshot:
+      description: >-
+        A stable externalTaskId exists before publication. GENERATED requires a
+        confirmed task-board registration. Transient delivery failure remains
+        PENDING_GENERATION with RETRY_PENDING; FAILED is permanent validation
+        rejection or operator-owned quarantine only.
+      type: object
+      additionalProperties: false
+      required: [externalTaskId, taskBoardRegistrationVersion, generationState, delivery]
+      properties:
+        externalTaskId: { type: string, format: uuid }
+        taskBoardRegistrationVersion:
+          oneOf: [ { type: integer, format: int64, minimum: 0 }, { type: 'null' } ]
+        generationState: { $ref: '#/components/schemas/GenerationState' }
+        delivery: { $ref: '#/components/schemas/DeliverySnapshot' }
+    RepairStage:
+      type: object
+      additionalProperties: false
+      required: [id, kind, order, state, routing, taskSync, completedAt]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: '#/components/schemas/RepairStageKind' }
+        order: { type: integer, minimum: 0 }
+        state: { $ref: '#/components/schemas/RepairStageState' }
+        routing: { $ref: '#/components/schemas/RoutingSnapshot' }
+        taskDeadline:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+        taskSync: { $ref: '#/components/schemas/TaskSyncSnapshot' }
+        completedAt:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+    RepairPlan:
+      type: object
+      additionalProperties: false
+      required: [repairId, repairVersion, stages]
+      properties:
+        repairId: { type: string, format: uuid }
+        repairVersion: { type: integer, format: int64, minimum: 0 }
+        stages: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/RepairStage' } }
+    Repair:
+      type: object
+      additionalProperties: false
+      required: [id, rootRepairId, sourceRepairId, estimateId, warehouseId, rentalItemId, origin, kind, executionState, acceptanceState, version, dispatchDate, sourceParty, plan, lease, mediaReferences, createdAt, updatedAt, actor]
+      properties:
+        id: { type: string, format: uuid }
+        rootRepairId: { type: string, format: uuid }
+        sourceRepairId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        estimateId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        warehouseId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        origin: { $ref: '#/components/schemas/RepairOrigin' }
+        kind: { $ref: '#/components/schemas/RepairKind' }
+        executionState: { $ref: '#/components/schemas/RepairExecutionState' }
+        acceptanceState: { $ref: '#/components/schemas/RepairAcceptanceState' }
+        version: { type: integer, format: int64, minimum: 0 }
+        dispatchDate: { type: string, format: date }
+        sourceParty:
+          oneOf: [ { type: string, minLength: 1, maxLength: 512 }, { type: 'null' } ]
+        plan: { $ref: '#/components/schemas/RepairPlan' }
+        lease:
+          oneOf: [ { $ref: '#/components/schemas/LeaseSnapshot' }, { type: 'null' } ]
+        mediaReferences: { type: array, items: { $ref: '#/components/schemas/MediaReference' } }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        actor: { $ref: '#/components/schemas/ActorSnapshot' }
+    RepairPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, size, totalElements]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/Repair' } }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+    CreateDirectRepairRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, rentalItemId, dispatchDate, sourceParty, plan, mediaReferences]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        dispatchDate: { type: string, format: date }
+        sourceParty:
+          oneOf: [ { type: string, minLength: 1, maxLength: 512 }, { type: 'null' } ]
+        plan: { type: array, minItems: 1, maxItems: 1000, items: { $ref: '#/components/schemas/PlanStageInput' } }
+        mediaReferences: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
+    ReplaceRepairPlanRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, stages]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        stages: { type: array, minItems: 1, maxItems: 1000, items: { $ref: '#/components/schemas/PlanStageInput' } }
+    CreateReworkRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason, plan, mediaReferences]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        reason:
+          description: Service-local business text; never published to Kafka.
+          type: string
+          minLength: 1
+          maxLength: 2000
+        plan: { type: array, minItems: 1, maxItems: 1000, items: { $ref: '#/components/schemas/PlanStageInput' } }
+        mediaReferences: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
+    RepairDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        comment:
+          description: Service-local decision text; never published to Kafka.
+          oneOf: [ { type: string, maxLength: 2000 }, { type: 'null' } ]
+    WriteOffRepairRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        reason:
+          description: Service-local decision text; never published to Kafka.
+          type: string
+          minLength: 1
+          maxLength: 2000
+        comment:
+          description: Service-local decision text; never published to Kafka.
+          oneOf: [ { type: string, maxLength: 2000 }, { type: 'null' } ]
+    EstimateCommandResult:
+      type: object
+      additionalProperties: false
+      required: [estimate, repair, delivery]
+      properties:
+        estimate: { $ref: '#/components/schemas/Estimate' }
+        repair:
+          oneOf: [ { $ref: '#/components/schemas/Repair' }, { type: 'null' } ]
+        delivery: { $ref: '#/components/schemas/DeliverySnapshot' }
+    RepairCommandResult:
+      type: object
+      additionalProperties: false
+      required: [repair, affectedSourceRepairs, delivery]
+      properties:
+        repair: { $ref: '#/components/schemas/Repair' }
+        affectedSourceRepairs: { type: array, items: { $ref: '#/components/schemas/Repair' } }
+        delivery: { $ref: '#/components/schemas/DeliverySnapshot' }
+    AcceptanceProjection:
+      type: object
+      additionalProperties: false
+      required: [repairId, rootRepairId, warehouseId, rentalItemId, executionState, acceptanceState, repairVersion, readyAt]
+      properties:
+        repairId: { type: string, format: uuid }
+        rootRepairId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        executionState: { $ref: '#/components/schemas/RepairExecutionState' }
+        acceptanceState: { $ref: '#/components/schemas/RepairAcceptanceState' }
+        repairVersion: { type: integer, format: int64, minimum: 0 }
+        readyAt: { type: string, format: date-time }
+    AcceptanceProjectionPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, size, totalElements]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/AcceptanceProjection' } }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+    WriteOffProjection:
+      type: object
+      additionalProperties: false
+      required: [repairId, rootRepairId, warehouseId, rentalItemId, repairVersion, writtenOffAt, actor]
+      properties:
+        repairId: { type: string, format: uuid }
+        rootRepairId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        repairVersion: { type: integer, format: int64, minimum: 0 }
+        writtenOffAt: { type: string, format: date-time }
+        actor: { $ref: '#/components/schemas/ActorSnapshot' }
+    WriteOffProjectionPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, size, totalElements]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/WriteOffProjection' } }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1 }
+        totalElements: { type: integer, format: int64, minimum: 0 }

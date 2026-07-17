@@ -85,6 +85,7 @@ function snapshotSubtask(
     | "includedLineIds"
     | "groupComment"
     | "queueCode"
+    | "queueId"
     | "routeQueueKind"
     | "sortOrder"
   >,
@@ -102,6 +103,7 @@ function snapshotSubtask(
       .map(cloneLine),
     groupComment: plan.groupComment.trim() || commentsForLines(lines),
     queueCode: plan.queueCode?.trim() || null,
+    queueId: plan.queueId ?? null,
     routeQueueKind: plan.routeQueueKind,
     sortOrder: plan.sortOrder,
     queuePosition: plan.sortOrder,

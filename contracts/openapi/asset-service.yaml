@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Asset Service API
-  version: 1.0.0
+  version: 1.1.0
   description: >-
     Stage 5 canonical asset boundary. Rental-item comments and manual-note text
     are readable only through this HTTP API and are never Kafka facts. New
@@ -306,6 +306,57 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/maintenance/operation-leases:
+    post:
+      operationId: acquireMaintenanceOperationLease
+      description: >-
+        Requires SERVICE principal maintenance-service with exactly asset.maintenance. The owner is
+        restricted to MAINTENANCE_ESTIMATE:<UUID> or MAINTENANCE_REPAIR:<root-repair UUID>.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AcquireMaintenanceOperationLeaseRequest' } } } }
+      responses:
+        '201': { $ref: '#/components/responses/OperationLeaseCreated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/maintenance/operation-leases/{id}/renew:
+    parameters: [ { $ref: '#/components/parameters/LeaseId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+    put:
+      operationId: renewMaintenanceOperationLease
+      description: Rechecks the exact maintenance owner, expected lease version and active fencing token.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RenewMaintenanceOperationLeaseRequest' } } } }
+      responses:
+        '200': { description: Renewed lease or original subject-bound replay., content: { application/json: { schema: { $ref: '#/components/schemas/OperationLease' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/maintenance/operation-leases/{id}/release:
+    parameters: [ { $ref: '#/components/parameters/LeaseId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+    put:
+      operationId: releaseMaintenanceOperationLease
+      description: Rechecks the exact maintenance owner and returns the original response for an identical replay.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReleaseMaintenanceOperationLeaseRequest' } } } }
+      responses:
+        '200': { description: Released lease or original subject-bound replay., content: { application/json: { schema: { $ref: '#/components/schemas/OperationLease' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/maintenance/rental-items/{id}/fenced-status:
+    parameters: [ { $ref: '#/components/parameters/RentalItemId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+    put:
+      operationId: updateMaintenanceFencedRentalItemStatus
+      description: >-
+        Requires the exact maintenance client/scope, matching active lease owner and fence. The request
+        exposes only approved maintenance actions; asset derives and validates the source/target status.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/MaintenanceFencedStatusRequest' } } } }
+      responses:
+        '200':
+          description: Updated rental item or original subject-bound replay while the fence remains active.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/RentalItem' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 components:
   securitySchemes:
     bearerJwt: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -553,6 +604,51 @@ components:
       additionalProperties: false
       required: [expectedVersion, status, leaseId, fencingToken]
       properties: { expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }, status: { $ref: '#/components/schemas/RentalItemStatus' }, leaseId: { type: string, format: uuid }, fencingToken: { type: integer, format: int64, minimum: 1 } }
+    MaintenanceLeaseOwnerType:
+      type: string
+      enum: [MAINTENANCE_ESTIMATE, MAINTENANCE_REPAIR]
+    MaintenanceStatusAction:
+      type: string
+      enum: [QUEUE_FOR_REPAIR, COMPLETE_EMPTY_ESTIMATE, MARK_PENDING_ACCEPTANCE, ACCEPT_REPAIR, WRITE_OFF]
+    AcquireMaintenanceOperationLeaseRequest:
+      type: object
+      additionalProperties: false
+      required: [rentalItemId, ownerType, ownerId, expectedRentalItemVersion]
+      properties:
+        rentalItemId: { type: string, format: uuid }
+        ownerType: { $ref: '#/components/schemas/MaintenanceLeaseOwnerType' }
+        ownerId: { type: string, format: uuid }
+        expectedRentalItemVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+    RenewMaintenanceOperationLeaseRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, fencingToken, ownerType, ownerId]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        fencingToken: { type: integer, format: int64, minimum: 1 }
+        ownerType: { $ref: '#/components/schemas/MaintenanceLeaseOwnerType' }
+        ownerId: { type: string, format: uuid }
+    ReleaseMaintenanceOperationLeaseRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, fencingToken, ownerType, ownerId]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        fencingToken: { type: integer, format: int64, minimum: 1 }
+        ownerType: { $ref: '#/components/schemas/MaintenanceLeaseOwnerType' }
+        ownerId: { type: string, format: uuid }
+    MaintenanceFencedStatusRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, action, leaseId, fencingToken, ownerType, ownerId]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        action: { $ref: '#/components/schemas/MaintenanceStatusAction' }
+        leaseId: { type: string, format: uuid }
+        fencingToken: { type: integer, format: int64, minimum: 1 }
+        ownerType: { $ref: '#/components/schemas/MaintenanceLeaseOwnerType' }
+        ownerId: { type: string, format: uuid }
+        linkedReturnEstimateId: { $ref: '#/components/schemas/NullableUuid' }
     Problem:
       type: object
       additionalProperties: true

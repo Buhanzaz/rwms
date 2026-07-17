@@ -40,6 +40,7 @@ class GatewayManagementEndpointIntegrationTest {
     registry.add("rwms.gateway.routes.task-board-uri", () -> "http://127.0.0.1:1");
     registry.add("rwms.gateway.routes.warehouse-uri", () -> "http://127.0.0.1:1");
     registry.add("rwms.gateway.routes.asset-uri", () -> "http://127.0.0.1:1");
+    registry.add("rwms.gateway.routes.maintenance-uri", () -> "http://127.0.0.1:1");
     registry.add("rwms.gateway.security.issuer", () -> "https://" + PUBLIC_HOST + "/auth");
     registry.add("rwms.gateway.security.audience", () -> "rwms-services");
     registry.add(

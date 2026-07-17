@@ -10,7 +10,9 @@ import {
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Field, FieldLabel } from "@/components/ui/field"
 import { Separator } from "@/components/ui/separator"
+import { Textarea } from "@/components/ui/textarea"
 import {
   REPAIR_ESTIMATES_QUERY_KEY,
   amendCompletedRepairEstimate,
@@ -116,6 +118,7 @@ export function RepairEstimateCompletedWorkspace({
     useState<RepairEstimateCatalogPager | null>(null)
   const [completionOpen, setCompletionOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [amendmentReason, setAmendmentReason] = useState("")
   const [expectedTaskVersion, setExpectedTaskVersion] = useState<number | null>(
     null
   )
@@ -160,6 +163,7 @@ export function RepairEstimateCompletedWorkspace({
         draft,
         warehouseId,
         expectedTaskVersion,
+        amendmentReason,
         ...params,
       }),
     onSuccess: (saved) => {
@@ -207,9 +211,11 @@ export function RepairEstimateCompletedWorkspace({
     setEditing(false)
     setCompletionOpen(false)
     setExpectedTaskVersion(null)
+    setAmendmentReason("")
     setAmendmentTaskPlans(plansInTaskOrder(estimate, null))
     setAmendmentMovementRequired(estimate.movementRequired ?? false)
     setError(null)
+    setAmendmentReason("")
   }
 
   function beginEditing() {
@@ -226,6 +232,10 @@ export function RepairEstimateCompletedWorkspace({
   }
 
   function validateDraft() {
+    if (!amendmentReason.trim()) {
+      setError("Укажите причину дополнения сметы")
+      return false
+    }
     try {
       assertEstimateLinesValid(draft.lines)
       setError(null)
@@ -293,27 +303,42 @@ export function RepairEstimateCompletedWorkspace({
 
   const mutationPending = mutation.isPending
   const information = (
-    <RepairWorkInformationFields
-      warehouseId={warehouseId}
-      rentalItemId={draft.rentalItemId}
-      rentalItemNumber={estimate.cabinNumber}
-      contextLabel="От кого"
-      contextValue={draft.sourceParty}
-      dispatchDate={draft.dispatchDate}
-      comment={draft.comment}
-      disabled={mutationPending}
-      readOnly
-      onRentalItemChange={() => undefined}
-      onContextChange={(sourceParty) =>
-        setDraft((current) => ({ ...current, sourceParty }))
-      }
-      onDispatchDateChange={(dispatchDate) =>
-        setDraft((current) => ({ ...current, dispatchDate }))
-      }
-      onCommentChange={(comment) =>
-        setDraft((current) => ({ ...current, comment }))
-      }
-    />
+    <div className="flex flex-col gap-4">
+      <RepairWorkInformationFields
+        warehouseId={warehouseId}
+        rentalItemId={draft.rentalItemId}
+        rentalItemNumber={estimate.cabinNumber}
+        contextLabel="От кого"
+        contextValue={draft.sourceParty}
+        dispatchDate={draft.dispatchDate}
+        comment={draft.comment}
+        disabled={mutationPending}
+        readOnly
+        onRentalItemChange={() => undefined}
+        onContextChange={(sourceParty) =>
+          setDraft((current) => ({ ...current, sourceParty }))
+        }
+        onDispatchDateChange={(dispatchDate) =>
+          setDraft((current) => ({ ...current, dispatchDate }))
+        }
+        onCommentChange={(comment) =>
+          setDraft((current) => ({ ...current, comment }))
+        }
+      />
+      <Field data-invalid={Boolean(error && !amendmentReason.trim())}>
+        <FieldLabel htmlFor="estimate-amendment-reason">
+          Причина дополнения
+        </FieldLabel>
+        <Textarea
+          id="estimate-amendment-reason"
+          value={amendmentReason}
+          disabled={mutationPending}
+          aria-invalid={Boolean(error && !amendmentReason.trim())}
+          maxLength={2000}
+          onChange={(event) => setAmendmentReason(event.target.value)}
+        />
+      </Field>
+    </div>
   )
   const estimateLines = (
     <div className="flex h-full min-h-0 flex-col gap-3">
@@ -430,6 +455,7 @@ export function RepairEstimateCompletedWorkspace({
       />
 
       <RepairEstimateCompletionDialog
+        warehouseId={warehouseId}
         open={completionOpen}
         draft={draft}
         pending={mutation.isPending}

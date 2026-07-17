@@ -6,12 +6,15 @@ import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
 import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCatalogItem;
+import dev.buhanzaz.rwms.asset.domain.OperationLease;
+import dev.buhanzaz.rwms.asset.domain.OperationLeaseState;
 import dev.buhanzaz.rwms.asset.domain.RentalItem;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.eventing.AssetEventStore;
 import dev.buhanzaz.rwms.asset.integration.warehouse.WarehouseRegistryClient;
 import dev.buhanzaz.rwms.asset.mapper.EquipmentCatalogItemMapper;
 import dev.buhanzaz.rwms.asset.repository.EquipmentCatalogItemRepository;
+import dev.buhanzaz.rwms.asset.repository.OperationLeaseRepository;
 import dev.buhanzaz.rwms.asset.repository.RentalItemRepository;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -43,6 +46,7 @@ import tools.jackson.databind.ObjectMapper;
 public class AssetService {
   private final RentalItemRepository rentalItems;
   private final EquipmentCatalogItemRepository equipment;
+  private final OperationLeaseRepository operationLeases;
   private final JdbcTemplate jdbc;
   private final AssetEventStore events;
   private final AssetIdempotencyStore idempotency;
@@ -55,6 +59,7 @@ public class AssetService {
   public AssetService(
       RentalItemRepository rentalItems,
       EquipmentCatalogItemRepository equipment,
+      OperationLeaseRepository operationLeases,
       JdbcTemplate jdbc,
       AssetEventStore events,
       AssetIdempotencyStore idempotency,
@@ -65,6 +70,7 @@ public class AssetService {
       @Value("${rwms.asset.operation-lease.ttl:15m}") Duration leaseTtl) {
     this.rentalItems = rentalItems;
     this.equipment = equipment;
+    this.operationLeases = operationLeases;
     this.jdbc = jdbc;
     this.events = events;
     this.idempotency = idempotency;
@@ -129,8 +135,9 @@ public class AssetService {
 
   @Transactional
   public RentalItemResponse fencedStatus(UUID id, FencedStatusRequest request) {
+    advisoryLock(rentalItemLockKey(id));
     validateLease(id, request.leaseId(), request.fencingToken());
-    return changeStatus(id, request.expectedVersion(), request.status(), true);
+    return changeStatusLocked(id, request.expectedVersion(), request.status(), true);
   }
 
   @Transactional
@@ -287,7 +294,10 @@ public class AssetService {
     advisoryLocks(java.util.stream.Stream.of(request.sourceRentalItemId(), request.targetRentalItemId())
         .filter(java.util.Objects::nonNull).map(AssetService::rentalItemLockKey).toList());
     java.util.stream.Stream.of(request.sourceRentalItemId(), request.targetRentalItemId())
-        .filter(java.util.Objects::nonNull).distinct().forEach(this::assertNoActiveLease);
+        .filter(java.util.Objects::nonNull)
+        .distinct()
+        .sorted(Comparator.comparing(UUID::toString))
+        .forEach(this::assertNoActiveLease);
     validateBalanceLocation(request.sourceWarehouseId(), request.sourceRentalItemId(), request.sourceLocationKind());
     validateBalanceLocation(request.targetWarehouseId(), request.targetRentalItemId(), request.targetLocationKind());
     if (sameLocation(request)) throw new AssetConflictException("Equipment transfer source and target must differ");
@@ -438,32 +448,36 @@ public class AssetService {
     String hash = hash(request);
     Optional<JsonNode> replay = idempotency.replay(subjectId, "operation-lease.acquire", key, hash);
     if (replay.isPresent()) return new CreateResult<>(read(replay.get(), OperationLeaseResponse.class), true);
+
+    lockRentalItemAndLease(request.rentalItemId());
     RentalItem item = requireRentalItem(request.rentalItemId());
     assertVersion(item.getVersion(), request.expectedRentalItemVersion());
-    advisoryLock("lease:" + request.rentalItemId());
     expireLeases(request.rentalItemId());
     String ownerType = canonicalOwnerType(request.ownerType());
     String ownerId = canonicalOwnerId(request.ownerId());
-    List<OperationLeaseResponse> active = jdbc.query("select id,version,rental_item_id,owner_type,owner_id,fencing_token,state,expires_at from operation_lease where rental_item_id=? and state='ACTIVE' for update",
-        (rs, row) -> new OperationLeaseResponse(rs.getObject("id", UUID.class), rs.getLong("version"), rs.getObject("rental_item_id", UUID.class),
-            rs.getString("owner_type"), rs.getString("owner_id"), rs.getLong("fencing_token"), rs.getString("state"), rs.getObject("expires_at", OffsetDateTime.class)), request.rentalItemId());
+    List<OperationLease> active = activeLeasesForUpdate(request.rentalItemId());
     if (!active.isEmpty()) {
-      OperationLeaseResponse current = active.getFirst();
-      if (!current.ownerType().equals(ownerType) || !current.ownerId().equals(ownerId)) throw new AssetConflictException("Rental item already has an active operation lease");
-      jdbc.update("update operation_lease set version=version+1,expires_at=?,updated_at=clock_timestamp() where id=? and version=?", now().plus(leaseTtl), current.id(), current.version());
-      OperationLeaseResponse renewed = leaseResponse(current.id());
-      events.append(AssetAggregateType.OPERATION_LEASE, current.id(), current.version(), AssetEventType.OPERATION_LEASE_RENEWED, leaseFact(renewed), leaseSnapshot(renewed));
+      OperationLease current = active.getFirst();
+      if (!current.isOwnedBy(ownerType, ownerId)) {
+        throw new AssetConflictException("Rental item already has an active operation lease");
+      }
+      long expectedVersion = current.getVersion();
+      OffsetDateTime renewedAt = now();
+      current.renew(renewedAt, renewedAt.plus(leaseTtl));
+      OperationLeaseResponse renewed = leaseResponse(operationLeases.saveAndFlush(current));
+      events.append(AssetAggregateType.OPERATION_LEASE, current.getId(), expectedVersion,
+          AssetEventType.OPERATION_LEASE_RENEWED, leaseFact(renewed), leaseSnapshot(renewed));
       idempotency.store(subjectId, "operation-lease.acquire", key, hash, 200, renewed);
       return new CreateResult<>(renewed, false);
     }
-    Long next = jdbc.queryForObject("select coalesce(max(fencing_token),0)+1 from operation_lease where rental_item_id=?", Long.class, request.rentalItemId());
-    UUID id = UUID.randomUUID();
-    jdbc.update("""
-        insert into operation_lease(id,version,rental_item_id,owner_type,owner_id,fencing_token,state,idempotency_key,expires_at,created_at,updated_at)
-        values (?,0,?,?,?,?, 'ACTIVE', ?, ?, clock_timestamp(), clock_timestamp())
-        """, id, request.rentalItemId(), ownerType, ownerId, next == null ? 1L : next, key, now().plus(leaseTtl));
-    OperationLeaseResponse response = leaseResponse(id);
-    events.initialize(AssetAggregateType.OPERATION_LEASE, id, 0, AssetEventType.OPERATION_LEASE_ACQUIRED, leaseFact(response), leaseSnapshot(response));
+
+    long next = Math.addExact(operationLeases.maximumFencingToken(request.rentalItemId()), 1);
+    OffsetDateTime acquiredAt = now();
+    OperationLease persisted = operationLeases.saveAndFlush(OperationLease.acquire(
+        request.rentalItemId(), ownerType, ownerId, next, key, acquiredAt, acquiredAt.plus(leaseTtl)));
+    OperationLeaseResponse response = leaseResponse(persisted);
+    events.initialize(AssetAggregateType.OPERATION_LEASE, persisted.getId(), persisted.getVersion(),
+        AssetEventType.OPERATION_LEASE_ACQUIRED, leaseFact(response), leaseSnapshot(response));
     idempotency.store(subjectId, "operation-lease.acquire", key, hash, 201, response);
     return new CreateResult<>(response, false);
   }
@@ -474,12 +488,7 @@ public class AssetService {
     String hash = hash(request);
     Optional<JsonNode> replay = idempotency.replay(subjectId, "operation-lease.renew", key, hash);
     if (replay.isPresent()) return new CreateResult<>(read(replay.get(), OperationLeaseResponse.class), true);
-    OperationLeaseResponse current = leaseResponse(id);
-    assertVersion(current.version(), request.expectedVersion());
-    assertFencing(current, request.fencingToken());
-    jdbc.update("update operation_lease set version=version+1,expires_at=?,updated_at=clock_timestamp() where id=? and version=?", now().plus(leaseTtl), id, request.expectedVersion());
-    OperationLeaseResponse updated = leaseResponse(id);
-    events.append(AssetAggregateType.OPERATION_LEASE, id, request.expectedVersion(), AssetEventType.OPERATION_LEASE_RENEWED, leaseFact(updated), leaseSnapshot(updated));
+    OperationLeaseResponse updated = renewLeaseState(id, request.expectedVersion(), request.fencingToken());
     idempotency.store(subjectId, "operation-lease.renew", key, hash, 200, updated);
     return new CreateResult<>(updated, false);
   }
@@ -490,14 +499,140 @@ public class AssetService {
     String hash = hash(request);
     Optional<JsonNode> replay = idempotency.replay(subjectId, "operation-lease.release", key, hash);
     if (replay.isPresent()) return new CreateResult<>(read(replay.get(), OperationLeaseResponse.class), true);
-    OperationLeaseResponse current = leaseResponse(id);
-    assertVersion(current.version(), request.expectedVersion());
-    assertFencing(current, request.fencingToken());
-    jdbc.update("update operation_lease set version=version+1,state='RELEASED',released_at=clock_timestamp(),updated_at=clock_timestamp() where id=? and version=?", id, request.expectedVersion());
-    OperationLeaseResponse updated = leaseResponse(id);
-    events.append(AssetAggregateType.OPERATION_LEASE, id, request.expectedVersion(), AssetEventType.OPERATION_LEASE_RELEASED, leaseFact(updated), leaseSnapshot(updated));
+    OperationLeaseResponse updated = releaseLeaseState(id, request.expectedVersion(), request.fencingToken());
     idempotency.store(subjectId, "operation-lease.release", key, hash, 200, updated);
     return new CreateResult<>(updated, false);
+  }
+
+  @Transactional
+  public CreateResult<OperationLeaseResponse> acquireMaintenanceLease(
+      UUID subjectId, UUID key, AcquireMaintenanceOperationLeaseRequest request) {
+    String hash = hash(request);
+    Optional<JsonNode> replay = idempotency.replay(
+        subjectId, "maintenance.operation-lease.acquire", key, hash);
+    if (replay.isPresent()) {
+      return new CreateResult<>(read(replay.get(), OperationLeaseResponse.class), true);
+    }
+
+    // Every rental-item mutation takes these locks in this order. Re-read the
+    // aggregate only after both locks so expectedRentalItemVersion fences a
+    // concurrent manual status mutation rather than a stale pre-lock read.
+    lockRentalItemAndLease(request.rentalItemId());
+    RentalItem item = requireRentalItem(request.rentalItemId());
+    assertVersion(item.getVersion(), request.expectedRentalItemVersion());
+    expireLeases(request.rentalItemId());
+    List<OperationLease> active = activeLeasesForUpdate(request.rentalItemId());
+    if (!active.isEmpty()) {
+      throw new AssetConflictException(
+          "Rental item already has an active operation lease; reacquisition is forbidden");
+    }
+
+    long next = Math.addExact(operationLeases.maximumFencingToken(request.rentalItemId()), 1);
+    OffsetDateTime acquiredAt = now();
+    OperationLease persisted = operationLeases.saveAndFlush(OperationLease.acquire(
+        request.rentalItemId(),
+        request.ownerType().name(),
+        request.ownerId().toString(),
+        next,
+        key,
+        acquiredAt,
+        acquiredAt.plus(leaseTtl)));
+    OperationLeaseResponse response = leaseResponse(persisted);
+    events.initialize(
+        AssetAggregateType.OPERATION_LEASE,
+        persisted.getId(),
+        persisted.getVersion(),
+        AssetEventType.OPERATION_LEASE_ACQUIRED,
+        leaseFact(response),
+        leaseSnapshot(response));
+    idempotency.store(
+        subjectId, "maintenance.operation-lease.acquire", key, hash, 201, response);
+    return new CreateResult<>(response, false);
+  }
+
+  @Transactional
+  public CreateResult<OperationLeaseResponse> renewMaintenanceLease(
+      UUID subjectId, UUID key, UUID id, RenewMaintenanceOperationLeaseRequest request) {
+    OperationLease current = requireLeaseForUpdate(id);
+    assertMaintenanceOwner(current, request.ownerType(), request.ownerId());
+    String hash = hash(new MaintenanceLeaseCommand<>(id, request));
+    Optional<JsonNode> replay = idempotency.replay(
+        subjectId, "maintenance.operation-lease.renew", key, hash);
+    if (replay.isPresent()) {
+      return new CreateResult<>(read(replay.get(), OperationLeaseResponse.class), true);
+    }
+    OperationLeaseResponse updated = renewLeaseState(
+        id, request.expectedVersion(), request.fencingToken());
+    idempotency.store(
+        subjectId, "maintenance.operation-lease.renew", key, hash, 200, updated);
+    return new CreateResult<>(updated, false);
+  }
+
+  @Transactional
+  public CreateResult<OperationLeaseResponse> releaseMaintenanceLease(
+      UUID subjectId, UUID key, UUID id, ReleaseMaintenanceOperationLeaseRequest request) {
+    OperationLease current = requireLeaseForUpdate(id);
+    assertMaintenanceOwner(current, request.ownerType(), request.ownerId());
+    String hash = hash(new MaintenanceLeaseCommand<>(id, request));
+    Optional<JsonNode> replay = idempotency.replay(
+        subjectId, "maintenance.operation-lease.release", key, hash);
+    if (replay.isPresent()) {
+      return new CreateResult<>(read(replay.get(), OperationLeaseResponse.class), true);
+    }
+    OperationLeaseResponse updated = releaseLeaseState(
+        id, request.expectedVersion(), request.fencingToken());
+    idempotency.store(
+        subjectId, "maintenance.operation-lease.release", key, hash, 200, updated);
+    return new CreateResult<>(updated, false);
+  }
+
+  @Transactional
+  public CreateResult<RentalItemResponse> maintenanceFencedStatus(
+      UUID subjectId, UUID key, UUID id, MaintenanceFencedStatusRequest request) {
+    advisoryLock(rentalItemLockKey(id));
+    OperationLease lease = validateLease(id, request.leaseId(), request.fencingToken());
+    assertMaintenanceOwner(lease, request.ownerType(), request.ownerId());
+    String hash = hash(new MaintenanceLeaseCommand<>(id, request));
+    Optional<JsonNode> replay = idempotency.replay(
+        subjectId, "maintenance.rental-item.fenced-status", key, hash);
+    if (replay.isPresent()) {
+      return new CreateResult<>(read(replay.get(), RentalItemResponse.class), true);
+    }
+    RentalItem current = requireRentalItem(id);
+    RentalItemStatus target = MaintenanceAssetTransitionPolicy.target(
+        current.getStatus(),
+        request.action(),
+        request.ownerType(),
+        request.ownerId(),
+        request.linkedReturnEstimateId());
+    RentalItemResponse updated = changeStatusLocked(id, request.expectedVersion(), target, true);
+    idempotency.store(
+        subjectId, "maintenance.rental-item.fenced-status", key, hash, 200, updated);
+    return new CreateResult<>(updated, false);
+  }
+
+  private OperationLeaseResponse renewLeaseState(UUID id, Long expectedVersion, long fencingToken) {
+    OperationLease current = requireLeaseForUpdate(id);
+    assertVersion(current.getVersion(), expectedVersion);
+    OffsetDateTime renewedAt = now();
+    assertFencing(current, fencingToken, renewedAt);
+    current.renew(renewedAt, renewedAt.plus(leaseTtl));
+    OperationLeaseResponse updated = leaseResponse(operationLeases.saveAndFlush(current));
+    events.append(AssetAggregateType.OPERATION_LEASE, id, expectedVersion,
+        AssetEventType.OPERATION_LEASE_RENEWED, leaseFact(updated), leaseSnapshot(updated));
+    return updated;
+  }
+
+  private OperationLeaseResponse releaseLeaseState(UUID id, Long expectedVersion, long fencingToken) {
+    OperationLease current = requireLeaseForUpdate(id);
+    assertVersion(current.getVersion(), expectedVersion);
+    OffsetDateTime releasedAt = now();
+    assertFencing(current, fencingToken, releasedAt);
+    current.release(releasedAt);
+    OperationLeaseResponse updated = leaseResponse(operationLeases.saveAndFlush(current));
+    events.append(AssetAggregateType.OPERATION_LEASE, id, expectedVersion,
+        AssetEventType.OPERATION_LEASE_RELEASED, leaseFact(updated), leaseSnapshot(updated));
+    return updated;
   }
 
   @Transactional(readOnly = true)
@@ -540,6 +675,11 @@ public class AssetService {
   private RentalItemResponse changeStatus(UUID id, Long expectedVersion, RentalItemStatus status, boolean fenced) {
     advisoryLock(rentalItemLockKey(id));
     if (!fenced) assertNoActiveLease(id);
+    return changeStatusLocked(id, expectedVersion, status, fenced);
+  }
+
+  private RentalItemResponse changeStatusLocked(
+      UUID id, Long expectedVersion, RentalItemStatus status, boolean fenced) {
     RentalItem item = requireRentalItem(id);
     assertVersion(item.getVersion(), expectedVersion);
     RentalItemStatus previous = item.getStatus();
@@ -716,49 +856,80 @@ public class AssetService {
             rs.getObject("expires_at", OffsetDateTime.class), rs.getObject("committed_at", OffsetDateTime.class)), id).stream().findFirst().orElseThrow(() -> new AssetNotFoundException("Equipment hold was not found"));
   }
   private void expireLeases(UUID itemId) {
-    List<OperationLeaseResponse> expired = jdbc.query("""
-        select id,version,rental_item_id,owner_type,owner_id,fencing_token,state,expires_at
-        from operation_lease
-        where rental_item_id=? and state='ACTIVE' and expires_at<=clock_timestamp()
-        for update
-        """, (rs, row) -> new OperationLeaseResponse(rs.getObject("id", UUID.class), rs.getLong("version"),
-        rs.getObject("rental_item_id", UUID.class), rs.getString("owner_type"), rs.getString("owner_id"),
-        rs.getLong("fencing_token"), rs.getString("state"), rs.getObject("expires_at", OffsetDateTime.class)), itemId);
-    for (OperationLeaseResponse current : expired) {
-      int changed = jdbc.update("update operation_lease set state='EXPIRED',released_at=clock_timestamp(),version=version+1,updated_at=clock_timestamp() where id=? and version=? and state='ACTIVE'", current.id(), current.version());
-      if (changed != 1) throw new AssetConflictException("Operation lease changed concurrently during expiry");
-      OperationLeaseResponse updated = leaseResponse(current.id());
-      events.append(AssetAggregateType.OPERATION_LEASE, current.id(), current.version(), AssetEventType.OPERATION_LEASE_EXPIRED,
+    OffsetDateTime expiredAt = now();
+    List<OperationLease> expired = operationLeases.findExpiredByRentalItemIdAndStateForUpdate(
+        itemId, OperationLeaseState.ACTIVE, expiredAt);
+    for (OperationLease current : expired) {
+      long expectedVersion = current.getVersion();
+      if (!current.expire(expiredAt)) continue;
+      OperationLeaseResponse updated = leaseResponse(operationLeases.saveAndFlush(current));
+      events.append(AssetAggregateType.OPERATION_LEASE, current.getId(), expectedVersion, AssetEventType.OPERATION_LEASE_EXPIRED,
           leaseFact(updated), leaseSnapshot(updated));
     }
   }
-  private OperationLeaseResponse leaseResponse(UUID id) {
-    return jdbc.query("select id,version,rental_item_id,owner_type,owner_id,fencing_token,state,expires_at from operation_lease where id=? for update",
-        (rs, row) -> new OperationLeaseResponse(rs.getObject("id", UUID.class), rs.getLong("version"), rs.getObject("rental_item_id", UUID.class),
-            rs.getString("owner_type"), rs.getString("owner_id"), rs.getLong("fencing_token"), rs.getString("state"), rs.getObject("expires_at", OffsetDateTime.class)), id).stream().findFirst().orElseThrow(() -> new AssetNotFoundException("Operation lease was not found"));
+  private OperationLeaseResponse leaseResponse(OperationLease lease) {
+    return new OperationLeaseResponse(
+        lease.getId(),
+        lease.getVersion(),
+        lease.getRentalItemId(),
+        lease.getOwnerType(),
+        lease.getOwnerId(),
+        lease.getFencingToken(),
+        lease.getState().name(),
+        lease.getExpiresAt());
   }
-  private void validateLease(UUID rentalItemId, UUID leaseId, long fencingToken) {
-    advisoryLock("lease:" + rentalItemId);
+  private OperationLease validateLease(UUID rentalItemId, UUID leaseId, long fencingToken) {
+    lockRentalItemAndLease(rentalItemId);
     expireLeases(rentalItemId);
-    OperationLeaseResponse lease = leaseResponse(leaseId);
-    if (!lease.rentalItemId().equals(rentalItemId)) throw new AssetConflictException("Operation lease belongs to another rental item");
-    assertFencing(lease, fencingToken);
+    OperationLease lease = operationLeases.findByIdForUpdate(leaseId)
+        .orElseThrow(() -> new AssetNotFoundException("Operation lease was not found"));
+    if (!lease.getRentalItemId().equals(rentalItemId)) {
+      throw new AssetConflictException("Operation lease belongs to another rental item");
+    }
+    assertFencing(lease, fencingToken, now());
+    return lease;
   }
-  private void assertFencing(OperationLeaseResponse lease, long token) {
-    if (!"ACTIVE".equals(lease.state()) || lease.expiresAt().isBefore(now()) || lease.fencingToken() != token) throw new AssetConflictException("Operation lease is stale or fenced");
+  private void assertMaintenanceOwner(
+      OperationLease lease, MaintenanceLeaseOwnerType ownerType, UUID ownerId) {
+    if (ownerType == null
+        || ownerId == null
+        || !lease.isOwnedBy(ownerType.name(), ownerId.toString())) {
+      throw new AssetConflictException("Operation lease belongs to another maintenance owner");
+    }
+  }
+  private void assertFencing(OperationLease lease, long token, OffsetDateTime instant) {
+    if (!lease.isActiveAt(instant) || lease.getFencingToken() != token) {
+      throw new AssetConflictException("Operation lease is stale or fenced");
+    }
   }
   private void assertNoActiveLease(UUID rentalItemId) {
-    advisoryLock("lease:" + rentalItemId);
+    lockRentalItemAndLease(rentalItemId);
     expireLeases(rentalItemId);
-    Integer active = jdbc.queryForObject("""
-        select count(*) from operation_lease
-        where rental_item_id=? and state='ACTIVE' and expires_at>clock_timestamp()
-        """, Integer.class, rentalItemId);
-    if (active != null && active > 0) {
+    if (!activeLeasesForUpdate(rentalItemId).isEmpty()) {
       throw new AssetConflictException("Rental item has an active operation lease; use a fenced internal command");
     }
   }
+  private OperationLease requireLeaseForUpdate(UUID id) {
+    UUID rentalItemId = operationLeases.findRentalItemIdById(id)
+        .orElseThrow(() -> new AssetNotFoundException("Operation lease was not found"));
+    lockRentalItemAndLease(rentalItemId);
+    return operationLeases.findByIdForUpdate(id)
+        .orElseThrow(() -> new AssetNotFoundException("Operation lease was not found"));
+  }
+  private List<OperationLease> activeLeasesForUpdate(UUID rentalItemId) {
+    List<OperationLease> active = operationLeases.findByRentalItemIdAndStateForUpdate(
+        rentalItemId, OperationLeaseState.ACTIVE);
+    if (active.size() > 1) {
+      throw new IllegalStateException("Active operation-lease uniqueness is corrupted");
+    }
+    return active;
+  }
+  private void lockRentalItemAndLease(UUID rentalItemId) {
+    advisoryLock(rentalItemLockKey(rentalItemId));
+    advisoryLock(leaseLockKey(rentalItemId));
+  }
   private static String rentalItemLockKey(UUID rentalItemId) { return "asset-rental-item:" + rentalItemId; }
+  private static String leaseLockKey(UUID rentalItemId) { return "lease:" + rentalItemId; }
   private static String balanceLockKey(UUID equipmentId, UUID warehouseId, UUID rentalItemId, BalanceLocationKind kind) {
     return "asset-balance:" + equipmentId + ':' + warehouseId + ':' + (rentalItemId == null ? "-" : rentalItemId) + ':' + kind.name();
   }
@@ -912,5 +1083,6 @@ public class AssetService {
   }
 
   private record BalanceRow(UUID id, long version, UUID equipmentId, UUID warehouseId, UUID rentalItemId, BalanceLocationKind kind, long quantity) {}
+  private record MaintenanceLeaseCommand<T>(UUID resourceId, T request) {}
   public record CreateResult<T>(T response, boolean replayed) {}
 }

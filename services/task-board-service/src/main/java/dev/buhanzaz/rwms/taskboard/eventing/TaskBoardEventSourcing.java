@@ -139,4 +139,14 @@ public class TaskBoardEventSourcing {
     store.append(TaskBoardAggregateType.QUEUE_ENTRY, value.getId(), streamVersion,
         eventType, facts.queueEntry(value, false));
   }
+
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void entryDeleted(QueueEntry value, long streamVersion) {
+    store.append(
+        TaskBoardAggregateType.QUEUE_ENTRY,
+        value.getId(),
+        streamVersion,
+        TaskBoardEventTypes.QUEUE_ENTRY_CHANGED,
+        facts.queueEntry(value, true));
+  }
 }

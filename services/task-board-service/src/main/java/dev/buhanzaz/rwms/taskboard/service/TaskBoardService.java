@@ -50,6 +50,7 @@ public class TaskBoardService {
   private final JdbcTemplate jdbc;
   private final TaskBoardEventSourcing eventSourcing;
   private final TaskBoardProjectionWriter projectionWriter;
+  private final TaskSyncSourceRepository taskSyncSources;
 
   public TaskBoardService(
       BoardTaskRepository tasks,
@@ -64,7 +65,8 @@ public class TaskBoardService {
       RegistryService registry,
       JdbcTemplate jdbc,
       TaskBoardEventSourcing eventSourcing,
-      TaskBoardProjectionWriter projectionWriter) {
+      TaskBoardProjectionWriter projectionWriter,
+      TaskSyncSourceRepository taskSyncSources) {
     this.tasks = tasks;
     this.entries = entries;
     this.queues = queues;
@@ -78,6 +80,7 @@ public class TaskBoardService {
     this.jdbc = jdbc;
     this.eventSourcing = eventSourcing;
     this.projectionWriter = projectionWriter;
+    this.taskSyncSources = taskSyncSources;
   }
 
   @Transactional(readOnly = true)
@@ -119,6 +122,28 @@ public class TaskBoardService {
 
   @Transactional
   public TaskBoardSnapshot createTask(UUID warehouseId, CreateBoardTaskRequest request) {
+    createTask(warehouseId, request, null);
+    return snapshot(warehouseId, true);
+  }
+
+  @Transactional
+  public BoardTaskRegistrationDto registerExternalTask(
+      String sourceClientId, RegisterExternalTaskRequest request) {
+    CreateBoardTaskRequest createRequest =
+        new CreateBoardTaskRequest(
+            request.externalTaskId(),
+            request.title(),
+            request.unitNumber(),
+            request.description(),
+            request.plannedDurationMinutes(),
+            request.deadlineAt(),
+            request.route());
+    BoardTask task = createTask(request.warehouseId(), createRequest, sourceClientId);
+    return registrationDto(task);
+  }
+
+  private BoardTask createTask(
+      UUID warehouseId, CreateBoardTaskRequest request, String sourceClientId) {
     String requestFingerprint = fingerprint(warehouseId, request);
     if (request.externalTaskId() != null) {
       lock("external-task:" + request.externalTaskId());
@@ -127,8 +152,11 @@ public class TaskBoardService {
         BoardTask task = existing.get();
         if (warehouseId.equals(task.getWarehouseId())
             && task.getRequestFingerprint() != null
-            && task.getRequestFingerprint().equals(requestFingerprint)) {
-          return snapshot(warehouseId, true);
+            && task.getRequestFingerprint().equals(requestFingerprint)
+            && (sourceClientId == null
+                || taskSyncSources.existsByBoardTaskIdAndSourceClientId(
+                    task.getId(), sourceClientId))) {
+          return task;
         }
         throw new ConflictException("Задача с externalTaskId уже существует с другими данными");
       }
@@ -150,6 +178,11 @@ public class TaskBoardService {
     } catch (DataIntegrityViolationException exception) {
       throw new ConflictException("Задача с externalTaskId уже существует");
     }
+    if (sourceClientId != null) {
+      projectionWriter.saveAndFlush(
+          taskSyncSources,
+          new TaskSyncSource(task.getId(), request.externalTaskId(), sourceClientId));
+    }
     int route = 0;
     for (var resolved : routeSteps) {
       RouteStepRequest step = resolved.request();
@@ -170,7 +203,7 @@ public class TaskBoardService {
     projectionWriter.flush();
     eventSourcing.created(task);
     entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()).forEach(eventSourcing::created);
-    return snapshot(warehouseId, true);
+    return task;
   }
 
   @Transactional
@@ -284,6 +317,152 @@ public class TaskBoardService {
             .findByWarehouseIdAndExternalTaskId(warehouseId, externalTaskId)
             .orElseThrow(() -> new NotFoundException("Задача не найдена"));
     return registrationDto(task);
+  }
+
+  @Transactional(readOnly = true)
+  public BoardTaskRegistrationDto externalTask(String sourceClientId, UUID externalTaskId) {
+    return registrationDto(ownedExternalTask(sourceClientId, externalTaskId));
+  }
+
+  @Transactional
+  public CancelledTaskDto cancelExternalTask(
+      String sourceClientId, UUID externalTaskId, CancelTaskRequest request) {
+    BoardTask task = ownedExternalTask(sourceClientId, externalTaskId);
+    return cancelTask(task.getWarehouseId(), externalTaskId, request);
+  }
+
+  @Transactional
+  public BoardTaskRegistrationDto updateExternalTaskBeforeStart(
+      String sourceClientId, UUID externalTaskId, PreStartUpdateTaskRequest request) {
+    lock("external-task:" + externalTaskId);
+    BoardTask task = ownedExternalTask(sourceClientId, externalTaskId);
+    UUID warehouseId = task.getWarehouseId();
+    lockQueueMutation(warehouseId);
+    checkVersion(task.getVersion(), request.expectedTaskVersion(), "Задача");
+    if (task.getStatus() != TaskStatus.ACTIVE) {
+      throw new ConflictException("Изменить можно только активную задачу до начала работ");
+    }
+
+    List<QueueEntry> oldEntries = entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId());
+    boolean routeStarted =
+        oldEntries.stream()
+            .anyMatch(
+                entry ->
+                    entry.getStatus() != EntryStatus.WAITING
+                        || entry.getActiveStartedAt() != null
+                        || entry.getPausedAt() != null
+                        || entry.getDoneAt() != null
+                        || entry.getActiveWorkSeconds() != 0);
+    List<UUID> oldEntryIds = oldEntries.stream().map(QueueEntry::getId).toList();
+    if (routeStarted
+        || (!oldEntryIds.isEmpty()
+            && assignments.existsByQueueEntryIdInAndStartedAtIsNotNull(oldEntryIds))) {
+      throw new ConflictException("Маршрут или назначение задачи уже начали выполнять");
+    }
+
+    List<ResolvedRouteStep> routeSteps = resolveRoute(warehouseId, request.route());
+    Set<WorkQueue> affectedQueues =
+        oldEntries.stream()
+            .map(QueueEntry::getQueue)
+            .filter(Objects::nonNull)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    routeSteps.stream()
+        .map(ResolvedRouteStep::queue)
+        .filter(Objects::nonNull)
+        .forEach(affectedQueues::add);
+    boolean affectedUnassigned =
+        oldEntries.stream().anyMatch(entry -> entry.getQueue() == null)
+            || routeSteps.stream().anyMatch(step -> step.queue() == null);
+    lockQueuePositions(
+        warehouseId,
+        java.util.stream.Stream.concat(
+                oldEntries.stream().map(QueueEntry::getQueue),
+                routeSteps.stream().map(ResolvedRouteStep::queue))
+            .toList());
+
+    Set<QueueEntry> positionCandidates = new LinkedHashSet<>();
+    affectedQueues.forEach(queue -> positionCandidates.addAll(orderedEntries(warehouseId, queue)));
+    if (affectedUnassigned) positionCandidates.addAll(orderedEntries(warehouseId, null));
+    Map<UUID, QueueEntryPosition> positionsBefore = positionsOf(positionCandidates);
+    Map<TaskBoardEventStore.StreamRef, Long> streamVersions =
+        lockTaskAndEntryStreams(task, positionCandidates);
+
+    Set<UUID> deletedIds = new LinkedHashSet<>();
+    for (QueueEntry oldEntry : oldEntries) {
+      eventSourcing.entryDeleted(
+          oldEntry,
+          streamVersion(
+              streamVersions, TaskBoardAggregateType.QUEUE_ENTRY, oldEntry.getId()));
+      deletedIds.add(oldEntry.getId());
+    }
+    projectionWriter.deleteAll(entries, oldEntries);
+    projectionWriter.flush();
+    affectedQueues.forEach(queue -> normalizePositions(warehouseId, queue));
+    if (affectedUnassigned) normalizePositions(warehouseId, null);
+    projectionWriter.flush();
+
+    CreateBoardTaskRequest replacement =
+        new CreateBoardTaskRequest(
+            externalTaskId,
+            request.title(),
+            request.unitNumber(),
+            request.description(),
+            request.plannedDurationMinutes(),
+            request.deadlineAt(),
+            request.route());
+    task.setTitle(request.title().trim());
+    task.setUnitNumber(trim(request.unitNumber()));
+    task.setDescription(trim(request.description()));
+    task.setPlannedDurationMinutes(request.plannedDurationMinutes());
+    task.setDeadlineAt(request.deadlineAt());
+    task.setRequestFingerprint(fingerprint(warehouseId, replacement));
+    task = projectionWriter.saveAndFlush(tasks, task);
+
+    int routeIndex = 0;
+    for (ResolvedRouteStep resolved : routeSteps) {
+      RouteStepRequest step = resolved.request();
+      QueueEntry entry = new QueueEntry();
+      entry.setTask(task);
+      entry.setQueue(resolved.queue());
+      entry.setQueueCode(resolved.queueCode());
+      entry.setRouteIndex(routeIndex);
+      entry.setEntryType(routeIndex == 0 ? EntryType.REAL : EntryType.SHADOW);
+      entry.setStatus(EntryStatus.WAITING);
+      entry.setQueuePosition(nextPosition(warehouseId, resolved.queue()));
+      entry.setTaskText(trim(step.taskText()));
+      entry.setPlannedDurationMinutes(step.plannedDurationMinutes());
+      projectionWriter.save(entries, entry);
+      routeIndex++;
+    }
+    projectionWriter.flush();
+    entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()).forEach(eventSourcing::created);
+
+    Set<UUID> repositionedIds = changedPositionIds(positionCandidates, positionsBefore);
+    for (QueueEntry candidate : positionCandidates) {
+      if (!deletedIds.contains(candidate.getId()) && repositionedIds.contains(candidate.getId())) {
+        eventSourcing.entryChanged(
+            candidate,
+            streamVersion(
+                streamVersions, TaskBoardAggregateType.QUEUE_ENTRY, candidate.getId()),
+            TaskBoardEventTypes.QUEUE_ENTRY_CHANGED);
+      }
+    }
+    eventSourcing.taskChanged(
+        task,
+        streamVersion(streamVersions, TaskBoardAggregateType.BOARD_TASK, task.getId()),
+        TaskBoardEventTypes.BOARD_TASK_CHANGED);
+    return registrationDto(task);
+  }
+
+  private BoardTask ownedExternalTask(String sourceClientId, UUID externalTaskId) {
+    BoardTask task =
+        tasks
+            .findByExternalTaskId(externalTaskId)
+            .orElseThrow(() -> new NotFoundException("Задача не найдена"));
+    if (!taskSyncSources.existsByBoardTaskIdAndSourceClientId(task.getId(), sourceClientId)) {
+      throw new NotFoundException("Задача не найдена");
+    }
+    return task;
   }
 
   private String fingerprint(UUID warehouseId, CreateBoardTaskRequest request) {

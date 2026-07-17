@@ -1,5 +1,4 @@
-import { DEV_AUTH_BYPASS_ENABLED } from "@/features/auth/auth-config"
-import { getOperationalRepairEstimateCatalog } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
+import { DEV_MAINTENANCE_FIXTURES_ENABLED } from "@/features/maintenance/maintenance-runtime"
 import {
   completeRepairTaskEntry,
   listRepairTasks,
@@ -10,10 +9,7 @@ import {
 } from "@/features/repair-tasks/api/repair-tasks-api"
 import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
 import type { PendingEstimateMediaUpload } from "@/features/repair-estimates/model/repair-estimate"
-import {
-  createMockTaskBoardProjection,
-  createTaskBoardSnapshot,
-} from "@/features/task-board/domain/task-board-domain"
+import { createMockTaskBoardProjection } from "@/features/task-board/domain/task-board-domain"
 import { taskBoardMockClient } from "@/features/task-board/mock"
 import type {
   MockTaskBoardSnapshotDto,
@@ -24,6 +20,14 @@ import type {
   TaskBoardQueueDto,
   TaskBoardSnapshotDto,
 } from "@/features/task-board/model/task-board"
+import {
+  completeHttpTaskBoardEntry,
+  getHttpTaskBoard,
+  moveHttpTaskBoardEntry,
+  pauseHttpTaskBoardEntry,
+  resumeHttpTaskBoardEntry,
+  takeHttpTaskBoardEntry,
+} from "@/features/task-board/api/http-task-board-client"
 
 export const TASK_BOARD_QUERY_KEY = ["task-board"] as const
 export const TASK_BOARD_NOTIFICATIONS_QUERY_KEY = [
@@ -277,9 +281,10 @@ async function reconcileRepairRuntime(
 
 export async function getTaskBoard(
   warehouseId: string,
-  serviceWarehouseId = warehouseId
+  serviceWarehouseId = warehouseId,
+  accessToken?: string | null
 ) {
-  if (DEV_AUTH_BYPASS_ENABLED) {
+  if (DEV_MAINTENANCE_FIXTURES_ENABLED) {
     await ensureRepairTasksRegistered(warehouseId, serviceWarehouseId)
     let sourceTasks = await listRepairTasks(warehouseId)
     let snapshot = await taskBoardMockClient.getSnapshot(serviceWarehouseId)
@@ -297,11 +302,7 @@ export async function getTaskBoard(
       sourceTasks
     )
   }
-  const [tasks, catalog] = await Promise.all([
-    listRepairTasks(warehouseId),
-    getOperationalRepairEstimateCatalog(),
-  ])
-  return createTaskBoardSnapshot({ warehouseId, tasks, catalog })
+  return getHttpTaskBoard(accessToken, serviceWarehouseId)
 }
 
 export function moveTaskBoardEntry(params: {
@@ -310,8 +311,18 @@ export function moveTaskBoardEntry(params: {
   queue: TaskBoardQueueDto
   queuePosition: number
   entry?: TaskBoardEntryDto
+  accessToken?: string | null
 }) {
-  if (DEV_AUTH_BYPASS_ENABLED && params.entry?.runtimeTask) {
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
+    if (!params.entry) throw new Error("Запись доски заданий не найдена.")
+    return moveHttpTaskBoardEntry(
+      params.accessToken,
+      params.entry,
+      params.queue.settingsQueueId ?? null,
+      params.queuePosition
+    )
+  }
+  if (params.entry?.runtimeTask) {
     return (async () => {
       if (isAttachedRepairEntry(params.entry!)) {
         await moveRepairTaskEntry({
@@ -343,9 +354,17 @@ export function takeTaskBoardEntry(params: {
   entry: TaskBoardEntryDto
   workerGroup: { id: string; name: string }
   workers?: Array<{ id: string; name: string }>
-  accessToken?: string
+  accessToken?: string | null
 }) {
-  if (DEV_AUTH_BYPASS_ENABLED && params.entry.runtimeTask) {
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
+    return takeHttpTaskBoardEntry(
+      params.accessToken,
+      params.entry,
+      params.workerGroup.id,
+      params.workers?.[0]?.id ?? null
+    )
+  }
+  if (params.entry.runtimeTask) {
     return (async () => {
       if (
         isAttachedRepairEntry(params.entry) &&
@@ -356,7 +375,7 @@ export function takeTaskBoardEntry(params: {
           subtaskId: params.entry.subtask.id,
           workerGroup: params.workerGroup,
           workers: params.workers,
-          accessToken: params.accessToken,
+          accessToken: params.accessToken ?? undefined,
         })
       }
       return taskBoardMockClient.takeTask({
@@ -372,12 +391,18 @@ export function takeTaskBoardEntry(params: {
     subtaskId: params.entry.subtask.id,
     workerGroup: params.workerGroup,
     workers: params.workers,
-    accessToken: params.accessToken,
+    accessToken: params.accessToken ?? undefined,
   })
 }
 
-export function pauseTaskBoardEntry(entry: TaskBoardEntryDto) {
-  if (DEV_AUTH_BYPASS_ENABLED && entry.runtimeTask) {
+export function pauseTaskBoardEntry(
+  entry: TaskBoardEntryDto,
+  accessToken?: string | null
+) {
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
+    return pauseHttpTaskBoardEntry(accessToken, entry)
+  }
+  if (entry.runtimeTask) {
     return (async () => {
       const runtimeTask = await taskBoardMockClient.pauseTask({
         taskId: entry.runtimeTask!.id,
@@ -401,8 +426,14 @@ export function pauseTaskBoardEntry(entry: TaskBoardEntryDto) {
   })
 }
 
-export function resumeTaskBoardEntry(entry: TaskBoardEntryDto) {
-  if (DEV_AUTH_BYPASS_ENABLED && entry.runtimeTask) {
+export function resumeTaskBoardEntry(
+  entry: TaskBoardEntryDto,
+  accessToken?: string | null
+) {
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
+    return resumeHttpTaskBoardEntry(accessToken, entry)
+  }
+  if (entry.runtimeTask) {
     return (async () => {
       const runtimeTask = await taskBoardMockClient.resumeTask({
         taskId: entry.runtimeTask!.id,
@@ -429,9 +460,18 @@ export function resumeTaskBoardEntry(entry: TaskBoardEntryDto) {
 
 export function completeTaskBoardEntry(
   entry: TaskBoardEntryDto,
-  pendingUploads: PendingEstimateMediaUpload[] = []
+  pendingUploads: PendingEstimateMediaUpload[] = [],
+  accessToken?: string | null
 ) {
-  if (DEV_AUTH_BYPASS_ENABLED && entry.runtimeTask) {
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
+    if (pendingUploads.length > 0) {
+      throw new Error(
+        "Загрузка результата недоступна: защищённый HTTP runtime media-service ещё не подключён."
+      )
+    }
+    return completeHttpTaskBoardEntry(accessToken, entry)
+  }
+  if (entry.runtimeTask) {
     return (async () => {
       if (isAttachedRepairEntry(entry) && entry.subtask.status !== "DONE") {
         await completeRepairTaskEntry({
@@ -456,7 +496,7 @@ export function completeTaskBoardEntry(
 export async function confirmTaskBoardGroupReturned(entry: TaskBoardEntryDto) {
   const groupId = entry.interruption?.workerGroupId
   const warehouseId = entry.runtimeTask?.warehouseId
-  if (!DEV_AUTH_BYPASS_ENABLED || !groupId || !warehouseId) return []
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED || !groupId || !warehouseId) return []
   const snapshot = await taskBoardMockClient.getSnapshot(warehouseId)
   const interruptions = snapshot.interruptions
     .filter(
@@ -476,20 +516,20 @@ export async function confirmTaskBoardGroupReturned(entry: TaskBoardEntryDto) {
 }
 
 export function subscribeTaskBoardMock(listener: () => void) {
-  return DEV_AUTH_BYPASS_ENABLED
+  return DEV_MAINTENANCE_FIXTURES_ENABLED
     ? taskBoardMockClient.subscribe(listener)
     : () => undefined
 }
 
 export function listTaskBoardWorkers(serviceWarehouseId: string) {
-  if (!DEV_AUTH_BYPASS_ENABLED) return Promise.resolve([])
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) return Promise.resolve([])
   return taskBoardMockClient
     .getSnapshot(serviceWarehouseId)
     .then((snapshot) => snapshot.workers.filter((worker) => worker.active))
 }
 
 export function listTaskBoardNotifications(workerId: string | null) {
-  if (!DEV_AUTH_BYPASS_ENABLED || !workerId) {
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED || !workerId) {
     return Promise.resolve([] as WorkerNotificationDto[])
   }
   return taskBoardMockClient.listNotifications(workerId)
@@ -520,7 +560,7 @@ export function markAllTaskBoardNotificationsRead(params: {
 }
 
 export async function setTaskBoardActiveWorker(workerId: string) {
-  if (!DEV_AUTH_BYPASS_ENABLED) return
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) return
   const clock = await taskBoardMockClient.getSimulationClock()
   await taskBoardMockClient.updateSimulationClock({
     expectedVersion: clock.version,
@@ -529,11 +569,11 @@ export async function setTaskBoardActiveWorker(workerId: string) {
 }
 
 export async function getTaskBoardActiveWorkerId() {
-  if (!DEV_AUTH_BYPASS_ENABLED) return null
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) return null
   return (await taskBoardMockClient.getSimulationClock()).activeWorkerId
 }
 
 export function evaluateTaskBoardMock() {
-  if (!DEV_AUTH_BYPASS_ENABLED) return Promise.resolve(null)
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) return Promise.resolve(null)
   return taskBoardMockClient.evaluate()
 }

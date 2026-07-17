@@ -30,6 +30,7 @@ public class GatewayProperties {
     @NotNull private URI taskBoardUri;
     @NotNull private URI warehouseUri;
     @NotNull private URI assetUri;
+    @NotNull private URI maintenanceUri;
   }
 
   @Getter

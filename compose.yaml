@@ -78,6 +78,25 @@ services:
       timeout: 5s
       retries: 10
 
+  maintenance-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_maintenance
+      POSTGRES_USER: rwms_maintenance
+      POSTGRES_PASSWORD: ${RWMS_MAINTENANCE_DB_PASSWORD:-rwms_maintenance_dev}
+    ports:
+      - "127.0.0.1:5437:5432"
+    volumes:
+      - rwms-maintenance-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_maintenance -d rwms_maintenance"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   kafka:
     image: apache/kafka:4.3.1
     profiles: ["core"]
@@ -138,6 +157,7 @@ volumes:
   rwms-task-board-db:
   rwms-warehouse-db:
   rwms-asset-db:
+  rwms-maintenance-db:
   rwms-kafka:
   rwms-rabbitmq:
 

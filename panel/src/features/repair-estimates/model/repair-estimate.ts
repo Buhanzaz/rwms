@@ -24,9 +24,16 @@ export type MoneyDecimal = string
 
 export type RepairEstimateCatalogLineSnapshotDto = {
   nodeId: string
+  catalogVersionId?: string
   code: string
   name: string
   nodeType: "WORK" | "MATERIAL" | "OPTION"
+  unit?: string | null
+  unitPrice?: MoneyDecimal | null
+  durationMinutes?: number
+  queueId?: string | null
+  queueCode?: string | null
+  queueKind?: RepairEstimateCatalogRouteQueueKind | null
 }
 
 export type RepairEstimateLineDto = {
@@ -52,6 +59,8 @@ export type RepairEstimateMediaVariantDto = {
 
 export type RepairEstimateMediaRefDto = {
   id: RepairEstimateMediaId
+  generation?: number
+  opaqueOnly?: boolean
   fileName: string
   mimeType: string
   /** Optional while legacy browser fixtures are being migrated to media-service. */
@@ -80,6 +89,7 @@ export type RepairEstimateTaskPlanDto = {
   primaryLineId: RepairEstimateLineId | null
   groupComment: string
   queueCode: string | null
+  queueId?: string | null
   routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
   sortOrder: number
   generationStatus: RepairEstimateTaskPlanGenerationStatus
@@ -161,6 +171,8 @@ export type AmendCompletedRepairEstimateCommand = Omit<
 > & {
   estimateId: RepairEstimateId
   expectedVersion: number
+  expectedLinkedRepairVersion: number | null
+  amendmentReason: string
 }
 
 export type RepairEstimateListQuery = {
@@ -236,4 +248,5 @@ export type CompleteRepairEstimateInput = {
 
 export type AmendCompletedRepairEstimateInput = CompleteRepairEstimateInput & {
   expectedTaskVersion: number | null
+  amendmentReason: string
 }

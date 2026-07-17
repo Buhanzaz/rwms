@@ -113,6 +113,38 @@ public final class AssetApiModels {
   public record FencedStatusRequest(@NotNull @Min(0) Long expectedVersion, @NotNull RentalItemStatus status,
       @NotNull UUID leaseId, @NotNull @Min(1) Long fencingToken) {}
 
+  public enum MaintenanceLeaseOwnerType { MAINTENANCE_ESTIMATE, MAINTENANCE_REPAIR }
+  public enum MaintenanceStatusAction {
+    QUEUE_FOR_REPAIR,
+    COMPLETE_EMPTY_ESTIMATE,
+    MARK_PENDING_ACCEPTANCE,
+    ACCEPT_REPAIR,
+    WRITE_OFF
+  }
+  public record AcquireMaintenanceOperationLeaseRequest(
+      @NotNull UUID rentalItemId,
+      @NotNull MaintenanceLeaseOwnerType ownerType,
+      @NotNull UUID ownerId,
+      @NotNull @Min(0) Long expectedRentalItemVersion) {}
+  public record RenewMaintenanceOperationLeaseRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotNull @Min(1) Long fencingToken,
+      @NotNull MaintenanceLeaseOwnerType ownerType,
+      @NotNull UUID ownerId) {}
+  public record ReleaseMaintenanceOperationLeaseRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotNull @Min(1) Long fencingToken,
+      @NotNull MaintenanceLeaseOwnerType ownerType,
+      @NotNull UUID ownerId) {}
+  public record MaintenanceFencedStatusRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotNull MaintenanceStatusAction action,
+      @NotNull UUID leaseId,
+      @NotNull @Min(1) Long fencingToken,
+      @NotNull MaintenanceLeaseOwnerType ownerType,
+      @NotNull UUID ownerId,
+      UUID linkedReturnEstimateId) {}
+
   public record ClassifierRequest(@NotNull @Min(0) Long expectedVersion, @NotBlank @Size(max = 32) String type,
       UUID parentId, @NotBlank @Size(max = 64) String code, @NotBlank @Size(max = 255) String name,
       boolean active, @Min(0) Integer sortOrder) {}

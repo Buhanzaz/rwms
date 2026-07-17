@@ -179,6 +179,25 @@ public final class ApiModels {
       OffsetDateTime deadlineAt,
       @NotEmpty List<@Valid RouteStepRequest> route) {}
 
+  public record RegisterExternalTaskRequest(
+      @NotNull UUID warehouseId,
+      @NotNull UUID externalTaskId,
+      @NotBlank @Size(max = 256) String title,
+      @Size(max = 64) String unitNumber,
+      @Size(max = 2000) String description,
+      @Min(0) Integer plannedDurationMinutes,
+      OffsetDateTime deadlineAt,
+      @NotEmpty List<@Valid RouteStepRequest> route) {}
+
+  public record PreStartUpdateTaskRequest(
+      @NotNull @Min(0) Long expectedTaskVersion,
+      @NotBlank @Size(max = 256) String title,
+      @Size(max = 64) String unitNumber,
+      @Size(max = 2000) String description,
+      @Min(0) Integer plannedDurationMinutes,
+      OffsetDateTime deadlineAt,
+      @NotEmpty List<@Valid RouteStepRequest> route) {}
+
   public record TakeEntryRequest(
       @NotNull @Min(0) Long expectedVersion, UUID workerGroupId, UUID workerId) {}
 

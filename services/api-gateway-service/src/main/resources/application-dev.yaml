@@ -6,6 +6,7 @@ rwms:
       task-board-uri: ${TASK_BOARD_SERVICE_URL:http://127.0.0.1:8081}
       warehouse-uri: ${WAREHOUSE_SERVICE_URL:http://127.0.0.1:8083}
       asset-uri: ${ASSET_SERVICE_URL:http://127.0.0.1:8086}
+      maintenance-uri: ${MAINTENANCE_SERVICE_URL:http://127.0.0.1:8087}
     security:
       issuer: ${AUTH_ISSUER:http://localhost:8080/auth}
       audience: ${AUTH_AUDIENCE:rwms-services}

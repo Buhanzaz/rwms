@@ -82,6 +82,7 @@ class GatewayProductionSafetyValidatorTest {
     properties.getRoutes().setTaskBoardUri(URI.create("http://task-board-service:8081"));
     properties.getRoutes().setWarehouseUri(URI.create("http://warehouse-service:8083"));
     properties.getRoutes().setAssetUri(URI.create("http://asset-service:8086"));
+    properties.getRoutes().setMaintenanceUri(URI.create("http://maintenance-service:8087"));
     properties.getSecurity().setIssuer("https://panel.example/auth");
     properties.getSecurity().setAudience("rwms-services");
     properties.getSecurity().setJwkSetUri(URI.create("http://auth-service:9000/oauth2/jwks"));

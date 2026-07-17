@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/maintenance/maintenance-dlt-v1.schema.json",
+  "title": "RWMS maintenance-service sanitized consumer DLT record v1",
+  "description": "Consumer-owned failure record. The original task-board or media message body, business text, credentials and PII are forbidden.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["failureCode", "messageSha256", "recordedAt"],
+  "properties": {
+    "failureCode": {
+      "enum": ["VALIDATION_REJECTED", "PROCESSING_FAILED", "VERSION_GAP"]
+    },
+    "messageSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "recordedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "x-rwms-topic": "rwms.maintenance.dlt.v1",
+  "x-rwms-replay": "OPERATOR_REVIEWED_ONLY"
+}

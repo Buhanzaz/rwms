@@ -24,6 +24,7 @@ import {
   REPAIR_TASKS_MOCK_STORAGE_KEY,
   REPAIR_TASKS_UPDATED_EVENT,
 } from "@/features/repair-tasks/adapters/local-storage-repair-tasks-adapter"
+import { DEV_MAINTENANCE_FIXTURES_ENABLED } from "@/features/maintenance/maintenance-runtime"
 import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import {
@@ -108,6 +109,7 @@ export function AcceptancePage() {
   })
 
   useEffect(() => {
+    if (!DEV_MAINTENANCE_FIXTURES_ENABLED) return
     const invalidate = () => {
       void queryClient.invalidateQueries({ queryKey: REPAIR_TASKS_QUERY_KEY })
     }
@@ -180,6 +182,10 @@ export function AcceptancePage() {
         ) : listQuery.isError ? (
           <p role="alert" className="text-xs text-destructive">
             Не удалось загрузить очередь приёмки.
+          </p>
+        ) : tasks.length === 0 ? (
+          <p role="status" className="p-4 text-sm text-muted-foreground">
+            Нет ремонтов, ожидающих приёмки.
           </p>
         ) : (
           <>
@@ -262,17 +268,15 @@ export function AcceptancePage() {
               />
             </div>
 
-            {tasks.length > 0 ? (
-              <div className="grid gap-3 md:hidden">
-                {tasks.map((task) => (
-                  <AcceptanceMobileCard
-                    key={task.id}
-                    task={task}
-                    onOpen={() => openTask(task.id)}
-                  />
-                ))}
-              </div>
-            ) : null}
+            <div className="grid gap-3 md:hidden">
+              {tasks.map((task) => (
+                <AcceptanceMobileCard
+                  key={task.id}
+                  task={task}
+                  onOpen={() => openTask(task.id)}
+                />
+              ))}
+            </div>
           </>
         )}
       </div>

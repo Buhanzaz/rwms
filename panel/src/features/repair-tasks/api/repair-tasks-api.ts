@@ -1,6 +1,6 @@
 import {
   createRepairEstimateCatalogIndex,
-  getOperationalRepairEstimateCatalog,
+  getOperationalMaintenanceCatalog,
 } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import { IndexedDbRepairEstimateMediaAdapter } from "@/features/repair-estimates/adapters/indexed-db-repair-estimate-media-adapter"
 import { panelRepairTaskRentalItemsClient } from "@/features/repair-tasks/adapters/panel-repair-task-rental-items-client"
@@ -18,6 +18,8 @@ import type {
   PendingEstimateMediaUpload,
 } from "@/features/repair-estimates/model/repair-estimate"
 import { LocalStorageRepairTasksAdapter } from "@/features/repair-tasks/adapters/local-storage-repair-tasks-adapter"
+import { httpRepairTasksAdapter } from "@/features/repair-tasks/adapters/http-repair-tasks-adapter"
+import { DEV_MAINTENANCE_FIXTURES_ENABLED } from "@/features/maintenance/maintenance-runtime"
 import {
   assertRepairTaskCanBeQueued,
   buildDirectRepairTaskSubtasks,
@@ -40,11 +42,15 @@ import type {
 
 export const REPAIR_TASKS_QUERY_KEY = ["repair-tasks"] as const
 
-const mediaClient = new IndexedDbRepairEstimateMediaAdapter()
+const fixtureMediaClient = new IndexedDbRepairEstimateMediaAdapter()
 const localRepairTasksAdapter = new LocalStorageRepairTasksAdapter(
   panelRepairTaskRentalItemsClient
 )
-const repairTasksClient: RepairTasksClient = localRepairTasksAdapter
+const stage6RepairTasksClient: RepairTasksClient =
+  DEV_MAINTENANCE_FIXTURES_ENABLED
+    ? localRepairTasksAdapter
+    : httpRepairTasksAdapter
+const repairTasksClient = stage6RepairTasksClient
 
 export function repairTasksListQueryKey(warehouseId: string) {
   return [...REPAIR_TASKS_QUERY_KEY, "list", warehouseId] as const
@@ -108,13 +114,14 @@ export async function getRepairTask(taskId: string, warehouseId: string) {
   if (!task) {
     return null
   }
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) return task
   return {
     ...task,
-    media: await mediaClient.hydrate(task.media),
+    media: await fixtureMediaClient.hydrate(task.media),
     subtasks: await Promise.all(
       task.subtasks.map(async (subtask) => ({
         ...subtask,
-        resultMedia: await mediaClient.hydrate(subtask.resultMedia),
+        resultMedia: await fixtureMediaClient.hydrate(subtask.resultMedia),
       }))
     ),
   }
@@ -148,7 +155,7 @@ export async function getRepairTaskByInventoryFinding(
     sourceInventoryFindingId,
     warehouseId
   )
-  return task ? hydrateCommittedTaskMedia(task) : null
+  return task ? hydrateFixtureTaskMedia(task) : null
 }
 
 export function getRepairTaskSnapshotByInventoryFinding(
@@ -156,7 +163,7 @@ export function getRepairTaskSnapshotByInventoryFinding(
   sourceInventoryFindingId: string,
   warehouseId: string
 ) {
-  return repairTasksClient.getByInventoryFinding(
+  return localRepairTasksAdapter.getByInventoryFinding(
     sourceInventoryId,
     sourceInventoryFindingId,
     warehouseId
@@ -183,26 +190,34 @@ function buildWriteCommand(params: {
     reason: params.draft.reason,
     dispatchDate: params.draft.dispatchDate,
     comment: params.draft.comment,
-    media: mediaClient.dehydrate(params.media),
+    media: DEV_MAINTENANCE_FIXTURES_ENABLED
+      ? fixtureMediaClient.dehydrate(params.media)
+      : params.media,
     subtasks: params.subtasks,
   }
 }
 
-async function hydrateCommittedTaskMedia(task: RepairTaskDto) {
+async function hydrateFixtureTaskMedia(task: RepairTaskDto) {
   try {
     return {
       ...task,
-      media: await mediaClient.hydrate(task.media),
+      media: await fixtureMediaClient.hydrate(task.media),
       subtasks: await Promise.all(
         task.subtasks.map(async (subtask) => ({
           ...subtask,
-          resultMedia: await mediaClient.hydrate(subtask.resultMedia),
+          resultMedia: await fixtureMediaClient.hydrate(subtask.resultMedia),
         }))
       ),
     }
   } catch {
     return task
   }
+}
+
+function hydrateCommittedTaskMedia(task: RepairTaskDto) {
+  return DEV_MAINTENANCE_FIXTURES_ENABLED
+    ? hydrateFixtureTaskMedia(task)
+    : Promise.resolve(task)
 }
 
 async function persistTaskWithMedia(params: {
@@ -217,7 +232,7 @@ async function persistTaskWithMedia(params: {
   if (params.status === "QUEUED") {
     assertRepairTaskCanBeQueued(params.draft.lines)
   }
-  const snapshot = await getOperationalRepairEstimateCatalog()
+  const snapshot = await getOperationalMaintenanceCatalog(params.warehouseId)
   const catalog = createRepairEstimateCatalogIndex(snapshot)
   if (params.status === "QUEUED" && params.completionMode === "AUTO") {
     const autoIssues = validateAutoCompletion(params.draft.lines, catalog)
@@ -255,7 +270,17 @@ async function persistTaskWithMedia(params: {
   const existing = params.draft.taskId
     ? await repairTasksClient.getById(params.draft.taskId, params.warehouseId)
     : null
-  const uploaded = await mediaClient.upload(params.draft.pendingUploads)
+  if (
+    !DEV_MAINTENANCE_FIXTURES_ENABLED &&
+    params.draft.pendingUploads.length > 0
+  ) {
+    throw new Error(
+      "Загрузка медиа недоступна: защищённый HTTP runtime media-service ещё не подключён."
+    )
+  }
+  const uploaded = DEV_MAINTENANCE_FIXTURES_ENABLED
+    ? await fixtureMediaClient.upload(params.draft.pendingUploads)
+    : []
   const media = [...params.draft.media, ...uploaded]
   let saved: RepairTaskDto
 
@@ -267,7 +292,7 @@ async function persistTaskWithMedia(params: {
         : await repairTasksClient.saveDraft(command)
   } catch (error) {
     try {
-      await mediaClient.discard(uploaded.map((item) => item.id))
+      await fixtureMediaClient.discard(uploaded.map((item) => item.id))
     } catch {
       // Preserve the task persistence error; media compensation is best-effort.
     }
@@ -280,7 +305,7 @@ async function persistTaskWithMedia(params: {
       .map((item) => item.id)
       .filter((id) => !committedIds.has(id)) ?? []
   try {
-    await mediaClient.discard(removedIds)
+    await fixtureMediaClient.discard(removedIds)
   } catch {
     // Cleanup after the durable task write is best-effort.
   }
@@ -414,22 +439,32 @@ export async function completeRepairTaskEntry(params: {
   subtaskId: string
   pendingUploads: PendingEstimateMediaUpload[]
 }) {
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
+    if (params.pendingUploads.length > 0) {
+      throw new Error(
+        "Загрузка результата недоступна: защищённый HTTP runtime media-service ещё не подключён."
+      )
+    }
+    throw new Error(
+      "Завершите этап через производственный HTTP API доски заданий."
+    )
+  }
   if (params.pendingUploads.length > 20) {
     throw new Error("К этапу можно прикрепить не более 20 фотографий")
   }
-  const uploaded = await mediaClient.upload(params.pendingUploads)
+  const uploaded = await fixtureMediaClient.upload(params.pendingUploads)
   try {
     const saved = await repairTasksClient.completeEntry({
       taskId: params.task.id,
       subtaskId: params.subtaskId,
       expectedVersion: params.task.version,
       warehouseId: params.task.warehouseId,
-      resultMedia: mediaClient.dehydrate(uploaded),
+      resultMedia: fixtureMediaClient.dehydrate(uploaded),
     })
     return hydrateCommittedTaskMedia(saved)
   } catch (error) {
     try {
-      await mediaClient.discard(uploaded.map((media) => media.id))
+      await fixtureMediaClient.discard(uploaded.map((media) => media.id))
     } catch {
       // Preserve the task completion error; compensation is best-effort.
     }
@@ -479,7 +514,7 @@ export async function writeOffRepairDraft(params: {
   pendingUploads: PendingEstimateMediaUpload[]
   writeOffReason: string
 }) {
-  const snapshot = await getOperationalRepairEstimateCatalog()
+  const snapshot = await getOperationalMaintenanceCatalog(params.warehouseId)
   const catalog = createRepairEstimateCatalogIndex(snapshot)
   const subtasks = buildDirectRepairTaskSubtasks(params.lines, catalog)
   const existing = params.taskId
@@ -490,7 +525,14 @@ export async function writeOffRepairDraft(params: {
           params.warehouseId
         )
       : null
-  const uploaded = await mediaClient.upload(params.pendingUploads)
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED && params.pendingUploads.length > 0) {
+    throw new Error(
+      "Загрузка медиа недоступна: защищённый HTTP runtime media-service ещё не подключён."
+    )
+  }
+  const uploaded = DEV_MAINTENANCE_FIXTURES_ENABLED
+    ? await fixtureMediaClient.upload(params.pendingUploads)
+    : []
   const media = [...params.media, ...uploaded]
   let saved: RepairTaskDto
 
@@ -509,13 +551,15 @@ export async function writeOffRepairDraft(params: {
       reason: params.reason,
       dispatchDate: params.dispatchDate,
       comment: params.comment,
-      media: mediaClient.dehydrate(media),
+      media: DEV_MAINTENANCE_FIXTURES_ENABLED
+        ? fixtureMediaClient.dehydrate(media)
+        : media,
       subtasks,
       writeOffReason: params.writeOffReason,
     })
   } catch (error) {
     try {
-      await mediaClient.discard(uploaded.map((item) => item.id))
+      await fixtureMediaClient.discard(uploaded.map((item) => item.id))
     } catch {
       // Preserve the write-off error; media compensation is best-effort.
     }
@@ -528,7 +572,7 @@ export async function writeOffRepairDraft(params: {
       .map((item) => item.id)
       .filter((id) => !committedIds.has(id)) ?? []
   try {
-    await mediaClient.discard(removedIds)
+    await fixtureMediaClient.discard(removedIds)
   } catch {
     // Cleanup after the durable write-off is best-effort.
   }
@@ -540,7 +584,9 @@ export async function createRepairTaskFromCompletedEstimate(params: {
   taskPlans: RepairEstimateTaskPlanDto[]
   allowWaitingEstimateConfirmation?: boolean
 }) {
-  const snapshot = await getOperationalRepairEstimateCatalog()
+  const snapshot = await getOperationalMaintenanceCatalog(
+    params.estimate.warehouseId
+  )
   const catalog = createRepairEstimateCatalogIndex(snapshot)
   return repairTasksClient.upsertFromEstimate({
     warehouseId: params.estimate.warehouseId,
@@ -565,15 +611,15 @@ export async function createRepairTaskFromCompletedEstimate(params: {
 export async function upsertRepairTaskByInventoryFinding(
   command: RepairTaskFromInventoryFindingCommand
 ) {
-  const saved = await repairTasksClient.upsertByInventoryFinding({
+  const saved = await localRepairTasksAdapter.upsertByInventoryFinding({
     ...command,
-    media: mediaClient.dehydrate(command.media),
+    media: fixtureMediaClient.dehydrate(command.media),
     subtasks: command.subtasks.map((subtask) => ({
       ...structuredClone(subtask),
-      resultMedia: mediaClient.dehydrate(subtask.resultMedia),
+      resultMedia: fixtureMediaClient.dehydrate(subtask.resultMedia),
     })),
   })
-  return hydrateCommittedTaskMedia(saved)
+  return hydrateFixtureTaskMedia(saved)
 }
 
 export async function syncRepairTaskFromCompletedEstimate(params: {
@@ -581,7 +627,9 @@ export async function syncRepairTaskFromCompletedEstimate(params: {
   taskPlans: RepairEstimateTaskPlanDto[]
   expectedTaskVersion: number | null
 }) {
-  const snapshot = await getOperationalRepairEstimateCatalog()
+  const snapshot = await getOperationalMaintenanceCatalog(
+    params.estimate.warehouseId
+  )
   const catalog = createRepairEstimateCatalogIndex(snapshot)
   return repairTasksClient.syncFromEstimate({
     warehouseId: params.estimate.warehouseId,

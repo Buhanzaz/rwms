@@ -6,6 +6,7 @@ export type GatewayRuntimeConfig = {
   taskBoardApiBaseUrl: string
   warehouseApiBaseUrl: string
   assetApiBaseUrl: string
+  maintenanceApiBaseUrl: string
 }
 
 function parseOriginOnlyUrl(value: string, settingName: string) {
@@ -62,6 +63,7 @@ export function createGatewayRuntimeConfig(
     taskBoardApiBaseUrl: `${gatewayOrigin}/api/task-board`,
     warehouseApiBaseUrl: `${gatewayOrigin}/api/warehouse`,
     assetApiBaseUrl: `${gatewayOrigin}/api/asset`,
+    maintenanceApiBaseUrl: `${gatewayOrigin}/api/maintenance`,
   }
 }
 
