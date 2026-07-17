@@ -48,10 +48,23 @@ class AssetOpenApiParityTest {
         "/api/internal/asset/v1/equipment-holds",
         "/api/internal/asset/v1/equipment-holds/{id}/commit",
         "/api/internal/asset/v1/operation-leases",
-        "/api/internal/asset/v1/rental-items/{id}/fenced-status");
+        "/api/internal/asset/v1/rental-items/{id}/fenced-status",
+        "/api/internal/asset/v1/maintenance/operation-leases",
+        "/api/internal/asset/v1/maintenance/operation-leases/{id}/renew",
+        "/api/internal/asset/v1/maintenance/operation-leases/{id}/release",
+        "/api/internal/asset/v1/maintenance/rental-items/{id}/fenced-status");
     Map<String, Object> schemas = child(child(document, "components"), "schemas");
     assertThat(list(child(schemas, "RentalItem").get("required")))
         .contains("id", "version", "number", "status", "passport", "tags", "contents");
+    assertThat(list(child(schemas, "MaintenanceStatusAction").get("enum")))
+        .containsExactly(
+            "QUEUE_FOR_REPAIR",
+            "COMPLETE_EMPTY_ESTIMATE",
+            "MARK_PENDING_ACCEPTANCE",
+            "ACCEPT_REPAIR",
+            "WRITE_OFF");
+    assertThat(child(schemas, "MaintenanceFencedStatusRequest").toString())
+        .doesNotContain("RentalItemStatus", "status=");
     assertAllLocalReferencesResolve(document, document);
   }
 

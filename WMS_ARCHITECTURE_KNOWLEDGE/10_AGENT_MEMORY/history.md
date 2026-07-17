@@ -3761,3 +3761,26 @@ a substitute source.
   are approved.
 - `ACTIVE_STAGE.md` advances only its Stage 6 status to database/implementation
   in progress. Stage 7 remains closed.
+
+## 2026-07-17 Stage 6 maintenance implementation verification
+
+- Implemented the JPA/Flyway maintenance service, canonical HTTP/event
+  contracts, four least-privilege prerequisites and approved production panel
+  cutover. Canonical catalog topic is
+  `rwms.maintenance.catalog-version.v1`.
+- The approved sanitized artifact pins 232 nodes/254 links, the four evidence
+  hashes, policy hash
+  `c378e395ec2931b1639dac8547659a1f749530edf791c1db9c524dc66d1b6c85`
+  and request-mapping hash
+  `118aed23abfebeb213dc9dc37b415def2b8b0272e94971f2e2ab93d80ed280a2`.
+  It omits 45 non-null node sort orders, maps 144 null durations and all 254
+  null link orders to zero, and binds 10 routed nodes to six reviewed queues
+  for legacy warehouse `...0002`. It contains no comments, PII or raw SQL and
+  has no runtime legacy-database path.
+- Catalog tests passed 11/11. The final Java 25/Testcontainers run passed 18
+  classes/116 tests with zero failures, errors or skips in 3m20s. Panel lint,
+  typecheck, build, 46 Vitest files/261 tests and Playwright desktop/tablet/
+  mobile 3/3 passed. Complete prerequisite suites passed asset 45, task-board
+  102 (one expected skip), auth 131 (one expected skip) and gateway 34.
+- `ACTIVE_STAGE.md` remains on Stage 6 until the reviewed implementation commit
+  exists. No Stage 7 contract or code was created.

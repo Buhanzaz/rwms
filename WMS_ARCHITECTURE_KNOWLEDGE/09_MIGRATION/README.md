@@ -345,3 +345,22 @@ with source hash, row counts and validation report; activation is a separate
 MANAGE/CAS command. This approval is not permission to copy the whole legacy
 database. Flyway V1 is authorized but remains unproved until its migration
 matrix passes; direct legacy-database copying remains forbidden.
+
+## Stage 6 maintenance implementation and controlled import (2026-07-17)
+
+The preceding entrance record is retained chronologically and superseded by
+the verified implementation. Maintenance Flyway V1 and JPA validation pass the
+clean/repeat/checksum/unversioned matrix. The final Java 25/Testcontainers run
+passed 18 classes/116 tests with zero failures, errors or skips in 3m20s.
+
+The controlled artifact imports exactly 232 nodes and 254 links into DRAFT,
+then proves explicit activation and estimate consumption. Its source/node/link/
+queue hashes are `94bacdcf7114e9dfb1935a162b29714e25ed36b406980c3b9551c7d27c687721`,
+`a5546cbbc9c48c630e987c4e831eebee47f70413b467ac0fdc21e5ab3b510873`,
+`3a20b83e2392ff8506a8525e6a9762c132d3a9957679151d4964c4335536e883`
+and `f486489d601cff0ddd85228516f1527277f8b90ec6fec6ee11e8aebcdd569766`.
+Policy hash is `c378e395ec2931b1639dac8547659a1f749530edf791c1db9c524dc66d1b6c85`;
+request-mapping hash is
+`118aed23abfebeb213dc9dc37b415def2b8b0272e94971f2e2ab93d80ed280a2`.
+No browser data, legacy comments/PII, raw SQL or runtime `old_db` access enters
+the target service.

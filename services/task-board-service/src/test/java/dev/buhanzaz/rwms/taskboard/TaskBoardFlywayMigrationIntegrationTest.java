@@ -66,10 +66,10 @@ class TaskBoardFlywayMigrationIntegrationTest {
   }
 
   @Test
-  void cumulativeVersionFourAndEventSourcingVersionFiveMigrateCleanDatabaseAndRepeatIsNoOp() {
+  void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -95,6 +95,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             "task_board_inbox",
             "task_board_outbox",
             "task_time_event",
+            "task_sync_source",
             "version_gap_quarantine",
             "work_queue",
             "work_queue_class_binding",
@@ -138,6 +139,14 @@ class TaskBoardFlywayMigrationIntegrationTest {
         .containsEntry("version", "5")
         .containsEntry("description", "task board event sourcing")
         .containsEntry("script", "V5__task_board_event_sourcing.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='6'"))
+        .containsEntry("version", "6")
+        .containsEntry("description", "task sync source ownership")
+        .containsEntry("script", "V6__task_sync_source_ownership.sql")
         .containsEntry("success", true);
   }
 
@@ -229,7 +238,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isOne();
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(2);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 

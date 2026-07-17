@@ -504,3 +504,20 @@ empty estimate creates no repair and frees the cabin, while every non-empty
 estimate retains material-only/unassigned lines in one repair snapshot. These
 details were approved by the user's `Продолжай` response; implementation and
 verification evidence remain outstanding until the Stage 6 exit gate.
+
+### Stage 6 implementation and catalog-policy resolution (2026-07-17)
+
+The approved estimate, repair, rework, acceptance and fenced-write-off state
+machines are implemented with optimistic versions, stable idempotency keys and
+truthful lease/task reconciliation. Deterministic replay, concurrency,
+authorization, failure/retry and real Kafka recovery are covered by the final
+18-class/116-test maintenance suite.
+
+The approved closed catalog mapping preserves UUID/code/name/type/parent/unit/
+price, applicable node booleans and reviewed queue routing. It maps 144 null
+durations and 254 null link orders to zero and omits 45 non-null node sort
+orders plus audit, canvas, default-quantity, additional-option,
+furniture-category, main-menu order/title, link-active and all comment fields.
+Exactly 232 nodes/254 links import into DRAFT; activation is a separate
+MANAGE/CAS decision. Ten routed nodes use six queue snapshots bound to legacy
+warehouse `00000000-0000-0000-0000-000000000002`.

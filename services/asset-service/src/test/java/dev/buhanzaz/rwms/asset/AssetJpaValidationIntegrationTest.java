@@ -4,36 +4,51 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireEquipmentHoldRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireMaintenanceOperationLeaseRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireOperationLeaseRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.ClassifierRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CommitEquipmentHoldRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateClassifierRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateRentalItemRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.Disposition;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.DispositionEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.FencedStatusRequest;
-import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceFencedStatusRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceLeaseOwnerType;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceStatusAction;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.ReleaseMaintenanceOperationLeaseRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.ReleaseOperationLeaseRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.RenewMaintenanceOperationLeaseRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.TransferEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateGeneralCommentRequest;
-import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateClassifierRequest;
-import dev.buhanzaz.rwms.asset.api.AssetApiModels.ClassifierRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdatePassportRequest;
-import dev.buhanzaz.rwms.asset.domain.EquipmentCatalogItem;
-import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
-import dev.buhanzaz.rwms.asset.domain.RentalItem;
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
 import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
+import dev.buhanzaz.rwms.asset.domain.EquipmentCatalogItem;
+import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
+import dev.buhanzaz.rwms.asset.domain.OperationLease;
+import dev.buhanzaz.rwms.asset.domain.OperationLeaseState;
+import dev.buhanzaz.rwms.asset.domain.RentalItem;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.eventing.AssetEventStore;
 import dev.buhanzaz.rwms.asset.eventing.AssetReplayVerifier;
 import dev.buhanzaz.rwms.asset.repository.EquipmentCatalogItemRepository;
+import dev.buhanzaz.rwms.asset.repository.OperationLeaseRepository;
 import dev.buhanzaz.rwms.asset.repository.RentalItemRepository;
 import dev.buhanzaz.rwms.asset.service.AssetConflictException;
 import dev.buhanzaz.rwms.asset.service.AssetService;
+import jakarta.persistence.EntityManager;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -64,10 +79,13 @@ class AssetJpaValidationIntegrationTest {
 
   @Autowired RentalItemRepository rentalItems;
   @Autowired EquipmentCatalogItemRepository equipment;
+  @Autowired OperationLeaseRepository operationLeases;
   @Autowired AssetEventStore events;
   @Autowired AssetReplayVerifier replay;
   @Autowired JdbcTemplate jdbc;
+  @Autowired EntityManager entityManager;
   @Autowired AssetService service;
+  @Autowired DataSource dataSource;
 
   @DynamicPropertySource
   static void properties(DynamicPropertyRegistry registry) {
@@ -96,6 +114,45 @@ class AssetJpaValidationIntegrationTest {
     assertThat(rental.getVersion()).isZero();
     assertThat(catalog.getCode()).isEqualTo("CHAIR-01");
     assertThat(catalog.getVersion()).isZero();
+  }
+
+  @Test
+  @Transactional
+  void flywayV1ValidatesOperationLeaseJpaMappingRepositoryLocksAndVersioning() {
+    RentalItem rental = rentalItems.saveAndFlush(RentalItem.create(
+        UUID.randomUUID(), "lease-jpa-" + UUID.randomUUID(), null, null, null, null, null, null, "{}", "[]"));
+    OffsetDateTime acquiredAt = OffsetDateTime.now(ZoneOffset.UTC);
+    OperationLease lease = operationLeases.saveAndFlush(OperationLease.acquire(
+        rental.getId(),
+        "MAINTENANCE_REPAIR",
+        UUID.randomUUID().toString(),
+        1,
+        UUID.randomUUID(),
+        acquiredAt,
+        acquiredAt.plusMinutes(15)));
+
+    assertThat(lease.getId()).isNotNull();
+    assertThat(lease.getVersion()).isZero();
+    assertThat(operationLeases.findByIdForUpdate(lease.getId())).containsSame(lease);
+    assertThat(operationLeases.findByRentalItemIdAndStateForUpdate(
+            rental.getId(), OperationLeaseState.ACTIVE))
+        .containsExactly(lease);
+    assertThat(operationLeases.maximumFencingToken(rental.getId())).isEqualTo(1);
+
+    lease.renew(acquiredAt.plusMinutes(1), acquiredAt.plusMinutes(16));
+    operationLeases.saveAndFlush(lease);
+    assertThat(lease.getVersion()).isEqualTo(1);
+
+    lease.release(acquiredAt.plusMinutes(2));
+    operationLeases.saveAndFlush(lease);
+    assertThat(lease.getVersion()).isEqualTo(2);
+    assertThat(lease.getState()).isEqualTo(OperationLeaseState.RELEASED);
+    assertThat(jdbc.queryForObject(
+            "select count(*) from operation_lease where id=? and version=2 and state='RELEASED' "
+                + "and released_at is not null and idempotency_key is not null",
+            Integer.class,
+            lease.getId()))
+        .isEqualTo(1);
   }
 
   @Test
@@ -361,6 +418,7 @@ class AssetJpaValidationIntegrationTest {
             new AcquireOperationLeaseRequest(rental.id(), "MAINTENANCE", "case-1", 0L))
         .response();
     jdbc.update("update operation_lease set expires_at=clock_timestamp() - interval '1 second' where id=?", first.id());
+    entityManager.clear();
 
     var second = service
         .acquireLease(
@@ -380,6 +438,45 @@ class AssetJpaValidationIntegrationTest {
                     new FencedStatusRequest(0L, RentalItemStatus.RENTED, first.id(), first.fencingToken())))
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("stale or fenced");
+    assertThat(replay.rebuildAndVerify().aggregateCount()).isGreaterThanOrEqualTo(3);
+  }
+
+  @Test
+  @Transactional
+  void canonicalReplayParityAcceptsNumericNodeWidthButRejectsRealLeaseDrift() {
+    UUID subjectId = UUID.randomUUID();
+    var rental = service.createRentalItem(
+        subjectId,
+        UUID.randomUUID(),
+        new CreateRentalItemRequest(
+            UUID.randomUUID(),
+            "replay-lease-" + UUID.randomUUID(),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            Map.of(),
+            List.of()))
+        .response();
+    var lease = service.acquireLease(
+        subjectId,
+        UUID.randomUUID(),
+        new AcquireOperationLeaseRequest(rental.id(), "MAINTENANCE", "replay-owner", rental.version()))
+        .response();
+
+    assertThat(replay.rebuildAndVerify().aggregateCount()).isEqualTo(2);
+
+    jdbc.update(
+        "update operation_lease set fencing_token=fencing_token+1 where id=?",
+        lease.id());
+    entityManager.clear();
+
+    assertThatThrownBy(replay::rebuildAndVerify)
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("Asset replay parity mismatch")
+        .hasMessageContaining("fencingToken");
   }
 
   @Test
@@ -409,6 +506,227 @@ class AssetJpaValidationIntegrationTest {
     assertThat(jdbc.queryForObject(
         "select count(*) from domain_event where aggregate_id=? and event_type=?", Integer.class,
         rental.id().toString(), AssetEventType.RENTAL_ITEM_STATUS_CHANGED.value())).isEqualTo(1);
+  }
+
+  @Test
+  @Transactional
+  void maintenanceLeaseCommandsBindAndRecheckTheOwnerWithSubjectBoundReplay() {
+    UUID subjectId = UUID.randomUUID();
+    UUID ownerId = UUID.randomUUID();
+    var rental = service.createRentalItem(
+        subjectId,
+        UUID.randomUUID(),
+        new CreateRentalItemRequest(
+            UUID.randomUUID(), "cabin-" + UUID.randomUUID(), null, null, null, null, null, null,
+            Map.of(), List.of()))
+        .response();
+    UUID acquireKey = UUID.randomUUID();
+    var acquireRequest = new AcquireMaintenanceOperationLeaseRequest(
+        rental.id(), MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, ownerId, rental.version());
+    var acquired = service.acquireMaintenanceLease(
+        subjectId,
+        acquireKey,
+        acquireRequest);
+    var lease = acquired.response();
+    var acquireReplay = service.acquireMaintenanceLease(subjectId, acquireKey, acquireRequest);
+
+    assertThat(lease.ownerType()).isEqualTo("MAINTENANCE_REPAIR");
+    assertThat(lease.ownerId()).isEqualTo(ownerId.toString());
+    assertThat(acquireReplay.replayed()).isTrue();
+    assertThat(acquireReplay.response()).isEqualTo(lease);
+    assertThatThrownBy(() -> service.acquireMaintenanceLease(
+        subjectId, UUID.randomUUID(), acquireRequest))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("reacquisition is forbidden");
+    assertThatThrownBy(() -> service.renewMaintenanceLease(
+        subjectId,
+        UUID.randomUUID(),
+        lease.id(),
+        new RenewMaintenanceOperationLeaseRequest(
+            lease.version(), lease.fencingToken(),
+            MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, UUID.randomUUID())))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("another maintenance owner");
+
+    UUID renewKey = UUID.randomUUID();
+    var renewed = service.renewMaintenanceLease(
+        subjectId,
+        renewKey,
+        lease.id(),
+        new RenewMaintenanceOperationLeaseRequest(
+            lease.version(), lease.fencingToken(),
+            MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, ownerId));
+    var renewedReplay = service.renewMaintenanceLease(
+        subjectId,
+        renewKey,
+        lease.id(),
+        new RenewMaintenanceOperationLeaseRequest(
+            lease.version(), lease.fencingToken(),
+            MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, ownerId));
+    assertThat(renewedReplay.replayed()).isTrue();
+    assertThat(renewedReplay.response()).isEqualTo(renewed.response());
+
+    UUID releaseKey = UUID.randomUUID();
+    var released = service.releaseMaintenanceLease(
+        subjectId,
+        releaseKey,
+        lease.id(),
+        new ReleaseMaintenanceOperationLeaseRequest(
+            renewed.response().version(), lease.fencingToken(),
+            MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, ownerId));
+    var releasedReplay = service.releaseMaintenanceLease(
+        subjectId,
+        releaseKey,
+        lease.id(),
+        new ReleaseMaintenanceOperationLeaseRequest(
+            renewed.response().version(), lease.fencingToken(),
+            MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, ownerId));
+    assertThat(released.response().state()).isEqualTo("RELEASED");
+    assertThat(releasedReplay.replayed()).isTrue();
+    assertThatThrownBy(() -> service.releaseMaintenanceLease(
+        UUID.randomUUID(),
+        releaseKey,
+        lease.id(),
+        new ReleaseMaintenanceOperationLeaseRequest(
+            renewed.response().version(), lease.fencingToken(),
+            MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, ownerId)))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessage("Asset data changed concurrently")
+        .hasMessageNotContaining(ownerId.toString());
+  }
+
+  @Test
+  void maintenanceAcquireRechecksRentalVersionAfterTheStableLockOrder() throws Exception {
+    UUID subjectId = UUID.randomUUID();
+    UUID ownerId = UUID.randomUUID();
+    UUID key = UUID.randomUUID();
+    var rental = service.createRentalItem(
+        subjectId,
+        UUID.randomUUID(),
+        new CreateRentalItemRequest(
+            UUID.randomUUID(), "cabin-" + UUID.randomUUID(), null, null, null, null, null, null,
+            Map.of(), List.of()))
+        .response();
+    var request = new AcquireMaintenanceOperationLeaseRequest(
+        rental.id(), MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, ownerId, rental.version());
+    String idempotencyLock = subjectId + ":maintenance.operation-lease.acquire:" + key;
+
+    try (var blocker = dataSource.getConnection();
+        var executor = Executors.newSingleThreadExecutor()) {
+      blocker.setAutoCommit(false);
+      try (var statement = blocker.prepareStatement(
+          "select pg_advisory_xact_lock(hashtextextended(?, 0))")) {
+        statement.setString(1, idempotencyLock);
+        statement.execute();
+      }
+
+      var acquire = executor.submit(() -> {
+        try {
+          service.acquireMaintenanceLease(subjectId, key, request);
+          return (Throwable) null;
+        } catch (Throwable failure) {
+          return failure;
+        }
+      });
+      awaitAdvisoryWait();
+
+      var changed = service.updateStatus(
+          rental.id(),
+          new dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest(
+              rental.version(), RentalItemStatus.FREE));
+      assertThat(changed.version()).isEqualTo(rental.version() + 1);
+      blocker.commit();
+
+      assertThat(acquire.get(10, TimeUnit.SECONDS))
+          .isInstanceOf(AssetConflictException.class)
+          .hasMessageContaining("changed concurrently");
+      assertThat(jdbc.queryForObject(
+          "select count(*) from operation_lease where rental_item_id=?",
+          Integer.class,
+          rental.id())).isZero();
+    }
+  }
+
+  @Test
+  @Transactional
+  void maintenanceFencedStatusUsesTheActionAllowlistAndActiveFenceForReplay() {
+    UUID subjectId = UUID.randomUUID();
+    UUID ownerId = UUID.randomUUID();
+    var created = service.createRentalItem(
+        subjectId,
+        UUID.randomUUID(),
+        new CreateRentalItemRequest(
+            UUID.randomUUID(), "cabin-" + UUID.randomUUID(), null, null, null, null, null, null,
+            Map.of(), List.of()))
+        .response();
+    var rental = service.updateStatus(
+        created.id(),
+        new dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest(
+            created.version(), RentalItemStatus.FREE));
+    var lease = service.acquireMaintenanceLease(
+        subjectId,
+        UUID.randomUUID(),
+        new AcquireMaintenanceOperationLeaseRequest(
+            rental.id(), MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, ownerId, rental.version()))
+        .response();
+
+    UUID queueKey = UUID.randomUUID();
+    var queueRequest = new MaintenanceFencedStatusRequest(
+        rental.version(),
+        MaintenanceStatusAction.QUEUE_FOR_REPAIR,
+        lease.id(),
+        lease.fencingToken(),
+        MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR,
+        ownerId,
+        null);
+    var queued = service.maintenanceFencedStatus(subjectId, queueKey, rental.id(), queueRequest);
+    var queuedReplay = service.maintenanceFencedStatus(subjectId, queueKey, rental.id(), queueRequest);
+    assertThat(queued.response().status()).isEqualTo(RentalItemStatus.REPAIR);
+    assertThat(queuedReplay.replayed()).isTrue();
+    assertThat(queuedReplay.response()).isEqualTo(queued.response());
+    assertThatThrownBy(() -> service.maintenanceFencedStatus(
+        UUID.randomUUID(), queueKey, rental.id(), queueRequest))
+        .isInstanceOf(AssetConflictException.class);
+
+    var pending = service.maintenanceFencedStatus(
+        subjectId,
+        UUID.randomUUID(),
+        rental.id(),
+        new MaintenanceFencedStatusRequest(
+            queued.response().version(),
+            MaintenanceStatusAction.MARK_PENDING_ACCEPTANCE,
+            lease.id(),
+            lease.fencingToken(),
+            MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR,
+            ownerId,
+            null));
+    var accepted = service.maintenanceFencedStatus(
+        subjectId,
+        UUID.randomUUID(),
+        rental.id(),
+        new MaintenanceFencedStatusRequest(
+            pending.response().version(),
+            MaintenanceStatusAction.ACCEPT_REPAIR,
+            lease.id(),
+            lease.fencingToken(),
+            MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR,
+            ownerId,
+            null));
+    var writtenOff = service.maintenanceFencedStatus(
+        subjectId,
+        UUID.randomUUID(),
+        rental.id(),
+        new MaintenanceFencedStatusRequest(
+            accepted.response().version(),
+            MaintenanceStatusAction.WRITE_OFF,
+            lease.id(),
+            lease.fencingToken(),
+            MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR,
+            ownerId,
+            null));
+    assertThat(pending.response().status()).isEqualTo(RentalItemStatus.WAITING_REPAIR_CHECK);
+    assertThat(accepted.response().status()).isEqualTo(RentalItemStatus.FREE);
+    assertThat(writtenOff.response().status()).isEqualTo(RentalItemStatus.WRITTEN_OFF);
   }
 
   @Test
@@ -471,5 +789,16 @@ class AssetJpaValidationIntegrationTest {
             "locationKind", BalanceLocationKind.STOCK.name(),
             "quantity", quantity));
     return balanceId;
+  }
+
+  private void awaitAdvisoryWait() throws InterruptedException {
+    for (int attempt = 0; attempt < 200; attempt++) {
+      Integer waiters = jdbc.queryForObject(
+          "select count(*) from pg_locks where locktype='advisory' and not granted",
+          Integer.class);
+      if (waiters != null && waiters > 0) return;
+      Thread.sleep(25);
+    }
+    throw new AssertionError("Maintenance acquire did not reach the idempotency lock wait");
   }
 }

@@ -1,5 +1,7 @@
 import type { RepairEstimateCatalogClient } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-client"
 import { repairEstimateCatalogMockClient } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-mock-adapter"
+import { httpRepairEstimateCatalogClient } from "@/features/repair-estimate-catalog/api/http-repair-estimate-catalog-client"
+import { DEV_MAINTENANCE_FIXTURES_ENABLED } from "@/features/maintenance/maintenance-runtime"
 import type {
   RepairEstimateCatalogEffectiveQueueBinding,
   RepairEstimateCatalogLinkDto,
@@ -9,7 +11,9 @@ import type {
 } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 
 const catalogClient: RepairEstimateCatalogClient =
-  repairEstimateCatalogMockClient
+  DEV_MAINTENANCE_FIXTURES_ENABLED
+    ? repairEstimateCatalogMockClient
+    : httpRepairEstimateCatalogClient
 
 /**
  * Stable query-key prefix shared by settings and operational estimate screens.
@@ -348,6 +352,7 @@ export function createRepairEstimateCatalogIndex(
       const explicitQueueCode = current.workQueueCode?.trim() || null
       if (explicitQueueCode || current.routeQueueKind) {
         return {
+          queueId: current.workQueueId ?? null,
           queueCode: explicitQueueCode,
           queueKind: current.routeQueueKind,
         }
@@ -416,7 +421,13 @@ export function createRepairEstimateCatalogIndex(
  * query keys.
  */
 export async function getOperationalRepairEstimateCatalog(): Promise<RepairEstimateCatalogSnapshotDto> {
-  return catalogClient.getOperationalCatalog()
+  return repairEstimateCatalogMockClient.getOperationalCatalog()
+}
+
+export async function getOperationalMaintenanceCatalog(
+  warehouseId: string
+): Promise<RepairEstimateCatalogSnapshotDto> {
+  return catalogClient.getOperationalCatalog(warehouseId)
 }
 
 export function getRepairEstimateCatalogMainMenuTitle(

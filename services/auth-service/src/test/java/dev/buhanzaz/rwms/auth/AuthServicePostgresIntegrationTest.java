@@ -59,7 +59,20 @@ class AuthServicePostgresIntegrationTest {
                         Integer.class))
                 .isEqualTo(1);
         assertThat(jdbc.queryForObject("select count(*) from auth_subject", Integer.class)).isEqualTo(1);
-        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isEqualTo(5);
+        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isEqualTo(6);
+        assertThat(jdbc.queryForMap(
+                        "select client_authentication_methods, authorization_grant_types, scopes, client_settings "
+                                + "from oauth2_registered_client where client_id = ?",
+                        "maintenance-service"))
+                .satisfies(row -> {
+                    assertThat(row.get("client_authentication_methods")).isEqualTo("client_secret_basic");
+                    assertThat(row.get("authorization_grant_types")).isEqualTo("client_credentials");
+                    assertThat(String.valueOf(row.get("scopes")))
+                            .contains("asset.maintenance", "task-board.task-sync")
+                            .doesNotContain("asset.internal", "rwms.write", "warehouse.read");
+                    assertThat(String.valueOf(row.get("client_settings")))
+                            .contains("\"rwms.client.enabled\":false");
+                });
 
         var client = clients.findByClientId("task-board-service");
         Instant issuedAt = Instant.now();

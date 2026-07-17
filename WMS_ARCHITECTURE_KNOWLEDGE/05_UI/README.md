@@ -934,3 +934,16 @@ bundled Chromium channel rather than a system Google Chrome dependency; the
 flow passed all three configured projects, 3/3, in an isolated official test
 container. The fixture is not a production fallback or a service mock used by
 the application runtime.
+
+## Maintenance HTTP cutover (verified implementation, 2026-07-17)
+
+Production catalog, estimate, repair, acceptance and maintenance write-off
+surfaces now use the versioned `/api/maintenance/v1` Bearer HTTP adapter. The
+catalog production store is fail-closed when service configuration, token or
+warehouse context is missing; browser persistence remains only an explicit
+development/test fixture. Transport stage order is normalized without changing
+the operator-facing ordering convention.
+
+Panel ESLint, TypeScript, the production build and 46 Vitest files/261 tests
+passed. `panel/e2e/maintenance-cutover.spec.ts` passed desktop, tablet and
+mobile, 3/3, with bundled Chromium in the official Playwright container.

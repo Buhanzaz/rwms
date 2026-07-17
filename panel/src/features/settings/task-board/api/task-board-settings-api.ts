@@ -1,8 +1,8 @@
 import { HttpTaskBoardSettingsClient } from "@/features/settings/task-board/api/http-task-board-settings-client"
-import { DEV_AUTH_BYPASS_ENABLED } from "@/features/auth/auth-config"
+import { DEV_MAINTENANCE_FIXTURES_ENABLED } from "@/features/maintenance/maintenance-runtime"
 import { taskBoardMockClient } from "@/features/task-board/mock"
 
-export const taskBoardSettingsClient = DEV_AUTH_BYPASS_ENABLED
+export const taskBoardSettingsClient = DEV_MAINTENANCE_FIXTURES_ENABLED
   ? taskBoardMockClient
   : new HttpTaskBoardSettingsClient()
 

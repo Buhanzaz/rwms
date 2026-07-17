@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Consumer;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.jsontype.BasicPolymorphicTypeValidator;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -54,6 +55,7 @@ import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
 import org.springframework.security.oauth2.core.OAuth2Error;
+import org.springframework.security.oauth2.core.OAuth2ErrorCodes;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -63,6 +65,10 @@ import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationConsentService;
 import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.OAuth2TokenType;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientCredentialsAuthenticationContext;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientCredentialsAuthenticationProvider;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientCredentialsAuthenticationToken;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientCredentialsAuthenticationValidator;
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationConsentService;
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.client.JdbcRegisteredClientRepository;
@@ -86,6 +92,9 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @EnableMethodSecurity
 @EnableConfigurationProperties({AuthProperties.class, OAuthClientProperties.class})
 public class AuthorizationServerConfiguration {
+    private static final String MAINTENANCE_CLIENT_ID = "maintenance-service";
+    private static final Set<String> MAINTENANCE_DOWNSTREAM_SCOPES =
+            Set.of("asset.maintenance", "task-board.task-sync");
 
     @Bean
     PasswordEncoder passwordEncoder() {
@@ -147,7 +156,10 @@ public class AuthorizationServerConfiguration {
         var authorizationServer = new OAuth2AuthorizationServerConfigurer();
         RequestMatcher endpoints = authorizationServer.getEndpointsMatcher();
         http.securityMatcher(endpoints)
-                .with(authorizationServer, server -> server.oidc(Customizer.withDefaults()))
+                .with(authorizationServer, server -> server
+                        .tokenEndpoint(tokenEndpoint -> tokenEndpoint.authenticationProviders(
+                                maintenanceClientCredentialsValidators()))
+                        .oidc(Customizer.withDefaults()))
                 .authorizeHttpRequests(authorize -> authorize.anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions.defaultAuthenticationEntryPointFor(
                         new LoginUrlAuthenticationEntryPoint("/login"),
@@ -155,6 +167,31 @@ public class AuthorizationServerConfiguration {
                 .oauth2ResourceServer(resourceServer -> resourceServer.jwt(Customizer.withDefaults()))
                 .cors(Customizer.withDefaults());
         return http.build();
+    }
+
+    private Consumer<List<AuthenticationProvider>> maintenanceClientCredentialsValidators() {
+        return providers -> providers.forEach(provider -> {
+            if (provider instanceof OAuth2ClientCredentialsAuthenticationProvider clientCredentials) {
+                clientCredentials.setAuthenticationValidator(
+                        OAuth2ClientCredentialsAuthenticationValidator.DEFAULT_SCOPE_VALIDATOR
+                                .andThen(AuthorizationServerConfiguration::validateMaintenanceDownstreamScope));
+            }
+        });
+    }
+
+    static void validateMaintenanceDownstreamScope(OAuth2ClientCredentialsAuthenticationContext context) {
+        if (!MAINTENANCE_CLIENT_ID.equals(context.getRegisteredClient().getClientId())) {
+            return;
+        }
+        OAuth2ClientCredentialsAuthenticationToken clientCredentialsAuthentication =
+                context.getAuthentication();
+        Set<String> requestedScopes = clientCredentialsAuthentication.getScopes();
+        if (requestedScopes.size() != 1 || !MAINTENANCE_DOWNSTREAM_SCOPES.containsAll(requestedScopes)) {
+            throw new OAuth2AuthenticationException(new OAuth2Error(
+                    OAuth2ErrorCodes.INVALID_SCOPE,
+                    "maintenance-service must request exactly one approved downstream scope",
+                    null));
+        }
     }
 
     @Bean

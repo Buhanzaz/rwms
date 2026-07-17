@@ -1141,3 +1141,19 @@ entry does not close F4T.
   remains forbidden.
 - Stage 7 remains closed until the complete Stage 6 verification, memory review
   and scoped implementation commit.
+
+## 2026-07-17 Stage 6 controlled catalog decisions
+
+- Preserve reviewed legacy catalog identity and safe business fields plus
+  separately hashed WORK_QUEUE ID/code/kind snapshots. Map null duration and
+  link order to zero. Omit node order, audit/layout, default quantity,
+  additional option, furniture category, main-menu order/title, link active and
+  all comments.
+- Pin source/node/link/queue evidence, policy and request mapping by SHA-256.
+  Accept only warehouse `00000000-0000-0000-0000-000000000002`, 232 nodes,
+  254 links, ten routed nodes and six reviewed queues. Reject unknown JSON
+  fields, duplicate keys, drift or invalid artifacts without a domain write.
+- Use `rwms.maintenance.catalog-version.v1` as the catalog aggregate-family
+  topic. PostgreSQL remains replay authority; Kafka remains transport.
+- Do not advance the active pointer until the scoped Stage 6 implementation
+  commit exists. This decision authorizes no Stage 7 work.

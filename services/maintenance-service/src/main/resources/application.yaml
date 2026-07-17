@@ -1,0 +1,116 @@
+server:
+  port: ${MAINTENANCE_SERVICE_PORT:8087}
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+  metrics:
+    tags:
+      application: maintenance-service
+  tracing:
+    sampling:
+      probability: ${MAINTENANCE_TRACING_SAMPLING_PROBABILITY:0.1}
+
+logging:
+  structured:
+    format:
+      console: ecs
+
+spring:
+  application:
+    name: maintenance-service
+  datasource:
+    url: ${MAINTENANCE_DB_URL}
+    username: ${MAINTENANCE_DB_USERNAME}
+    password: ${MAINTENANCE_DB_PASSWORD}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    clean-disabled: true
+    out-of-order: false
+    validate-migration-naming: true
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  cloud:
+    function:
+      definition: maintenanceInbound
+    stream:
+      bindings:
+        maintenanceInbound-in-0:
+          destination: rwms.task-board.board-task.v1,rwms.task-board.queue-entry.v1,rwms.media.media.v1,rwms.asset.rental-item.v1,rwms.asset.operation-lease.v1
+          group: maintenance-service-inbox-v1
+          consumer:
+            max-attempts: 1
+            multiplex: true
+      kafka:
+        default:
+          producer:
+            sync: true
+        binder:
+          brokers: ${MAINTENANCE_KAFKA_BROKERS:}
+          auto-create-topics: false
+          configuration:
+            acks: all
+            enable.idempotence: true
+            compression.type: zstd
+            request.timeout.ms: 5000
+            delivery.timeout.ms: 15000
+            max.block.ms: 5000
+            metadata.recovery.rebootstrap.trigger.ms: 1000
+        bindings:
+          maintenanceInbound-in-0:
+            consumer:
+              enable-dlq: false
+              start-offset: earliest
+              common-error-handler-bean-name: maintenanceFailClosedConsumerErrorHandler
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTH_ISSUER}
+          audiences: ${AUTH_AUDIENCE:rwms-services}
+
+rwms:
+  platform:
+    kafka:
+      enabled: ${MAINTENANCE_KAFKA_ENABLED:false}
+      destinations:
+        - rwms.maintenance.catalog-version.v1
+        - rwms.maintenance.estimate.v1
+        - rwms.maintenance.repair.v1
+  maintenance:
+    idempotency:
+      retention: ${MAINTENANCE_IDEMPOTENCY_RETENTION:7d}
+    eventing:
+      outbox:
+        relay-delay: ${MAINTENANCE_KAFKA_OUTBOX_RELAY_DELAY:1s}
+        lease-duration: ${MAINTENANCE_KAFKA_OUTBOX_LEASE_DURATION:30s}
+        instance-id: ${MAINTENANCE_KAFKA_INSTANCE_ID:maintenance-service}
+    dependencies:
+      enabled: ${MAINTENANCE_DEPENDENCIES_ENABLED:false}
+      token-uri: ${AUTH_TOKEN_URI:}
+      client-id: ${MAINTENANCE_CLIENT_ID:maintenance-service}
+      client-secret: ${MAINTENANCE_CLIENT_SECRET:}
+      asset-base-url: ${ASSET_INTERNAL_BASE_URL:}
+      task-board-base-url: ${TASK_BOARD_INTERNAL_BASE_URL:}
+      connect-timeout: ${MAINTENANCE_CONNECT_TIMEOUT:2s}
+      read-timeout: ${MAINTENANCE_READ_TIMEOUT:5s}
+  security:
+    dev-auth-bypass: ${MAINTENANCE_DEV_AUTH_BYPASS:false}
+  cors:
+    allowed-origins: ${PANEL_ORIGIN}

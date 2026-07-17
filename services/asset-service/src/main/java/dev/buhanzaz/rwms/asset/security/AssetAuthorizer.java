@@ -14,6 +14,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class AssetAuthorizer {
   private static final UUID DEV_SUBJECT = UUID.fromString("00000000-0000-0000-0000-0000000000d5");
+  private static final String MAINTENANCE_CLIENT_ID = "maintenance-service";
   private final boolean developmentPublicBypass;
 
   public AssetAuthorizer(
@@ -64,8 +65,24 @@ public class AssetAuthorizer {
 
   public UUID internalSubjectId(Jwt jwt) {
     requireInternalAssetAccess(jwt);
-    return UUID.nameUUIDFromBytes(("service:" + jwt.getClaimAsString("client_id"))
-        .getBytes(StandardCharsets.UTF_8));
+    return serviceSubjectId(jwt.getClaimAsString("client_id"));
+  }
+
+  /** The Stage 6 credential can reach only the maintenance lease/fence controller. */
+  public void requireMaintenanceAssetAccess(Jwt jwt) {
+    if (jwt == null
+        || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
+        || !MAINTENANCE_CLIENT_ID.equals(jwt.getClaimAsString("client_id"))
+        || !MAINTENANCE_CLIENT_ID.equals(jwt.getSubject())
+        || !exactScope(jwt, "asset.maintenance")) {
+      throw new AccessDeniedException(
+          "The maintenance-service credential with exactly asset.maintenance is required");
+    }
+  }
+
+  public UUID maintenanceSubjectId(Jwt jwt) {
+    requireMaintenanceAssetAccess(jwt);
+    return serviceSubjectId(MAINTENANCE_CLIENT_ID);
   }
 
   public UUID subjectId(Jwt jwt) {
@@ -112,6 +129,10 @@ public class AssetAuthorizer {
   private static boolean exactScope(Jwt jwt, String expected) {
     List<String> values = scopes(jwt);
     return values.size() == 1 && expected.equals(values.getFirst());
+  }
+
+  private static UUID serviceSubjectId(String clientId) {
+    return UUID.nameUUIDFromBytes(("service:" + clientId).getBytes(StandardCharsets.UTF_8));
   }
 
   private static List<String> scopes(Jwt jwt) {

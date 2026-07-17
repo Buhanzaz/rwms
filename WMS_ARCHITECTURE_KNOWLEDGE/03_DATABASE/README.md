@@ -540,3 +540,19 @@ affected asset module test task passed 25 tests in that focused run.
 released; the migration does not infer a logistics transfer. It also expands
 the immutable event/outbox constraints for hold-commit and classifier facts,
 and permits `CLASSIFIER` stream heads. V1 remains immutable.
+
+## Maintenance Flyway V1 (verified implementation, 2026-07-17)
+
+`services/maintenance-service/src/main/resources/db/migration/
+V1__maintenance_schema.sql` is the cumulative empty-database install for the
+maintenance-owned JPA model. It creates catalog/estimate/repair projections,
+append-only domain events, stream heads, snapshots, projection checkpoints,
+outbox/inbox/checkpoints, sanitized DLT/quarantine, idempotency and explicit
+integration-reconciliation state. Hibernate always uses `ddl-auto=validate`;
+Flyway `baselineOnMigrate` remains false.
+
+Testcontainers proves clean install, repeat validation, checksum-drift and
+non-empty-unversioned rejection plus JPA validation. The reviewed legacy
+catalog is a packaged, hash-pinned command artifact imported into a DRAFT
+stream, not a Flyway seed, cross-database query or raw-SQL runtime path. Import,
+event append, synchronous projection and idempotency commit atomically.

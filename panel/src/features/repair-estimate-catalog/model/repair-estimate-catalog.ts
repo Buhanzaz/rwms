@@ -12,6 +12,7 @@ export type RepairEstimateCatalogMoneyDecimal = string
 /** Canonical read DTO exposed by the repair-catalog service boundary. */
 export type RepairEstimateCatalogNodeDto = {
   id: string
+  catalogVersionId?: string | null
   code: string
   name: string
   nodeType: RepairEstimateCatalogNodeType
@@ -29,6 +30,7 @@ export type RepairEstimateCatalogNodeDto = {
   mainMenuTitle: string | null
   routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
   workQueueCode: string | null
+  workQueueId?: string | null
   photoRequired: boolean
   includeInEstimate: boolean
   commonItem: boolean
@@ -60,6 +62,7 @@ export type RepairEstimateCatalogSnapshotDto = {
 }
 
 export type RepairEstimateCatalogEffectiveQueueBinding = {
+  queueId: string | null
   queueCode: string | null
   queueKind: RepairEstimateCatalogRouteQueueKind | null
 }

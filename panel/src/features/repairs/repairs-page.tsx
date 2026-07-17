@@ -25,6 +25,7 @@ import {
   REPAIR_TASKS_MOCK_STORAGE_KEY,
   REPAIR_TASKS_UPDATED_EVENT,
 } from "@/features/repair-tasks/adapters/local-storage-repair-tasks-adapter"
+import { DEV_MAINTENANCE_FIXTURES_ENABLED } from "@/features/maintenance/maintenance-runtime"
 import type {
   RepairTaskDto,
   RepairsLocationState,
@@ -129,6 +130,7 @@ export function RepairsPage() {
   })
 
   useEffect(() => {
+    if (!DEV_MAINTENANCE_FIXTURES_ENABLED) return
     const invalidate = () => {
       void queryClient.invalidateQueries({ queryKey: REPAIR_TASKS_QUERY_KEY })
     }

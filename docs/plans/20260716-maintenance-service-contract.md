@@ -102,6 +102,32 @@ invalid numeric values. Those destructive/coercing behaviors are rejected by
 the target versioned import: invalid rows produce a validation report and no
 catalog stream commit.
 
+The user approved the closed legacy-to-target mapping on 2026-07-17. The
+reviewed artifact preserves node/link UUIDs, node code/name/type/parent,
+active/unit/price/duration and the target-common boolean flags
+`showInMainMenu`, `photoRequired`, `includeInEstimate` and `commonItem`.
+It preserves link endpoints/type/order and obtains routing only from separately
+hashed `WORK_QUEUE.ID/CODE/QUEUE_KIND` evidence. It deliberately omits audit,
+canvas, node sort order, default quantity, additional-option,
+furniture-category and main-menu order/title fields, direct route-kind hints,
+link active state and all node/link comments. Of the reviewed rows, 45
+non-null legacy node sort orders are omitted, 144 null durations become `0`
+and all 254 null link sort orders become `0`.
+
+The controlled artifact contains exactly 232 nodes and 254 links. Ten routed
+nodes refer to six reviewed queue snapshots, all bound to legacy warehouse
+`00000000-0000-0000-0000-000000000002`. Its evidence hashes are source
+`94bacdcf7114e9dfb1935a162b29714e25ed36b406980c3b9551c7d27c687721`,
+nodes `a5546cbbc9c48c630e987c4e831eebee47f70413b467ac0fdc21e5ab3b510873`,
+links `3a20b83e2392ff8506a8525e6a9762c132d3a9957679151d4964c4335536e883`
+and queues `f486489d601cff0ddd85228516f1527277f8b90ec6fec6ee11e8aebcdd569766`.
+The approved policy hash is
+`c378e395ec2931b1639dac8547659a1f749530edf791c1db9c524dc66d1b6c85`
+and the canonical request-mapping hash is
+`118aed23abfebeb213dc9dc37b415def2b8b0272e94971f2e2ab93d80ed280a2`.
+Neither the artifact nor the runtime contains legacy comments, audit actors,
+PII, raw SQL or a runtime path to `old_db`.
+
 ### Estimate
 
 Lifecycle: `DRAFT -> COMPLETED`. Ordinary draft replacement is forbidden after
@@ -311,7 +337,7 @@ active fence, not through a generic no-op transition.
 PostgreSQL service-local event streams are authoritative. Kafka carries
 versioned facts on aggregate-family topics keyed by aggregate ID:
 
-- `rwms.maintenance.catalog.v1`;
+- `rwms.maintenance.catalog-version.v1`;
 - `rwms.maintenance.estimate.v1`;
 - `rwms.maintenance.repair.v1`.
 

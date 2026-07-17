@@ -171,7 +171,8 @@ public class TaskBoardReplayVerifier {
         if (!projectionJson.equals(tail.payload())) {
           throw new IllegalStateException("Task-board replay tail does not match live projection");
         }
-      } else if (!TERMINAL_DELETE_EVENTS.contains(tail.eventType())) {
+      } else if (!TERMINAL_DELETE_EVENTS.contains(tail.eventType())
+          && !read(tail.payload()).path("deleted").asBoolean(false)) {
         throw new IllegalStateException("Task-board live projection is missing without terminal delete");
       }
       return new ReplayResult(stream.version(), stored.size(), tail.payloadSha256());

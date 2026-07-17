@@ -1,0 +1,322 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/maintenance/maintenance-events-v1.schema.json",
+  "title": "RWMS maintenance-service sanitized facts v1",
+  "description": "DomainEventEnvelopeV2 committed maintenance facts. Only opaque IDs, versions and sanitized state snapshots are transported; service-local business text and PII are forbidden.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelopeVersion",
+    "eventId",
+    "eventType",
+    "eventVersion",
+    "occurredAt",
+    "recordedAt",
+    "producer",
+    "aggregateType",
+    "aggregateId",
+    "aggregateVersion",
+    "correlation",
+    "actorRef",
+    "payload"
+  ],
+  "properties": {
+    "envelopeVersion": {"const": 2},
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {
+      "enum": [
+        "maintenance.catalog-version.imported.v1",
+        "maintenance.catalog-version.changed.v1",
+        "maintenance.catalog-version.activated.v1",
+        "maintenance.catalog-version.superseded.v1",
+        "maintenance.estimate.created.v1",
+        "maintenance.estimate.draft-changed.v1",
+        "maintenance.estimate.completed.v1",
+        "maintenance.estimate.amended.v1",
+        "maintenance.repair.created.v1",
+        "maintenance.repair.plan-changed.v1",
+        "maintenance.repair.queued.v1",
+        "maintenance.repair.stage-completed.v1",
+        "maintenance.repair.pending-acceptance.v1",
+        "maintenance.repair.rework-created.v1",
+        "maintenance.repair.accepted.v1",
+        "maintenance.repair.written-off.v1"
+      ]
+    },
+    "eventVersion": {"const": 1},
+    "occurredAt": {"$ref": "#/$defs/nullableDateTime"},
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "producer": {"const": "maintenance-service"},
+    "aggregateType": {"enum": ["CATALOG_VERSION", "ESTIMATE", "REPAIR"]},
+    "aggregateId": {"type": "string", "format": "uuid"},
+    "aggregateVersion": {"type": "integer", "format": "int64", "minimum": 0},
+    "correlation": {"$ref": "#/$defs/correlationContext"},
+    "actorRef": {
+      "oneOf": [
+        {"$ref": "#/$defs/opaqueActorReference"},
+        {"type": "null"}
+      ]
+    },
+    "payload": {
+      "oneOf": [
+        {"$ref": "#/$defs/catalogVersionFact"},
+        {"$ref": "#/$defs/estimateFact"},
+        {"$ref": "#/$defs/repairFact"}
+      ]
+    }
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/catalogVersionEnvelope"},
+    {"$ref": "#/$defs/estimateEnvelope"},
+    {"$ref": "#/$defs/repairEnvelope"}
+  ],
+  "x-rwms-envelope": "DomainEventEnvelopeV2",
+  "x-rwms-topics": [
+    "rwms.maintenance.catalog-version.v1",
+    "rwms.maintenance.estimate.v1",
+    "rwms.maintenance.repair.v1"
+  ],
+  "x-rwms-delivery": {
+    "producer": "transactional-postgresql-outbox",
+    "markPublished": "AFTER_BROKER_ACK",
+    "key": "aggregateId",
+    "atLeastOnce": true,
+    "consumerRetriesSeconds": [1, 2, 4],
+    "validationFailure": "SANITIZED_DLT",
+    "versionGap": "QUARANTINE_AGGREGATE"
+  },
+  "x-rwms-prohibitedPayloadFields": [
+    "authorization",
+    "login",
+    "displayName",
+    "email",
+    "comment",
+    "reason",
+    "sourceParty",
+    "mediaUrl",
+    "objectKey",
+    "objectPath",
+    "signedUrl",
+    "password",
+    "secret",
+    "token",
+    "jwt"
+  ],
+  "$defs": {
+    "nullableUuid": {
+      "oneOf": [
+        {"type": "string", "format": "uuid"},
+        {"type": "null"}
+      ]
+    },
+    "nullableInteger": {
+      "oneOf": [
+        {"type": "integer", "format": "int64", "minimum": 0},
+        {"type": "null"}
+      ]
+    },
+    "nullableDateTime": {
+      "oneOf": [
+        {"type": "string", "format": "date-time"},
+        {"type": "null"}
+      ]
+    },
+    "correlationContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correlationId", "causationId"],
+      "properties": {
+        "correlationId": {"type": "string", "format": "uuid"},
+        "causationId": {"$ref": "#/$defs/nullableUuid"}
+      }
+    },
+    "opaqueActorReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subjectId", "principalType", "profileRevision"],
+      "properties": {
+        "subjectId": {"type": "string", "format": "uuid"},
+        "principalType": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+        },
+        "profileRevision": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$"
+            },
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "catalogVersionEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "CATALOG_VERSION"},
+        "eventType": {
+          "enum": [
+            "maintenance.catalog-version.imported.v1",
+            "maintenance.catalog-version.changed.v1",
+            "maintenance.catalog-version.activated.v1",
+            "maintenance.catalog-version.superseded.v1"
+          ]
+        },
+        "payload": {"$ref": "#/$defs/catalogVersionFact"}
+      }
+    },
+    "estimateEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "ESTIMATE"},
+        "eventType": {
+          "enum": [
+            "maintenance.estimate.created.v1",
+            "maintenance.estimate.draft-changed.v1",
+            "maintenance.estimate.completed.v1",
+            "maintenance.estimate.amended.v1"
+          ]
+        },
+        "payload": {"$ref": "#/$defs/estimateFact"}
+      }
+    },
+    "repairEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "REPAIR"},
+        "eventType": {
+          "enum": [
+            "maintenance.repair.created.v1",
+            "maintenance.repair.plan-changed.v1",
+            "maintenance.repair.queued.v1",
+            "maintenance.repair.stage-completed.v1",
+            "maintenance.repair.pending-acceptance.v1",
+            "maintenance.repair.rework-created.v1",
+            "maintenance.repair.accepted.v1",
+            "maintenance.repair.written-off.v1"
+          ]
+        },
+        "payload": {"$ref": "#/$defs/repairFact"}
+      }
+    },
+    "catalogVersionFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "catalogVersionId",
+        "warehouseId",
+        "lifecycle",
+        "sourceSha256",
+        "nodeCount",
+        "linkCount",
+        "validationReportSha256"
+      ],
+      "properties": {
+        "catalogVersionId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "lifecycle": {"enum": ["DRAFT", "ACTIVE", "SUPERSEDED"]},
+        "sourceSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "nodeCount": {"type": "integer", "minimum": 0},
+        "linkCount": {"type": "integer", "minimum": 0},
+        "validationReportSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "estimateFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "estimateId",
+        "warehouseId",
+        "rentalItemId",
+        "lifecycle",
+        "revision",
+        "dispatchDate",
+        "lineCount",
+        "completionKind",
+        "repairId"
+      ],
+      "properties": {
+        "estimateId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "rentalItemId": {"type": "string", "format": "uuid"},
+        "lifecycle": {"enum": ["DRAFT", "COMPLETED"]},
+        "revision": {"type": "integer", "minimum": 1},
+        "dispatchDate": {"type": "string", "format": "date"},
+        "lineCount": {"type": "integer", "minimum": 0},
+        "completionKind": {"enum": ["NOT_COMPLETED", "EMPTY", "NON_EMPTY"]},
+        "repairId": {"$ref": "#/$defs/nullableUuid"}
+      }
+    },
+    "taskSyncFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "externalTaskId",
+        "taskBoardRegistrationVersion",
+        "generationState",
+        "deliveryState"
+      ],
+      "properties": {
+        "externalTaskId": {"type": "string", "format": "uuid"},
+        "taskBoardRegistrationVersion": {"$ref": "#/$defs/nullableInteger"},
+        "generationState": {
+          "enum": ["PENDING_GENERATION", "GENERATED", "FAILED"]
+        },
+        "deliveryState": {
+          "enum": ["PENDING", "RETRY_PENDING", "DELIVERED", "QUARANTINED"]
+        }
+      }
+    },
+    "repairStageFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stageId", "kind", "order", "state", "queueId", "taskSync"],
+      "properties": {
+        "stageId": {"type": "string", "format": "uuid"},
+        "kind": {"enum": ["REPAIR_WORK", "MOVE_TO_REPAIR", "MOVE_FROM_REPAIR"]},
+        "order": {"type": "integer", "minimum": 0},
+        "state": {"enum": ["PLANNED", "QUEUED", "IN_PROGRESS", "DONE", "CANCELLED"]},
+        "queueId": {"type": "string", "format": "uuid"},
+        "taskSync": {"$ref": "#/$defs/taskSyncFact"}
+      }
+    },
+    "repairFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repairId",
+        "rootRepairId",
+        "sourceRepairId",
+        "estimateId",
+        "warehouseId",
+        "rentalItemId",
+        "origin",
+        "kind",
+        "executionState",
+        "acceptanceState",
+        "dispatchDate",
+        "stages"
+      ],
+      "properties": {
+        "repairId": {"type": "string", "format": "uuid"},
+        "rootRepairId": {"type": "string", "format": "uuid"},
+        "sourceRepairId": {"$ref": "#/$defs/nullableUuid"},
+        "estimateId": {"$ref": "#/$defs/nullableUuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "rentalItemId": {"type": "string", "format": "uuid"},
+        "origin": {"enum": ["ESTIMATE", "DIRECT_REPAIR"]},
+        "kind": {"enum": ["PRIMARY", "REWORK"]},
+        "executionState": {
+          "enum": ["DRAFT", "QUEUED", "IN_PROGRESS", "COMPLETED", "CANCELLED"]
+        },
+        "acceptanceState": {
+          "enum": ["NOT_READY", "PENDING", "IN_REWORK", "ACCEPTED", "WRITTEN_OFF"]
+        },
+        "dispatchDate": {"type": "string", "format": "date"},
+        "stages": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {"$ref": "#/$defs/repairStageFact"}
+        }
+      }
+    }
+  }
+}

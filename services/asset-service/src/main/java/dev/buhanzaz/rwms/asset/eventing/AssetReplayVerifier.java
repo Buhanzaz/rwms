@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.asset.eventing;
 
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
+import dev.buhanzaz.rwms.asset.repository.OperationLeaseRepository;
 import dev.buhanzaz.rwms.asset.service.AssetChecksum;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -30,11 +31,17 @@ public class AssetReplayVerifier {
   private final JdbcTemplate jdbc;
   private final ObjectMapper mapper;
   private final AssetEventPayloadPolicy payloads;
+  private final OperationLeaseRepository operationLeases;
 
-  public AssetReplayVerifier(JdbcTemplate jdbc, ObjectMapper mapper, AssetEventPayloadPolicy payloads) {
+  public AssetReplayVerifier(
+      JdbcTemplate jdbc,
+      ObjectMapper mapper,
+      AssetEventPayloadPolicy payloads,
+      OperationLeaseRepository operationLeases) {
     this.jdbc = jdbc;
     this.mapper = mapper;
     this.payloads = payloads;
+    this.operationLeases = operationLeases;
   }
 
   @Transactional
@@ -114,8 +121,10 @@ public class AssetReplayVerifier {
     }
     replayed.forEach((key, state) -> {
       JsonNode projected = live.get(key);
-      if (!state.fact().equals(projected)) {
-        throw new IllegalStateException("Asset replay parity mismatch for " + key);
+      if (!canonicalHash(state.fact()).equals(canonicalHash(projected))) {
+        throw new IllegalStateException(
+            "Asset replay parity mismatch for " + key
+                + ": replayed=" + state.fact() + ", live=" + projected);
       }
     });
   }
@@ -159,11 +168,11 @@ public class AssetReplayVerifier {
           "holdId", id.toString(), "equipmentId", rs.getObject("equipment_id", UUID.class).toString(),
           "warehouseId", rs.getObject("warehouse_id", UUID.class).toString(), "quantity", rs.getLong("quantity"), "state", rs.getString("state"))));
     });
-    jdbc.query("select id,rental_item_id,fencing_token,state from operation_lease", rs -> {
-      UUID id = rs.getObject("id", UUID.class);
+    operationLeases.findAll().forEach(lease -> {
+      UUID id = lease.getId();
       result.put(new StreamKey(AssetAggregateType.OPERATION_LEASE, id), node(Map.of(
-          "leaseId", id.toString(), "rentalItemId", rs.getObject("rental_item_id", UUID.class).toString(),
-          "fencingToken", rs.getLong("fencing_token"), "state", rs.getString("state"))));
+          "leaseId", id.toString(), "rentalItemId", lease.getRentalItemId().toString(),
+          "fencingToken", lease.getFencingToken(), "state", lease.getState().name())));
     });
     jdbc.query("select id,classifier_type,parent_id,code,name,active,sort_order from asset_classifier", rs -> {
       UUID id = rs.getObject("id", UUID.class);
