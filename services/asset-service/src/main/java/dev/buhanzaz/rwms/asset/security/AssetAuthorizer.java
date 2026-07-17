@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 public class AssetAuthorizer {
   private static final UUID DEV_SUBJECT = UUID.fromString("00000000-0000-0000-0000-0000000000d5");
   private static final String MAINTENANCE_CLIENT_ID = "maintenance-service";
+  private static final String INVENTORY_CLIENT_ID = "inventory-service";
   private final boolean developmentPublicBypass;
 
   public AssetAuthorizer(
@@ -85,6 +86,24 @@ public class AssetAuthorizer {
     return serviceSubjectId(MAINTENANCE_CLIENT_ID);
   }
 
+  /** Stage 7 inventory may reach only its read/capture/source-create boundary. */
+  public void requireInventoryAssetAccess(Jwt jwt) {
+    if (jwt == null
+        || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
+        || !INVENTORY_CLIENT_ID.equals(jwt.getClaimAsString("client_id"))
+        || !INVENTORY_CLIENT_ID.equals(jwt.getSubject())
+        || !exactScope(jwt, "asset.inventory")) {
+      throw new AccessDeniedException(
+          "The inventory-service credential with exactly asset.inventory is required");
+    }
+  }
+
+  public UUID inventorySubjectId(Jwt jwt) {
+    requireInventoryAssetAccess(jwt);
+    return serviceSubjectId(INVENTORY_CLIENT_ID);
+  }
+
+
   public UUID subjectId(Jwt jwt) {
     if (developmentPublicBypass) return DEV_SUBJECT;
     if (jwt == null || !"USER".equals(jwt.getClaimAsString("principal_type"))) {
@@ -143,7 +162,10 @@ public class AssetAuthorizer {
       return List.of(value.trim().split("\\s+")).stream().filter(item -> !item.isBlank()).toList();
     }
     if (claim instanceof Collection<?> values) {
-      return values.stream().filter(String.class::isInstance).map(String.class::cast).filter(value -> !value.isBlank()).toList();
+      if (values.stream().anyMatch(value -> !(value instanceof String text) || text.isBlank())) {
+        return List.of();
+      }
+      return values.stream().map(String.class::cast).toList();
     }
     return List.of();
   }

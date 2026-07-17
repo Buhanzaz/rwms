@@ -11,6 +11,12 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties("rwms.auth.oauth")
 public record OAuthClientProperties(List<Client> clients) {
 
+    static final String INVENTORY_CLIENT_ID = "inventory-service";
+    static final String INVENTORY_AUDIENCE = "rwms-services";
+    static final String INVENTORY_SECRET_ENVIRONMENT = "INVENTORY_CLIENT_SECRET";
+    static final Set<String> INVENTORY_SCOPES =
+            Set.of("warehouse.read", "asset.inventory", "maintenance.inventory");
+
     public OAuthClientProperties {
         clients = clients == null ? List.of() : List.copyOf(clients);
     }
@@ -61,6 +67,10 @@ public record OAuthClientProperties(List<Client> clients) {
 
         private static Set<String> copy(Set<String> values) {
             return values == null ? Set.of() : Set.copyOf(values);
+        }
+
+        boolean inventoryServiceClient() {
+            return INVENTORY_CLIENT_ID.equals(clientId);
         }
 
         @Override

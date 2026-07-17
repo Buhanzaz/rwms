@@ -38,10 +38,10 @@ class MaintenanceFlywayMigrationIntegrationTest {
   }
 
   @Test
-  void cleanInstallIsRepeatSafeAndContainsTheAuthoritativeStageSixSchema() {
+  void cleanInstallIsRepeatSafeAndContainsTheAuthoritativeMaintenanceSchema() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isOne();
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -52,7 +52,8 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "consumer_aggregate_checkpoint", "version_gap_quarantine", "sanitized_dead_letter",
         "maintenance_inbound_replay_message", "maintenance_inbound_correlation",
         "rental_item_fact_projection", "operation_lease_fact_projection",
-        "maintenance_idempotency_record", "integration_reconciliation");
+        "maintenance_idempotency_record", "integration_reconciliation",
+        "inventory_repair_source_operation", "inventory_repair_source");
     assertThat(columnCount("maintenance_estimate", "rental_item_version_snapshot")).isOne();
     assertThat(columnCount("maintenance_repair", "rental_item_version_snapshot")).isOne();
     assertThat(columnCount("maintenance_repair", "dispatch_date")).isOne();
@@ -67,24 +68,58 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "routing_queue_id", "routing_queue_code", "routing_queue_kind", "task_deadline");
     assertThat(columns("repair_stage")).contains(
         "routing_queue_id", "routing_queue_code", "routing_queue_kind", "task_deadline");
+    assertThat(columns("inventory_repair_source")).contains(
+        "inventory_id", "finding_id", "source_revision", "catalog_version_id",
+        "plan_request_sha256", "plan_fingerprint", "plan_snapshot", "media_snapshot",
+        "source_fingerprint", "rental_item_id", "rental_item_version_snapshot", "repair_id");
+    assertThat(constraintDefinition(
+        "inventory_repair_source", "ck_inventory_repair_source_version"))
+        .contains("source_revision >= 1");
+    for (String hashColumn : List.of(
+        "plan_request_sha256", "plan_fingerprint", "source_fingerprint")) {
+      assertThat(columnType("inventory_repair_source", hashColumn))
+          .isEqualTo("character varying(64)");
+    }
+    assertThat(constraintDefinition(
+        "inventory_repair_source", "ck_inventory_repair_source_hashes"))
+        .contains(
+            "plan_request_sha256", "plan_fingerprint", "source_fingerprint", "{64}");
+    assertThat(triggerDefinition("trg_inventory_repair_source_immutable"))
+        .contains("enforce_inventory_repair_source_immutability");
+
     assertThat(jdbc.queryForObject("select count(*) from catalog_version", Integer.class)).isZero();
     assertThat(jdbc.queryForObject("select count(*) from maintenance_repair", Integer.class)).isZero();
   }
 
   @Test
-  void appliedMigrationChecksumDriftIsRejected(@TempDir Path directory) throws IOException {
-    Path migration = directory.resolve("V1__maintenance_schema.sql");
-    try (var source = requireResource("db/migration/V1__maintenance_schema.sql").openStream()) {
-      Files.copy(source, migration);
-    }
+  void appliedInventorySourceV2ChecksumDriftIsRejected(@TempDir Path directory)
+      throws IOException {
+    copyMigration(directory, "V1__maintenance_schema.sql");
+    Path migration = copyMigration(directory, "V2__inventory_source.sql");
     String location = "filesystem:" + directory.toAbsolutePath().toString().replace('\\', '/');
     flyway(location).migrate();
     Files.writeString(migration, Files.readString(migration)
-        .replace("source_party varchar(512)", "source_party varchar(511)"));
+        .replace("inventory repair plan/source fields are immutable",
+            "inventory repair source fields are immutable"));
 
     assertThatThrownBy(() -> flyway(location).validate())
         .isInstanceOf(FlywayValidateException.class)
         .hasMessageContaining("checksum");
+  }
+
+  @Test
+  void existingV1SchemaUpgradesInPlaceToV2AndRemainsRepeatSafe(@TempDir Path directory)
+      throws IOException {
+    copyMigration(directory, "V1__maintenance_schema.sql");
+    String location = "filesystem:" + directory.toAbsolutePath().toString().replace('\\', '/');
+    assertThat(flyway(location).migrate().migrationsExecuted).isOne();
+
+    copyMigration(directory, "V2__inventory_source.sql");
+    assertThat(flyway(location).migrate().migrationsExecuted).isOne();
+    assertThat(flyway(location).migrate().migrationsExecuted).isZero();
+    assertThat(tableNames()).contains("inventory_repair_source");
+    assertThat(constraintDefinition("maintenance_repair", "ck_repair_origin"))
+        .contains("INVENTORY");
   }
 
   @Test
@@ -371,6 +406,19 @@ class MaintenanceFlywayMigrationIntegrationTest {
         index);
   }
 
+  private String triggerDefinition(String trigger) {
+    return jdbc.queryForObject(
+        """
+        select pg_get_triggerdef(trigger.oid)
+        from pg_trigger trigger
+        join pg_class relation on relation.oid=trigger.tgrelid
+        join pg_namespace namespace on namespace.oid=relation.relnamespace
+        where namespace.nspname='public' and not trigger.tgisinternal and trigger.tgname=?
+        """,
+        String.class,
+        trigger);
+  }
+
   private String columnDefault(String table, String column) {
     return jdbc.queryForObject(
         """
@@ -386,6 +434,18 @@ class MaintenanceFlywayMigrationIntegrationTest {
     return jdbc.queryForObject(
         """
         select is_nullable from information_schema.columns
+        where table_schema='public' and table_name=? and column_name=?
+        """,
+        String.class,
+        table,
+        column);
+  }
+
+  private String columnType(String table, String column) {
+    return jdbc.queryForObject(
+        """
+        select data_type || '(' || character_maximum_length || ')'
+        from information_schema.columns
         where table_schema='public' and table_name=? and column_name=?
         """,
         String.class,
@@ -517,5 +577,13 @@ class MaintenanceFlywayMigrationIntegrationTest {
     java.net.URL resource = getClass().getClassLoader().getResource(path);
     if (resource == null) throw new IllegalStateException("Missing maintenance migration " + path);
     return resource;
+  }
+
+  private Path copyMigration(Path directory, String name) throws IOException {
+    Path target = directory.resolve(name);
+    try (var source = requireResource("db/migration/" + name).openStream()) {
+      Files.copy(source, target);
+    }
+    return target;
   }
 }

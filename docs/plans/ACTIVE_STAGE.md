@@ -1,12 +1,12 @@
 ---
 roadmap: docs/plans/20260712-panel-microservices-decomposition.md
 roadmap_status: APPROVED_WORKING_ROADMAP
-state: STAGE_6_MAINTENANCE_SERVICE
-status: STAGE_6_COMPLETE_AWAITING_EXPLICIT_STAGE_7_START
-sequence: F0 -> F1 -> F2 -> F3 -> F1C -> F4K -> F4MA -> F4MT -> F4A -> F4T -> F4R -> F4G -> W1 -> STAGE_2_TASK_BOARD_SERVICE -> STAGE_3_4_MEDIA_SERVICE -> STAGE_5_ASSET_SERVICE -> STAGE_6_MAINTENANCE_SERVICE
-service_owner: maintenance-service
+state: STAGE_7_INVENTORY_SERVICE
+status: COMPLETE
+sequence: F0 -> F1 -> F2 -> F3 -> F1C -> F4K -> F4MA -> F4MT -> F4A -> F4T -> F4R -> F4G -> W1 -> STAGE_2_TASK_BOARD_SERVICE -> STAGE_3_4_MEDIA_SERVICE -> STAGE_5_ASSET_SERVICE -> STAGE_6_MAINTENANCE_SERVICE -> STAGE_7_INVENTORY_SERVICE
+service_owner: inventory-service
 delivery_owner: RWMS lead/reviewer
-next_state: STAGE_7_INVENTORY_SERVICE
+next_state: STAGE_8_LOGISTICS_SERVICE
 ---
 
 # Active RWMS Implementation Stage
@@ -190,8 +190,93 @@ the affected Playwright desktop/tablet/mobile matrix, 3/3. Reviewed scoped
 commit `1e15a4b` (`Complete Stage 6 maintenance service`) records the Stage 6
 implementation. Stage 6 is complete.
 
-## Next gate
+## Completed gate: `STAGE_7_INVENTORY_SERVICE`
 
-Stage 7 `inventory-service` is **NOT STARTED**. The `next_state` frontmatter
-value is metadata only: Stage 7 requires separate explicit user authorization
-before any evidence, contract, schema or implementation work begins.
+The user explicitly authorized starting Stage 7 on 2026-07-17. The subsequent
+instruction `Начинай Stage 7 все разрешаю`, followed by `Продолжай`, approves
+the complete inventory contract, its narrow sequential prerequisites, the
+separate media-runtime closure and the Stage 7 panel cutover. Implementation is
+authorized under `docs/plans/20260717-inventory-service-implementation.md`.
+
+### Allowed scope
+
+- close the separately authorized prior media HTTP/JWT/PostgreSQL/outbox runtime
+  as one bounded, verified subgate before inventory depends on it;
+- implement only the approved narrow auth, warehouse, asset V3 and maintenance
+  V2 prerequisites, one deployable at a time with focused positive and negative
+  tests passing before the next subgate;
+- extend architecture guards, then create only `inventory-service`, canonical
+  inventory OpenAPI/events, clean Flyway V1, isolated local `inventory-db`
+  dependency and the approved runtime/recovery tests;
+- add only the stateless `/api/inventory/**` gateway route after inventory
+  implementation passes;
+- cut over only the approved inventory panel ports/routes/adapters after the
+  gateway subgate passes, preserving the current UI and keeping mocks as
+  explicit development fixtures;
+- run the complete exit matrix, reconcile durable memory, independently review
+  the final diff and create one scoped human Stage 7 commit.
+
+### Forbidden scope
+
+- beginning a later subgate before the current subgate's success, negative,
+  security and recovery checks pass and its diff is reviewed;
+- widening auth, warehouse, asset, maintenance, media or gateway behavior
+  beyond the exact approved inventory prerequisites;
+- adding an inventory task-board client/scope, generic `asset.internal`, asset
+  equipment holds, a session-wide asset lease/fence or a media credential;
+- changing panel code outside the inventory cutover or treating its browser
+  envelope as a production contract or migration source;
+- treating browser DTOs, local storage, legacy mobile admin behavior, legacy
+  deletion or seed identifiers as a production contract or migration source;
+- Stage 8 work;
+- deployment/hosting/Kubernetes/CI/CD or production operations work.
+
+### Approved entrance gate and delivery order
+
+`docs/plans/20260717-inventory-service-contract.md` has status `APPROVED`.
+The approved delivery order is strict:
+
+`media runtime -> auth -> warehouse -> asset V3 -> maintenance V2 ->`
+`architecture guards -> inventory contracts/Flyway V1/runtime -> gateway ->`
+`panel -> full exit review and one commit`.
+
+Every subgate contained success and negative tests and passed before the next
+began. The media runtime closure is part of the verified Stage 7 evidence.
+
+### Stage 7 exit gate
+
+- media upload/finalize/access runtime, ownership checks, PostgreSQL/outbox and
+  recovery are production-capable and verified without inventing unresolved
+  retention/orphan/legal-hold policy;
+- auth/warehouse/asset/maintenance prerequisites enforce their exact service
+  identities/scopes, stable capture/source identities, plan freeze/upsert and
+  maintenance-owned lease/task reconciliation contracts;
+- inventory Flyway clean/repeat/checksum/unversioned/JPA validation, domain,
+  authorization, concurrency, idempotency, point-in-time validation,
+  statistics, replay, outbox/inbox/retry/DLT/quarantine and outage recovery
+  matrices pass;
+- canonical OpenAPI/event schemas match runtime behavior, the gateway remains
+  stateless and the approved panel production cutover passes typecheck, lint,
+  build, affected Vitest and desktop/tablet/mobile Playwright;
+- durable memory is reconciled, independent review findings are closed and one
+  reviewed scoped human commit records the complete Stage 7 exit.
+
+### Stage 7 verified completion (2026-07-17)
+
+All implementation, independent review and verification subgates are complete.
+Inventory business persistence is JPA; Flyway V1 is the sole schema authority.
+Low-level SQL is restricted by service and shared architecture policies to the
+six exact technical CAS/outbox/inbox/checkpoint/retry/DLT eventing adapters.
+Idempotency persists the exact response under a lease-locked reservation, and
+capture release runs only after the containing transaction completes.
+
+The final Stage 7-only candidate suites passed inventory 46/46, asset 57/57,
+maintenance 131/131, Stage 7 architecture 27/27, auth 11/11, warehouse 12/12,
+gateway 36/36 and media's canonical real PostgreSQL, drift-PostgreSQL, Kafka
+and MinIO matrix 73/73, all with zero failures, errors or skips. Media also
+passed a reproducible build. Panel typecheck, lint and build passed with Vitest
+48 and Playwright desktop/tablet/mobile 9/9. Earlier shared asset 64/64,
+maintenance 136/136 and architecture 33/34 runs mixed in Stage 8 diagnostics
+and are not Stage 7 closure totals. Closure is recorded by the containing
+scoped Stage 7 commit; no SHA is invented in advance. `next_state` remains
+metadata only.

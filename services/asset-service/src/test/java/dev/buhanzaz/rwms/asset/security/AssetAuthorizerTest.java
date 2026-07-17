@@ -63,6 +63,36 @@ class AssetAuthorizerTest {
         .isInstanceOf(AccessDeniedException.class);
   }
 
+  @Test
+  void bindsAssetInventoryToTheExactInventoryClientAndScopeOnly() {
+    AssetAuthorizer authorizer = new AssetAuthorizer(new MockEnvironment(), false);
+    Jwt valid = service("asset.inventory", "inventory-service");
+
+    authorizer.requireInventoryAssetAccess(valid);
+    assertThat(authorizer.inventorySubjectId(valid)).isNotNull();
+    assertThatThrownBy(() -> authorizer.requireInternalAssetAccess(valid))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireInventoryAssetAccess(
+        service("asset.inventory asset.internal", "inventory-service")))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireInventoryAssetAccess(jwt(Map.of(
+        "sub", "inventory-service",
+        "principal_type", "SERVICE",
+        "scope", java.util.List.of("asset.inventory", 7),
+        "client_id", "inventory-service"))))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireInventoryAssetAccess(
+        service("asset.inventory", "maintenance-service")))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireInventoryAssetAccess(
+        service("asset.inventory", "inventory-service", "maintenance-service")))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireInventoryAssetAccess(
+        user("asset.inventory", "SYSTEM_ADMIN", "MANAGE")))
+        .isInstanceOf(AccessDeniedException.class);
+  }
+
+
   private Jwt user(String scope, String globalRole, String level) {
     return jwt(Map.of(
         "sub", UUID.randomUUID().toString(),
@@ -73,8 +103,12 @@ class AssetAuthorizerTest {
   }
 
   private static Jwt service(String scope, String clientId) {
+    return service(scope, clientId, clientId);
+  }
+
+  private static Jwt service(String scope, String clientId, String subject) {
     return jwt(Map.of(
-        "sub", clientId,
+        "sub", subject,
         "principal_type", "SERVICE",
         "scope", scope,
         "client_id", clientId));

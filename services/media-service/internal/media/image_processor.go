@@ -17,12 +17,16 @@ const canonicalImageContentType = "image/jpeg"
 // ObjectStore deliberately contains only operations required by processing.
 // HTTP signing is kept at the API/storage boundary.
 type ObjectStore interface {
-	Get(context.Context, string) (io.ReadCloser, ObjectMetadata, error)
-	Put(context.Context, string, io.Reader, int64, string) error
+	GetVersion(context.Context, string, string) (io.ReadCloser, ObjectMetadata, error)
+	PutVersion(context.Context, string, io.Reader, int64, string) (ObjectMetadata, error)
 }
 
 type ObjectMetadata struct {
-	SizeBytes int64
+	SizeBytes    int64
+	ContentType  string
+	ETag         string
+	VersionID    string
+	UserMetadata map[string]string
 }
 
 type ImageProcessRequest struct {
@@ -31,19 +35,21 @@ type ImageProcessRequest struct {
 	// absolute orientation, so regenerating from a previous generation would
 	// compound or fail to undo an earlier rotation.
 	SourceObjectKey string
+	SourceVersionID string
 	Generation      int
 	Rotation        Rotation
 	Variants        VariantConfiguration
 }
 
 type ProcessedVariant struct {
-	Variant        Variant
-	ObjectKey      string
-	ContentType    string
-	SizeBytes      int64
-	Width          int
-	Height         int
-	ChecksumSHA256 string
+	Variant         Variant
+	ObjectKey       string
+	ContentType     string
+	SizeBytes       int64
+	Width           int
+	Height          int
+	ChecksumSHA256  string
+	ObjectVersionID string
 }
 
 // generatedObject keeps transformation bytes inside the processing boundary.
@@ -59,14 +65,18 @@ type ImageProcessResult struct {
 }
 
 type ImageProcessor struct {
-	Store ObjectStore
+	Store  ObjectStore
+	Limits ProcessingLimits
 }
 
 func (processor ImageProcessor) Process(ctx context.Context, request ImageProcessRequest) (ImageProcessResult, error) {
 	if processor.Store == nil {
 		return ImageProcessResult{}, fmt.Errorf("image processor has no object store")
 	}
-	if request.MediaID == "" || request.SourceObjectKey == "" || request.Generation < 0 {
+	if !processor.Limits.Valid() {
+		return ImageProcessResult{}, fmt.Errorf("image processor limits are required")
+	}
+	if request.MediaID == "" || request.SourceObjectKey == "" || request.SourceVersionID == "" || request.Generation <= 0 {
 		return ImageProcessResult{}, fmt.Errorf("invalid image processing request")
 	}
 
@@ -74,9 +84,16 @@ func (processor ImageProcessor) Process(ctx context.Context, request ImageProces
 		return ImageProcessResult{}, err
 	}
 
-	source, err := processor.read(ctx, request.SourceObjectKey)
+	source, err := processor.read(ctx, request.SourceObjectKey, request.SourceVersionID)
 	if err != nil {
 		return ImageProcessResult{}, fmt.Errorf("read image source: %w", err)
+	}
+	sourceSize, err := bimg.NewImage(source).Size()
+	if err != nil {
+		return ImageProcessResult{}, fmt.Errorf("read source image dimensions: %w", err)
+	}
+	if pixels := int64(sourceSize.Width) * int64(sourceSize.Height); pixels <= 0 || pixels > processor.Limits.MaxDecodedPixels {
+		return ImageProcessResult{}, fmt.Errorf("decoded image exceeds pixel limit")
 	}
 
 	canonicalBytes, err := bimg.NewImage(source).Process(bimg.Options{
@@ -89,9 +106,15 @@ func (processor ImageProcessor) Process(ctx context.Context, request ImageProces
 	if err != nil {
 		return ImageProcessResult{}, fmt.Errorf("build canonical original: %w", err)
 	}
+	if int64(len(canonicalBytes)) > processor.Limits.MaxImageOutputBytes {
+		return ImageProcessResult{}, fmt.Errorf("canonical image exceeds output limit")
+	}
 	canonicalSize, err := bimg.NewImage(canonicalBytes).Size()
 	if err != nil {
 		return ImageProcessResult{}, fmt.Errorf("read canonical image dimensions: %w", err)
+	}
+	if pixels := int64(canonicalSize.Width) * int64(canonicalSize.Height); pixels <= 0 || pixels > processor.Limits.MaxDecodedPixels {
+		return ImageProcessResult{}, fmt.Errorf("decoded image exceeds pixel limit")
 	}
 
 	original := newGeneratedObject(
@@ -102,7 +125,7 @@ func (processor ImageProcessor) Process(ctx context.Context, request ImageProces
 		canonicalSize.Width,
 		canonicalSize.Height,
 	)
-	if err := processor.write(ctx, original); err != nil {
+	if err := processor.write(ctx, &original); err != nil {
 		return ImageProcessResult{}, fmt.Errorf("write canonical original: %w", err)
 	}
 
@@ -112,7 +135,10 @@ func (processor ImageProcessor) Process(ctx context.Context, request ImageProces
 		if err != nil {
 			return ImageProcessResult{}, err
 		}
-		if err := processor.write(ctx, variant); err != nil {
+		if variant.variant.SizeBytes > processor.Limits.MaxImageOutputBytes {
+			return ImageProcessResult{}, fmt.Errorf("%s variant exceeds output limit", variant.variant.Variant)
+		}
+		if err := processor.write(ctx, &variant); err != nil {
 			return ImageProcessResult{}, fmt.Errorf("write %s variant: %w", variant.variant.Variant, err)
 		}
 		result.Variants = append(result.Variants, variant.variant)
@@ -120,23 +146,45 @@ func (processor ImageProcessor) Process(ctx context.Context, request ImageProces
 	return result, nil
 }
 
-func (processor ImageProcessor) read(ctx context.Context, key string) ([]byte, error) {
-	object, _, err := processor.Store.Get(ctx, key)
+func (processor ImageProcessor) read(ctx context.Context, key, versionID string) ([]byte, error) {
+	object, metadata, err := getObject(ctx, processor.Store, key, versionID)
 	if err != nil {
 		return nil, err
 	}
 	defer object.Close()
-	return io.ReadAll(object)
+	limit := processor.Limits.MaxImageBytes
+	if metadata.SizeBytes <= 0 || metadata.SizeBytes > limit {
+		return nil, fmt.Errorf("image source exceeds byte limit")
+	}
+	data, err := io.ReadAll(io.LimitReader(object, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) != metadata.SizeBytes || int64(len(data)) > limit {
+		return nil, fmt.Errorf("image source length changed while reading")
+	}
+	return data, nil
 }
 
-func (processor ImageProcessor) write(ctx context.Context, object generatedObject) error {
-	return processor.Store.Put(
-		ctx,
-		object.variant.ObjectKey,
-		bytes.NewReader(object.data),
-		object.variant.SizeBytes,
-		object.variant.ContentType,
-	)
+func getObject(ctx context.Context, store ObjectStore, key, versionID string) (io.ReadCloser, ObjectMetadata, error) {
+	if versionID == "" {
+		return nil, ObjectMetadata{}, fmt.Errorf("immutable object version is required")
+	}
+	return store.GetVersion(ctx, key, versionID)
+}
+
+func (processor ImageProcessor) write(ctx context.Context, object *generatedObject) error {
+	metadata, err := putObject(ctx, processor.Store, object.variant.ObjectKey,
+		bytes.NewReader(object.data), object.variant.SizeBytes, object.variant.ContentType)
+	if err != nil {
+		return err
+	}
+	object.variant.ObjectVersionID = metadata.VersionID
+	return nil
+}
+
+func putObject(ctx context.Context, store ObjectStore, key string, source io.Reader, size int64, contentType string) (ObjectMetadata, error) {
+	return store.PutVersion(ctx, key, source, size, contentType)
 }
 
 func newGeneratedObject(variant Variant, objectKey, contentType string, data []byte, width, height int) generatedObject {

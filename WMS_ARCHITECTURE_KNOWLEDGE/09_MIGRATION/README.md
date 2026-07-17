@@ -364,3 +364,57 @@ request-mapping hash is
 `118aed23abfebeb213dc9dc37b415def2b8b0272e94971f2e2ab93d80ed280a2`.
 No browser data, legacy comments/PII, raw SQL or runtime `old_db` access enters
 the target service.
+
+## Stage 7 inventory migration entrance (2026-07-17)
+
+Approval resolution: the user's `Начинай Stage 7 все разрешаю` response,
+followed by `Продолжай`, approves asset V3, maintenance V2 and clean inventory
+V1 in that order, with no auth/warehouse/task-board/gateway schema migration and
+no legacy/browser ETL. Contracts, local `inventory-db` and panel cutover are
+authorized only in their ordered subgates.
+
+Stage 7 evidence found no reconstructible inventory-session aggregate in the
+reviewed legacy HSQLDB script/log. Their verified SHA-256 values are
+`30c944cd6d56227a7010e424acbc75253676834bf989e7b6b1a447efcb3061d8`
+and `5451b4003fea6fb7c7078bd2b178cb7c83e6a489332b05120d5c422daf55cce2`.
+Browser `rwms:inventory:v1` LocalStorage and shared media IndexedDB are fixture/
+recovery evidence, not production migration sources. Inventory Flyway V1 must
+therefore start clean and empty; no synthetic session, finding, acknowledgement,
+publication-attempt or event ETL is allowed.
+
+The proposed prerequisite migration boundary, still awaiting approval, is:
+
+- asset V3 for display number/identity match key, collision validation, stable
+  capture and permanent inventory source-create mapping;
+- maintenance V2 for `INVENTORY` origin, permanent source fingerprint and
+  immutable inventory plan/media source snapshot;
+- inventory V1 for service-owned projections, event streams, snapshots,
+  idempotency, publication attempts, outbox/inbox/checkpoints/quarantine/DLT;
+- no auth, warehouse, task-board or gateway schema migration.
+
+Every approved migration must prove clean install, in-place previous-version
+upgrade where a previous target version exists, repeat validation, checksum
+drift rejection, non-empty-unversioned rejection and JPA validation. The
+number migration may preserve existing stripped values but may not invent lost
+hyphens. Canonical OpenAPI/events, service/Compose changes and panel cutover
+remain forbidden until their respective approvals.
+
+### Stage 7 verified migration resolution (2026-07-17)
+
+Asset V3, maintenance V2 and clean inventory Flyway V1 are implemented and
+verified without legacy/browser ETL. Inventory business persistence is JPA
+with Hibernate validation; Flyway remains the sole schema/checksum authority.
+Low-level SQL is confined to exactly `InventoryDeadLetterRelay`,
+`InventoryDeadLetterStore`, `InventoryEventStore`,
+`InventoryMediaInboxProcessor`, `InventoryMediaRetryStore` and
+`InventoryOutboxStore`; business tables and maintenance reconciliation are JPA.
+
+The final Stage 7-only candidate suites passed inventory 46/46, asset 57/57,
+maintenance 131/131, Stage 7 architecture 27/27, auth 11/11, warehouse 12/12,
+gateway 36/36 and media's canonical real PostgreSQL, drift-PostgreSQL, Kafka
+and MinIO matrix 73/73, all with zero failures, errors or skips. Media also
+passed a reproducible build, and the complete panel matrix passed. Earlier
+shared asset 64/64, maintenance 136/136 and architecture 33/34 runs mixed in
+Stage 8 diagnostics and are not Stage 7 closure totals. The migration/cutover
+is complete, and closure is recorded by the containing scoped Stage 7 commit
+without inventing a SHA.

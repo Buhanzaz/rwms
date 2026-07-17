@@ -14,6 +14,8 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateRentalItemRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.Disposition;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.DispositionEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.FencedStatusRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryCaptureRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventorySourceAssetRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceFencedStatusRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceLeaseOwnerType;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceStatusAction;
@@ -40,12 +42,14 @@ import dev.buhanzaz.rwms.asset.repository.OperationLeaseRepository;
 import dev.buhanzaz.rwms.asset.repository.RentalItemRepository;
 import dev.buhanzaz.rwms.asset.service.AssetConflictException;
 import dev.buhanzaz.rwms.asset.service.AssetService;
+import dev.buhanzaz.rwms.asset.service.InventoryAssetService;
 import jakarta.persistence.EntityManager;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import javax.sql.DataSource;
@@ -85,6 +89,7 @@ class AssetJpaValidationIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   @Autowired EntityManager entityManager;
   @Autowired AssetService service;
+  @Autowired InventoryAssetService inventoryAssetService;
   @Autowired DataSource dataSource;
 
   @DynamicPropertySource
@@ -104,13 +109,14 @@ class AssetJpaValidationIntegrationTest {
 
   @Test
   @Transactional
-  void flywayV1ValidatesJpaMappingsAndPersistsCanonicalRoots() {
+  void flywayV3ValidatesJpaMappingsAndPersistsCanonicalRoots() {
     RentalItem rental = rentalItems.saveAndFlush(
         RentalItem.create(UUID.randomUUID(), " cabin-101 ", null, null, null, null, null, null, "{}", "[]"));
     EquipmentCatalogItem catalog = equipment.saveAndFlush(
         EquipmentCatalogItem.create(" chair-01 ", "Chair", EquipmentCategory.FURNITURE, null));
 
-    assertThat(rental.getNumber()).isEqualTo("CABIN101");
+    assertThat(rental.getNumber()).isEqualTo("CABIN-101");
+    assertThat(rental.getIdentityMatchKey()).isEqualTo("CABIN101");
     assertThat(rental.getVersion()).isZero();
     assertThat(catalog.getCode()).isEqualTo("CHAIR-01");
     assertThat(catalog.getVersion()).isZero();
@@ -118,7 +124,174 @@ class AssetJpaValidationIntegrationTest {
 
   @Test
   @Transactional
-  void flywayV1ValidatesOperationLeaseJpaMappingRepositoryLocksAndVersioning() {
+  void inventorySourceIdentityReplaysPermanentlyAndCreatesFreeNormalAssetFact() {
+    int ordinaryIdempotencyBefore = jdbc.queryForObject(
+        "select count(*) from asset_idempotency_record", Integer.class);
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    InventorySourceAssetRequest request = new InventorySourceAssetRequest(
+        inventoryId, findingId, UUID.randomUUID(), " ИНВ- 901 ", "Cabin", null, null,
+        null, null, null, Map.of("safe", "value"), List.of("TAG"));
+
+    var created = inventoryAssetService.createSourceAsset(request);
+    var replayed = inventoryAssetService.createSourceAsset(request);
+
+    assertThat(created.replayed()).isFalse();
+    assertThat(replayed.replayed()).isTrue();
+    assertThat(replayed.response()).isEqualTo(created.response());
+    assertThat(created.response().asset().status()).isEqualTo(RentalItemStatus.FREE);
+    assertThat(created.response().asset().displayCanonicalNumber()).isEqualTo("ИНВ- 901");
+    assertThat(created.response().asset().identityMatchKey()).isEqualTo("ИНВ901");
+    assertThat(jdbc.queryForObject(
+        "select count(*) from inventory_asset_source where inventory_id=? and finding_id=?",
+        Integer.class, inventoryId, findingId)).isEqualTo(1);
+    assertThat(jdbc.queryForObject(
+        "select count(*) from domain_event where aggregate_id=? and event_type='asset.rental-item.created.v1'",
+        Integer.class, created.response().asset().assetId().toString())).isEqualTo(1);
+    assertThat(jdbc.queryForObject("select count(*) from asset_idempotency_record", Integer.class))
+        .isEqualTo(ordinaryIdempotencyBefore);
+
+    InventorySourceAssetRequest changed = new InventorySourceAssetRequest(
+        inventoryId, findingId, request.warehouseId(), "ИНВ-902", "Cabin", null, null,
+        null, null, null, Map.of("safe", "value"), List.of("TAG"));
+    assertThatThrownBy(() -> inventoryAssetService.createSourceAsset(changed))
+        .isInstanceOf(AssetConflictException.class);
+  }
+
+  @Test
+  void concurrentInventorySourceRetriesConvergeOnOneAsset() throws Exception {
+    InventorySourceAssetRequest request = new InventorySourceAssetRequest(
+        UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), "SRC-" + UUID.randomUUID(),
+        null, null, null, null, null, null, Map.of(), List.of());
+    var executor = Executors.newFixedThreadPool(2);
+    try {
+      var first = executor.submit(() -> inventoryAssetService.createSourceAsset(request));
+      var second = executor.submit(() -> inventoryAssetService.createSourceAsset(request));
+      var results = List.of(first.get(30, TimeUnit.SECONDS), second.get(30, TimeUnit.SECONDS));
+
+      assertThat(results).extracting(result -> result.response().asset().assetId())
+          .containsOnly(results.getFirst().response().asset().assetId());
+      assertThat(results).extracting(result -> result.replayed()).containsExactlyInAnyOrder(false, true);
+    } finally {
+      executor.shutdownNow();
+    }
+  }
+
+  @Test
+  void captureAttemptIdentityRejectsWrongWarehouseAndChangedFingerprint() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID operationId = UUID.randomUUID();
+    var capture = inventoryAssetService.createCapture(new InventoryCaptureRequest(
+        operationId, 1L, "c".repeat(64), warehouseId));
+
+    assertThatThrownBy(() -> inventoryAssetService.createCapture(new InventoryCaptureRequest(
+        operationId, 1L, "c".repeat(64), UUID.randomUUID())))
+        .isInstanceOf(AssetConflictException.class);
+    assertThatThrownBy(() -> inventoryAssetService.createCapture(new InventoryCaptureRequest(
+        operationId, 1L, "d".repeat(64), warehouseId)))
+        .isInstanceOf(AssetConflictException.class);
+    inventoryAssetService.releaseCapture(capture.captureId());
+  }
+
+  @Test
+  void concurrentCaptureRetriesConvergeOnOneJpaLockedAttempt() throws Exception {
+    UUID operationId = UUID.randomUUID();
+    InventoryCaptureRequest request = new InventoryCaptureRequest(
+        operationId, 1L, "9".repeat(64), UUID.randomUUID());
+    var executor = Executors.newFixedThreadPool(2);
+    try {
+      var first = executor.submit(() -> inventoryAssetService.createCapture(request));
+      var second = executor.submit(() -> inventoryAssetService.createCapture(request));
+
+      assertThat(List.of(
+              first.get(30, TimeUnit.SECONDS), second.get(30, TimeUnit.SECONDS)))
+          .containsOnly(inventoryAssetService.createCapture(request));
+    } finally {
+      executor.shutdownNow();
+    }
+  }
+
+  @Test
+  void expiredCaptureCannotReviveButHigherMonotonicAttemptCanReplaceIt() {
+    UUID captureId = UUID.randomUUID();
+    UUID operationId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    String fingerprint = "e".repeat(64);
+    jdbc.update("""
+        insert into inventory_asset_capture_operation(
+          operation_id,version,warehouse_id,request_fingerprint,created_at)
+        values (?,0,?,?,clock_timestamp())
+        """, operationId, warehouseId, fingerprint);
+    jdbc.update("""
+        with instant as (select clock_timestamp() as value)
+        insert into inventory_asset_capture(capture_id,operation_id,technical_attempt,warehouse_id,
+          request_fingerprint,membership_digest,total_count,state,created_at,expires_at)
+        select ?,?,?,?, ?,?,0,'ACTIVE',value - interval '31 minutes',value - interval '1 minute'
+        from instant
+        """, captureId, operationId, 1L, warehouseId, fingerprint, "f".repeat(64));
+
+    assertThatThrownBy(() -> inventoryAssetService.capturePage(captureId, null, 200))
+        .isInstanceOf(AssetConflictException.class);
+    assertThatThrownBy(() -> inventoryAssetService.createCapture(new InventoryCaptureRequest(
+        operationId, 1L, fingerprint, warehouseId)))
+        .isInstanceOf(AssetConflictException.class);
+
+    var replacement = inventoryAssetService.createCapture(new InventoryCaptureRequest(
+        operationId, 2L, fingerprint, warehouseId));
+    assertThat(replacement.expiresAt()).isEqualTo(replacement.createdAt().plusMinutes(30));
+    assertThat(jdbc.queryForObject(
+        "select state from inventory_asset_capture where capture_id=?", String.class, captureId))
+        .isEqualTo("EXPIRED");
+    assertThat(inventoryAssetService.capturePage(replacement.captureId(), null, 200).content())
+        .isEmpty();
+    inventoryAssetService.releaseCapture(replacement.captureId());
+  }
+
+  @Test
+  void concurrentDifferentSourcesWithOneNumberProduceOneAssetAndOneDomainConflict()
+      throws Exception {
+    UUID warehouseId = UUID.randomUUID();
+    String number = "RACE-" + UUID.randomUUID();
+    InventorySourceAssetRequest firstRequest = new InventorySourceAssetRequest(
+        UUID.randomUUID(), UUID.randomUUID(), warehouseId, number,
+        null, null, null, null, null, null, Map.of(), List.of());
+    InventorySourceAssetRequest secondRequest = new InventorySourceAssetRequest(
+        UUID.randomUUID(), UUID.randomUUID(), warehouseId, number,
+        null, null, null, null, null, null, Map.of(), List.of());
+    var executor = Executors.newFixedThreadPool(2);
+    try {
+      var first = executor.submit(() -> inventoryAssetService.createSourceAsset(firstRequest));
+      var second = executor.submit(() -> inventoryAssetService.createSourceAsset(secondRequest));
+      int successes = 0;
+      int conflicts = 0;
+      for (var future : List.of(first, second)) {
+        try {
+          future.get(30, TimeUnit.SECONDS);
+          successes++;
+        } catch (ExecutionException exception) {
+          assertThat(exception.getCause()).isInstanceOf(AssetConflictException.class);
+          conflicts++;
+        }
+      }
+
+      assertThat(successes).isEqualTo(1);
+      assertThat(conflicts).isEqualTo(1);
+      assertThat(jdbc.queryForObject(
+          "select count(*) from rental_item where identity_match_key=?", Integer.class,
+          RentalItem.identityMatchKey(number))).isEqualTo(1);
+      assertThat(jdbc.queryForObject("""
+          select count(*) from inventory_asset_source
+          where (inventory_id=? and finding_id=?) or (inventory_id=? and finding_id=?)
+          """, Integer.class, firstRequest.inventoryId(), firstRequest.findingId(),
+          secondRequest.inventoryId(), secondRequest.findingId())).isEqualTo(1);
+    } finally {
+      executor.shutdownNow();
+    }
+  }
+
+  @Test
+  @Transactional
+  void flywayV3ValidatesOperationLeaseJpaMappingRepositoryLocksAndVersioning() {
     RentalItem rental = rentalItems.saveAndFlush(RentalItem.create(
         UUID.randomUUID(), "lease-jpa-" + UUID.randomUUID(), null, null, null, null, null, null, "{}", "[]"));
     OffsetDateTime acquiredAt = OffsetDateTime.now(ZoneOffset.UTC);

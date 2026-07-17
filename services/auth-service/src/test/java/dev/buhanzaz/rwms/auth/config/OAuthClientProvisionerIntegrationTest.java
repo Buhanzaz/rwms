@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.auth.config;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.buhanzaz.rwms.auth.domain.PrincipalType;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -136,6 +137,145 @@ class OAuthClientProvisionerIntegrationTest {
         assertThatThrownBy(() -> productionProvisioner(missingSecret).run(null))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("secret environment");
+        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
+    }
+
+    @Test
+    void inventoryClientRejectsContractDriftAndMissingExternalSecretBeforeMutation() {
+        List<OAuthClientProperties.Client> invalidConfigurations = List.of(
+                inventoryClient(
+                        Set.of("none"),
+                        Set.of("client_credentials"),
+                        Set.of(),
+                        Set.of(),
+                        OAuthClientProperties.INVENTORY_SCOPES,
+                        false,
+                        Set.of(),
+                        Set.of("rwms-services"),
+                        Set.of(),
+                        "INVENTORY_CLIENT_SECRET",
+                        null),
+                inventoryClient(
+                        Set.of("client_secret_basic"),
+                        Set.of("authorization_code"),
+                        Set.of(),
+                        Set.of(),
+                        OAuthClientProperties.INVENTORY_SCOPES,
+                        false,
+                        Set.of(),
+                        Set.of("rwms-services"),
+                        Set.of(),
+                        "INVENTORY_CLIENT_SECRET",
+                        null),
+                inventoryClient(
+                        Set.of("client_secret_basic"),
+                        Set.of("client_credentials"),
+                        Set.of(),
+                        Set.of(),
+                        Set.of("warehouse.read", "asset.inventory"),
+                        false,
+                        Set.of(),
+                        Set.of("rwms-services"),
+                        Set.of(),
+                        "INVENTORY_CLIENT_SECRET",
+                        null),
+                inventoryClient(
+                        Set.of("client_secret_basic"),
+                        Set.of("client_credentials"),
+                        Set.of(),
+                        Set.of(),
+                        OAuthClientProperties.INVENTORY_SCOPES,
+                        false,
+                        Set.of(),
+                        Set.of("other-audience"),
+                        Set.of(),
+                        "INVENTORY_CLIENT_SECRET",
+                        null),
+                inventoryClient(
+                        Set.of("client_secret_basic"),
+                        Set.of("client_credentials"),
+                        Set.of("https://inventory.example.test/callback"),
+                        Set.of(),
+                        OAuthClientProperties.INVENTORY_SCOPES,
+                        false,
+                        Set.of(),
+                        Set.of("rwms-services"),
+                        Set.of(),
+                        "INVENTORY_CLIENT_SECRET",
+                        null),
+                inventoryClient(
+                        Set.of("client_secret_basic"),
+                        Set.of("client_credentials"),
+                        Set.of(),
+                        Set.of("https://inventory.example.test/logout"),
+                        OAuthClientProperties.INVENTORY_SCOPES,
+                        false,
+                        Set.of(),
+                        Set.of("rwms-services"),
+                        Set.of(),
+                        "INVENTORY_CLIENT_SECRET",
+                        null),
+                inventoryClient(
+                        Set.of("client_secret_basic"),
+                        Set.of("client_credentials"),
+                        Set.of(),
+                        Set.of(),
+                        OAuthClientProperties.INVENTORY_SCOPES,
+                        false,
+                        Set.of(PrincipalType.USER),
+                        Set.of("rwms-services"),
+                        Set.of(),
+                        "INVENTORY_CLIENT_SECRET",
+                        null),
+                inventoryClient(
+                        Set.of("client_secret_basic"),
+                        Set.of("client_credentials"),
+                        Set.of(),
+                        Set.of(),
+                        OAuthClientProperties.INVENTORY_SCOPES,
+                        false,
+                        Set.of(),
+                        Set.of("rwms-services"),
+                        Set.of("https://inventory.example.test"),
+                        "INVENTORY_CLIENT_SECRET",
+                        null),
+                inventoryClient(
+                        Set.of("client_secret_basic"),
+                        Set.of("client_credentials"),
+                        Set.of(),
+                        Set.of(),
+                        OAuthClientProperties.INVENTORY_SCOPES,
+                        false,
+                        Set.of(),
+                        Set.of("rwms-services"),
+                        Set.of(),
+                        "OTHER_CLIENT_SECRET",
+                        null),
+                inventoryClient(
+                        Set.of("client_secret_basic"),
+                        Set.of("client_credentials"),
+                        Set.of(),
+                        Set.of(),
+                        OAuthClientProperties.INVENTORY_SCOPES,
+                        false,
+                        Set.of(),
+                        Set.of("rwms-services"),
+                        Set.of(),
+                        "INVENTORY_CLIENT_SECRET",
+                        "repository-secret"));
+
+        assertThat(invalidConfigurations.getLast().toString())
+                .contains("clientId=inventory-service", "enabled=true", "revision=1")
+                .doesNotContain("repository-secret", "INVENTORY_CLIENT_SECRET");
+        invalidConfigurations.forEach(configuration -> assertThatThrownBy(() -> provisioner(configuration).run(null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("inventory-service OAuth client"));
+        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
+
+        assertThatThrownBy(() -> provisioner(inventoryClient(true)).run(null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("secret environment")
+                .hasMessageContaining("inventory-service");
         assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
     }
 
@@ -294,4 +434,58 @@ class OAuthClientProvisionerIntegrationTest {
                 developmentSecret,
                 revoke);
     }
+
+    private OAuthClientProperties.Client inventoryClient(boolean enabled) {
+        return new OAuthClientProperties.Client(
+                "inventory-service",
+                "Inventory Service Downstream Client",
+                enabled,
+                1,
+                Set.of("client_secret_basic"),
+                Set.of("client_credentials"),
+                Set.of(),
+                Set.of(),
+                OAuthClientProperties.INVENTORY_SCOPES,
+                false,
+                Set.of(),
+                Set.of(OAuthClientProperties.INVENTORY_AUDIENCE),
+                Set.of(),
+                Duration.ofMinutes(5),
+                OAuthClientProperties.INVENTORY_SECRET_ENVIRONMENT,
+                null,
+                false);
+    }
+
+    private OAuthClientProperties.Client inventoryClient(
+            Set<String> authenticationMethods,
+            Set<String> grantTypes,
+            Set<String> redirectUris,
+            Set<String> postLogoutRedirectUris,
+            Set<String> scopes,
+            boolean requireProofKey,
+            Set<PrincipalType> allowedPrincipalTypes,
+            Set<String> audiences,
+            Set<String> allowedOrigins,
+            String secretEnvironment,
+            String developmentSecret) {
+        return new OAuthClientProperties.Client(
+                "inventory-service",
+                "Inventory Service Downstream Client",
+                true,
+                1,
+                authenticationMethods,
+                grantTypes,
+                redirectUris,
+                postLogoutRedirectUris,
+                scopes,
+                requireProofKey,
+                allowedPrincipalTypes,
+                audiences,
+                allowedOrigins,
+                Duration.ofMinutes(5),
+                secretEnvironment,
+                developmentSecret,
+                false);
+    }
+
 }

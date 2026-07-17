@@ -131,7 +131,7 @@ public class AssetReplayVerifier {
 
   private Map<StreamKey, JsonNode> liveProjection() {
     Map<StreamKey, JsonNode> result = new LinkedHashMap<>();
-    jdbc.query("select id,warehouse_id,status,number from rental_item", rs -> {
+    jdbc.query("select id,warehouse_id,status,display_canonical_number as number from rental_item", rs -> {
       UUID id = rs.getObject("id", UUID.class);
       result.put(new StreamKey(AssetAggregateType.RENTAL_ITEM, id), node(Map.of(
           "rentalItemId", id.toString(), "warehouseId", rs.getObject("warehouse_id", UUID.class).toString(),

@@ -13,6 +13,7 @@ import { AcceptancePage } from "@/features/acceptance/acceptance-page"
 import { RepairEstimatesPage } from "@/features/repair-estimates/repair-estimates-page"
 import { RepairsPage } from "@/features/repairs/repairs-page"
 import { EstimatesRepairsSettingsPage } from "@/features/settings/estimates-repairs/estimates-repairs-settings-page"
+import { InventoryFeatureRoutes } from "@/features/inventory/inventory-feature-routes"
 import { TaskBoardPage } from "@/features/task-board/task-board-page"
 import { WriteOffsPage } from "@/features/write-offs/write-offs-page"
 import { UsersPage } from "@/features/settings/users/users-page"
@@ -194,10 +195,7 @@ function AppLayout() {
             />
             <Route path="/equipment" element={<AssetEquipmentPage />} />
             <Route path="/warehouse" element={<AssetRentalItemsPage />} />
-            <Route
-              path="/inventory/*"
-              element={<DeferredWorkflowPage title="Инвентаризация" />}
-            />
+            <Route path="/inventory/*" element={<InventoryFeatureRoutes />} />
             <Route path="/estimates" element={<RepairEstimatesPage />} />
             <Route path="/repairs" element={<RepairsPage />} />
             <Route path="/task-board" element={<TaskBoardPage />} />

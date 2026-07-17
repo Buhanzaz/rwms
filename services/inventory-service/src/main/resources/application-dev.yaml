@@ -1,0 +1,22 @@
+spring:
+  datasource:
+    url: ${INVENTORY_DB_URL:jdbc:postgresql://localhost:5439/rwms_inventory}
+    username: ${INVENTORY_DB_USERNAME:rwms_inventory}
+    password: ${INVENTORY_DB_PASSWORD:rwms_inventory_dev}
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTH_ISSUER:http://localhost:9000}
+
+rwms:
+  platform:
+    kafka:
+      enabled: ${INVENTORY_KAFKA_ENABLED:false}
+  inventory:
+    dependencies:
+      enabled: ${INVENTORY_DEPENDENCIES_ENABLED:false}
+    security:
+      dev-auth-bypass: ${INVENTORY_DEV_AUTH_BYPASS:true}
+  cors:
+    allowed-origins: ${PANEL_ORIGIN:http://localhost:5173}

@@ -7,6 +7,8 @@ export type GatewayRuntimeConfig = {
   warehouseApiBaseUrl: string
   assetApiBaseUrl: string
   maintenanceApiBaseUrl: string
+  inventoryApiBaseUrl: string
+  mediaApiBaseUrl: string
 }
 
 function parseOriginOnlyUrl(value: string, settingName: string) {
@@ -64,6 +66,8 @@ export function createGatewayRuntimeConfig(
     warehouseApiBaseUrl: `${gatewayOrigin}/api/warehouse`,
     assetApiBaseUrl: `${gatewayOrigin}/api/asset`,
     maintenanceApiBaseUrl: `${gatewayOrigin}/api/maintenance`,
+    inventoryApiBaseUrl: `${gatewayOrigin}/api/inventory`,
+    mediaApiBaseUrl: `${gatewayOrigin}/api/media`,
   }
 }
 

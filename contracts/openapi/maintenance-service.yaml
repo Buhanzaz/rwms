@@ -1,11 +1,12 @@
 openapi: 3.1.0
 info:
   title: RWMS Maintenance Service API
-  version: 1.0.0
+  version: 1.1.0
   x-rwms-owner: maintenance-service
-  x-rwms-stability: approved-stage-6
+  x-rwms-stability: approved-stage-7-maintenance-v2
   description: >-
-    Stage 6 canonical maintenance boundary for immutable repair catalogs,
+    Stage 6 canonical maintenance boundary plus the approved Stage 7 private
+    inventory plan-freeze and permanent repair-source upsert for immutable repair catalogs,
     estimates, primary/direct repairs, reworks, acceptance and maintenance
     write-off decisions. All resources are warehouse-scoped. Business text is
     service-local and is never copied to Kafka facts. Locally committed
@@ -20,6 +21,7 @@ tags:
   - { name: Estimates }
   - { name: Repairs }
   - { name: Decisions }
+  - { name: Inventory Integration }
 paths:
   /api/maintenance/v1/catalog/versions:
     get:
@@ -131,6 +133,48 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/internal/maintenance/v1/inventory/plans:
+    post:
+      tags: [Inventory Integration]
+      operationId: freezeInventoryRepairPlan
+      description: >-
+        Private direct-service boundary. Requires principal_type=SERVICE,
+        sub=client_id=inventory-service, audience rwms-services and exactly the
+        maintenance.inventory scope. AUTO resolves against the active warehouse
+        catalog; MANUAL validates the submitted order. The permanent source key
+        replays its immutable historical result and never adopts a later catalog.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/FreezeInventoryPlanRequest' } } } }
+      responses:
+        '200': { description: Immutable maintenance-issued inventory plan., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/FrozenInventoryPlan' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+  /api/internal/maintenance/v1/inventory/sources/{inventoryId}/findings/{findingId}:
+    parameters:
+      - { name: inventoryId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: findingId, in: path, required: true, schema: { type: string, format: uuid } }
+    put:
+      tags: [Inventory Integration]
+      operationId: upsertInventoryRepairSource
+      description: >-
+        Private exact maintenance.inventory SERVICE boundary. Binds the permanent
+        inventoryId:findingId source to one INVENTORY repair only when the exact
+        historical snapshot/fingerprint and current asset preconditions match.
+        Identical replay returns that repair. Maintenance alone acquires the asset
+        lease/fence and synchronizes task-board through durable reconciliation.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpsertInventoryRepairRequest' } } } }
+      responses:
+        '200': { description: Created or replayed inventory-origin repair., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryRepairUpsertResult' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+
   /api/maintenance/v1/estimates:
     get:
       tags: [Estimates]
@@ -533,13 +577,16 @@ components:
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
     CatalogLifecycle: { enum: [DRAFT, ACTIVE, SUPERSEDED] }
     EstimateLifecycle: { enum: [DRAFT, COMPLETED] }
-    RepairOrigin: { enum: [ESTIMATE, DIRECT_REPAIR] }
+    RepairOrigin: { enum: [ESTIMATE, DIRECT_REPAIR, INVENTORY] }
     RepairKind: { enum: [PRIMARY, REWORK] }
     RepairExecutionState: { enum: [DRAFT, QUEUED, IN_PROGRESS, COMPLETED, CANCELLED] }
     RepairAcceptanceState: { enum: [NOT_READY, PENDING, IN_REWORK, ACCEPTED, WRITTEN_OFF] }
     RepairStageKind: { enum: [REPAIR_WORK, MOVE_TO_REPAIR, MOVE_FROM_REPAIR] }
     RepairStageState: { enum: [PLANNED, QUEUED, IN_PROGRESS, DONE, CANCELLED] }
     GenerationState: { enum: [PENDING_GENERATION, GENERATED, FAILED] }
+    InventoryPlanMode: { enum: [AUTO, MANUAL] }
+    InventoryPlanLineKind: { enum: [CATALOG, MANUAL] }
+    InventoryPlanLineType: { enum: [WORK, MATERIAL] }
     DeliveryState: { enum: [PENDING, RETRY_PENDING, DELIVERED, QUARANTINED] }
     LeaseReconciliationState: { enum: [NOT_ACQUIRED, ACTIVE, RELEASED, RECONCILIATION_REQUIRED] }
     CatalogNodeType: { enum: [CATEGORY, SUBCATEGORY, WORK, MATERIAL, LOCATION, OPTION] }
@@ -573,6 +620,7 @@ components:
         - MAINTENANCE_REPAIR
         - MAINTENANCE_ACCEPTANCE
         - MAINTENANCE_CATALOG_NODE
+        - INVENTORY_FINDING
     Money:
       type: string
       pattern: '^(?:0|[1-9][0-9]*)(?:\.[0-9]{2})$'
@@ -581,6 +629,14 @@ components:
       type: string
       pattern: '^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,3})?$'
       examples: ['2.5']
+    InventoryQuantityInput:
+      type: string
+      pattern: '^(?:0|[1-9][0-9]{0,13})(?:\.[0-9]{1,3})?$'
+      examples: ['2.5']
+    InventoryQuantitySnapshot:
+      type: string
+      pattern: '^(?:0|[1-9][0-9]{0,13})\.[0-9]{6}$'
+      examples: ['2.500000']
     CatalogCounts:
       type: object
       additionalProperties: false
@@ -957,6 +1013,161 @@ components:
         taskSync: { $ref: '#/components/schemas/TaskSyncSnapshot' }
         completedAt:
           oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+    InventoryPlanLineInput:
+      type: object
+      additionalProperties: false
+      description: >-
+        CATALOG requires catalogNodeId and rejects the manual evidence fields.
+        MANUAL requires a null catalogNodeId plus description, WORK/MATERIAL type,
+        unit, nonnegative minor-unit price and exact normative minutes. MANUAL
+        lines are valid only with MANUAL plan mode.
+      required: [aggregationKind, catalogNodeId, description, type, unit, quantity, unitPriceMinor, normativeMinutes, mediaReferences]
+      properties:
+        aggregationKind: { $ref: '#/components/schemas/InventoryPlanLineKind' }
+        catalogNodeId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        description:
+          oneOf: [ { type: string, minLength: 1, maxLength: 1000 }, { type: 'null' } ]
+        type:
+          oneOf: [ { $ref: '#/components/schemas/InventoryPlanLineType' }, { type: 'null' } ]
+        unit:
+          oneOf: [ { type: string, minLength: 1, maxLength: 32 }, { type: 'null' } ]
+        quantity: { $ref: '#/components/schemas/InventoryQuantityInput' }
+        unitPriceMinor:
+          oneOf: [ { type: integer, format: int64, minimum: 0 }, { type: 'null' } ]
+        normativeMinutes:
+          oneOf:
+            - { type: string, pattern: '^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,3})?$' }
+            - { type: 'null' }
+        groupComment:
+          oneOf: [ { type: string, minLength: 1, maxLength: 2000 }, { type: 'null' } ]
+        mediaReferences:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/MediaReference' }
+    InventoryPlanStageSelection:
+      type: object
+      additionalProperties: false
+      required: [catalogNodeId, kind, order]
+      properties:
+        catalogNodeId: { type: string, format: uuid }
+        kind: { $ref: '#/components/schemas/RepairStageKind' }
+        order: { type: integer, minimum: 0 }
+    FreezeInventoryPlanRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, inventoryId, findingId, sourceRevision, mode, lines, plan, mediaReferences]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        inventoryId: { type: string, format: uuid }
+        findingId: { type: string, format: uuid }
+        sourceRevision: { type: integer, format: int64, minimum: 1 }
+        mode: { $ref: '#/components/schemas/InventoryPlanMode' }
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 2000
+          items: { $ref: '#/components/schemas/InventoryPlanLineInput' }
+        plan:
+          type: array
+          maxItems: 1000
+          items: { $ref: '#/components/schemas/InventoryPlanStageSelection' }
+        mediaReferences:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/MediaReference' }
+    InventoryPlanLineSnapshot:
+      type: object
+      additionalProperties: false
+      required: [aggregationKind, catalogVersionId, catalogNodeId, catalogNodeCode, type, description, normalizedDescription, unit, quantity, unitPriceMinor, normativeMinutes, routing, groupComment, photoRequired, mediaReferences]
+      properties:
+        aggregationKind: { $ref: '#/components/schemas/InventoryPlanLineKind' }
+        catalogVersionId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        catalogNodeId:
+          oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        catalogNodeCode:
+          oneOf:
+            - { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{0,63}$' }
+            - { type: 'null' }
+        type: { $ref: '#/components/schemas/InventoryPlanLineType' }
+        description: { type: string, minLength: 1, maxLength: 1000 }
+        normalizedDescription:
+          oneOf: [ { type: string, minLength: 1, maxLength: 1000 }, { type: 'null' } ]
+        unit:
+          oneOf: [ { type: string, minLength: 1, maxLength: 32 }, { type: 'null' } ]
+        quantity: { $ref: '#/components/schemas/InventoryQuantitySnapshot' }
+        unitPriceMinor: { type: integer, format: int64, minimum: 0 }
+        normativeMinutes:
+          { type: string, pattern: '^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,3})?$' }
+        routing:
+          oneOf: [ { $ref: '#/components/schemas/RoutingSnapshot' }, { type: 'null' } ]
+        groupComment:
+          oneOf: [ { type: string, minLength: 1, maxLength: 2000 }, { type: 'null' } ]
+        photoRequired: { type: boolean }
+        mediaReferences:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/MediaReference' }
+    InventoryPlanStageSnapshot:
+      type: object
+      additionalProperties: false
+      required: [id, catalogNodeId, catalogNodeCode, kind, order, routing, normativeDurationMinutes]
+      properties:
+        id: { type: string, format: uuid }
+        catalogNodeId: { type: string, format: uuid }
+        catalogNodeCode: { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{0,63}$' }
+        kind: { $ref: '#/components/schemas/RepairStageKind' }
+        order: { type: integer, minimum: 0 }
+        routing: { $ref: '#/components/schemas/RoutingSnapshot' }
+        normativeDurationMinutes: { type: integer, minimum: 0, maximum: 525600 }
+    FrozenInventoryPlanSnapshot:
+      type: object
+      additionalProperties: false
+      required: [catalogVersionId, mode, lines, stages, moveToRepairRequired, moveFromRepairRequired, mediaReferences]
+      properties:
+        catalogVersionId: { type: string, format: uuid }
+        mode: { $ref: '#/components/schemas/InventoryPlanMode' }
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 2000
+          items: { $ref: '#/components/schemas/InventoryPlanLineSnapshot' }
+        stages:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items: { $ref: '#/components/schemas/InventoryPlanStageSnapshot' }
+        moveToRepairRequired: { type: boolean }
+        moveFromRepairRequired: { type: boolean }
+        mediaReferences:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/MediaReference' }
+    FrozenInventoryPlan:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, inventoryId, findingId, sourceRevision, snapshot, fingerprint]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        inventoryId: { type: string, format: uuid }
+        findingId: { type: string, format: uuid }
+        sourceRevision: { type: integer, format: int64, minimum: 1 }
+        snapshot: { $ref: '#/components/schemas/FrozenInventoryPlanSnapshot' }
+        fingerprint: { type: string, pattern: '^[0-9a-f]{64}$' }
+    UpsertInventoryRepairRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, sourceRevision, rentalItemId, rentalItemVersion, dispatchDate, planFingerprint, snapshot]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        sourceRevision: { type: integer, format: int64, minimum: 1 }
+        rentalItemId: { type: string, format: uuid }
+        rentalItemVersion: { type: integer, format: int64, minimum: 0 }
+        dispatchDate: { type: string, format: date }
+        planFingerprint: { type: string, pattern: '^[0-9a-f]{64}$' }
+        snapshot: { $ref: '#/components/schemas/FrozenInventoryPlanSnapshot' }
+
     RepairPlan:
       type: object
       additionalProperties: false
@@ -965,10 +1176,20 @@ components:
         repairId: { type: string, format: uuid }
         repairVersion: { type: integer, format: int64, minimum: 0 }
         stages: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/RepairStage' } }
+    InventorySourceReference:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, findingId, sourceRevision, planFingerprint, sourceFingerprint]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        findingId: { type: string, format: uuid }
+        sourceRevision: { type: integer, format: int64, minimum: 1 }
+        planFingerprint: { type: string, pattern: '^[0-9a-f]{64}$' }
+        sourceFingerprint: { type: string, pattern: '^[0-9a-f]{64}$' }
     Repair:
       type: object
       additionalProperties: false
-      required: [id, rootRepairId, sourceRepairId, estimateId, warehouseId, rentalItemId, origin, kind, executionState, acceptanceState, version, dispatchDate, sourceParty, plan, lease, mediaReferences, createdAt, updatedAt, actor]
+      required: [id, rootRepairId, sourceRepairId, estimateId, warehouseId, rentalItemId, origin, kind, executionState, acceptanceState, version, dispatchDate, sourceParty, plan, inventorySource, lease, mediaReferences, createdAt, updatedAt, actor]
       properties:
         id: { type: string, format: uuid }
         rootRepairId: { type: string, format: uuid }
@@ -987,12 +1208,22 @@ components:
         sourceParty:
           oneOf: [ { type: string, minLength: 1, maxLength: 512 }, { type: 'null' } ]
         plan: { $ref: '#/components/schemas/RepairPlan' }
+        inventorySource:
+          oneOf: [ { $ref: '#/components/schemas/InventorySourceReference' }, { type: 'null' } ]
         lease:
           oneOf: [ { $ref: '#/components/schemas/LeaseSnapshot' }, { type: 'null' } ]
         mediaReferences: { type: array, items: { $ref: '#/components/schemas/MediaReference' } }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
         actor: { $ref: '#/components/schemas/ActorSnapshot' }
+    InventoryRepairUpsertResult:
+      type: object
+      additionalProperties: false
+      required: [repair, source, delivery]
+      properties:
+        repair: { $ref: '#/components/schemas/Repair' }
+        source: { $ref: '#/components/schemas/InventorySourceReference' }
+        delivery: { $ref: '#/components/schemas/DeliverySnapshot' }
     RepairPage:
       type: object
       additionalProperties: false

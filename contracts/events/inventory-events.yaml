@@ -1,0 +1,127 @@
+asyncapi: 3.1.0
+info:
+  title: RWMS Inventory Domain Events
+  version: 1.0.0
+  description: >-
+    Stage 7 sanitized inventory session/finding/publication facts. PostgreSQL
+    service-local streams are authoritative and Kafka delivery is at-least-once
+    through an acknowledged transactional outbox. Aggregate version gaps
+    quarantine that aggregate. Text reasons, passport/equipment observations,
+    rental numbers, media locations, credentials and raw errors are forbidden.
+defaultContentType: application/json
+servers:
+  kafka:
+    host: configured-at-runtime
+    protocol: kafka
+channels:
+  sessionFacts:
+    address: rwms.inventory.session.v1
+    description: >-
+      Session and finding aggregate facts. Every Kafka key equals aggregateId.
+      The owner-proof aggregateId and payload.ownerId are the same finding UUID.
+    messages:
+      sessionFactV1: { $ref: '#/components/messages/SessionFactV1' }
+      findingFactV1: { $ref: '#/components/messages/FindingFactV1' }
+      findingOwnerProofV1: { $ref: '#/components/messages/FindingOwnerProofV1' }
+  publicationFacts:
+    address: rwms.inventory.publication.v1
+    description: Publication-intent facts keyed by publication-intent aggregateId.
+    messages:
+      publicationFactV1: { $ref: '#/components/messages/PublicationFactV1' }
+  mediaFacts:
+    address: rwms.media.media.v1
+    description: >-
+      Media lifecycle facts consumed into the inventory-owned projection. Only
+      READY generations matching INVENTORY_FINDING owner and warehouse can be frozen.
+    messages:
+      mediaFactV1: { $ref: '#/components/messages/MediaFactV1' }
+  sanitizedDlt:
+    address: rwms.inventory.dlt.v1
+    description: >-
+      Consumer-owned hash-only failure record. Validation failures are not
+      retried; transient failures receive 1s/2s/4s retries first.
+    messages:
+      sanitizedDltV1: { $ref: '#/components/messages/SanitizedDltV1' }
+operations:
+  publishSessionAndFindingFacts:
+    action: send
+    channel: { $ref: '#/channels/sessionFacts' }
+  publishPublicationFacts:
+    action: send
+    channel: { $ref: '#/channels/publicationFacts' }
+  consumeMediaFacts:
+    action: receive
+    channel: { $ref: '#/channels/mediaFacts' }
+  publishSanitizedConsumerFailure:
+    action: send
+    channel: { $ref: '#/channels/sanitizedDlt' }
+components:
+  messages:
+    SessionFactV1:
+      name: inventory.session.fact.v1
+      payload:
+        allOf:
+          - { $ref: './inventory/inventory-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: SESSION }
+              eventType:
+                enum:
+                  - inventory.session.started.v1
+                  - inventory.session.completed.v1
+                  - inventory.session.cancelled.v1
+    FindingFactV1:
+      name: inventory.finding.fact.v1
+      payload:
+        allOf:
+          - { $ref: './inventory/inventory-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: FINDING }
+              eventType:
+                enum:
+                  - inventory.finding.added.v1
+                  - inventory.finding.inspection-saved.v1
+    FindingOwnerProofV1:
+      name: inventory.finding.owner-proof.v1
+      description: >-
+        Canonical media owner lifecycle proof. Kafka key, aggregateId and
+        payload.ownerId are the same finding UUID. Contiguous aggregateVersion
+        and monotonic ownerRevision are mandatory.
+      payload:
+        allOf:
+          - { $ref: './inventory/inventory-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: FINDING }
+              eventType: { const: inventory.finding.owner-proof.v1 }
+    PublicationFactV1:
+      name: inventory.publication.fact.v1
+      payload:
+        allOf:
+          - { $ref: './inventory/inventory-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: PUBLICATION }
+              eventType:
+                enum:
+                  - inventory.publication.ready.v1
+                  - inventory.publication.requested.v1
+                  - inventory.publication.succeeded.v1
+                  - inventory.publication.transient-failed.v1
+                  - inventory.publication.blocked.v1
+                  - inventory.publication.closed-blocked.v1
+    MediaFactV1:
+      name: inventory.input.media.fact.v1
+      payload: { $ref: './media/media-facts-v1.schema.json' }
+    SanitizedDltV1:
+      name: inventory.sanitized-dlt.v1
+      payload:
+        type: object
+        additionalProperties: false
+        required: [failureCode, messageSha256, recordedAt]
+        properties:
+          failureCode:
+            enum: [VALIDATION_REJECTED, PROCESSING_FAILED, EVENT_ID_CONFLICT]
+          messageSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+          recordedAt: { type: string, format: date-time }

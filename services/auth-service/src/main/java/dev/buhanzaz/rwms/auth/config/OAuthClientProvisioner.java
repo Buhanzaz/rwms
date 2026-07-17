@@ -251,6 +251,9 @@ public class OAuthClientProvisioner implements ApplicationRunner {
             OAuthClientProperties.Client client,
             Set<ClientAuthenticationMethod> authenticationMethods,
             Set<AuthorizationGrantType> grantTypes) {
+        if (client.inventoryServiceClient()) {
+            validateInventoryClientContract(client, authenticationMethods, grantTypes);
+        }
         if (!client.enabled()) {
             return;
         }
@@ -281,6 +284,47 @@ public class OAuthClientProvisioner implements ApplicationRunner {
                 || client.scopes().contains("openid")
                 || client.scopes().contains("profile")) {
             throw new IllegalStateException("Client-credentials contract is invalid: " + client.clientId());
+        }
+    }
+
+    private void validateInventoryClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes) {
+        validateExactServiceClientContract(
+                client,
+                authenticationMethods,
+                grantTypes,
+                OAuthClientProperties.INVENTORY_SCOPES,
+                OAuthClientProperties.INVENTORY_AUDIENCE,
+                OAuthClientProperties.INVENTORY_SECRET_ENVIRONMENT);
+    }
+
+    private void validateExactServiceClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes,
+            Set<String> expectedScopes,
+            String expectedAudience,
+            String expectedSecretEnvironment) {
+        boolean repositorySecret = client.developmentSecret() != null && !client.developmentSecret().isBlank();
+        if (!authenticationMethods.equals(Set.of(ClientAuthenticationMethod.CLIENT_SECRET_BASIC))
+                || !grantTypes.equals(Set.of(AuthorizationGrantType.CLIENT_CREDENTIALS))
+                || !client.scopes().equals(expectedScopes)
+                || !client.audiences().equals(Set.of(expectedAudience))
+                || !client.allowedPrincipalTypes().isEmpty()
+                || !client.redirectUris().isEmpty()
+                || !client.postLogoutRedirectUris().isEmpty()
+                || !client.allowedOrigins().isEmpty()
+                || client.requireProofKey()
+                || client.revokeAuthorizations()
+                || client.accessTokenTtl().isZero()
+                || client.accessTokenTtl().isNegative()
+                || !expectedSecretEnvironment.equals(client.secretEnvironment())
+                || repositorySecret) {
+            throw new IllegalStateException(
+                    client.clientId()
+                            + " OAuth client must use its exact SERVICE scopes, audience, and external secret");
         }
     }
 

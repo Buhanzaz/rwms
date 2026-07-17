@@ -672,3 +672,111 @@ HTTP/JWT runtime, media retention/orphan policy, physical movement/logistics
 semantics, general queue administration or any later-stage contract. Those
 existing UNKNOWNs remain. The scoped Stage 6 implementation commit and later
 sole active-pointer transition remain intentionally open.
+
+Resolution (2026-07-17): commit `1e15a4b` and the sole active-pointer transition
+are complete and supersede only the stale open-commit/pointer sentence above.
+The media/runtime and other explicitly retained UNKNOWNs in that paragraph
+remain unresolved.
+
+## 2026-07-17 Stage 7 inventory contract gate
+
+- `docs/plans/20260717-inventory-service-contract.md` is a proposal awaiting
+  explicit user approval. Its state model, exact active-status set, HTTP/error,
+  event/recovery, seven-day ordinary idempotency, permanent source identities,
+  initial `FREE` create status and migration details are not approved facts.
+- The proposed display canonical number plus whitespace/hyphen-insensitive
+  identity match key is unresolved. Existing asset values have already lost
+  separator provenance; no migration may invent historical hyphens.
+- The proposal now makes asset capture lifecycle concrete but unapproved:
+  public start plus technical attempt identity/fingerprint, stable membership/
+  digest/order/paging, exact non-sliding 30-minute TTL, immediate release after
+  copied commit or concurrent loss, no active-session retention, new attempt
+  only before local commit, committed-session replay and orphan expiry. It must
+  not be treated as a session-wide business lease or implemented before
+  contract approval.
+- Proposed session/finding/publication revision boundaries, expected/finding
+  asset and identity-key uniqueness, permanent source key, completion gate and
+  cancel/complete/create-attach race semantics remain unapproved entity
+  invariants.
+- Proposed preview/fresh-complete point-in-time asset validation, local-only
+  CAS, frozen validation digest/time and publication-time handling of later
+  asset facts remain unapproved. No validation token, lease or remote-stability
+  claim is proposed.
+- The exact aggregate publication fold precedence and MANAGE
+  `BLOCKED -> PENDING` reconcile-and-retry transition remain proposed;
+  `CLOSED_BLOCKED` remains terminal in proposed v1.
+- Maintenance-owned plan resolve/freeze during `WORK_STAGED` save, exact frozen
+  fingerprint contents, historical preview validation and no rerouting at
+  publication remain unapproved integration details.
+- Server-paged history and completed-only statistics endpoints remain proposed.
+  The contract now gives concrete but unapproved counter predicates, positive
+  quantity format/scale, line/stage/media limits, `ru-RU` manual-description
+  normalization, signed-int64 overflow rejection, independent category/grand/
+  aggregate-row `HALF_UP` calculations and explicit rounding adjustment.
+- The roadmap lease wording is unresolved for v1. The proposal uses no
+  session-wide inventory asset lease, makes observation read-only and leaves
+  repair lease/fencing with maintenance. A future apply-to-existing-asset
+  command would need a separate short lease/fence contract.
+- Warehouse-local business date at successful start and the MANAGE terminal
+  `CLOSED_BLOCKED` publication policy require approval. Reopen/correct/delete/
+  export and reopening a closed-blocked intent remain `UNKNOWN` and absent from
+  v1.
+- Exact auth/warehouse/asset/maintenance/gateway prerequisites remain
+  unauthorized. No inventory task-board or media credential is proposed, and
+  generic `asset.internal` remains forbidden.
+- Media HTTP/JWT/PostgreSQL/outbox runtime and its gateway route remain absent.
+  This blocks full upload/panel cutover/Stage 7 exit unless prior-stage closure
+  is separately authorized and verified; retention, orphan cleanup, legal hold,
+  upload limits and codec/format allowlists remain `UNKNOWN`.
+
+### Stage 7 approval resolution (2026-07-17)
+
+The preceding proposal-state bullets are retained as contract-gate audit
+history. The user's `Начинай Stage 7 все разрешаю` response, followed by
+`Продолжай`, resolves the following product decisions: the inventory owner and
+V1 aggregate/HTTP/event/security boundary; 30-minute stable capture lifecycle;
+display-number/identity matching; session/finding/publication revisions and
+uniqueness; point-in-time completion validation without a session lease;
+maintenance-owned plan freeze, repair fence and task synchronization;
+warehouse-local business date; exact statistics/rounding/limits; publication
+fold and terminal `CLOSED_BLOCKED`; active expected-status set and initial
+`FREE`; seven-day ordinary idempotency plus permanent source keys; exact scopes;
+media-runtime closure authority; and Stage 7 panel-cutover authority. These are
+no longer product `UNKNOWN`s, although implementation and verification remain
+outstanding.
+
+Still `UNKNOWN` and excluded from inventory v1 are reopening/correcting/deleting/
+exporting completed sessions, reopening `CLOSED_BLOCKED`, applying observations
+to canonical existing-asset passport/equipment, authoritative tenant/customer
+history, and all Stage 8 logistics semantics. Media retention, cleanup of
+abandoned business media after finalization, legal hold/deletion, exact upload
+size/count/codec/format allowlists, production operations and deployment remain
+`UNKNOWN`; the authorized runtime closure must not invent them. Whether the
+verified implementation satisfies the approved contract is an open delivery
+gate, not a product `UNKNOWN`.
+- Current browser LocalStorage/IndexedDB and legacy HSQLDB contain no approved
+  production inventory migration input. The reviewed legacy artifacts prove no
+  reconstructible inventory sessions; synthetic session/finding/event ETL is
+  forbidden.
+- Panel production cutover requires separate explicit authority. Stage 8
+  evidence, contract and implementation remain forbidden until Stage 7 exit and
+  commit; all logistics semantics remain outside this gate.
+
+
+## Stage 7 implementation resolution (2026-07-17)
+
+The approved Stage 7 service, prerequisites, media owner-proof path, gateway
+and panel cutover are no longer implementation `UNKNOWN`s; independent review
+and the final matrix are complete. The final Stage 7-only candidate suites
+passed inventory 46/46, asset 57/57, maintenance 131/131, Stage 7 architecture
+27/27, auth 11/11, warehouse 12/12, gateway 36/36 and media 73/73, all with zero
+failures, errors or skips. Media also passed a reproducible build; panel
+typecheck/lint/build with Vitest 48 and Playwright 9/9 passed. Earlier shared
+asset 64/64, maintenance 136/136 and architecture 33/34 runs mixed in Stage 8
+diagnostics and are not Stage 7 closure totals or a Stage 7 unknown.
+
+This resolution does not remove the still-open product UNKNOWNs for
+reopen/correct/delete/export, reopening `CLOSED_BLOCKED`, applying observations
+to canonical existing assets, authoritative tenant/customer history, media
+retention/orphan/legal-hold or production operations. Closure is recorded by
+the containing scoped Stage 7 commit without inventing a SHA.

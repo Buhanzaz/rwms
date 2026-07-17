@@ -35,6 +35,7 @@ import dev.buhanzaz.rwms.maintenance.repository.CatalogVersionRepository;
 import dev.buhanzaz.rwms.maintenance.repository.EstimateLineRepository;
 import dev.buhanzaz.rwms.maintenance.repository.EstimatePlanStageRepository;
 import dev.buhanzaz.rwms.maintenance.repository.EstimateRevisionRepository;
+import dev.buhanzaz.rwms.maintenance.repository.InventoryRepairSourceRepository;
 import dev.buhanzaz.rwms.maintenance.repository.MaintenanceEstimateRepository;
 import dev.buhanzaz.rwms.maintenance.repository.MaintenanceMediaReferenceRepository;
 import dev.buhanzaz.rwms.maintenance.repository.MaintenanceRepairRepository;
@@ -81,6 +82,7 @@ public class MaintenanceApplicationService {
   private final EstimatePlanStageRepository estimatePlans;
   private final EstimateRevisionRepository estimateRevisions;
   private final MaintenanceRepairRepository repairs;
+  private final InventoryRepairSourceRepository inventorySources;
   private final RepairStageRepository repairStages;
   private final MaintenanceMediaReferenceRepository mediaReferences;
   private final MediaFactProjectionRepository mediaFacts;
@@ -107,6 +109,7 @@ public class MaintenanceApplicationService {
       EstimatePlanStageRepository estimatePlans,
       EstimateRevisionRepository estimateRevisions,
       MaintenanceRepairRepository repairs,
+      InventoryRepairSourceRepository inventorySources,
       RepairStageRepository repairStages,
       MaintenanceMediaReferenceRepository mediaReferences,
       MediaFactProjectionRepository mediaFacts,
@@ -131,6 +134,7 @@ public class MaintenanceApplicationService {
     this.estimatePlans = estimatePlans;
     this.estimateRevisions = estimateRevisions;
     this.repairs = repairs;
+    this.inventorySources = inventorySources;
     this.repairStages = repairStages;
     this.mediaReferences = mediaReferences;
     this.mediaFacts = mediaFacts;
@@ -1790,27 +1794,15 @@ public class MaintenanceApplicationService {
   }
 
   private boolean enqueueDueLeaseRenewal() {
-    Optional<UUID> repairId = jdbc.query("""
-        select repair.id
-        from maintenance_repair repair
-        where repair.kind='PRIMARY'
-          and repair.lease_reconciliation_state='ACTIVE'
-          and repair.execution_state in ('QUEUED','IN_PROGRESS','COMPLETED','CANCELLED')
-          and repair.acceptance_state not in ('ACCEPTED','WRITTEN_OFF')
-          and repair.lease_expires_at <= clock_timestamp() + (? * interval '1 millisecond')
-          and not exists (
-            select 1 from integration_reconciliation reconciliation
-            where reconciliation.repair_id=repair.id
-              and reconciliation.operation_type='RENEW_LEASE'
-              and reconciliation.state in ('PENDING','RETRY_PENDING','RECONCILIATION_REQUIRED'))
-        order by repair.lease_expires_at,repair.id
-        for update skip locked
-        limit 1
-        """, (resultSet, rowNumber) -> resultSet.getObject("id", UUID.class),
-        LEASE_RENEWAL_GUARD.toMillis())
-        .stream().findFirst();
-    if (repairId.isEmpty()) return false;
-    MaintenanceRepair repair = requireRepair(repairId.get());
+    Optional<MaintenanceRepair> candidate =
+        repairs
+            .findLeaseRenewalCandidateForUpdateSkipLocked(
+                OffsetDateTime.now(java.time.ZoneOffset.UTC).plus(LEASE_RENEWAL_GUARD),
+                org.springframework.data.domain.PageRequest.of(0, 1))
+            .stream()
+            .findFirst();
+    if (candidate.isEmpty()) return false;
+    MaintenanceRepair repair = candidate.get();
     reconciliations.enqueue(
         repair.getId(),
         "ASSET",
@@ -2155,11 +2147,17 @@ public class MaintenanceApplicationService {
                     stage.getDeliveryAttempts(), stage.getDeliveryUpdatedAt())),
             stage.getCompletedAt()))
         .toList();
+    InventorySourceReference inventorySource = inventorySources.findByRepairId(value.getId())
+        .map(source -> new InventorySourceReference(
+            source.getInventoryId(), source.getFindingId(), source.getSourceRevision(),
+            source.getPlanFingerprint(), source.getSourceFingerprint()))
+        .orElse(null);
     return new RepairResponse(
         value.getId(), rootId(value), value.getSourceRepairId(), value.getEstimateId(),
         value.getWarehouseId(), value.getRentalItemId(), value.getOrigin(), value.getKind(),
         value.getExecutionState(), value.getAcceptanceState(), value.getVersion(), value.getDispatchDate(),
         value.getSourceParty(), new RepairPlanResponse(value.getId(), value.getVersion(), stages),
+        inventorySource,
         value.getLeaseId() == null ? null : new LeaseSnapshot(
             value.getLeaseId(), value.getFencingToken(), value.getLeaseExpiresAt(),
             leaseReconciliationState(value.getLeaseReconciliationState())),

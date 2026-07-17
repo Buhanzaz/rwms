@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceCatalogController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceEstimateController;
+import dev.buhanzaz.rwms.maintenance.api.MaintenanceInventoryController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceRepairController;
 import dev.buhanzaz.rwms.maintenance.domain.CatalogVersionState;
 import dev.buhanzaz.rwms.maintenance.domain.EstimateState;
@@ -22,6 +23,7 @@ import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageState;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
+import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
 import dev.buhanzaz.rwms.platform.contracts.ApiProblem;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import jakarta.validation.Valid;
@@ -82,17 +84,56 @@ class MaintenanceOpenApiParityTest {
   private static final List<OperationSpec> OPERATIONS = canonicalOperations();
 
   @Test
-  void allEighteenPathsAndTwentyFourOperationsExactlyMatchTheApprovedAcceptanceMatrix()
+  void allTwentyPathsAndTwentySixOperationsExactlyMatchTheApprovedAcceptanceMatrix()
       throws Exception {
     Map<String, Object> document = openApi();
-    assertThat(child(document, "paths")).hasSize(18);
-    assertThat(openApiOperationCount(document)).isEqualTo(24);
-    assertThat(controllerOperations()).hasSize(24);
+    assertThat(child(document, "paths")).hasSize(20);
+    assertThat(openApiOperationCount(document)).isEqualTo(26);
+    assertThat(controllerOperations()).hasSize(26);
 
     for (OperationSpec expected : OPERATIONS) {
       assertOpenApiOperation(document, expected);
       assertControllerOperation(expected);
     }
+  }
+
+  @Test
+  void inventoryBoundaryIsPrivateAndDoesNotExposeGenericMaintenanceMutations() throws Exception {
+    Map<String, Object> document = openApi();
+    Set<String> inventoryPaths = child(document, "paths").keySet().stream()
+        .filter(path -> path.contains("/inventory"))
+        .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+
+    assertThat(inventoryPaths).containsExactly(
+        "/api/internal/maintenance/v1/inventory/plans",
+        "/api/internal/maintenance/v1/inventory/sources/{inventoryId}/findings/{findingId}");
+    assertThat(inventoryPaths)
+        .allMatch(path -> path.startsWith("/api/internal/maintenance/v1/inventory"))
+        .noneMatch(path -> path.startsWith("/api/maintenance/"))
+        .noneMatch(path -> Set.of("lease", "hold", "fence", "mutation").stream()
+            .anyMatch(path::contains));
+    assertThat(child(document, "paths").keySet().stream()
+        .filter(path -> path.startsWith("/api/maintenance/")))
+        .noneMatch(path -> path.contains("/internal/"));
+  }
+
+  @Test
+  void inventoryRevisionAndRepairStageSchemasKeepTheirExactOwnership() throws Exception {
+    Map<String, Object> document = openApi();
+    for (String schemaName : List.of(
+        "FreezeInventoryPlanRequest", "FrozenInventoryPlan",
+        "UpsertInventoryRepairRequest", "InventorySourceReference")) {
+      assertThat(child(child(schema(document, schemaName), "properties"), "sourceRevision"))
+          .containsEntry("minimum", 1);
+    }
+    assertThat(child(schema(document, "RepairStage"), "properties"))
+        .containsKeys("taskSync", "completedAt");
+    assertThat(stringList(schema(document, "RepairStage").get("required")))
+        .contains("taskSync", "completedAt");
+    assertThat(child(schema(document, "UpsertInventoryRepairRequest"), "properties"))
+        .containsOnlyKeys(
+            "warehouseId", "sourceRevision", "rentalItemId", "rentalItemVersion",
+            "dispatchDate", "planFingerprint", "snapshot");
   }
 
   @Test
@@ -250,18 +291,23 @@ class MaintenanceOpenApiParityTest {
     assertEnum(document, DeliveryState.class, "DeliveryState");
     assertEnum(document, LeaseReconciliationState.class, "LeaseReconciliationState");
     assertEnum(document, GenerationState.class, "GenerationState");
+    assertEnum(document, InventoryPlanMode.class, "InventoryPlanMode");
+    assertEnum(document, InventoryPlanLineKind.class, "InventoryPlanLineKind");
+    assertEnum(document, InventoryPlanLineType.class, "InventoryPlanLineType");
     assertPropertyEnum(document, ActorType.class, "ActorSnapshot", "actorType");
   }
 
   @Test
   void mockMvcExecutesEveryControllerBindingStatusBodyAndRequiredHeader() throws Exception {
     MaintenanceApplicationService service = serviceFixture();
+    InventoryMaintenanceService inventory = inventoryFixture();
     MaintenanceAuthorizer authorizer = mock(MaintenanceAuthorizer.class);
     when(authorizer.subjectId(null)).thenReturn(ID);
     MockMvc mvc = MockMvcBuilders.standaloneSetup(
             new MaintenanceCatalogController(service, authorizer),
             new MaintenanceEstimateController(service, authorizer),
-            new MaintenanceRepairController(service, authorizer))
+            new MaintenanceRepairController(service, authorizer),
+            new MaintenanceInventoryController(inventory, service, authorizer))
         .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
         .addFilters(new CorrelationIdFilter())
         .build();
@@ -269,7 +315,10 @@ class MaintenanceOpenApiParityTest {
 
     for (OperationSpec operation : OPERATIONS) {
       MockHttpServletRequestBuilder request = request(
-          HttpMethod.valueOf(operation.httpMethod()), operation.path().replace("{id}", ID.toString()));
+          HttpMethod.valueOf(operation.httpMethod()), operation.path()
+              .replace("{id}", ID.toString())
+              .replace("{inventoryId}", ID.toString())
+              .replace("{findingId}", ID.toString()));
       for (ParameterSpec parameter : operation.parameters()) {
         String value = valueFor(parameter);
         if ("query".equals(parameter.location())) request.param(parameter.name(), value);
@@ -344,6 +393,18 @@ class MaintenanceOpenApiParityTest {
         MaintenanceCatalogController.class, "activate", append(catalogId, requiredHeader("Idempotency-Key")),
         VersionCommand.class, "ExpectedVersionRequest", "200", "CatalogVersion", true,
         "400", "401", "403", "404", "409", "422"));
+
+    result.add(op("POST", "/api/internal/maintenance/v1/inventory/plans",
+        "freezeInventoryRepairPlan", MaintenanceInventoryController.class, "freezePlan",
+        List.of(), FreezeInventoryPlanRequest.class, "FreezeInventoryPlanRequest",
+        "200", "FrozenInventoryPlan", true, "400", "401", "403", "409", "422"));
+    result.add(op("PUT",
+        "/api/internal/maintenance/v1/inventory/sources/{inventoryId}/findings/{findingId}",
+        "upsertInventoryRepairSource", MaintenanceInventoryController.class, "upsertRepair",
+        List.of(path("inventoryId"), path("findingId")),
+        UpsertInventoryRepairRequest.class, "UpsertInventoryRepairRequest",
+        "200", "InventoryRepairUpsertResult", true,
+        "400", "401", "403", "404", "409", "422", "503"));
 
     result.add(op("GET", "/api/maintenance/v1/estimates", "listEstimates",
         MaintenanceEstimateController.class, "list",
@@ -773,6 +834,24 @@ class MaintenanceOpenApiParityTest {
     });
   }
 
+  private static InventoryMaintenanceService inventoryFixture() throws Exception {
+    InventoryMaintenanceService inventory = mock(InventoryMaintenanceService.class);
+    FrozenInventoryPlanResponse frozen = (FrozenInventoryPlanResponse) sample(
+        FrozenInventoryPlanResponse.class, "frozenInventoryPlan");
+    InventorySourceReference source = (InventorySourceReference) sample(
+        InventorySourceReference.class, "inventorySource");
+    DeliverySnapshot delivery = (DeliverySnapshot) sample(DeliverySnapshot.class, "delivery");
+    when(inventory.freeze(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new InventoryMaintenanceService.FreezeResult(frozen, true));
+    when(inventory.upsert(
+        org.mockito.ArgumentMatchers.any(),
+        org.mockito.ArgumentMatchers.any(),
+        org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new InventoryMaintenanceService.UpsertResult(ID, source, delivery, true));
+    return inventory;
+  }
+
+
   private static MaintenanceApplicationService.CreateResult<?> createResult(Class<?> type)
       throws Exception {
     return new MaintenanceApplicationService.CreateResult<>(sample(type, type.getSimpleName()), true);
@@ -803,6 +882,10 @@ class MaintenanceOpenApiParityTest {
     Object[] arguments = new Object[components.length];
     for (int index = 0; index < components.length; index++) {
       arguments[index] = sample(components[index].getGenericType(), components[index].getName());
+      if (recordType == InventoryPlanLineSnapshot.class
+          && "quantity".equals(components[index].getName())) {
+        arguments[index] = "2.500000";
+      }
     }
     return arguments;
   }
@@ -820,10 +903,12 @@ class MaintenanceOpenApiParityTest {
   }
 
   private static String stringSample(String name) {
-    if (name.toLowerCase(Locale.ROOT).contains("sha256")) return "a".repeat(64);
+    if (name.toLowerCase(Locale.ROOT).contains("sha256")
+        || name.toLowerCase(Locale.ROOT).contains("fingerprint")) return "a".repeat(64);
     if (Set.of("unitPrice", "lineTotal", "total").contains(name)) return "12.00";
     if ("quantity".equals(name)) return "2.5";
-    if ("code".equals(name)) return "CODE";
+    if ("normativeMinutes".equals(name)) return "45.000";
+    if (name.toLowerCase(Locale.ROOT).contains("code")) return "CODE";
     if ("actorId".equals(name)) return ID.toString();
     return "value";
   }
@@ -876,7 +961,17 @@ class MaintenanceOpenApiParityTest {
     values.put(TaskSyncSnapshot.class, "TaskSyncSnapshot");
     values.put(RepairStageResponse.class, "RepairStage");
     values.put(RepairPlanResponse.class, "RepairPlan");
+    values.put(InventorySourceReference.class, "InventorySourceReference");
     values.put(RepairResponse.class, "Repair");
+    values.put(InventoryPlanLineInput.class, "InventoryPlanLineInput");
+    values.put(InventoryPlanStageSelection.class, "InventoryPlanStageSelection");
+    values.put(FreezeInventoryPlanRequest.class, "FreezeInventoryPlanRequest");
+    values.put(InventoryPlanLineSnapshot.class, "InventoryPlanLineSnapshot");
+    values.put(InventoryPlanStageSnapshot.class, "InventoryPlanStageSnapshot");
+    values.put(FrozenInventoryPlanSnapshot.class, "FrozenInventoryPlanSnapshot");
+    values.put(FrozenInventoryPlanResponse.class, "FrozenInventoryPlan");
+    values.put(UpsertInventoryRepairRequest.class, "UpsertInventoryRepairRequest");
+    values.put(InventoryRepairUpsertResponse.class, "InventoryRepairUpsertResult");
     values.put(CreateDirectRepairRequest.class, "CreateDirectRepairRequest");
     values.put(UpdateRepairPlanRequest.class, "ReplaceRepairPlanRequest");
     values.put(CreateReworkRequest.class, "CreateReworkRequest");
@@ -890,6 +985,9 @@ class MaintenanceOpenApiParityTest {
     values.put(EstimateState.class, "EstimateLifecycle");
     values.put(RepairExecutionState.class, "RepairExecutionState");
     values.put(RepairAcceptanceState.class, "RepairAcceptanceState");
+    values.put(InventoryPlanMode.class, "InventoryPlanMode");
+    values.put(InventoryPlanLineKind.class, "InventoryPlanLineKind");
+    values.put(InventoryPlanLineType.class, "InventoryPlanLineType");
     return Map.copyOf(values);
   }
 
@@ -916,6 +1014,13 @@ class MaintenanceOpenApiParityTest {
     values.put(CreateReworkRequest.class, "CreateReworkRequest");
     values.put(RepairDecisionRequest.class, "RepairDecisionRequest");
     values.put(WriteOffRepairRequest.class, "WriteOffRepairRequest");
+    values.put(InventoryPlanLineInput.class, "InventoryPlanLineInput");
+    values.put(InventoryPlanStageSelection.class, "InventoryPlanStageSelection");
+    values.put(FreezeInventoryPlanRequest.class, "FreezeInventoryPlanRequest");
+    values.put(InventoryPlanLineSnapshot.class, "InventoryPlanLineSnapshot");
+    values.put(InventoryPlanStageSnapshot.class, "InventoryPlanStageSnapshot");
+    values.put(FrozenInventoryPlanSnapshot.class, "FrozenInventoryPlanSnapshot");
+    values.put(UpsertInventoryRepairRequest.class, "UpsertInventoryRepairRequest");
     return Map.copyOf(values);
   }
 
@@ -978,7 +1083,8 @@ class MaintenanceOpenApiParityTest {
     for (Class<?> controller : List.of(
         MaintenanceCatalogController.class,
         MaintenanceEstimateController.class,
-        MaintenanceRepairController.class)) {
+        MaintenanceRepairController.class,
+        MaintenanceInventoryController.class)) {
       RequestMapping root = AnnotatedElementUtils.findMergedAnnotation(controller, RequestMapping.class);
       for (Method method : controller.getDeclaredMethods()) {
         RequestMapping mapping = AnnotatedElementUtils.findMergedAnnotation(method, RequestMapping.class);

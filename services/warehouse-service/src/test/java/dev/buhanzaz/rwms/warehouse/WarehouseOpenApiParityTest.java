@@ -42,19 +42,31 @@ class WarehouseOpenApiParityTest {
             "/api/warehouse/v1/warehouses",
             "/api/warehouse/v1/warehouses/{id}",
             "/api/internal/warehouse/v1/warehouses/{id}/existence",
-            "/api/internal/warehouse/v1/warehouses/asset/{id}/existence");
+            "/api/internal/warehouse/v1/warehouses/asset/{id}/existence",
+            "/api/internal/warehouse/v1/warehouses/inventory/{id}/metadata");
     Map<String, Object> create = child(child(paths, "/api/warehouse/v1/warehouses"), "post");
     assertThat(list(create.get("parameters")).getFirst())
         .isInstanceOfSatisfying(
             Map.class,
-            parameter -> assertThat(((Map<?, ?>) parameter).get("$ref")).isEqualTo("#/components/parameters/IdempotencyKey"));
+            parameter ->
+                assertThat(((Map<?, ?>) parameter).get("$ref"))
+                    .isEqualTo("#/components/parameters/IdempotencyKey"));
     Map<String, Object> schemas = child(child(document, "components"), "schemas");
     assertThat(list(child(schemas, "Warehouse").get("required")))
         .containsExactlyInAnyOrder(
             "id", "version", "code", "name", "city", "address", "timeZone", "active", "sortOrder");
     assertThat(list(child(schemas, "InternalWarehouseExistence").get("required")))
         .containsExactlyInAnyOrder("id", "version", "active");
-    assertThat(child(schemas, "InternalWarehouseExistence").get("additionalProperties")).isEqualTo(false);
+    assertThat(child(schemas, "InternalWarehouseExistence").get("additionalProperties"))
+        .isEqualTo(false);
+    assertThat(list(child(schemas, "InventoryWarehouseMetadata").get("required")))
+        .containsExactlyInAnyOrder("id", "version", "active", "timeZone");
+    assertThat(child(schemas, "InventoryWarehouseMetadata").get("additionalProperties"))
+        .isEqualTo(false);
+    assertThat(
+            child(child(child(schemas, "InventoryWarehouseMetadata"), "properties"), "active")
+                .get("const"))
+        .isEqualTo(true);
     assertAllLocalReferencesResolve(document, document);
   }
 
@@ -88,7 +100,8 @@ class WarehouseOpenApiParityTest {
   }
 
   private Map<String, Object> openApi() throws Exception {
-    Path contract = Path.of(System.getProperty("rwms.contracts.dir"), "openapi/warehouse-service.yaml");
+    Path contract =
+        Path.of(System.getProperty("rwms.contracts.dir"), "openapi/warehouse-service.yaml");
     try (InputStream input = Files.newInputStream(contract)) {
       return new Yaml().load(input);
     }
@@ -101,7 +114,8 @@ class WarehouseOpenApiParityTest {
       Map<String, Object> item = map(path.getValue());
       for (String method : item.keySet()) {
         if (OPENAPI_METHODS.contains(method.toLowerCase(Locale.ROOT))) {
-          endpoints.add(new Endpoint(normalizePath(path.getKey()), method.toLowerCase(Locale.ROOT)));
+          endpoints.add(
+              new Endpoint(normalizePath(path.getKey()), method.toLowerCase(Locale.ROOT)));
         }
       }
     }

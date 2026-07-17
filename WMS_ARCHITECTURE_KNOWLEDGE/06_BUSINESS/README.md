@@ -521,3 +521,56 @@ furniture-category, main-menu order/title, link-active and all comment fields.
 Exactly 232 nodes/254 links import into DRAFT; activation is a separate
 MANAGE/CAS decision. Ten routed nodes use six queue snapshots bound to legacy
 warehouse `00000000-0000-0000-0000-000000000002`.
+
+## Stage 7 inventory evidence and proposed contract (2026-07-17)
+
+Approval resolution: the user's `Начинай Stage 7 все разрешаю` response,
+followed by `Продолжай`, approves the complete v1 model, number aliases,
+warehouse-local business date, exact statistics/rounding, terminal
+`CLOSED_BLOCKED`, initial `FREE`, point-in-time validation without a session
+lease and maintenance-owned plan/repair fencing. Implementation is pending.
+
+The user's Stage 7 entrance authorizes evidence and contract work only. The
+durable business rules above remain authoritative: one active warehouse
+session, frozen active non-rented expected population, independent finding
+dimensions, immutable work/media/plan/statistics snapshots, explicit completion
+acknowledgement and per-finding retryable publication.
+
+Current browser behavior is not a backend contract. Sessions and repair
+publication remain LocalStorage-backed, media uses IndexedDB, the inventory
+snapshot drops the canonical asset version, and the browser plan loses
+canonical queue identity. Legacy mobile inventory could mutate passport,
+accessories and media under anonymous admin authority; target v1 must not carry
+that behavior forward.
+
+The proposed, unapproved v1 model adds `ACTIVE -> COMPLETED | CANCELLED`,
+`EXPECTED | ADDED_NEW | ADDED_USED | UNEXPECTED_EXISTING` origins,
+`NOT_INSPECTED | READY | WORK_STAGED` inspection and
+`MATCHED | MISSING | CONFLICT` reconciliation. Existing-asset observations are
+read-only and distinguish absent, explicit empty and present values. A new
+asset is recoverable by permanent `inventoryId:findingId`; cancellation never
+deletes it. No session-wide asset lease is proposed: maintenance owns lease/
+fencing after accepting a repair publication. Number aliases, business date,
+closed-blocked publication and the complete contract remain awaiting explicit
+approval in `docs/plans/20260717-inventory-service-contract.md`.
+
+### Stage 7 verified business resolution (2026-07-17)
+
+The server-owned lifecycle, frozen population, independent finding dimensions,
+completion/statistics freeze and retryable publication are implemented. The
+media, auth, warehouse, asset V3 and maintenance V2 prerequisites are closed
+without moving canonical ownership into inventory. Asset freezes the complete
+capture in one inner repeatable-read snapshot. Inventory idempotency replays the
+exact stored response, holds a lease-locked reservation during the effect and
+releases the copied capture only after transaction completion. Maintenance plan,
+source and reconciliation business persistence is JPA end-to-end.
+
+The final Stage 7-only candidate suites passed inventory 46/46, asset 57/57,
+maintenance 131/131, Stage 7 architecture 27/27, auth 11/11, warehouse 12/12,
+gateway 36/36 and media's canonical real PostgreSQL, drift-PostgreSQL, Kafka
+and MinIO matrix 73/73, all with zero failures, errors or skips. Media also
+passed a reproducible build; panel typecheck/lint/build, Vitest 48 and
+Playwright 9/9 passed. Earlier shared asset 64/64, maintenance 136/136 and
+architecture 33/34 runs mixed in Stage 8 diagnostics and are not Stage 7
+closure totals. Closure is recorded by the containing scoped Stage 7 commit
+without inventing a SHA.

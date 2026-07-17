@@ -37,6 +37,22 @@ public class MaintenanceAuthorizer {
     requireWarehouse(jwt, warehouseId, AccessLevel.MANAGE);
   }
 
+  public void requireInventoryService(Jwt jwt) {
+    if (jwt == null
+        || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
+        || !"inventory-service".equals(jwt.getSubject())
+        || !"inventory-service".equals(jwt.getClaimAsString("client_id"))
+        || jwt.getAudience().size() != 1
+        || !jwt.getAudience().contains("rwms-services")) {
+      throw new AccessDeniedException("Exact inventory-service principal is required");
+    }
+    List<String> granted = scopes(jwt);
+    if (granted.size() != 1 || !"maintenance.inventory".equals(granted.getFirst())) {
+      throw new AccessDeniedException("Exact maintenance.inventory scope is required");
+    }
+  }
+
+
   public UUID subjectId(Jwt jwt) {
     if (developmentPublicBypass) return DEV_SUBJECT;
     if (jwt == null || !"USER".equals(jwt.getClaimAsString("principal_type"))) {
@@ -90,11 +106,10 @@ public class MaintenanceAuthorizer {
           .toList();
     }
     if (claim instanceof Collection<?> values) {
-      return values.stream()
-          .filter(String.class::isInstance)
-          .map(String.class::cast)
-          .filter(value -> !value.isBlank())
-          .toList();
+      if (values.stream().anyMatch(value -> !(value instanceof String text) || text.isBlank())) {
+        return List.of();
+      }
+      return values.stream().map(String.class::cast).toList();
     }
     return List.of();
   }

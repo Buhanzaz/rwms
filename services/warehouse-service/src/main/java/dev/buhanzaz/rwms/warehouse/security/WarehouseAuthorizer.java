@@ -70,12 +70,27 @@ public class WarehouseAuthorizer {
     requireInternalWarehouseReader(jwt, "asset-service");
   }
 
+  /** Inventory receives only active warehouse identity, version, and canonical timezone. */
+  public void requireInternalInventoryService(Jwt jwt) {
+    String clientId = "inventory-service";
+    if (jwt == null
+        || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
+        || !clientId.equals(jwt.getClaimAsString("client_id"))
+        || !clientId.equals(jwt.getSubject())
+        || !exactlyWarehouseRead(jwt)) {
+      throw new AccessDeniedException(
+          "Only inventory-service with matching subject and exactly warehouse.read may use this"
+              + " endpoint");
+    }
+  }
+
   private void requireInternalWarehouseReader(Jwt jwt, String clientId) {
     if (jwt == null
         || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
         || !clientId.equals(jwt.getClaimAsString("client_id"))
         || !exactlyWarehouseRead(jwt)) {
-      throw new AccessDeniedException("Only " + clientId + " with exactly warehouse.read may use this endpoint");
+      throw new AccessDeniedException(
+          "Only " + clientId + " with exactly warehouse.read may use this endpoint");
     }
   }
 
@@ -92,8 +107,12 @@ public class WarehouseAuthorizer {
   }
 
   private boolean exactlyWarehouseRead(Jwt jwt) {
+    return exactlyScope(jwt, "warehouse.read");
+  }
+
+  private boolean exactlyScope(Jwt jwt, String expectedScope) {
     List<String> values = scopeValues(jwt);
-    return values.size() == 1 && "warehouse.read".equals(values.getFirst());
+    return values.size() == 1 && expectedScope.equals(values.getFirst());
   }
 
   private static List<String> scopes(Jwt jwt) {

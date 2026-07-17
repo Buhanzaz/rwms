@@ -1,0 +1,389 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/inventory/inventory-events-v1.schema.json",
+  "title": "RWMS inventory-service sanitized facts v1",
+  "description": "DomainEventEnvelopeV2 inventory session, finding owner-proof and publication facts. Service-local text, passport data, media locations, credentials and raw errors are forbidden.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelopeVersion",
+    "eventId",
+    "eventType",
+    "eventVersion",
+    "occurredAt",
+    "recordedAt",
+    "producer",
+    "aggregateType",
+    "aggregateId",
+    "aggregateVersion",
+    "correlation",
+    "actorRef",
+    "payload"
+  ],
+  "properties": {
+    "envelopeVersion": {"const": 2},
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {
+      "enum": [
+        "inventory.session.started.v1",
+        "inventory.finding.added.v1",
+        "inventory.finding.inspection-saved.v1",
+        "inventory.finding.owner-proof.v1",
+        "inventory.session.completed.v1",
+        "inventory.session.cancelled.v1",
+        "inventory.publication.ready.v1",
+        "inventory.publication.requested.v1",
+        "inventory.publication.succeeded.v1",
+        "inventory.publication.transient-failed.v1",
+        "inventory.publication.blocked.v1",
+        "inventory.publication.closed-blocked.v1"
+      ]
+    },
+    "eventVersion": {"const": 1},
+    "occurredAt": {"$ref": "#/$defs/nullableDateTime"},
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "producer": {"const": "inventory-service"},
+    "aggregateType": {
+      "enum": ["SESSION", "FINDING", "PUBLICATION"]
+    },
+    "aggregateId": {"type": "string", "format": "uuid"},
+    "aggregateVersion": {"type": "integer", "format": "int64", "minimum": 0},
+    "correlation": {"$ref": "#/$defs/correlationContext"},
+    "actorRef": {
+      "oneOf": [
+        {"$ref": "#/$defs/opaqueActorReference"},
+        {"type": "null"}
+      ]
+    },
+    "payload": {
+      "oneOf": [
+        {"$ref": "#/$defs/sessionFact"},
+        {"$ref": "#/$defs/findingFact"},
+        {"$ref": "#/$defs/ownerProofFact"},
+        {"$ref": "#/$defs/publicationFact"}
+      ]
+    }
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/sessionEnvelope"},
+    {"$ref": "#/$defs/findingEnvelope"},
+    {"$ref": "#/$defs/ownerProofEnvelope"},
+    {"$ref": "#/$defs/publicationEnvelope"}
+  ],
+  "x-rwms-envelope": "DomainEventEnvelopeV2",
+  "x-rwms-topics": [
+    "rwms.inventory.session.v1",
+    "rwms.inventory.publication.v1"
+  ],
+  "x-rwms-key-invariants": [
+    "Kafka record key equals aggregateId",
+    "inventory.finding.owner-proof.v1 aggregateId equals payload.ownerId"
+  ],
+  "x-rwms-delivery": {
+    "producer": "transactional-postgresql-outbox",
+    "markPublished": "AFTER_BROKER_ACK",
+    "key": "aggregateId",
+    "atLeastOnce": true,
+    "consumerRetriesSeconds": [1, 2, 4],
+    "validationFailure": "SANITIZED_DLT",
+    "versionGap": "QUARANTINE_AGGREGATE"
+  },
+  "x-rwms-prohibitedPayloadFields": [
+    "authorization",
+    "actor",
+    "login",
+    "displayName",
+    "email",
+    "tenant",
+    "comment",
+    "reason",
+    "passport",
+    "equipment",
+    "displayCanonicalNumber",
+    "identityMatchKey",
+    "mediaUrl",
+    "objectKey",
+    "objectPath",
+    "signedUrl",
+    "rawError",
+    "requestBody",
+    "password",
+    "secret",
+    "token",
+    "jwt"
+  ],
+  "$defs": {
+    "nullableUuid": {
+      "oneOf": [
+        {"type": "string", "format": "uuid"},
+        {"type": "null"}
+      ]
+    },
+    "nullableSha256": {
+      "oneOf": [
+        {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        {"type": "null"}
+      ]
+    },
+    "nullableDateTime": {
+      "oneOf": [
+        {"type": "string", "format": "date-time"},
+        {"type": "null"}
+      ]
+    },
+    "correlationContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correlationId", "causationId"],
+      "properties": {
+        "correlationId": {"type": "string", "format": "uuid"},
+        "causationId": {"$ref": "#/$defs/nullableUuid"}
+      }
+    },
+    "opaqueActorReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subjectId", "principalType", "profileRevision"],
+      "properties": {
+        "subjectId": {"type": "string", "format": "uuid"},
+        "principalType": {"enum": ["USER", "SERVICE"]},
+        "profileRevision": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$"
+            },
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "sessionEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "SESSION"},
+        "eventType": {
+          "enum": [
+            "inventory.session.started.v1",
+            "inventory.session.completed.v1",
+            "inventory.session.cancelled.v1"
+          ]
+        },
+        "payload": {"$ref": "#/$defs/sessionFact"}
+      }
+    },
+    "findingEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "FINDING"},
+        "eventType": {
+          "enum": [
+            "inventory.finding.added.v1",
+            "inventory.finding.inspection-saved.v1"
+          ]
+        },
+        "payload": {"$ref": "#/$defs/findingFact"}
+      }
+    },
+    "ownerProofEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "FINDING"},
+        "eventType": {"const": "inventory.finding.owner-proof.v1"},
+        "payload": {"$ref": "#/$defs/ownerProofFact"}
+      }
+    },
+    "publicationEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "PUBLICATION"},
+        "eventType": {
+          "enum": [
+            "inventory.publication.ready.v1",
+            "inventory.publication.requested.v1",
+            "inventory.publication.succeeded.v1",
+            "inventory.publication.transient-failed.v1",
+            "inventory.publication.blocked.v1",
+            "inventory.publication.closed-blocked.v1"
+          ]
+        },
+        "payload": {"$ref": "#/$defs/publicationFact"}
+      }
+    },
+    "statisticsFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expectedCount",
+        "inspectedCount",
+        "missingCount",
+        "readyCount",
+        "withWorkCount",
+        "addedCount",
+        "unexpectedExistingCount",
+        "conflictCount",
+        "workLineCount",
+        "materialLineCount",
+        "workTotalMinor",
+        "materialTotalMinor",
+        "grandTotalMinor",
+        "roundingAdjustmentMinor",
+        "normativeMinutes",
+        "durationSeconds"
+      ],
+      "properties": {
+        "expectedCount": {"type": "integer", "minimum": 0},
+        "inspectedCount": {"type": "integer", "minimum": 0},
+        "missingCount": {"type": "integer", "minimum": 0},
+        "readyCount": {"type": "integer", "minimum": 0},
+        "withWorkCount": {"type": "integer", "minimum": 0},
+        "addedCount": {"type": "integer", "minimum": 0},
+        "unexpectedExistingCount": {"type": "integer", "minimum": 0},
+        "conflictCount": {"type": "integer", "minimum": 0},
+        "workLineCount": {"type": "integer", "minimum": 0},
+        "materialLineCount": {"type": "integer", "minimum": 0},
+        "workTotalMinor": {"type": "integer", "format": "int64", "minimum": 0},
+        "materialTotalMinor": {"type": "integer", "format": "int64", "minimum": 0},
+        "grandTotalMinor": {"type": "integer", "format": "int64", "minimum": 0},
+        "roundingAdjustmentMinor": {"type": "integer", "minimum": -1, "maximum": 1},
+        "normativeMinutes": {
+          "type": "string",
+          "pattern": "^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,3})?$"
+        },
+        "durationSeconds": {"type": "integer", "format": "int64", "minimum": 0}
+      }
+    },
+    "sessionFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inventoryId",
+        "warehouseId",
+        "sessionRevision",
+        "lifecycle",
+        "businessDate",
+        "expectedCount",
+        "findingCount",
+        "terminalAt",
+        "statistics"
+      ],
+      "properties": {
+        "inventoryId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "sessionRevision": {"type": "integer", "format": "int64", "minimum": 0},
+        "lifecycle": {"enum": ["ACTIVE", "COMPLETED", "CANCELLED"]},
+        "businessDate": {"type": "string", "format": "date"},
+        "expectedCount": {"type": "integer", "minimum": 0},
+        "findingCount": {"type": "integer", "minimum": 0},
+        "terminalAt": {"$ref": "#/$defs/nullableDateTime"},
+        "statistics": {
+          "oneOf": [
+            {"$ref": "#/$defs/statisticsFact"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "findingFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inventoryId",
+        "findingId",
+        "warehouseId",
+        "sessionRevision",
+        "findingRevision",
+        "origin",
+        "inspection",
+        "reconciliation",
+        "assetId",
+        "sourceAttached",
+        "mediaCount",
+        "planFingerprintSha256"
+      ],
+      "properties": {
+        "inventoryId": {"type": "string", "format": "uuid"},
+        "findingId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "sessionRevision": {"type": "integer", "format": "int64", "minimum": 0},
+        "findingRevision": {"type": "integer", "format": "int64", "minimum": 0},
+        "origin": {
+          "enum": ["EXPECTED", "ADDED_NEW", "ADDED_USED", "UNEXPECTED_EXISTING"]
+        },
+        "inspection": {"enum": ["NOT_INSPECTED", "READY", "WORK_STAGED"]},
+        "reconciliation": {"enum": ["MATCHED", "MISSING", "CONFLICT"]},
+        "assetId": {"$ref": "#/$defs/nullableUuid"},
+        "sourceAttached": {"type": "boolean"},
+        "mediaCount": {"type": "integer", "minimum": 0, "maximum": 100},
+        "planFingerprintSha256": {"$ref": "#/$defs/nullableSha256"}
+      }
+    },
+    "ownerProofFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ownerType",
+        "ownerId",
+        "warehouseId",
+        "ownerRevision",
+        "active"
+      ],
+      "properties": {
+        "ownerType": {"const": "INVENTORY_FINDING"},
+        "ownerId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "ownerRevision": {"type": "integer", "format": "int64", "minimum": 0},
+        "active": {"type": "boolean"}
+      }
+    },
+    "sourceReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inventoryId", "findingId", "sourceRevision", "requestSha256"],
+      "properties": {
+        "inventoryId": {"type": "string", "format": "uuid"},
+        "findingId": {"type": "string", "format": "uuid"},
+        "sourceRevision": {"type": "integer", "format": "int64", "minimum": 1},
+        "requestSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "publicationFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inventoryId",
+        "findingId",
+        "publicationIntentId",
+        "warehouseId",
+        "publicationRevision",
+        "state",
+        "attemptCount",
+        "maintenanceRepairId",
+        "failureCode",
+        "sourceReference"
+      ],
+      "properties": {
+        "inventoryId": {"type": "string", "format": "uuid"},
+        "findingId": {"type": "string", "format": "uuid"},
+        "publicationIntentId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "publicationRevision": {"type": "integer", "format": "int64", "minimum": 0},
+        "state": {
+          "enum": [
+            "READY",
+            "PENDING",
+            "SUCCEEDED",
+            "TRANSIENT_FAILED",
+            "BLOCKED",
+            "CLOSED_BLOCKED"
+          ]
+        },
+        "attemptCount": {"type": "integer", "minimum": 0},
+        "maintenanceRepairId": {"$ref": "#/$defs/nullableUuid"},
+        "failureCode": {
+          "oneOf": [
+            {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"},
+            {"type": "null"}
+          ]
+        },
+        "sourceReference": {"$ref": "#/$defs/sourceReference"}
+      }
+    }
+  }
+}

@@ -1,21 +1,38 @@
 openapi: 3.1.0
 info:
   title: RWMS Media Service API
-  version: 1.0.0
-  license:
-    name: UNLICENSED
+  version: 1.2.0
+  license: { name: UNLICENSED }
   description: >-
-    Go media API. The service authorizes an operation and returns short-lived
-    signed MinIO URLs; it never proxies media bytes through the gateway.
+    Stateful Go media API. PostgreSQL owns metadata and replay state; MinIO
+    receives bytes only through a constrained POST policy and every finalized
+    source and derived variant is pinned to an immutable object version.
 servers:
   - url: /
 security:
   - bearerJwt: []
 paths:
+  /health/live:
+    get:
+      security: []
+      operationId: mediaLiveness
+      responses:
+        '200': { description: Process is alive. }
+  /health/ready:
+    get:
+      security: []
+      operationId: mediaReadiness
+      responses:
+        '200': { description: Exact Flyway schema, PostgreSQL and versioned MinIO are ready. }
+        '503': { $ref: '#/components/responses/Unavailable' }
   /api/media/v1/upload-sessions:
     post:
-      summary: Authorize a direct media upload
+      summary: Authorize one constrained direct upload
       operationId: createUploadSession
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT. Only the proven
+        INVENTORY_FINDING + INSPECTION owner binding is accepted. At most 100
+        live media assets may belong to one finding.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -25,7 +42,16 @@ paths:
             schema: { $ref: '#/components/schemas/CreateUploadSessionRequest' }
       responses:
         '201':
-          description: Authorized direct MinIO upload session.
+          description: New constrained MinIO POST policy. Response is no-store.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadSession' }
+        '200':
+          description: Safe replay while the same upload session remains open.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/UploadSession' }
@@ -34,16 +60,27 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '415': { $ref: '#/components/responses/UnsupportedMedia' }
+        '503': { $ref: '#/components/responses/Unavailable' }
   /api/media/v1/upload-sessions/{uploadSessionId}/complete:
     post:
-      summary: Finalize an uploaded media object
+      summary: Pin and finalize an uploaded object version
       operationId: finalizeUploadSession
       parameters:
         - $ref: '#/components/parameters/UploadSessionId'
         - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FinalizeUploadRequest' }
       responses:
         '202':
-          description: Media is queued for copying or processing. A new generation becomes current only after the worker succeeds.
+          description: UPLOADED fact and dependent processing request committed atomically.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaAsset' }
+        '200':
+          description: Exact completed-command replay.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MediaAsset' }
@@ -52,61 +89,91 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/Unavailable' }
   /api/media/v1/assets:
     get:
-      summary: List authorized owner media
+      summary: List bounded owner media without ORIGINAL capabilities
       operationId: listOwnerMedia
       parameters:
-        - name: ownerType
+        - $ref: '#/components/parameters/OwnerType'
+        - $ref: '#/components/parameters/OwnerId'
+        - $ref: '#/components/parameters/WarehouseId'
+        - $ref: '#/components/parameters/OwnerContext'
+        - name: limit
           in: query
-          required: true
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
           schema: { type: string, minLength: 1, maxLength: 64 }
-        - name: ownerId
-          in: query
-          required: true
-          schema: { type: string, minLength: 1, maxLength: 128 }
-        - name: viewerContext
-          in: query
-          required: true
-          schema: { enum: [ESTIMATE, INSPECTION, WORK, WAREHOUSE, HISTORY] }
       responses:
         '200':
-          description: Images ordered first and videos last. URLs are short-lived.
+          description: Images first, then videos. ORIGINAL is never returned.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: '#/components/schemas/MediaAsset' }
+              schema: { $ref: '#/components/schemas/MediaPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-  /api/media/v1/assets/{mediaId}/rotation:
-    post:
-      summary: Queue a new rotated media generation
-      operationId: rotateMedia
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /api/media/v1/assets/{mediaId}/original:
+    get:
+      summary: Get one owner-scoped lazy ORIGINAL capability
+      operationId: getOriginalMedia
       parameters:
         - $ref: '#/components/parameters/MediaId'
-        - $ref: '#/components/parameters/IdempotencyKey'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [rotationDegrees, expectedVersion]
-              properties:
-                rotationDegrees: { enum: [0, 90, 180, 270] }
-                expectedVersion: { type: integer, minimum: 0 }
+        - $ref: '#/components/parameters/OwnerType'
+        - $ref: '#/components/parameters/OwnerId'
+        - $ref: '#/components/parameters/WarehouseId'
+        - $ref: '#/components/parameters/OwnerContext'
       responses:
-        '202':
-          description: A new MinIO generation is queued and becomes current when ready.
+        '200':
+          description: Short-lived URL for the exact immutable variant version.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MediaAsset' }
+              schema: { $ref: '#/components/schemas/SignedCapability' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /api/media/v1/assets/{mediaId}/rotation:
+    post:
+      summary: Queue a new absolute rotated generation
+      operationId: rotateMedia
+      parameters:
+        - $ref: '#/components/parameters/MediaId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/OwnerType'
+        - $ref: '#/components/parameters/OwnerId'
+        - $ref: '#/components/parameters/WarehouseId'
+        - $ref: '#/components/parameters/OwnerContext'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RotateRequest' }
+      responses:
+        '202':
+          description: A monotonically allocated generation is queued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaAsset' }
+        '200':
+          description: Exact command replay.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaAsset' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/Unavailable' }
 components:
   securitySchemes:
     bearerJwt:
@@ -129,65 +196,147 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    OwnerType:
+      name: ownerType
+      in: query
+      required: true
+      schema: { const: INVENTORY_FINDING }
+    OwnerId:
+      name: ownerId
+      in: query
+      required: true
+      schema: { type: string, format: uuid }
+    WarehouseId:
+      name: warehouseId
+      in: query
+      required: true
+      schema: { type: string, format: uuid }
+    OwnerContext:
+      name: context
+      in: query
+      required: true
+      schema: { const: INSPECTION }
   schemas:
     CreateUploadSessionRequest:
       type: object
       additionalProperties: false
-      required: [ownerType, ownerId, warehouseId, fileName, contentType, contentLength]
+      required: [ownerType, ownerId, warehouseId, context, fileName, contentType, contentLength, checksumSha256]
       properties:
-        ownerType: { type: string, minLength: 1, maxLength: 64 }
-        ownerId: { type: string, minLength: 1, maxLength: 128 }
+        ownerType: { const: INVENTORY_FINDING }
+        ownerId: { type: string, format: uuid }
         warehouseId: { type: string, format: uuid }
+        context: { const: INSPECTION }
         fileName: { type: string, minLength: 1, maxLength: 512 }
         contentType: { type: string, minLength: 1, maxLength: 255 }
         contentLength: { type: integer, minimum: 1 }
-        sortOrder: { type: integer, minimum: 0 }
+        checksumSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        sortOrder: { type: integer, minimum: 0, default: 0 }
+    FinalizeUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [objectVersionId, etag, checksumSha256]
+      properties:
+        objectVersionId: { type: string, minLength: 1, maxLength: 255 }
+        etag: { type: string, minLength: 1, maxLength: 255 }
+        checksumSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+    RotateRequest:
+      type: object
+      additionalProperties: false
+      required: [rotationDegrees, expectedVersion]
+      properties:
+        rotationDegrees: { enum: [0, 90, 180, 270] }
+        expectedVersion: { type: integer, minimum: 1 }
     UploadSession:
       type: object
       additionalProperties: false
-      required: [uploadSessionId, mediaId, expiresAt, uploadUrl, requiredHeaders]
+      required: [uploadSessionId, mediaId, expiresAt, uploadUrl, formFields]
       properties:
         uploadSessionId: { type: string, format: uuid }
         mediaId: { type: string, format: uuid }
         expiresAt: { type: string, format: date-time }
         uploadUrl: { type: string, format: uri }
-        requiredHeaders:
+        formFields:
           type: object
+          minProperties: 1
           additionalProperties: { type: string }
+    MediaPage:
+      type: object
+      additionalProperties: false
+      required: [items, next]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/MediaAsset' }
+        next: { oneOf: [{ type: string, maxLength: 64 }, { type: 'null' }] }
     MediaAsset:
       type: object
       additionalProperties: false
-      required: [id, fileName, contentType, kind, status, version, generation, rotationDegrees, sortOrder, createdAt, variants]
+      required: [id, fileName, contentType, kind, status, version, generation, rotationDegrees, sortOrder, sizeBytes, createdAt, variants]
       properties:
         id: { type: string, format: uuid }
         fileName: { type: string, minLength: 1, maxLength: 512 }
-        contentType: { type: string, minLength: 1, maxLength: 255 }
+        contentType: { type: string }
         kind: { enum: [IMAGE, VIDEO] }
         status: { enum: [UPLOADING, PROCESSING, READY, FAILED, DELETED] }
-        version: { type: integer, minimum: 0 }
+        version: { type: integer, minimum: 1 }
         generation: { type: integer, minimum: 0 }
         rotationDegrees: { enum: [0, 90, 180, 270] }
         sortOrder: { type: integer, minimum: 0 }
+        sizeBytes: { oneOf: [{ type: integer, minimum: 1 }, { type: 'null' }] }
         createdAt: { type: string, format: date-time }
         variants:
-          description: >-
-            A ready image has SMALL, MEDIUM, LARGE and conditionally authorized
-            ORIGINAL URLs. A ready video has only its ORIGINAL URL.
+          description: List responses contain SMALL/MEDIUM/LARGE only; ORIGINAL uses the lazy endpoint.
           type: array
-          items:
-            type: object
-            additionalProperties: false
-            required: [kind, contentType, url]
-            properties:
-              kind: { enum: [SMALL, MEDIUM, LARGE, ORIGINAL] }
-              contentType: { type: string }
-              url: { type: string, format: uri }
-              width: { type: [integer, 'null'], minimum: 1 }
-              height: { type: [integer, 'null'], minimum: 1 }
+          items: { $ref: '#/components/schemas/SafeVariant' }
+    SafeVariant:
+      type: object
+      additionalProperties: false
+      required: [kind, contentType, url, width, height]
+      properties:
+        kind: { enum: [SMALL, MEDIUM, LARGE] }
+        contentType: { type: string }
+        url: { type: string, format: uri }
+        width: { oneOf: [{ type: integer, minimum: 1 }, { type: 'null' }] }
+        height: { oneOf: [{ type: integer, minimum: 1 }, { type: 'null' }] }
+    SignedCapability:
+      type: object
+      additionalProperties: false
+      required: [url, expiresAt]
+      properties:
+        url: { type: string, format: uri }
+        expiresAt: { type: string, format: date-time }
+    Problem:
+      type: object
+      additionalProperties: true
+      required: [type, title, status, detail, instance, code, correlationId]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        code: { type: string }
+        correlationId: { type: string, format: uuid }
   responses:
-    BadRequest: { description: Invalid request. }
-    Unauthorized: { description: Missing or invalid Bearer JWT. }
-    Forbidden: { description: Insufficient warehouse access or original-media capability. }
-    NotFound: { description: Media asset or upload session not found. }
-    Conflict: { description: "Idempotency, state or optimistic-version conflict." }
-    UnsupportedMedia: { description: Unsupported content type or codec. }
+    BadRequest:
+      description: Invalid request.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Unauthorized:
+      description: Missing or invalid Bearer JWT.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Forbidden:
+      description: USER scope, warehouse access or owner proof is insufficient.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    NotFound:
+      description: Scoped media resource not found; owner mismatches are indistinguishable.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Conflict:
+      description: Idempotency, expiry, object, state, limit or optimistic-version conflict.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    UnsupportedMedia:
+      description: MIME, container or codec is not in explicit runtime configuration.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }
+    Unavailable:
+      description: PostgreSQL, MinIO, JWKS or another required dependency is unavailable.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } }

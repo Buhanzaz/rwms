@@ -1,6 +1,9 @@
 package media
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Object keys use opaque media IDs. Owner identifiers never enter a MinIO key,
 // preventing client-visible object names from leaking cabin or estimate data.
@@ -30,11 +33,15 @@ func lowerVariant(variant Variant) string {
 }
 
 func normalizeExtension(extension, fallback string) string {
-	if extension == "" {
+	extension = strings.ToLower(strings.TrimSpace(extension))
+	extension = strings.TrimPrefix(extension, ".")
+	if extension == "" || len(extension) > 10 {
 		return fallback
 	}
-	if extension[0] == '.' {
-		return extension
+	for _, character := range extension {
+		if !((character >= 'a' && character <= 'z') || (character >= '0' && character <= '9')) {
+			return fallback
+		}
 	}
 	return "." + extension
 }
