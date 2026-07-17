@@ -1157,3 +1157,113 @@ entry does not close F4T.
   topic. PostgreSQL remains replay authority; Kafka remains transport.
 - Do not advance the active pointer until the scoped Stage 6 implementation
   commit exists. This decision authorizes no Stage 7 work.
+
+## 2026-07-17 Stage 7 inventory entrance authorization
+
+- The user explicitly authorized Stage 7 evidence and contract work after the
+  verified Stage 6 commit. This authorization does not approve the proposed
+  inventory contract, cross-service prerequisites, database, implementation,
+  canonical transport schemas, panel cutover or media-runtime closure.
+- Existing durable inventory rules remain authoritative: one active session per
+  warehouse; a frozen active non-rented expected population; independent
+  origin/inspection/reconciliation/publication dimensions; immutable
+  work/media/plan/statistics snapshots; explicit completion acknowledgement;
+  and independently retryable publication by stable session/finding identity.
+- Inventory remains the owner of sessions/findings/publication intents only.
+  Asset, maintenance, task-board, media, auth and warehouse retain their
+  established canonical ownership; evidence collection transfers none of it.
+- Stage 8 remains forbidden until the complete Stage 7 exit, memory
+  reconciliation, independent review and scoped implementation commit. The
+  Stage 8 pointer is metadata only.
+
+## 2026-07-17 Stage 7 inventory contract approval
+
+- The user's `Начинай Stage 7 все разрешаю` response, followed by `Продолжай`,
+  approves the entire Stage 7 contract, all narrow prerequisites, the separate
+  prior media-runtime closure and the inventory panel cutover. Implementation
+  must follow the ordered subgates in
+  `docs/plans/20260717-inventory-service-implementation.md`; Stage 8 remains
+  forbidden through the Stage 7 exit commit.
+- Asset stable capture uses public start plus monotonic technical attempt
+  identity/fingerprint, immutable membership/count/digest/order/pages, a
+  non-sliding 30-minute TTL, immediate release after copied commit or concurrent
+  loss, a new attempt only before local commit, durable session replay after
+  commit and asset-owned crash/orphan expiry. It is never a business session
+  lease.
+- Rental numbers keep deterministic `ru-RU` uppercase display form with
+  collapsed whitespace and ASCII hyphen; identity matching removes spaces and
+  that hyphen. Other punctuation is rejected, uniqueness is global and
+  migration never invents lost separators. Inventory-created assets start
+  operationally `FREE`; `NEW`/`USED` is finding origin/condition evidence.
+- Inventory uses no session-wide or finding-wide asset lease. Preview and
+  complete use fresh point-in-time asset validation; local CAS proves only
+  inventory revisions. A post-`validatedAt` asset fact does not rewrite a
+  completed session and may block/reconcile maintenance publication.
+  Maintenance owns the repair lease/fence and task synchronization.
+- Session, finding and publication intent have separate revisions. Expected/
+  finding asset and identity-key uniqueness, permanent
+  `inventoryId:findingId`, terminal cancel/complete races and recoverable
+  create/attach state are approved invariants.
+- Maintenance resolves/freezes AUTO or MANUAL plans during `WORK_STAGED` save
+  against the active catalog. Exact catalog/node/queue/line/price/duration/
+  order/photo snapshots and fingerprints are immutable; historical preview and
+  source upsert never regenerate, upgrade or reroute them.
+- `businessDate` is the warehouse-local calendar date at successful start;
+  timestamps are UTC and browser date/actor/statistics/signature input is never
+  authoritative. Actor facts remain opaque and PII-free.
+- Completed statistics use the approved exact predicates, decimal-string
+  quantity/scale/count limits, signed-int64 overflow rejection, independent
+  single `HALF_UP` category/grand/aggregate-row calculations and explicit
+  rounding adjustment. History/findings are server-paged and only completed
+  sessions populate statistics rows/summaries.
+- Publication state and the exact required-intent fold are approved.
+  `BLOCKED -> PENDING` requires MANAGE reconcile-and-retry evidence;
+  `CLOSED_BLOCKED` is terminal in v1. Successful findings are never relabelled.
+  Seven-day ordinary idempotency does not expire permanent asset/maintenance
+  source identities.
+- Public inventory authorization is USER plus `rwms.read`/VIEW for reads,
+  USER plus `rwms.write`/EDIT for start/resolve/add/save, and USER plus
+  `rwms.write`/MANAGE for complete/cancel/publish/retry/close. The disabled
+  service client receives exactly one of `warehouse.read`, `asset.inventory`
+  or `maintenance.inventory`; combined scopes, generic `asset.internal`, holds,
+  fenced status, task-board, media and logistics credentials remain forbidden.
+- Inventory accepts only owner/warehouse-bound finalized READY media generations
+  as opaque references. The missing media HTTP/JWT/PostgreSQL/outbox runtime and
+  its stateless route are authorized as a separate first subgate, not folded
+  into inventory ownership. The inventory panel cutover is also explicitly
+  authorized after backend and gateway subgates pass.
+- The approved expected-population statuses are `NEW`, `BOOKED`, `REPAIR`,
+  `WAITING_REPAIR_CHECK`, `CAPITAL_REPAIR`, `AFTER_RENT`, `SALE`, `USED_SALE`,
+  `RESERVED`, `FREE`, `WAREHOUSE` and `OWN_NEEDS`; `RENTED`, `WRITTEN_OFF`,
+  `WAITING_ESTIMATE_CONFIRMATION` and `IN_TRANSFER` are excluded.
+
+
+## 2026-07-17 Stage 7 persistence and closure decision
+
+- Inventory business persistence remains Spring Data JPA with Hibernate
+  validation; Flyway V1 alone owns schema/version/checksum state.
+- Only `InventoryDeadLetterRelay`, `InventoryDeadLetterStore`,
+  `InventoryEventStore`, `InventoryMediaInboxProcessor`,
+  `InventoryMediaRetryStore` and `InventoryOutboxStore` may use low-level SQL.
+  Service and shared architecture policies reject JDBC elsewhere.
+- Idempotency owns a lease-locked record and replays the exact response. Start
+  saga state that must survive retry uses independent transactions, while
+  session commit joins the command transaction and capture release runs only
+  from `afterCompletion`.
+- Asset capture is a single inner repeatable-read snapshot. Maintenance's full
+  inventory reconciliation boundary is JPA. Warehouse metadata conceals absent,
+  inactive and foreign-scoped IDs behind the same `404` response.
+- Media event-ID/body identity conflicts atomically quarantine/deactivate the
+  affected owner and write sanitized DLT evidence. Public reads lock and test
+  owner binding, checkpoint and quarantine in the same SQL statement that
+  returns media, so revocation cannot leave stale authorization.
+- The final Stage 7-only candidate suites passed inventory 46/46, asset 57/57,
+  maintenance 131/131, Stage 7 architecture 27/27, auth 11/11, warehouse 12/12,
+  gateway 36/36 and media 73/73, all with zero failures, errors or skips. Media
+  also passed a reproducible build; panel typecheck/lint/build with Vitest 48
+  and Playwright 9/9 passed. Earlier shared asset 64/64, maintenance 136/136 and
+  architecture 33/34 runs mixed in Stage 8 diagnostics and are not Stage 7
+  closure totals.
+- Keep the operational pointer on `STAGE_7_INVENTORY_SERVICE` with status
+  `COMPLETE`; `next_state` remains metadata. The containing scoped Stage 7
+  commit records closure without an invented advance SHA.

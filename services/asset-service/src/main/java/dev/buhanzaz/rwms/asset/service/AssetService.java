@@ -106,7 +106,9 @@ public class AssetService {
     if (replay.isPresent()) return new CreateResult<>(read(replay.get(), RentalItemResponse.class), true);
     RentalItem candidate = RentalItem.create(request.warehouseId(), request.number(), request.rentalType(), request.dimensions(),
         request.finishing(), request.category(), request.characteristics(), request.linoleum(), jsonObject(request.passport()), jsonArray(request.tags()));
-    if (rentalItems.existsByNumber(candidate.getNumber())) throw new AssetConflictException("Rental item number is globally unique and cannot be reused");
+    if (rentalItems.existsByIdentityMatchKey(candidate.getIdentityMatchKey())) {
+      throw new AssetConflictException("Rental item number identity is globally unique and cannot be reused");
+    }
     RentalItem persisted = rentalItems.saveAndFlush(candidate);
     events.initialize(AssetAggregateType.RENTAL_ITEM, persisted.getId(), persisted.getVersion(), AssetEventType.RENTAL_ITEM_CREATED,
         rentalFact(persisted), rentalSnapshot(persisted));

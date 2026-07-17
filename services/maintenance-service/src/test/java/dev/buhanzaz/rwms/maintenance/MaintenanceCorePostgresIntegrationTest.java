@@ -30,11 +30,13 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -355,6 +357,28 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   @Test
+  void dueLeaseRenewalIsSelectedAndEnqueuedThroughJpaBoundary() {
+    RegisteredRepairFixture fixture = createRegisteredPrimaryRepair();
+    setLeaseExpiry(fixture.repair().repairId(), "4 minutes");
+
+    assertThat(service.reconcileOneTask()).isTrue();
+
+    assertThat(
+            jdbc.queryForList(
+                """
+                select repair_id,state,attempt_count from integration_reconciliation
+                where operation_type='RENEW_LEASE'
+                """))
+        .singleElement()
+        .satisfies(
+            row ->
+                assertThat(row)
+                    .containsEntry("repair_id", fixture.repair().repairId())
+                    .containsEntry("state", "PENDING")
+                    .containsEntry("attempt_count", 0));
+  }
+
+  @Test
   void reworkQueueRejectsExpiredAndFourMinuteLeaseButAcceptsFiveMinutePlus() {
     RepairFixture source = createQueuedPendingAcceptanceRepair();
     RepairFixture child = createDraftRework(source);
@@ -464,6 +488,112 @@ class MaintenanceCorePostgresIntegrationTest {
     assertThat(jdbc.queryForObject("""
         select idempotency_key from integration_reconciliation where id=?
         """, UUID.class, reconciliationId)).isEqualTo(stableKey);
+  }
+
+  @Test
+  void concurrentReconciliationClaimsSkipLockedWorkWithoutBlocking() throws Exception {
+    RepairFixture fixture = createDirectRepair();
+    new TransactionTemplate(transactionManager)
+        .executeWithoutResult(
+            status ->
+                reconciliations.enqueue(
+                    fixture.repairId(),
+                    "ASSET",
+                    "QUEUE_REPAIR",
+                    UUID.randomUUID(),
+                    Map.of("repairId", fixture.repairId().toString())));
+    CountDownLatch claimed = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    var executor = Executors.newFixedThreadPool(2);
+    try {
+      Future<Optional<MaintenanceReconciliationStore.WorkItem>> first =
+          executor.submit(
+              () ->
+                  new TransactionTemplate(transactionManager)
+                      .execute(
+                          status -> {
+                            Optional<MaintenanceReconciliationStore.WorkItem> item =
+                                reconciliations.lockNextDue();
+                            claimed.countDown();
+                            try {
+                              release.await();
+                            } catch (InterruptedException exception) {
+                              Thread.currentThread().interrupt();
+                              throw new IllegalStateException(exception);
+                            }
+                            status.setRollbackOnly();
+                            return item;
+                          }));
+      assertThat(claimed.await(5, TimeUnit.SECONDS)).isTrue();
+
+      Future<Optional<MaintenanceReconciliationStore.WorkItem>> concurrent =
+          executor.submit(
+              () ->
+                  new TransactionTemplate(transactionManager)
+                      .execute(status -> reconciliations.lockNextDue()));
+
+      assertThat(concurrent.get(2, TimeUnit.SECONDS)).isEmpty();
+      release.countDown();
+      assertThat(first.get(5, TimeUnit.SECONDS)).isPresent();
+    } finally {
+      release.countDown();
+      executor.shutdownNow();
+    }
+  }
+
+  @Test
+  void reconciliationTransitionRollbackAndStableKeyConflictPreserveStoredWork() {
+    RepairFixture fixture = createDirectRepair();
+    RepairFixture other = createDirectRepair();
+    UUID stableKey = UUID.randomUUID();
+    new TransactionTemplate(transactionManager)
+        .executeWithoutResult(
+            status ->
+                reconciliations.enqueue(
+                    fixture.repairId(),
+                    "ASSET",
+                    "QUEUE_REPAIR",
+                    stableKey,
+                    Map.of("repairId", fixture.repairId().toString())));
+
+    new TransactionTemplate(transactionManager)
+        .executeWithoutResult(
+            status -> {
+              MaintenanceReconciliationStore.WorkItem claimed =
+                  reconciliations.lockNextDue().orElseThrow();
+              reconciliations.confirmed(claimed, Map.of("result", "confirmed"));
+              status.setRollbackOnly();
+            });
+
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select state,attempt_count from integration_reconciliation
+                where idempotency_key=?
+                """,
+                stableKey))
+        .containsEntry("state", "PENDING")
+        .containsEntry("attempt_count", 0);
+    assertThatThrownBy(
+            () ->
+                new TransactionTemplate(transactionManager)
+                    .executeWithoutResult(
+                        status ->
+                            reconciliations.enqueue(
+                                other.repairId(),
+                                "ASSET",
+                                "QUEUE_REPAIR",
+                                stableKey,
+                                Map.of("repairId", other.repairId().toString()))))
+        .isInstanceOf(MaintenanceConflictException.class);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select repair_id from integration_reconciliation where idempotency_key=?
+                """,
+                UUID.class,
+                stableKey))
+        .isEqualTo(fixture.repairId());
   }
 
   @Test

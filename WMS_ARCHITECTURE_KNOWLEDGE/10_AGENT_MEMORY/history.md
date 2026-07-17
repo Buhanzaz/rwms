@@ -3799,3 +3799,105 @@ a substitute source.
 - Stage 7 is not started. Its `next_state` pointer is metadata only; evidence,
   contract, schema and implementation work require separate explicit user
   authorization.
+
+## 2026-07-17 Stage 7 inventory evidence and proposed contract entrance
+
+- The user explicitly authorized starting Stage 7. The sole active pointer now
+  authorizes only inventory evidence, a proposed contract and durable-memory
+  reconciliation; no prerequisite, schema, service, canonical transport
+  contract, panel cutover or Stage 8 work is authorized yet.
+- Three read-only audits reconciled current panel/browser behavior, target
+  backend/security/integration capabilities and legacy/database hazards.
+  Inventory sessions are stored in `rwms:inventory:v1` LocalStorage, media uses
+  the shared IndexedDB adapter, and inventory-origin repair publication remains
+  hard-wired to the local repair adapter rather than maintenance HTTP.
+- Current target services have no exact inventory OAuth client, warehouse
+  endpoint, stable asset capture/global resolve/permanent source create,
+  maintenance source upsert or inventory gateway route. Asset's inventory
+  snapshot path cannot freeze a consistent population larger than 200 and the
+  browser inventory snapshot drops the canonical asset version. Media facts and
+  foundations exist, but production HTTP/JWT/PostgreSQL/outbox runtime and the
+  gateway route remain absent.
+- Legacy mobile inventory used anonymous admin authority and could mutate
+  passport/accessories/media or delete by QR; those hazards are evidence only.
+  Reviewed HSQLDB artifacts contain no reconstructible inventory-session
+  aggregates. Their verified SHA-256 values are
+  `30c944cd6d56227a7010e424acbc75253676834bf989e7b6b1a447efcb3061d8`
+  for `wmspanel.script` and
+  `5451b4003fea6fb7c7078bd2b178cb7c83e6a489332b05120d5c422daf55cce2`
+  for `wmspanel.log`; no synthetic session ETL is proposed.
+- Added `docs/plans/20260717-inventory-service-contract.md` with status
+  `PROPOSED_AWAITING_USER_APPROVAL`. It consolidates the proposed aggregate,
+  number, observation, completion/publication, security, integration,
+  migration and verification model while keeping every new product choice
+  explicitly unapproved.
+- Stage 8 remains forbidden until Stage 7 passes its complete exit matrix and a
+  reviewed scoped commit exists. No application code, schema, YAML contract,
+  test or panel file was changed by this documentation entrance task.
+
+## 2026-07-17 Stage 7 inventory contract approval and implementation planning
+
+- The user's instruction `Начинай Stage 7 все разрешаю`, followed by
+  `Продолжай`, explicitly approved the complete Stage 7 inventory contract, its
+  narrow sequential auth/warehouse/asset/maintenance/gateway prerequisites,
+  the separate prior media-runtime closure and the inventory panel cutover.
+- `docs/plans/20260717-inventory-service-contract.md` now has status `APPROVED`.
+  Approval covers the exact capture, number, state/revision, point-in-time
+  validation, statistics, publication, lease, business-date, authorization,
+  migration, event/recovery and privacy decisions recorded there.
+- Added `docs/plans/20260717-inventory-service-implementation.md` with status
+  `APPROVED_IN_PROGRESS`. It enforces the sequential order `media -> auth ->`
+  `warehouse -> asset V3 -> maintenance V2 -> architecture -> inventory V1 ->`
+  `gateway -> panel -> full exit/one commit`; success and negative tests must
+  pass before every next subgate.
+- The sole active pointer now records implementation authority. Approval removes
+  the authority blocker around the missing media runtime and panel cutover but
+  does not claim either is implemented or verified.
+- This update changes documentation and durable memory only. No runtime code,
+  migration, canonical YAML/schema, panel file, test result or commit is claimed.
+  Stage 8 remains forbidden until the complete Stage 7 exit and reviewed commit.
+
+
+## 2026-07-17 Stage 7 inventory exit readiness
+
+- Sequential media, auth, warehouse, asset V3, maintenance V2, inventory,
+  gateway and panel subgates are implemented. Inventory business persistence
+  is JPA and Flyway V1 is schema authority; low-level SQL is allowlisted only
+  for the six named technical eventing adapters.
+- Final verification passed inventory 36/36, architecture 26/26, complete media
+  real gate/build, gateway 34/34, panel typecheck/lint/build, Vitest 48,
+  Playwright 9/9 and real inventory Kafka/PostgreSQL 3/3.
+- Stage 7 is ready for final diff review and one scoped human commit. It is not
+  complete and no completion SHA is claimed.
+
+## 2026-07-17 Stage 7 inventory completion
+
+- Closed Inventory business persistence on Spring Data JPA with Flyway V1 as
+  schema/checksum authority. Exactly six technical adapters retain low-level
+  SQL: `InventoryDeadLetterRelay`, `InventoryDeadLetterStore`,
+  `InventoryEventStore`, `InventoryMediaInboxProcessor`,
+  `InventoryMediaRetryStore` and `InventoryOutboxStore`.
+- Closed atomic idempotency and start recovery: a lease-locked reservation owns
+  the exact stored response; intermediate capture state uses independent
+  transactions; session commit joins the command transaction; external capture
+  release runs only from transaction `afterCompletion` and remains recoverable.
+- Closed prerequisite boundaries: warehouse absent/inactive/foreign IDs share
+  the same `404` concealment matrix; asset freezes capture rows in one inner
+  repeatable-read snapshot; maintenance inventory reconciliation is JPA
+  end-to-end.
+- Closed media owner-proof security: event-ID/body conflicts atomically record
+  evidence, quarantine/deactivate the affected owner and sanitize the DLT;
+  public metadata/variant/signed-URL reads validate and lock current proof in
+  the same SQL statement, preventing stale authorization during revocation.
+- Closed the stateless gateway route and production panel HTTP cutover. Browser
+  stores remain development fixtures and are not migration inputs.
+- Final Stage 7-only candidate suites passed inventory 46/46, asset 57/57,
+  maintenance 131/131, Stage 7 architecture 27/27, auth 11/11, warehouse 12/12,
+  gateway 36/36 and media canonical real PostgreSQL + drift-PostgreSQL + Kafka
+  + MinIO 73/73, all with zero failures, errors or skips. Media also passed a
+  reproducible build; panel typecheck/lint/build, Vitest 48 and Playwright 9/9
+  passed. Earlier shared asset 64/64, maintenance 136/136 and architecture
+  33/34 runs mixed in Stage 8 diagnostics and are not Stage 7 closure totals.
+- `ACTIVE_STAGE.md` remains on `STAGE_7_INVENTORY_SERVICE` with status
+  `COMPLETE`; `next_state` is metadata only. Closure is recorded by the
+  containing scoped Stage 7 commit, so no SHA is invented here.

@@ -1,0 +1,325 @@
+import { ApiError, bearerRequest } from "@/lib/api-client"
+import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
+import { requireInventoryAccessToken } from "@/features/inventory/inventory-runtime"
+import type {
+  InventoryCompletionPreview,
+  InventoryFinding,
+  InventoryFindingPage,
+  InventoryMediaReference,
+  InventoryNumberResolution,
+  InventoryPlanSelection,
+  InventoryPublicationBatch,
+  InventoryPublicationIntent,
+  InventorySessionDetail,
+  InventorySessionPage,
+  InventorySessionView,
+  InventoryStatisticsSummary,
+} from "@/features/inventory/model/inventory-service"
+
+function endpoint(path: string) {
+  return `${getGatewayRuntimeConfig().inventoryApiBaseUrl}/v1${path}`
+}
+
+function commandHeaders(idempotencyKey: string) {
+  return { "Idempotency-Key": idempotencyKey }
+}
+
+function revisionExpectations(findings: InventoryFinding[]) {
+  return findings.map((finding) => ({
+    findingId: finding.id,
+    expectedFindingRevision: finding.findingRevision,
+  }))
+}
+
+async function listAllFindings(accessToken: string, inventoryId: string) {
+  const content: InventoryFinding[] = []
+  let page = 0
+  let totalPages = 1
+  while (page < totalPages) {
+    const response = await bearerRequest<InventoryFindingPage>(
+      accessToken,
+      endpoint(
+        `/sessions/${encodeURIComponent(inventoryId)}/findings?page=${page}&size=200&sort=createdAt%2Casc`
+      )
+    )
+    content.push(...response.content)
+    totalPages = response.page.totalPages
+    page += 1
+  }
+  return content
+}
+
+export async function listInventorySessions(
+  accessToken: string | null,
+  warehouseId: string,
+  page = 0
+) {
+  return bearerRequest<InventorySessionPage>(
+    requireInventoryAccessToken(accessToken),
+    endpoint(
+      `/sessions?warehouseId=${encodeURIComponent(warehouseId)}&page=${page}&size=50&sort=startedAt%2Cdesc`
+    )
+  )
+}
+
+export async function getActiveInventorySession(
+  accessToken: string | null,
+  warehouseId: string
+) {
+  try {
+    return await getInventorySessionByUrl(
+      requireInventoryAccessToken(accessToken),
+      `/sessions/active?warehouseId=${encodeURIComponent(warehouseId)}`
+    )
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null
+    throw error
+  }
+}
+
+async function getInventorySessionByUrl(accessToken: string, path: string) {
+  const detail = await bearerRequest<InventorySessionDetail>(
+    accessToken,
+    endpoint(path)
+  )
+  const findings = await listAllFindings(accessToken, detail.id)
+  return { ...detail, findings } satisfies InventorySessionView
+}
+
+export function getInventorySession(
+  accessToken: string | null,
+  inventoryId: string
+) {
+  return getInventorySessionByUrl(
+    requireInventoryAccessToken(accessToken),
+    `/sessions/${encodeURIComponent(inventoryId)}`
+  )
+}
+
+export function startInventorySession(
+  accessToken: string | null,
+  warehouseId: string,
+  idempotencyKey: string
+) {
+  return bearerRequest<InventorySessionDetail>(
+    requireInventoryAccessToken(accessToken),
+    endpoint("/sessions"),
+    {
+      method: "POST",
+      headers: commandHeaders(idempotencyKey),
+      body: JSON.stringify({ warehouseId }),
+    }
+  )
+}
+
+export function resolveInventoryNumber(input: {
+  accessToken: string | null
+  inventoryId: string
+  expectedSessionRevision: number
+  submittedNumber: string
+  idempotencyKey: string
+}) {
+  return bearerRequest<InventoryNumberResolution>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(
+      `/sessions/${encodeURIComponent(input.inventoryId)}/number-resolutions`
+    ),
+    {
+      method: "POST",
+      headers: commandHeaders(input.idempotencyKey),
+      body: JSON.stringify({
+        expectedSessionRevision: input.expectedSessionRevision,
+        submittedNumber: input.submittedNumber,
+      }),
+    }
+  )
+}
+
+export function createAndAttachInventoryAsset(input: {
+  accessToken: string | null
+  inventoryId: string
+  findingId: string
+  expectedSessionRevision: number
+  expectedFindingRevision: number
+  origin: "ADDED_NEW" | "ADDED_USED"
+  displayCanonicalNumber: string
+  safePassport: Record<string, unknown>
+  idempotencyKey: string
+}) {
+  return bearerRequest<InventoryFinding>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(
+      `/sessions/${encodeURIComponent(input.inventoryId)}/findings/${encodeURIComponent(input.findingId)}/assets`
+    ),
+    {
+      method: "POST",
+      headers: commandHeaders(input.idempotencyKey),
+      body: JSON.stringify({
+        expectedSessionRevision: input.expectedSessionRevision,
+        expectedFindingRevision: input.expectedFindingRevision,
+        sourceRevision: 1,
+        origin: input.origin,
+        displayCanonicalNumber: input.displayCanonicalNumber,
+        safePassport: input.safePassport,
+      }),
+    }
+  )
+}
+
+export function saveInventoryInspection(input: {
+  accessToken: string | null
+  inventoryId: string
+  findingId: string
+  expectedSessionRevision: number
+  expectedFindingRevision: number
+  inspection: "READY" | "WORK_STAGED"
+  media: InventoryMediaReference[]
+  planSelection: InventoryPlanSelection
+}) {
+  return bearerRequest<InventoryFinding>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(
+      `/sessions/${encodeURIComponent(input.inventoryId)}/findings/${encodeURIComponent(input.findingId)}/inspection`
+    ),
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedSessionRevision: input.expectedSessionRevision,
+        expectedFindingRevision: input.expectedFindingRevision,
+        inspection: input.inspection,
+        passportObservation: { presence: "ABSENT", value: null },
+        equipmentObservation: { presence: "ABSENT", value: null },
+        media: input.media,
+        planSelection:
+          input.inspection === "READY" ? null : input.planSelection,
+      }),
+    }
+  )
+}
+
+export function previewInventoryCompletion(input: {
+  accessToken: string | null
+  session: InventorySessionView
+  idempotencyKey: string
+}) {
+  return bearerRequest<InventoryCompletionPreview>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(
+      `/sessions/${encodeURIComponent(input.session.id)}/completion-preview`
+    ),
+    {
+      method: "POST",
+      headers: commandHeaders(input.idempotencyKey),
+      body: JSON.stringify({
+        expectedSessionRevision: input.session.sessionRevision,
+        findingRevisions: revisionExpectations(input.session.findings),
+      }),
+    }
+  )
+}
+
+export function completeInventorySession(input: {
+  accessToken: string | null
+  preview: InventoryCompletionPreview
+  idempotencyKey: string
+}) {
+  return bearerRequest<InventorySessionDetail>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(
+      `/sessions/${encodeURIComponent(input.preview.inventoryId)}/complete`
+    ),
+    {
+      method: "POST",
+      headers: commandHeaders(input.idempotencyKey),
+      body: JSON.stringify({
+        expectedSessionRevision: input.preview.sessionRevision,
+        findingRevisions: input.preview.findingRevisions,
+        acknowledgementSha256: input.preview.acknowledgementSha256,
+        validationSha256: input.preview.validationSha256,
+      }),
+    }
+  )
+}
+
+export function publishInventoryFindings(input: {
+  accessToken: string | null
+  inventoryId: string
+  expectedSessionRevision: number
+  idempotencyKey: string
+}) {
+  return bearerRequest<InventoryPublicationBatch>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(`/sessions/${encodeURIComponent(input.inventoryId)}/publications`),
+    {
+      method: "POST",
+      headers: commandHeaders(input.idempotencyKey),
+      body: JSON.stringify({
+        expectedSessionRevision: input.expectedSessionRevision,
+        allEligible: true,
+        findings: [],
+      }),
+    }
+  )
+}
+
+export function retryFindingPublication(input: {
+  accessToken: string | null
+  inventoryId: string
+  findingId: string
+  expectedPublicationRevision: number
+  reconcileReason: string | null
+  currentPreconditionSha256: string | null
+  idempotencyKey: string
+}) {
+  return bearerRequest<InventoryPublicationIntent>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(
+      `/sessions/${encodeURIComponent(input.inventoryId)}/findings/${encodeURIComponent(input.findingId)}/publication/retry`
+    ),
+    {
+      method: "POST",
+      headers: commandHeaders(input.idempotencyKey),
+      body: JSON.stringify({
+        expectedPublicationRevision: input.expectedPublicationRevision,
+        reconcileReason: input.reconcileReason,
+        currentPreconditionSha256: input.currentPreconditionSha256,
+      }),
+    }
+  )
+}
+
+export function closeBlockedFindingPublication(input: {
+  accessToken: string | null
+  inventoryId: string
+  findingId: string
+  expectedPublicationRevision: number
+  reason: string
+  idempotencyKey: string
+}) {
+  return bearerRequest<InventoryPublicationIntent>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(
+      `/sessions/${encodeURIComponent(input.inventoryId)}/findings/${encodeURIComponent(input.findingId)}/publication/close`
+    ),
+    {
+      method: "POST",
+      headers: commandHeaders(input.idempotencyKey),
+      body: JSON.stringify({
+        expectedPublicationRevision: input.expectedPublicationRevision,
+        reason: input.reason,
+      }),
+    }
+  )
+}
+
+export function getInventoryStatisticsSummary(
+  accessToken: string | null,
+  warehouseId: string
+) {
+  return bearerRequest<InventoryStatisticsSummary>(
+    requireInventoryAccessToken(accessToken),
+    endpoint(
+      `/statistics/summary?warehouseId=${encodeURIComponent(warehouseId)}`
+    )
+  )
+}

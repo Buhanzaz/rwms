@@ -17,9 +17,13 @@ class WarehouseAuthorizerTest {
     WarehouseAuthorizer authorizer = new WarehouseAuthorizer(new MockEnvironment(), false);
 
     authorizer.requireSystemAdminWrite(jwt("USER", "rwms.write", "SYSTEM_ADMIN", null));
-    assertThatThrownBy(() -> authorizer.requireSystemAdminWrite(jwt("USER", "rwms.write", "WMS_ADMIN", null)))
+    assertThatThrownBy(
+            () -> authorizer.requireSystemAdminWrite(jwt("USER", "rwms.write", "WMS_ADMIN", null)))
         .isInstanceOf(AccessDeniedException.class);
-    assertThatThrownBy(() -> authorizer.requireSystemAdminWrite(jwt("USER", "warehouse.read", "SYSTEM_ADMIN", null)))
+    assertThatThrownBy(
+            () ->
+                authorizer.requireSystemAdminWrite(
+                    jwt("USER", "warehouse.read", "SYSTEM_ADMIN", null)))
         .isInstanceOf(AccessDeniedException.class);
   }
 
@@ -40,8 +44,35 @@ class WarehouseAuthorizerTest {
 
     authorizer.requireInternalAssetService(jwt("SERVICE", "warehouse.read", null, "asset-service"));
     assertThatThrownBy(
-            () -> authorizer.requireInternalAssetService(jwt("SERVICE", "warehouse.read", null, "auth-service")))
+            () ->
+                authorizer.requireInternalAssetService(
+                    jwt("SERVICE", "warehouse.read", null, "auth-service")))
         .isInstanceOf(AccessDeniedException.class);
+  }
+
+  @Test
+  void inventoryContractAlsoRequiresMatchingServiceSubject() {
+    WarehouseAuthorizer authorizer = new WarehouseAuthorizer(new MockEnvironment(), false);
+
+    authorizer.requireInternalInventoryService(
+        jwt("SERVICE", "warehouse.read", null, "inventory-service", "inventory-service"));
+    for (Jwt invalid :
+        new Jwt[] {
+          jwt(
+              "SERVICE",
+              "warehouse.read rwms.read",
+              null,
+              "inventory-service",
+              "inventory-service"),
+          jwt("SERVICE", "asset.inventory", null, "inventory-service", "inventory-service"),
+          jwt("SERVICE", "", null, "inventory-service", "inventory-service"),
+          jwt("SERVICE", "warehouse.read", null, "asset-service", "inventory-service"),
+          jwt("SERVICE", "warehouse.read", null, "inventory-service", "other-service"),
+          jwt("USER", "warehouse.read", "SYSTEM_ADMIN", "inventory-service", "inventory-service")
+        }) {
+      assertThatThrownBy(() -> authorizer.requireInternalInventoryService(invalid))
+          .isInstanceOf(AccessDeniedException.class);
+    }
   }
 
   @Test
@@ -51,17 +82,26 @@ class WarehouseAuthorizerTest {
     WarehouseAuthorizer authorizer = new WarehouseAuthorizer(environment, true);
 
     assertThat(authorizer.isSystemAdmin(null)).isTrue();
-    assertThat(authorizer.subjectId(null)).isEqualTo(UUID.fromString("00000000-0000-0000-0000-0000000000d1"));
+    assertThat(authorizer.subjectId(null))
+        .isEqualTo(UUID.fromString("00000000-0000-0000-0000-0000000000d1"));
     assertThatThrownBy(() -> authorizer.requireInternalAuthService(null))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireInternalInventoryService(null))
         .isInstanceOf(AccessDeniedException.class);
   }
 
   private static Jwt jwt(String principalType, String scope, String globalRole, String clientId) {
+    return jwt(principalType, scope, globalRole, clientId, UUID.randomUUID().toString());
+  }
+
+  private static Jwt jwt(
+      String principalType, String scope, String globalRole, String clientId, String subject) {
     Map<String, Object> claims =
         new java.util.LinkedHashMap<>(
-            Map.of("sub", UUID.randomUUID().toString(), "principal_type", principalType, "scope", scope));
+            Map.of("sub", subject, "principal_type", principalType, "scope", scope));
     if (globalRole != null) claims.put("global_role", globalRole);
     if (clientId != null) claims.put("client_id", clientId);
-    return new Jwt("token", Instant.now(), Instant.now().plusSeconds(60), Map.of("alg", "none"), claims);
+    return new Jwt(
+        "token", Instant.now(), Instant.now().plusSeconds(60), Map.of("alg", "none"), claims);
   }
 }

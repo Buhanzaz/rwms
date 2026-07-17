@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.warehouse.service;
 
 import dev.buhanzaz.rwms.warehouse.api.CreateWarehouseRequest;
 import dev.buhanzaz.rwms.warehouse.api.InternalWarehouseExistenceResponse;
+import dev.buhanzaz.rwms.warehouse.api.InventoryWarehouseMetadataResponse;
 import dev.buhanzaz.rwms.warehouse.api.ReplaceWarehouseRequest;
 import dev.buhanzaz.rwms.warehouse.api.WarehouseResponse;
 import dev.buhanzaz.rwms.warehouse.domain.Warehouse;
@@ -46,7 +47,8 @@ public class WarehouseService {
 
   @Transactional(readOnly = true)
   public List<WarehouseResponse> list(boolean includeInactive) {
-    List<Warehouse> source = includeInactive ? warehouses.findAll() : warehouses.findAllByActiveTrue();
+    List<Warehouse> source =
+        includeInactive ? warehouses.findAll() : warehouses.findAllByActiveTrue();
     return source.stream().sorted(ORDER).map(responses::toResponse).toList();
   }
 
@@ -58,11 +60,11 @@ public class WarehouseService {
   }
 
   @Transactional
-  public CreateResult create(
-      UUID subjectId, UUID idempotencyKey, CreateWarehouseRequest request) {
+  public CreateResult create(UUID subjectId, UUID idempotencyKey, CreateWarehouseRequest request) {
     Warehouse candidate = newWarehouse(request);
     String fingerprint = fingerprint(candidate);
-    Optional<WarehouseResponse> replayed = idempotency.replay(subjectId, idempotencyKey, fingerprint);
+    Optional<WarehouseResponse> replayed =
+        idempotency.replay(subjectId, idempotencyKey, fingerprint);
     if (replayed.isPresent()) return new CreateResult(replayed.get(), true);
     if (warehouses.existsByCode(candidate.getCode())) {
       throw new WarehouseConflictException("Warehouse code is already used and cannot be reused");
@@ -117,6 +119,14 @@ public class WarehouseService {
         warehouse.getId(), warehouse.getVersion(), warehouse.isActive());
   }
 
+  @Transactional(readOnly = true)
+  public InventoryWarehouseMetadataResponse inventoryMetadata(UUID id) {
+    Warehouse warehouse = require(id);
+    if (!warehouse.isActive()) throw new WarehouseNotFoundException();
+    return new InventoryWarehouseMetadataResponse(
+        warehouse.getId(), warehouse.getVersion(), warehouse.isActive(), warehouse.getTimeZone());
+  }
+
   private Warehouse newWarehouse(CreateWarehouseRequest request) {
     return Warehouse.create(
         request.code(),
@@ -144,17 +154,17 @@ public class WarehouseService {
   private String fingerprint(Warehouse warehouse) {
     try {
       return WarehouseChecksum.sha256(
-          objectMapper
-              .writeValueAsBytes(
-                  new CreateFingerprint(
-                      warehouse.getCode(),
-                      warehouse.getName(),
-                      warehouse.getCity(),
-                      warehouse.getAddress(),
-                      warehouse.getTimeZone(),
-                      warehouse.getSortOrder())));
+          objectMapper.writeValueAsBytes(
+              new CreateFingerprint(
+                  warehouse.getCode(),
+                  warehouse.getName(),
+                  warehouse.getCity(),
+                  warehouse.getAddress(),
+                  warehouse.getTimeZone(),
+                  warehouse.getSortOrder())));
     } catch (JacksonException exception) {
-      throw new IllegalArgumentException("Warehouse create command cannot be fingerprinted", exception);
+      throw new IllegalArgumentException(
+          "Warehouse create command cannot be fingerprinted", exception);
     }
   }
 

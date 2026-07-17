@@ -1,0 +1,229 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"io"
+	"log"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
+
+	"dev.buhanzaz.rwms/media-service/internal/api"
+	"dev.buhanzaz.rwms/media-service/internal/auth"
+	"dev.buhanzaz.rwms/media-service/internal/config"
+	"dev.buhanzaz.rwms/media-service/internal/eventing"
+	"dev.buhanzaz.rwms/media-service/internal/media"
+	"dev.buhanzaz.rwms/media-service/internal/persistence"
+	"dev.buhanzaz.rwms/media-service/internal/storage"
+	"dev.buhanzaz.rwms/media-service/internal/worker"
+)
+
+func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if err := run(logger); err != nil {
+		logger.Error("media service stopped", "failureType", "RUNTIME_FAILURE")
+		os.Exit(1)
+	}
+}
+
+func run(logger *slog.Logger) error {
+	if len(os.Args) > 1 {
+		if len(os.Args) != 3 || os.Args[1] != "reconcile-inventory-owner" {
+			return errors.New("supported operator command: reconcile-inventory-owner <reviewed-batch.json>")
+		}
+		databaseURL := os.Getenv("MEDIA_DATABASE_URL")
+		if databaseURL == "" {
+			return errors.New("MEDIA_DATABASE_URL is required for inventory owner reconciliation")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		database, err := persistence.Open(ctx, databaseURL)
+		if err != nil {
+			return err
+		}
+		defer database.Close()
+		return worker.RunInventoryOwnerReconciliationFile(ctx,
+			persistence.NewRepository(database.Pool), os.Args[2])
+	}
+	configuration, err := config.Load()
+	if err != nil {
+		return err
+	}
+	startupContext, startupCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer startupCancel()
+	database, err := persistence.Open(startupContext, configuration.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+	objectStore, err := storage.NewMinIOObjectStore(storage.MinIOOptions{
+		Endpoint: configuration.MinIOEndpoint, AccessKey: configuration.MinIOAccessKey,
+		SecretKey: configuration.MinIOSecretKey, Bucket: configuration.MinIOBucket,
+		UseSSL: configuration.MinIOUseSSL,
+	})
+	if err != nil {
+		return err
+	}
+	if err := objectStore.EnsureVersioning(startupContext); err != nil {
+		return err
+	}
+	validator, err := auth.NewValidator(configuration.Issuer, configuration.Audience, configuration.JWKSURL)
+	if err != nil {
+		return err
+	}
+	repository := persistence.NewRepository(database.Pool)
+	producer, err := eventing.NewProducer(configuration.KafkaBrokers)
+	if err != nil {
+		return err
+	}
+	relay := eventing.NewRelay(repository, producer, configuration.InstanceID+":outbox", logger)
+	consumerClient, err := worker.NewKafkaConsumer(configuration.KafkaBrokers, configuration.ProcessingGroup, configuration.ProcessingTopic)
+	if err != nil {
+		producer.Close()
+		return err
+	}
+	ownerConsumerClient, err := worker.NewInventoryOwnerKafkaConsumer(configuration.KafkaBrokers,
+		configuration.InventoryOwnerGroup, configuration.InventoryTopic)
+	if err != nil {
+		consumerClient.Close()
+		producer.Close()
+		return err
+	}
+	limits := media.ProcessingLimits{
+		MaxImageBytes: configuration.MaxUploadBytes, MaxImageOutputBytes: configuration.MaxImageOutputBytes,
+		MaxDecodedPixels: configuration.MaxDecodedPixels, MaxVideoBytes: configuration.MaxUploadBytes,
+		MaxVideoOutputBytes: configuration.MaxVideoOutputBytes, Timeout: configuration.ProcessingTimeout,
+	}
+	processingConsumer := worker.NewConsumer(repository, consumerClient, worker.Processor{
+		Image: media.ImageProcessor{Store: objectStore, Limits: limits},
+		Video: media.VideoProcessor{Store: objectStore, Runner: media.ExecCommandRunner{}, Probe: media.FFprobe{},
+			AllowedCodecs: configuration.AllowedVideoCodecs, MaxDuration: configuration.MaxVideoDuration, Limits: limits},
+	}, configuration.InstanceID+":worker", configuration.ProcessingTimeout, logger)
+	ownerConsumer := worker.NewInventoryOwnerConsumer(repository, ownerConsumerClient, logger)
+	apiServer, err := api.NewServer(repository, database, validator, objectStore, api.Configuration{
+		MaxUploadBytes: configuration.MaxUploadBytes, AllowedMIMETypes: configuration.AllowedMIMETypes,
+		UploadExpiry: configuration.UploadExpiry, DownloadExpiry: configuration.DownloadExpiry,
+	}, logger)
+	if err != nil {
+		ownerConsumerClient.Close()
+		consumerClient.Close()
+		producer.Close()
+		return err
+	}
+	httpServer := &http.Server{
+		Addr: configuration.HTTPAddress, Handler: apiServer.Handler(),
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second,
+		WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second,
+		MaxHeaderBytes: 32 << 10, ErrorLog: log.New(io.Discard, "", 0),
+	}
+	logger.Info("media service started", "address", configuration.HTTPAddress)
+	signalContext, stopSignal := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignal()
+	processes := []mediaRuntimeProcess{
+		{name: "outbox-relay", run: relay.Run},
+		{name: "processing-consumer", run: processingConsumer.Run},
+		{name: "inventory-owner-consumer", run: ownerConsumer.Run},
+		{name: "http-server", run: func(context.Context) error {
+			err := httpServer.ListenAndServe()
+			if errors.Is(err, http.ErrServerClosed) {
+				return nil
+			}
+			return err
+		}},
+	}
+	err = superviseMediaRuntime(signalContext, 20*time.Second, processes,
+		func(shutdownContext context.Context) error {
+			var shutdownError error
+			if closeErr := httpServer.Shutdown(shutdownContext); closeErr != nil {
+				shutdownError = closeErr
+			}
+			if closeErr := processingConsumer.Close(shutdownContext); closeErr != nil && shutdownError == nil {
+				shutdownError = closeErr
+			}
+			ownerConsumer.Close()
+			if closeErr := relay.Close(shutdownContext); closeErr != nil && shutdownError == nil {
+				shutdownError = closeErr
+			}
+			return shutdownError
+		})
+	logger.Info("media service stopped")
+	return err
+}
+
+type mediaRuntimeProcess struct {
+	name string
+	run  func(context.Context) error
+}
+
+type mediaRuntimeResult struct {
+	name string
+	err  error
+}
+
+func superviseMediaRuntime(
+	signalContext context.Context,
+	shutdownTimeout time.Duration,
+	processes []mediaRuntimeProcess,
+	shutdown func(context.Context) error,
+) error {
+	required := map[string]bool{
+		"outbox-relay": false, "processing-consumer": false,
+		"inventory-owner-consumer": false, "http-server": false,
+	}
+	if signalContext == nil || shutdownTimeout <= 0 || shutdown == nil || len(processes) != len(required) {
+		return errors.New("media runtime requires all four supervised processes")
+	}
+	for _, process := range processes {
+		if process.run == nil {
+			return errors.New("media runtime process is nil")
+		}
+		if _, exists := required[process.name]; !exists || required[process.name] {
+			return errors.New("media runtime process set is invalid")
+		}
+		required[process.name] = true
+	}
+	runtimeContext, cancelRuntime := context.WithCancel(context.Background())
+	results := make(chan mediaRuntimeResult, len(processes))
+	var runtimeGroup sync.WaitGroup
+	for _, process := range processes {
+		process := process
+		runtimeGroup.Add(1)
+		go func() {
+			defer runtimeGroup.Done()
+			results <- mediaRuntimeResult{name: process.name, err: process.run(runtimeContext)}
+		}()
+	}
+	var runtimeError error
+	select {
+	case <-signalContext.Done():
+	case result := <-results:
+		runtimeError = result.err
+		if runtimeError == nil {
+			runtimeError = errors.New("required media runtime process stopped: " + result.name)
+		}
+	}
+	cancelRuntime()
+	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer shutdownCancel()
+	if err := shutdown(shutdownContext); err != nil && runtimeError == nil {
+		runtimeError = err
+	}
+	runtimeStopped := make(chan struct{})
+	go func() {
+		runtimeGroup.Wait()
+		close(runtimeStopped)
+	}()
+	select {
+	case <-runtimeStopped:
+	case <-shutdownContext.Done():
+		if runtimeError == nil {
+			runtimeError = shutdownContext.Err()
+		}
+	}
+	return runtimeError
+}

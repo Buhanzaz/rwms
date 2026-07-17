@@ -29,6 +29,14 @@ class JpaLombokSourcePolicyTest {
         () ->
             JpaLombokSourcePolicy.assertSafe(
                 root.resolve("services/warehouse-service/src/main/java")));
+    assertDoesNotThrow(
+        () ->
+            JpaLombokSourcePolicy.assertSafe(
+                root.resolve("services/maintenance-service/src/main/java")));
+    var inventorySources = root.resolve("services/inventory-service/src/main/java");
+    if (Files.isDirectory(inventorySources)) {
+      assertDoesNotThrow(() -> JpaLombokSourcePolicy.assertSafe(inventorySources));
+    }
   }
 
   @Test

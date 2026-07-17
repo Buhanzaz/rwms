@@ -242,3 +242,68 @@ event facts and outbox facts commit together. The controlled catalog preserves
 legacy business identity and selected safe fields while excluding audit,
 layout, obsolete flags and comments; it does not make the legacy Jmix entity
 shape the target JPA model.
+
+## Stage 7 inventory aggregate proposal (unapproved, 2026-07-17)
+
+Approval resolution: the user's `Начинай Stage 7 все разрешаю` response,
+followed by `Продолжай`, approves the revision, uniqueness, permanent source,
+point-in-time completion, 30-minute capture and no-session-lease model below.
+Implementation and verification remain pending in the ordered Stage 7 subgates.
+
+The proposal in `docs/plans/20260717-inventory-service-contract.md` does not yet
+authorize entities or migrations. It separates three mutable revision/CAS
+boundaries:
+
+- `INVENTORY_SESSION` owns warehouse/start snapshots, lifecycle
+  `ACTIVE -> COMPLETED | CANCELLED`, the one-active-per-warehouse invariant,
+  copied expected-population membership, acknowledgement and frozen completion
+  statistics;
+- `INVENTORY_FINDING` owns immutable origin/identity, inspection observation,
+  reconciliation/conflicts, media references and a maintenance-issued frozen
+  plan snapshot/fingerprint; finding edits do not reuse the session revision;
+- `INVENTORY_PUBLICATION_INTENT` owns post-completion state and revision, while
+  append-only publication attempts record delivery/reconciliation outcomes and
+  cannot mutate the completed session.
+
+Proposed structural invariants are one expected row per
+`(inventoryId, assetId)`, exactly one expected finding for each expected row, at
+most one finding per `(inventoryId, assetId)` and per
+`(inventoryId, identityMatchKey)`, and permanent non-reusable source identity
+`inventoryId:findingId`. Source-create/attach state is durable so a committed
+asset remains auditable when attach loses a cancel/complete CAS race.
+
+Completion freezes an asset point-in-time validation snapshot/digest/time on
+the session. Session/finding CAS proves only inventory-local revisions; the
+validation snapshot is not an asset aggregate token, lease or fence and does
+not claim remote stability through the PostgreSQL commit. Later canonical asset
+facts do not rewrite a completed session and are evaluated as current
+maintenance-publication preconditions.
+
+The asset stable capture is a technical resource with a proposed non-sliding
+30-minute TTL, not an inventory aggregate or business lease. Inventory releases
+it immediately after the copied start transaction commits; a concurrent loser
+also releases immediately, and asset expiry is only crash/orphan fallback. No
+capture remains attached to an `ACTIVE` session, so cancel/complete have none to
+release. Canonical assets, maintenance repairs/tasks and media remain owned by
+their existing services. These aggregate, revision, uniqueness and capture
+choices are approval-required proposals, not approved target facts.
+
+### Stage 7 verified aggregate resolution (2026-07-17)
+
+The preceding proposal is retained as audit history. The approved inventory
+aggregates are implemented as JPA business projections over the service-local
+event store. Business packages use no low-level JDBC. Exactly six technical
+eventing adapters retain SQL: `InventoryDeadLetterRelay`,
+`InventoryDeadLetterStore`, `InventoryEventStore`,
+`InventoryMediaInboxProcessor`, `InventoryMediaRetryStore` and
+`InventoryOutboxStore`. Flyway V1 owns the schema; Hibernate validates it.
+The idempotency aggregate stores the exact response while a lease-locked row
+prevents duplicate effects. Start-capture bookkeeping survives intermediate
+failures, and release becomes eligible only with the committed session before
+the external release runs from transaction `afterCompletion`. The final Stage
+7-only candidate suites passed inventory 46/46, asset 57/57, maintenance
+131/131, Stage 7 architecture 27/27, auth 11/11, warehouse 12/12, gateway 36/36
+and media 73/73, all with zero failures, errors or skips. Earlier shared asset
+64/64, maintenance 136/136 and architecture 33/34 runs mixed in Stage 8
+diagnostics and are not Stage 7 closure totals. Closure is recorded by the
+containing scoped Stage 7 commit without inventing a SHA.

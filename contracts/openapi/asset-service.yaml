@@ -1,12 +1,13 @@
 openapi: 3.1.0
 info:
   title: RWMS Asset Service API
-  version: 1.1.0
+  version: 1.2.0
   description: >-
-    Stage 5 canonical asset boundary. Rental-item comments and manual-note text
-    are readable only through this HTTP API and are never Kafka facts. New
-    production databases start empty; browser fixtures and legacy rows are not
-    an import source.
+    Stage 5 canonical asset boundary plus the narrow Stage 7 inventory-service
+    private surface. Rental-item comments and
+    manual-note text are readable only through this HTTP API and are never
+    Kafka facts. New production databases start empty; browser fixtures and
+    legacy rows are not an import source.
 servers:
   - url: /
 security:
@@ -357,6 +358,79 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/internal/asset/v1/inventory/captures:
+    post:
+      operationId: createInventoryAssetCapture
+      description: >-
+        Requires SERVICE inventory-service with exactly asset.inventory. Freezes one deterministic
+        eligible warehouse population for 30 non-sliding minutes. A later technical attempt under
+        the same operation is accepted only after the prior attempt expires.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryCaptureRequest' } } } }
+      responses:
+        '201': { description: Stable capture created or recovered., content: { application/json: { schema: { $ref: '#/components/schemas/InventoryCapture' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/inventory/captures/{captureId}/members:
+    parameters:
+      - { name: captureId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      operationId: readInventoryAssetCapturePage
+      description: Reads only the immutable capture; page reads never extend its expiry.
+      parameters:
+        - { name: cursor, in: query, required: false, schema: { type: string } }
+        - { name: size, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 200 } }
+      responses:
+        '200': { description: Stable capture page., content: { application/json: { schema: { $ref: '#/components/schemas/InventoryCapturePage' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/inventory/captures/{captureId}:
+    parameters:
+      - { name: captureId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      operationId: releaseInventoryAssetCapture
+      description: Idempotently releases copied or losing technical capture state immediately.
+      responses:
+        '204': { description: Capture released or already terminal. }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/internal/asset/v1/inventory/number-resolutions:
+    post:
+      operationId: resolveInventoryRentalNumber
+      description: Global identity lookup. It does not move an asset or hide a cross-warehouse/status conflict.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryNumberResolutionRequest' } } } }
+      responses:
+        '200': { description: Global resolution including explicit absence., content: { application/json: { schema: { $ref: '#/components/schemas/InventoryNumberResolution' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/internal/asset/v1/inventory/validations:
+    post:
+      operationId: validateInventoryAssets
+      description: Point-in-time read snapshot only; it creates no validation token, lease or fence.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventoryValidationRequest' } } } }
+      responses:
+        '200': { description: Deterministically ordered validation snapshot and digest., content: { application/json: { schema: { $ref: '#/components/schemas/InventoryValidation' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/internal/asset/v1/inventory/source-assets:
+    post:
+      operationId: createInventorySourceAsset
+      description: >-
+        Atomically creates one FREE asset and its normal rental-item fact. Permanent source identity
+        inventoryId:findingId replays beyond ordinary idempotency retention; changed payload conflicts.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/InventorySourceAssetRequest' } } } }
+      responses:
+        '200':
+          description: Permanent replay.
+          headers:
+            Idempotency-Replayed: { required: true, schema: { type: string, enum: ['true'] } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/InventorySourceAsset' } } }
+        '201': { description: Source asset created., content: { application/json: { schema: { $ref: '#/components/schemas/InventorySourceAsset' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
 components:
   securitySchemes:
     bearerJwt: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -649,6 +723,133 @@ components:
         ownerType: { $ref: '#/components/schemas/MaintenanceLeaseOwnerType' }
         ownerId: { type: string, format: uuid }
         linkedReturnEstimateId: { $ref: '#/components/schemas/NullableUuid' }
+
+    Sha256:
+      type: string
+      pattern: '^[0-9a-f]{64}$'
+    InventoryCaptureRequest:
+      type: object
+      additionalProperties: false
+      required: [operationId, technicalAttempt, requestFingerprint, warehouseId]
+      properties:
+        operationId: { type: string, format: uuid }
+        technicalAttempt: { type: integer, format: int64, minimum: 1 }
+        requestFingerprint: { $ref: '#/components/schemas/Sha256' }
+        warehouseId: { type: string, format: uuid }
+    InventoryCapture:
+      type: object
+      additionalProperties: false
+      required: [captureId, operationId, technicalAttempt, warehouseId, totalCount, membershipDigest, createdAt, expiresAt]
+      properties:
+        captureId: { type: string, format: uuid }
+        operationId: { type: string, format: uuid }
+        technicalAttempt: { type: integer, format: int64, minimum: 1 }
+        warehouseId: { type: string, format: uuid }
+        totalCount: { type: integer, format: int64, minimum: 0 }
+        membershipDigest: { $ref: '#/components/schemas/Sha256' }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+    InventoryCaptureMember:
+      type: object
+      additionalProperties: false
+      required: [sequence, assetId, version, warehouseId, status, displayCanonicalNumber, identityMatchKey, passportSnapshot, contentsSnapshot]
+      properties:
+        sequence: { type: integer, format: int64, minimum: 0 }
+        assetId: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        warehouseId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/RentalItemStatus' }
+        displayCanonicalNumber: { type: string, minLength: 1, maxLength: 128 }
+        identityMatchKey: { type: string, minLength: 1, maxLength: 128 }
+        passportSnapshot: { $ref: '#/components/schemas/Passport' }
+        contentsSnapshot: { type: array, items: { $ref: '#/components/schemas/EquipmentContent' } }
+    InventoryCapturePage:
+      type: object
+      additionalProperties: false
+      required: [captureId, operationId, technicalAttempt, warehouseId, totalCount, membershipDigest, content]
+      properties:
+        captureId: { type: string, format: uuid }
+        operationId: { type: string, format: uuid }
+        technicalAttempt: { type: integer, format: int64, minimum: 1 }
+        warehouseId: { type: string, format: uuid }
+        totalCount: { type: integer, format: int64, minimum: 0 }
+        membershipDigest: { $ref: '#/components/schemas/Sha256' }
+        nextCursor: { type: [string, 'null'] }
+        content: { type: array, maxItems: 500, items: { $ref: '#/components/schemas/InventoryCaptureMember' } }
+    InventoryAssetSnapshot:
+      type: object
+      additionalProperties: false
+      required: [assetId, version, warehouseId, status, displayCanonicalNumber, identityMatchKey]
+      properties:
+        assetId: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        warehouseId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/RentalItemStatus' }
+        displayCanonicalNumber: { type: string }
+        identityMatchKey: { type: string }
+    InventoryNumberResolutionRequest:
+      type: object
+      additionalProperties: false
+      required: [number]
+      properties: { number: { type: string, minLength: 1, maxLength: 128 } }
+    InventoryNumberResolution:
+      type: object
+      additionalProperties: false
+      required: [displayCanonicalNumber, identityMatchKey, found]
+      properties:
+        displayCanonicalNumber: { type: string }
+        identityMatchKey: { type: string }
+        found: { type: boolean }
+        asset: { oneOf: [ { $ref: '#/components/schemas/InventoryAssetSnapshot' }, { type: 'null' } ] }
+    InventoryValidationRequest:
+      type: object
+      additionalProperties: false
+      required: [assetIds]
+      properties:
+        assetIds: { type: array, minItems: 1, maxItems: 5000, uniqueItems: true, items: { type: string, format: uuid } }
+    InventoryValidationItem:
+      type: object
+      additionalProperties: false
+      required: [assetId, found]
+      properties:
+        assetId: { type: string, format: uuid }
+        found: { type: boolean }
+        version: { type: [integer, 'null'], format: int64, minimum: 0 }
+        warehouseId: { $ref: '#/components/schemas/NullableUuid' }
+        status: { oneOf: [ { $ref: '#/components/schemas/RentalItemStatus' }, { type: 'null' } ] }
+    InventoryValidation:
+      type: object
+      additionalProperties: false
+      required: [validatedAt, validationDigest, assets]
+      properties:
+        validatedAt: { type: string, format: date-time }
+        validationDigest: { $ref: '#/components/schemas/Sha256' }
+        assets: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/InventoryValidationItem' } }
+    InventorySourceAssetRequest:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, findingId, warehouseId, number]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        findingId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        number: { type: string, minLength: 1, maxLength: 128 }
+        rentalType: { type: [string, 'null'], maxLength: 255 }
+        dimensions: { type: [string, 'null'], maxLength: 255 }
+        finishing: { type: [string, 'null'], maxLength: 255 }
+        category: { type: [string, 'null'], maxLength: 255 }
+        characteristics: { type: [string, 'null'], maxLength: 2000 }
+        linoleum: { type: [boolean, 'null'] }
+        passport: { $ref: '#/components/schemas/Passport' }
+        tags: { type: array, items: { type: string, minLength: 1, maxLength: 128 } }
+    InventorySourceAsset:
+      type: object
+      additionalProperties: false
+      required: [inventoryId, findingId, asset]
+      properties:
+        inventoryId: { type: string, format: uuid }
+        findingId: { type: string, format: uuid }
+        asset: { $ref: '#/components/schemas/InventoryAssetSnapshot' }
     Problem:
       type: object
       additionalProperties: true

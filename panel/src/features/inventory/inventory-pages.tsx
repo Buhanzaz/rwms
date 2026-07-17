@@ -814,12 +814,6 @@ export function InventoryFinishPage() {
                 <CardTitle>{finding.cabinNumber}</CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-3 text-sm">
-                {finding.currentSnapshot?.status === "RENTED" ? (
-                  <p>
-                    <span className="text-muted-foreground">Арендатор: </span>
-                    {finding.currentSnapshot.tenant?.trim() || "не указан"}
-                  </p>
-                ) : null}
                 <ul className="flex list-disc flex-col gap-2 pl-5">
                   {finding.conflicts.map((conflict) => (
                     <li key={conflict.code}>

@@ -91,6 +91,8 @@ class GatewayJwtValidationIntegrationTest {
     registry.add("rwms.gateway.routes.warehouse-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
     registry.add("rwms.gateway.routes.asset-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
     registry.add("rwms.gateway.routes.maintenance-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
+    registry.add("rwms.gateway.routes.media-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
+    registry.add("rwms.gateway.routes.inventory-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
     registry.add("rwms.gateway.security.issuer", () -> ISSUER);
     registry.add("rwms.gateway.security.audience", () -> AUDIENCE);
     registry.add(
@@ -134,7 +136,7 @@ class GatewayJwtValidationIntegrationTest {
   private HttpResponse<String> send(String token, String correlationId) throws Exception {
     HttpRequest.Builder request =
         HttpRequest.newBuilder(
-                URI.create("http://127.0.0.1:" + gatewayPort + "/api/task-board/worker-classes"))
+                URI.create("http://127.0.0.1:" + gatewayPort + "/api/inventory/v1/sessions"))
             .header(HttpHeaders.HOST, "gateway.test")
             .GET();
     if (token != null) {

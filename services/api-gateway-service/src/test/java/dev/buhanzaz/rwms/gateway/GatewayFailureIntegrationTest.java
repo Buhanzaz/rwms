@@ -61,6 +61,8 @@ class GatewayFailureIntegrationTest {
     registry.add("rwms.gateway.routes.warehouse-uri", () -> "http://127.0.0.1:9");
     registry.add("rwms.gateway.routes.asset-uri", () -> "http://127.0.0.1:9");
     registry.add("rwms.gateway.routes.maintenance-uri", () -> "http://127.0.0.1:9");
+    registry.add("rwms.gateway.routes.media-uri", () -> "http://127.0.0.1:9");
+    registry.add("rwms.gateway.routes.inventory-uri", () -> "http://127.0.0.1:9");
     registry.add("rwms.gateway.security.issuer", () -> "http://gateway.test/auth");
     registry.add("rwms.gateway.security.audience", () -> "rwms-services");
     registry.add("rwms.gateway.security.jwk-set-uri", () -> slowOrigin() + "/oauth2/jwks");
@@ -69,7 +71,7 @@ class GatewayFailureIntegrationTest {
 
   @Test
   void returnsSanitizedBadGatewayWhenConnectionIsRefused() throws Exception {
-    HttpResponse<String> response = request("/api/warehouse/v1/warehouses");
+    HttpResponse<String> response = request("/api/inventory/v1/sessions");
     org.assertj.core.api.Assertions.assertThat(response.statusCode())
         .withFailMessage("Expected 502, got %s with %s", response.statusCode(), response.body())
         .isEqualTo(502);

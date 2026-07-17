@@ -41,12 +41,16 @@ class GatewayRouteIntegrationTest {
   private static HttpServer warehouse;
   private static HttpServer asset;
   private static HttpServer maintenance;
+  private static HttpServer media;
+  private static HttpServer inventory;
   private static final List<CapturedRequest> AUTH_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> TASK_BOARD_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> WAREHOUSE_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> ASSET_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> MAINTENANCE_REQUESTS =
       new CopyOnWriteArrayList<>();
+  private static final List<CapturedRequest> MEDIA_REQUESTS = new CopyOnWriteArrayList<>();
+  private static final List<CapturedRequest> INVENTORY_REQUESTS = new CopyOnWriteArrayList<>();
 
   @Autowired MockMvc mvc;
 
@@ -57,6 +61,8 @@ class GatewayRouteIntegrationTest {
     warehouse = server(WAREHOUSE_REQUESTS);
     asset = server(ASSET_REQUESTS);
     maintenance = server(MAINTENANCE_REQUESTS);
+    media = server(MEDIA_REQUESTS);
+    inventory = server(INVENTORY_REQUESTS);
   }
 
   @AfterAll
@@ -66,6 +72,8 @@ class GatewayRouteIntegrationTest {
     warehouse.stop(0);
     asset.stop(0);
     maintenance.stop(0);
+    media.stop(0);
+    inventory.stop(0);
   }
 
   @DynamicPropertySource
@@ -75,6 +83,8 @@ class GatewayRouteIntegrationTest {
     registry.add("rwms.gateway.routes.warehouse-uri", () -> origin(warehouse));
     registry.add("rwms.gateway.routes.asset-uri", () -> origin(asset));
     registry.add("rwms.gateway.routes.maintenance-uri", () -> origin(maintenance));
+    registry.add("rwms.gateway.routes.media-uri", () -> origin(media));
+    registry.add("rwms.gateway.routes.inventory-uri", () -> origin(inventory));
     registry.add("rwms.gateway.public-base-uri", () -> "https://panel.example");
     registry.add("rwms.gateway.cors.allowed-origins", () -> "https://panel.example");
     registry.add("rwms.gateway.security.issuer", () -> "https://panel.example/auth");
@@ -190,6 +200,66 @@ class GatewayRouteIntegrationTest {
                 .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
         .andExpect(status().is4xxClientError());
     assertThat(MAINTENANCE_REQUESTS).isEmpty();
+  }
+
+  @Test
+  void proxiesOnlyPublicMediaPathsWithoutCookiesAndPreservesBearer() throws Exception {
+    MEDIA_REQUESTS.clear();
+
+    mvc.perform(
+            publicGet("/api/media/v1/assets?ownerType=INVENTORY_FINDING")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer original-token")
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.path").value("/api/media/v1/assets"));
+
+    assertThat(MEDIA_REQUESTS).singleElement().satisfies(request -> {
+      assertThat(request.path()).isEqualTo("/api/media/v1/assets");
+      assertThat(request.authorization()).isEqualTo("Bearer original-token");
+      assertThat(request.cookie()).isNull();
+    });
+
+    MEDIA_REQUESTS.clear();
+    mvc.perform(
+            publicGet("/api/media/%69nternal/owner-bindings")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().is4xxClientError());
+    mvc.perform(
+            publicGet("/api/media/private/object-keys")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isForbidden());
+    assertThat(MEDIA_REQUESTS).isEmpty();
+  }
+
+  @Test
+  void proxiesOnlyPublicInventoryPathsWithoutCookiesOrPathRewriting() throws Exception {
+    INVENTORY_REQUESTS.clear();
+
+    mvc.perform(
+            publicGet("/api/inventory/v1/sessions?warehouseId=warehouse-1")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer original-token")
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.path").value("/api/inventory/v1/sessions"));
+
+    assertThat(INVENTORY_REQUESTS).singleElement().satisfies(request -> {
+      assertThat(request.path()).isEqualTo("/api/inventory/v1/sessions");
+      assertThat(request.authorization()).isEqualTo("Bearer original-token");
+      assertThat(request.cookie()).isNull();
+    });
+
+    INVENTORY_REQUESTS.clear();
+    mvc.perform(
+            publicGet("/api/inventory/%69nternal/captures")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().is4xxClientError());
+    mvc.perform(
+            publicGet("/api/inventory/private/captures")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isForbidden());
+    assertThat(INVENTORY_REQUESTS).isEmpty();
   }
 
   @Test
@@ -336,6 +406,8 @@ class GatewayRouteIntegrationTest {
     AUTH_REQUESTS.clear();
     WAREHOUSE_REQUESTS.clear();
     ASSET_REQUESTS.clear();
+    MEDIA_REQUESTS.clear();
+    INVENTORY_REQUESTS.clear();
 
     mvc.perform(
             publicGet("/api/task-board/internal/work-queues")
@@ -361,11 +433,23 @@ class GatewayRouteIntegrationTest {
                 .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
         .andExpect(status().isForbidden())
         .andExpect(jsonPath("$.code").value("GATEWAY_FORBIDDEN"));
+    mvc.perform(
+            publicGet("/api/media/internal/owner-bindings")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.code").value("GATEWAY_FORBIDDEN"));
+    mvc.perform(
+            publicGet("/api/inventory/internal/captures")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.code").value("GATEWAY_FORBIDDEN"));
 
     assertThat(TASK_BOARD_REQUESTS).isEmpty();
     assertThat(AUTH_REQUESTS).isEmpty();
     assertThat(WAREHOUSE_REQUESTS).isEmpty();
     assertThat(ASSET_REQUESTS).isEmpty();
+    assertThat(MEDIA_REQUESTS).isEmpty();
+    assertThat(INVENTORY_REQUESTS).isEmpty();
   }
 
   @Test
@@ -397,7 +481,7 @@ class GatewayRouteIntegrationTest {
                 HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS,
                 org.hamcrest.Matchers.containsString("x-xsrf-token")));
     mvc.perform(
-            publicOptions("/api/asset/v1/rental-items")
+            publicOptions("/api/inventory/v1/sessions")
                 .header(HttpHeaders.ORIGIN, "https://panel.example")
                 .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
                 .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, "idempotency-key"))

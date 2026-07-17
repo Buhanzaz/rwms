@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
-import {
-  ArrowLeft01Icon,
-  Search01Icon,
-} from "@hugeicons/core-free-icons"
+import { ArrowLeft01Icon, Search01Icon } from "@hugeicons/core-free-icons"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -31,6 +28,7 @@ import { Textarea } from "@/components/ui/textarea"
 import {
   REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
   createRepairEstimateCatalogIndex,
+  getOperationalMaintenanceCatalog,
   getOperationalRepairEstimateCatalog,
   getRepairEstimateCatalogMainMenuTitle,
 } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
@@ -57,6 +55,7 @@ type CatalogBreadcrumb = {
 type RepairEstimateCatalogPickerProps = {
   lines: RepairEstimateLineDto[]
   readOnly: boolean
+  warehouseId?: string
   onChange: (lines: RepairEstimateLineDto[]) => void
   onPagerChange?: (pager: RepairEstimateCatalogPager | null) => void
 }
@@ -77,12 +76,18 @@ function uniqueNodes(nodes: readonly RepairEstimateCatalogNodeDto[]) {
 export function RepairEstimateCatalogPicker({
   lines,
   readOnly,
+  warehouseId,
   onChange,
   onPagerChange,
 }: RepairEstimateCatalogPickerProps) {
   const catalogQuery = useQuery({
-    queryKey: REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
-    queryFn: getOperationalRepairEstimateCatalog,
+    queryKey: warehouseId
+      ? [...REPAIR_ESTIMATE_CATALOG_QUERY_KEY, warehouseId]
+      : REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
+    queryFn: () =>
+      warehouseId
+        ? getOperationalMaintenanceCatalog(warehouseId)
+        : getOperationalRepairEstimateCatalog(),
   })
   const catalog = useMemo(
     () =>
@@ -538,7 +543,7 @@ export function RepairEstimateCatalogPicker({
               key={node.id}
               type="button"
               aria-label={`${nodeActionLabel(node)}: ${node.name}`}
-              className="group min-w-0 w-full rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:ring-inset"
+              className="group w-full min-w-0 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:ring-inset"
               onClick={() => selectNode(node)}
             >
               <Card

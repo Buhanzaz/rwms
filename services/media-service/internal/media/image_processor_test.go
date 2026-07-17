@@ -14,9 +14,10 @@ func TestImageProcessorRotatesCanonicalOriginalAndCreatesWebPVariants(t *testing
 		"media/m-1/source/upload.jpg": testJPEG(t, 64, 32),
 	})
 
-	result, err := (ImageProcessor{Store: store}).Process(context.Background(), ImageProcessRequest{
+	result, err := (ImageProcessor{Store: store, Limits: testProcessingLimits()}).Process(context.Background(), ImageProcessRequest{
 		MediaID:         "m-1",
 		SourceObjectKey: "media/m-1/source/upload.jpg",
+		SourceVersionID: "version-1",
 		Generation:      2,
 		Rotation:        Rotation90,
 		Variants: VariantConfiguration{

@@ -423,3 +423,49 @@ The warehouse registry accepts only the exact `SERVICE` credential
 declares that disabled client without a repository secret. Asset Kafka facts,
 outbox envelopes and DLT metadata reject comments, note text, tenant/media URL
 fields and PII; manual-note text never leaves the asset database.
+
+## Stage 7 inventory security proposal (2026-07-17)
+
+Approval resolution: the user's `Начинай Stage 7 все разрешаю` response,
+followed by `Продолжай`, approves the public VIEW/EDIT/MANAGE matrix, exact
+separate service scopes, forbidden broad credentials and sanitized actor/event/
+DLT policy below. Implementation and negative verification remain pending.
+
+Legacy `/api/mobile/**` anonymous admin execution is explicitly rejected as a
+target trust model. Proposed inventory public reads require USER, `rwms.read`
+and warehouse VIEW; start/resolve/add/save require USER, `rwms.write` and EDIT;
+complete/cancel/publish/close require USER, `rwms.write` and MANAGE. The server
+derives actor, grants, warehouse access and business time from validated state;
+client actor/date/statistics/signature fields are never authoritative.
+
+The proposed disabled `inventory-service` client receives separate exact-scope
+tokens only for `warehouse.read`, `asset.inventory` or
+`maintenance.inventory`, with `principal_type=SERVICE` and
+`sub == client_id == inventory-service`. Combined/omitted/foreign scopes fail
+closed. It receives no USER, generic `asset.internal`, equipment-hold,
+fenced-status, task-board, queue, worker, media or logistics credential.
+
+Inventory events use opaque actor references and exclude tenant, display/login/
+email, comments/reasons, passport values, media URLs/object keys, JWTs, secrets
+and raw dependency errors. These rules and service allowlists are proposed,
+not implemented or approved, until the Stage 7 contract entrance gate closes.
+
+### Stage 7 verified security resolution (2026-07-17)
+
+Public USER VIEW/EDIT/MANAGE authorization and exact single-scope inventory
+service credentials now fail closed. Gateway routing remains stateless;
+downstream JWT validation is local and event/DLT evidence is sanitized.
+Warehouse metadata uses a concealment matrix: absent, inactive and a valid ID
+outside the caller's warehouse scope are indistinguishable `404` responses.
+Media event-ID/body conflicts quarantine the affected owner aggregate and make
+authorization fail closed; public metadata and signed-URL reads validate and
+lock the current owner proof in the same SQL statement, preventing stale proof
+reuse during concurrent revocation.
+
+The final Stage 7-only security candidate evidence passed inventory 46/46,
+asset 57/57, maintenance 131/131, Stage 7 architecture 27/27, auth 11/11,
+warehouse 12/12, gateway 36/36 and media 73/73, all with zero failures, errors
+or skips. Earlier shared asset 64/64, maintenance 136/136 and architecture
+33/34 runs mixed in Stage 8 diagnostics and are not Stage 7 closure totals.
+Closure is recorded by the containing scoped Stage 7 commit without inventing
+a SHA.
