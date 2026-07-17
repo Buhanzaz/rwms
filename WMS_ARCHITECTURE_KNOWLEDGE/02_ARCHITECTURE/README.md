@@ -543,3 +543,17 @@ passes the affected asset cutover flow in all three responsive Playwright
 projects, and completes a successful root Gradle `test` graph. The earlier
 missing replay, real-broker and browser evidence statements above are retained
 as chronological audit findings and are superseded by this completion record.
+
+## Maintenance-service boundary (verified implementation, 2026-07-17)
+
+`maintenance-service` owns versioned catalog, estimate and repair streams plus
+synchronous JPA projections in its own PostgreSQL database. Asset leases/fenced
+cabin status, task execution, media objects and warehouse identity remain
+external authorities represented only by opaque references and safe snapshots.
+
+PostgreSQL `domain_event` is the replay authority. Kafka uses
+`rwms.maintenance.catalog-version.v1`, `rwms.maintenance.estimate.v1` and
+`rwms.maintenance.repair.v1` through the transactional outbox; inbox,
+checkpoint, DLT and quarantine state remains local. The stateless gateway owns
+only the public route. The final Java 25 suite passed 18 classes/116 tests with
+no failure, error or skip.

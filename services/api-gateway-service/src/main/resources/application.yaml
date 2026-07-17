@@ -50,6 +50,7 @@ rwms:
       task-board-uri: ${TASK_BOARD_SERVICE_URL}
       warehouse-uri: ${WAREHOUSE_SERVICE_URL}
       asset-uri: ${ASSET_SERVICE_URL}
+      maintenance-uri: ${MAINTENANCE_SERVICE_URL}
     security:
       issuer: ${AUTH_ISSUER}
       audience: ${AUTH_AUDIENCE:rwms-services}

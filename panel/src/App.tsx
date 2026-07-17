@@ -9,7 +9,12 @@ import { AssetEquipmentWriteOffsPage } from "@/features/assets/asset-equipment-w
 import { AssetRentalItemDetailPage } from "@/features/assets/asset-rental-item-detail-page"
 import { AssetRentalItemsPage } from "@/features/assets/asset-rental-items-page"
 import { AssetSettingsPage } from "@/features/assets/asset-settings-page"
+import { AcceptancePage } from "@/features/acceptance/acceptance-page"
+import { RepairEstimatesPage } from "@/features/repair-estimates/repair-estimates-page"
+import { RepairsPage } from "@/features/repairs/repairs-page"
+import { EstimatesRepairsSettingsPage } from "@/features/settings/estimates-repairs/estimates-repairs-settings-page"
 import { TaskBoardPage } from "@/features/task-board/task-board-page"
+import { WriteOffsPage } from "@/features/write-offs/write-offs-page"
 import { UsersPage } from "@/features/settings/users/users-page"
 import { TaskBoardSettingsPage } from "@/features/settings/task-board/task-board-settings-page"
 import { WarehouseSettingsPage } from "@/features/settings/warehouses/warehouse-settings-page"
@@ -193,19 +198,10 @@ function AppLayout() {
               path="/inventory/*"
               element={<DeferredWorkflowPage title="Инвентаризация" />}
             />
-            <Route
-              path="/estimates"
-              element={<DeferredWorkflowPage title="Сметы" />}
-            />
-            <Route
-              path="/repairs"
-              element={<DeferredWorkflowPage title="Ремонты" />}
-            />
+            <Route path="/estimates" element={<RepairEstimatesPage />} />
+            <Route path="/repairs" element={<RepairsPage />} />
             <Route path="/task-board" element={<TaskBoardPage />} />
-            <Route
-              path="/acceptance"
-              element={<DeferredWorkflowPage title="Приёмка и доработки" />}
-            />
+            <Route path="/acceptance" element={<AcceptancePage />} />
             <Route
               path="/logistics/returns"
               element={<DeferredWorkflowPage title="Возврат из аренды" />}
@@ -218,19 +214,14 @@ function AppLayout() {
               path="/logistics/transfers"
               element={<DeferredWorkflowPage title="Перемещения" />}
             />
-            <Route
-              path="/write-offs"
-              element={<DeferredWorkflowPage title="Списание бытовок" />}
-            />
+            <Route path="/write-offs" element={<WriteOffsPage />} />
             <Route
               path="/write-offs/equipment"
               element={<AssetEquipmentWriteOffsPage />}
             />
             <Route
               path="/settings/estimates-repairs"
-              element={
-                <DeferredWorkflowPage title="Настройка смет и ремонтов" />
-              }
+              element={<EstimatesRepairsSettingsPage />}
             />
             <Route path="/settings/users" element={<UsersPage />} />
             <Route

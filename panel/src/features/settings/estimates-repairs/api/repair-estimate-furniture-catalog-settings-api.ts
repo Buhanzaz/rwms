@@ -22,19 +22,28 @@ export async function getRepairEstimateFurnitureCatalogSettings() {
   return REPAIR_ESTIMATE_FURNITURE_CATALOG_SETTINGS
 }
 
-export async function getRepairEstimateFurnitureCatalogMock() {
-  return getRepairEstimateCatalogSection("furniture")
+export async function getRepairEstimateFurnitureCatalogMock(
+  warehouseId?: string
+) {
+  return getRepairEstimateCatalogSection("furniture", warehouseId)
 }
 
 export async function saveRepairEstimateFurnitureCatalogItem(
-  input: RepairEstimateCatalogNodeMutation
+  input: RepairEstimateCatalogNodeMutation,
+  warehouseId?: string
 ) {
-  return saveRepairEstimateCatalogNode({
-    ...input,
-    nodeType: "MATERIAL",
-  })
+  return saveRepairEstimateCatalogNode(
+    {
+      ...input,
+      nodeType: "MATERIAL",
+    },
+    warehouseId
+  )
 }
 
-export async function deleteRepairEstimateFurnitureCatalogItem(id: string) {
-  return deleteRepairEstimateCatalogNode(id)
+export async function deleteRepairEstimateFurnitureCatalogItem(
+  id: string,
+  warehouseId?: string
+) {
+  return deleteRepairEstimateCatalogNode(id, warehouseId)
 }

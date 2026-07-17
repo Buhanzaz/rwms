@@ -60,6 +60,7 @@ class GatewayFailureIntegrationTest {
     registry.add("rwms.gateway.routes.task-board-uri", GatewayFailureIntegrationTest::slowOrigin);
     registry.add("rwms.gateway.routes.warehouse-uri", () -> "http://127.0.0.1:9");
     registry.add("rwms.gateway.routes.asset-uri", () -> "http://127.0.0.1:9");
+    registry.add("rwms.gateway.routes.maintenance-uri", () -> "http://127.0.0.1:9");
     registry.add("rwms.gateway.security.issuer", () -> "http://gateway.test/auth");
     registry.add("rwms.gateway.security.audience", () -> "rwms-services");
     registry.add("rwms.gateway.security.jwk-set-uri", () -> slowOrigin() + "/oauth2/jwks");

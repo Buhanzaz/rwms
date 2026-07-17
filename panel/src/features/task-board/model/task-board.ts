@@ -35,6 +35,9 @@ export type TaskBoardEntryDto = {
   runtimeTask?: MockTaskDto
   interruption?: TaskInterruptionDto | null
   detailsHref?: string | null
+  taskBoardEntryVersion?: number
+  taskBoardWarehouseId?: string
+  taskBoardQueueId?: string | null
 }
 
 export type TaskBoardSnapshotDto = {

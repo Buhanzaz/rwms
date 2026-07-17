@@ -48,6 +48,7 @@ export type RepairTaskSubtaskDto = {
   materialLines: RepairEstimateLineDto[]
   groupComment: string
   queueCode: string | null
+  queueId?: string | null
   routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
   sortOrder: number
   queuePosition: number

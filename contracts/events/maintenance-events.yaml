@@ -1,0 +1,215 @@
+asyncapi: 3.1.0
+info:
+  title: RWMS Maintenance Domain Events
+  version: 1.0.0
+  description: >-
+    Stage 6 sanitized maintenance facts. PostgreSQL service-local event streams
+    are authoritative; Kafka is at-least-once transport. Aggregate-family
+    topics are keyed by aggregateId, outbox rows are marked published only
+    after broker acknowledgement, duplicates are harmless, and version gaps
+    quarantine the affected aggregate. Business comments, reasons,
+    source-party text, login/display names, media URLs, object keys and PII are
+    forbidden in both integration facts and the sanitized consumer DLT.
+defaultContentType: application/json
+servers:
+  kafka:
+    host: configured-at-runtime
+    protocol: kafka
+channels:
+  catalogFacts:
+    address: rwms.maintenance.catalog-version.v1
+    description: Catalog-version aggregate facts keyed by catalog-version aggregateId.
+    messages:
+      catalogFactV1: { $ref: '#/components/messages/CatalogVersionFactV1' }
+  estimateFacts:
+    address: rwms.maintenance.estimate.v1
+    description: Estimate aggregate facts keyed by estimate aggregateId.
+    messages:
+      estimateFactV1: { $ref: '#/components/messages/EstimateFactV1' }
+  repairFacts:
+    address: rwms.maintenance.repair.v1
+    description: Primary, direct and rework repair facts keyed by repair aggregateId.
+    messages:
+      repairFactV1: { $ref: '#/components/messages/RepairFactV1' }
+  taskBoardBoardTaskFacts:
+    address: rwms.task-board.board-task.v1
+    description: >-
+      Every existing board-task family fact is validated and checkpointed in
+      the maintenance task-sync group so terminal facts cannot create a false
+      version gap. Only completed/cancelled facts are actionable domain effects.
+      Inbox deduplication, any effect and aggregate checkpoint commit in one
+      maintenance PostgreSQL transaction.
+    messages:
+      boardTaskFactV1: { $ref: '#/components/messages/BoardTaskFactV1' }
+  taskBoardQueueEntryFacts:
+    address: rwms.task-board.queue-entry.v1
+    description: >-
+      Every existing queue-entry family fact is validated and checkpointed;
+      only completed/cancelled facts are actionable for matching repair stages.
+    messages:
+      queueEntryFactV1: { $ref: '#/components/messages/QueueEntryFactV1' }
+  mediaFacts:
+    address: rwms.media.media.v1
+    description: >-
+      Existing media facts consumed into the maintenance-owned reference
+      projection. Only READY, matching owner/warehouse/generation references
+      can be attached by a command.
+    messages:
+      mediaFactV1: { $ref: '#/components/messages/MediaFactV1' }
+  assetRentalItemFacts:
+    address: rwms.asset.rental-item.v1
+    description: Reconciliation input only; it never replaces a fenced asset HTTP command.
+    messages:
+      rentalItemReconciliationV1: { $ref: '#/components/messages/RentalItemReconciliationV1' }
+  assetOperationLeaseFacts:
+    address: rwms.asset.operation-lease.v1
+    description: Reconciliation input only; it never authorizes lease bypass or stale-fence reuse.
+    messages:
+      operationLeaseReconciliationV1: { $ref: '#/components/messages/OperationLeaseReconciliationV1' }
+  sanitizedDlt:
+    address: rwms.maintenance.dlt.v1
+    description: >-
+      Consumer-owned task-board/media failure record. Validation failures are
+      sent directly; transient failures first receive bounded retries at
+      1s/2s/4s. Replay is explicit and operator-reviewed. The original message
+      body is never copied here.
+    messages:
+      sanitizedDltV1: { $ref: '#/components/messages/SanitizedDltV1' }
+operations:
+  publishCatalogFacts:
+    action: send
+    channel: { $ref: '#/channels/catalogFacts' }
+  publishEstimateFacts:
+    action: send
+    channel: { $ref: '#/channels/estimateFacts' }
+  publishRepairFacts:
+    action: send
+    channel: { $ref: '#/channels/repairFacts' }
+  consumeBoardTaskOutcomes:
+    action: receive
+    channel: { $ref: '#/channels/taskBoardBoardTaskFacts' }
+  consumeQueueEntryOutcomes:
+    action: receive
+    channel: { $ref: '#/channels/taskBoardQueueEntryFacts' }
+  consumeMediaFacts:
+    action: receive
+    channel: { $ref: '#/channels/mediaFacts' }
+  consumeRentalItemReconciliation:
+    action: receive
+    channel: { $ref: '#/channels/assetRentalItemFacts' }
+  consumeOperationLeaseReconciliation:
+    action: receive
+    channel: { $ref: '#/channels/assetOperationLeaseFacts' }
+  publishSanitizedConsumerFailure:
+    action: send
+    channel: { $ref: '#/channels/sanitizedDlt' }
+components:
+  messages:
+    CatalogVersionFactV1:
+      name: maintenance.catalog-version.fact.v1
+      description: >-
+        DomainEventEnvelopeV2 fact with eventVersion 1. Kafka record key MUST
+        equal aggregateId and eventId is the consumer deduplication identity.
+      correlationId:
+        location: $message.payload#/correlation/correlationId
+      payload:
+        allOf:
+          - { $ref: './maintenance/maintenance-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: CATALOG_VERSION }
+              eventType:
+                enum:
+                  - maintenance.catalog-version.imported.v1
+                  - maintenance.catalog-version.changed.v1
+                  - maintenance.catalog-version.activated.v1
+                  - maintenance.catalog-version.superseded.v1
+    EstimateFactV1:
+      name: maintenance.estimate.fact.v1
+      description: >-
+        DomainEventEnvelopeV2 estimate fact with eventVersion 1 and aggregateId
+        as the Kafka record key.
+      correlationId:
+        location: $message.payload#/correlation/correlationId
+      payload:
+        allOf:
+          - { $ref: './maintenance/maintenance-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: ESTIMATE }
+              eventType:
+                enum:
+                  - maintenance.estimate.created.v1
+                  - maintenance.estimate.draft-changed.v1
+                  - maintenance.estimate.completed.v1
+                  - maintenance.estimate.amended.v1
+    RepairFactV1:
+      name: maintenance.repair.fact.v1
+      description: >-
+        DomainEventEnvelopeV2 repair fact with eventVersion 1 and aggregateId
+        as the Kafka record key.
+      correlationId:
+        location: $message.payload#/correlation/correlationId
+      payload:
+        allOf:
+          - { $ref: './maintenance/maintenance-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: REPAIR }
+              eventType:
+                enum:
+                  - maintenance.repair.created.v1
+                  - maintenance.repair.plan-changed.v1
+                  - maintenance.repair.queued.v1
+                  - maintenance.repair.stage-completed.v1
+                  - maintenance.repair.pending-acceptance.v1
+                  - maintenance.repair.rework-created.v1
+                  - maintenance.repair.accepted.v1
+                  - maintenance.repair.written-off.v1
+    BoardTaskFactV1:
+      name: maintenance.input.task-board.board-task-fact.v1
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: BOARD_TASK }
+      x-rwms-accepted-aggregate-type: BOARD_TASK
+      x-rwms-actionable-event-types:
+        - task-board.board-task.completed.v1
+        - task-board.board-task.cancelled.v1
+    QueueEntryFactV1:
+      name: maintenance.input.task-board.queue-entry-fact.v1
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: QUEUE_ENTRY }
+      x-rwms-accepted-aggregate-type: QUEUE_ENTRY
+      x-rwms-actionable-event-types:
+        - task-board.queue-entry.completed.v1
+        - task-board.queue-entry.cancelled.v1
+    MediaFactV1:
+      name: maintenance.input.media.fact.v1
+      payload: { $ref: './media/media-events-v1.schema.json' }
+    RentalItemReconciliationV1:
+      name: maintenance.input.asset.rental-item-reconciliation.v1
+      payload:
+        allOf:
+          - { $ref: './asset/asset-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: RENTAL_ITEM }
+    OperationLeaseReconciliationV1:
+      name: maintenance.input.asset.operation-lease-reconciliation.v1
+      payload:
+        allOf:
+          - { $ref: './asset/asset-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: OPERATION_LEASE }
+    SanitizedDltV1:
+      name: maintenance.sanitized-dlt.v1
+      description: Hash-only failure record with no original message body.
+      payload: { $ref: './maintenance/maintenance-dlt-v1.schema.json' }

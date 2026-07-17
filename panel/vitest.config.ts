@@ -9,6 +9,9 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     restoreMocks: true,
+    env: {
+      VITE_DEV_MAINTENANCE_FIXTURES: "true",
+    },
     exclude: [...configDefaults.exclude, "e2e/**"],
   },
 })

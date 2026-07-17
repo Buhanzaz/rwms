@@ -227,3 +227,18 @@ operation lease, so they cannot bypass the fencing boundary.
 `EXPIRED` lifecycle states. Commit is a versioned/idempotent asset-owned fact
 and keeps the stock unavailable until release; it does not create a future
 logistics aggregate or movement.
+
+## Maintenance target aggregates (verified implementation, 2026-07-17)
+
+`CatalogVersion` owns immutable published nodes/links and DRAFT-to-ACTIVE-to-
+SUPERSEDED lifecycle. `MaintenanceEstimate` owns revisions, lines and frozen
+plans. `MaintenanceRepair` owns execution and acceptance axes, stages, direct
+repairs and child rework; acceptance/write-off are read projections rather than
+independent aggregates. Lease, task-board and media records are opaque local
+snapshots or reconciliation records, never shared entities or foreign keys.
+
+Every mutable aggregate uses an event-stream head/version CAS. Projection rows,
+event facts and outbox facts commit together. The controlled catalog preserves
+legacy business identity and selected safe fields while excluding audit,
+layout, obsolete flags and comments; it does not make the legacy Jmix entity
+shape the target JPA model.

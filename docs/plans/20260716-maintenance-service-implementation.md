@@ -1,6 +1,6 @@
 # Stage 6 Maintenance Service Implementation Plan
 
-Status: `IN_PROGRESS`
+Status: `IMPLEMENTED_AWAITING_CLOSURE_COMMIT`
 
 Authority: the approved
 [`20260716-maintenance-service-contract.md`](20260716-maintenance-service-contract.md),
@@ -27,78 +27,89 @@ authorize Stage 7 work.
   scopes, errors, idempotency, concurrency, replay, and recovery matrix.
 - [x] Record explicit approval of the four prerequisites and maintenance panel
   cutover.
-- [ ] Add disabled-by-default maintenance OAuth client/scopes to `auth-service`.
-- [ ] Add exact lease-bound maintenance status-transition authority to
+- [x] Add disabled-by-default maintenance OAuth client/scopes to `auth-service`.
+- [x] Add exact lease-bound maintenance status-transition authority to
   `asset-service` with allowlisted source/target transitions.
-- [ ] Add source-bound task registration/reconciliation/pre-start update/cancel
+- [x] Add source-bound task registration/reconciliation/pre-start update/cancel
   operations to `task-board-service` and reconcile its canonical Kafka facts.
-- [ ] Add the stateless `/api/maintenance/**` gateway route.
-- [ ] Run focused auth, asset, task-board, and gateway regression/security tests.
+- [x] Add the stateless `/api/maintenance/**` gateway route.
+- [x] Run focused auth, asset, task-board, and gateway regression/security tests.
 
 ### 2. Canonical contracts and database
 
-- [ ] Add canonical maintenance OpenAPI and versioned event schemas.
-- [ ] Register the `maintenance-service` Gradle module and local-only PostgreSQL
+- [x] Add canonical maintenance OpenAPI and versioned event schemas.
+- [x] Register the `maintenance-service` Gradle module and local-only PostgreSQL
   development dependency.
-- [ ] Add cumulative Flyway `V1` schema with domain event store, stream heads,
+- [x] Add cumulative Flyway `V1` schema with domain event store, stream heads,
   snapshots, synchronous projections, outbox, inbox, checkpoints,
   idempotency, catalog, estimate, repair, stage, media-reference, lease, and
   integration-reconciliation data.
-- [ ] Prove clean install, repeat safety, checksum rejection, explicit handling
+- [x] Prove clean install, repeat safety, checksum rejection, explicit handling
   of a non-empty unversioned schema, and JPA `validate` startup.
 
 ### 3. Maintenance domain and HTTP implementation
 
-- [ ] Implement versioned catalog drafts, controlled legacy import, activation,
+- [x] Implement versioned catalog drafts, controlled legacy import, activation,
   and supersession with count/hash reconciliation.
-- [ ] Implement estimate draft, completion, amendment, line and planned-stage
+- [x] Implement estimate draft, completion, amendment, line and planned-stage
   invariants.
-- [ ] Implement repair execution and acceptance axes, direct repair, rework,
+- [x] Implement repair execution and acceptance axes, direct repair, rework,
   terminal acceptance, and write-off decisions.
-- [ ] Enforce stream CAS, request `expectedVersion`, UUID idempotency keys,
+- [x] Enforce stream CAS, request `expectedVersion`, UUID idempotency keys,
   seven-day response retention, and RFC 7807 errors.
-- [ ] Validate locally issued JWTs and exact maintenance scopes with warehouse
+- [x] Validate locally issued JWTs and exact maintenance scopes with warehouse
   authorization.
 
 ### 4. Distributed consistency and recovery
 
-- [ ] Acquire, renew, reconcile, and release asset operation leases without an
+- [x] Acquire, renew, reconcile, and release asset operation leases without an
   unfenced status mutation path.
-- [ ] Register and reconcile task-board movement/stage tasks using stable
+- [x] Register and reconcile task-board movement/stage tasks using stable
   external task IDs.
-- [ ] Consume task-board and media facts through inbox deduplication and
+- [x] Consume task-board and media facts through inbox deduplication and
   aggregate-version checkpoints.
-- [ ] Publish sanitized aggregate-family facts only through the transactional
+- [x] Publish sanitized aggregate-family facts only through the transactional
   outbox and broker acknowledgement.
-- [ ] Implement bounded retry at 1s/2s/4s, validation-to-DLT routing,
+- [x] Implement bounded retry at 1s/2s/4s, validation-to-DLT routing,
   consumer-owned DLT, aggregate-gap quarantine, and operator reconciliation.
-- [ ] Prove deterministic full replay, snapshot replay, shadow-projection parity,
+- [x] Prove deterministic full replay, snapshot replay, shadow-projection parity,
   CAS/concurrency, multi-stream atomicity, duplicate safety, outage recovery,
   and absence of secrets/PII in events.
 
 ### 5. Approved panel cutover
 
-- [ ] Replace production maintenance catalog, estimate, repair, acceptance, and
+- [x] Replace production maintenance catalog, estimate, repair, acceptance, and
   write-off browser adapters with the versioned HTTP adapter.
-- [ ] Keep mocks only as explicit development fixtures and fail closed when
+- [x] Keep mocks only as explicit development fixtures and fail closed when
   production service configuration or authentication is absent.
-- [ ] Preserve current desktop/mobile layouts and shared component behavior.
-- [ ] Run affected unit tests, typecheck, lint, build, and Playwright desktop,
+- [x] Preserve current desktop/mobile layouts and shared component behavior.
+- [x] Run affected unit tests, typecheck, lint, build, and Playwright desktop,
   tablet, and mobile flows.
 
 ### 6. Exit gate
 
-- [ ] Run the `maintenance-service` unit/integration/security/concurrency/
-  migration/event-sourcing/Kafka recovery suite and affected root regressions.
-- [ ] Validate OpenAPI and event schemas against implementation payloads.
-- [ ] Reconcile numbered architecture memory, migration map, decisions,
+- [x] Run the `maintenance-service` unit/integration/security/concurrency/
+  migration/event-sourcing/Kafka recovery suite and affected prerequisite-
+  service regressions.
+- [x] Validate OpenAPI and event schemas against implementation payloads.
+- [x] Reconcile numbered architecture memory, migration map, decisions,
   history, and remaining `UNKNOWN`s without erasing audit history.
-- [ ] Complete independent QA review of the final diff and address findings.
+- [x] Complete independent QA review of the final diff and address findings.
 - [ ] Create one scoped human Stage 6 implementation commit.
 - [ ] Advance `ACTIVE_STAGE.md` to Stage 7 only after every Stage 6 exit item is
   evidenced and the commit exists.
 
 ## Verification record
 
-Commands and exact results are added here as work packages finish; an unchecked
-item remains an open Stage 6 gate and cannot be inferred from implementation.
+Final Java 25/Testcontainers verification ran 18 test classes and passed all
+116 tests with zero failures, errors or skips in 3m20s. The controlled catalog
+class passed 11/11, including exact evidence/hash validation, fail-closed
+rejection and import-to-activation-to-estimate use. The previously recorded
+full prerequisite suites passed for asset (45), task-board (102, one expected
+skip), auth (131, one expected skip) and gateway (34).
+
+Panel ESLint, TypeScript, the production build and all 46 Vitest files/261
+tests passed. The affected Playwright cutover passed desktop, tablet and mobile,
+3/3, using bundled Chromium in the official Playwright container. The Stage 6
+implementation and memory gates are complete; the scoped implementation commit
+and subsequent `ACTIVE_STAGE.md` transition remain deliberately unchecked.

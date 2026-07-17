@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/input-group"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
-import { DEV_AUTH_BYPASS_ENABLED } from "@/features/auth/auth-config"
+import { DEV_MAINTENANCE_FIXTURES_ENABLED } from "@/features/maintenance/maintenance-runtime"
 import { useAuth } from "@/features/auth/use-auth"
 import {
   REPAIR_TASKS_MOCK_STORAGE_KEY,
@@ -252,18 +252,19 @@ export function TaskBoardPage() {
       selectedWarehouseId ?? "none",
       serviceWarehouseId ?? "none"
     ),
-    queryFn: () => getTaskBoard(selectedWarehouseId!, serviceWarehouseId!),
+    queryFn: () =>
+      getTaskBoard(selectedWarehouseId!, serviceWarehouseId!, accessToken),
     enabled: selectedWarehouseId !== null && serviceWarehouseId !== null,
   })
   const workersQuery = useQuery({
     queryKey: ["task-board", serviceWarehouseId, "mock-workers"],
     queryFn: () => listTaskBoardWorkers(serviceWarehouseId!),
-    enabled: DEV_AUTH_BYPASS_ENABLED && serviceWarehouseId !== null,
+    enabled: DEV_MAINTENANCE_FIXTURES_ENABLED && serviceWarehouseId !== null,
   })
   const activeMockWorkerQuery = useQuery({
     queryKey: ["task-board", "mock-active-worker"],
     queryFn: getTaskBoardActiveWorkerId,
-    enabled: DEV_AUTH_BYPASS_ENABLED,
+    enabled: DEV_MAINTENANCE_FIXTURES_ENABLED,
   })
   const activeWorker = (workersQuery.data ?? []).find(
     (worker) =>
@@ -274,7 +275,8 @@ export function TaskBoardPage() {
   const notificationsQuery = useQuery({
     queryKey: [...TASK_BOARD_NOTIFICATIONS_QUERY_KEY, effectiveActiveWorkerId],
     queryFn: () => listTaskBoardNotifications(effectiveActiveWorkerId),
-    enabled: DEV_AUTH_BYPASS_ENABLED && Boolean(effectiveActiveWorkerId),
+    enabled:
+      DEV_MAINTENANCE_FIXTURES_ENABLED && Boolean(effectiveActiveWorkerId),
   })
 
   const setPreview = useCallback(
@@ -337,13 +339,13 @@ export function TaskBoardPage() {
   }, [notificationsQuery.data])
 
   useEffect(() => {
-    if (DEV_AUTH_BYPASS_ENABLED) return
+    if (DEV_MAINTENANCE_FIXTURES_ENABLED) return
     const timer = window.setInterval(() => setNow(Date.now()), 1_000)
     return () => window.clearInterval(timer)
   }, [])
 
   useEffect(() => {
-    if (!DEV_AUTH_BYPASS_ENABLED || !serviceWarehouseId) return
+    if (!DEV_MAINTENANCE_FIXTURES_ENABLED || !serviceWarehouseId) return
     const reconcile = async () => {
       if (runtimeEvaluationPendingRef.current) return
       runtimeEvaluationPendingRef.current = true
@@ -368,6 +370,7 @@ export function TaskBoardPage() {
   }, [queryClient, serviceWarehouseId])
 
   useEffect(() => {
+    if (!DEV_MAINTENANCE_FIXTURES_ENABLED) return
     const invalidate = () => {
       void queryClient.invalidateQueries({ queryKey: TASK_BOARD_QUERY_KEY })
     }
@@ -417,12 +420,16 @@ export function TaskBoardPage() {
         })
       }
       if (action.kind === "pause") {
-        return pauseTaskBoardEntry(action.entry)
+        return pauseTaskBoardEntry(action.entry, accessToken)
       }
       if (action.kind === "resume") {
-        return resumeTaskBoardEntry(action.entry)
+        return resumeTaskBoardEntry(action.entry, accessToken)
       }
-      return completeTaskBoardEntry(action.entry, action.pendingUploads)
+      return completeTaskBoardEntry(
+        action.entry,
+        action.pendingUploads,
+        accessToken
+      )
     },
     onMutate: () => setNotice(null),
     onSuccess: async () => {
@@ -458,6 +465,7 @@ export function TaskBoardPage() {
         queue: params.queue,
         queuePosition: params.queuePosition,
         entry: params.entry,
+        accessToken,
       }),
     onMutate: () => setNotice(null),
     onSuccess: async () => {
@@ -701,7 +709,7 @@ export function TaskBoardPage() {
         </PageToolbarContent>
 
         <PageToolbarActions className="w-full sm:w-auto">
-          {DEV_AUTH_BYPASS_ENABLED ? (
+          {DEV_MAINTENANCE_FIXTURES_ENABLED ? (
             <TaskBoardMockToolbar
               workers={workersQuery.data ?? []}
               activeWorkerId={effectiveActiveWorkerId}

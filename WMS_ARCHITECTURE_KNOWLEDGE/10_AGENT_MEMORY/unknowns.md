@@ -656,3 +656,19 @@ Implementation evidence remains outstanding: exact OpenAPI/AsyncAPI files,
 Flyway V1, service/runtime behavior, prerequisite tests, media event projection,
 panel cutover, recovery matrix and reviewed scoped commit must still be built
 and verified. Stage 7 remains forbidden until that exit gate closes.
+
+### Stage 6 implementation resolution (2026-07-17)
+
+The preceding implementation list is retained as audit history. Canonical
+OpenAPI/AsyncAPI, Flyway V1/JPA validation, service behavior, four narrow
+prerequisites, safe media-fact projection, production panel cutover,
+deterministic replay and Kafka retry/DLT/quarantine/outage recovery are now
+implemented and verified. The reviewed 232-node/254-link catalog mapping,
+including its preservation, omission, coercion, routing and hash rules, is no
+longer `UNKNOWN`.
+
+This resolution does not invent an operator display-name service, media upload
+HTTP/JWT runtime, media retention/orphan policy, physical movement/logistics
+semantics, general queue administration or any later-stage contract. Those
+existing UNKNOWNs remain. The scoped Stage 6 implementation commit and later
+sole active-pointer transition remain intentionally open.

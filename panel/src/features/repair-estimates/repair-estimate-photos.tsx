@@ -28,6 +28,7 @@ import {
 } from "@/features/repair-estimates/repair-estimate-photo-manager-dialog"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { DEV_MAINTENANCE_FIXTURES_ENABLED } from "@/features/maintenance/maintenance-runtime"
 
 type RepairEstimatePhotosProps = {
   media: RepairEstimateMediaRefDto[]
@@ -94,8 +95,12 @@ export function RepairEstimatePhotos({
   const [activeIndex, setActiveIndex] = useState(0)
   const [managerOpen, setManagerOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const visualMedia = media.filter(
+    (item) => !item.opaqueOnly && Boolean(item.variants.small.url)
+  )
+  const opaqueMedia = media.filter((item) => item.opaqueOnly)
   const items: RepairEstimatePhotoManagerItem[] = [
-    ...media.map((item) => ({
+    ...visualMedia.map((item) => ({
       id: item.id,
       fileName: item.fileName,
       previewUrl: item.variants.small.url,
@@ -113,7 +118,7 @@ export function RepairEstimatePhotos({
     })),
   ]
   const carouselPhotos: PhotoCarouselPhoto[] = [
-    ...media.map((item) => ({
+    ...visualMedia.map((item) => ({
       id: item.id,
       url: item.variants.small.url,
       kind: item.kind ?? mediaKindFromMimeType(item.mimeType),
@@ -145,6 +150,7 @@ export function RepairEstimatePhotos({
   const activeItem = items[safeActiveIndex] ?? null
 
   function addFiles(files: File[]) {
+    if (!DEV_MAINTENANCE_FIXTURES_ENABLED) return
     const remaining = Math.max(0, 20 - items.length)
     const uploads = files.slice(0, remaining).map((file) => ({
       id: createOpaqueId(),
@@ -246,7 +252,7 @@ export function RepairEstimatePhotos({
             </FieldLabel>
           </Field>
         </div>
-        {!readOnly ? (
+        {!readOnly && DEV_MAINTENANCE_FIXTURES_ENABLED ? (
           <Button
             type="button"
             variant="outline"
@@ -255,10 +261,12 @@ export function RepairEstimatePhotos({
             <HugeiconsIcon icon={ImageUploadIcon} data-icon="inline-start" />
             Добавить
           </Button>
+        ) : !readOnly ? (
+          <Badge variant="outline">Загрузка медиа недоступна</Badge>
         ) : null}
       </div>
 
-      {directUpload ? (
+      {directUpload && DEV_MAINTENANCE_FIXTURES_ENABLED ? (
         <input
           ref={fileInputRef}
           type="file"
@@ -271,16 +279,30 @@ export function RepairEstimatePhotos({
           }}
         />
       ) : null}
+      {opaqueMedia.length > 0 ? (
+        <div className="flex flex-wrap gap-2" aria-label="Ссылки на медиа">
+          {opaqueMedia.map((item) => (
+            <Badge key={item.id} variant="outline" title={item.id}>
+              {item.id}
+            </Badge>
+          ))}
+        </div>
+      ) : null}
       <div
         className={cn(
           "min-h-56 flex-1",
-          directUpload && items.length === 0 && "hidden md:block"
+          directUpload &&
+            DEV_MAINTENANCE_FIXTURES_ENABLED &&
+            items.length === 0 &&
+            "hidden md:block"
         )}
         onDragOver={
-          directUpload ? (event) => event.preventDefault() : undefined
+          directUpload && DEV_MAINTENANCE_FIXTURES_ENABLED
+            ? (event) => event.preventDefault()
+            : undefined
         }
         onDrop={
-          directUpload
+          directUpload && DEV_MAINTENANCE_FIXTURES_ENABLED
             ? (event) => {
                 event.preventDefault()
                 addFiles(

@@ -19,4 +19,6 @@ public interface TaskAssignmentRepository extends JpaRepository<TaskAssignment, 
 
   List<TaskAssignment> findAllByQueueEntryIdAndStatusIn(
       UUID entryId, Collection<AssignmentStatus> statuses);
+
+  boolean existsByQueueEntryIdInAndStartedAtIsNotNull(Collection<UUID> entryIds);
 }

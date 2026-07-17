@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventFactFactory;
 import dev.buhanzaz.rwms.taskboard.repository.BoardTaskRepository;
 import dev.buhanzaz.rwms.taskboard.repository.QueueEntryRepository;
 import dev.buhanzaz.rwms.taskboard.repository.QueueUsageReferenceRepository;
+import dev.buhanzaz.rwms.taskboard.repository.TaskSyncSourceRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkQueueRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkerClassRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkerGroupRepository;
@@ -67,6 +68,7 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
   @Autowired BoardTaskRepository tasks;
   @Autowired QueueEntryRepository entries;
   @Autowired QueueUsageReferenceRepository usageReferences;
+  @Autowired TaskSyncSourceRepository taskSyncSources;
   @Autowired WorkQueueRepository queues;
   @Autowired WorkerClassRepository workerClasses;
   @Autowired WorkerGroupRepository workerGroups;
@@ -83,7 +85,7 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
 
   @Test
   @Transactional
-  void bootMigratesAdoptedVersionFourToVersionFiveAndLeavesProjectionRowsUntouched() {
+  void bootMigratesAdoptedVersionFourThroughVersionSixAndValidatesJpa() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(retainedDigests(jdbc)).containsExactlyInAnyOrderEntriesOf(beforeStartup);
     assertThat(
@@ -92,6 +94,13 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
                     + "where version='4' and type='BASELINE' and success",
                 Integer.class))
         .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history "
+                    + "where version='6' and type='SQL' and success",
+                Integer.class))
+        .isOne();
+    assertThat(taskSyncSources.findAll()).isEmpty();
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from flyway_schema_history "
@@ -150,6 +159,33 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
             item ->
                 assertBaselinePayload(
                     "QUEUE_ENTRY", item.getId(), facts.queueEntry(item, false)));
+  }
+
+  @Test
+  @Transactional
+  void immutableVersionFiveQueueEntryBaselineReplaysWithOriginalV1Shape() throws Exception {
+    var sourceCorrelatedEntry =
+        entries.findAll().stream()
+            .filter(item -> item.getTask().getExternalTaskId() != null)
+            .findFirst()
+            .orElseThrow();
+    String storedPayload =
+        jdbc.queryForObject(
+            "select payload::text from domain_event where aggregate_type='QUEUE_ENTRY' "
+                + "and aggregate_id=? and baseline",
+            String.class,
+            sourceCorrelatedEntry.getId().toString());
+    var payload = objectMapper.readTree(storedPayload);
+
+    assertThat(payload.has("externalTaskId")).isFalse();
+    assertThat(payload.required("taskId").textValue())
+        .isEqualTo(sourceCorrelatedEntry.getTask().getId().toString());
+    assertThat(payload.required("routeIndex").intValue())
+        .isEqualTo(sourceCorrelatedEntry.getRouteIndex());
+    assertBaselinePayload(
+        "QUEUE_ENTRY",
+        sourceCorrelatedEntry.getId(),
+        facts.queueEntry(sourceCorrelatedEntry, false));
   }
 
   private void assertBaselinePayload(String aggregateType, UUID id, Object fact) {

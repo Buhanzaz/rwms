@@ -1,0 +1,17 @@
+spring:
+  datasource:
+    url: ${MAINTENANCE_DB_URL:jdbc:postgresql://localhost:5437/rwms_maintenance}
+    username: ${MAINTENANCE_DB_USERNAME:rwms_maintenance}
+    password: ${MAINTENANCE_DB_PASSWORD:rwms_maintenance_dev}
+
+rwms:
+  platform:
+    kafka:
+      enabled: ${MAINTENANCE_KAFKA_ENABLED:false}
+  maintenance:
+    dependencies:
+      enabled: ${MAINTENANCE_DEPENDENCIES_ENABLED:false}
+    security:
+      dev-auth-bypass: ${MAINTENANCE_DEV_AUTH_BYPASS:true}
+  cors:
+    allowed-origins: ${PANEL_ORIGIN:http://localhost:5173}

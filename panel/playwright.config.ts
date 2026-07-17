@@ -45,6 +45,7 @@ export default defineConfig({
     env: {
       ...process.env,
       VITE_DEV_AUTH_BYPASS: "true",
+      VITE_DEV_MAINTENANCE_FIXTURES: "true",
       VITE_GATEWAY_URL: baseURL,
     },
   },

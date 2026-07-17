@@ -313,6 +313,9 @@ export function applyCatalogNodesToEstimateLines(params: {
         lineTotal: "0.00",
         catalogSnapshot: {
           nodeId: node.id,
+          ...(node.catalogVersionId
+            ? { catalogVersionId: node.catalogVersionId }
+            : {}),
           code: node.code,
           name: node.name,
           nodeType:
@@ -321,6 +324,12 @@ export function applyCatalogNodesToEstimateLines(params: {
               : node.nodeType === "OPTION"
                 ? "OPTION"
                 : "MATERIAL",
+          unit: node.unit,
+          unitPrice: node.unitPrice,
+          durationMinutes: node.durationMinutes ?? 0,
+          queueId: node.workQueueId ?? null,
+          queueCode: node.workQueueCode,
+          queueKind: node.routeQueueKind,
         },
       }),
     ]
@@ -348,6 +357,7 @@ export function buildRepairEstimateTaskPlans(
   catalog: RepairEstimateCatalogIndex
 ): RepairEstimateTaskPlanDto[] {
   const groups: Array<{
+    queueId: string | null
     queueCode: string | null
     routeQueueKind: RepairEstimateTaskPlanDto["routeQueueKind"]
     bindingKey: string
@@ -359,6 +369,7 @@ export function buildRepairEstimateTaskPlans(
     if (line.lineType === "WORK") {
       const binding = lineQueueBinding(line, catalog)
       const queueCode = binding?.queueCode ?? null
+      const queueId = binding?.queueId ?? null
       const routeQueueKind = binding?.queueKind ?? null
       const bindingKey = queueCode
         ? `QUEUE:${queueCode}`
@@ -366,7 +377,13 @@ export function buildRepairEstimateTaskPlans(
           ? `KIND:${routeQueueKind}`
           : "UNBOUND"
       if (!current || current.bindingKey !== bindingKey) {
-        current = { queueCode, routeQueueKind, bindingKey, lines: [line] }
+        current = {
+          queueId,
+          queueCode,
+          routeQueueKind,
+          bindingKey,
+          lines: [line],
+        }
         groups.push(current)
       } else {
         current.lines.push(line)
@@ -386,6 +403,7 @@ export function buildRepairEstimateTaskPlans(
       primaryLineId: primaryLine.id,
       groupComment: commentsForLines(group.lines),
       queueCode: group.queueCode,
+      queueId: group.queueId,
       routeQueueKind: group.routeQueueKind,
       sortOrder: (index + 1) * 10,
       generationStatus: "PENDING_GENERATION",
@@ -406,6 +424,7 @@ export function buildRepairEstimateTaskPlans(
       primaryLineId: primaryLine?.id ?? null,
       groupComment: commentsForLines(unassignedLines),
       queueCode: null,
+      queueId: null,
       routeQueueKind: null,
       sortOrder: (plans.length + 1) * 10,
       generationStatus: "PENDING_GENERATION",
@@ -427,6 +446,7 @@ export function createRepairEstimateMovementTaskPlan(
     primaryLineId: null,
     groupComment: "",
     queueCode: null,
+    queueId: null,
     routeQueueKind: "MOVEMENT",
     sortOrder: 0,
     generationStatus: "PENDING_GENERATION",

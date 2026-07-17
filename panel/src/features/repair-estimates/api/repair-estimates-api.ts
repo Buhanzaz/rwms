@@ -1,8 +1,9 @@
 import {
   createRepairEstimateCatalogIndex,
-  getOperationalRepairEstimateCatalog,
+  getOperationalMaintenanceCatalog,
 } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import { IndexedDbRepairEstimateMediaAdapter } from "@/features/repair-estimates/adapters/indexed-db-repair-estimate-media-adapter"
+import { httpRepairEstimatesAdapter } from "@/features/repair-estimates/adapters/http-repair-estimates-adapter"
 import { LocalStorageRepairEstimatesAdapter } from "@/features/repair-estimates/adapters/local-storage-repair-estimates-adapter"
 import { panelEstimateRentalItemsClient } from "@/features/repair-estimates/adapters/panel-estimate-rental-items-client"
 import {
@@ -35,6 +36,7 @@ import {
   updateRentalItemStatusForRepairWorkflow,
 } from "@/features/rental-items/api/rental-items-api"
 import { isLinkedReturnEstimate } from "@/features/logistics/api/logistics-api"
+import { DEV_MAINTENANCE_FIXTURES_ENABLED } from "@/features/maintenance/maintenance-runtime"
 
 export const REPAIR_ESTIMATES_QUERY_KEY = ["repair-estimates"] as const
 export const ESTIMATE_RENTAL_ITEMS_QUERY_KEY = [
@@ -42,11 +44,14 @@ export const ESTIMATE_RENTAL_ITEMS_QUERY_KEY = [
   "rental-items",
 ] as const
 
-const mediaClient = new IndexedDbRepairEstimateMediaAdapter()
+const fixtureMediaClient = new IndexedDbRepairEstimateMediaAdapter()
 const localRepairEstimatesAdapter = new LocalStorageRepairEstimatesAdapter(
   panelEstimateRentalItemsClient
 )
-const repairEstimatesClient: RepairEstimatesClient = localRepairEstimatesAdapter
+const repairEstimatesClient: RepairEstimatesClient =
+  DEV_MAINTENANCE_FIXTURES_ENABLED
+    ? localRepairEstimatesAdapter
+    : httpRepairEstimatesAdapter
 const repairEstimateWorkflowClient: RepairEstimateWorkflowClient =
   localRepairEstimatesAdapter
 
@@ -152,7 +157,12 @@ export function updateRepairEstimateMediaRotation(
   mediaId: string,
   rotationDegrees: RepairEstimateMediaRotationDegrees
 ) {
-  return mediaClient.updateRotation(mediaId, rotationDegrees)
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
+    throw new Error(
+      "Поворот медиа недоступен: защищённый HTTP runtime media-service ещё не подключён."
+    )
+  }
+  return fixtureMediaClient.updateRotation(mediaId, rotationDegrees)
 }
 
 function buildDraftCommand(params: {
@@ -172,14 +182,17 @@ function buildDraftCommand(params: {
     dispatchDate: params.draft.dispatchDate,
     comment: params.draft.comment,
     lines: params.draft.lines.map((line) => ({ ...line })),
-    media: mediaClient.dehydrate(params.media),
+    media: DEV_MAINTENANCE_FIXTURES_ENABLED
+      ? fixtureMediaClient.dehydrate(params.media)
+      : params.media,
   }
 }
 
 async function hydrateEstimateMedia(estimate: RepairEstimateDto) {
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) return estimate
   return {
     ...estimate,
-    media: await mediaClient.hydrate(estimate.media),
+    media: await fixtureMediaClient.hydrate(estimate.media),
   }
 }
 
@@ -203,6 +216,7 @@ function toTaskPlanCommand(
     primaryLineId: plan.primaryLineId,
     groupComment: plan.groupComment,
     queueCode: plan.queueCode,
+    queueId: plan.queueId,
     routeQueueKind: plan.routeQueueKind,
     sortOrder: plan.sortOrder,
     generationStatus: plan.generationStatus,
@@ -216,21 +230,33 @@ async function persistWithMedia<T extends RepairEstimateDto>(params: {
 }) {
   assertEstimateLinesValid(params.draft.lines)
 
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
+    if (params.draft.pendingUploads.length > 0) {
+      throw new Error(
+        "Загрузка медиа недоступна: защищённый HTTP runtime media-service ещё не подключён."
+      )
+    }
+    return params.persist(params.draft.media)
+  }
+
   const existing = params.draft.estimateId
     ? await repairEstimatesClient.getById(
         params.draft.estimateId,
         params.warehouseId
       )
     : null
-  const uploaded = await mediaClient.upload(params.draft.pendingUploads)
-  const media = mediaClient.dehydrate([...params.draft.media, ...uploaded])
+  const uploaded = await fixtureMediaClient.upload(params.draft.pendingUploads)
+  const media = fixtureMediaClient.dehydrate([
+    ...params.draft.media,
+    ...uploaded,
+  ])
   let saved: T
 
   try {
     saved = await params.persist(media)
   } catch (error) {
     try {
-      await mediaClient.discard(uploaded.map((item) => item.id))
+      await fixtureMediaClient.discard(uploaded.map((item) => item.id))
     } catch {
       // Compensation is best-effort; preserve the persistence error.
     }
@@ -243,7 +269,7 @@ async function persistWithMedia<T extends RepairEstimateDto>(params: {
       .map((item) => item.id)
       .filter((id) => !committedIds.has(id)) ?? []
   try {
-    await mediaClient.discard(removedIds)
+    await fixtureMediaClient.discard(removedIds)
   } catch {
     // Cleanup is post-commit and must not turn a successful save into failure.
   }
@@ -264,9 +290,10 @@ export function saveRepairEstimateDraft(params: {
 }
 
 export async function prepareRepairEstimateCompletion(
-  draft: RepairEstimateEditorDraft
+  draft: RepairEstimateEditorDraft,
+  warehouseId: string
 ) {
-  const snapshot = await getOperationalRepairEstimateCatalog()
+  const snapshot = await getOperationalMaintenanceCatalog(warehouseId)
   const catalog = createRepairEstimateCatalogIndex(snapshot)
   return {
     catalog,
@@ -278,14 +305,7 @@ export async function prepareRepairEstimateCompletion(
 export async function completeRepairEstimate(
   input: CompleteRepairEstimateInput
 ) {
-  const linkedReturnEstimate = input.draft.estimateId
-    ? await isLinkedReturnEstimate(
-        input.warehouseId,
-        input.draft.rentalItemId,
-        input.draft.estimateId
-      )
-    : false
-  const snapshot = await getOperationalRepairEstimateCatalog()
+  const snapshot = await getOperationalMaintenanceCatalog(input.warehouseId)
   const catalog = createRepairEstimateCatalogIndex(snapshot)
   const autoIssues = validateAutoCompletion(input.draft.lines, catalog)
   if (input.completionMode === "AUTO" && autoIssues.length > 0) {
@@ -303,6 +323,32 @@ export async function completeRepairEstimate(
     completionMode: input.completionMode,
     movementRequired: emptyEstimate ? false : input.movementRequired,
   })
+
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
+    return persistWithMedia({
+      draft: input.draft,
+      warehouseId: input.warehouseId,
+      persist: (media) =>
+        repairEstimatesClient.complete({
+          ...buildDraftCommand({
+            draft: input.draft,
+            warehouseId: input.warehouseId,
+            media,
+          }),
+          completionMode: emptyEstimate ? "MANUAL" : input.completionMode,
+          movementRequired: emptyEstimate ? false : input.movementRequired,
+          taskPlans: taskPlans.map(toTaskPlanCommand),
+        }),
+    })
+  }
+
+  const linkedReturnEstimate = input.draft.estimateId
+    ? await isLinkedReturnEstimate(
+        input.warehouseId,
+        input.draft.rentalItemId,
+        input.draft.estimateId
+      )
+    : false
 
   return persistWithMedia({
     draft: input.draft,
@@ -375,7 +421,7 @@ export async function amendCompletedRepairEstimate(
     throw new Error("Для дополнения нужна сохранённая завершённая смета")
   }
 
-  const snapshot = await getOperationalRepairEstimateCatalog()
+  const snapshot = await getOperationalMaintenanceCatalog(input.warehouseId)
   const catalog = createRepairEstimateCatalogIndex(snapshot)
   const autoIssues = validateAutoCompletion(input.draft.lines, catalog)
   if (input.completionMode === "AUTO" && autoIssues.length > 0) {
@@ -393,6 +439,28 @@ export async function amendCompletedRepairEstimate(
     completionMode: input.completionMode,
     movementRequired: emptyEstimate ? false : input.movementRequired,
   })
+
+  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
+    return persistWithMedia({
+      draft: input.draft,
+      warehouseId: input.warehouseId,
+      persist: (media) =>
+        repairEstimatesClient.amendCompleted({
+          ...buildDraftCommand({
+            draft: input.draft,
+            warehouseId: input.warehouseId,
+            media,
+          }),
+          estimateId: input.draft.estimateId!,
+          expectedVersion: input.draft.expectedVersion!,
+          expectedLinkedRepairVersion: input.expectedTaskVersion,
+          amendmentReason: input.amendmentReason.trim(),
+          completionMode: emptyEstimate ? "MANUAL" : input.completionMode,
+          movementRequired: emptyEstimate ? false : input.movementRequired,
+          taskPlans: taskPlans.map(toTaskPlanCommand),
+        }),
+    })
+  }
 
   return persistWithMedia({
     draft: input.draft,
@@ -452,6 +520,8 @@ export async function amendCompletedRepairEstimate(
             }),
             estimateId,
             expectedVersion,
+            expectedLinkedRepairVersion: input.expectedTaskVersion,
+            amendmentReason: input.amendmentReason.trim(),
             completionMode: emptyEstimate ? "MANUAL" : input.completionMode,
             movementRequired: emptyEstimate ? false : input.movementRequired,
             taskPlans: taskPlans.map(toTaskPlanCommand),

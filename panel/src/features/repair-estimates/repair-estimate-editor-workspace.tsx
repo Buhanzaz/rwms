@@ -544,6 +544,7 @@ function RepairEstimateEditorContent({
       />
 
       <RepairEstimateCompletionDialog
+        warehouseId={warehouseId}
         open={completionOpen}
         draft={draft}
         pending={completeMutation.isPending}

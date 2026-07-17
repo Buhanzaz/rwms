@@ -13,6 +13,7 @@ describe("createGatewayRuntimeConfig", () => {
       taskBoardApiBaseUrl: "https://panel.example.test/api/task-board",
       warehouseApiBaseUrl: "https://panel.example.test/api/warehouse",
       assetApiBaseUrl: "https://panel.example.test/api/asset",
+      maintenanceApiBaseUrl: "https://panel.example.test/api/maintenance",
     })
   })
 

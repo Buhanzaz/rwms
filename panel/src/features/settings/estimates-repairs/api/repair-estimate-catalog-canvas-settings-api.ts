@@ -28,30 +28,40 @@ export async function getRepairEstimateCatalogCanvasSettings() {
   return REPAIR_ESTIMATE_CATALOG_CANVAS_SETTINGS
 }
 
-export async function getRepairEstimateCatalogCanvasMock() {
-  return getRepairEstimateCatalogCanvas()
+export async function getRepairEstimateCatalogCanvasMock(warehouseId?: string) {
+  return getRepairEstimateCatalogCanvas(warehouseId)
 }
 
 export async function saveRepairEstimateCatalogCanvasNode(
-  input: RepairEstimateCatalogNodeMutation
+  input: RepairEstimateCatalogNodeMutation,
+  warehouseId?: string
 ) {
-  return saveRepairEstimateCatalogNode(input)
+  return saveRepairEstimateCatalogNode(input, warehouseId)
 }
 
-export async function deleteRepairEstimateCatalogCanvasNode(id: string) {
-  return deleteRepairEstimateCatalogNode(id)
+export async function deleteRepairEstimateCatalogCanvasNode(
+  id: string,
+  warehouseId?: string
+) {
+  return deleteRepairEstimateCatalogNode(id, warehouseId)
 }
 
 export async function saveRepairEstimateCatalogCanvasLink(
-  input: RepairEstimateCatalogLinkMutation
+  input: RepairEstimateCatalogLinkMutation,
+  warehouseId?: string
 ) {
-  return saveRepairEstimateCatalogLink(input)
+  return saveRepairEstimateCatalogLink(input, warehouseId)
 }
 
-export async function deleteRepairEstimateCatalogCanvasLink(id: string) {
-  return deleteRepairEstimateCatalogLink(id)
+export async function deleteRepairEstimateCatalogCanvasLink(
+  id: string,
+  warehouseId?: string
+) {
+  return deleteRepairEstimateCatalogLink(id, warehouseId)
 }
 
-export async function resetRepairEstimateCatalogCanvasMock() {
-  return resetRepairEstimateCatalogMock()
+export async function resetRepairEstimateCatalogCanvasMock(
+  warehouseId?: string
+) {
+  return resetRepairEstimateCatalogMock(warehouseId)
 }

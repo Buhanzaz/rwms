@@ -414,3 +414,21 @@ also covers at-least-once duplicate inbox safety, aggregate-version-gap
 quarantine/checkpoint blocking, validation DLT sanitization and a byte-array
 aggregate key compatible with the enforced `ByteArraySerializer`. Focused
 consumer tests cover initial delivery plus the bounded 1s/2s/4s retry budget.
+
+## Maintenance integrations (verified implementation, 2026-07-17)
+
+Auth supplies a disabled-by-default maintenance client with separate exact
+downstream scopes. Asset exposes only maintenance-owned lease/fenced status
+operations; task-board exposes source-bound task sync; the gateway adds only
+the stateless public maintenance route. Maintenance consumes safe media and
+task-board facts into service-local projection/inbox state and never receives a
+broad asset, queue-management or media credential.
+
+Outbound facts use catalog-version, estimate and repair topics through a
+PostgreSQL outbox and broker acknowledgement. Inbound effects combine event-ID
+deduplication, effect and aggregate checkpoint in one transaction; gaps
+quarantine the aggregate. Validation goes directly to the sanitized DLT,
+transient failures use bounded 1s/2s/4s retries, and replay requires an
+operator-reviewed action. Tests cover duplicates, ordering, outages,
+DLT/quarantine recovery and late task correlation without moving authority
+into Kafka.

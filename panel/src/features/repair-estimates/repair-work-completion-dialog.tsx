@@ -32,6 +32,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import {
   createRepairEstimateCatalogIndex,
+  getOperationalMaintenanceCatalog,
   getOperationalRepairEstimateCatalog,
 } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import {
@@ -62,6 +63,7 @@ type RepairWorkCompletionDialogProps = {
   completeLabel: string
   pendingLabel: string
   previewKey: string
+  warehouseId?: string
   allowEmpty?: boolean
   emptyTitle?: string
   emptyDescription?: string
@@ -102,6 +104,7 @@ export function RepairWorkCompletionDialog({
   completeLabel,
   pendingLabel,
   previewKey,
+  warehouseId,
   allowEmpty = false,
   emptyTitle = "Бытовка готова",
   emptyDescription = "Пустая смета завершит осмотр, переведёт бытовку в статус «Свободная» и не создаст задание или перемещение.",
@@ -127,7 +130,9 @@ export function RepairWorkCompletionDialog({
       ]),
     ],
     queryFn: async () => {
-      const snapshot = await getOperationalRepairEstimateCatalog()
+      const snapshot = warehouseId
+        ? await getOperationalMaintenanceCatalog(warehouseId)
+        : await getOperationalRepairEstimateCatalog()
       const catalog = createRepairEstimateCatalogIndex(snapshot)
       const taskPlans = buildRepairEstimateTaskPlans(lines, catalog)
       return {

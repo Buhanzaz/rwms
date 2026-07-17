@@ -89,3 +89,12 @@ rwms:
           scopes: [warehouse.read]
           audiences: [rwms-services]
           access-token-ttl: 5m
+        - client-id: maintenance-service
+          client-name: Maintenance Service Downstream Client
+          enabled: false
+          revision: 1
+          authentication-methods: [client_secret_basic]
+          grant-types: [client_credentials]
+          scopes: [asset.maintenance, task-board.task-sync]
+          audiences: [rwms-services]
+          access-token-ttl: 5m

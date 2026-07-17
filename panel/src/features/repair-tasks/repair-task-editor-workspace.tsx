@@ -416,6 +416,7 @@ function RepairTaskEditorContent({
         catalogAction={catalogAction}
       />
       <RepairWorkCompletionDialog
+        warehouseId={warehouseId}
         open={completionOpen}
         lines={draft.lines}
         pending={queueMutation.isPending}

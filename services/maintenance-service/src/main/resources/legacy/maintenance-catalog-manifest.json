@@ -1,0 +1,27 @@
+{
+  "manifestVersion": 1,
+  "sourceWarehouseId": "00000000-0000-0000-0000-000000000002",
+  "sourceEvidenceSha256": "94bacdcf7114e9dfb1935a162b29714e25ed36b406980c3b9551c7d27c687721",
+  "nodeEvidenceSha256": "a5546cbbc9c48c630e987c4e831eebee47f70413b467ac0fdc21e5ab3b510873",
+  "linkEvidenceSha256": "3a20b83e2392ff8506a8525e6a9762c132d3a9957679151d4964c4335536e883",
+  "queueEvidenceSha256": "f486489d601cff0ddd85228516f1527277f8b90ec6fec6ee11e8aebcdd569766",
+  "nodeCount": 232,
+  "linkCount": 254,
+  "nodeTypes": {
+    "CATEGORY": 10,
+    "SUBCATEGORY": 30,
+    "WORK": 89,
+    "MATERIAL": 91,
+    "LOCATION": 3,
+    "OPTION": 9
+  },
+  "linkTypes": {
+    "DEPENDENCY": 72,
+    "FOLLOW_UP": 182
+  },
+  "brokenLinkReferences": 0,
+  "importReady": true,
+  "approvedMappingPolicySha256": "c378e395ec2931b1639dac8547659a1f749530edf791c1db9c524dc66d1b6c85",
+  "approvedMappingSha256": "118aed23abfebeb213dc9dc37b415def2b8b0272e94971f2e2ab93d80ed280a2",
+  "unresolvedMappings": []
+}

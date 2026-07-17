@@ -1262,16 +1262,28 @@ creates a repair and amendments synchronize the same process.
 
 ### Cutover and exit gate
 
-- [ ] `/estimates`, `/repairs`, `/acceptance`, cabin write-off and settings use HTTP;
-- [ ] draft/complete/amend/direct repair/rework are versioned;
-- [ ] task registration failures remain retryable, not UI rollbacks;
-- [ ] task-board completion is inbox-deduplicated;
-- [ ] operation lease is released or truthfully reconciled after every terminal
+- [x] `/estimates`, `/repairs`, `/acceptance`, cabin write-off and settings use HTTP;
+- [x] draft/complete/amend/direct repair/rework are versioned;
+- [x] task registration failures remain retryable, not UI rollbacks;
+- [x] task-board completion is inbox-deduplicated;
+- [x] operation lease is released or truthfully reconciled after every terminal
   maintenance outcome and retry;
-- [ ] maintenance write-off decision changes canonical cabin status only through
+- [x] maintenance write-off decision changes canonical cabin status only through
   the fenced asset-service command;
-- [ ] catalog import is reconciled against legacy evidence;
-- [ ] browser estimate/repair/catalog stores are retired from production.
+- [x] catalog import is reconciled against legacy evidence;
+- [x] browser estimate/repair/catalog stores are retired from production.
+
+### Implementation verification (2026-07-17)
+
+The service-local JPA/Flyway/event-store implementation, four narrow
+prerequisites and approved panel cutover are complete. The final Java 25 run
+passed 18 classes/116 tests with zero failures, errors or skips in 3m20s; the
+reviewed catalog flow passed 11/11. Panel lint, typecheck, production build,
+46 Vitest files/261 tests and the desktop/tablet/mobile Playwright flow (3/3)
+passed. The legacy catalog artifact pins 232 nodes, 254 links, four source
+evidence hashes, the approved policy hash and request-mapping hash without
+comments, PII, raw SQL or a runtime legacy-database dependency. Stage 7 remains
+closed until the reviewed Stage 6 commit and sole active-pointer transition.
 
 ### Future split trigger
 

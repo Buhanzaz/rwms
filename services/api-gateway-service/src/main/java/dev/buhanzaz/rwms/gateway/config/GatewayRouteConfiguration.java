@@ -89,6 +89,23 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  @Bean
+  RouterFunction<ServerResponse> maintenanceRoutes(
+      GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
+    RequestPredicate publicMaintenancePath =
+        path("/api/maintenance/**")
+            .and(request -> safePath(request.path()))
+            .and(
+                request ->
+                    !decodedPath(request.path()).startsWith("/api/maintenance/internal"));
+    return route("maintenance-service")
+        .route(publicMaintenancePath, http())
+        .before(uri(properties.getRoutes().getMaintenanceUri()))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
   private static String decodedPath(String path) {
     return UriUtils.decode(path, StandardCharsets.UTF_8);
   }

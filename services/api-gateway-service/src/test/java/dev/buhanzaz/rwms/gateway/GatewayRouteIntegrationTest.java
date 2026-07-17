@@ -40,10 +40,13 @@ class GatewayRouteIntegrationTest {
   private static HttpServer taskBoard;
   private static HttpServer warehouse;
   private static HttpServer asset;
+  private static HttpServer maintenance;
   private static final List<CapturedRequest> AUTH_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> TASK_BOARD_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> WAREHOUSE_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> ASSET_REQUESTS = new CopyOnWriteArrayList<>();
+  private static final List<CapturedRequest> MAINTENANCE_REQUESTS =
+      new CopyOnWriteArrayList<>();
 
   @Autowired MockMvc mvc;
 
@@ -53,6 +56,7 @@ class GatewayRouteIntegrationTest {
     taskBoard = server(TASK_BOARD_REQUESTS);
     warehouse = server(WAREHOUSE_REQUESTS);
     asset = server(ASSET_REQUESTS);
+    maintenance = server(MAINTENANCE_REQUESTS);
   }
 
   @AfterAll
@@ -61,6 +65,7 @@ class GatewayRouteIntegrationTest {
     taskBoard.stop(0);
     warehouse.stop(0);
     asset.stop(0);
+    maintenance.stop(0);
   }
 
   @DynamicPropertySource
@@ -69,6 +74,7 @@ class GatewayRouteIntegrationTest {
     registry.add("rwms.gateway.routes.task-board-uri", () -> origin(taskBoard));
     registry.add("rwms.gateway.routes.warehouse-uri", () -> origin(warehouse));
     registry.add("rwms.gateway.routes.asset-uri", () -> origin(asset));
+    registry.add("rwms.gateway.routes.maintenance-uri", () -> origin(maintenance));
     registry.add("rwms.gateway.public-base-uri", () -> "https://panel.example");
     registry.add("rwms.gateway.cors.allowed-origins", () -> "https://panel.example");
     registry.add("rwms.gateway.security.issuer", () -> "https://panel.example/auth");
@@ -158,6 +164,32 @@ class GatewayRouteIntegrationTest {
       assertThat(request.authorization()).isEqualTo("Bearer original-token");
       assertThat(request.cookie()).isNull();
     });
+  }
+
+  @Test
+  void proxiesOnlyPublicMaintenancePathsWithoutCookiesOrPathRewriting() throws Exception {
+    MAINTENANCE_REQUESTS.clear();
+
+    mvc.perform(
+            publicGet("/api/maintenance/v1/repairs")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer original-token")
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.path").value("/api/maintenance/v1/repairs"));
+
+    assertThat(MAINTENANCE_REQUESTS).singleElement().satisfies(request -> {
+      assertThat(request.path()).isEqualTo("/api/maintenance/v1/repairs");
+      assertThat(request.authorization()).isEqualTo("Bearer original-token");
+      assertThat(request.cookie()).isNull();
+    });
+
+    MAINTENANCE_REQUESTS.clear();
+    mvc.perform(
+            publicGet("/api/maintenance/%69nternal/tasks")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().is4xxClientError());
+    assertThat(MAINTENANCE_REQUESTS).isEmpty();
   }
 
   @Test
