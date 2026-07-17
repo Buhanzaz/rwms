@@ -3,7 +3,10 @@ package dev.buhanzaz.rwms.architecture;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noFields;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noMethods;
 
+import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaMethod;
 import com.tngtech.archunit.lang.ArchCondition;
 import com.tngtech.archunit.lang.ArchRule;
@@ -22,7 +25,27 @@ final class ArchitectureRules {
           Pattern.CASE_INSENSITIVE);
   private static final Pattern DOMAIN_TRANSITION_RETURN =
       Pattern.compile(".*(Aggregate|Command|Request)$");
-
+  private static final Pattern BUSINESS_MODEL_TYPE =
+      Pattern.compile(
+          ".*(Asset|Cabin|Catalog|Company|Contract|Dossier|Equipment|Estimate|Finding|Hold|Inventory|Lease|Maintenance|Rental|Repair|Reservation|Shipment|Stock|Task|Transfer|Warehouse|Worker|WriteOff).*",
+          Pattern.CASE_INSENSITIVE);
+  private static final String[] SERVICE_PACKAGES = {
+    "dev.buhanzaz.rwms.auth..",
+    "dev.buhanzaz.rwms.taskboard..",
+    "dev.buhanzaz.rwms.warehouse..",
+    "dev.buhanzaz.rwms.asset..",
+    "dev.buhanzaz.rwms.maintenance..",
+    "dev.buhanzaz.rwms.inventory..",
+    "dev.buhanzaz.rwms.media.."
+  };
+  private static final String[] NON_INVENTORY_SERVICE_PACKAGES = {
+    "dev.buhanzaz.rwms.auth..",
+    "dev.buhanzaz.rwms.taskboard..",
+    "dev.buhanzaz.rwms.warehouse..",
+    "dev.buhanzaz.rwms.asset..",
+    "dev.buhanzaz.rwms.maintenance..",
+    "dev.buhanzaz.rwms.media.."
+  };
   static final ArchRule TECHNICAL_CONTRACTS_ARE_FRAMEWORK_NEUTRAL =
       noClasses()
           .that()
@@ -37,6 +60,52 @@ final class ArchitectureRules {
               "org.apache.kafka..",
               "org.springframework.kafka..")
           .because("technical contracts must remain immutable and framework-neutral");
+
+  static final ArchRule TECHNICAL_CONTRACTS_DO_NOT_DEPEND_ON_SERVICES =
+      noClasses()
+          .that()
+          .resideInAPackage("dev.buhanzaz.rwms.platform.contracts..")
+          .should()
+          .dependOnClassesThat()
+          .resideInAnyPackage(SERVICE_PACKAGES)
+          .because("cross-service truth comes from versioned schemas, not shared Java models");
+
+  static final ArchRule TECHNICAL_CONTRACTS_CONTAIN_NO_BUSINESS_MODELS =
+      classes()
+          .that()
+          .resideInAPackage("dev.buhanzaz.rwms.platform.contracts..")
+          .should(describeOnlyTechnicalContractTypes())
+          .because("technical-contracts must not become a shared business-domain module");
+
+  static final ArchRule INVENTORY_DOES_NOT_DEPEND_ON_OTHER_SERVICES =
+      noClasses()
+          .that()
+          .resideInAPackage("dev.buhanzaz.rwms.inventory..")
+          .should()
+          .dependOnClassesThat()
+          .resideInAnyPackage(NON_INVENTORY_SERVICE_PACKAGES)
+          .because("inventory owns its models and integrates only through versioned transport contracts")
+          .allowEmptyShould(true);
+
+  static final ArchRule SERVICES_DO_NOT_USE_FIELD_INJECTION =
+      noFields()
+          .that()
+          .areDeclaredInClassesThat()
+          .resideInAnyPackage(SERVICE_PACKAGES)
+          .should()
+          .beAnnotatedWith("org.springframework.beans.factory.annotation.Autowired")
+          .because("service collaborators use explicit constructor injection")
+          .allowEmptyShould(true);
+
+  static final ArchRule SERVICES_DO_NOT_USE_METHOD_INJECTION =
+      noMethods()
+          .that()
+          .areDeclaredInClassesThat()
+          .resideInAnyPackage(SERVICE_PACKAGES)
+          .should()
+          .beAnnotatedWith("org.springframework.beans.factory.annotation.Autowired")
+          .because("service collaborators use explicit constructor injection")
+          .allowEmptyShould(true);
 
   static final ArchRule MAPPERS_LIVE_IN_MAPPING_PACKAGES =
       classes()
@@ -86,6 +155,21 @@ final class ArchitectureRules {
                   method,
                   "%s uses a JPA entity as a MapStruct mapping target"
                       .formatted(method.getFullName())));
+        }
+      }
+    };
+  }
+
+  private static ArchCondition<JavaClass> describeOnlyTechnicalContractTypes() {
+    return new ArchCondition<>("describe only framework-neutral technical records") {
+      @Override
+      public void check(JavaClass type, ConditionEvents events) {
+        if (BUSINESS_MODEL_TYPE.matcher(type.getSimpleName()).matches()) {
+          events.add(
+              SimpleConditionEvent.violated(
+                  type,
+                  "%s exposes a business model from technical-contracts"
+                      .formatted(type.getName())));
         }
       }
     };

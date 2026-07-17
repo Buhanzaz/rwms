@@ -106,6 +106,46 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  @Bean
+  RouterFunction<ServerResponse> mediaRoutes(
+      GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
+    RequestPredicate publicMediaPath =
+        path("/api/media/**")
+            .and(request -> safePath(request.path()))
+            .and(
+                request -> {
+                  String decoded = decodedPath(request.path());
+                  return !decoded.startsWith("/api/media/internal")
+                      && !decoded.startsWith("/api/media/private");
+                });
+    return route("media-service")
+        .route(publicMediaPath, http())
+        .before(uri(properties.getRoutes().getMediaUri()))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
+  @Bean
+  RouterFunction<ServerResponse> inventoryRoutes(
+      GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
+    RequestPredicate publicInventoryPath =
+        path("/api/inventory/**")
+            .and(request -> safePath(request.path()))
+            .and(
+                request -> {
+                  String decoded = decodedPath(request.path());
+                  return !decoded.startsWith("/api/inventory/internal")
+                      && !decoded.startsWith("/api/inventory/private");
+                });
+    return route("inventory-service")
+        .route(publicInventoryPath, http())
+        .before(uri(properties.getRoutes().getInventoryUri()))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
   private static String decodedPath(String path) {
     return UriUtils.decode(path, StandardCharsets.UTF_8);
   }

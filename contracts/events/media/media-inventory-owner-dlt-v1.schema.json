@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/media/media-inventory-owner-dlt-v1.schema.json",
+  "title": "RWMS media-service inventory owner consumer DLT record v1",
+  "description": "Consumer-owned hash-only failure record. Inventory owner, warehouse, actor and raw fact data are forbidden.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["failureCode", "messageSha256", "recordedAt"],
+  "properties": {
+    "failureCode": {
+      "enum": [
+        "INVALID_INVENTORY_OWNER_FACT",
+        "OWNER_EVENT_ID_CONFLICT",
+        "OWNER_PROOF_PROCESSING_FAILED"
+      ]
+    },
+    "messageSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "recordedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "x-rwms-topic": "rwms.inventory.session.v1.media-service-inventory-owner-v1.dlt",
+  "x-rwms-record-key": "source finding aggregateId when identity is valid; UUIDv5(OID namespace, SHA-256(raw source bytes)) when invalid",
+  "x-rwms-replay": "OPERATOR_REVIEWED_ONLY"
+}

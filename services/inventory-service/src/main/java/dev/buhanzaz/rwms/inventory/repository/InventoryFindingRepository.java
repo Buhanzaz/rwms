@@ -1,0 +1,66 @@
+package dev.buhanzaz.rwms.inventory.repository;
+
+import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
+import dev.buhanzaz.rwms.inventory.domain.InspectionState;
+import jakarta.persistence.LockModeType;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+public interface InventoryFindingRepository extends JpaRepository<InventoryFinding, UUID> {
+  Optional<InventoryFinding> findByIdAndInventoryId(UUID id, UUID inventoryId);
+
+  Optional<InventoryFinding> findByInventoryIdAndIdentityMatchKey(
+      UUID inventoryId, String matchKey);
+
+  @Query(
+      """
+      select finding.inventoryId
+        from InventoryFinding finding, InventorySession session
+       where finding.id = :findingId
+         and session.id = finding.inventoryId
+         and session.warehouseId = :warehouseId
+      """)
+  Optional<UUID> findOwnedInventoryId(
+      @Param("findingId") UUID findingId, @Param("warehouseId") UUID warehouseId);
+
+  Page<InventoryFinding> findByInventoryId(UUID inventoryId, Pageable pageable);
+
+  @Query(
+      """
+      select finding.inventoryId as inventoryId,
+             count(finding) as findingCount,
+             sum(case when finding.inspection <> :notInspected then 1 else 0 end) as inspectedCount
+        from InventoryFinding finding
+       where finding.inventoryId in :inventoryIds
+       group by finding.inventoryId
+      """)
+  List<InventoryFindingCounts> countByInventoryIds(
+      @Param("inventoryIds") Set<UUID> inventoryIds,
+      @Param("notInspected") InspectionState notInspected);
+
+  List<InventoryFinding> findAllByInventoryIdOrderById(UUID inventoryId);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      "select finding from InventoryFinding finding where finding.inventoryId = :inventoryId order by finding.id")
+  List<InventoryFinding> findAllByInventoryIdForUpdateOrderById(
+      @Param("inventoryId") UUID inventoryId);
+
+  long countByInventoryId(UUID inventoryId);
+
+  interface InventoryFindingCounts {
+    UUID getInventoryId();
+
+    long getFindingCount();
+
+    long getInspectedCount();
+  }
+}

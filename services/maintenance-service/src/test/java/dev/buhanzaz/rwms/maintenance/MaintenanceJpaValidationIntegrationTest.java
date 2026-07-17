@@ -32,10 +32,10 @@ class MaintenanceJpaValidationIntegrationTest {
   @Autowired JdbcTemplate jdbc;
 
   @Test
-  void flywayV1PassesHibernateValidationForEveryBusinessProjection() {
+  void flywayV2PassesHibernateValidationForEveryBusinessProjection() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(jdbc.queryForObject(
-        "select count(*) from flyway_schema_history where success", Integer.class)).isOne();
+        "select count(*) from flyway_schema_history where success", Integer.class)).isEqualTo(2);
     assertThat(entityManagerFactory.getMetamodel().getEntities())
         .extracting(value -> value.getJavaType().getSimpleName())
         .contains(
@@ -43,5 +43,8 @@ class MaintenanceJpaValidationIntegrationTest {
             "EstimateRevision", "EstimateLine", "EstimatePlanStage", "MaintenanceRepair",
             "RepairStage", "MaintenanceMediaReference", "MediaFactProjection",
             "RentalItemFactProjection", "OperationLeaseFactProjection");
+    assertThat(entityManagerFactory.getMetamodel().getEntities())
+        .extracting(value -> value.getJavaType().getSimpleName())
+        .contains("InventoryRepairSource");
   }
 }

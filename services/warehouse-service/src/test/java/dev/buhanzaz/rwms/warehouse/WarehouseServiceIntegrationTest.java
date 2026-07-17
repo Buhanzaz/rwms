@@ -54,7 +54,9 @@ class WarehouseServiceIntegrationTest {
     properties.add("spring.datasource.password", POSTGRES::getPassword);
     properties.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
     properties.add("rwms.platform.kafka.enabled", () -> "false");
-    properties.add("spring.security.oauth2.resourceserver.jwt.jwk-set-uri", () -> "http://127.0.0.1:65535/jwks");
+    properties.add(
+        "spring.security.oauth2.resourceserver.jwt.jwk-set-uri",
+        () -> "http://127.0.0.1:65535/jwks");
   }
 
   @BeforeEach
@@ -78,7 +80,10 @@ class WarehouseServiceIntegrationTest {
     assertThat(replayed.replayed()).isTrue();
     assertThat(replayed.response()).isEqualTo(created.response());
     assertThat(count("select count(*) from warehouse where code='TEST-WEST'")).isOne();
-    assertThat(count("select count(*) from outbox_event where aggregate_id=?", created.response().id().toString()))
+    assertThat(
+            count(
+                "select count(*) from outbox_event where aggregate_id=?",
+                created.response().id().toString()))
         .isOne();
     assertThatThrownBy(() -> service.create(subject, key, request("TEST-EAST", "Test east", 4)))
         .isInstanceOf(WarehouseConflictException.class)
@@ -100,25 +105,30 @@ class WarehouseServiceIntegrationTest {
 
   @Test
   void enforcesUniquenessOptimisticVersionNoOpAndDeactivationTransitions() {
-    WarehouseResponse created = service.create(UUID.randomUUID(), UUID.randomUUID(), request("OPS-1", "Operations", null)).response();
+    WarehouseResponse created =
+        service
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("OPS-1", "Operations", null))
+            .response();
     WarehouseResponse noOp =
         service.replace(
-            created.id(),
-            replace(created, created.version(), "OPS-1", "Operations", true, null));
+            created.id(), replace(created, created.version(), "OPS-1", "Operations", true, null));
     assertThat(noOp.version()).isEqualTo(created.version());
-    assertThat(count("select count(*) from outbox_event where aggregate_id=?", created.id().toString())).isOne();
+    assertThat(
+            count(
+                "select count(*) from outbox_event where aggregate_id=?", created.id().toString()))
+        .isOne();
 
     WarehouseResponse changed =
         service.replace(
             created.id(),
             replace(created, created.version(), "OPS-2", "Operations updated", true, 5));
     assertThat(changed.version()).isEqualTo(created.version() + 1);
-    assertThat(eventTypes(created.id())).containsExactly("warehouse.warehouse.created.v1", "warehouse.warehouse.changed.v1");
+    assertThat(eventTypes(created.id()))
+        .containsExactly("warehouse.warehouse.created.v1", "warehouse.warehouse.changed.v1");
     assertThatThrownBy(
             () ->
                 service.replace(
-                    created.id(),
-                    replace(changed, created.version(), "OPS-3", "Stale", true, 5)))
+                    created.id(), replace(changed, created.version(), "OPS-3", "Stale", true, 5)))
         .isInstanceOf(WarehouseConflictException.class);
 
     service.deactivate(created.id(), changed.version());
@@ -131,16 +141,31 @@ class WarehouseServiceIntegrationTest {
     WarehouseResponse reactivated =
         service.replace(
             inactive.id(),
-            replace(inactive, inactive.version(), inactive.code(), inactive.name(), true, inactive.sortOrder()));
+            replace(
+                inactive,
+                inactive.version(),
+                inactive.code(),
+                inactive.name(),
+                true,
+                inactive.sortOrder()));
     assertThat(reactivated.active()).isTrue();
     assertThat(eventTypes(created.id()).getLast()).isEqualTo("warehouse.warehouse.changed.v1");
 
-    WarehouseResponse other = service.create(UUID.randomUUID(), UUID.randomUUID(), request("OPS-UNIQUE", "Other", null)).response();
+    WarehouseResponse other =
+        service
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("OPS-UNIQUE", "Other", null))
+            .response();
     assertThatThrownBy(
             () ->
                 service.replace(
                     other.id(),
-                    replace(other, other.version(), reactivated.code(), other.name(), true, other.sortOrder())))
+                    replace(
+                        other,
+                        other.version(),
+                        reactivated.code(),
+                        other.name(),
+                        true,
+                        other.sortOrder())))
         .isInstanceOf(WarehouseConflictException.class);
   }
 
@@ -164,7 +189,8 @@ class WarehouseServiceIntegrationTest {
             .getResponse()
             .getContentAsString();
     JsonNode response = objectMapper.readTree(body);
-    assertThat(Set.copyOf(response.propertyNames())).containsExactlyInAnyOrder("id", "version", "active");
+    assertThat(Set.copyOf(response.propertyNames()))
+        .containsExactlyInAnyOrder("id", "version", "active");
     assertThat(response.get("id").stringValue()).isEqualTo(SPB.toString());
     assertThat(response.get("active").booleanValue()).isTrue();
 
@@ -195,6 +221,90 @@ class WarehouseServiceIntegrationTest {
                                     .claim("client_id", "asset-service")
                                     .claim("scope", "warehouse.read"))))
         .andExpect(status().isOk());
+  }
+
+  @Test
+  void exposesOnlyActiveInventoryWarehouseMetadata() throws Exception {
+    String body =
+        mockMvc
+            .perform(
+                get("/api/internal/warehouse/v1/warehouses/inventory/{id}/metadata", SPB)
+                    .with(
+                        inventoryServiceJwt(
+                            "inventory-service", "inventory-service", "SERVICE", "warehouse.read")))
+            .andExpect(status().isOk())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+    JsonNode response = objectMapper.readTree(body);
+    assertThat(Set.copyOf(response.propertyNames()))
+        .containsExactlyInAnyOrder("id", "version", "active", "timeZone");
+    assertThat(response.get("id").stringValue()).isEqualTo(SPB.toString());
+    assertThat(response.get("version").longValue()).isZero();
+    assertThat(response.get("active").booleanValue()).isTrue();
+    assertThat(response.get("timeZone").stringValue()).isEqualTo("Europe/Moscow");
+
+    WarehouseResponse inactive =
+        service
+            .create(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                request("INVENTORY-HIDDEN", "Inventory hidden", null))
+            .response();
+    service.deactivate(inactive.id(), inactive.version());
+
+    mockMvc
+        .perform(
+            get("/api/internal/warehouse/v1/warehouses/inventory/{id}/metadata", inactive.id())
+                .with(
+                    inventoryServiceJwt(
+                        "inventory-service", "inventory-service", "SERVICE", "warehouse.read")))
+        .andExpect(status().isNotFound());
+    mockMvc
+        .perform(
+            get("/api/internal/warehouse/v1/warehouses/inventory/{id}/metadata", UUID.randomUUID())
+                .with(
+                    inventoryServiceJwt(
+                        "inventory-service", "inventory-service", "SERVICE", "warehouse.read")))
+        .andExpect(status().isNotFound());
+  }
+
+  @Test
+  void inventoryWarehouseMetadataRejectsEveryBroaderOrForeignAuthority() throws Exception {
+    var invalidTokens =
+        java.util.List.of(
+            inventoryServiceJwt(
+                "inventory-service", "inventory-service", "SERVICE", "warehouse.read rwms.read"),
+            inventoryServiceJwt(
+                "inventory-service", "inventory-service", "SERVICE", "asset.inventory"),
+            inventoryServiceJwt("inventory-service", "inventory-service", "SERVICE", ""),
+            inventoryServiceJwt("asset-service", "inventory-service", "SERVICE", "warehouse.read"),
+            inventoryServiceJwt("inventory-service", "other-service", "SERVICE", "warehouse.read"),
+            inventoryServiceJwt(
+                "inventory-service", "inventory-service", "USER", "warehouse.read"));
+
+    for (var invalid : invalidTokens) {
+      mockMvc
+          .perform(
+              get("/api/internal/warehouse/v1/warehouses/inventory/{id}/metadata", SPB)
+                  .with(invalid))
+          .andExpect(status().isForbidden());
+    }
+  }
+
+  private static org.springframework.security.test.web.servlet.request
+          .SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor
+      inventoryServiceJwt(String clientId, String subject, String principalType, String scope) {
+    return jwt()
+        .jwt(
+            token ->
+                token
+                    .subject(subject)
+                    .audience(java.util.List.of("rwms-services"))
+                    .claim("principal_type", principalType)
+                    .claim("client_id", clientId)
+                    .claim("scope", scope));
   }
 
   private CreateWarehouseRequest request(String code, String name, Integer sortOrder) {

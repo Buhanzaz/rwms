@@ -158,7 +158,7 @@ public class AuthorizationServerConfiguration {
         http.securityMatcher(endpoints)
                 .with(authorizationServer, server -> server
                         .tokenEndpoint(tokenEndpoint -> tokenEndpoint.authenticationProviders(
-                                maintenanceClientCredentialsValidators()))
+                                downstreamClientCredentialsValidators()))
                         .oidc(Customizer.withDefaults()))
                 .authorizeHttpRequests(authorize -> authorize.anyRequest().authenticated())
                 .exceptionHandling(exceptions -> exceptions.defaultAuthenticationEntryPointFor(
@@ -169,12 +169,13 @@ public class AuthorizationServerConfiguration {
         return http.build();
     }
 
-    private Consumer<List<AuthenticationProvider>> maintenanceClientCredentialsValidators() {
+    private Consumer<List<AuthenticationProvider>> downstreamClientCredentialsValidators() {
         return providers -> providers.forEach(provider -> {
             if (provider instanceof OAuth2ClientCredentialsAuthenticationProvider clientCredentials) {
                 clientCredentials.setAuthenticationValidator(
                         OAuth2ClientCredentialsAuthenticationValidator.DEFAULT_SCOPE_VALIDATOR
-                                .andThen(AuthorizationServerConfiguration::validateMaintenanceDownstreamScope));
+                                .andThen(AuthorizationServerConfiguration::validateMaintenanceDownstreamScope)
+                                .andThen(AuthorizationServerConfiguration::validateInventoryDownstreamRequest));
             }
         });
     }
@@ -190,6 +191,52 @@ public class AuthorizationServerConfiguration {
             throw new OAuth2AuthenticationException(new OAuth2Error(
                     OAuth2ErrorCodes.INVALID_SCOPE,
                     "maintenance-service must request exactly one approved downstream scope",
+                    null));
+        }
+    }
+
+    static void validateInventoryDownstreamRequest(OAuth2ClientCredentialsAuthenticationContext context) {
+        validateExactDownstreamRequest(
+                context,
+                OAuthClientProperties.INVENTORY_CLIENT_ID,
+                OAuthClientProperties.INVENTORY_SCOPES,
+                OAuthClientProperties.INVENTORY_AUDIENCE);
+    }
+
+    private static void validateExactDownstreamRequest(
+            OAuth2ClientCredentialsAuthenticationContext context,
+            String clientId,
+            Set<String> approvedScopes,
+            String audience) {
+        if (!clientId.equals(context.getRegisteredClient().getClientId())) {
+            return;
+        }
+        OAuth2ClientCredentialsAuthenticationToken authentication = context.getAuthentication();
+        Set<String> requestedScopes = authentication.getScopes();
+        if (requestedScopes.size() != 1 || !approvedScopes.containsAll(requestedScopes)) {
+            throw new OAuth2AuthenticationException(new OAuth2Error(
+                    OAuth2ErrorCodes.INVALID_SCOPE,
+                    clientId + " must request exactly one approved downstream scope",
+                    null));
+        }
+        validateExactDownstreamOverride(authentication, clientId, "principal_type", "SERVICE");
+        validateExactDownstreamOverride(authentication, clientId, "sub", clientId);
+        validateExactDownstreamOverride(authentication, clientId, "subject", clientId);
+        validateExactDownstreamOverride(authentication, clientId, "client_id", clientId);
+        validateExactDownstreamOverride(authentication, clientId, "audience", audience);
+        validateExactDownstreamOverride(authentication, clientId, "resource", audience);
+    }
+
+    private static void validateExactDownstreamOverride(
+            OAuth2ClientCredentialsAuthenticationToken authentication,
+            String clientId,
+            String parameter,
+            String expected) {
+        Object actual = authentication.getAdditionalParameters().get(parameter);
+        if (actual != null && (!(actual instanceof String value) || !expected.equals(value))) {
+            throw new OAuth2AuthenticationException(new OAuth2Error(
+                    OAuth2ErrorCodes.INVALID_REQUEST,
+                    clientId + " token request contains an invalid " + parameter + " override",
                     null));
         }
     }

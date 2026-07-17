@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/media/media-facts-v1.schema.json",
+  "title": "RWMS media facts v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelopeVersion", "eventId", "eventType", "eventVersion", "occurredAt", "recordedAt", "producer", "aggregateType", "aggregateId", "aggregateVersion", "correlation", "actorRef", "payload"],
+  "properties": {
+    "envelopeVersion": {"const": 2},
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {"enum": ["media.media.uploaded.v1", "media.media.ready.v1", "media.media.failed.v1", "media.media.rotated.v1", "media.media.deleted.v1"]},
+    "eventVersion": {"const": 1},
+    "occurredAt": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "producer": {"const": "media-service"},
+    "aggregateType": {"const": "MEDIA"},
+    "aggregateId": {"type": "string", "format": "uuid"},
+    "aggregateVersion": {"type": "integer", "minimum": 1},
+    "correlation": {"$ref": "#/$defs/correlation"},
+    "actorRef": {"oneOf": [{"$ref": "#/$defs/actor"}, {"type": "null"}]},
+    "payload": {"$ref": "#/$defs/payload"}
+  },
+  "x-rwms-topic": "rwms.media.media.v1",
+  "x-rwms-record-key": "aggregateId",
+  "$defs": {
+    "correlation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["correlationId", "causationId"],
+      "properties": {
+        "correlationId": {"type": "string", "format": "uuid"},
+        "causationId": {"oneOf": [{"type": "string", "format": "uuid"}, {"type": "null"}]}
+      }
+    },
+    "actor": {
+      "type": "object", "additionalProperties": false,
+      "required": ["subjectId", "principalType", "profileRevision"],
+      "properties": {
+        "subjectId": {"type": "string", "format": "uuid"},
+        "principalType": {"const": "USER"},
+        "profileRevision": {"oneOf": [{"type": "string"}, {"type": "null"}]}
+      }
+    },
+    "payload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mediaId", "ownerType", "ownerId", "warehouseId", "kind", "status", "generation", "rotationDegrees"],
+      "properties": {
+        "mediaId": {"type": "string", "format": "uuid"},
+        "ownerType": {"const": "INVENTORY_FINDING"},
+        "ownerId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "kind": {"enum": ["IMAGE", "VIDEO"]},
+        "status": {"enum": ["PROCESSING", "READY", "FAILED", "DELETED"]},
+        "generation": {"type": "integer", "minimum": 0},
+        "rotationDegrees": {"enum": [0, 90, 180, 270]}
+      }
+    }
+  }
+}

@@ -4,7 +4,6 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
 import { RepairEstimateCatalogPicker } from "@/features/repair-estimates/repair-estimate-catalog-picker"
 import { RepairEstimateLinesEditor } from "@/features/repair-estimates/repair-estimate-lines-editor"
 import { RepairEstimateLinesSnapshot } from "@/features/repair-estimates/repair-estimate-lines-snapshot"
@@ -79,10 +78,6 @@ function InventoryRepairWorkflowSnapshot({
               </CardHeader>
               <CardContent className="grid gap-2 text-sm sm:grid-cols-2">
                 <p>
-                  <span className="text-muted-foreground">Комментарий: </span>
-                  {plan.groupComment.trim() || "—"}
-                </p>
-                <p>
                   <span className="text-muted-foreground">Норматив: </span>
                   {plan.plannedDurationMinutes === null
                     ? "—"
@@ -123,9 +118,7 @@ type InventoryInspectionWorkspaceProps = {
 export function InventoryInspectionWorkspace({
   cabinNumber,
   statusLabel,
-  tenant,
   businessDate,
-  comment,
   lines,
   repairCompletionMode,
   movementRequired,
@@ -134,7 +127,6 @@ export function InventoryInspectionWorkspace({
   pendingUploads,
   readOnly,
   message,
-  onCommentChange,
   onLinesChange,
   onMediaChange,
   onPendingUploadsChange,
@@ -204,28 +196,6 @@ export function InventoryInspectionWorkspace({
               id="inventory-inspection-status"
               value={statusLabel || "—"}
               readOnly
-            />
-          </Field>
-          <Field orientation="horizontal">
-            <FieldLabel htmlFor="inventory-inspection-tenant" className="w-32">
-              Арендатор
-            </FieldLabel>
-            <Input
-              id="inventory-inspection-tenant"
-              value={tenant?.trim() || "—"}
-              readOnly
-            />
-          </Field>
-          <Field data-disabled={readOnly}>
-            <FieldLabel htmlFor="inventory-inspection-comment">
-              Комментарий
-            </FieldLabel>
-            <Textarea
-              id="inventory-inspection-comment"
-              className="field-sizing-fixed h-28 min-h-28 resize-none"
-              disabled={readOnly}
-              value={comment}
-              onChange={(event) => onCommentChange(event.target.value)}
             />
           </Field>
         </FieldGroup>

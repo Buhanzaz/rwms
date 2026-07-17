@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.FlywayException;
 import org.flywaydb.core.api.configuration.FluentConfiguration;
@@ -40,7 +41,7 @@ class AssetFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsNoProductionFixtures() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -61,35 +62,87 @@ class AssetFlywayMigrationIntegrationTest {
         "consumer_aggregate_checkpoint",
         "version_gap_quarantine",
         "sanitized_dead_letter",
-        "asset_idempotency_record");
+        "asset_idempotency_record",
+        "inventory_asset_capture_operation",
+        "inventory_asset_capture",
+        "inventory_asset_capture_member",
+        "inventory_asset_source_operation",
+        "inventory_asset_number_claim",
+        "inventory_asset_source");
     assertThat(jdbc.queryForObject("select count(*) from rental_item", Integer.class)).isZero();
     assertThat(jdbc.queryForObject("select count(*) from equipment_catalog_item", Integer.class)).isZero();
   }
 
   @Test
-  void versionOneSchemaUpgradesToVersionTwoWithoutBaselineOrClean(@TempDir Path directory)
+  void versionTwoSchemaUpgradesToVersionThreeWithoutBaselineOrClean(@TempDir Path directory)
       throws IOException {
     Path versionOne = directory.resolve("V1__asset_schema.sql");
     try (var source = requireResource("db/migration/V1__asset_schema.sql").openStream()) {
       Files.copy(source, versionOne);
     }
-    String versionOneLocation =
+    Path versionTwo = directory.resolve("V2__asset_event_stream_completion.sql");
+    try (var source = requireResource("db/migration/V2__asset_event_stream_completion.sql").openStream()) {
+      Files.copy(source, versionTwo);
+    }
+    String versionTwoLocation =
         "filesystem:" + directory.toAbsolutePath().toString().replace('\\', '/');
 
-    assertThat(flyway(versionOneLocation).migrate().migrationsExecuted).isEqualTo(1);
-    assertThat(appliedVersions()).containsExactly("1");
-    assertThat(columnCount("equipment_allocation_hold", "committed_at")).isZero();
+    assertThat(flyway(versionTwoLocation).migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(appliedVersions()).containsExactly("1", "2");
+    UUID existingId = UUID.randomUUID();
+    jdbc.update("""
+        insert into rental_item(id,version,warehouse_id,number,status,passport_json,tags_json,created_at,updated_at)
+        values (?,0,?,'LEGACY77','FREE','{}','[]',clock_timestamp(),clock_timestamp())
+        """, existingId, UUID.randomUUID());
 
     Flyway latest = flyway(MIGRATIONS);
     assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);
     latest.validate();
 
+    assertThat(appliedVersions()).containsExactly("1", "2", "3");
+    assertThat(columnCount("rental_item", "number")).isZero();
+    assertThat(columnCount("rental_item", "display_canonical_number")).isEqualTo(1);
+    assertThat(columnCount("rental_item", "identity_match_key")).isEqualTo(1);
+    assertThat(jdbc.queryForMap(
+        "select display_canonical_number,identity_match_key from rental_item where id=?", existingId))
+        .containsEntry("display_canonical_number", "LEGACY77")
+        .containsEntry("identity_match_key", "LEGACY77");
+    assertThat(toRegclass("inventory_asset_capture")).isNotNull();
+    assertThat(latest.migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
+  void versionThreeRejectsCaseAliasCollisionWithoutGuessingOrPartialRewrite(
+      @TempDir Path directory) throws IOException {
+    Path versionOne = directory.resolve("V1__asset_schema.sql");
+    try (var source = requireResource("db/migration/V1__asset_schema.sql").openStream()) {
+      Files.copy(source, versionOne);
+    }
+    Path versionTwo = directory.resolve("V2__asset_event_stream_completion.sql");
+    try (var source = requireResource("db/migration/V2__asset_event_stream_completion.sql").openStream()) {
+      Files.copy(source, versionTwo);
+    }
+    String versionTwoLocation =
+        "filesystem:" + directory.toAbsolutePath().toString().replace('\\', '/');
+    flyway(versionTwoLocation).migrate();
+    UUID warehouseId = UUID.randomUUID();
+    for (String number : List.of("AB12", "ab12")) {
+      jdbc.update("""
+          insert into rental_item(id,version,warehouse_id,number,status,passport_json,tags_json,
+            created_at,updated_at)
+          values (?,0,?,?, 'FREE','{}','[]',clock_timestamp(),clock_timestamp())
+          """, UUID.randomUUID(), warehouseId, number);
+    }
+
+    assertThatThrownBy(() -> flyway(MIGRATIONS).migrate())
+        .isInstanceOf(FlywayException.class)
+        .hasStackTraceContaining("rental number identity collision requires explicit reconciliation");
+
+    assertThat(columnCount("rental_item", "number")).isEqualTo(1);
+    assertThat(columnCount("rental_item", "display_canonical_number")).isZero();
+    assertThat(jdbc.queryForList("select number from rental_item order by number", String.class))
+        .containsExactly("AB12", "ab12");
     assertThat(appliedVersions()).containsExactly("1", "2");
-    assertThat(columnCount("equipment_allocation_hold", "committed_at")).isEqualTo(1);
-    assertThat(constraintDefinition("equipment_allocation_hold", "ck_equipment_hold_state"))
-        .contains("COMMITTED");
-    assertThat(constraintDefinition("event_stream_head", "ck_asset_event_stream_head_type"))
-        .contains("CLASSIFIER");
   }
 
   @Test

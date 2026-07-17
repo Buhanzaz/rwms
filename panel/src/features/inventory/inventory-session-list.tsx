@@ -64,13 +64,6 @@ export function InventorySessionList({
               render: (session) => formatDateTime(session.startedAt),
             },
             {
-              id: "author",
-              label: "Автор",
-              className: "w-48",
-              getSortValue: (session) => session.author.displayName,
-              render: (session) => session.author.displayName,
-            },
-            {
               id: "status",
               label: "Статус",
               className: "w-40",
@@ -152,8 +145,6 @@ export function InventorySessionList({
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
               <dl className="grid grid-cols-2 gap-2 text-sm">
-                <dt className="text-muted-foreground">Автор</dt>
-                <dd>{session.author.displayName}</dd>
                 <dt className="text-muted-foreground">Проверено</dt>
                 <dd>
                   {

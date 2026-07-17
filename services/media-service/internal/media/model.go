@@ -81,6 +81,10 @@ type Asset struct {
 	Version           int64
 	Rotation          Rotation
 	CurrentGeneration int
+	// NextGeneration is monotonically allocated before processing begins. It is
+	// never decremented after a failed attempt, preventing a later retry from
+	// reusing object keys written by the failed worker.
+	NextGeneration    int
 	PendingGeneration *int
 	PendingRotation   *Rotation
 	ProcessingError   string
@@ -101,7 +105,7 @@ func (asset *Asset) QueueInitialProcessing() (ProcessingJob, error) {
 	if asset.CurrentGeneration != 0 || asset.PendingGeneration != nil {
 		return ProcessingJob{}, fmt.Errorf("media %s already has a processing generation", asset.ID)
 	}
-	return asset.queueProcessing(ProcessingInitial, 1, Rotation0)
+	return asset.queueProcessing(ProcessingInitial, asset.allocateGeneration(), Rotation0)
 }
 
 func (asset *Asset) QueueRotation(expectedVersion int64, rotation Rotation) (ProcessingJob, error) {
@@ -120,7 +124,7 @@ func (asset *Asset) QueueRotation(expectedVersion int64, rotation Rotation) (Pro
 	if rotation == asset.Rotation {
 		return ProcessingJob{}, fmt.Errorf("media %s is already rotated to %d degrees", asset.ID, rotation)
 	}
-	return asset.queueProcessing(ProcessingRotation, asset.CurrentGeneration+1, rotation)
+	return asset.queueProcessing(ProcessingRotation, asset.allocateGeneration(), rotation)
 }
 
 func (asset *Asset) CompleteProcessing(job ProcessingJob) error {
@@ -169,6 +173,18 @@ func (asset *Asset) queueProcessing(kind ProcessingKind, generation int, rotatio
 		Rotation:   rotation,
 		Kind:       kind,
 	}, nil
+}
+
+func (asset *Asset) allocateGeneration() int {
+	next := asset.NextGeneration
+	if next <= asset.CurrentGeneration {
+		next = asset.CurrentGeneration + 1
+	}
+	if next <= 0 {
+		next = 1
+	}
+	asset.NextGeneration = next + 1
+	return next
 }
 
 func (asset *Asset) validatePendingJob(job ProcessingJob) error {

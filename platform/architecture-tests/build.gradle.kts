@@ -11,6 +11,10 @@ dependencies {
     testImplementation(project(":services:task-board-service"))
     testImplementation(project(":services:warehouse-service"))
     testImplementation(project(":services:asset-service"))
+    testImplementation(project(":services:maintenance-service"))
+    if (rootProject.findProject(":services:inventory-service") != null) {
+        testImplementation(project(":services:inventory-service"))
+    }
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.archunit.junit5)

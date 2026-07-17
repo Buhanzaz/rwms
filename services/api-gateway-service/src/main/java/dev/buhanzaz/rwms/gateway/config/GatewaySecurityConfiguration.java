@@ -44,6 +44,10 @@ public class GatewaySecurityConfiguration {
                     "/api/warehouse/internal/**",
                     "/api/asset/internal/**",
                     "/api/maintenance/internal/**",
+                    "/api/media/internal/**",
+                    "/api/media/private/**",
+                    "/api/inventory/internal/**",
+                    "/api/inventory/private/**",
                     "/auth/api/internal/**")
                 .denyAll()
                 .requestMatchers(

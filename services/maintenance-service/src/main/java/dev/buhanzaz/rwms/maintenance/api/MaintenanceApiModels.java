@@ -43,8 +43,12 @@ public final class MaintenanceApiModels {
     NOT_ACQUIRED, ACTIVE, RELEASED, RECONCILIATION_REQUIRED
   }
   public enum GenerationState { PENDING_GENERATION, GENERATED, FAILED }
+  public enum InventoryPlanMode { AUTO, MANUAL }
+  public enum InventoryPlanLineKind { CATALOG, MANUAL }
+  public enum InventoryPlanLineType { WORK, MATERIAL }
 
   public record ActorSnapshot(String actorId, ActorType actorType) {}
+
   public record MediaReferenceInput(@NotNull UUID mediaId, @NotNull @Min(0) Long generation) {}
   public record RoutingSnapshot(
       @NotNull UUID queueId,
@@ -299,6 +303,12 @@ public final class MaintenanceApiModels {
       OffsetDateTime completedAt) {}
   public record RepairPlanResponse(
       UUID repairId, long repairVersion, List<RepairStageResponse> stages) {}
+  public record InventorySourceReference(
+      UUID inventoryId,
+      UUID findingId,
+      @Min(1) long sourceRevision,
+      String planFingerprint,
+      String sourceFingerprint) {}
   public record RepairResponse(
       UUID id,
       UUID rootRepairId,
@@ -314,11 +324,92 @@ public final class MaintenanceApiModels {
       LocalDate dispatchDate,
       String sourceParty,
       RepairPlanResponse plan,
+      InventorySourceReference inventorySource,
       LeaseSnapshot lease,
       List<MediaReferenceInput> mediaReferences,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt,
       ActorSnapshot actor) {}
+
+  public record InventoryPlanLineInput(
+      @NotNull InventoryPlanLineKind aggregationKind,
+      @JsonProperty(required = true) UUID catalogNodeId,
+      @JsonProperty(required = true) @Size(max = 1000) String description,
+      @JsonProperty(required = true) InventoryPlanLineType type,
+      @JsonProperty(required = true) @Size(max = 32) String unit,
+      @NotBlank
+          @Pattern(regexp = "^(?:0|[1-9][0-9]{0,13})(?:\\.[0-9]{1,3})?$")
+          String quantity,
+      @JsonProperty(required = true) @Min(0) Long unitPriceMinor,
+      @JsonProperty(required = true)
+          @Pattern(regexp = "^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,3})?$")
+          String normativeMinutes,
+      @Size(max = 2000) String groupComment,
+      @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> mediaReferences) {}
+  public record InventoryPlanStageSelection(
+      @NotNull UUID catalogNodeId,
+      @NotNull RepairStageKind kind,
+      @NotNull @Min(0) Integer order) {}
+  public record FreezeInventoryPlanRequest(
+      @NotNull UUID warehouseId,
+      @NotNull UUID inventoryId,
+      @NotNull UUID findingId,
+      @NotNull @Min(1) Long sourceRevision,
+      @NotNull InventoryPlanMode mode,
+      @NotEmpty @Size(max = 2000) List<@Valid InventoryPlanLineInput> lines,
+      @NotNull @Size(max = 1000) List<@Valid InventoryPlanStageSelection> plan,
+      @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> mediaReferences) {}
+  public record InventoryPlanLineSnapshot(
+      @NotNull InventoryPlanLineKind aggregationKind,
+      @JsonProperty(required = true) UUID catalogVersionId,
+      @JsonProperty(required = true) UUID catalogNodeId,
+      @JsonProperty(required = true) String catalogNodeCode,
+      @NotNull InventoryPlanLineType type,
+      @NotBlank String description,
+      @JsonProperty(required = true) String normalizedDescription,
+      @JsonProperty(required = true) String unit,
+      @NotBlank String quantity,
+      @Min(0) long unitPriceMinor,
+      @NotBlank String normativeMinutes,
+      @JsonProperty(required = true) @Valid RoutingSnapshot routing,
+      @JsonProperty(required = true) String groupComment,
+      boolean photoRequired,
+      @NotNull List<@Valid MediaReferenceInput> mediaReferences) {}
+  public record InventoryPlanStageSnapshot(
+      @NotNull UUID id,
+      @NotNull UUID catalogNodeId,
+      @NotBlank String catalogNodeCode,
+      @NotNull RepairStageKind kind,
+      @Min(0) int order,
+      @NotNull @Valid RoutingSnapshot routing,
+      @Min(0) int normativeDurationMinutes) {}
+  public record FrozenInventoryPlanSnapshot(
+      @NotNull UUID catalogVersionId,
+      @NotNull InventoryPlanMode mode,
+      @NotEmpty List<@Valid InventoryPlanLineSnapshot> lines,
+      @NotEmpty List<@Valid InventoryPlanStageSnapshot> stages,
+      boolean moveToRepairRequired,
+      boolean moveFromRepairRequired,
+      @NotNull List<@Valid MediaReferenceInput> mediaReferences) {}
+  public record FrozenInventoryPlanResponse(
+      UUID warehouseId,
+      UUID inventoryId,
+      UUID findingId,
+      @Min(1) long sourceRevision,
+      FrozenInventoryPlanSnapshot snapshot,
+      String fingerprint) {}
+  public record UpsertInventoryRepairRequest(
+      @NotNull UUID warehouseId,
+      @NotNull @Min(1) Long sourceRevision,
+      @NotNull UUID rentalItemId,
+      @NotNull @Min(0) Long rentalItemVersion,
+      @NotNull LocalDate dispatchDate,
+      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String planFingerprint,
+      @NotNull @Valid FrozenInventoryPlanSnapshot snapshot) {}
+  public record InventoryRepairUpsertResponse(
+      RepairResponse repair,
+      InventorySourceReference source,
+      DeliverySnapshot delivery) {}
 
   public record CreateDirectRepairRequest(
       @NotNull UUID warehouseId,

@@ -302,7 +302,7 @@
         "estimateId": {"$ref": "#/$defs/nullableUuid"},
         "warehouseId": {"type": "string", "format": "uuid"},
         "rentalItemId": {"type": "string", "format": "uuid"},
-        "origin": {"enum": ["ESTIMATE", "DIRECT_REPAIR"]},
+        "origin": {"enum": ["ESTIMATE", "DIRECT_REPAIR", "INVENTORY"]},
         "kind": {"enum": ["PRIMARY", "REWORK"]},
         "executionState": {
           "enum": ["DRAFT", "QUEUED", "IN_PROGRESS", "COMPLETED", "CANCELLED"]

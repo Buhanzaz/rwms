@@ -1,9 +1,13 @@
 package dev.buhanzaz.rwms.maintenance.service;
 
+import dev.buhanzaz.rwms.maintenance.domain.MaintenanceReconciliation;
+import dev.buhanzaz.rwms.maintenance.repository.MaintenanceReconciliationRepository;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -11,16 +15,17 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
-/** Durable local coordinator for post-commit asset and task-board effects. */
+/** Typed JPA coordinator for durable post-commit asset and task-board effects. */
 @Repository
 public class MaintenanceReconciliationStore {
   static final int MAX_ATTEMPTS = 4;
 
-  private final JdbcTemplate jdbc;
+  private final MaintenanceReconciliationRepository reconciliations;
   private final ObjectMapper mapper;
 
-  public MaintenanceReconciliationStore(JdbcTemplate jdbc, ObjectMapper mapper) {
-    this.jdbc = jdbc;
+  public MaintenanceReconciliationStore(
+      MaintenanceReconciliationRepository reconciliations, ObjectMapper mapper) {
+    this.reconciliations = reconciliations;
     this.mapper = mapper;
   }
 
@@ -31,18 +36,7 @@ public class MaintenanceReconciliationStore {
       String operation,
       UUID idempotencyKey,
       Object payload) {
-    if (dependency == null || operation == null || idempotencyKey == null) {
-      throw new IllegalArgumentException("Reconciliation identity is required");
-    }
-    int inserted = jdbc.update("""
-        insert into integration_reconciliation(
-          id,repair_id,dependency_type,operation_type,idempotency_key,state,
-          attempt_count,next_attempt_at,response_snapshot,created_at,updated_at)
-        values (?, ?, ?, ?, ?, 'PENDING', 0, clock_timestamp(), ?::jsonb,
-          clock_timestamp(), clock_timestamp())
-        on conflict (dependency_type,operation_type,idempotency_key) do nothing
-        """, UUID.randomUUID(), repairId, dependency, operation, idempotencyKey, write(payload));
-    rejectQuarantinedConflict(dependency, operation, idempotencyKey, inserted);
+    enqueue(repairId, dependency, operation, idempotencyKey, payload, false);
   }
 
   @Transactional(propagation = Propagation.MANDATORY)
@@ -52,18 +46,42 @@ public class MaintenanceReconciliationStore {
       String operation,
       UUID idempotencyKey,
       Object payload) {
+    enqueue(repairId, dependency, operation, idempotencyKey, payload, true);
+  }
+
+  private void enqueue(
+      UUID repairId,
+      String dependency,
+      String operation,
+      UUID idempotencyKey,
+      Object payload,
+      boolean reviewRequired) {
     if (dependency == null || operation == null || idempotencyKey == null) {
       throw new IllegalArgumentException("Reconciliation identity is required");
     }
-    int inserted = jdbc.update("""
-        insert into integration_reconciliation(
-          id,repair_id,dependency_type,operation_type,idempotency_key,state,
-          attempt_count,next_attempt_at,response_snapshot,created_at,updated_at)
-        values (?, ?, ?, ?, ?, 'RECONCILIATION_REQUIRED', 0, 'infinity'::timestamptz,
-          ?::jsonb, clock_timestamp(), clock_timestamp())
-        on conflict (dependency_type,operation_type,idempotency_key) do nothing
-        """, UUID.randomUUID(), repairId, dependency, operation, idempotencyKey, write(payload));
-    rejectQuarantinedConflict(dependency, operation, idempotencyKey, inserted);
+    MaintenanceReconciliation existing =
+        reconciliations
+            .findByStableKeyForUpdate(dependency, operation, idempotencyKey)
+            .orElse(null);
+    if (existing != null) {
+      try {
+        existing.requireStableIdentity(repairId);
+      } catch (IllegalArgumentException exception) {
+        throw new MaintenanceConflictException(
+            "MAINTENANCE_IDEMPOTENCY_CONFLICT",
+            "Stable reconciliation identity is bound to another repair");
+      }
+      rejectQuarantined(existing);
+      return;
+    }
+    OffsetDateTime now = now();
+    MaintenanceReconciliation created =
+        reviewRequired
+            ? MaintenanceReconciliation.reconciliationRequired(
+                repairId, dependency, operation, idempotencyKey, write(payload), now)
+            : MaintenanceReconciliation.pending(
+                repairId, dependency, operation, idempotencyKey, write(payload), now);
+    reconciliations.saveAndFlush(created);
   }
 
   @Transactional(propagation = Propagation.MANDATORY)
@@ -72,123 +90,116 @@ public class MaintenanceReconciliationStore {
       long expectedReviewVersion,
       UUID reviewSubjectId,
       String reviewReason) {
-    if (reconciliationId == null || expectedReviewVersion < 0 || reviewSubjectId == null
-        || reviewReason == null || reviewReason.isBlank() || reviewReason.trim().length() > 2000) {
+    if (reconciliationId == null
+        || expectedReviewVersion < 0
+        || reviewSubjectId == null
+        || reviewReason == null
+        || reviewReason.isBlank()
+        || reviewReason.trim().length() > 2000) {
       throw new IllegalArgumentException("Reviewed reconciliation resume metadata is invalid");
     }
-    String reason = reviewReason.trim();
-    int changed = jdbc.update("""
-        update integration_reconciliation
-        set state='RETRY_PENDING',attempt_count=0,next_attempt_at=clock_timestamp(),
-          last_error_code=null,review_version=review_version+1,review_subject_id=?,
-          review_reason=?,reviewed_at=clock_timestamp(),updated_at=clock_timestamp()
-        where id=? and state='QUARANTINED' and review_version=?
-        """, reviewSubjectId, reason, reconciliationId, expectedReviewVersion);
-    if (changed != 1) {
-      ReviewState current = jdbc.query("""
-          select state,review_version from integration_reconciliation where id=?
-          """, (resultSet, rowNumber) -> new ReviewState(
-              resultSet.getString("state"), resultSet.getLong("review_version")),
-          reconciliationId).stream().findFirst().orElseThrow(() ->
-              new MaintenanceNotFoundException("Reconciliation record not found"));
-      if (current.reviewVersion() != expectedReviewVersion) {
+    MaintenanceReconciliation reconciliation =
+        reconciliations
+            .findByIdForUpdate(reconciliationId)
+            .orElseThrow(() -> new MaintenanceNotFoundException("Reconciliation record not found"));
+    try {
+      reconciliation.resume(expectedReviewVersion, reviewSubjectId, reviewReason, now());
+      reconciliations.flush();
+    } catch (IllegalArgumentException exception) {
+      if ("REVIEW_VERSION".equals(exception.getMessage())) {
         throw new MaintenanceConflictException(
             "MAINTENANCE_VERSION_CONFLICT", "Reconciliation review version conflict");
       }
-      throw new MaintenanceConflictException(
-          "MAINTENANCE_STATE_CONFLICT", "Only a quarantined reconciliation can be resumed");
+      if ("REVIEW_STATE".equals(exception.getMessage())) {
+        throw new MaintenanceConflictException(
+            "MAINTENANCE_STATE_CONFLICT",
+            "Only a quarantined reconciliation can be resumed");
+      }
+      throw exception;
     }
-    return jdbc.query("""
-        select id,idempotency_key,state,review_version,review_subject_id,review_reason,reviewed_at
-        from integration_reconciliation where id=?
-        """, (resultSet, rowNumber) -> new ResumeResult(
-            resultSet.getObject("id", UUID.class),
-            resultSet.getObject("idempotency_key", UUID.class),
-            resultSet.getString("state"),
-            resultSet.getLong("review_version"),
-            resultSet.getObject("review_subject_id", UUID.class),
-            resultSet.getString("review_reason"),
-            resultSet.getObject("reviewed_at", OffsetDateTime.class)),
-        reconciliationId).stream().findFirst().orElseThrow();
+    return resumeResult(reconciliation);
   }
 
   @Transactional(propagation = Propagation.MANDATORY)
   public Optional<WorkItem> lockNextDue() {
-    return jdbc.query("""
-        select id,repair_id,dependency_type,operation_type,idempotency_key,state,
-          attempt_count,next_attempt_at,response_snapshot::text
-        from integration_reconciliation
-        where state in ('PENDING','RETRY_PENDING','RECONCILIATION_REQUIRED')
-          and attempt_count < ? and next_attempt_at <= clock_timestamp()
-        order by next_attempt_at,id
-        for update skip locked
-        limit 1
-        """, (resultSet, rowNumber) -> new WorkItem(
-            resultSet.getObject("id", UUID.class),
-            resultSet.getObject("repair_id", UUID.class),
-            resultSet.getString("dependency_type"),
-            resultSet.getString("operation_type"),
-            resultSet.getObject("idempotency_key", UUID.class),
-            resultSet.getString("state"),
-            resultSet.getInt("attempt_count"),
-            resultSet.getObject("next_attempt_at", OffsetDateTime.class),
-            read(resultSet.getString("response_snapshot"))),
-        MAX_ATTEMPTS).stream().findFirst();
+    return reconciliations
+        .findDueForUpdateSkipLocked(MAX_ATTEMPTS, now(), PageRequest.of(0, 1))
+        .stream()
+        .findFirst()
+        .map(this::workItem);
   }
 
   @Transactional(propagation = Propagation.MANDATORY)
   public void confirmed(WorkItem item, Object response) {
-    int changed = jdbc.update("""
-        update integration_reconciliation
-        set state='CONFIRMED',attempt_count=attempt_count+1,response_snapshot=?::jsonb,
-          last_error_code=null,updated_at=clock_timestamp()
-        where id=? and state in ('PENDING','RETRY_PENDING','RECONCILIATION_REQUIRED')
-          and attempt_count=?
-        """, write(response), item.id(), item.attemptCount());
-    if (changed != 1) {
-      throw new MaintenanceConflictException(
-          "MAINTENANCE_STATE_CONFLICT", "Reconciliation claim changed concurrently");
+    MaintenanceReconciliation reconciliation = requireLocked(item.id());
+    try {
+      reconciliation.confirm(item.attemptCount(), write(response), now());
+      reconciliations.flush();
+    } catch (IllegalArgumentException exception) {
+      throw claimConflict();
     }
   }
 
   @Transactional(propagation = Propagation.MANDATORY)
   public boolean failed(WorkItem item, RuntimeException failure) {
-    int nextAttempt = Math.addExact(item.attemptCount(), 1);
-    boolean quarantined = nextAttempt >= MAX_ATTEMPTS;
-    int backoffSeconds = 1 << Math.min(item.attemptCount(), 2);
-    int changed = jdbc.update("""
-        update integration_reconciliation
-        set state=?,attempt_count=?,
-          next_attempt_at=clock_timestamp() + (? * interval '1 second'),
-          last_error_code=?,updated_at=clock_timestamp()
-        where id=? and state in ('PENDING','RETRY_PENDING','RECONCILIATION_REQUIRED')
-          and attempt_count=?
-        """, quarantined ? "QUARANTINED" : "RETRY_PENDING", nextAttempt,
-        backoffSeconds, failureCode(failure), item.id(), item.attemptCount());
-    if (changed != 1) {
-      throw new MaintenanceConflictException(
-          "MAINTENANCE_STATE_CONFLICT", "Reconciliation claim changed concurrently");
+    MaintenanceReconciliation reconciliation = requireLocked(item.id());
+    try {
+      boolean quarantined =
+          reconciliation.fail(
+              item.attemptCount(), MAX_ATTEMPTS, failureCode(failure), now());
+      reconciliations.flush();
+      return quarantined;
+    } catch (IllegalArgumentException exception) {
+      throw claimConflict();
     }
-    return quarantined;
+  }
+
+  private MaintenanceReconciliation requireLocked(UUID reconciliationId) {
+    return reconciliations
+        .findByIdForUpdate(reconciliationId)
+        .orElseThrow(() -> new MaintenanceNotFoundException("Reconciliation record not found"));
+  }
+
+  private WorkItem workItem(MaintenanceReconciliation value) {
+    return new WorkItem(
+        value.getId(),
+        value.getRepairId(),
+        value.getDependencyType(),
+        value.getOperationType(),
+        value.getIdempotencyKey(),
+        value.getState(),
+        value.getAttemptCount(),
+        value.getNextAttemptAt(),
+        read(value.getResponseSnapshot()));
+  }
+
+  private ResumeResult resumeResult(MaintenanceReconciliation value) {
+    return new ResumeResult(
+        value.getId(),
+        value.getIdempotencyKey(),
+        value.getState(),
+        value.getReviewVersion(),
+        value.getReviewSubjectId(),
+        value.getReviewReason(),
+        value.getReviewedAt());
+  }
+
+  private static void rejectQuarantined(MaintenanceReconciliation existing) {
+    if ("QUARANTINED".equals(existing.getState())) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_RECONCILIATION_QUARANTINED",
+          "Stable reconciliation work is quarantined and requires reviewed resume");
+    }
+  }
+
+  private static MaintenanceConflictException claimConflict() {
+    return new MaintenanceConflictException(
+        "MAINTENANCE_STATE_CONFLICT", "Reconciliation claim changed concurrently");
   }
 
   private static String failureCode(RuntimeException failure) {
     String value = failure.getClass().getSimpleName();
     return value.length() <= 64 ? value : value.substring(0, 64);
-  }
-
-  private void rejectQuarantinedConflict(
-      String dependency, String operation, UUID idempotencyKey, int inserted) {
-    if (inserted != 0) return;
-    String state = jdbc.queryForObject("""
-        select state from integration_reconciliation
-        where dependency_type=? and operation_type=? and idempotency_key=?
-        """, String.class, dependency, operation, idempotencyKey);
-    if ("QUARANTINED".equals(state)) {
-      throw new MaintenanceConflictException(
-          "MAINTENANCE_RECONCILIATION_QUARANTINED",
-          "Stable reconciliation work is quarantined and requires reviewed resume");
-    }
   }
 
   private JsonNode read(String value) {
@@ -201,10 +212,14 @@ public class MaintenanceReconciliationStore {
 
   private String write(Object value) {
     try {
-      return mapper.writeValueAsString(value == null ? java.util.Map.of() : value);
+      return mapper.writeValueAsString(value == null ? Map.of() : value);
     } catch (JacksonException exception) {
       throw new IllegalArgumentException("Reconciliation payload cannot be serialized", exception);
     }
+  }
+
+  private static OffsetDateTime now() {
+    return OffsetDateTime.now(ZoneOffset.UTC);
   }
 
   public record WorkItem(
@@ -226,6 +241,4 @@ public class MaintenanceReconciliationStore {
       UUID reviewSubjectId,
       String reviewReason,
       OffsetDateTime reviewedAt) {}
-
-  private record ReviewState(String state, long reviewVersion) {}
 }

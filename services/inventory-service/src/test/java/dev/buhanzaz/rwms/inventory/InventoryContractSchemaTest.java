@@ -1,0 +1,436 @@
+package dev.buhanzaz.rwms.inventory;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.networknt.schema.JsonSchema;
+import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.SpecVersion;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Collection;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import org.junit.jupiter.api.Test;
+import org.yaml.snakeyaml.Yaml;
+
+class InventoryContractSchemaTest {
+  private static final ObjectMapper JSON = new ObjectMapper();
+  private static final JsonSchemaFactory SCHEMAS =
+      JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
+  private static final Set<String> METHODS = Set.of("get", "post", "put", "delete");
+
+  @Test
+  void openApiContainsOnlyTheApprovedSixteenOperationsAndExactErrors() throws Exception {
+    Map<String, Object> document = yaml("openapi/inventory-service.yaml");
+    Map<String, Object> paths = child(document, "paths");
+
+    assertThat(operations(paths))
+        .containsExactlyInAnyOrder(
+            "GET /api/inventory/v1/sessions",
+            "POST /api/inventory/v1/sessions",
+            "GET /api/inventory/v1/sessions/active",
+            "GET /api/inventory/v1/sessions/{inventoryId}",
+            "GET /api/inventory/v1/sessions/{inventoryId}/findings",
+            "POST /api/inventory/v1/sessions/{inventoryId}/number-resolutions",
+            "POST /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/assets",
+            "PUT /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/inspection",
+            "POST /api/inventory/v1/sessions/{inventoryId}/completion-preview",
+            "POST /api/inventory/v1/sessions/{inventoryId}/complete",
+            "POST /api/inventory/v1/sessions/{inventoryId}/cancel",
+            "POST /api/inventory/v1/sessions/{inventoryId}/publications",
+            "POST /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/publication/retry",
+            "POST /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/publication/close",
+            "GET /api/inventory/v1/statistics/sessions",
+            "GET /api/inventory/v1/statistics/summary");
+
+    Map<String, Object> schemas = child(child(document, "components"), "schemas");
+    assertThat(enumValues(child(schemas, "ProblemDetail"), "code"))
+        .containsExactlyInAnyOrder(
+            "INVENTORY_VALIDATION_FAILED",
+            "INVENTORY_NOT_FOUND",
+            "INVENTORY_VERSION_CONFLICT",
+            "INVENTORY_IDEMPOTENCY_CONFLICT",
+            "INVENTORY_ACTIVE_SESSION_CONFLICT",
+            "INVENTORY_NUMBER_CONFLICT",
+            "INVENTORY_ACKNOWLEDGEMENT_STALE",
+            "INVENTORY_MEDIA_NOT_READY",
+            "INVENTORY_PUBLICATION_CONFLICT",
+            "INVENTORY_DEPENDENCY_UNAVAILABLE",
+            "INVENTORY_FORBIDDEN");
+    assertThat(required(schemas, "FrozenStatistics"))
+        .contains(
+            "roundingAdjustmentMinor",
+            "normativeMinutes",
+            "durationSeconds",
+            "unexpectedExistingCount");
+    assertThat(child(schemas, "FrozenStatistics").get("additionalProperties")).isEqualTo(false);
+    assertThat(
+            stringList(
+                child(
+                        child(
+                            child(child(document, "components"), "parameters"), "FindingSort"),
+                        "schema")
+                    .get("enum")))
+        .containsExactly(
+            "createdAt,asc",
+            "createdAt,desc",
+            "displayCanonicalNumber,asc",
+            "displayCanonicalNumber,desc");
+    assertAllLocalReferencesResolve(document, document);
+  }
+
+  @Test
+  void inspectionObservationsAndPlanConditionalsValidateRealRequests() throws Exception {
+    JsonSchema request = openApiSchema("SaveInspectionRequest");
+    JsonNode ready =
+        JSON.readTree(
+            """
+            {
+              "expectedSessionRevision":2,
+              "expectedFindingRevision":3,
+              "inspection":"READY",
+              "passportObservation":{"presence":"EXPLICIT_EMPTY","value":{}},
+              "equipmentObservation":{"presence":"ABSENT","value":null},
+              "media":[],
+              "planSelection":null
+            }
+            """);
+    assertThat(request.validate(ready)).isEmpty();
+
+    ObjectNode wrongPassport = ready.deepCopy();
+    wrongPassport.set(
+        "passportObservation",
+        JSON.readTree("{\"presence\":\"PRESENT\",\"value\":[]}"));
+    assertThat(request.validate(wrongPassport)).isNotEmpty();
+    ObjectNode wrongEquipment = ready.deepCopy();
+    wrongEquipment.set(
+        "equipmentObservation",
+        JSON.readTree("{\"presence\":\"PRESENT\",\"value\":{\"x\":1}}"));
+    assertThat(request.validate(wrongEquipment)).isNotEmpty();
+
+    ObjectNode readyWithPlan = ready.deepCopy();
+    readyWithPlan.set("planSelection", validAutoPlan());
+    assertThat(request.validate(readyWithPlan)).isNotEmpty();
+    ObjectNode stagedWithoutPlan = ready.deepCopy();
+    stagedWithoutPlan.put("inspection", "WORK_STAGED");
+    assertThat(request.validate(stagedWithoutPlan)).isNotEmpty();
+    stagedWithoutPlan.set("planSelection", validAutoPlan());
+    assertThat(request.validate(stagedWithoutPlan)).isEmpty();
+  }
+
+  @Test
+  void publicationSessionDetailAndStatisticsSchemasRejectImpossibleCombinations()
+      throws Exception {
+    JsonSchema publish = openApiSchema("PublishFindingsRequest");
+    JsonNode all =
+        JSON.readTree("{\"expectedSessionRevision\":1,\"allEligible\":true,\"findings\":[]}");
+    assertThat(publish.validate(all)).isEmpty();
+    ObjectNode allWithSelection = all.deepCopy();
+    allWithSelection.set(
+        "findings",
+        JSON.readTree(
+            "[{\"findingId\":\"00000000-0000-0000-0000-000000000711\",\"expectedPublicationRevision\":0}]"));
+    assertThat(publish.validate(allWithSelection)).isNotEmpty();
+    ObjectNode selectedEmpty = all.deepCopy();
+    selectedEmpty.put("allEligible", false);
+    assertThat(publish.validate(selectedEmpty)).isNotEmpty();
+    selectedEmpty.set("findings", allWithSelection.required("findings"));
+    assertThat(publish.validate(selectedEmpty)).isEmpty();
+
+    JsonSchema summary = openApiSchema("StatisticsSummary");
+    JsonNode nested =
+        JSON.readTree(
+            """
+            {"sessionCount":0,"statistics":{
+              "expectedCount":0,"inspectedCount":0,"missingCount":0,"readyCount":0,
+              "withWorkCount":0,"addedCount":0,"unexpectedExistingCount":0,
+              "conflictCount":0,"workLineCount":0,"materialLineCount":0,
+              "workTotalMinor":0,"materialTotalMinor":0,"grandTotalMinor":0,
+              "roundingAdjustmentMinor":0,"normativeMinutes":"0","durationSeconds":0,
+              "aggregateLines":[]}}
+            """);
+    assertThat(summary.validate(nested)).isEmpty();
+    ObjectNode flattened = (ObjectNode) nested.required("statistics").deepCopy();
+    flattened.put("sessionCount", 0);
+    assertThat(summary.validate(flattened)).isNotEmpty();
+
+    JsonSchema detail = openApiSchema("SessionDetail");
+    JsonNode validDetail =
+        JSON.readTree(
+            """
+            {"id":"00000000-0000-0000-0000-000000000721","sessionRevision":0,
+             "warehouseId":"00000000-0000-0000-0000-000000000722","warehouseVersion":1,
+             "warehouseTimeZone":"Europe/Moscow","businessDate":"2026-07-17",
+             "lifecycle":"ACTIVE","expectedCount":0,"findingCount":0,"inspectedCount":0,
+             "startedAt":"2026-07-17T12:00:00Z","terminalAt":null,
+             "publicationState":"NOT_REQUESTED","statistics":null,"cancellation":null}
+            """);
+    assertThat(detail.validate(validDetail)).isEmpty();
+  }
+
+  @Test
+  void findingReadProjectionIsStrictTypedAndRejectsUnsafeOrInexactPlanValues()
+      throws Exception {
+    JsonSchema finding = openApiSchema("Finding");
+    JsonNode staged =
+        JSON.readTree(
+            """
+            {
+              "id":"00000000-0000-0000-0000-000000000731",
+              "inventoryId":"00000000-0000-0000-0000-000000000732",
+              "findingRevision":3,"origin":"EXPECTED","inspection":"WORK_STAGED",
+              "reconciliation":"MATCHED",
+              "assetId":"00000000-0000-0000-0000-000000000733","assetVersion":7,
+              "displayCanonicalNumber":"AA-01","identityMatchKey":"AA01",
+              "passportObservation":{"presence":"ABSENT","value":null},
+              "equipmentObservation":{"presence":"ABSENT","value":null},
+              "mutationState":"IDLE",
+              "planFingerprintSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "expectedSnapshot":{
+                "assetId":"00000000-0000-0000-0000-000000000733","assetVersion":7,
+                "status":"WAREHOUSE","displayCanonicalNumber":"AA-01",
+                "passportSnapshot":{"serial":"SAFE"},"contentsSnapshot":[{"name":"safe"}]
+              },
+              "frozenPlan":{
+                "mode":"MANUAL","catalogVersionId":"00000000-0000-0000-0000-000000000734",
+                "fingerprintSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "lines":[{
+                  "sourceKind":"MANUAL","lineType":"WORK","catalogVersionId":null,
+                  "catalogNodeId":null,"description":"Work","normalizedDescription":"work",
+                  "unit":"HOUR","quantity":"1.25","unitPriceMinor":1234,
+                  "normativeMinutes":"2.5"
+                }],
+                "stages":[{
+                  "order":0,"kind":"REPAIR_WORK",
+                  "routingQueueId":"00000000-0000-0000-0000-000000000735",
+                  "routingQueueCode":"REPAIR","routingQueueKind":"MAINTENANCE",
+                  "movementRequired":false,"photoRequired":true
+                }]
+              },
+              "media":[],"publication":null
+            }
+            """);
+    assertThat(finding.validate(staged)).isEmpty();
+
+    ObjectNode ready = staged.deepCopy();
+    ready.put("origin", "UNEXPECTED_EXISTING");
+    ready.put("inspection", "READY");
+    ready.putNull("planFingerprintSha256");
+    ready.putNull("expectedSnapshot");
+    ready.putNull("frozenPlan");
+    assertThat(finding.validate(ready)).isEmpty();
+
+    ObjectNode rawPassport = staged.deepCopy();
+    ((ObjectNode) rawPassport.required("expectedSnapshot")).put("passportSnapshot", "opaque");
+    assertThat(finding.validate(rawPassport)).isNotEmpty();
+    ObjectNode rawContents = staged.deepCopy();
+    ((ObjectNode) rawContents.required("expectedSnapshot")).put("contentsSnapshot", "opaque");
+    assertThat(finding.validate(rawContents)).isNotEmpty();
+
+    ObjectNode extraPlanField = staged.deepCopy();
+    ((ObjectNode) extraPlanField.required("frozenPlan")).put("sourceSnapshot", "forbidden");
+    assertThat(finding.validate(extraPlanField)).isNotEmpty();
+    ObjectNode numericQuantity = staged.deepCopy();
+    ((ObjectNode) numericQuantity.required("frozenPlan").required("lines").get(0))
+        .put("quantity", 1.25);
+    assertThat(finding.validate(numericQuantity)).isNotEmpty();
+    ObjectNode excessiveScale = staged.deepCopy();
+    ((ObjectNode) excessiveScale.required("frozenPlan").required("lines").get(0))
+        .put("normativeMinutes", "2.5000");
+    assertThat(finding.validate(excessiveScale)).isNotEmpty();
+    ObjectNode negativeMinor = staged.deepCopy();
+    ((ObjectNode) negativeMinor.required("frozenPlan").required("lines").get(0))
+        .put("unitPriceMinor", -1);
+    assertThat(finding.validate(negativeMinor)).isNotEmpty();
+  }
+
+  @Test
+  void asyncApiBindsTheTwoApprovedAggregateTopicsAndOwnerProof() throws Exception {
+    Map<String, Object> document = yaml("events/inventory-events.yaml");
+    Map<String, Object> channels = child(document, "channels");
+
+    assertThat(channels.keySet())
+        .containsExactlyInAnyOrder(
+            "sessionFacts", "publicationFacts", "mediaFacts", "sanitizedDlt");
+    assertThat(child(channels, "sessionFacts").get("address"))
+        .isEqualTo("rwms.inventory.session.v1");
+    assertThat(child(channels, "publicationFacts").get("address"))
+        .isEqualTo("rwms.inventory.publication.v1");
+    String text = Files.readString(contract("events/inventory-events.yaml"));
+    assertThat(text)
+        .contains(
+            "inventory.finding.owner-proof.v1",
+            "aggregateId and",
+            "payload.ownerId",
+            "rwms.inventory.dlt.v1")
+        .doesNotContain(
+            "protocol: amqp",
+            "rwms.domain.v1",
+            "rwms.logistics",
+            "media.processing.request.v1",
+            "VERSION_GAP");
+    assertAllLocalReferencesResolve(document, document);
+  }
+
+  @Test
+  void ownerProofIsStrictAndRejectsCrossBoundaryInformation() throws Exception {
+    JsonNode valid =
+        JSON.readTree(
+            """
+            {
+              "envelopeVersion":2,
+              "eventId":"00000000-0000-0000-0000-000000000701",
+              "eventType":"inventory.finding.owner-proof.v1",
+              "eventVersion":1,
+              "occurredAt":null,
+              "recordedAt":"2026-07-17T12:00:00Z",
+              "producer":"inventory-service",
+              "aggregateType":"FINDING",
+              "aggregateId":"00000000-0000-0000-0000-000000000702",
+              "aggregateVersion":1,
+              "correlation":{"correlationId":"00000000-0000-0000-0000-000000000703","causationId":null},
+              "actorRef":null,
+              "payload":{
+                "ownerType":"INVENTORY_FINDING",
+                "ownerId":"00000000-0000-0000-0000-000000000702",
+                "warehouseId":"00000000-0000-0000-0000-000000000704",
+                "ownerRevision":0,
+                "active":true
+              }
+            }
+            """);
+
+    assertThat(schema().validate(valid)).isEmpty();
+
+    ObjectNode inactive = valid.deepCopy();
+    inactive.put("aggregateVersion", 4);
+    ((ObjectNode) inactive.required("payload")).put("ownerRevision", 1).put("active", false);
+    assertThat(schema().validate(inactive)).isEmpty();
+
+    ObjectNode leaking = valid.deepCopy();
+    ((ObjectNode) leaking.required("payload")).put("displayCanonicalNumber", "AB-12");
+    assertThat(schema().validate(leaking)).isNotEmpty();
+
+    ObjectNode wrongFamily = valid.deepCopy();
+    wrongFamily.put("aggregateType", "SESSION");
+    assertThat(schema().validate(wrongFamily)).isNotEmpty();
+  }
+
+  @Test
+  void schemaDeclaresEverySanitizedFactAndProhibitedField() throws Exception {
+    JsonNode root =
+        JSON.readTree(
+            Files.readString(contract("events/inventory/inventory-events-v1.schema.json")));
+    assertThat(root.required("x-rwms-topics").toString())
+        .contains("rwms.inventory.session.v1", "rwms.inventory.publication.v1");
+    assertThat(root.required("x-rwms-prohibitedPayloadFields").toString())
+        .contains(
+            "login",
+            "displayName",
+            "email",
+            "passport",
+            "mediaUrl",
+            "objectKey",
+            "rawError",
+            "jwt",
+            "secret");
+    assertThat(root.required("properties").required("eventType").required("enum").size())
+        .isEqualTo(12);
+    assertThat(root.required("properties").required("aggregateVersion").required("minimum").asInt())
+        .isZero();
+    assertThat(root.required("properties").required("aggregateType").required("enum").toString())
+        .contains("SESSION", "FINDING", "PUBLICATION")
+        .doesNotContain("INVENTORY_SESSION", "INVENTORY_FINDING", "INVENTORY_PUBLICATION");
+  }
+
+  private ObjectNode validAutoPlan() throws Exception {
+    return (ObjectNode)
+        JSON.readTree(
+            """
+            {"mode":"AUTO","lines":[{
+              "aggregationKind":"CATALOG",
+              "catalogNodeId":"00000000-0000-0000-0000-000000000731",
+              "description":null,"type":null,"unit":null,"quantity":"1",
+              "unitPriceMinor":null,"normativeMinutes":null,"groupComment":null,
+              "mediaReferences":[]}],"stages":[]}
+            """);
+  }
+
+  private JsonSchema openApiSchema(String name) throws Exception {
+    ObjectNode document = JSON.valueToTree(yaml("openapi/inventory-service.yaml"));
+    document.put("$schema", "https://json-schema.org/draft/2020-12/schema");
+    document.put("$ref", "#/components/schemas/" + name);
+    return SCHEMAS.getSchema(document);
+  }
+
+  private JsonSchema schema() throws Exception {
+    return SCHEMAS.getSchema(
+        JSON.readTree(
+            Files.readString(contract("events/inventory/inventory-events-v1.schema.json"))));
+  }
+
+  private Map<String, Object> yaml(String relative) throws Exception {
+    try (var input = Files.newInputStream(contract(relative))) {
+      return new Yaml().load(input);
+    }
+  }
+
+  private Path contract(String relative) {
+    return Path.of(System.getProperty("rwms.contracts.dir"), relative);
+  }
+
+  private Set<String> operations(Map<String, Object> paths) {
+    Set<String> result = new LinkedHashSet<>();
+    paths.forEach(
+        (path, item) ->
+            map(item).keySet().stream()
+                .filter(METHODS::contains)
+                .forEach(method -> result.add(method.toUpperCase() + " " + path)));
+    return result;
+  }
+
+  private List<String> enumValues(Map<String, Object> schema, String property) {
+    return stringList(child(child(schema, "properties"), property).get("enum"));
+  }
+
+  private List<String> required(Map<String, Object> schemas, String name) {
+    return stringList(child(schemas, name).get("required"));
+  }
+
+  @SuppressWarnings("unchecked")
+  private void assertAllLocalReferencesResolve(Object node, Map<String, Object> root) {
+    if (node instanceof Map<?, ?> map) {
+      Object reference = map.get("$ref");
+      if (reference instanceof String path && path.startsWith("#/")) {
+        Object resolved = root;
+        for (String segment : path.substring(2).split("/")) {
+          resolved = map(resolved).get(segment.replace("~1", "/").replace("~0", "~"));
+          assertThat(resolved).as("resolved %s", path).isNotNull();
+        }
+      }
+      map.values().forEach(value -> assertAllLocalReferencesResolve(value, root));
+    } else if (node instanceof Collection<?> collection) {
+      collection.forEach(value -> assertAllLocalReferencesResolve(value, root));
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> child(Map<String, Object> value, String key) {
+    return (Map<String, Object>) value.get(key);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> map(Object value) {
+    return (Map<String, Object>) value;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static List<String> stringList(Object value) {
+    return (List<String>) value;
+  }
+}

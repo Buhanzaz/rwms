@@ -8,6 +8,8 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -144,6 +146,87 @@ public final class AssetApiModels {
       @NotNull MaintenanceLeaseOwnerType ownerType,
       @NotNull UUID ownerId,
       UUID linkedReturnEstimateId) {}
+
+
+  public record InventoryCaptureRequest(
+      @NotNull UUID operationId,
+      @NotNull @Positive Long technicalAttempt,
+      @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String requestFingerprint,
+      @NotNull UUID warehouseId) {}
+  public record InventoryCaptureResponse(
+      UUID captureId,
+      UUID operationId,
+      long technicalAttempt,
+      UUID warehouseId,
+      long totalCount,
+      String membershipDigest,
+      OffsetDateTime createdAt,
+      OffsetDateTime expiresAt) {}
+  public record InventoryCaptureMember(
+      long sequence,
+      UUID assetId,
+      long version,
+      UUID warehouseId,
+      RentalItemStatus status,
+      String displayCanonicalNumber,
+      String identityMatchKey,
+      Map<String, Object> passportSnapshot,
+      List<EquipmentContentResponse> contentsSnapshot) {}
+  public record InventoryCapturePage(
+      UUID captureId,
+      UUID operationId,
+      long technicalAttempt,
+      UUID warehouseId,
+      long totalCount,
+      String membershipDigest,
+      String nextCursor,
+      List<InventoryCaptureMember> content) {}
+
+  public record InventoryNumberResolutionRequest(
+      @NotBlank @Size(max = 128) String number) {}
+  public record InventoryAssetSnapshot(
+      UUID assetId,
+      long version,
+      UUID warehouseId,
+      RentalItemStatus status,
+      String displayCanonicalNumber,
+      String identityMatchKey) {}
+  public record InventoryNumberResolutionResponse(
+      String displayCanonicalNumber,
+      String identityMatchKey,
+      boolean found,
+      InventoryAssetSnapshot asset) {}
+
+  public record InventoryValidationRequest(
+      @NotEmpty @Size(max = 5000) List<@NotNull UUID> assetIds) {}
+  public record InventoryValidationItem(
+      UUID assetId,
+      boolean found,
+      Long version,
+      UUID warehouseId,
+      RentalItemStatus status) {}
+  public record InventoryValidationResponse(
+      OffsetDateTime validatedAt,
+      String validationDigest,
+      List<InventoryValidationItem> assets) {}
+
+  public record InventorySourceAssetRequest(
+      @NotNull UUID inventoryId,
+      @NotNull UUID findingId,
+      @NotNull UUID warehouseId,
+      @NotBlank @Size(max = 128) String number,
+      @Size(max = 255) String rentalType,
+      @Size(max = 255) String dimensions,
+      @Size(max = 255) String finishing,
+      @Size(max = 255) String category,
+      @Size(max = 2000) String characteristics,
+      Boolean linoleum,
+      Map<String, Object> passport,
+      List<@NotBlank @Size(max = 128) String> tags) {}
+  public record InventorySourceAssetResponse(
+      UUID inventoryId,
+      UUID findingId,
+      InventoryAssetSnapshot asset) {}
 
   public record ClassifierRequest(@NotNull @Min(0) Long expectedVersion, @NotBlank @Size(max = 32) String type,
       UUID parentId, @NotBlank @Size(max = 64) String code, @NotBlank @Size(max = 255) String name,

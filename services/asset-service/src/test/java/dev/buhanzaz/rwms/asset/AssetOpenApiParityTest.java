@@ -52,7 +52,14 @@ class AssetOpenApiParityTest {
         "/api/internal/asset/v1/maintenance/operation-leases",
         "/api/internal/asset/v1/maintenance/operation-leases/{id}/renew",
         "/api/internal/asset/v1/maintenance/operation-leases/{id}/release",
-        "/api/internal/asset/v1/maintenance/rental-items/{id}/fenced-status");
+        "/api/internal/asset/v1/maintenance/rental-items/{id}/fenced-status",
+
+        "/api/internal/asset/v1/inventory/captures",
+        "/api/internal/asset/v1/inventory/captures/{captureId}",
+        "/api/internal/asset/v1/inventory/captures/{captureId}/members",
+        "/api/internal/asset/v1/inventory/number-resolutions",
+        "/api/internal/asset/v1/inventory/validations",
+        "/api/internal/asset/v1/inventory/source-assets");
     Map<String, Object> schemas = child(child(document, "components"), "schemas");
     assertThat(list(child(schemas, "RentalItem").get("required")))
         .contains("id", "version", "number", "status", "passport", "tags", "contents");
@@ -65,6 +72,18 @@ class AssetOpenApiParityTest {
             "WRITE_OFF");
     assertThat(child(schemas, "MaintenanceFencedStatusRequest").toString())
         .doesNotContain("RentalItemStatus", "status=");
+
+    assertThat(list(child(schemas, "InventoryCaptureMember").get("required")))
+        .contains("assetId", "version", "warehouseId", "status", "displayCanonicalNumber",
+            "identityMatchKey", "passportSnapshot", "contentsSnapshot");
+    assertThat(child(schemas, "InventorySourceAssetRequest").toString())
+        .doesNotContain("expectedVersion", "leaseId", "fencingToken", "status");
+    assertThat(paths.keySet().stream().filter(path -> path.contains("/inventory/")).toList())
+        .noneMatch(path -> path.contains("hold") || path.contains("lease")
+            || path.contains("fenced-status"));
+    assertThat(child(child(child(paths,
+        "/api/internal/asset/v1/inventory/source-assets"), "post"), "responses")
+        .get("200").toString()).contains("Idempotency-Replayed", "true");
     assertAllLocalReferencesResolve(document, document);
   }
 

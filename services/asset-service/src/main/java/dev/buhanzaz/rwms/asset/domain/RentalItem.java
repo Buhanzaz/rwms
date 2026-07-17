@@ -22,7 +22,9 @@ import org.hibernate.proxy.HibernateProxy;
 @Entity
 @Table(name = "rental_item")
 public class RentalItem {
-  private static final Pattern NUMBER = Pattern.compile("^[\\p{L}\\p{N}]{1,128}$");
+  private static final Locale NUMBER_LOCALE = Locale.forLanguageTag("ru-RU");
+  private static final Pattern DISPLAY_NUMBER = Pattern.compile("^[\\p{L}\\p{N}][\\p{L}\\p{N} -]{0,127}$");
+  private static final Pattern MATCH_KEY = Pattern.compile("^[\\p{L}\\p{N}]{1,128}$");
 
   @Id
   @GeneratedValue(strategy = GenerationType.UUID)
@@ -36,8 +38,11 @@ public class RentalItem {
   @Column(name = "warehouse_id", nullable = false)
   private UUID warehouseId;
 
-  @Column(name = "number", nullable = false, length = 128)
+  @Column(name = "display_canonical_number", nullable = false, length = 128)
   private String number;
+
+  @Column(name = "identity_match_key", nullable = false, length = 128)
+  private String identityMatchKey;
 
   @Enumerated(EnumType.STRING)
   @Column(name = "status", nullable = false, length = 64)
@@ -90,13 +95,23 @@ public class RentalItem {
       String passportJson,
       String tagsJson) {
     if (warehouseId == null) throw new IllegalArgumentException("warehouseId is required");
-    RentalItem item = new RentalItem();
-    item.warehouseId = warehouseId;
-    item.number = canonicalNumber(number);
-    item.status = RentalItemStatus.NEW;
-    item.assignPassport(
-        rentalType, dimensions, finishing, category, characteristics, linoleum, passportJson, tagsJson);
-    return item;
+    return createWithStatus(warehouseId, number, RentalItemStatus.NEW, rentalType, dimensions,
+        finishing, category, characteristics, linoleum, passportJson, tagsJson);
+  }
+
+  public static RentalItem createFromInventory(
+      UUID warehouseId,
+      String number,
+      String rentalType,
+      String dimensions,
+      String finishing,
+      String category,
+      String characteristics,
+      Boolean linoleum,
+      String passportJson,
+      String tagsJson) {
+    return createWithStatus(warehouseId, number, RentalItemStatus.FREE, rentalType, dimensions,
+        finishing, category, characteristics, linoleum, passportJson, tagsJson);
   }
 
   public boolean changePassport(
@@ -204,21 +219,55 @@ public class RentalItem {
     createdAt = now;
     updatedAt = now;
     number = canonicalNumber(number);
+    identityMatchKey = identityMatchKey(number);
   }
 
   @PreUpdate
   void preUpdate() {
     updatedAt = OffsetDateTime.now(ZoneOffset.UTC);
     number = canonicalNumber(number);
+    identityMatchKey = identityMatchKey(number);
   }
 
   public static String canonicalNumber(String value) {
-    String candidate = value == null ? "" : value.trim().replaceAll("[^\\p{L}\\p{N}]+", "");
-    String normalized = candidate.toUpperCase(Locale.ROOT);
-    if (!NUMBER.matcher(normalized).matches()) {
-      throw new IllegalArgumentException("Rental item number must contain 1 to 128 letters or digits");
+    String candidate = value == null ? "" : value.strip().replaceAll("[\\p{Z}\\s]+", " ");
+    String normalized = candidate.toUpperCase(NUMBER_LOCALE);
+    if (!DISPLAY_NUMBER.matcher(normalized).matches()) {
+      throw new IllegalArgumentException(
+          "Rental item number must contain 1 to 128 letters, digits, spaces, or ASCII hyphens");
     }
     return normalized;
+  }
+
+  public static String identityMatchKey(String value) {
+    String key = canonicalNumber(value).replace(" ", "").replace("-", "");
+    if (!MATCH_KEY.matcher(key).matches()) {
+      throw new IllegalArgumentException("Rental item number has no identity characters");
+    }
+    return key;
+  }
+
+  private static RentalItem createWithStatus(
+      UUID warehouseId,
+      String number,
+      RentalItemStatus status,
+      String rentalType,
+      String dimensions,
+      String finishing,
+      String category,
+      String characteristics,
+      Boolean linoleum,
+      String passportJson,
+      String tagsJson) {
+    if (warehouseId == null) throw new IllegalArgumentException("warehouseId is required");
+    RentalItem item = new RentalItem();
+    item.warehouseId = warehouseId;
+    item.number = canonicalNumber(number);
+    item.identityMatchKey = identityMatchKey(item.number);
+    item.status = status;
+    item.assignPassport(
+        rentalType, dimensions, finishing, category, characteristics, linoleum, passportJson, tagsJson);
+    return item;
   }
 
   private static String optional(String value, int maximum) {
@@ -249,6 +298,7 @@ public class RentalItem {
   public long getVersion() { return version; }
   public UUID getWarehouseId() { return warehouseId; }
   public String getNumber() { return number; }
+  public String getIdentityMatchKey() { return identityMatchKey; }
   public RentalItemStatus getStatus() { return status; }
   public String getRentalType() { return rentalType; }
   public String getDimensions() { return dimensions; }

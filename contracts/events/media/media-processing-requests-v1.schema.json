@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/media/media-processing-requests-v1.schema.json",
+  "title": "RWMS media processing request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelopeVersion", "eventId", "eventType", "eventVersion", "occurredAt", "recordedAt", "producer", "aggregateType", "aggregateId", "aggregateVersion", "correlation", "actorRef", "payload"],
+  "properties": {
+    "envelopeVersion": {"const": 2},
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {"const": "media.processing.request.v1"},
+    "eventVersion": {"const": 1},
+    "occurredAt": {"oneOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "producer": {"const": "media-service"},
+    "aggregateType": {"const": "PROCESSING_JOB"},
+    "aggregateId": {"type": "string", "format": "uuid"},
+    "aggregateVersion": {"const": 1},
+    "correlation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["correlationId", "causationId"],
+      "properties": {
+        "correlationId": {"type": "string", "format": "uuid"},
+        "causationId": {"oneOf": [{"type": "string", "format": "uuid"}, {"type": "null"}]}
+      }
+    },
+    "actorRef": {"type": "null"},
+    "payload": {
+      "type": "object", "additionalProperties": false,
+      "required": ["processingJobId", "mediaId", "warehouseId", "kind", "processingKind", "generation", "rotationDegrees", "sourceVersionId"],
+      "properties": {
+        "processingJobId": {"type": "string", "format": "uuid"},
+        "mediaId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "kind": {"enum": ["IMAGE", "VIDEO"]},
+        "processingKind": {"enum": ["INITIAL", "ROTATION"]},
+        "generation": {"type": "integer", "minimum": 1},
+        "rotationDegrees": {"enum": [0, 90, 180, 270]},
+        "sourceVersionId": {"type": "string", "minLength": 1, "maxLength": 255}
+      }
+    }
+  },
+  "x-rwms-topic": "rwms.media.processing.v1",
+  "x-rwms-record-key": "aggregateId",
+  "x-rwms-ordering": "One PROCESSING_JOB aggregate starts at version 1. Validation failures are not retried; transient failures use 1s/2s/4s then the consumer-owned DLT."
+}

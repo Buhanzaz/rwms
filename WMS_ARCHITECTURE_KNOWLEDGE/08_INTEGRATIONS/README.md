@@ -432,3 +432,110 @@ transient failures use bounded 1s/2s/4s retries, and replay requires an
 operator-reviewed action. Tests cover duplicates, ordering, outages,
 DLT/quarantine recovery and late task correlation without moving authority
 into Kafka.
+
+## Stage 7 inventory integration proposal (2026-07-17)
+
+Approval resolution: the user's `Начинай Stage 7 все разрешаю` response,
+followed by `Продолжай`, approves the exact direct-service sequence, stable
+capture/source create, point-in-time validation, maintenance plan/source
+boundaries, messaging and query/statistics contract below. The missing media
+runtime is authorized as a separate first subgate; authority is not runtime
+evidence.
+
+Current target gaps are explicit: there is no inventory OAuth client,
+inventory-authorized warehouse endpoint/allowlist returning the required
+version/active/timezone shape, stable asset population capture/global resolve/
+permanent source create, maintenance inventory upsert or public gateway route.
+Service-specific private warehouse endpoints already exist for auth and asset,
+but do not authorize inventory. Asset public pages cannot freeze one population
+above 200 records. Inventory-origin repair lookup/upsert is hard-wired to the
+local browser adapter and is invisible to maintenance HTTP.
+
+The proposed narrow sequence uses direct exact-scope HTTP only:
+
+- warehouse returns active identity/version/timezone;
+- asset accepts an idempotent capture request keyed by the inventory start
+  operation and technical attempt IDs and returns fixed membership/count/digest/
+  order plus stable pages. A changed request fingerprint conflicts. Each capture
+  has an exact non-sliding 30-minute TTL. Inventory releases immediately after
+  its copied start transaction commits; concurrent losers release immediately,
+  no capture remains on `ACTIVE`, and asset-side expiry is crash/orphan fallback.
+  Inventory commits no local session when copy/digest/dependency/expiry checks
+  fail before its transaction. A still-uncommitted public-key retry may append a
+  new technical attempt, while a committed retry replays the local session;
+- asset also provides global number resolution and permanent
+  `inventoryId:findingId` create; it exposes no inventory business lease, hold
+  or fenced-status mutation;
+- completion preview receives an asset point-in-time validation snapshot with
+  versions/status/warehouse, `validatedAt` and digest. Complete repeats that
+  validation immediately before local commit and returns stale `409` when it
+  differs. Matching validation is frozen with local CAS; it is not a token or
+  proof that remote assets remain unchanged until PostgreSQL commits. A later
+  canonical change preserves completed history and is rechecked as a blockable/
+  reconcilable current precondition at maintenance publication;
+- during `WORK_STAGED` save, `maintenance.inventory` resolves `AUTO` against the
+  then-active warehouse catalog or validates a `MANUAL` selection and returns
+  exact catalog-version/node/queue IDs, codes/kinds, normalized lines/prices,
+  durations, ordered route, movement/photo requirements and one immutable
+  fingerprint;
+- after completion, maintenance accepts exact source upsert with
+  `origin=INVENTORY` and that historical snapshot/fingerprint. It verifies
+  source/current-asset preconditions but never regenerates, silently upgrades
+  or reroutes the plan after later catalog activation. Maintenance owns the
+  repair asset lease and existing task-board synchronization;
+- gateway exposes only the later public `/api/inventory/**` route.
+
+No task-board change or inventory task-board/media credential is proposed.
+Inventory consumes owner-bound finalized media facts and stores only opaque
+`{mediaId,generation}` references. The absent media HTTP/JWT/PostgreSQL/outbox
+runtime still blocks production upload and full Stage 7 cutover; resolving it
+is a separately authorized previous-stage closure, not inventory integration
+work.
+
+The proposed inventory session/publication aggregate-family topics use the
+existing transactional outbox, broker acknowledgement, inbox/checkpoint
+atomicity, version-gap quarantine, sanitized DLT and bounded initial plus
+1s/2s/4s retry rules. Exact schemas remain forbidden until contract approval.
+
+The public inventory outline additionally proposes VIEW-authorized,
+warehouse-scoped server paging for session history, detail/findings and frozen
+statistics, with business-date and UTC start/terminal filters. Only `COMPLETED`
+sessions have statistics rows or enter summaries; `ACTIVE`/`CANCELLED` remain in
+history/detail. Browser LocalStorage totals are not query authority.
+
+Integration verification must cover public-key/technical-attempt replay and
+mismatch, deterministic pages/digest, immediate copied/loser release, no active
+retention, non-sliding 30-minute crash/TTL cleanup and no local start on pre-
+commit failure; `AUTO`/`MANUAL` freeze, later catalog activation without
+rewrite, historical preview validation, exact upsert fingerprint replay/
+conflict, and maintenance-owned lease/task recovery. Query contract tests must
+cover VIEW, warehouse isolation, paging/sort bounds, time-boundary and
+completed-only statistics semantics, concrete quantity/count/overflow limits,
+and independent category/grand/aggregate-row `HALF_UP` parity with maintenance.
+Race tests must distinguish a pre-fresh-validation change (`409`/new preview)
+from a post-`validatedAt` change (retained completed snapshot plus publication
+block/reconciliation), without adding an inventory asset lease. Publication
+tests must exhaust the required-intent fold precedence, blocked peers with a
+retryable intent, MANAGE reconcile-and-retry and terminal `CLOSED_BLOCKED`.
+
+### Stage 7 verified integration resolution (2026-07-17)
+
+The direct prerequisites, inventory HTTP/events, stateless gateway and panel
+cutover are implemented. Asset capture membership, catalog and balance reads
+run inside one inner repeatable-read snapshot. Inventory start idempotency uses
+a lease-locked exact-response record; its external capture release runs only
+from transaction `afterCompletion`. Maintenance's complete inventory-source
+reconciliation path is JPA. Media applies owner event-ID conflict evidence,
+quarantine, binding deactivation and sanitized DLT atomically; public media
+reads include the locked owner-proof/checkpoint/quarantine predicate in the
+same statement that returns rows, so concurrent revocation fails closed.
+
+The final Stage 7-only candidate suites passed inventory 46/46, asset 57/57,
+maintenance 131/131, Stage 7 architecture 27/27, auth 11/11, warehouse 12/12,
+gateway 36/36 and media's canonical real PostgreSQL, drift-PostgreSQL, Kafka
+and MinIO matrix 73/73, all with zero failures, errors or skips. Media also
+passed a reproducible build; panel typecheck/lint/build, Vitest 48 and
+Playwright 9/9 passed. Earlier shared asset 64/64, maintenance 136/136 and
+architecture 33/34 runs mixed in Stage 8 diagnostics and are not Stage 7
+closure totals. Closure is recorded by the containing scoped Stage 7 commit
+without inventing a SHA.

@@ -66,6 +66,35 @@ class AuthFlywayConfigurationTest {
                 .isEqualTo("rwms-services");
     }
 
+    @Test
+    void inventoryClientIsDisabledAndExactInBaseDevelopmentAndFocusedTestProfiles() throws IOException {
+        assertInventoryClient(load("application.yaml"), 6);
+        assertInventoryClient(load("application-dev.yaml"), 6);
+        assertInventoryClient(load("application-inventory-client.yaml"), 0);
+    }
+
+    private void assertInventoryClient(PropertySource<?> source, int index) {
+        String prefix = "rwms.auth.oauth.clients[" + index + "]";
+        assertThat(source.getProperty(prefix + ".client-id")).isEqualTo("inventory-service");
+        assertThat(source.getProperty(prefix + ".enabled")).isEqualTo("${INVENTORY_CLIENT_ENABLED:false}");
+        assertThat(source.getProperty(prefix + ".authentication-methods[0]")).isEqualTo("client_secret_basic");
+        assertThat(source.getProperty(prefix + ".authentication-methods[1]")).isNull();
+        assertThat(source.getProperty(prefix + ".grant-types[0]")).isEqualTo("client_credentials");
+        assertThat(source.getProperty(prefix + ".grant-types[1]")).isNull();
+        assertThat(source.getProperty(prefix + ".scopes[0]")).isEqualTo("warehouse.read");
+        assertThat(source.getProperty(prefix + ".scopes[1]")).isEqualTo("asset.inventory");
+        assertThat(source.getProperty(prefix + ".scopes[2]")).isEqualTo("maintenance.inventory");
+        assertThat(source.getProperty(prefix + ".scopes[3]")).isNull();
+        assertThat(source.getProperty(prefix + ".audiences[0]")).isEqualTo("rwms-services");
+        assertThat(source.getProperty(prefix + ".audiences[1]")).isNull();
+        assertThat(source.getProperty(prefix + ".secret-environment")).isEqualTo("INVENTORY_CLIENT_SECRET");
+        assertThat(source.getProperty(prefix + ".development-secret")).isNull();
+        assertThat(source.getProperty(prefix + ".redirect-uris[0]")).isNull();
+        assertThat(source.getProperty(prefix + ".post-logout-redirect-uris[0]")).isNull();
+        assertThat(source.getProperty(prefix + ".allowed-principal-types[0]")).isNull();
+        assertThat(source.getProperty(prefix + ".allowed-origins[0]")).isNull();
+    }
+
     private PropertySource<?> load(String resource) throws IOException {
         return loader.load(resource, new ClassPathResource(resource)).getFirst();
     }
