@@ -254,6 +254,9 @@ public class OAuthClientProvisioner implements ApplicationRunner {
         if (client.inventoryServiceClient()) {
             validateInventoryClientContract(client, authenticationMethods, grantTypes);
         }
+        if (client.logisticsServiceClient()) {
+            validateLogisticsClientContract(client, authenticationMethods, grantTypes);
+        }
         if (!client.enabled()) {
             return;
         }
@@ -298,6 +301,19 @@ public class OAuthClientProvisioner implements ApplicationRunner {
                 OAuthClientProperties.INVENTORY_SCOPES,
                 OAuthClientProperties.INVENTORY_AUDIENCE,
                 OAuthClientProperties.INVENTORY_SECRET_ENVIRONMENT);
+    }
+
+    private void validateLogisticsClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes) {
+        validateExactServiceClientContract(
+                client,
+                authenticationMethods,
+                grantTypes,
+                OAuthClientProperties.LOGISTICS_SCOPES,
+                OAuthClientProperties.LOGISTICS_AUDIENCE,
+                OAuthClientProperties.LOGISTICS_SECRET_ENVIRONMENT);
     }
 
     private void validateExactServiceClientContract(

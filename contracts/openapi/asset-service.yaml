@@ -3,8 +3,8 @@ info:
   title: RWMS Asset Service API
   version: 1.2.0
   description: >-
-    Stage 5 canonical asset boundary plus the narrow Stage 7 inventory-service
-    private surface. Rental-item comments and
+    Stage 5 canonical asset boundary plus narrow Stage 7 inventory-service and
+    Stage 8 logistics-service private surfaces. Rental-item comments and
     manual-note text are readable only through this HTTP API and are never
     Kafka facts. New production databases start empty; browser fixtures and
     legacy rows are not an import source.
@@ -358,7 +358,141 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
-
+  /api/internal/asset/v1/logistics/rental-items/{id}/snapshot:
+    parameters: [ { $ref: '#/components/parameters/RentalItemId' } ]
+    get:
+      operationId: readLogisticsRentalItemSnapshot
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Returns only the canonical
+        asset ID, version, warehouse, status and opaque equipment quantities; it never exposes a
+        cabin number, passport, local comments or generic asset read data.
+      responses:
+        '200': { description: Narrow canonical asset snapshot., content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsRentalItemSnapshot' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/internal/asset/v1/logistics/operation-leases:
+    post:
+      operationId: acquireLogisticsOperationLease
+      description: >-
+        Requires exactly asset.logistics. Owner type is closed to the three logistics aggregate
+        families and asset derives the persisted owner reference as documentId:lineId.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AcquireLogisticsOperationLeaseRequest' } } } }
+      responses:
+        '201':
+          description: Acquired lease or original subject-bound replay.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsOperationLease' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/logistics/operation-leases/{id}/renew:
+    parameters: [ { $ref: '#/components/parameters/LeaseId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+    put:
+      operationId: renewLogisticsOperationLease
+      description: Rechecks the exact typed document-line owner, expected lease version and active fencing token.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsLeaseCommandRequest' } } } }
+      responses:
+        '200':
+          description: Renewed lease or original subject-bound replay.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsOperationLease' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/logistics/operation-leases/{id}/release:
+    parameters: [ { $ref: '#/components/parameters/LeaseId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+    put:
+      operationId: releaseLogisticsOperationLease
+      description: Rechecks the exact typed document-line owner before releasing the opaque lease.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsLeaseCommandRequest' } } } }
+      responses:
+        '200':
+          description: Released lease or original subject-bound replay.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsOperationLease' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/logistics/rental-items/{id}/effects:
+    parameters: [ { $ref: '#/components/parameters/RentalItemId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+    put:
+      operationId: applyLogisticsRentalItemEffect
+      description: >-
+        A closed action allowlist validates the matching active typed lease, asset version and
+        permissible canonical return, shipment or transfer transition. Only transfer arrival may
+        move warehouse; attached cabin contents move through asset-owned ledger rows atomically.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsFencedEffectRequest' } } } }
+      responses:
+        '200':
+          description: Canonical effect applied or original replay while the active fence remains valid.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsRentalItemSnapshot' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/DependencyFailure' }
+        '503': { $ref: '#/components/responses/DependencyFailure' }
+  /api/internal/asset/v1/logistics/equipment-holds:
+    post:
+      operationId: acquireLogisticsEquipmentHold
+      description: >-
+        Requires exactly asset.logistics. Only a shipmentId:shipmentLineId owner can reserve
+        canonical stock; asset remains owner of hold state and all physical ledger movement.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AcquireLogisticsEquipmentHoldRequest' } } } }
+      responses:
+        '201':
+          description: Opaque hold reference or original subject-bound replay.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsEquipmentHold' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/DependencyFailure' }
+        '503': { $ref: '#/components/responses/DependencyFailure' }
+  /api/internal/asset/v1/logistics/equipment-holds/{id}/renew:
+    parameters: [ { $ref: '#/components/parameters/HoldId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+    put:
+      operationId: renewLogisticsEquipmentHold
+      description: Renews only a matching active shipment-line hold.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsEquipmentHoldCommandRequest' } } } }
+      responses:
+        '200':
+          description: Renewed opaque hold or original subject-bound replay.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsEquipmentHold' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/logistics/equipment-holds/{id}/commit:
+    parameters: [ { $ref: '#/components/parameters/HoldId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+    put:
+      operationId: commitLogisticsEquipmentHold
+      description: Commits only a matching active shipment-line hold without inferring a logistics movement.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsEquipmentHoldCommandRequest' } } } }
+      responses:
+        '200':
+          description: Committed opaque hold or original subject-bound replay.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsEquipmentHold' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/logistics/equipment-holds/{id}/release:
+    parameters: [ { $ref: '#/components/parameters/HoldId' }, { $ref: '#/components/parameters/IdempotencyKey' } ]
+    put:
+      operationId: releaseLogisticsEquipmentHold
+      description: Releases only a matching shipment-line hold; active and committed holds are asset-owned states.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsEquipmentHoldCommandRequest' } } } }
+      responses:
+        '200':
+          description: Released opaque hold or original subject-bound replay.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsEquipmentHold' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/internal/asset/v1/inventory/captures:
     post:
       operationId: createInventoryAssetCapture
@@ -723,7 +857,104 @@ components:
         ownerType: { $ref: '#/components/schemas/MaintenanceLeaseOwnerType' }
         ownerId: { type: string, format: uuid }
         linkedReturnEstimateId: { $ref: '#/components/schemas/NullableUuid' }
-
+    LogisticsLeaseOwnerType:
+      type: string
+      enum: [LOGISTICS_RETURN, LOGISTICS_SHIPMENT, LOGISTICS_TRANSFER]
+    LogisticsRentalItemAction:
+      type: string
+      enum: [RETURN_INTAKE, RETURN_SETTLE_FREE, RETURN_SETTLE_SHORTAGE, SHIPMENT_CONFIRM, TRANSFER_DEPART, TRANSFER_ARRIVE]
+    LogisticsEquipmentContentSnapshot:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, quantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        quantity: { type: integer, format: int64, minimum: 0 }
+    LogisticsRentalItemSnapshot:
+      type: object
+      additionalProperties: false
+      required: [assetId, version, warehouseId, status, contents]
+      properties:
+        assetId: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        warehouseId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/RentalItemStatus' }
+        contents:
+          type: array
+          items: { $ref: '#/components/schemas/LogisticsEquipmentContentSnapshot' }
+    AcquireLogisticsOperationLeaseRequest:
+      type: object
+      additionalProperties: false
+      required: [rentalItemId, ownerType, documentId, lineId, expectedRentalItemVersion]
+      properties:
+        rentalItemId: { type: string, format: uuid }
+        ownerType: { $ref: '#/components/schemas/LogisticsLeaseOwnerType' }
+        documentId: { type: string, format: uuid }
+        lineId: { type: string, format: uuid }
+        expectedRentalItemVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+    LogisticsLeaseCommandRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, fencingToken, ownerType, documentId, lineId]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        fencingToken: { type: integer, format: int64, minimum: 1 }
+        ownerType: { $ref: '#/components/schemas/LogisticsLeaseOwnerType' }
+        documentId: { type: string, format: uuid }
+        lineId: { type: string, format: uuid }
+    LogisticsOperationLease:
+      type: object
+      additionalProperties: false
+      required: [leaseId, version, rentalItemId, fencingToken, state, expiresAt]
+      properties:
+        leaseId: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        rentalItemId: { type: string, format: uuid }
+        fencingToken: { type: integer, format: int64, minimum: 1 }
+        state: { type: string, enum: [ACTIVE, RELEASED, EXPIRED] }
+        expiresAt: { type: string, format: date-time }
+    LogisticsFencedEffectRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, action, leaseId, fencingToken, ownerType, documentId, lineId]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        action: { $ref: '#/components/schemas/LogisticsRentalItemAction' }
+        leaseId: { type: string, format: uuid }
+        fencingToken: { type: integer, format: int64, minimum: 1 }
+        ownerType: { $ref: '#/components/schemas/LogisticsLeaseOwnerType' }
+        documentId: { type: string, format: uuid }
+        lineId: { type: string, format: uuid }
+        destinationWarehouseId: { $ref: '#/components/schemas/NullableUuid' }
+    AcquireLogisticsEquipmentHoldRequest:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, warehouseId, shipmentId, shipmentLineId, quantity, expectedStockVersion]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        shipmentId: { type: string, format: uuid }
+        shipmentLineId: { type: string, format: uuid }
+        quantity: { type: integer, format: int64, minimum: 1 }
+        expectedStockVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+    LogisticsEquipmentHoldCommandRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, shipmentId, shipmentLineId]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        shipmentId: { type: string, format: uuid }
+        shipmentLineId: { type: string, format: uuid }
+    LogisticsEquipmentHold:
+      type: object
+      additionalProperties: false
+      required: [holdId, version, state, expiresAt, committedAt]
+      properties:
+        holdId: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        state: { type: string, enum: [ACTIVE, COMMITTED, RELEASED, EXPIRED] }
+        expiresAt: { type: string, format: date-time }
+        committedAt: { type: [string, 'null'], format: date-time }
     Sha256:
       type: string
       pattern: '^[0-9a-f]{64}$'

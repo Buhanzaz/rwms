@@ -5,8 +5,8 @@ info:
   description: >-
     Canonical Stage 1 warehouse identity API. Public endpoints require a USER
     JWT and local issuer/audience validation. Internal existence validation has
-    separate least-privilege paths for auth-service, asset-service and
-    inventory-service client credentials.
+    separate least-privilege paths for auth-service, asset-service,
+    inventory-service and logistics-service client credentials.
 servers:
   - url: /
 security:
@@ -153,7 +153,25 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-
+  /api/internal/warehouse/v1/warehouses/logistics/{id}/identity:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: getWarehouseIdentityForLogisticsService
+      description: >-
+        Requires principal_type SERVICE, sub and client_id both exactly
+        logistics-service, and exactly one scope: warehouse.logistics. This
+        narrow private route is not gateway-routable and exposes no topology or
+        location data. Inactive state remains explicit for logistics validation.
+      responses:
+        '200':
+          description: Exact warehouse identity, version, active flag and canonical IANA timezone.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LogisticsWarehouseIdentity' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 components:
   securitySchemes:
     bearerJwt:
@@ -236,7 +254,19 @@ components:
           minLength: 1
           maxLength: 64
           description: Canonical IANA timezone identifier.
-
+    LogisticsWarehouseIdentity:
+      type: object
+      additionalProperties: false
+      required: [id, version, active, timeZone]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, minimum: 0 }
+        active: { type: boolean }
+        timeZone:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Canonical IANA timezone identifier.
     ApiProblem:
       type: object
       additionalProperties: true

@@ -124,6 +124,22 @@ retries; validation is terminal on its actual attempt. A DLT record uses the
 source processing-job UUID key for a valid request, or deterministic UUIDv5 in
 the OID namespace over SHA-256 of the raw bytes for an invalid request.
 
+## Private logistics readiness validation
+
+`POST /api/internal/media/v1/logistics/references/validate` is the only Stage
+8 media receiver. It requires the exact `logistics-service` SERVICE JWT with
+matching `sub`/`client_id` and one `media.logistics` scope. The request derives
+an opaque owner ID from `documentId:lineId`, permits only
+`LOGISTICS_RETURN`, `LOGISTICS_SHIPMENT` and `LOGISTICS_TRANSFER`, and validates
+one to twenty unique `{mediaId,generation}` values for the matching warehouse.
+
+The query succeeds only for current `READY` generations and returns only the
+validated opaque IDs/generations. It never exposes a URL, object key,
+filename, MIME type, processing state or retention policy. It is read-only:
+no upload, owner binding, migration, event, outbox, Kafka consumer or object
+storage call is made. In particular, it does not depend on the Stage 7
+inventory owner-proof projection.
+
 ## Local verification
 
 The build host needs Go 1.25, CGO, libvips, FFmpeg and FFprobe.

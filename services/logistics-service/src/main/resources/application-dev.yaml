@@ -1,0 +1,29 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  datasource:
+    url: ${LOGISTICS_DB_URL:jdbc:postgresql://localhost:5440/rwms_logistics}
+    username: ${LOGISTICS_DB_USERNAME:rwms_logistics}
+    password: ${LOGISTICS_DB_PASSWORD:rwms_logistics_dev}
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTH_ISSUER:http://localhost:9000}
+  cloud:
+    stream:
+      kafka:
+        binder:
+          brokers: ${LOGISTICS_KAFKA_BROKERS:127.0.0.1:9092}
+          auto-create-topics: true
+
+rwms:
+  platform:
+    kafka:
+      enabled: ${LOGISTICS_KAFKA_ENABLED:false}
+  logistics:
+    security:
+      dev-auth-bypass: ${LOGISTICS_DEV_AUTH_BYPASS:true}
+  cors:
+    allowed-origins: ${PANEL_ORIGIN:http://localhost:5173}

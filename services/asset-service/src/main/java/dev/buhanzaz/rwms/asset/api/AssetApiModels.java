@@ -147,6 +147,90 @@ public final class AssetApiModels {
       @NotNull UUID ownerId,
       UUID linkedReturnEstimateId) {}
 
+  /**
+   * The only operation-lease owners accepted from logistics. The service
+   * derives the persisted owner ID from documentId and lineId rather than
+   * trusting an arbitrary owner string.
+   */
+  public enum LogisticsLeaseOwnerType {
+    LOGISTICS_RETURN,
+    LOGISTICS_SHIPMENT,
+    LOGISTICS_TRANSFER
+  }
+
+  /**
+   * A closed canonical-effect vocabulary. Logistics cannot submit a target
+   * rental status directly.
+   */
+  public enum LogisticsRentalItemAction {
+    RETURN_INTAKE,
+    RETURN_SETTLE_FREE,
+    RETURN_SETTLE_SHORTAGE,
+    SHIPMENT_CONFIRM,
+    TRANSFER_DEPART,
+    TRANSFER_ARRIVE
+  }
+
+  /** Read projection deliberately excludes cabin number, passport and local comments. */
+  public record LogisticsRentalItemSnapshot(
+      UUID assetId,
+      long version,
+      UUID warehouseId,
+      RentalItemStatus status,
+      List<LogisticsEquipmentContentSnapshot> contents) {}
+  public record LogisticsEquipmentContentSnapshot(UUID equipmentId, long quantity) {}
+
+  public record AcquireLogisticsOperationLeaseRequest(
+      @NotNull UUID rentalItemId,
+      @NotNull LogisticsLeaseOwnerType ownerType,
+      @NotNull UUID documentId,
+      @NotNull UUID lineId,
+      @NotNull @Min(0) Long expectedRentalItemVersion) {}
+  public record LogisticsLeaseCommandRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotNull @Min(1) Long fencingToken,
+      @NotNull LogisticsLeaseOwnerType ownerType,
+      @NotNull UUID documentId,
+      @NotNull UUID lineId) {}
+  public record LogisticsOperationLeaseResponse(
+      UUID leaseId,
+      long version,
+      UUID rentalItemId,
+      long fencingToken,
+      String state,
+      OffsetDateTime expiresAt) {}
+
+  public record LogisticsFencedEffectRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotNull LogisticsRentalItemAction action,
+      @NotNull UUID leaseId,
+      @NotNull @Min(1) Long fencingToken,
+      @NotNull LogisticsLeaseOwnerType ownerType,
+      @NotNull UUID documentId,
+      @NotNull UUID lineId,
+      UUID destinationWarehouseId) {}
+
+  /**
+   * Equipment reservation belongs to a shipment line only. Asset-service
+   * keeps the physical balance and ledger mutation authoritative.
+   */
+  public record AcquireLogisticsEquipmentHoldRequest(
+      @NotNull UUID equipmentId,
+      @NotNull UUID warehouseId,
+      @NotNull UUID shipmentId,
+      @NotNull UUID shipmentLineId,
+      @NotNull @Min(1) Long quantity,
+      @NotNull @Min(0) Long expectedStockVersion) {}
+  public record LogisticsEquipmentHoldCommandRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotNull UUID shipmentId,
+      @NotNull UUID shipmentLineId) {}
+  public record LogisticsEquipmentHoldResponse(
+      UUID holdId,
+      long version,
+      String state,
+      OffsetDateTime expiresAt,
+      OffsetDateTime committedAt) {}
 
   public record InventoryCaptureRequest(
       @NotNull UUID operationId,

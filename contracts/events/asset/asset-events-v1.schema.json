@@ -10,7 +10,7 @@
     "envelopeVersion": {"const": 2},
     "eventId": {"type": "string", "format": "uuid"},
     "eventType": {"enum": [
-      "asset.rental-item.created.v1", "asset.rental-item.passport-changed.v1", "asset.rental-item.status-changed.v1", "asset.rental-item.warehouse-changed.v1", "asset.rental-item.general-comment-changed.v1", "asset.rental-item.manual-note-added.v1",
+      "asset.rental-item.created.v1", "asset.rental-item.passport-changed.v1", "asset.rental-item.status-changed.v1", "asset.rental-item.warehouse-changed.v1", "asset.rental-item.logistics-effect-applied.v1", "asset.rental-item.general-comment-changed.v1", "asset.rental-item.manual-note-added.v1",
       "asset.equipment-catalog.created.v1", "asset.equipment-catalog.changed.v1",
       "asset.equipment-balance.changed.v1",
       "asset.equipment-movement.transferred.v1", "asset.equipment-movement.written-off.v1", "asset.equipment-movement.lost.v1",
@@ -34,7 +34,7 @@
     ]}
   },
   "oneOf": [
-    {"properties": {"aggregateType": {"const": "RENTAL_ITEM"}, "eventType": {"enum": ["asset.rental-item.created.v1", "asset.rental-item.passport-changed.v1", "asset.rental-item.status-changed.v1", "asset.rental-item.warehouse-changed.v1"]}, "payload": {"$ref": "#/$defs/rentalFact"}}},
+    {"properties": {"aggregateType": {"const": "RENTAL_ITEM"}, "eventType": {"enum": ["asset.rental-item.created.v1", "asset.rental-item.passport-changed.v1", "asset.rental-item.status-changed.v1", "asset.rental-item.warehouse-changed.v1", "asset.rental-item.logistics-effect-applied.v1"]}, "payload": {"$ref": "#/$defs/rentalFact"}}},
     {"properties": {"aggregateType": {"const": "RENTAL_ITEM"}, "eventType": {"const": "asset.rental-item.general-comment-changed.v1"}, "payload": {"$ref": "#/$defs/rentalCommentFact"}}},
     {"properties": {"aggregateType": {"const": "RENTAL_ITEM"}, "eventType": {"const": "asset.rental-item.manual-note-added.v1"}, "payload": {"$ref": "#/$defs/rentalNoteFact"}}},
     {"properties": {"aggregateType": {"const": "EQUIPMENT_CATALOG"}, "eventType": {"enum": ["asset.equipment-catalog.created.v1", "asset.equipment-catalog.changed.v1"]}, "payload": {"$ref": "#/$defs/equipmentCatalogFact"}}},

@@ -76,6 +76,30 @@ class WarehouseAuthorizerTest {
   }
 
   @Test
+  void logisticsContractRequiresMatchingServiceIdentityAndExactLogisticsScope() {
+    WarehouseAuthorizer authorizer = new WarehouseAuthorizer(new MockEnvironment(), false);
+
+    authorizer.requireInternalLogisticsService(
+        jwt("SERVICE", "warehouse.logistics", null, "logistics-service", "logistics-service"));
+    for (Jwt invalid :
+        new Jwt[] {
+          jwt(
+              "SERVICE",
+              "warehouse.logistics warehouse.read",
+              null,
+              "logistics-service",
+              "logistics-service"),
+          jwt("SERVICE", "warehouse.read", null, "logistics-service", "logistics-service"),
+          jwt("SERVICE", "warehouse.logistics", null, "asset-service", "logistics-service"),
+          jwt("SERVICE", "warehouse.logistics", null, "logistics-service", "other-service"),
+          jwt("USER", "warehouse.logistics", "SYSTEM_ADMIN", "logistics-service", "logistics-service")
+        }) {
+      assertThatThrownBy(() -> authorizer.requireInternalLogisticsService(invalid))
+          .isInstanceOf(AccessDeniedException.class);
+    }
+  }
+
+  @Test
   void developmentBypassDoesNotOpenTheInternalContract() {
     MockEnvironment environment = new MockEnvironment();
     environment.setActiveProfiles("dev");
@@ -87,6 +111,8 @@ class WarehouseAuthorizerTest {
     assertThatThrownBy(() -> authorizer.requireInternalAuthService(null))
         .isInstanceOf(AccessDeniedException.class);
     assertThatThrownBy(() -> authorizer.requireInternalInventoryService(null))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireInternalLogisticsService(null))
         .isInstanceOf(AccessDeniedException.class);
   }
 

@@ -15,6 +15,9 @@ dependencies {
     if (rootProject.findProject(":services:inventory-service") != null) {
         testImplementation(project(":services:inventory-service"))
     }
+    if (rootProject.findProject(":services:logistics-service") != null) {
+        testImplementation(project(":services:logistics-service"))
+    }
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.archunit.junit5)

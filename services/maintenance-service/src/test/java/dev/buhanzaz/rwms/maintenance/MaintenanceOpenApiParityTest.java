@@ -12,6 +12,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceCatalogController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceEstimateController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceInventoryController;
+import dev.buhanzaz.rwms.maintenance.api.MaintenanceLogisticsController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceRepairController;
 import dev.buhanzaz.rwms.maintenance.domain.CatalogVersionState;
 import dev.buhanzaz.rwms.maintenance.domain.EstimateState;
@@ -24,6 +25,7 @@ import dev.buhanzaz.rwms.maintenance.domain.RepairStageState;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
 import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
+import dev.buhanzaz.rwms.maintenance.service.LogisticsReturnShortageService;
 import dev.buhanzaz.rwms.platform.contracts.ApiProblem;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import jakarta.validation.Valid;
@@ -84,12 +86,12 @@ class MaintenanceOpenApiParityTest {
   private static final List<OperationSpec> OPERATIONS = canonicalOperations();
 
   @Test
-  void allTwentyPathsAndTwentySixOperationsExactlyMatchTheApprovedAcceptanceMatrix()
+  void allTwentyOnePathsAndTwentyEightOperationsExactlyMatchTheApprovedAcceptanceMatrix()
       throws Exception {
     Map<String, Object> document = openApi();
-    assertThat(child(document, "paths")).hasSize(20);
-    assertThat(openApiOperationCount(document)).isEqualTo(26);
-    assertThat(controllerOperations()).hasSize(26);
+    assertThat(child(document, "paths")).hasSize(21);
+    assertThat(openApiOperationCount(document)).isEqualTo(28);
+    assertThat(controllerOperations()).hasSize(28);
 
     for (OperationSpec expected : OPERATIONS) {
       assertOpenApiOperation(document, expected);
@@ -115,6 +117,23 @@ class MaintenanceOpenApiParityTest {
     assertThat(child(document, "paths").keySet().stream()
         .filter(path -> path.startsWith("/api/maintenance/")))
         .noneMatch(path -> path.contains("/internal/"));
+  }
+
+  @Test
+  void logisticsBoundaryIsPrivateAndDoesNotExposeRepairOrAssetMutation() throws Exception {
+    Map<String, Object> document = openApi();
+    Set<String> logisticsPaths = child(document, "paths").keySet().stream()
+        .filter(path -> path.contains("/logistics"))
+        .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+
+    assertThat(logisticsPaths).containsExactly(
+        "/api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/shortage");
+    assertThat(logisticsPaths)
+        .allMatch(path -> path.startsWith("/api/internal/maintenance/v1/logistics"))
+        .noneMatch(path -> path.startsWith("/api/maintenance/"))
+        .noneMatch(path -> Set.of("repair", "estimate", "lease", "hold", "fence", "task")
+            .stream()
+            .anyMatch(path::contains));
   }
 
   @Test
@@ -301,13 +320,15 @@ class MaintenanceOpenApiParityTest {
   void mockMvcExecutesEveryControllerBindingStatusBodyAndRequiredHeader() throws Exception {
     MaintenanceApplicationService service = serviceFixture();
     InventoryMaintenanceService inventory = inventoryFixture();
+    LogisticsReturnShortageService logistics = logisticsFixture();
     MaintenanceAuthorizer authorizer = mock(MaintenanceAuthorizer.class);
     when(authorizer.subjectId(null)).thenReturn(ID);
     MockMvc mvc = MockMvcBuilders.standaloneSetup(
             new MaintenanceCatalogController(service, authorizer),
             new MaintenanceEstimateController(service, authorizer),
             new MaintenanceRepairController(service, authorizer),
-            new MaintenanceInventoryController(inventory, service, authorizer))
+            new MaintenanceInventoryController(inventory, service, authorizer),
+            new MaintenanceLogisticsController(logistics, authorizer))
         .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
         .addFilters(new CorrelationIdFilter())
         .build();
@@ -318,7 +339,9 @@ class MaintenanceOpenApiParityTest {
           HttpMethod.valueOf(operation.httpMethod()), operation.path()
               .replace("{id}", ID.toString())
               .replace("{inventoryId}", ID.toString())
-              .replace("{findingId}", ID.toString()));
+              .replace("{findingId}", ID.toString())
+              .replace("{returnId}", ID.toString())
+              .replace("{lineId}", ID.toString()));
       for (ParameterSpec parameter : operation.parameters()) {
         String value = valueFor(parameter);
         if ("query".equals(parameter.location())) request.param(parameter.name(), value);
@@ -405,6 +428,19 @@ class MaintenanceOpenApiParityTest {
         UpsertInventoryRepairRequest.class, "UpsertInventoryRepairRequest",
         "200", "InventoryRepairUpsertResult", true,
         "400", "401", "403", "404", "409", "422", "503"));
+    result.add(op("PUT",
+        "/api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/shortage",
+        "upsertLogisticsReturnShortage", MaintenanceLogisticsController.class, "upsert",
+        List.of(path("returnId"), path("lineId")),
+        UpsertLogisticsReturnShortageRequest.class, "UpsertLogisticsReturnShortageRequest",
+        "200", "LogisticsReturnShortage", true,
+        "400", "401", "403", "409", "422"));
+    result.add(op("GET",
+        "/api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/shortage",
+        "getLogisticsReturnShortage", MaintenanceLogisticsController.class, "get",
+        List.of(path("returnId"), path("lineId")),
+        null, null, "200", "LogisticsReturnShortage", false,
+        "401", "403", "404"));
 
     result.add(op("GET", "/api/maintenance/v1/estimates", "listEstimates",
         MaintenanceEstimateController.class, "list",
@@ -851,6 +887,20 @@ class MaintenanceOpenApiParityTest {
     return inventory;
   }
 
+  private static LogisticsReturnShortageService logisticsFixture() throws Exception {
+    LogisticsReturnShortageService logistics = mock(LogisticsReturnShortageService.class);
+    LogisticsReturnShortageResponse response = (LogisticsReturnShortageResponse) sample(
+        LogisticsReturnShortageResponse.class, "logisticsReturnShortage");
+    when(logistics.upsert(
+        org.mockito.ArgumentMatchers.any(),
+        org.mockito.ArgumentMatchers.any(),
+        org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new LogisticsReturnShortageService.UpsertResult(response, true));
+    when(logistics.get(
+        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+        .thenReturn(response);
+    return logistics;
+  }
 
   private static MaintenanceApplicationService.CreateResult<?> createResult(Class<?> type)
       throws Exception {
@@ -932,6 +982,9 @@ class MaintenanceOpenApiParityTest {
   private static Map<Class<?>, String> schemaMappings() {
     Map<Class<?>, String> values = new LinkedHashMap<>();
     values.put(ActorSnapshot.class, "ActorSnapshot");
+    values.put(LogisticsEquipmentShortage.class, "LogisticsEquipmentShortage");
+    values.put(UpsertLogisticsReturnShortageRequest.class, "UpsertLogisticsReturnShortageRequest");
+    values.put(LogisticsReturnShortageResponse.class, "LogisticsReturnShortage");
     values.put(MediaReferenceInput.class, "MediaReference");
     values.put(CatalogCounts.class, "CatalogCounts");
     values.put(CatalogValidationReport.class, "CatalogValidationReport");
@@ -993,6 +1046,8 @@ class MaintenanceOpenApiParityTest {
 
   private static Map<Class<?>, String> requestSchemaMappings() {
     Map<Class<?>, String> values = new LinkedHashMap<>();
+    values.put(LogisticsEquipmentShortage.class, "LogisticsEquipmentShortage");
+    values.put(UpsertLogisticsReturnShortageRequest.class, "UpsertLogisticsReturnShortageRequest");
     values.put(MediaReferenceInput.class, "MediaReference");
     values.put(RoutingSnapshot.class, "RoutingSnapshot");
     values.put(OpaqueCatalogReference.class, "OpaqueCatalogReference");
@@ -1084,7 +1139,8 @@ class MaintenanceOpenApiParityTest {
         MaintenanceCatalogController.class,
         MaintenanceEstimateController.class,
         MaintenanceRepairController.class,
-        MaintenanceInventoryController.class)) {
+        MaintenanceInventoryController.class,
+        MaintenanceLogisticsController.class)) {
       RequestMapping root = AnnotatedElementUtils.findMergedAnnotation(controller, RequestMapping.class);
       for (Method method : controller.getDeclaredMethods()) {
         RequestMapping mapping = AnnotatedElementUtils.findMergedAnnotation(method, RequestMapping.class);

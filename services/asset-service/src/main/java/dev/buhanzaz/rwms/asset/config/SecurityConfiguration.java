@@ -37,6 +37,8 @@ public class SecurityConfiguration {
           .hasAuthority("SCOPE_asset.maintenance");
       authorize.requestMatchers("/api/internal/asset/v1/inventory/**")
           .hasAuthority("SCOPE_asset.inventory");
+      authorize.requestMatchers("/api/internal/asset/v1/logistics/**")
+          .hasAuthority("SCOPE_asset.logistics");
       authorize.requestMatchers("/api/internal/**").authenticated();
       if (bypass) authorize.requestMatchers("/api/asset/**").permitAll();
       authorize.anyRequest().authenticated();

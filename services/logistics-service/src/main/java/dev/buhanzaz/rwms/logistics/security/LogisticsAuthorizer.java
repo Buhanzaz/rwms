@@ -1,0 +1,115 @@
+package dev.buhanzaz.rwms.logistics.security;
+
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.stereotype.Component;
+
+@Component
+public class LogisticsAuthorizer {
+  private static final UUID DEVELOPMENT_SUBJECT =
+      UUID.fromString("00000000-0000-0000-0000-0000000000d8");
+  private final boolean developmentBypass;
+
+  public LogisticsAuthorizer(
+      Environment environment,
+      @Value("${rwms.logistics.security.dev-auth-bypass:false}") boolean configuredBypass) {
+    boolean production = environment.matchesProfiles("prod", "production");
+    developmentBypass = configuredBypass && environment.matchesProfiles("dev") && !production;
+  }
+
+  public void requireRead(Jwt jwt, UUID warehouseId) {
+    requireUserScope(jwt, "rwms.read");
+    requireWarehouse(jwt, warehouseId, AccessLevel.VIEW);
+  }
+
+  public void requireEdit(Jwt jwt, UUID warehouseId) {
+    requireUserScope(jwt, "rwms.write");
+    requireWarehouse(jwt, warehouseId, AccessLevel.EDIT);
+  }
+
+  public void requireManageBoth(Jwt jwt, UUID originWarehouseId, UUID destinationWarehouseId) {
+    requireUserScope(jwt, "rwms.write");
+    requireWarehouse(jwt, originWarehouseId, AccessLevel.MANAGE);
+    requireWarehouse(jwt, destinationWarehouseId, AccessLevel.MANAGE);
+  }
+
+  public void requireManage(Jwt jwt, UUID warehouseId) {
+    requireUserScope(jwt, "rwms.write");
+    requireWarehouse(jwt, warehouseId, AccessLevel.MANAGE);
+  }
+
+  public UUID subjectId(Jwt jwt) {
+    if (developmentBypass) return DEVELOPMENT_SUBJECT;
+    if (jwt == null || !"USER".equals(jwt.getClaimAsString("principal_type"))) {
+      throw new AccessDeniedException("USER principal is required");
+    }
+    try {
+      return UUID.fromString(jwt.getSubject());
+    } catch (IllegalArgumentException exception) {
+      throw new AccessDeniedException("USER subject must be a UUID");
+    }
+  }
+
+  private void requireUserScope(Jwt jwt, String requiredScope) {
+    if (developmentBypass) return;
+    if (jwt == null
+        || !"USER".equals(jwt.getClaimAsString("principal_type"))
+        || !scopes(jwt).contains(requiredScope)) {
+      throw new AccessDeniedException("Required USER scope is missing");
+    }
+  }
+
+  private void requireWarehouse(Jwt jwt, UUID warehouseId, AccessLevel required) {
+    if (warehouseId == null) throw new AccessDeniedException("Warehouse scope is required");
+    if (developmentBypass) return;
+    String globalRole = jwt == null ? null : jwt.getClaimAsString("global_role");
+    if ("SYSTEM_ADMIN".equals(globalRole) || "WMS_ADMIN".equals(globalRole)) return;
+    Object claim = jwt == null ? null : jwt.getClaims().get("warehouse_access");
+    if (claim instanceof Collection<?> entries) {
+      for (Object entry : entries) {
+        if (!(entry instanceof Map<?, ?> access)) continue;
+        Object id = access.get("warehouseId");
+        Object level = access.get("level");
+        if (warehouseId.toString().equals(id) && level instanceof String value) {
+          try {
+            if (AccessLevel.valueOf(value).ordinal() >= required.ordinal()) return;
+          } catch (IllegalArgumentException ignored) {
+            // A malformed access claim never grants authority.
+          }
+        }
+      }
+    }
+    throw new AccessDeniedException("Insufficient warehouse access");
+  }
+
+  private static List<String> scopes(Jwt jwt) {
+    if (jwt == null) return List.of();
+    Object claim = jwt.getClaims().get("scope");
+    if (claim == null) claim = jwt.getClaims().get("scp");
+    if (claim instanceof String value) {
+      return java.util.Arrays.stream(value.trim().split("\\s+"))
+          .filter(item -> !item.isBlank())
+          .toList();
+    }
+    if (claim instanceof Collection<?> values) {
+      return values.stream()
+          .filter(String.class::isInstance)
+          .map(String.class::cast)
+          .filter(value -> !value.isBlank())
+          .toList();
+    }
+    return List.of();
+  }
+
+  private enum AccessLevel {
+    VIEW,
+    EDIT,
+    MANAGE
+  }
+}

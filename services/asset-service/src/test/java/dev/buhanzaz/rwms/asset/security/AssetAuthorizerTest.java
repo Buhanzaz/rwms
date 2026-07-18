@@ -92,6 +92,28 @@ class AssetAuthorizerTest {
         .isInstanceOf(AccessDeniedException.class);
   }
 
+  @Test
+  void bindsAssetLogisticsToTheExactLogisticsClientAndScopeOnly() {
+    AssetAuthorizer authorizer = new AssetAuthorizer(new MockEnvironment(), false);
+    Jwt valid = service("asset.logistics", "logistics-service");
+
+    authorizer.requireLogisticsAssetAccess(valid);
+    assertThat(authorizer.logisticsSubjectId(valid)).isNotNull();
+    assertThatThrownBy(() -> authorizer.requireInternalAssetAccess(valid))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireLogisticsAssetAccess(
+        service("asset.logistics asset.internal", "logistics-service")))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireLogisticsAssetAccess(
+        service("asset.logistics", "inventory-service")))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireLogisticsAssetAccess(
+        service("asset.logistics", "logistics-service", "another-subject")))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> authorizer.requireLogisticsAssetAccess(
+        user("asset.logistics", "SYSTEM_ADMIN", "MANAGE")))
+        .isInstanceOf(AccessDeniedException.class);
+  }
 
   private Jwt user(String scope, String globalRole, String level) {
     return jwt(Map.of(

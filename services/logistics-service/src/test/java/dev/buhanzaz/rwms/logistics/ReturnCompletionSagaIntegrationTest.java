@@ -1,0 +1,334 @@
+package dev.buhanzaz.rwms.logistics;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.AcceptReturnRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateReturnRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.EquipmentShortageRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.MediaReferenceInput;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.RequestReturnEstimateRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnLineRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnMediaLineRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnShortageLineRequest;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
+import dev.buhanzaz.rwms.logistics.service.ReturnCompletionProcessor;
+import dev.buhanzaz.rwms.logistics.service.ReturnRegistrationProcessor;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.List;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+
+@SpringBootTest(
+    properties = {
+      "spring.jpa.hibernate.ddl-auto=validate",
+      "rwms.platform.kafka.enabled=false",
+      "rwms.logistics.return-registration.relay-enabled=false",
+      "rwms.logistics.return-completion.relay-enabled=false",
+      "AUTH_ISSUER=http://auth.test",
+      "PANEL_ORIGIN=http://panel.test"
+    })
+@ActiveProfiles("test")
+@Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+class ReturnCompletionSagaIntegrationTest {
+  private static final UUID WAREHOUSE = UUID.fromString("00000000-0000-0000-0000-000000000701");
+  private static final UUID SUBJECT = UUID.fromString("00000000-0000-0000-0000-000000000702");
+  private static final UUID CORRELATION = UUID.fromString("00000000-0000-0000-0000-000000000703");
+  private static final UUID ASSET = UUID.fromString("00000000-0000-0000-0000-000000000704");
+
+  @Container
+  @ServiceConnection
+  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
+
+  @Autowired LogisticsDocumentService documents;
+  @Autowired ReturnRegistrationProcessor registration;
+  @Autowired ReturnCompletionProcessor completion;
+  @Autowired JdbcTemplate jdbc;
+
+  @MockitoBean LogisticsDependencyGateway dependencies;
+
+  @BeforeEach
+  void reset() {
+    jdbc.execute(
+        """
+        truncate table
+          logistics_document,
+          event_stream_head,
+          domain_event,
+          aggregate_snapshot,
+          projection_checkpoint,
+          outbox_event
+        cascade
+        """);
+    org.mockito.Mockito.reset(dependencies);
+  }
+
+  @Test
+  void acceptsAnUndamagedReturnOnlyAfterMediaSettlementAndLeaseReleaseConfirm() {
+    RegisteredReturn registered = registeredReturn();
+    UUID mediaId = UUID.randomUUID();
+    UUID acceptanceKey = UUID.randomUUID();
+    AcceptReturnRequest request =
+        new AcceptReturnRequest(
+            List.of(
+                new ReturnMediaLineRequest(
+                    registered.lineId(), List.of(new MediaReferenceInput(mediaId, 2)))));
+    when(dependencies.validateMediaReferences(
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_RETURN),
+            eq(registered.documentId()),
+            eq(registered.lineId()),
+            eq(WAREHOUSE),
+            any()))
+        .thenReturn(
+            new LogisticsDependencyGateway.MediaValidation(
+                LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_RETURN,
+                registered.documentId(),
+                registered.lineId(),
+                WAREHOUSE,
+                List.of(new LogisticsDependencyGateway.MediaReference(mediaId, 2))));
+    when(dependencies.settleReturn(
+            any(),
+            eq(ASSET),
+            eq(8L),
+            eq(registered.leaseId()),
+            eq(11L),
+            eq(registered.documentId()),
+            eq(registered.lineId()),
+            eq(false)))
+        .thenReturn(snapshot(9, "FREE"));
+    when(dependencies.releaseOperationLease(
+            any(),
+            eq(registered.leaseId()),
+            eq(3L),
+            eq(11L),
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_RETURN),
+            eq(registered.documentId()),
+            eq(registered.lineId())))
+        .thenReturn(releasedLease(registered.leaseId()));
+
+    LogisticsDocumentService.CreateResult started =
+        documents.acceptUndamagedReturn(
+            SUBJECT,
+            acceptanceKey,
+            CORRELATION,
+            registered.documentId(),
+            registered.version(),
+            request);
+    LogisticsDocumentService.CreateResult replayed =
+        documents.acceptUndamagedReturn(
+            SUBJECT,
+            acceptanceKey,
+            CORRELATION,
+            registered.documentId(),
+            registered.version(),
+            request);
+
+    assertThat(started.replayed()).isFalse();
+    assertThat(replayed.replayed()).isTrue();
+    assertThat(started.response().state()).isEqualTo(LogisticsDocumentState.ACCEPTING);
+
+    completion.processUntilIdle(registered.documentId());
+
+    assertThat(documents.get(registered.documentId(), LogisticsDocumentType.RETURN).state())
+        .isEqualTo(LogisticsDocumentState.ACCEPTED);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_media_reference where readiness='READY'", Long.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_guard where guard_state='RELEASED'", Long.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from domain_event where event_type='logistics.return.accepted.v1'",
+                Long.class))
+        .isOne();
+    verify(dependencies)
+        .settleReturn(
+            any(),
+            eq(ASSET),
+            eq(8L),
+            eq(registered.leaseId()),
+            eq(11L),
+            eq(registered.documentId()),
+            eq(registered.lineId()),
+            eq(false));
+  }
+
+  @Test
+  void persistsAnImmutableShortageSourceBeforeRequestingMaintenanceEstimate() {
+    RegisteredReturn registered = registeredReturn();
+    UUID equipmentId = UUID.randomUUID();
+    RequestReturnEstimateRequest request =
+        new RequestReturnEstimateRequest(
+            List.of(
+                new ReturnShortageLineRequest(
+                    registered.lineId(), List.of(new EquipmentShortageRequest(equipmentId, 3)))));
+    when(dependencies.settleReturn(
+            any(), any(), anyLong(), any(), anyLong(), any(), any(), anyBoolean()))
+        .thenReturn(snapshot(9, "WAITING_ESTIMATE_CONFIRMATION"));
+    when(dependencies.upsertReturnShortage(
+            eq(registered.documentId()),
+            eq(registered.lineId()),
+            eq(WAREHOUSE),
+            eq(ASSET),
+            eq(8L),
+            any()))
+        .thenReturn(
+            new LogisticsDependencyGateway.ReturnShortageSource(
+                registered.documentId(),
+                registered.lineId(),
+                0,
+                WAREHOUSE,
+                ASSET,
+                8,
+                List.of(new LogisticsDependencyGateway.EquipmentShortage(equipmentId, 3)),
+                "a".repeat(64),
+                OffsetDateTime.now(ZoneOffset.UTC)));
+    when(dependencies.releaseOperationLease(
+            any(),
+            eq(registered.leaseId()),
+            eq(3L),
+            eq(11L),
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_RETURN),
+            eq(registered.documentId()),
+            eq(registered.lineId())))
+        .thenReturn(releasedLease(registered.leaseId()));
+
+    LogisticsDocumentService.CreateResult started =
+        documents.requestReturnEstimate(
+            SUBJECT,
+            UUID.randomUUID(),
+            CORRELATION,
+            registered.documentId(),
+            registered.version(),
+            request);
+
+    assertThat(started.response().state()).isEqualTo(LogisticsDocumentState.ESTIMATE_PENDING);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_return_shortage_snapshot", Long.class))
+        .isOne();
+
+    completion.processUntilIdle(registered.documentId());
+
+    assertThat(
+            jdbc.queryForList(
+                "select operation_type || ':' || result from logistics_external_attempt order by operation_type",
+                String.class))
+        .contains(
+            "RETURN_ASSET_SETTLE_SHORTAGE:CONFIRMED",
+            "RETURN_MAINTENANCE_SHORTAGE_UPSERT:CONFIRMED",
+            "RETURN_ASSET_LEASE_RELEASE:CONFIRMED");
+    assertThat(documents.get(registered.documentId(), LogisticsDocumentType.RETURN).state())
+        .isEqualTo(LogisticsDocumentState.ESTIMATE_REQUESTED);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from domain_event where event_type='logistics.return.estimate-requested.v1'",
+                Long.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_guard where guard_state='RELEASED'", Long.class))
+        .isOne();
+    verify(dependencies)
+        .settleReturn(
+            any(),
+            eq(ASSET),
+            eq(8L),
+            eq(registered.leaseId()),
+            eq(11L),
+            eq(registered.documentId()),
+            eq(registered.lineId()),
+            eq(true));
+    verify(dependencies)
+        .upsertReturnShortage(
+            eq(registered.documentId()),
+            eq(registered.lineId()),
+            eq(WAREHOUSE),
+            eq(ASSET),
+            eq(8L),
+            eq(List.of(new LogisticsDependencyGateway.EquipmentShortage(equipmentId, 3))));
+  }
+
+  private RegisteredReturn registeredReturn() {
+    LogisticsDocumentService.CreateResult created =
+        documents.createReturn(
+            SUBJECT,
+            UUID.randomUUID(),
+            CORRELATION,
+            new CreateReturnRequest(
+                WAREHOUSE, List.of(new ReturnLineRequest(ASSET, 7, "Tenant A"))));
+    UUID documentId = created.response().id();
+    UUID lineId = created.response().lines().getFirst().id();
+    UUID leaseId = UUID.randomUUID();
+    when(dependencies.readWarehouseIdentity(WAREHOUSE))
+        .thenReturn(new LogisticsDependencyGateway.WarehouseIdentity(WAREHOUSE, 1, true, "Europe/Moscow"));
+    when(dependencies.readRentalItemSnapshot(ASSET)).thenReturn(snapshot(7, "RENTED"));
+    when(dependencies.acquireReturnLease(any(), eq(ASSET), eq(7L), eq(documentId), eq(lineId)))
+        .thenReturn(activeLease(leaseId));
+    when(dependencies.applyReturnIntake(
+            any(), eq(ASSET), eq(7L), eq(leaseId), eq(11L), eq(documentId), eq(lineId)))
+        .thenReturn(snapshot(8, "AFTER_RENT"));
+
+    documents.registerReturn(SUBJECT, UUID.randomUUID(), CORRELATION, documentId, 0);
+    registration.processUntilIdle(documentId);
+    long version = documents.get(documentId, LogisticsDocumentType.RETURN).version();
+    assertThat(documents.get(documentId, LogisticsDocumentType.RETURN).state())
+        .isEqualTo(LogisticsDocumentState.INSPECTION_REQUIRED);
+    return new RegisteredReturn(documentId, lineId, leaseId, version);
+  }
+
+  private static LogisticsDependencyGateway.RentalItemSnapshot snapshot(long version, String status) {
+    return new LogisticsDependencyGateway.RentalItemSnapshot(
+        ASSET,
+        version,
+        WAREHOUSE,
+        status,
+        List.of(new LogisticsDependencyGateway.EquipmentContent(UUID.randomUUID(), 2)));
+  }
+
+  private static LogisticsDependencyGateway.OperationLease activeLease(UUID leaseId) {
+    return new LogisticsDependencyGateway.OperationLease(
+        leaseId,
+        3,
+        ASSET,
+        11,
+        "ACTIVE",
+        OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
+  }
+
+  private static LogisticsDependencyGateway.OperationLease releasedLease(UUID leaseId) {
+    return new LogisticsDependencyGateway.OperationLease(
+        leaseId,
+        4,
+        ASSET,
+        11,
+        "RELEASED",
+        OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
+  }
+
+  private record RegisteredReturn(UUID documentId, UUID lineId, UUID leaseId, long version) {}
+}

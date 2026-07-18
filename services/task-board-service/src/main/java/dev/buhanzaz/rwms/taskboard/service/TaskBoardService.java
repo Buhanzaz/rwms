@@ -9,6 +9,7 @@ import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventStore;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventSourcing;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardProjectionWriter;
+import dev.buhanzaz.rwms.taskboard.mapper.LogisticsTaskResponseMapper;
 import dev.buhanzaz.rwms.taskboard.repository.*;
 import java.security.MessageDigest;
 import java.nio.charset.StandardCharsets;
@@ -35,6 +36,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class TaskBoardService {
   public static final String UNASSIGNED_CODE = "UNASSIGNED";
   public static final String REQUEST_FINGERPRINT_SCHEMA = "task-board-create:v1";
+  private static final String LOGISTICS_SOURCE_CLIENT_ID = "logistics-service";
+  private static final String LOGISTICS_PREPARATION_TITLE = "Logistics preparation";
+  private static final String LOGISTICS_PREPARATION_TASK_TEXT = "LOGISTICS_PREPARATION";
   private static final Set<EntryStatus> UNFINISHED =
       Set.of(EntryStatus.WAITING, EntryStatus.IN_PROGRESS, EntryStatus.PAUSED);
   private final BoardTaskRepository tasks;
@@ -51,6 +55,7 @@ public class TaskBoardService {
   private final TaskBoardEventSourcing eventSourcing;
   private final TaskBoardProjectionWriter projectionWriter;
   private final TaskSyncSourceRepository taskSyncSources;
+  private final LogisticsTaskResponseMapper logisticsTaskMapper;
 
   public TaskBoardService(
       BoardTaskRepository tasks,
@@ -66,7 +71,8 @@ public class TaskBoardService {
       JdbcTemplate jdbc,
       TaskBoardEventSourcing eventSourcing,
       TaskBoardProjectionWriter projectionWriter,
-      TaskSyncSourceRepository taskSyncSources) {
+      TaskSyncSourceRepository taskSyncSources,
+      LogisticsTaskResponseMapper logisticsTaskMapper) {
     this.tasks = tasks;
     this.entries = entries;
     this.queues = queues;
@@ -81,6 +87,7 @@ public class TaskBoardService {
     this.eventSourcing = eventSourcing;
     this.projectionWriter = projectionWriter;
     this.taskSyncSources = taskSyncSources;
+    this.logisticsTaskMapper = logisticsTaskMapper;
   }
 
   @Transactional(readOnly = true)
@@ -140,6 +147,33 @@ public class TaskBoardService {
             request.route());
     BoardTask task = createTask(request.warehouseId(), createRequest, sourceClientId);
     return registrationDto(task);
+  }
+
+  /**
+   * Creates a source-owned preparation task in the task-board-owned unassigned
+   * column. Logistics supplies no queue, worker, route or operator text.
+   */
+  @Transactional
+  public LogisticsTaskSnapshot registerLogisticsPreparationTask(
+      RegisterLogisticsPreparationTaskRequest request) {
+    BoardTask task =
+        createTask(
+            request.warehouseId(),
+            new CreateBoardTaskRequest(
+                request.externalTaskId(),
+                LOGISTICS_PREPARATION_TITLE,
+                null,
+                null,
+                request.plannedDurationMinutes(),
+                request.deadlineAt(),
+                List.of(
+                    new RouteStepRequest(
+                        null,
+                        UNASSIGNED_CODE,
+                        LOGISTICS_PREPARATION_TASK_TEXT,
+                        request.plannedDurationMinutes()))),
+            LOGISTICS_SOURCE_CLIENT_ID);
+    return logisticsTaskMapper.toLogisticsTaskSnapshot(task);
   }
 
   private BoardTask createTask(
@@ -324,11 +358,29 @@ public class TaskBoardService {
     return registrationDto(ownedExternalTask(sourceClientId, externalTaskId));
   }
 
+  @Transactional(readOnly = true)
+  public LogisticsTaskSnapshot logisticsPreparationTask(UUID externalTaskId) {
+    return logisticsTaskMapper.toLogisticsTaskSnapshot(
+        ownedExternalTask(LOGISTICS_SOURCE_CLIENT_ID, externalTaskId));
+  }
+
   @Transactional
   public CancelledTaskDto cancelExternalTask(
       String sourceClientId, UUID externalTaskId, CancelTaskRequest request) {
     BoardTask task = ownedExternalTask(sourceClientId, externalTaskId);
     return cancelTask(task.getWarehouseId(), externalTaskId, request);
+  }
+
+  @Transactional
+  public LogisticsTaskSnapshot cancelLogisticsPreparationTask(
+      UUID externalTaskId, CancelLogisticsPreparationTaskRequest request) {
+    BoardTask task = ownedExternalTask(LOGISTICS_SOURCE_CLIENT_ID, externalTaskId);
+    cancelTask(
+        task.getWarehouseId(),
+        externalTaskId,
+        new CancelTaskRequest(request.expectedTaskVersion(), "LOGISTICS_PREPARATION_CANCELLED"));
+    return logisticsTaskMapper.toLogisticsTaskSnapshot(
+        ownedExternalTask(LOGISTICS_SOURCE_CLIENT_ID, externalTaskId));
   }
 
   @Transactional

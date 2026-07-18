@@ -1,0 +1,251 @@
+asyncapi: 3.1.0
+info:
+  title: RWMS Logistics Domain Events
+  version: 1.0.0
+  description: >-
+    Sanitized committed logistics facts published through the logistics-service
+    transactional outbox. Delivery is at-least-once, aggregateId is the Kafka
+    key, and eventId is the consumer deduplication identity. Party, tenant,
+    driver, passport, contents, media, reason, credentials, and object-storage
+    fields are never transported.
+defaultContentType: application/json
+servers:
+  kafka:
+    host: configured-at-runtime
+    protocol: kafka
+channels:
+  returnFacts:
+    address: rwms.logistics.return.v1
+    messages:
+      returnCreatedV1: { $ref: '#/components/messages/ReturnCreatedV1' }
+      returnRegisteredV1: { $ref: '#/components/messages/ReturnRegisteredV1' }
+      returnAcceptedV1: { $ref: '#/components/messages/ReturnAcceptedV1' }
+      returnConflictedV1: { $ref: '#/components/messages/ReturnConflictedV1' }
+  shipmentFacts:
+    address: rwms.logistics.shipment.v1
+    messages:
+      shipmentCreatedV1: { $ref: '#/components/messages/ShipmentCreatedV1' }
+      shipmentPlannedV1: { $ref: '#/components/messages/ShipmentPlannedV1' }
+      shipmentPreparationConfirmedV1: { $ref: '#/components/messages/ShipmentPreparationConfirmedV1' }
+      shipmentCancelledV1: { $ref: '#/components/messages/ShipmentCancelledV1' }
+  transferFacts:
+    address: rwms.logistics.transfer.v1
+    messages:
+      transferCreatedV1: { $ref: '#/components/messages/TransferCreatedV1' }
+      transferDepartedV1: { $ref: '#/components/messages/TransferDepartedV1' }
+      transferLineArrivedV1: { $ref: '#/components/messages/TransferLineArrivedV1' }
+      transferConflictedV1: { $ref: '#/components/messages/TransferConflictedV1' }
+  assetRentalItemFacts:
+    address: rwms.asset.rental-item.v1
+    description: Read-only source evidence; it never authorizes a logistics effect.
+    messages:
+      rentalItemFactV1: { $ref: '#/components/messages/RentalItemFactV1' }
+  assetOperationLeaseFacts:
+    address: rwms.asset.operation-lease.v1
+    description: Read-only lease evidence used for reconciliation and replay.
+    messages:
+      operationLeaseFactV1: { $ref: '#/components/messages/OperationLeaseFactV1' }
+  assetEquipmentAllocationHoldFacts:
+    address: rwms.asset.equipment-allocation-hold.v1
+    description: Read-only equipment-hold evidence used for reconciliation and replay.
+    messages:
+      equipmentAllocationHoldFactV1: { $ref: '#/components/messages/EquipmentAllocationHoldFactV1' }
+  taskBoardFacts:
+    address: rwms.task-board.board-task.v1
+    description: Read-only logistics task evidence keyed by task aggregateId.
+    messages:
+      boardTaskFactV1: { $ref: '#/components/messages/BoardTaskFactV1' }
+  maintenanceEstimateFacts:
+    address: rwms.maintenance.estimate.v1
+    description: Read-only maintenance-estimate evidence keyed by estimate aggregateId.
+    messages:
+      maintenanceEstimateFactV1: { $ref: '#/components/messages/MaintenanceEstimateFactV1' }
+  mediaFacts:
+    address: rwms.media.media.v1
+    description: Read-only media lifecycle evidence; no media ownership transfers to logistics.
+    messages:
+      mediaFactV1: { $ref: '#/components/messages/MediaFactV1' }
+  inboundSanitizedDlt:
+    address: rwms.logistics.inbound.v1.dlt
+    description: >-
+      Consumer-owned hash-only failure record. Validation failures are not retried;
+      transient failures receive 1s/2s/4s retries before this record is emitted.
+    messages:
+      inboundSanitizedDltV1: { $ref: '#/components/messages/InboundSanitizedDltV1' }
+operations:
+  publishReturnFact:
+    action: send
+    channel: { $ref: '#/channels/returnFacts' }
+  publishShipmentFact:
+    action: send
+    channel: { $ref: '#/channels/shipmentFacts' }
+  publishTransferFact:
+    action: send
+    channel: { $ref: '#/channels/transferFacts' }
+  consumeRentalItemFacts:
+    action: receive
+    channel: { $ref: '#/channels/assetRentalItemFacts' }
+  consumeOperationLeaseFacts:
+    action: receive
+    channel: { $ref: '#/channels/assetOperationLeaseFacts' }
+  consumeEquipmentAllocationHoldFacts:
+    action: receive
+    channel: { $ref: '#/channels/assetEquipmentAllocationHoldFacts' }
+  consumeBoardTaskFacts:
+    action: receive
+    channel: { $ref: '#/channels/taskBoardFacts' }
+  consumeMaintenanceEstimateFacts:
+    action: receive
+    channel: { $ref: '#/channels/maintenanceEstimateFacts' }
+  consumeMediaFacts:
+    action: receive
+    channel: { $ref: '#/channels/mediaFacts' }
+  publishInboundSanitizedConsumerFailure:
+    action: send
+    channel: { $ref: '#/channels/inboundSanitizedDlt' }
+components:
+  messages:
+    ReturnCreatedV1:
+      name: logistics.return.created.v1
+      payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    ReturnRegisteredV1:
+      name: logistics.return.registered.v1
+      payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    ReturnAcceptedV1:
+      name: logistics.return.accepted.v1
+      payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    ReturnConflictedV1:
+      name: logistics.return.conflicted.v1
+      payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    ShipmentCreatedV1:
+      name: logistics.shipment.created.v1
+      payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    ShipmentPlannedV1:
+      name: logistics.shipment.planned.v1
+      payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    ShipmentPreparationConfirmedV1:
+      name: logistics.shipment.preparation-confirmed.v1
+      payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    ShipmentCancelledV1:
+      name: logistics.shipment.cancelled.v1
+      payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    TransferCreatedV1:
+      name: logistics.transfer.created.v1
+      payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    TransferDepartedV1:
+      name: logistics.transfer.departed.v1
+      payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    TransferLineArrivedV1:
+      name: logistics.transfer.line-arrived.v1
+      payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    TransferConflictedV1:
+      name: logistics.transfer.conflicted.v1
+      payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    RentalItemFactV1:
+      name: logistics.input.asset.rental-item.v1
+      payload:
+        allOf:
+          - { $ref: './asset/asset-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: RENTAL_ITEM }
+              eventType:
+                enum:
+                  - asset.rental-item.created.v1
+                  - asset.rental-item.passport-changed.v1
+                  - asset.rental-item.status-changed.v1
+                  - asset.rental-item.warehouse-changed.v1
+                  - asset.rental-item.logistics-effect-applied.v1
+      x-rwms-record-key: aggregateId
+    OperationLeaseFactV1:
+      name: logistics.input.asset.operation-lease.v1
+      payload:
+        allOf:
+          - { $ref: './asset/asset-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: OPERATION_LEASE }
+              eventType:
+                enum:
+                  - asset.operation-lease.acquired.v1
+                  - asset.operation-lease.renewed.v1
+                  - asset.operation-lease.released.v1
+                  - asset.operation-lease.expired.v1
+      x-rwms-record-key: aggregateId
+    EquipmentAllocationHoldFactV1:
+      name: logistics.input.asset.equipment-allocation-hold.v1
+      payload:
+        allOf:
+          - { $ref: './asset/asset-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: EQUIPMENT_ALLOCATION_HOLD }
+              eventType:
+                enum:
+                  - asset.equipment-allocation-hold.acquired.v1
+                  - asset.equipment-allocation-hold.renewed.v1
+                  - asset.equipment-allocation-hold.committed.v1
+                  - asset.equipment-allocation-hold.released.v1
+                  - asset.equipment-allocation-hold.expired.v1
+      x-rwms-record-key: aggregateId
+    BoardTaskFactV1:
+      name: logistics.input.task-board.board-task.v1
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: BOARD_TASK }
+              eventType:
+                enum:
+                  - task-board.board-task.created.v1
+                  - task-board.board-task.changed.v1
+                  - task-board.board-task.completed.v1
+                  - task-board.board-task.cancelled.v1
+      x-rwms-record-key: aggregateId
+    MaintenanceEstimateFactV1:
+      name: logistics.input.maintenance.estimate.v1
+      payload:
+        allOf:
+          - { $ref: './maintenance/maintenance-events-v1.schema.json' }
+          - type: object
+            properties:
+              aggregateType: { const: ESTIMATE }
+              eventType:
+                enum:
+                  - maintenance.estimate.created.v1
+                  - maintenance.estimate.draft-changed.v1
+                  - maintenance.estimate.completed.v1
+                  - maintenance.estimate.amended.v1
+      x-rwms-record-key: aggregateId
+    MediaFactV1:
+      name: logistics.input.media.v1
+      payload: { $ref: './media/media-facts-v1.schema.json' }
+      x-rwms-record-key: aggregateId
+    InboundSanitizedDltV1:
+      name: logistics.inbound.sanitized-dlt.v1
+      description: Hash-only failure record; the original source envelope is never copied here.
+      payload:
+        type: object
+        additionalProperties: false
+        required: [failureCode, messageSha256, sourceTopic, sourceEventId, recordedAt]
+        properties:
+          failureCode:
+            enum: [VALIDATION_REJECTED, PROCESSING_FAILED, VERSION_GAP, EVENT_ID_CONFLICT]
+          messageSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+          sourceTopic:
+            oneOf:
+              - enum:
+                  - rwms.asset.rental-item.v1
+                  - rwms.asset.operation-lease.v1
+                  - rwms.asset.equipment-allocation-hold.v1
+                  - rwms.task-board.board-task.v1
+                  - rwms.maintenance.estimate.v1
+                  - rwms.media.media.v1
+              - type: 'null'
+          sourceEventId:
+            oneOf:
+              - type: string
+                format: uuid
+              - type: 'null'
+          recordedAt: { type: string, format: date-time }

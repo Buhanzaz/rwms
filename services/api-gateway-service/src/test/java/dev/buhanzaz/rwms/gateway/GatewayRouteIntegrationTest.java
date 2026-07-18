@@ -43,6 +43,7 @@ class GatewayRouteIntegrationTest {
   private static HttpServer maintenance;
   private static HttpServer media;
   private static HttpServer inventory;
+  private static HttpServer logistics;
   private static final List<CapturedRequest> AUTH_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> TASK_BOARD_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> WAREHOUSE_REQUESTS = new CopyOnWriteArrayList<>();
@@ -51,6 +52,7 @@ class GatewayRouteIntegrationTest {
       new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> MEDIA_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> INVENTORY_REQUESTS = new CopyOnWriteArrayList<>();
+  private static final List<CapturedRequest> LOGISTICS_REQUESTS = new CopyOnWriteArrayList<>();
 
   @Autowired MockMvc mvc;
 
@@ -63,6 +65,7 @@ class GatewayRouteIntegrationTest {
     maintenance = server(MAINTENANCE_REQUESTS);
     media = server(MEDIA_REQUESTS);
     inventory = server(INVENTORY_REQUESTS);
+    logistics = server(LOGISTICS_REQUESTS);
   }
 
   @AfterAll
@@ -74,6 +77,7 @@ class GatewayRouteIntegrationTest {
     maintenance.stop(0);
     media.stop(0);
     inventory.stop(0);
+    logistics.stop(0);
   }
 
   @DynamicPropertySource
@@ -85,6 +89,7 @@ class GatewayRouteIntegrationTest {
     registry.add("rwms.gateway.routes.maintenance-uri", () -> origin(maintenance));
     registry.add("rwms.gateway.routes.media-uri", () -> origin(media));
     registry.add("rwms.gateway.routes.inventory-uri", () -> origin(inventory));
+    registry.add("rwms.gateway.routes.logistics-uri", () -> origin(logistics));
     registry.add("rwms.gateway.public-base-uri", () -> "https://panel.example");
     registry.add("rwms.gateway.cors.allowed-origins", () -> "https://panel.example");
     registry.add("rwms.gateway.security.issuer", () -> "https://panel.example/auth");
@@ -263,6 +268,36 @@ class GatewayRouteIntegrationTest {
   }
 
   @Test
+  void proxiesOnlyPublicLogisticsPathsWithoutCookiesOrPathRewriting() throws Exception {
+    LOGISTICS_REQUESTS.clear();
+
+    mvc.perform(
+            publicGet("/api/logistics/v1/transfers?warehouseId=warehouse-1")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer original-token")
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.path").value("/api/logistics/v1/transfers"));
+
+    assertThat(LOGISTICS_REQUESTS).singleElement().satisfies(request -> {
+      assertThat(request.path()).isEqualTo("/api/logistics/v1/transfers");
+      assertThat(request.authorization()).isEqualTo("Bearer original-token");
+      assertThat(request.cookie()).isNull();
+    });
+
+    LOGISTICS_REQUESTS.clear();
+    mvc.perform(
+            publicGet("/api/logistics/%69nternal/attempts")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().is4xxClientError());
+    mvc.perform(
+            publicGet("/api/logistics/private/reconciliation")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isForbidden());
+    assertThat(LOGISTICS_REQUESTS).isEmpty();
+  }
+
+  @Test
   void removesSpoofedForwardedMetadataFromUntrustedRequests() throws Exception {
     TASK_BOARD_REQUESTS.clear();
 
@@ -408,6 +443,7 @@ class GatewayRouteIntegrationTest {
     ASSET_REQUESTS.clear();
     MEDIA_REQUESTS.clear();
     INVENTORY_REQUESTS.clear();
+    LOGISTICS_REQUESTS.clear();
 
     mvc.perform(
             publicGet("/api/task-board/internal/work-queues")
@@ -443,6 +479,11 @@ class GatewayRouteIntegrationTest {
                 .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
         .andExpect(status().isForbidden())
         .andExpect(jsonPath("$.code").value("GATEWAY_FORBIDDEN"));
+    mvc.perform(
+            publicGet("/api/logistics/internal/reconciliation")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.code").value("GATEWAY_FORBIDDEN"));
 
     assertThat(TASK_BOARD_REQUESTS).isEmpty();
     assertThat(AUTH_REQUESTS).isEmpty();
@@ -450,6 +491,7 @@ class GatewayRouteIntegrationTest {
     assertThat(ASSET_REQUESTS).isEmpty();
     assertThat(MEDIA_REQUESTS).isEmpty();
     assertThat(INVENTORY_REQUESTS).isEmpty();
+    assertThat(LOGISTICS_REQUESTS).isEmpty();
   }
 
   @Test

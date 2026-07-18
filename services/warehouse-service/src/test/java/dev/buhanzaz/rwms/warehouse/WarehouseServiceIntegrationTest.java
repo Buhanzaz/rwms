@@ -293,9 +293,115 @@ class WarehouseServiceIntegrationTest {
     }
   }
 
+  @Test
+  void exposesExactLogisticsWarehouseIdentityIncludingInactiveState() throws Exception {
+    String body =
+        mockMvc
+            .perform(
+                get("/api/internal/warehouse/v1/warehouses/logistics/{id}/identity", SPB)
+                    .with(
+                        logisticsServiceJwt(
+                            "logistics-service",
+                            "logistics-service",
+                            "SERVICE",
+                            "warehouse.logistics")))
+            .andExpect(status().isOk())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+    JsonNode response = objectMapper.readTree(body);
+    assertThat(Set.copyOf(response.propertyNames()))
+        .containsExactlyInAnyOrder("id", "version", "active", "timeZone");
+    assertThat(response.get("id").stringValue()).isEqualTo(SPB.toString());
+    assertThat(response.get("version").longValue()).isZero();
+    assertThat(response.get("active").booleanValue()).isTrue();
+    assertThat(response.get("timeZone").stringValue()).isEqualTo("Europe/Moscow");
+
+    WarehouseResponse inactive =
+        service
+            .create(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                request("LOGISTICS-INACTIVE", "Logistics inactive", null))
+            .response();
+    service.deactivate(inactive.id(), inactive.version());
+
+    mockMvc
+        .perform(
+            get("/api/internal/warehouse/v1/warehouses/logistics/{id}/identity", inactive.id())
+                .with(
+                    logisticsServiceJwt(
+                        "logistics-service",
+                        "logistics-service",
+                        "SERVICE",
+                        "warehouse.logistics")))
+        .andExpect(status().isOk())
+        .andExpect(
+            result ->
+                assertThat(
+                        objectMapper
+                            .readTree(result.getResponse().getContentAsString())
+                            .get("active")
+                            .booleanValue())
+                    .isFalse());
+
+    mockMvc
+        .perform(
+            get("/api/internal/warehouse/v1/warehouses/logistics/{id}/identity", UUID.randomUUID())
+                .with(
+                    logisticsServiceJwt(
+                        "logistics-service",
+                        "logistics-service",
+                        "SERVICE",
+                        "warehouse.logistics")))
+        .andExpect(status().isNotFound());
+  }
+
+  @Test
+  void logisticsWarehouseIdentityRejectsEveryBroaderOrForeignAuthority() throws Exception {
+    var invalidTokens =
+        java.util.List.of(
+            logisticsServiceJwt(
+                "logistics-service",
+                "logistics-service",
+                "SERVICE",
+                "warehouse.logistics warehouse.read"),
+            logisticsServiceJwt(
+                "logistics-service", "logistics-service", "SERVICE", "warehouse.read"),
+            logisticsServiceJwt(
+                "asset-service", "logistics-service", "SERVICE", "warehouse.logistics"),
+            logisticsServiceJwt(
+                "logistics-service", "other-service", "SERVICE", "warehouse.logistics"),
+            logisticsServiceJwt(
+                "logistics-service", "logistics-service", "USER", "warehouse.logistics"));
+
+    for (var invalid : invalidTokens) {
+      mockMvc
+          .perform(
+              get("/api/internal/warehouse/v1/warehouses/logistics/{id}/identity", SPB)
+                  .with(invalid))
+          .andExpect(status().isForbidden());
+    }
+  }
+
   private static org.springframework.security.test.web.servlet.request
           .SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor
       inventoryServiceJwt(String clientId, String subject, String principalType, String scope) {
+    return jwt()
+        .jwt(
+            token ->
+                token
+                    .subject(subject)
+                    .audience(java.util.List.of("rwms-services"))
+                    .claim("principal_type", principalType)
+                    .claim("client_id", clientId)
+                    .claim("scope", scope));
+  }
+
+  private static org.springframework.security.test.web.servlet.request
+          .SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor
+      logisticsServiceJwt(String clientId, String subject, String principalType, String scope) {
     return jwt()
         .jwt(
             token ->

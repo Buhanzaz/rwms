@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.warehouse.service;
 import dev.buhanzaz.rwms.warehouse.api.CreateWarehouseRequest;
 import dev.buhanzaz.rwms.warehouse.api.InternalWarehouseExistenceResponse;
 import dev.buhanzaz.rwms.warehouse.api.InventoryWarehouseMetadataResponse;
+import dev.buhanzaz.rwms.warehouse.api.LogisticsWarehouseIdentityResponse;
 import dev.buhanzaz.rwms.warehouse.api.ReplaceWarehouseRequest;
 import dev.buhanzaz.rwms.warehouse.api.WarehouseResponse;
 import dev.buhanzaz.rwms.warehouse.domain.Warehouse;
@@ -125,6 +126,11 @@ public class WarehouseService {
     if (!warehouse.isActive()) throw new WarehouseNotFoundException();
     return new InventoryWarehouseMetadataResponse(
         warehouse.getId(), warehouse.getVersion(), warehouse.isActive(), warehouse.getTimeZone());
+  }
+
+  @Transactional(readOnly = true)
+  public LogisticsWarehouseIdentityResponse logisticsIdentity(UUID id) {
+    return responses.toLogisticsIdentity(require(id));
   }
 
   private Warehouse newWarehouse(CreateWarehouseRequest request) {
