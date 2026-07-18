@@ -1,6 +1,6 @@
 # Stage 8 Logistics Service Implementation Plan
 
-Status: `READY_FOR_SCOPED_COMMIT`
+Status: `COMPLETE`
 
 This plan implements the approved backend-only contract in
 `20260717-logistics-service-contract.md`. It is authorized as a parallel
@@ -325,10 +325,27 @@ and rejects a production loopback upstream.
 - [x] independently review only Stage 8 hunks and close findings;
 - [x] reconcile durable memory and record unimplemented correction policy as
   `UNKNOWN`;
-- [ ] create one Stage 8-only reviewed human commit when all accepted checks
-  pass. It is intentionally not created here: the shared worktree contains
-  independent Stage 7/user changes and no commit was requested. Panel
-  verification remains deferred pending explicit panel cutover authority.
+- [x] record the reviewed implementation in scoped commit `08c262f`, then
+  record V7/replay/outbox recovery and final memory/pointer reconciliation in
+  the containing scoped closure/fix commit. Panel verification is not a Stage
+  8 backend exit requirement because no logistics panel cutover was authorized.
+
+Completion reconciliation on 2026-07-18 closed the independent review stack:
+business persistence remains JPA; the subject/operation/idempotency lock is
+invoked through a Spring Data JPA repository rather than `JdbcTemplate` in the
+business service. Immutable Flyway V7 adds optimistic versions only to mutable
+guard, external-attempt and media-reference projections and proves V1-to-latest
+preservation plus Hibernate validation. Technical SQL remains narrowly
+allowlisted for event-store/outbox/inbox/recovery/DLT/replay adapters only.
+
+The focused Flyway/JPA/idempotency repeat passed 8/8 and the exact architecture
+policy passed 7/7. The replay verifier uses one `REPEATABLE_READ` transaction;
+its 6/6 suite proves deterministic live/snapshot/shadow parity and rejects
+recomputed-checksum actor, correlation and authoritative-payload tampering. The
+real Kafka business-outbox outage/ack/recovery gate passed 1/1. Final Java 25
+verification passed logistics 60/60 and architecture 36/36; gateway remains
+37/37. The earlier 51/51 and 35/35 totals are historical pre-closure evidence.
+Stage 8 is complete.
 
 ## Explicit non-goals
 

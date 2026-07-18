@@ -14,6 +14,7 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
@@ -35,6 +36,10 @@ public class LogisticsGuard {
   @GeneratedValue(strategy = GenerationType.UUID)
   @Column(name = "id", nullable = false)
   private UUID id;
+
+  @Version
+  @Column(name = "row_version", nullable = false)
+  private long rowVersion;
 
   @ManyToOne(fetch = FetchType.LAZY, optional = false)
   @JoinColumn(

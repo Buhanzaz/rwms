@@ -56,3 +56,19 @@ The current target implementation adds the asset boundary under
 schema, UI cutover and unresolved integration limits are recorded in the
 numbered sections below. This is an implementation record, not reconstructed
 exit evidence for an earlier stage or a statement that the current gate passed.
+
+## 2026-07-17 Stage 8 logistics implementation record
+
+The backend-only `logistics-service` now owns returns, shipments and transfers
+through service-local JPA entities and Flyway V1--V7. Lombok is limited to safe
+boilerplate and MapStruct maps read/event projections only. The service records
+external saga attempts, source evidence and reconciliation requests locally; it
+does not acquire another service's aggregate, table or canonical movement
+ownership. Its details and unresolved correction policy are recorded in the
+numbered sections below.
+
+The stateless gateway has an explicit `/api/logistics/**` route, but no panel
+cutover was performed. Stage 7 is complete in `51460a3`. Stage 8 implementation
+is recorded in `08c262f`; its containing closure/fix commit records the final
+JPA boundary, V7, replay/outbox recovery evidence and pointer transition. Stage
+8 is complete, and Stage 9 dossier service-side implementation is active.

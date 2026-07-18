@@ -1237,6 +1237,140 @@ entry does not close F4T.
   `RESERVED`, `FREE`, `WAREHOUSE` and `OWN_NEEDS`; `RENTED`, `WRITTEN_OFF`,
   `WAITING_ESTIMATE_CONFIRMATION` and `IN_TRANSFER` are excluded.
 
+## 2026-07-17 Stage 8 parallel logistics foundation decision
+
+- The user's explicit Stage 8 parallel authorization supersedes only previous
+  statements that Stage 8 was forbidden pending Stage 7 completion. Stage 7
+  remains active and incomplete; no evidence, scope or commit is shared.
+- `logistics-service` is a JPA/Flyway service with safe Lombok only and
+  MapStruct restricted to entity-read/sanitized-event mappings. It owns local
+  return, shipment and transfer document workflow projections, event streams,
+  outbox/inbox/checkpoints/quarantine/DLT and opaque integration references.
+- The approved implemented slice is idempotent DRAFT creation/read/list plus
+  the local creation event/outbox relay. No local command may claim an asset,
+  task, hold, lease, warehouse, maintenance or media effect until the owning
+  exact service boundary exists and passes its own checks.
+- Sanitized logistics facts and DLT metadata may contain IDs, aggregate
+  versions, hashes, safe code and timestamps only. Party/tenant/driver/passport
+  text, media identifiers, content snapshots, source payloads and credentials
+  remain excluded from transport.
+
+## 2026-07-17 Stage 8 logistics auth-client decision
+
+- The `logistics-service` OAuth client is disabled by default, uses external
+  `LOGISTICS_CLIENT_SECRET` only, has audience `rwms-services`, and can request
+  exactly one configured scope: `warehouse.logistics`, `asset.logistics`,
+  `task-board.logistics`, `maintenance.logistics` or `media.logistics`.
+- Auth rejects a combined, omitted or foreign scope plus any USER/wrong
+  subject/client/audience/resource override. Its service token is bound to
+  `principal_type=SERVICE` and `sub=client_id=logistics-service`.
+- This authorization decision does not grant a broad `asset.internal`,
+  warehouse-read, task/queue/worker, generic-media, inventory or maintenance
+  management credential. It does not authorize a receiver until that service
+  independently validates the same exact JWT boundary.
+
+## 2026-07-17 Stage 8 warehouse logistics receiver decision
+
+- Warehouse owns the logistics-only private identity boundary. It returns
+  exactly `{id, version, active, timeZone}` for the requested UUID under
+  `warehouse.logistics`; topology/location data remains outside the contract.
+- A known inactive warehouse returns `active=false`, rather than a fabricated
+  active identity or an implicit fallback. Logistics must keep any resulting
+  origin/destination issue as a visible conflict/reconciliation state.
+- The receiver's exact JWT contract is `SERVICE`, matching
+  `sub=client_id=logistics-service`, one `warehouse.logistics` scope and local
+  issuer/audience validation. Public/dev bypasses never apply to it.
+
+## 2026-07-17 Stage 8 asset logistics receiver decision
+
+- Asset owns the logistics-only lease/hold/fenced-effect boundary under one
+  exact `asset.logistics` service JWT. It derives owner identity from typed
+  document and line IDs; arbitrary owner references, raw status writes,
+  generic `asset.internal` and public bypasses are forbidden.
+- The only approved state effects are `RENTED -> AFTER_RENT` intake,
+  `AFTER_RENT -> FREE | WAITING_ESTIMATE_CONFIRMATION` return settlement,
+  `FREE -> RENTED` shipment confirmation, `FREE -> IN_TRANSFER` transfer
+  departure and `IN_TRANSFER -> FREE` transfer arrival. Arrival alone needs a
+  distinct active destination and atomically performs the asset-owned cabin
+  balance ledger movement.
+- Equipment allocation is shipment-line only; its opaque lifecycle stays
+  asset-owned and subject-bound. No policy here resolves task-board task
+  lifecycle, maintenance shortage, media readiness, tenant/customer/company,
+  location correction or post-departure compensation.
+
+## 2026-07-17 Stage 8 task-board logistics receiver decision
+
+- Task-board owns the logistics-only preparation-task boundary under the exact
+  `task-board.logistics` service JWT. A separate route is used rather than
+  widening maintenance's generic task-sync contract.
+- Logistics supplies one stable external identity and constrained schedule
+  values only. Task-board retains all queue, worker, route and task-content
+  decisions by creating the task in its `UNASSIGNED` ownership boundary.
+- Status is a safe MapStruct read projection. Source-scoped cancellation is
+  idempotent and uses the fixed safe reason
+  `LOGISTICS_PREPARATION_CANCELLED`; no request-to-entity mutation or arbitrary
+  task transition crosses the boundary.
+
+## 2026-07-17 Stage 8 maintenance logistics receiver decision
+
+- Maintenance owns a separate exact `maintenance.logistics` private boundary;
+  it does not widen the concurrent inventory source or generic maintenance
+  authority. The receiver accepts only the exact `logistics-service` SERVICE
+  JWT after local issuer/audience validation.
+- `(returnId, lineId)` is a permanent, immutable return-shortage source. Its
+  canonical equipment-shortage snapshot is an auditable input, not an implicit
+  repair, estimate, task, cabin lease, asset effect or inventory transition.
+- Flyway V3 stores that source in a maintenance-owned table with no database
+  relation to Stage 7 tables. MapStruct maps the persisted entity to a safe
+  response only; it never mutates an entity or performs a domain transition.
+
+## 2026-07-17 Stage 8 media logistics receiver decision
+
+- Media owns a separate exact `media.logistics` private boundary. It accepts
+  only the `logistics-service` SERVICE JWT with matching subject/client ID and
+  one scope; generic public media credentials and the Stage 7 inventory owner
+  proof are not widened or reused.
+- A request supplies only a declared logistics owner type, document/line and
+  warehouse UUIDs, and opaque media ID/current-generation pairs. Media derives
+  the owner key locally and returns no storage capability, provenance or policy
+  data. Missing/wrong/stale/non-ready state is intentionally one opaque
+  conflict.
+- The receiver is a base-table read only. It creates no upload, binding,
+  migration, event, outbox or consumer and does not transfer media ownership
+  to logistics.
+
+## 2026-07-17 Stage 8 return-registration consumer decision
+
+- Return registration commits local saga intent before any remote call. A
+  service-owned external-attempt UUID is the stable idempotency key for each
+  mutating asset request; an HTTP timeout is never interpreted as rollback or
+  success.
+- The implemented sequence is constrained to active warehouse identity,
+  exact asset ID/version/warehouse plus RENTED, a typed LOGISTICS_RETURN
+  lease/fence, then fenced RETURN_INTAKE. The relay stores safe
+  expected/factual contents snapshots locally and publishes only sanitized
+  document facts.
+- Permanent dependency rejection becomes visible CONFLICT; uncertain or
+  exhausted retry outcome becomes visible RECONCILIATION_REQUIRED with a
+  logistics-owned audit row. No compensating write back to RENTED is inferred
+  after a possible asset intake.
+- tenantSnapshot is deliberately not sent to or returned from asset's narrow
+  private logistics API. It remains an immutable submitted snapshot pending an
+  approved canonical tenant authority; it must not be treated as verified
+  tenant truth.
+
+## 2026-07-17 Stage 8 logistics architecture-guard decision
+
+- Logistics source and compiled dependencies are treated as an isolated
+  bounded context: direct imports or Gradle dependencies on auth, task-board,
+  warehouse, asset, maintenance, inventory or media service implementations
+  are forbidden. Transport records remain local and direct calls require a
+  receiver-specific client-credentials scope.
+- The policy makes the logistics Flyway event store, outbox, inbox, aggregate
+  checkpoint, version-gap quarantine and sanitized DLT mandatory rather than
+  optional conventions. Low-level JDBC remains limited to the explicit
+  event/outbox/DLT/idempotency CAS adapters; business services cannot use it
+  opportunistically.
 
 ## 2026-07-17 Stage 7 persistence and closure decision
 
@@ -1246,24 +1380,65 @@ entry does not close F4T.
   `InventoryEventStore`, `InventoryMediaInboxProcessor`,
   `InventoryMediaRetryStore` and `InventoryOutboxStore` may use low-level SQL.
   Service and shared architecture policies reject JDBC elsewhere.
-- Idempotency owns a lease-locked record and replays the exact response. Start
-  saga state that must survive retry uses independent transactions, while
-  session commit joins the command transaction and capture release runs only
-  from `afterCompletion`.
-- Asset capture is a single inner repeatable-read snapshot. Maintenance's full
-  inventory reconciliation boundary is JPA. Warehouse metadata conceals absent,
-  inactive and foreign-scoped IDs behind the same `404` response.
-- Media event-ID/body identity conflicts atomically quarantine/deactivate the
-  affected owner and write sanitized DLT evidence. Public reads lock and test
-  owner binding, checkpoint and quarantine in the same SQL statement that
-  returns media, so revocation cannot leave stale authorization.
-- The final Stage 7-only candidate suites passed inventory 46/46, asset 57/57,
-  maintenance 131/131, Stage 7 architecture 27/27, auth 11/11, warehouse 12/12,
-  gateway 36/36 and media 73/73, all with zero failures, errors or skips. Media
-  also passed a reproducible build; panel typecheck/lint/build with Vitest 48
-  and Playwright 9/9 passed. Earlier shared asset 64/64, maintenance 136/136 and
-  architecture 33/34 runs mixed in Stage 8 diagnostics and are not Stage 7
-  closure totals.
-- Keep the operational pointer on `STAGE_7_INVENTORY_SERVICE` with status
-  `COMPLETE`; `next_state` remains metadata. The containing scoped Stage 7
-  commit records closure without an invented advance SHA.
+- The verified matrix makes Stage 7 exit-ready, not complete. Final independent
+  review, intentional staging and one reviewed human commit SHA are mandatory.
+
+## 2026-07-17 Stage 8 workflow, reconciliation and inbound decisions
+
+- Logistics owns saga state, external-attempt IDs and visible reconciliation
+  requests; it never claims source-owned asset/task/maintenance/media state.
+  An operator reconciliation request records why a document is conflicted but
+  cannot silently reverse a shipment, transfer or asset effect.
+- Return media is a line-scoped opaque `{mediaId, generation}` proof and a
+  shortage snapshot is immutable local evidence before the maintenance source
+  request. Shipment holds and task references are opaque local records; transfer
+  correction/reversal remains unavailable after departure.
+- The inbound consumer accepts only the six contract-declared source topics and
+  exact V2 envelopes. It may maintain inbox/checkpoint/quarantine/replay and
+  observation records, but those are source evidence only. Duplicate effects
+  are harmless; a version gap blocks that source aggregate until explicit
+  reviewed reconciliation.
+- Low-level JDBC remains forbidden in business services. It is allowlisted only
+  for event/outbox/DLT/idempotency and the named inbound technical adapters
+  (staging, inbox processor, observation, gap recovery and local DB-health
+  monitor). The architecture policy tests those boundaries. Consumer failure
+  output contains hashes and fixed metadata only, never the original envelope.
+
+## 2026-07-18 Stage 9 dossier evidence boundary
+
+- The user authorizes parallel Stage 9 evidence and contract work only.
+  `dossier-service` remains a read-only, append-only cross-domain cabin
+  projection and never becomes a command owner or a shared source database.
+- A current producer event is eligible for visible dossier activity only with
+  an explicit, canonical cabin subject. Dossier must not infer that subject
+  from task, document, media-owner or other opaque identifiers; missing links
+  remain unlinked technical evidence until a producer-owned contract is
+  approved.
+
+## 2026-07-18 Stage 8 closure and Stage 9 active decision
+
+- Historical Stage 7 readiness is resolved by `51460a3`. Historical Stage 8
+  parallel/readiness wording is resolved by implementation commit `08c262f`
+  plus the containing closure/fix commit. Stage 8 is complete.
+- Logistics business persistence is JPA. A native PostgreSQL transaction lock
+  may be exposed only through the Spring Data JPA idempotency repository; a
+  business service is never a JDBC adapter. Low-level SQL remains named and
+  allowlisted only for technical event-store, outbox, inbox, recovery, DLT and
+  deterministic replay components.
+- Flyway V7 versions only mutable external-attempt, guard and media-reference
+  projections. Immutable evidence rows remain unversioned. The migration must
+  preserve a V1 database and pass Hibernate validation.
+- Deterministic logistics replay executes in one `REPEATABLE_READ` transaction
+  and verifies full event/outbox metadata parity as well as canonical payload
+  state. Recomputed-checksum actor, correlation and authoritative-payload
+  tampering must fail closed. The final Java 25 closure totals are logistics
+  60/60 and architecture 36/36, with gateway 37/37.
+- The approved Stage 9 dossier contract is now implementation authority for
+  the service-side boundary only. Dossier is append-only/read-only, owns an
+  isolated JPA/Flyway projection and Kafka replay/recovery state, exposes a
+  warehouse-filtered read API and sanitized outbox fact, and may receive only
+  a stateless gateway route. No panel or producer deployable changes are
+  authorized.
+- Stage 10/KPI work is `DEFERRED_BY_USER_2026-07-18`. It cannot resume until
+  Stage 9 completes and the user explicitly reauthorizes a product-approved
+  KPI contract.
