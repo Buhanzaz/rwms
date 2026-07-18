@@ -1,8 +1,5 @@
-import { useQuery } from "@tanstack/react-query"
 import { X } from "lucide-react"
 
-import { getRentalItemPhotos } from "@/features/rental-items/api/rental-items-api"
-import { PhotoCarousel } from "@/components/media/photo-carousel"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -15,26 +12,14 @@ import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 type RentalItemPhotoDialogProps = {
   item: RentalItemDto | null
   open: boolean
-  activePhotoIndex?: number
-  onActivePhotoIndexChange?: (index: number) => void
   onOpenChange: (open: boolean) => void
 }
 
 export function RentalItemPhotoDialog({
   item,
   open,
-  activePhotoIndex,
-  onActivePhotoIndexChange,
   onOpenChange,
 }: RentalItemPhotoDialogProps) {
-  const photosQuery = useQuery({
-    queryKey: ["rental-item-photos", item?.id],
-    queryFn: () => getRentalItemPhotos(item!.id),
-    enabled: open && item !== null,
-  })
-
-  const photos = photosQuery.data ?? []
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -72,31 +57,10 @@ export function RentalItemPhotoDialog({
           </Button>
         </div>
 
-        {photosQuery.isLoading ? (
-          <div className="flex h-dvh items-center justify-center text-sm text-white/70">
-            Загрузка фото...
-          </div>
-        ) : photos.length > 0 ? (
-          <PhotoCarousel
-            photos={photos}
-            photoCount={photos.length}
-            showPhotoCount={false}
-            className="h-dvh w-screen bg-black"
-            imageVariant="fullscreen"
-            fit="contain"
-            controlsVisibility="hover"
-            hideEdgeControlsOnMobile
-            showViewerToolbar
-            disableFullscreenViewer
-            activeIndex={activePhotoIndex}
-            onActiveIndexChange={onActivePhotoIndexChange}
-            onSwipeUp={() => onOpenChange(false)}
-          />
-        ) : (
-          <div className="flex h-dvh items-center justify-center text-sm text-white/70">
-            Фото отсутствуют.
-          </div>
-        )}
+        <div className="flex h-dvh items-center justify-center px-6 text-center text-sm text-white/70">
+          Фотографии бытовки недоступны: asset-service пока не предоставляет
+          публичный media API.
+        </div>
       </DialogContent>
     </Dialog>
   )

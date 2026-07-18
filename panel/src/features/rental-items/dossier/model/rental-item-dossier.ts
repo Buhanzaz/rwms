@@ -256,6 +256,7 @@ export type AddCabinPhotoGroupCommand = {
 export type AddCabinCommentCommand = {
   rentalItemId: string
   warehouseId: string
+  expectedVersion: number
   actor: CabinActorSnapshot
   text: string
 }

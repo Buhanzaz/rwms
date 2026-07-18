@@ -1,5 +1,4 @@
-import { useEffect } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { ArrowLeft01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -14,17 +13,11 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import {
-  REPAIR_TASKS_QUERY_KEY,
   getRepairTask,
   listPendingRepairAcceptance,
   repairAcceptanceListQueryKey,
   repairTaskDetailQueryKey,
 } from "@/features/repair-tasks/api/repair-tasks-api"
-import {
-  REPAIR_TASKS_MOCK_STORAGE_KEY,
-  REPAIR_TASKS_UPDATED_EVENT,
-} from "@/features/repair-tasks/adapters/local-storage-repair-tasks-adapter"
-import { DEV_MAINTENANCE_FIXTURES_ENABLED } from "@/features/maintenance/maintenance-runtime"
 import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import {
@@ -65,14 +58,12 @@ function AcceptanceMobileCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="grid grid-cols-2 gap-2">
-        <span className="text-muted-foreground">Причина</span>
-        <span>{task.reason || "—"}</span>
-        <span className="text-muted-foreground">Автор</span>
-        <span>{task.authorName || "—"}</span>
-        <span className="text-muted-foreground">Начато</span>
-        <span>{formatAcceptanceDateTime(task.startedAt)}</span>
-        <span className="text-muted-foreground">Завершено</span>
-        <span>{formatAcceptanceDateTime(task.completedAt)}</span>
+        <span className="text-muted-foreground">От кого</span>
+        <span>{task.sourceParty || "—"}</span>
+        <span className="text-muted-foreground">Идентификатор автора</span>
+        <span>{task.actorId || "—"}</span>
+        <span className="text-muted-foreground">Готово к приёмке</span>
+        <span>{formatAcceptanceDateTime(task.readyAt ?? null)}</span>
         <span className="text-muted-foreground">Статус</span>
         <span>
           <AcceptanceStatusBadge status={task.acceptanceStatus} />
@@ -84,7 +75,6 @@ function AcceptanceMobileCard({
 
 export function AcceptancePage() {
   const { selectedWarehouseId } = useWarehouse()
-  const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const acceptanceId = searchParams.get("acceptanceId")
@@ -107,24 +97,6 @@ export function AcceptancePage() {
     queryFn: () => getRepairTask(acceptanceId!, selectedWarehouseId!),
     enabled: Boolean(acceptanceId && selectedWarehouseId),
   })
-
-  useEffect(() => {
-    if (!DEV_MAINTENANCE_FIXTURES_ENABLED) return
-    const invalidate = () => {
-      void queryClient.invalidateQueries({ queryKey: REPAIR_TASKS_QUERY_KEY })
-    }
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === REPAIR_TASKS_MOCK_STORAGE_KEY) {
-        invalidate()
-      }
-    }
-    window.addEventListener(REPAIR_TASKS_UPDATED_EVENT, invalidate)
-    window.addEventListener("storage", handleStorage)
-    return () => {
-      window.removeEventListener(REPAIR_TASKS_UPDATED_EVENT, invalidate)
-      window.removeEventListener("storage", handleStorage)
-    }
-  }, [queryClient])
 
   const tasks = listQuery.data ?? []
   const selectedTask = detailQuery.data ?? null
@@ -183,10 +155,6 @@ export function AcceptancePage() {
           <p role="alert" className="text-xs text-destructive">
             Не удалось загрузить очередь приёмки.
           </p>
-        ) : tasks.length === 0 ? (
-          <p role="status" className="p-4 text-sm text-muted-foreground">
-            Нет ремонтов, ожидающих приёмки.
-          </p>
         ) : (
           <>
             <div className="hidden min-h-full min-w-0 flex-1 md:block">
@@ -221,39 +189,27 @@ export function AcceptancePage() {
                       repairTaskOriginLabel(task.origin, task.kind),
                   },
                   {
-                    id: "reason",
-                    label: "Причина",
+                    id: "sourceParty",
+                    label: "От кого",
                     className: "w-48",
-                    getSortValue: (task) => task.reason,
-                    render: (task) => task.reason || "—",
+                    getSortValue: (task) => task.sourceParty,
+                    render: (task) => task.sourceParty || "—",
                   },
                   {
-                    id: "authorName",
-                    label: "Автор",
+                    id: "actorId",
+                    label: "Идентификатор автора",
                     className: "w-44",
-                    getSortValue: (task) => task.authorName,
-                    render: (task) => task.authorName || "—",
+                    getSortValue: (task) => task.actorId,
+                    render: (task) => task.actorId || "—",
                   },
                   {
-                    id: "startedAt",
-                    label: "Начато",
-                    className: "w-44",
-                    getSortValue: (task) =>
-                      task.startedAt
-                        ? new Date(task.startedAt).getTime()
-                        : null,
-                    render: (task) => formatAcceptanceDateTime(task.startedAt),
-                  },
-                  {
-                    id: "completedAt",
-                    label: "Завершено",
+                    id: "readyAt",
+                    label: "Готово к приёмке",
                     className: "w-44",
                     getSortValue: (task) =>
-                      task.completedAt
-                        ? new Date(task.completedAt).getTime()
-                        : null,
+                      task.readyAt ? new Date(task.readyAt).getTime() : null,
                     render: (task) =>
-                      formatAcceptanceDateTime(task.completedAt),
+                      formatAcceptanceDateTime(task.readyAt ?? null),
                   },
                   {
                     id: "status",
@@ -268,15 +224,17 @@ export function AcceptancePage() {
               />
             </div>
 
-            <div className="grid gap-3 md:hidden">
-              {tasks.map((task) => (
-                <AcceptanceMobileCard
-                  key={task.id}
-                  task={task}
-                  onOpen={() => openTask(task.id)}
-                />
-              ))}
-            </div>
+            {tasks.length > 0 ? (
+              <div className="grid gap-3 md:hidden">
+                {tasks.map((task) => (
+                  <AcceptanceMobileCard
+                    key={task.id}
+                    task={task}
+                    onOpen={() => openTask(task.id)}
+                  />
+                ))}
+              </div>
+            ) : null}
           </>
         )}
       </div>

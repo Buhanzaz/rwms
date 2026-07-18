@@ -10,9 +10,9 @@ import {
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Field, FieldLabel } from "@/components/ui/field"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
+import { Field, FieldLabel } from "@/components/ui/field"
 import {
   REPAIR_ESTIMATES_QUERY_KEY,
   amendCompletedRepairEstimate,
@@ -36,7 +36,6 @@ import {
 import { RepairEstimateCompletionDialog } from "@/features/repair-estimates/repair-estimate-completion-dialog"
 import { RepairEstimateLinesEditor } from "@/features/repair-estimates/repair-estimate-lines-editor"
 import { RepairEstimateLinesSnapshot } from "@/features/repair-estimates/repair-estimate-lines-snapshot"
-import { RepairEstimatePhotos } from "@/features/repair-estimates/repair-estimate-photos"
 import {
   RepairEstimateWorkspaceLayout,
   RepairWorkDetailWorkspaceLayout,
@@ -64,33 +63,37 @@ function plansInTaskOrder(
 
   const planById = new Map(storedPlans.map((plan) => [plan.id, plan]))
   const usedPlanIds = new Set<string>()
-  const orderedPlans = task.subtasks.map((subtask) => {
-    const stored = planById.get(subtask.id)
-    if (stored) {
-      usedPlanIds.add(stored.id)
+  const orderedPlans: RepairEstimateTaskPlanDto[] = task.subtasks.map(
+    (subtask) => {
+      const stored = planById.get(subtask.id)
+      if (stored) {
+        usedPlanIds.add(stored.id)
+        return {
+          ...stored,
+          kind: subtask.kind,
+          groupComment: subtask.groupComment,
+          queueCode: subtask.queueCode,
+          queueId: subtask.queueId,
+          routeQueueKind: subtask.routeQueueKind,
+          sortOrder: subtask.sortOrder,
+        }
+      }
+      const includedLines = [...subtask.workLines, ...subtask.materialLines]
       return {
-        ...stored,
+        id: subtask.id,
         kind: subtask.kind,
+        includedLineIds: includedLines.map((line) => line.id),
+        primaryLineId: subtask.workLines[0]?.id ?? null,
         groupComment: subtask.groupComment,
         queueCode: subtask.queueCode,
+        queueId: subtask.queueId,
         routeQueueKind: subtask.routeQueueKind,
         sortOrder: subtask.sortOrder,
+        generationStatus: "PENDING_GENERATION" as const,
+        workflowRequestRef: null,
       }
     }
-    const includedLines = [...subtask.workLines, ...subtask.materialLines]
-    return {
-      id: subtask.id,
-      kind: subtask.kind,
-      includedLineIds: includedLines.map((line) => line.id),
-      primaryLineId: subtask.workLines[0]?.id ?? null,
-      groupComment: subtask.groupComment,
-      queueCode: subtask.queueCode,
-      routeQueueKind: subtask.routeQueueKind,
-      sortOrder: subtask.sortOrder,
-      generationStatus: "PENDING_GENERATION" as const,
-      workflowRequestRef: null,
-    }
-  })
+  )
   storedPlans.forEach((plan) => {
     if (!usedPlanIds.has(plan.id)) {
       orderedPlans.push(plan)
@@ -163,7 +166,7 @@ export function RepairEstimateCompletedWorkspace({
         draft,
         warehouseId,
         expectedTaskVersion,
-        amendmentReason,
+        reason: amendmentReason,
         ...params,
       }),
     onSuccess: (saved) => {
@@ -211,7 +214,6 @@ export function RepairEstimateCompletedWorkspace({
     setEditing(false)
     setCompletionOpen(false)
     setExpectedTaskVersion(null)
-    setAmendmentReason("")
     setAmendmentTaskPlans(plansInTaskOrder(estimate, null))
     setAmendmentMovementRequired(estimate.movementRequired ?? false)
     setError(null)
@@ -228,15 +230,16 @@ export function RepairEstimateCompletedWorkspace({
         : (estimate.movementRequired ?? false)
     )
     setError(null)
+    setAmendmentReason("")
     setEditing(true)
   }
 
   function validateDraft() {
-    if (!amendmentReason.trim()) {
-      setError("Укажите причину дополнения сметы")
-      return false
-    }
     try {
+      if (!amendmentReason.trim()) {
+        setError("Укажите причину дополнения сметы")
+        return false
+      }
       assertEstimateLinesValid(draft.lines)
       setError(null)
       return true
@@ -266,13 +269,10 @@ export function RepairEstimateCompletedWorkspace({
       <RepairWorkDetailWorkspaceLayout
         ariaLabel={`Завершённая смета бытовки ${estimate.cabinNumber}`}
         photos={
-          <RepairEstimatePhotos
-            media={estimate.media}
-            pendingUploads={[]}
-            readOnly
-            onMediaChange={() => undefined}
-            onPendingUploadsChange={() => undefined}
-          />
+          <p className="text-sm text-muted-foreground">
+            Фото для смет временно недоступны: media-service ещё не подтверждает
+            владельца MAINTENANCE_ESTIMATE.
+          </p>
         }
         information={
           <RepairWorkInformationSnapshot
@@ -282,6 +282,8 @@ export function RepairEstimateCompletedWorkspace({
             dispatchDate={estimate.dispatchDate}
             comment={estimate.comment}
             authorName={estimate.authorName}
+            authorLabel="Идентификатор автора"
+            showComment={false}
             status={<Badge variant="secondary">Завершена</Badge>}
           />
         }
@@ -303,42 +305,28 @@ export function RepairEstimateCompletedWorkspace({
 
   const mutationPending = mutation.isPending
   const information = (
-    <div className="flex flex-col gap-4">
-      <RepairWorkInformationFields
-        warehouseId={warehouseId}
-        rentalItemId={draft.rentalItemId}
-        rentalItemNumber={estimate.cabinNumber}
-        contextLabel="От кого"
-        contextValue={draft.sourceParty}
-        dispatchDate={draft.dispatchDate}
-        comment={draft.comment}
-        disabled={mutationPending}
-        readOnly
-        onRentalItemChange={() => undefined}
-        onContextChange={(sourceParty) =>
-          setDraft((current) => ({ ...current, sourceParty }))
-        }
-        onDispatchDateChange={(dispatchDate) =>
-          setDraft((current) => ({ ...current, dispatchDate }))
-        }
-        onCommentChange={(comment) =>
-          setDraft((current) => ({ ...current, comment }))
-        }
-      />
-      <Field data-invalid={Boolean(error && !amendmentReason.trim())}>
-        <FieldLabel htmlFor="estimate-amendment-reason">
-          Причина дополнения
-        </FieldLabel>
-        <Textarea
-          id="estimate-amendment-reason"
-          value={amendmentReason}
-          disabled={mutationPending}
-          aria-invalid={Boolean(error && !amendmentReason.trim())}
-          maxLength={2000}
-          onChange={(event) => setAmendmentReason(event.target.value)}
-        />
-      </Field>
-    </div>
+    <RepairWorkInformationFields
+      warehouseId={warehouseId}
+      rentalItemId={draft.rentalItemId}
+      rentalItemNumber={estimate.cabinNumber}
+      contextLabel="От кого"
+      contextValue={draft.sourceParty}
+      dispatchDate={draft.dispatchDate}
+      comment={draft.comment}
+      showComment={false}
+      disabled={mutationPending}
+      readOnly
+      onRentalItemChange={() => undefined}
+      onContextChange={(sourceParty) =>
+        setDraft((current) => ({ ...current, sourceParty }))
+      }
+      onDispatchDateChange={(dispatchDate) =>
+        setDraft((current) => ({ ...current, dispatchDate }))
+      }
+      onCommentChange={(comment) =>
+        setDraft((current) => ({ ...current, comment }))
+      }
+    />
   )
   const estimateLines = (
     <div className="flex h-full min-h-0 flex-col gap-3">
@@ -346,6 +334,7 @@ export function RepairEstimateCompletedWorkspace({
         <RepairEstimateLinesEditor
           lines={draft.lines}
           readOnly={mutationPending}
+          catalogOnly
           onChange={(lines) => setDraft((current) => ({ ...current, lines }))}
         />
       </div>
@@ -368,6 +357,17 @@ export function RepairEstimateCompletedWorkspace({
         />
       </div>
       <Separator />
+      <Field data-disabled={mutationPending}>
+        <FieldLabel htmlFor="estimate-amendment-reason">
+          Причина дополнения
+        </FieldLabel>
+        <Textarea
+          id="estimate-amendment-reason"
+          value={amendmentReason}
+          disabled={mutationPending}
+          onChange={(event) => setAmendmentReason(event.target.value)}
+        />
+      </Field>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Button
@@ -436,17 +436,10 @@ export function RepairEstimateCompletedWorkspace({
           ) : null
         }
         photos={
-          <RepairEstimatePhotos
-            media={draft.media}
-            pendingUploads={draft.pendingUploads}
-            readOnly={mutationPending}
-            onMediaChange={(media) =>
-              setDraft((current) => ({ ...current, media }))
-            }
-            onPendingUploadsChange={(pendingUploads) =>
-              setDraft((current) => ({ ...current, pendingUploads }))
-            }
-          />
+          <p className="text-sm text-muted-foreground">
+            Фото для смет временно недоступны: media-service ещё не подтверждает
+            владельца MAINTENANCE_ESTIMATE.
+          </p>
         }
         information={information}
         estimate={estimateLines}
@@ -455,7 +448,6 @@ export function RepairEstimateCompletedWorkspace({
       />
 
       <RepairEstimateCompletionDialog
-        warehouseId={warehouseId}
         open={completionOpen}
         draft={draft}
         pending={mutation.isPending}

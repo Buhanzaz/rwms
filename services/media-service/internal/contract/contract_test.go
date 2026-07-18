@@ -138,12 +138,14 @@ func TestOpenAPIParsesAndExposesOnlyApprovedRuntimePaths(t *testing.T) {
 	approved := map[string]string{
 		"/health/live":  "get",
 		"/health/ready": "get",
-		"/api/internal/media/v1/logistics/references/validate":     "post",
-		"/api/media/v1/upload-sessions":                            "post",
-		"/api/media/v1/upload-sessions/{uploadSessionId}/complete": "post",
-		"/api/media/v1/assets":                                     "get",
-		"/api/media/v1/assets/{mediaId}/original":                  "get",
-		"/api/media/v1/assets/{mediaId}/rotation":                  "post",
+		"/api/internal/media/v1/logistics/references/validate":      "post",
+		"/api/media/v1/upload-sessions":                             "post",
+		"/api/media/v1/upload-sessions/{uploadSessionId}/content":   "put",
+		"/api/media/v1/upload-sessions/{uploadSessionId}/complete":  "post",
+		"/api/media/v1/assets":                                      "get",
+		"/api/media/v1/assets/{mediaId}/original":                   "get",
+		"/api/media/v1/assets/{mediaId}/variants/{variant}/content": "get",
+		"/api/media/v1/assets/{mediaId}/rotation":                   "post",
 	}
 	if len(paths) != len(approved) {
 		t.Fatalf("OpenAPI paths = %d, want exactly %d", len(paths), len(approved))
@@ -155,6 +157,33 @@ func TestOpenAPIParsesAndExposesOnlyApprovedRuntimePaths(t *testing.T) {
 		}
 		if _, ok := pathItem["delete"]; ok {
 			t.Errorf("%s exposes forbidden delete operation", path)
+		}
+	}
+}
+
+func TestPublicMediaContractUsesOnlySameOriginOpaqueContentPaths(t *testing.T) {
+	root := repositoryRoot(t)
+	var document map[string]any
+	if err := yaml.Unmarshal(readContract(t, filepath.Join(root, "contracts", "openapi", "media-service.yaml")), &document); err != nil {
+		t.Fatalf("decode media-service.yaml: %v", err)
+	}
+	schemas := objectAt(t, objectAt(t, document, "components"), "schemas")
+	if _, exists := schemas["SignedCapability"]; exists {
+		t.Fatal("public contract still exposes a signed object-store capability")
+	}
+	uploadProperties := objectAt(t, objectAt(t, schemas, "UploadSession"), "properties")
+	if uploadProperties["contentUploadUrl"] == nil || uploadProperties["uploadUrl"] != nil ||
+		uploadProperties["formFields"] != nil {
+		t.Fatalf("upload session properties = %#v", uploadProperties)
+	}
+	variantProperties := objectAt(t, objectAt(t, schemas, "SafeVariant"), "properties")
+	if variantProperties["contentPath"] == nil || variantProperties["url"] != nil {
+		t.Fatalf("safe variant properties = %#v", variantProperties)
+	}
+	raw := strings.ToLower(string(readContract(t, filepath.Join(root, "contracts", "openapi", "media-service.yaml"))))
+	for _, forbidden := range []string{"signedcapability", "presigned", "minio post policy", "formfields"} {
+		if strings.Contains(raw, forbidden) {
+			t.Fatalf("public media contract contains forbidden %q", forbidden)
 		}
 	}
 }

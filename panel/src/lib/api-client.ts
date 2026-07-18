@@ -1,5 +1,3 @@
-import { DEV_AUTH_BYPASS_TOKEN } from "@/features/auth/auth-config"
-
 export class ApiError extends Error {
   readonly status: number
 
@@ -47,12 +45,12 @@ export async function bearerRequest<T>(
   input: string | URL,
   init: RequestInit = {}
 ): Promise<T> {
-  const headers = new Headers(init.headers)
-  if (accessToken === DEV_AUTH_BYPASS_TOKEN) {
-    headers.delete("Authorization")
-  } else {
-    headers.set("Authorization", `Bearer ${accessToken}`)
+  if (!accessToken.trim()) {
+    throw new Error("Не получен токен доступа.")
   }
+
+  const headers = new Headers(init.headers)
+  headers.set("Authorization", `Bearer ${accessToken}`)
   headers.set("Accept", "application/json")
 
   if (init.body !== undefined && !headers.has("Content-Type")) {

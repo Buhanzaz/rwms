@@ -7,15 +7,15 @@ import {
 import { ApiError } from "@/lib/api-client"
 
 describe("task board settings errors", () => {
-  it("recognizes HTTP and browser mock conflicts", () => {
+  it("recognizes HTTP and structurally compatible conflicts", () => {
     expect(
       isTaskBoardSettingsConflict(new ApiError("HTTP conflict", 409))
     ).toBe(true)
-    const browserConflict = Object.assign(new Error("MOCK conflict"), {
+    const structuralConflict = Object.assign(new Error("Concurrent change"), {
       status: 409,
     })
-    expect(isTaskBoardSettingsConflict(browserConflict)).toBe(true)
-    expect(taskBoardSettingsErrorMessage(browserConflict, true)).toContain(
+    expect(isTaskBoardSettingsConflict(structuralConflict)).toBe(true)
+    expect(taskBoardSettingsErrorMessage(structuralConflict, true)).toContain(
       "Данные обновлены с сервера"
     )
   })

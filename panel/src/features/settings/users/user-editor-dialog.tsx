@@ -99,7 +99,8 @@ export function UserEditorDialog({
     Object.fromEntries(
       warehouses.map((warehouse) => {
         const current = user?.warehouseAccesses.find(
-          (access) => access.warehouseId === warehouse.id && access.active
+          (access) =>
+            access.warehouseId === warehouse.serviceId && access.active
         )
 
         return [
@@ -177,7 +178,7 @@ export function UserEditorDialog({
 
       return [
         {
-          warehouseId: warehouse.id,
+          warehouseId: warehouse.serviceId,
           accessLevel: draft.accessLevel,
           comment: draft.comment.trim() || null,
           active: true,

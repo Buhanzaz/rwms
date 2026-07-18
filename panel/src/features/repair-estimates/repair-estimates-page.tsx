@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useState } from "react"
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -30,7 +30,6 @@ import type {
   RepairEstimateDto,
   RepairEstimateStatus,
   RepairEstimateSummaryDto,
-  LogisticsEstimateSeed,
 } from "@/features/repair-estimates/model/repair-estimate"
 import type { RentalItemDossierNavigationState } from "@/features/rental-items/dossier/model/rental-item-dossier"
 import { RepairEstimateEditorWorkspace } from "@/features/repair-estimates/repair-estimate-editor-workspace"
@@ -39,15 +38,6 @@ import {
   useWorkspaceBack,
   workspaceEntryNavigationOptions,
 } from "@/hooks/use-workspace-back"
-import {
-  cloneReturnMediaToPendingUploads,
-  claimReturnForEstimate,
-  createReturnReplacementEstimateLines,
-  getReturnTask,
-  markReturnEstimateCreated,
-  recordReturnEstimateLinkFailure,
-  releaseReturnEstimateClaim,
-} from "@/features/logistics/api/logistics-api"
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium" }).format(
@@ -66,11 +56,8 @@ export function RepairEstimatesPage() {
   const [searchParams] = useSearchParams()
   const estimateId = searchParams.get("estimateId")
   const createRequested = searchParams.get("create") === "1"
-  const dossierNavigationState = location.state as
-    | (RentalItemDossierNavigationState & {
-        estimateLinkageError?: string
-      })
-    | null
+  const dossierNavigationState =
+    location.state as RentalItemDossierNavigationState | null
   const rentalItemSeed =
     createRequested &&
     dossierNavigationState?.rentalItemSeed?.type ===
@@ -81,46 +68,6 @@ export function RepairEstimatesPage() {
   const returnTaskId = searchParams.get("returnTaskId")
   const [selectedStatus, setSelectedStatus] =
     useState<RepairEstimateStatus>("DRAFT")
-  const logisticsSeedQuery = useQuery({
-    queryKey: ["logistics", "estimate-seed", selectedWarehouseId, returnTaskId],
-    queryFn: async (): Promise<LogisticsEstimateSeed | null> => {
-      const task = await getReturnTask(selectedWarehouseId!, returnTaskId!)
-      if (
-        !task ||
-        task.status !== "PENDING_INSPECTION" ||
-        task.sourceEstimateId ||
-        task.pendingEstimateId ||
-        task.media.length === 0
-      )
-        return null
-      const replacements = createReturnReplacementEstimateLines(task)
-      return {
-        type: "logistics-return-estimate-seed-v1",
-        returnTaskId: task.id,
-        returnTaskVersion: task.version,
-        rentalItemId: task.rentalItemId,
-        cabinNumber: task.cabinNumber,
-        sourceParty: task.fromParty,
-        dispatchDate: task.returnDate,
-        media: [],
-        pendingUploads: await cloneReturnMediaToPendingUploads(task.media),
-        sourceMediaIds: task.media.map((item) => item.id),
-        replacementLines: replacements.lines,
-        replacementWarnings: replacements.warnings,
-      }
-    },
-    enabled: Boolean(selectedWarehouseId && returnTaskId && createRequested),
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: 0,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
-  })
-  const verifiedLogisticsSeed = logisticsSeedQuery.data ?? undefined
-  const estimateClaimRef = useRef<{
-    claimId: string
-    version: number
-  } | null>(null)
-
   const listSearchParams = new URLSearchParams(searchParams)
   listSearchParams.delete("estimateId")
   listSearchParams.delete("create")
@@ -182,98 +129,8 @@ export function RepairEstimatesPage() {
     clearEstimateSelection()
   }
 
-  async function handleSaved(estimate: RepairEstimateDto) {
-    if (verifiedLogisticsSeed) {
-      const claim = estimateClaimRef.current
-      if (!claim) {
-        throw new Error("Claim возврата отсутствует перед связыванием сметы")
-      }
-      try {
-        await markReturnEstimateCreated({
-          warehouseId: selectedWarehouseId!,
-          returnTaskId: verifiedLogisticsSeed.returnTaskId,
-          expectedVersion: claim.version,
-          estimateId: estimate.id,
-          estimateStatus: estimate.status,
-          rentalItemId: verifiedLogisticsSeed.rentalItemId,
-          claimId: claim.claimId,
-        })
-        estimateClaimRef.current = null
-      } catch (cause) {
-        try {
-          await recordReturnEstimateLinkFailure({
-            warehouseId: selectedWarehouseId!,
-            returnTaskId: verifiedLogisticsSeed.returnTaskId,
-            rentalItemId: verifiedLogisticsSeed.rentalItemId,
-            estimateId: estimate.id,
-            expectedVersion: claim.version,
-            claimId: claim.claimId,
-          })
-        } catch {
-          // The estimate remains saved and is opened below; recovery is visible.
-        }
-        estimateClaimRef.current = null
-        navigate(`/estimates?estimateId=${encodeURIComponent(estimate.id)}`, {
-          replace: true,
-          state: {
-            estimateLinkageError:
-              cause instanceof Error
-                ? `Смета сохранена, но связь с возвратом не создана: ${cause.message}`
-                : "Смета сохранена, но связь с возвратом не создана",
-          },
-        })
-        return
-      }
-    }
+  function handleSaved(estimate: RepairEstimateDto) {
     closeEditor(estimate.status)
-  }
-
-  async function claimReturnBeforePersist() {
-    if (!verifiedLogisticsSeed) return
-    const current = await getReturnTask(
-      selectedWarehouseId!,
-      verifiedLogisticsSeed.returnTaskId
-    )
-    if (
-      !current ||
-      current.status !== "PENDING_INSPECTION" ||
-      current.rentalItemId !== verifiedLogisticsSeed.rentalItemId ||
-      current.cabinNumber !== verifiedLogisticsSeed.cabinNumber ||
-      current.fromParty !== verifiedLogisticsSeed.sourceParty ||
-      current.returnDate !== verifiedLogisticsSeed.dispatchDate ||
-      current.version !== verifiedLogisticsSeed.returnTaskVersion ||
-      current.sourceEstimateId ||
-      current.pendingEstimateId ||
-      current.media.map((item) => item.id).join("|") !==
-        verifiedLogisticsSeed.sourceMediaIds.join("|")
-    ) {
-      throw new Error("Возврат изменился. Откройте создание сметы заново")
-    }
-    const claimed = await claimReturnForEstimate({
-      warehouseId: selectedWarehouseId!,
-      returnTaskId: verifiedLogisticsSeed.returnTaskId,
-      rentalItemId: verifiedLogisticsSeed.rentalItemId,
-      expectedVersion: verifiedLogisticsSeed.returnTaskVersion,
-    })
-    if (!claimed.estimateClaimId) {
-      throw new Error("Не удалось получить claim возврата")
-    }
-    estimateClaimRef.current = {
-      claimId: claimed.estimateClaimId,
-      version: claimed.version,
-    }
-  }
-
-  async function releaseReturnClaimAfterFailure() {
-    const claim = estimateClaimRef.current
-    estimateClaimRef.current = null
-    if (!claim || !verifiedLogisticsSeed) return
-    await releaseReturnEstimateClaim({
-      warehouseId: selectedWarehouseId!,
-      returnTaskId: verifiedLogisticsSeed.returnTaskId,
-      expectedVersion: claim.version,
-      claimId: claim.claimId,
-    })
   }
 
   const estimates = listQuery.data ?? []
@@ -281,12 +138,6 @@ export function RepairEstimatesPage() {
   const detailUnavailable = Boolean(
     estimateId && !detailQuery.isLoading && !detailQuery.data
   )
-  const logisticsSeedInvalid = Boolean(
-    returnTaskId &&
-    (logisticsSeedQuery.isError ||
-      (logisticsSeedQuery.isSuccess && !logisticsSeedQuery.data))
-  )
-  const linkageError = dossierNavigationState?.estimateLinkageError
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
@@ -299,20 +150,15 @@ export function RepairEstimatesPage() {
         </header>
       ) : null}
 
-      {linkageError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {linkageError}
-        </p>
-      ) : null}
-
       {workspaceOpen && selectedWarehouseId ? (
-        logisticsSeedInvalid ? (
+        returnTaskId ? (
           <Card>
             <CardHeader>
-              <CardTitle>Возврат недоступен</CardTitle>
+              <CardTitle>Смета из возврата пока недоступна</CardTitle>
               <CardDescription role="alert">
-                Задание возврата изменилось или уже обработано. Вернитесь в
-                раздел логистики и откройте его заново.
+                Публичный logistics-контракт ещё не определяет серверную связь
+                возврата со сметой. Создайте обычную смету без параметра
+                returnTaskId.
               </CardDescription>
             </CardHeader>
           </Card>
@@ -329,23 +175,11 @@ export function RepairEstimatesPage() {
           <RepairEstimateEditorWorkspace
             warehouseId={selectedWarehouseId}
             estimate={estimateId ? (detailQuery.data ?? null) : null}
-            loading={Boolean(
-              (estimateId && detailQuery.isLoading) ||
-              (returnTaskId && logisticsSeedQuery.isLoading)
-            )}
+            loading={Boolean(estimateId && detailQuery.isLoading)}
             onClose={() => closeEditor()}
             onSaved={handleSaved}
-            seed={estimateId ? undefined : verifiedLogisticsSeed}
             initialRentalItemId={
-              estimateId || verifiedLogisticsSeed
-                ? undefined
-                : rentalItemSeed?.rentalItemId
-            }
-            onBeforePersist={
-              verifiedLogisticsSeed ? claimReturnBeforePersist : undefined
-            }
-            onPersistFailed={
-              verifiedLogisticsSeed ? releaseReturnClaimAfterFailure : undefined
+              estimateId ? undefined : rentalItemSeed?.rentalItemId
             }
           />
         )

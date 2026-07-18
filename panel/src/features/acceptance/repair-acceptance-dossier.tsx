@@ -1,12 +1,7 @@
-import { useId, useMemo, useState, type ReactNode } from "react"
+import { useMemo, useState, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
-import { toast } from "sonner"
 
-import {
-  PhotoCarousel,
-  type PhotoCarouselPhoto,
-} from "@/components/media/photo-carousel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -17,7 +12,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -32,9 +26,8 @@ import {
   FieldError,
   FieldGroup,
   FieldLabel,
-  FieldLegend,
-  FieldSet,
 } from "@/components/ui/field"
+import { Separator } from "@/components/ui/separator"
 import {
   Table,
   TableBody,
@@ -44,16 +37,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
-import { Separator } from "@/components/ui/separator"
-import { useAuth } from "@/features/auth/use-auth"
-import { mediaKindFromMimeType } from "@/features/media/model/media"
-import { useOriginalPhotoPreference } from "@/features/media/use-media-preferences"
-import { useOriginalMediaUrls } from "@/features/media/use-original-media-urls"
 import { RepairWorkDetailWorkspaceLayout } from "@/features/repair-estimates/repair-estimate-workspace-layout"
-import type {
-  RepairEstimateLineDto,
-  RepairEstimateMediaRefDto,
-} from "@/features/repair-estimates/model/repair-estimate"
 import {
   REPAIR_TASKS_QUERY_KEY,
   acceptRepairTask,
@@ -85,36 +69,13 @@ type RepairAcceptanceDossierProps = {
   onDecision?: () => void
 }
 
-function mediaToCarouselPhotos(
-  media: RepairEstimateMediaRefDto[],
-  originalUrls: Record<string, string>
-): PhotoCarouselPhoto[] {
-  return media.map((item) => ({
-    id: item.id,
-    url: item.variants.small.url,
-    kind: item.kind ?? mediaKindFromMimeType(item.mimeType),
-    mimeType: item.mimeType,
-    rotationDegrees: item.rotationDegrees,
-    variants: {
-      small: { url: item.variants.small.url },
-      largeWebp: { url: item.variants.largeWebp.url },
-      ...(originalUrls[item.id]
-        ? { original: { url: originalUrls[item.id] } }
-        : {}),
-    },
-    createdAt: item.createdAt,
-  }))
-}
-
 function subtaskTitle(subtask: RepairTaskSubtaskDto, index: number) {
   if (subtask.kind === "MOVE_TO_REPAIR") {
     return `Этап ${index + 1}: перемещение в ремонт`
   }
-
   if (subtask.kind === "MOVE_FROM_REPAIR") {
     return `Этап ${index + 1}: перемещение из ремонта`
   }
-
   return `Этап ${index + 1}: ремонтные работы`
 }
 
@@ -122,7 +83,7 @@ function InfoRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[minmax(7.5rem,0.8fr)_minmax(0,1.2fr)] gap-3 py-1">
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 font-medium">{children}</dd>
+      <dd className="min-w-0 font-medium break-words">{children}</dd>
     </div>
   )
 }
@@ -136,33 +97,29 @@ function TaskInformation({
 }) {
   return (
     <dl className="flex flex-col gap-1 text-sm">
-      <InfoRow label="Бытовка">{task.cabinNumber}</InfoRow>
-      <InfoRow label="Источник">
+      <InfoRow label="Бытовка">{task.cabinNumber || "—"}</InfoRow>
+      <InfoRow label="Тип источника">
         {repairTaskOriginLabel(task.origin, task.kind)}
       </InfoRow>
-      <InfoRow label="Причина">{task.reason || "—"}</InfoRow>
-      <InfoRow label="Автор">{task.authorName || "—"}</InfoRow>
-      <InfoRow label="Начато">
-        {formatAcceptanceDateTime(task.startedAt)}
+      <InfoRow label="От кого">{task.sourceParty || "—"}</InfoRow>
+      <InfoRow label="Идентификатор автора">{task.actorId || "—"}</InfoRow>
+      <InfoRow label="Дата прибытия">
+        {formatAcceptanceDateTime(task.dispatchDate)}
       </InfoRow>
-      <InfoRow label="Завершено">
-        {formatAcceptanceDateTime(task.completedAt)}
+      <InfoRow label="Готово к приёмке">
+        {formatAcceptanceDateTime(task.readyAt ?? null)}
       </InfoRow>
       <InfoRow label="Статус">
         <AcceptanceStatusBadge status={task.acceptanceStatus} />
       </InfoRow>
-      <InfoRow label="Комментарий">{task.comment || "—"}</InfoRow>
 
       {mode === "WRITE_OFF" ? (
         <>
-          <InfoRow label="Причина списания">
-            {task.acceptanceComment || "—"}
-          </InfoRow>
           <InfoRow label="Решение принял">
-            {task.acceptanceDecidedBy || "—"}
+            {task.decisionActorId || "—"}
           </InfoRow>
           <InfoRow label="Дата списания">
-            {formatAcceptanceDateTime(task.acceptanceDecidedAt)}
+            {formatAcceptanceDateTime(task.writtenOffAt ?? null)}
           </InfoRow>
         </>
       ) : null}
@@ -183,58 +140,66 @@ function SourceLink({ task }: { task: RepairTaskDto }) {
       </Button>
     )
   }
-  const sourceEstimateId = task.sourceEstimateId
-  if (task.origin === "ESTIMATE" && !sourceEstimateId) {
-    return null
+  if (task.origin === "ESTIMATE" && task.sourceEstimateId) {
+    return (
+      <Button variant="outline" size="sm" asChild>
+        <Link
+          to={`/estimates?estimateId=${encodeURIComponent(task.sourceEstimateId)}`}
+          state={workspaceEntryNavigationOptions.state}
+        >
+          Перейти к смете
+        </Link>
+      </Button>
+    )
   }
-
-  const href =
-    task.origin === "ESTIMATE"
-      ? `/estimates?estimateId=${encodeURIComponent(sourceEstimateId!)}`
-      : `/repairs?repairId=${encodeURIComponent(task.id)}`
-
   return (
     <Button variant="outline" size="sm" asChild>
-      <Link to={href} state={workspaceEntryNavigationOptions.state}>
-        {task.origin === "ESTIMATE" ? "Перейти к смете" : "Перейти к заданию"}
+      <Link
+        to={`/repairs?repairId=${encodeURIComponent(task.id)}`}
+        state={workspaceEntryNavigationOptions.state}
+      >
+        Перейти к заданию
       </Link>
     </Button>
   )
 }
 
-function LinesTable({ subtask }: { subtask: RepairTaskSubtaskDto }) {
-  const lines: Array<RepairEstimateLineDto & { visibleType: string }> = [
-    ...subtask.workLines.map((line) => ({ ...line, visibleType: "Работа" })),
-    ...subtask.materialLines.map((line) => ({
-      ...line,
-      visibleType: "Материал",
-    })),
-  ]
-
-  if (lines.length === 0) {
+function AssignmentTable({ subtask }: { subtask: RepairTaskSubtaskDto }) {
+  if (subtask.assignments.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">Состав этапа не указан.</p>
+      <p className="text-sm text-muted-foreground">
+        Назначения исполнителей не зафиксированы в task-board.
+      </p>
     )
   }
-
   return (
     <div className="w-full max-w-full overflow-x-auto rounded-lg border">
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Тип</TableHead>
-            <TableHead>Позиция</TableHead>
-            <TableHead>Комментарий</TableHead>
+            <TableHead>Исполнитель</TableHead>
+            <TableHead>Назначен</TableHead>
+            <TableHead>Начал</TableHead>
+            <TableHead>Завершил</TableHead>
+            <TableHead>Статус</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {lines.map((line) => (
-            <TableRow key={line.id}>
+          {subtask.assignments.map((assignment) => (
+            <TableRow key={assignment.id}>
+              <TableCell>{assignment.worker?.name ?? "—"}</TableCell>
               <TableCell>
-                <Badge variant="secondary">{line.visibleType}</Badge>
+                {formatAcceptanceDateTime(assignment.assignedAt)}
               </TableCell>
-              <TableCell>{line.description}</TableCell>
-              <TableCell>{line.lineComment || "—"}</TableCell>
+              <TableCell>
+                {formatAcceptanceDateTime(assignment.startedAt)}
+              </TableCell>
+              <TableCell>
+                {formatAcceptanceDateTime(assignment.finishedAt)}
+              </TableCell>
+              <TableCell>
+                <Badge variant="secondary">{assignment.status}</Badge>
+              </TableCell>
             </TableRow>
           ))}
         </TableBody>
@@ -243,196 +208,78 @@ function LinesTable({ subtask }: { subtask: RepairTaskSubtaskDto }) {
   )
 }
 
-function AssignmentTable({
-  subtask,
-  selectedIds,
-  onToggle,
-  readOnly,
-}: {
-  subtask: RepairTaskSubtaskDto
-  selectedIds: Set<string>
-  onToggle: (subtaskId: string, id: string, checked: boolean) => void
-  readOnly: boolean
-}) {
-  if (subtask.assignments.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        {subtask.assigneeName
-          ? `Исполнитель: ${subtask.assigneeName}`
-          : "Исполнители не зафиксированы."}
-      </p>
-    )
-  }
-
-  return (
-    <FieldSet className="min-w-0">
-      <FieldLegend variant="label">Исполнители</FieldLegend>
-      <div className="w-full max-w-full overflow-x-auto rounded-lg border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              {!readOnly ? <TableHead className="w-12">Выбор</TableHead> : null}
-              <TableHead>Работник</TableHead>
-              <TableHead>Взял</TableHead>
-              <TableHead>Начал</TableHead>
-              <TableHead>Завершил</TableHead>
-              <TableHead>Время</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {subtask.assignments.map((assignment) => (
-              <TableRow key={assignment.id}>
-                {!readOnly ? (
-                  <TableCell>
-                    <Checkbox
-                      aria-label={`Выбрать ${assignment.worker?.name ?? "исполнителя"}`}
-                      checked={selectedIds.has(assignment.id)}
-                      onCheckedChange={(checked) =>
-                        onToggle(subtask.id, assignment.id, checked === true)
-                      }
-                    />
-                  </TableCell>
-                ) : null}
-                <TableCell>{assignment.worker?.name ?? "—"}</TableCell>
-                <TableCell>
-                  {formatAcceptanceDateTime(assignment.assignedAt)}
-                </TableCell>
-                <TableCell>
-                  {formatAcceptanceDateTime(assignment.startedAt)}
-                </TableCell>
-                <TableCell>
-                  {formatAcceptanceDateTime(assignment.finishedAt)}
-                </TableCell>
-                <TableCell>
-                  {formatActiveTime(assignment.activeWorkSeconds)}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-    </FieldSet>
-  )
-}
-
 function SubtaskCard({
   subtask,
   index,
-  selectedIds,
-  onToggle,
-  onToggleGroup,
-  readOnly,
-  originalUrls,
-  showOriginalPhotos,
+  taskBoardAvailable,
 }: {
   subtask: RepairTaskSubtaskDto
   index: number
-  selectedIds: Set<string>
-  onToggle: (subtaskId: string, id: string, checked: boolean) => void
-  onToggleGroup: (subtask: RepairTaskSubtaskDto, checked: boolean) => void
-  readOnly: boolean
-  originalUrls: Record<string, string>
-  showOriginalPhotos: boolean
+  taskBoardAvailable: boolean
 }) {
-  const assignmentIds =
-    subtask.assignments.length > 0
-      ? subtask.assignments.map((assignment) => assignment.id)
-      : []
-  const groupMarker = `group:${subtask.id}`
-  const selectedCount = assignmentIds.filter((id) => selectedIds.has(id)).length
-  const groupChecked = selectedIds.has(groupMarker)
-    ? true
-    : selectedCount === 0
-      ? false
-      : "indeterminate"
-
   return (
     <Card size="sm" className="min-w-0">
       <CardHeader className="min-w-0">
         <CardTitle>{subtaskTitle(subtask, index)}</CardTitle>
         <CardDescription>
-          {subtask.workerGroup?.name ?? "Рабочая группа не указана"}
+          Очередь: {subtask.queueCode || subtask.queueId || "—"}
         </CardDescription>
-        <CardAction className="flex flex-wrap items-center justify-end gap-2">
-          <RemainingTimeBadge
-            plannedDurationMinutes={subtask.plannedDurationMinutes}
-            activeWorkSeconds={subtask.activeWorkSeconds}
-          />
-          {!readOnly ? (
-            <FieldSet>
-              <FieldLegend className="sr-only" variant="label">
-                Выбор группы
-              </FieldLegend>
-              <Field orientation="horizontal">
-                <Checkbox
-                  id={`acceptance-group-${subtask.id}`}
-                  checked={groupChecked}
-                  onCheckedChange={(checked) =>
-                    onToggleGroup(subtask, checked === true)
-                  }
-                />
-                <FieldLabel htmlFor={`acceptance-group-${subtask.id}`}>
-                  Группа
-                </FieldLabel>
-              </Field>
-            </FieldSet>
-          ) : null}
+        <CardAction>
+          {taskBoardAvailable ? (
+            <RemainingTimeBadge
+              plannedDurationMinutes={subtask.plannedDurationMinutes}
+              activeWorkSeconds={subtask.activeWorkSeconds}
+            />
+          ) : (
+            <Badge variant="secondary">Task-board недоступен</Badge>
+          )}
         </CardAction>
       </CardHeader>
+      <CardContent className="flex min-w-0 flex-col gap-4">
+        <dl className="grid grid-cols-2 gap-2 text-sm">
+          <dt className="text-muted-foreground">Статус этапа</dt>
+          <dd>{subtask.status}</dd>
+          <dt className="text-muted-foreground">Начато</dt>
+          <dd>{formatAcceptanceDateTime(subtask.startedAt)}</dd>
+          <dt className="text-muted-foreground">Завершено</dt>
+          <dd>{formatAcceptanceDateTime(subtask.completedAt)}</dd>
+          {taskBoardAvailable ? (
+            <>
+              <dt className="text-muted-foreground">Норматив</dt>
+              <dd>
+                {subtask.plannedDurationMinutes === null
+                  ? "—"
+                  : `${subtask.plannedDurationMinutes} мин`}
+              </dd>
+              <dt className="text-muted-foreground">Активное время</dt>
+              <dd>{formatActiveTime(subtask.activeWorkSeconds)}</dd>
+            </>
+          ) : null}
+        </dl>
 
-      <CardContent className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(18rem,0.8fr)]">
-        <div className="flex min-w-0 flex-col gap-4">
-          <dl className="grid grid-cols-2 gap-2 text-sm">
-            <dt className="text-muted-foreground">Начато</dt>
-            <dd>{formatAcceptanceDateTime(subtask.startedAt)}</dd>
-            <dt className="text-muted-foreground">Завершено</dt>
-            <dd>{formatAcceptanceDateTime(subtask.completedAt)}</dd>
-            <dt className="text-muted-foreground">Норматив</dt>
-            <dd>
-              {subtask.plannedDurationMinutes === null
-                ? "—"
-                : `${subtask.plannedDurationMinutes} мин`}
-            </dd>
-            <dt className="text-muted-foreground">Фактически</dt>
-            <dd>{formatActiveTime(subtask.activeWorkSeconds)}</dd>
-          </dl>
+        {taskBoardAvailable ? (
+          <AssignmentTable subtask={subtask} />
+        ) : (
+          <p role="status" className="text-sm text-muted-foreground">
+            Исполнители и время не показаны, потому что публичная проекция
+            task-board недоступна.
+          </p>
+        )}
 
-          <AssignmentTable
-            subtask={subtask}
-            selectedIds={selectedIds}
-            onToggle={onToggle}
-            readOnly={readOnly}
-          />
-          <LinesTable subtask={subtask} />
-        </div>
-
-        <section className="flex min-h-56 min-w-0 flex-col gap-2">
-          <h4 className="text-sm font-medium">Фото результата</h4>
-          <PhotoCarousel
-            photos={mediaToCarouselPhotos(subtask.resultMedia, originalUrls)}
-            title={`${subtaskTitle(subtask, index)} — ${subtask.workerGroup?.name ?? taskGroupFallback(subtask)}`}
-            className="min-h-48 flex-1 rounded-lg border"
-            fit="contain"
-            controlsVisibility="always"
-            fullscreenQuality={showOriginalPhotos ? "original" : "preview"}
-          />
-        </section>
+        <p className="text-sm text-muted-foreground">
+          Состав строк этапа не входит в публичную проекцию ремонта
+          maintenance-service.
+        </p>
       </CardContent>
     </Card>
   )
 }
 
-function taskGroupFallback(subtask: RepairTaskSubtaskDto) {
-  return subtask.assigneeName || "исполнители"
-}
-
 function DecisionDialogs({
   task,
-  selectedIds,
   onDecision,
 }: {
   task: RepairTaskDto
-  selectedIds: Set<string>
   onDecision?: () => void
 }) {
   const queryClient = useQueryClient()
@@ -463,10 +310,7 @@ function DecisionDialogs({
 
   function confirmWriteOff() {
     setWriteOffSubmitted(true)
-    if (!writeOffReason.trim()) {
-      return
-    }
-    writeOffMutation.mutate()
+    if (writeOffReason.trim()) writeOffMutation.mutate()
   }
 
   return (
@@ -485,7 +329,6 @@ function DecisionDialogs({
             type="button"
             variant="outline"
             size="sm"
-            disabled={selectedIds.size === 0}
             onClick={() => setReworkOpen(true)}
           >
             Переделать
@@ -499,7 +342,6 @@ function DecisionDialogs({
       <RepairReworkWizardDialog
         open={reworkOpen}
         task={task}
-        selectedIds={selectedIds}
         onOpenChange={setReworkOpen}
       />
 
@@ -508,7 +350,7 @@ function DecisionDialogs({
           <DialogHeader>
             <DialogTitle>Принять бытовку</DialogTitle>
             <DialogDescription>
-              Бытовка станет свободной и исчезнет из очереди приёмки.
+              Команда завершит приёмку текущей версии ремонта.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
@@ -520,12 +362,15 @@ function DecisionDialogs({
                 placeholder="Необязательно"
                 onChange={(event) => setAcceptComment(event.target.value)}
               />
+              <FieldDescription>
+                Комментарий принимает maintenance-service; текущая публичная
+                проекция приёмки его не возвращает.
+              </FieldDescription>
             </Field>
           </FieldGroup>
           {acceptMutation.isError ? (
             <p role="alert" className="text-sm text-destructive">
-              {acceptMutation.error instanceof Error &&
-              acceptMutation.error.message
+              {acceptMutation.error instanceof Error
                 ? acceptMutation.error.message
                 : "Не удалось принять бытовку."}
             </p>
@@ -555,8 +400,7 @@ function DecisionDialogs({
           <DialogHeader>
             <DialogTitle>Списать бытовку</DialogTitle>
             <DialogDescription>
-              Решение завершит ремонтный цикл и перенесёт бытовку в раздел
-              «Списание».
+              Команда завершит ремонтный цикл текущей версии ремонта.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
@@ -571,7 +415,8 @@ function DecisionDialogs({
                 onChange={(event) => setWriteOffReason(event.target.value)}
               />
               <FieldDescription>
-                Причина сохранится в досье списания.
+                Причина обязательна для команды, но публичная проекция списаний
+                сейчас возвращает только дату и автора решения.
               </FieldDescription>
               {writeOffSubmitted && !writeOffReason.trim() ? (
                 <FieldError>Укажите причину списания.</FieldError>
@@ -580,8 +425,7 @@ function DecisionDialogs({
           </FieldGroup>
           {writeOffMutation.isError ? (
             <p role="alert" className="text-sm text-destructive">
-              {writeOffMutation.error instanceof Error &&
-              writeOffMutation.error.message
+              {writeOffMutation.error instanceof Error
                 ? writeOffMutation.error.message
                 : "Не удалось списать бытовку."}
             </p>
@@ -615,9 +459,6 @@ export function RepairAcceptanceDossier({
   mode,
   onDecision,
 }: RepairAcceptanceDossierProps) {
-  const originalToggleId = useId()
-  const { currentUser } = useAuth()
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const orderedSubtasks = useMemo(
     () =>
       task.subtasks
@@ -625,101 +466,27 @@ export function RepairAcceptanceDossier({
         .sort((left, right) => left.sortOrder - right.sortOrder),
     [task.subtasks]
   )
-  const allMedia = useMemo(
-    () => [
-      ...task.media,
-      ...orderedSubtasks.flatMap((subtask) => subtask.resultMedia),
-    ],
-    [orderedSubtasks, task.media]
-  )
-  const originalPreference = useOriginalPhotoPreference(currentUser?.id, "WORK")
-  const originalUrls = useOriginalMediaUrls(
-    allMedia,
-    originalPreference.showOriginalPhotos,
-    "WORK"
-  )
-
-  function toggleSelection(subtaskId: string, id: string, checked: boolean) {
-    setSelectedIds((current) => {
-      const next = new Set(current)
-      next.delete(`group:${subtaskId}`)
-      if (checked) {
-        next.add(id)
-      } else {
-        next.delete(id)
-      }
-      return next
-    })
-  }
-
-  function toggleGroup(subtask: RepairTaskSubtaskDto, checked: boolean) {
-    const ids = [
-      `group:${subtask.id}`,
-      ...subtask.assignments.map((assignment) => assignment.id),
-    ]
-    setSelectedIds((current) => {
-      const next = new Set(current)
-      for (const id of ids) {
-        if (checked) {
-          next.add(id)
-        } else {
-          next.delete(id)
-        }
-      }
-      return next
-    })
-  }
+  const taskBoardAvailable = task.taskBoardAvailable !== false
 
   return (
     <RepairWorkDetailWorkspaceLayout
       ariaLabel={`${mode === "WRITE_OFF" ? "Списание" : "Приёмка"} бытовки ${task.cabinNumber}`}
       mobileContentFlow
       photos={
-        <section className="flex h-full min-h-0 flex-col gap-3">
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="text-sm font-medium">Фото до ремонта</h3>
-            <div className="flex flex-wrap items-center gap-3">
-              <Field orientation="horizontal" className="w-auto gap-2">
-                <Checkbox
-                  id={originalToggleId}
-                  checked={originalPreference.showOriginalPhotos}
-                  disabled={originalPreference.loading}
-                  onCheckedChange={(checked) => {
-                    void originalPreference
-                      .setShowOriginalPhotos(checked === true)
-                      .catch(() => {
-                        toast.error("Не удалось сохранить качество фотографий")
-                      })
-                  }}
-                />
-                <FieldLabel htmlFor={originalToggleId} className="font-normal">
-                  Оригиналы
-                </FieldLabel>
-              </Field>
-              <Badge variant="secondary">{task.media.length} фото</Badge>
-            </div>
-          </div>
-          <PhotoCarousel
-            photos={mediaToCarouselPhotos(task.media, originalUrls)}
-            title={`Фото до ремонта — ${task.cabinNumber}`}
-            className="min-h-56 flex-1 rounded-lg border xl:min-h-0"
-            fit="contain"
-            controlsVisibility="always"
-            fullscreenQuality={
-              originalPreference.showOriginalPhotos ? "original" : "preview"
-            }
-          />
-        </section>
+        <p className="text-sm text-muted-foreground">
+          Фото для ремонта и приёмки временно недоступны: media-service ещё не
+          подтверждает владельцев MAINTENANCE_REPAIR и MAINTENANCE_ACCEPTANCE.
+        </p>
       }
       information={<TaskInformation task={task} mode={mode} />}
       informationDescription={
         mode === "WRITE_OFF"
-          ? "Сведения о списанной бытовке и решении."
-          : "Сведения о завершённом ремонтном задании."
+          ? "Сведения из maintenance write-off projection."
+          : "Сведения из maintenance acceptance projection."
       }
       informationAction={<SourceLink task={task} />}
       lowerTitle="Этапы ремонта"
-      lowerDescription="Выполненные этапы, исполнители, время и фотографии."
+      lowerDescription="Этапы maintenance-service и доступные данные публичной проекции task-board."
       lowerContent={
         <div className="flex min-h-full flex-col gap-3">
           {orderedSubtasks.length > 0 ? (
@@ -729,12 +496,7 @@ export function RepairAcceptanceDossier({
                   key={subtask.id}
                   subtask={subtask}
                   index={index}
-                  selectedIds={selectedIds}
-                  onToggle={toggleSelection}
-                  onToggleGroup={toggleGroup}
-                  readOnly={mode === "WRITE_OFF"}
-                  originalUrls={originalUrls}
-                  showOriginalPhotos={originalPreference.showOriginalPhotos}
+                  taskBoardAvailable={taskBoardAvailable}
                 />
               ))}
             </div>
@@ -744,11 +506,7 @@ export function RepairAcceptanceDossier({
           {mode === "ACCEPTANCE" ? (
             <div className="sticky bottom-0 mt-auto bg-card py-2">
               <Separator className="mb-2" />
-              <DecisionDialogs
-                task={task}
-                selectedIds={selectedIds}
-                onDecision={onDecision}
-              />
+              <DecisionDialogs task={task} onDecision={onDecision} />
             </div>
           ) : null}
         </div>

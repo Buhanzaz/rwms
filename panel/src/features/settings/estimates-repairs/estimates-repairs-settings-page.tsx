@@ -7,48 +7,39 @@ import {
   ArrowRight01Icon,
   CanvasIcon,
   Delete01Icon,
-  HammerIcon,
   PackageIcon,
   PencilEdit01Icon,
   Refresh01Icon,
-  Route01Icon,
-  Sofa01Icon,
-  TaskDone01Icon,
-  ToolsIcon,
   WorkIcon,
 } from "@hugeicons/core-free-icons"
 
 import {
   deleteRepairEstimateCatalogCanvasLink,
-  getRepairEstimateCatalogCanvasMock,
+  getRepairEstimateCatalogCanvasSettingsData,
   getRepairEstimateCatalogCanvasSettings,
-  resetRepairEstimateCatalogCanvasMock,
   saveRepairEstimateCatalogCanvasLink,
   saveRepairEstimateCatalogCanvasNode,
 } from "@/features/settings/estimates-repairs/api/repair-estimate-catalog-canvas-settings-api"
 import {
-  deleteRepairEstimateFurnitureCatalogItem,
-  getRepairEstimateFurnitureCatalogMock,
-  getRepairEstimateFurnitureCatalogSettings,
-  saveRepairEstimateFurnitureCatalogItem,
-} from "@/features/settings/estimates-repairs/api/repair-estimate-furniture-catalog-settings-api"
-import {
   deleteRepairEstimateMaterialCatalogItem,
-  getRepairEstimateMaterialCatalogMock,
+  getRepairEstimateMaterialCatalog,
   getRepairEstimateMaterialCatalogSettings,
   saveRepairEstimateMaterialCatalogItem,
 } from "@/features/settings/estimates-repairs/api/repair-estimate-material-catalog-settings-api"
 import {
   deleteRepairEstimateWorkCatalogItem,
-  getRepairEstimateWorkCatalogMock,
+  getRepairEstimateWorkCatalog,
   getRepairEstimateWorkCatalogSettings,
   saveRepairEstimateWorkCatalogItem,
 } from "@/features/settings/estimates-repairs/api/repair-estimate-work-catalog-settings-api"
 import {
+  activateRepairEstimateCatalog,
   getItemsForCategory,
   getRepairEstimateCatalogSectionItems,
+  importRepairEstimateCatalog,
+  listRepairEstimateCatalogVersions,
+  moveRepairEstimateCatalogCanvasNode,
 } from "@/features/settings/estimates-repairs/api/repair-estimate-catalog-store"
-import { getRepairSettingsActions } from "@/features/settings/estimates-repairs/api/repair-settings-api"
 import { REPAIR_ESTIMATE_CATALOG_QUERY_KEY } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -72,12 +63,10 @@ import {
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
-import { cn } from "@/lib/utils"
+import { useAuth } from "@/features/auth/use-auth"
 import { useWarehouse } from "@/hooks/use-warehouse"
-import type {
-  EstimateCatalogSettingsActionDto,
-  RepairSettingsActionDto,
-} from "@/features/settings/estimates-repairs/model/estimate-repair-settings"
+import { cn } from "@/lib/utils"
+import type { EstimateCatalogSettingsActionDto } from "@/features/settings/estimates-repairs/model/estimate-repair-settings"
 import type {
   RepairEstimateCatalogCanvasDto,
   RepairEstimateCatalogLinkDto,
@@ -86,18 +75,15 @@ import type {
   RepairEstimateCatalogNodeDto,
   RepairEstimateCatalogNodeMutation,
   RepairEstimateCatalogNodeType,
-  RepairEstimateCatalogRouteQueueKind,
+  RepairEstimateCatalogRequest,
   RepairEstimateCatalogSectionDto,
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
 import {
   repairEstimateCatalogLinkTypeLabel,
   repairEstimateCatalogNodeTypeLabel,
-  repairEstimateCatalogRouteQueueKindLabel,
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
 
-type SettingsAction =
-  | (EstimateCatalogSettingsActionDto & { group: "estimate" })
-  | (RepairSettingsActionDto & { group: "repair" })
+type SettingsAction = EstimateCatalogSettingsActionDto & { group: "estimate" }
 
 type EstimateScreen =
   | { level: "root" }
@@ -115,7 +101,6 @@ type CatalogTableSortColumn =
   | "name"
   | "unit"
   | "unitPrice"
-  | "defaultQuantity"
   | "durationMinutes"
   | "includeInEstimate"
   | "commonItem"
@@ -145,9 +130,7 @@ const CATALOG_TABLE_SORT_STORAGE_PREFIX =
   "rwms:repair-estimate-catalog-table-sort:v1:"
 const CANVAS_NODE_WIDTH = 256
 const CANVAS_NODE_MIN_HEIGHT = 208
-const CATALOG_ANCHOR_COMMENT_PREFIX = "__anchors__:"
-const CATALOG_COMMENT_MAX_LENGTH = 180
-const CATALOG_MAIN_MENU_TITLE_MAX_LENGTH = 255
+const CATALOG_COMMENT_MAX_LENGTH = 2000
 
 function getEstimateActionIcon(id: EstimateCatalogSettingsActionDto["id"]) {
   switch (id) {
@@ -157,21 +140,6 @@ function getEstimateActionIcon(id: EstimateCatalogSettingsActionDto["id"]) {
       return WorkIcon
     case "repair-estimate-catalog-materials":
       return PackageIcon
-    case "repair-estimate-catalog-furniture":
-      return Sofa01Icon
-  }
-}
-
-function getRepairActionIcon(id: RepairSettingsActionDto["id"]) {
-  switch (id) {
-    case "repair-stage-settings":
-      return ToolsIcon
-    case "repair-route-settings":
-      return Route01Icon
-    case "repair-acceptance-settings":
-      return TaskDone01Icon
-    case "repair-rework-settings":
-      return HammerIcon
   }
 }
 
@@ -181,35 +149,22 @@ function getSectionKind(action: EstimateCatalogSettingsActionDto) {
       return "works"
     case "repair-estimate-catalog-materials":
       return "materials"
-    case "repair-estimate-catalog-furniture":
-      return "furniture"
     case "repair-estimate-catalog-canvas":
       return null
   }
 }
 
-function canConfigureRouteQueueKind(type: RepairEstimateCatalogNodeType) {
-  return (
-    type === "CATEGORY" ||
-    type === "SUBCATEGORY" ||
-    type === "WORK" ||
-    type === "OPTION"
-  )
-}
-
 async function getEstimateActionData(
-  action: EstimateCatalogSettingsActionDto,
-  warehouseId: string
+  request: RepairEstimateCatalogRequest,
+  action: EstimateCatalogSettingsActionDto
 ) {
   switch (action.id) {
     case "repair-estimate-catalog-canvas":
-      return getRepairEstimateCatalogCanvasMock(warehouseId)
+      return getRepairEstimateCatalogCanvasSettingsData(request)
     case "repair-estimate-catalog-works":
-      return getRepairEstimateWorkCatalogMock(warehouseId)
+      return getRepairEstimateWorkCatalog(request)
     case "repair-estimate-catalog-materials":
-      return getRepairEstimateMaterialCatalogMock(warehouseId)
-    case "repair-estimate-catalog-furniture":
-      return getRepairEstimateFurnitureCatalogMock(warehouseId)
+      return getRepairEstimateMaterialCatalog(request)
   }
 }
 
@@ -222,21 +177,21 @@ function isSectionData(
 function SettingsActionButton({
   action,
   active,
+  disabled = false,
   onClick,
 }: {
   action: SettingsAction
   active: boolean
+  disabled?: boolean
   onClick: (action: SettingsAction) => void
 }) {
-  const Icon =
-    action.group === "estimate"
-      ? getEstimateActionIcon(action.id)
-      : getRepairActionIcon(action.id)
+  const Icon = getEstimateActionIcon(action.id)
 
   return (
     <Button
       type="button"
       variant={active ? "secondary" : "outline"}
+      disabled={disabled}
       className="h-auto min-h-14 w-full justify-between gap-3 px-3 py-3 text-left"
       onClick={() => onClick(action)}
     >
@@ -343,7 +298,6 @@ function isCatalogTableSortColumn(
     value === "name" ||
     value === "unit" ||
     value === "unitPrice" ||
-    value === "defaultQuantity" ||
     value === "durationMinutes" ||
     value === "includeInEstimate" ||
     value === "commonItem"
@@ -404,8 +358,6 @@ function getCatalogTableSortValue(
       return item.unit
     case "unitPrice":
       return item.unitPrice
-    case "defaultQuantity":
-      return item.defaultQuantity
     case "durationMinutes":
       return item.durationMinutes
     case "includeInEstimate":
@@ -483,43 +435,16 @@ function compareMoneyDecimalValues(left: string | null, right: string | null) {
   return leftMinor < rightMinor ? -1 : leftMinor > rightMinor ? 1 : 0
 }
 
-function normalizeCatalogAnchor(value: string | null | undefined) {
-  return value?.toUpperCase() === "TOP" ? "TOP" : "BOTTOM"
-}
-
-function parseCatalogAnchorComment(comment: string | null | undefined): {
-  sourceAnchor: CatalogLinkAnchor
-  targetAnchor: CatalogLinkAnchor
-} | null {
-  if (!comment?.startsWith(CATALOG_ANCHOR_COMMENT_PREFIX)) {
-    return null
-  }
-
-  const [sourceAnchor, targetAnchor] = comment
-    .slice(CATALOG_ANCHOR_COMMENT_PREFIX.length)
-    .split("->")
-
-  return {
-    sourceAnchor: normalizeCatalogAnchor(sourceAnchor),
-    targetAnchor: normalizeCatalogAnchor(targetAnchor),
-  }
-}
-
-function createCatalogAnchorComment(
-  sourceAnchor: CatalogLinkAnchor,
-  targetAnchor: CatalogLinkAnchor
-) {
-  return `${CATALOG_ANCHOR_COMMENT_PREFIX}${sourceAnchor}->${targetAnchor}`
-}
-
 function getCatalogLinkAnchors(
   link: RepairEstimateCatalogLinkDto | RepairEstimateCatalogLinkMutation,
   source?: { y: number } | null,
   target?: { y: number } | null
 ) {
-  const parsed = parseCatalogAnchorComment(link.comment)
-  if (parsed !== null) {
-    return parsed
+  if (link.canvasAnchors) {
+    return {
+      sourceAnchor: link.canvasAnchors.source,
+      targetAnchor: link.canvasAnchors.target,
+    }
   }
 
   if (source && target && source.y > target.y) {
@@ -545,22 +470,17 @@ function createNodeMutation(
     nodeType: node.nodeType,
     parentId: node.parentId,
     active: node.active,
-    sortOrder: node.sortOrder,
     unit: node.unit,
     unitPrice: node.unitPrice,
-    defaultQuantity: node.defaultQuantity,
     durationMinutes: node.durationMinutes,
-    additionalOption: node.additionalOption,
     showInMainMenu: node.showInMainMenu,
-    mainMenuOrder: node.mainMenuOrder,
-    mainMenuTitle: node.mainMenuTitle,
     routeQueueKind: node.routeQueueKind,
+    routing: node.routing,
+    references: node.references,
+    mediaReferences: node.mediaReferences,
     photoRequired: node.photoRequired,
     includeInEstimate: node.includeInEstimate,
     commonItem: node.commonItem,
-    furnitureCategory: node.furnitureCategory,
-    canvasX: node.canvasX,
-    canvasY: node.canvasY,
     comment: node.comment,
   }
 }
@@ -568,13 +488,9 @@ function createNodeMutation(
 function createBlankNodeMutation({
   nodeType,
   parentId,
-  furnitureCategory,
-  sortOrder,
 }: {
   nodeType: RepairEstimateCatalogNodeType
   parentId: string | null
-  furnitureCategory: boolean
-  sortOrder: number
 }): RepairEstimateCatalogNodeMutation {
   const priced = nodeType === "WORK" || nodeType === "MATERIAL"
 
@@ -584,22 +500,14 @@ function createBlankNodeMutation({
     nodeType,
     parentId,
     active: true,
-    sortOrder,
     unit: priced ? "шт." : null,
     unitPrice: priced ? "0.00" : null,
-    defaultQuantity: 1,
     durationMinutes: nodeType === "WORK" ? 60 : null,
-    additionalOption: false,
     showInMainMenu: false,
-    mainMenuOrder: null,
-    mainMenuTitle: null,
     routeQueueKind: null,
     photoRequired: false,
     includeInEstimate: priced,
     commonItem: false,
-    furnitureCategory,
-    canvasX: null,
-    canvasY: null,
     comment: null,
   }
 }
@@ -669,7 +577,6 @@ function NodeEditorDialogContent({
   const [draft, setDraft] = useState(state.value)
   const [error, setError] = useState<string | null>(null)
   const priced = draft.nodeType === "WORK" || draft.nodeType === "MATERIAL"
-  const routeQueueKindConfigurable = canConfigureRouteQueueKind(draft.nodeType)
   const commentLength = (draft.comment ?? "").length
   const commentTooLong = commentLength > CATALOG_COMMENT_MAX_LENGTH
 
@@ -728,11 +635,6 @@ function NodeEditorDialogContent({
                         value === "WORK" || value === "MATERIAL"
                           ? current.unitPrice
                           : null,
-                      routeQueueKind: canConfigureRouteQueueKind(
-                        value as RepairEstimateCatalogNodeType
-                      )
-                        ? current.routeQueueKind
-                        : null,
                       photoRequired:
                         value === "WORK" ? current.photoRequired : false,
                     }))
@@ -813,24 +715,6 @@ function NodeEditorDialogContent({
             </div>
 
             <div className="grid gap-3 md:grid-cols-2">
-              <Field>
-                <FieldLabel htmlFor={`${fieldIdPrefix}-default-quantity`}>
-                  Количество по умолчанию
-                </FieldLabel>
-                <Input
-                  id={`${fieldIdPrefix}-default-quantity`}
-                  value={draft.defaultQuantity}
-                  disabled={!priced}
-                  inputMode="numeric"
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      defaultQuantity: Number(event.target.value) || 1,
-                    }))
-                  }
-                />
-              </Field>
-
               {draft.nodeType === "WORK" && (
                 <Field>
                   <FieldLabel htmlFor={`${fieldIdPrefix}-duration`}>
@@ -883,9 +767,6 @@ function NodeEditorDialogContent({
                   setDraft((current) => ({
                     ...current,
                     showInMainMenu: checked,
-                    mainMenuOrder: checked
-                      ? (current.mainMenuOrder ?? current.sortOrder)
-                      : current.mainMenuOrder,
                   }))
                 }
               />
@@ -901,104 +782,7 @@ function NodeEditorDialogContent({
                   }
                 />
               )}
-              {draft.nodeType === "CATEGORY" && (
-                <BooleanField
-                  title="Мебельная категория"
-                  checked={draft.furnitureCategory}
-                  onCheckedChange={(checked) =>
-                    setDraft((current) => ({
-                      ...current,
-                      furnitureCategory: checked,
-                    }))
-                  }
-                />
-              )}
             </FieldGroup>
-
-            {draft.showInMainMenu && (
-              <FieldGroup className="grid gap-3 md:grid-cols-2">
-                <Field>
-                  <FieldLabel htmlFor={`${fieldIdPrefix}-main-menu-order`}>
-                    Порядок в главном меню
-                  </FieldLabel>
-                  <Input
-                    id={`${fieldIdPrefix}-main-menu-order`}
-                    value={draft.mainMenuOrder ?? ""}
-                    type="number"
-                    step={1}
-                    inputMode="numeric"
-                    onChange={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        mainMenuOrder: toNumberOrNull(event.target.value),
-                      }))
-                    }
-                  />
-                  <FieldDescription>
-                    Пустое значение помещает пункт после записей с заданным
-                    порядком.
-                  </FieldDescription>
-                </Field>
-
-                <Field>
-                  <FieldLabel htmlFor={`${fieldIdPrefix}-main-menu-title`}>
-                    Название в главном меню
-                  </FieldLabel>
-                  <Input
-                    id={`${fieldIdPrefix}-main-menu-title`}
-                    value={draft.mainMenuTitle ?? ""}
-                    maxLength={CATALOG_MAIN_MENU_TITLE_MAX_LENGTH}
-                    placeholder={draft.name || "Название записи"}
-                    onChange={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        mainMenuTitle: event.target.value,
-                      }))
-                    }
-                  />
-                  <FieldDescription>
-                    Если не заполнено, используется название записи.
-                  </FieldDescription>
-                </Field>
-              </FieldGroup>
-            )}
-
-            {routeQueueKindConfigurable && (
-              <Field>
-                <FieldLabel htmlFor={`${fieldIdPrefix}-route-queue-kind`}>
-                  Тип очереди маршрута
-                </FieldLabel>
-                <NativeSelect
-                  id={`${fieldIdPrefix}-route-queue-kind`}
-                  value={draft.routeQueueKind ?? ""}
-                  onChange={(value) =>
-                    setDraft((current) => ({
-                      ...current,
-                      routeQueueKind: value
-                        ? (value as RepairEstimateCatalogRouteQueueKind)
-                        : null,
-                    }))
-                  }
-                >
-                  <option value="">Наследовать</option>
-                  {(
-                    [
-                      "MOVEMENT",
-                      "REPAIR",
-                      "HOLDING",
-                    ] satisfies RepairEstimateCatalogRouteQueueKind[]
-                  ).map((kind) => (
-                    <option key={kind} value={kind}>
-                      {repairEstimateCatalogRouteQueueKindLabel(kind)}
-                    </option>
-                  ))}
-                </NativeSelect>
-                <FieldDescription>
-                  Без явного значения тип наследуется по родительской иерархии,
-                  затем по входящей связи каталога.
-                </FieldDescription>
-              </Field>
-            )}
 
             <Field data-invalid={commentTooLong || undefined}>
               <FieldLabel htmlFor={`${fieldIdPrefix}-comment`}>
@@ -1087,12 +871,12 @@ function categoryItemCount(
 }
 
 function EstimateActionCategoryMenu({
+  request,
   action,
-  warehouseId,
   onOpenCategory,
 }: {
+  request: RepairEstimateCatalogRequest
   action: EstimateCatalogSettingsActionDto
-  warehouseId: string
   onOpenCategory: (categoryId: string) => void
 }) {
   const queryClient = useQueryClient()
@@ -1100,15 +884,26 @@ function EstimateActionCategoryMenu({
   const dataQuery = useQuery({
     queryKey: [
       ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
-      warehouseId,
+      request.warehouseId,
+      request.catalogVersionId,
       "action-menu",
       action.id,
     ],
-    queryFn: () => getEstimateActionData(action, warehouseId),
+    queryFn: () => getEstimateActionData(request, action),
   })
 
   if (dataQuery.isLoading) {
     return <SectionSkeleton />
+  }
+
+  if (dataQuery.error) {
+    return (
+      <ErrorBox>
+        {dataQuery.error instanceof Error
+          ? dataQuery.error.message
+          : "Не удалось загрузить каталог."}
+      </ErrorBox>
+    )
   }
 
   if (!dataQuery.data) {
@@ -1137,11 +932,9 @@ function EstimateActionCategoryMenu({
                 value: createBlankNodeMutation({
                   nodeType: "CATEGORY",
                   parentId: null,
-                  furnitureCategory: false,
-                  sortOrder: dataQuery.data.categories.length * 10 + 10,
                 }),
                 save: (input) =>
-                  saveRepairEstimateCatalogCanvasNode(input, warehouseId),
+                  saveRepairEstimateCatalogCanvasNode(request, input),
               })
             }
           >
@@ -1883,7 +1676,6 @@ function CatalogCanvas({
             </Badge>
           </div>
           <span className="flex flex-1 flex-col gap-1 text-xs text-muted-foreground">
-            <span>К-во. по умолчанию: {node.defaultQuantity}</span>
             <span>Единица: {node.unit ?? ""}</span>
             <span>Активно: {node.active ? "Да" : "Нет"}</span>
             {node.commonItem && <span>Общий</span>}
@@ -1914,11 +1706,11 @@ function CatalogCanvas({
 }
 
 function CatalogCanvasCategoryEditor({
+  request,
   categoryId,
-  warehouseId,
 }: {
+  request: RepairEstimateCatalogRequest
   categoryId: string
-  warehouseId: string
 }) {
   const queryClient = useQueryClient()
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -1933,8 +1725,13 @@ function CatalogCanvasCategoryEditor({
   const [error, setError] = useState<string | null>(null)
 
   const canvasQuery = useQuery({
-    queryKey: [...REPAIR_ESTIMATE_CATALOG_QUERY_KEY, warehouseId, "canvas"],
-    queryFn: () => getRepairEstimateCatalogCanvasMock(warehouseId),
+    queryKey: [
+      ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
+      request.warehouseId,
+      request.catalogVersionId,
+      "canvas",
+    ],
+    queryFn: () => getRepairEstimateCatalogCanvasSettingsData(request),
   })
 
   const invalidate = () => {
@@ -1945,7 +1742,7 @@ function CatalogCanvasCategoryEditor({
 
   const deleteLinkMutation = useMutation({
     mutationFn: (id: string) =>
-      deleteRepairEstimateCatalogCanvasLink(id, warehouseId),
+      deleteRepairEstimateCatalogCanvasLink(request, id),
     onSuccess: () => {
       setError(null)
       setSelectedLinkId(null)
@@ -1962,7 +1759,7 @@ function CatalogCanvasCategoryEditor({
 
   const createLinkMutation = useMutation({
     mutationFn: (input: RepairEstimateCatalogLinkMutation) =>
-      saveRepairEstimateCatalogCanvasLink(input, warehouseId),
+      saveRepairEstimateCatalogCanvasLink(request, input),
     onSuccess: (link) => {
       setError(null)
       setDraftLinkStart(null)
@@ -1982,23 +1779,15 @@ function CatalogCanvasCategoryEditor({
 
   const moveNodeMutation = useMutation({
     mutationFn: ({
-      node,
+      nodeId,
       position,
     }: {
-      node: RepairEstimateCatalogNodeDto
+      nodeId: string
       position: CanvasPosition
-    }) =>
-      saveRepairEstimateCatalogCanvasNode(
-        {
-          ...createNodeMutation(node),
-          canvasX: position.x,
-          canvasY: position.y,
-        },
-        warehouseId
-      ),
-    onSuccess: (node) => {
+    }) => moveRepairEstimateCatalogCanvasNode(request, nodeId, position),
+    onSuccess: (_position, variables) => {
       setError(null)
-      setSelectedNodeId(node.id)
+      setSelectedNodeId(variables.nodeId)
       setSelectedLinkId(null)
       invalidate()
     },
@@ -2011,19 +1800,18 @@ function CatalogCanvasCategoryEditor({
     },
   })
 
-  const resetMutation = useMutation({
-    mutationFn: () => resetRepairEstimateCatalogCanvasMock(warehouseId),
-    onSuccess: () => {
-      setError(null)
-      setSelectedNodeId(null)
-      setSelectedLinkId(null)
-      setDraftLinkStart(null)
-      invalidate()
-    },
-  })
-
   if (canvasQuery.isLoading) {
     return <SectionSkeleton />
+  }
+
+  if (canvasQuery.error) {
+    return (
+      <ErrorBox>
+        {canvasQuery.error instanceof Error
+          ? canvasQuery.error.message
+          : "Не удалось загрузить граф каталога."}
+      </ErrorBox>
+    )
   }
 
   if (!canvasQuery.data) {
@@ -2062,9 +1850,11 @@ function CatalogCanvasCategoryEditor({
       sourceNodeId: sourceNode.id,
       targetNodeId: target.id,
       linkType: draftLinkType,
-      active: true,
       sortOrder: canvasLinks.length * 10 + 10,
-      comment: createCatalogAnchorComment(draftLinkStart.anchor, targetAnchor),
+      canvasAnchors: {
+        source: draftLinkStart.anchor,
+        target: targetAnchor,
+      },
     })
   }
 
@@ -2075,7 +1865,7 @@ function CatalogCanvasCategoryEditor({
       submitLabel: "Сохранить",
       allowTypeSelect: node.nodeType !== "CATEGORY",
       value: createNodeMutation(node),
-      save: (input) => saveRepairEstimateCatalogCanvasNode(input, warehouseId),
+      save: (input) => saveRepairEstimateCatalogCanvasNode(request, input),
     })
   }
 
@@ -2102,11 +1892,9 @@ function CatalogCanvasCategoryEditor({
                 value: createBlankNodeMutation({
                   nodeType: "WORK",
                   parentId: category.id,
-                  furnitureCategory: category.furnitureCategory,
-                  sortOrder: canvasNodes.length * 10 + 10,
                 }),
                 save: (input) =>
-                  saveRepairEstimateCatalogCanvasNode(input, warehouseId),
+                  saveRepairEstimateCatalogCanvasNode(request, input),
               })
             }
           >
@@ -2143,16 +1931,6 @@ function CatalogCanvasCategoryEditor({
               Отменить точку
             </Button>
           )}
-          <Button
-            type="button"
-            variant="outline"
-            className="h-9 w-52 justify-start md:h-9"
-            disabled={resetMutation.isPending}
-            onClick={() => resetMutation.mutate()}
-          >
-            <HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" />
-            Сбросить mock
-          </Button>
         </div>
       </div>
 
@@ -2182,7 +1960,7 @@ function CatalogCanvasCategoryEditor({
           }}
           onCompleteLink={createLinkFromAnchors}
           onMoveNode={(node, position) =>
-            moveNodeMutation.mutate({ node, position })
+            moveNodeMutation.mutate({ nodeId: node.id, position })
           }
           onEditNode={openNodeEditor}
           onDeleteLink={(link) => deleteLinkMutation.mutate(link.id)}
@@ -2301,7 +2079,6 @@ function CatalogItemsTable({
           {renderSortableHeader("name", "Название")}
           {renderSortableHeader("unit", "Ед.")}
           {renderSortableHeader("unitPrice", "Цена")}
-          {renderSortableHeader("defaultQuantity", "Кол.")}
           {section.sectionType === "WORK" &&
             renderSortableHeader("durationMinutes", "Мин.")}
           {renderSortableHeader("includeInEstimate", "Смета")}
@@ -2322,7 +2099,6 @@ function CatalogItemsTable({
             </td>
             <td className="px-3 py-2">{item.unit ?? ""}</td>
             <td className="px-3 py-2">{item.unitPrice ?? ""}</td>
-            <td className="px-3 py-2">{item.defaultQuantity}</td>
             {section.sectionType === "WORK" && (
               <td className="px-3 py-2">{item.durationMinutes ?? ""}</td>
             )}
@@ -2360,13 +2136,13 @@ function CatalogItemsTable({
 }
 
 function CatalogSectionCategoryEditor({
+  request,
   action,
   categoryId,
-  warehouseId,
 }: {
+  request: RepairEstimateCatalogRequest
   action: EstimateCatalogSettingsActionDto
   categoryId: string
-  warehouseId: string
 }) {
   const kind = getSectionKind(action)
   const queryClient = useQueryClient()
@@ -2376,14 +2152,15 @@ function CatalogSectionCategoryEditor({
   const sectionQuery = useQuery({
     queryKey: [
       ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
-      warehouseId,
+      request.warehouseId,
+      request.catalogVersionId,
       "section",
       kind,
     ],
     queryFn: () =>
       kind === null
-        ? getRepairEstimateWorkCatalogMock(warehouseId)
-        : getEstimateActionData(action, warehouseId),
+        ? getRepairEstimateWorkCatalog(request)
+        : getEstimateActionData(request, action),
     enabled: kind !== null,
   })
 
@@ -2397,13 +2174,11 @@ function CatalogSectionCategoryEditor({
     mutationFn: (id: string) => {
       switch (kind) {
         case "works":
-          return deleteRepairEstimateWorkCatalogItem(id, warehouseId)
+          return deleteRepairEstimateWorkCatalogItem(request, id)
         case "materials":
-          return deleteRepairEstimateMaterialCatalogItem(id, warehouseId)
-        case "furniture":
-          return deleteRepairEstimateFurnitureCatalogItem(id, warehouseId)
+          return deleteRepairEstimateMaterialCatalogItem(request, id)
         case null:
-          return deleteRepairEstimateWorkCatalogItem(id, warehouseId)
+          return deleteRepairEstimateWorkCatalogItem(request, id)
       }
     },
     onSuccess: () => {
@@ -2423,6 +2198,16 @@ function CatalogSectionCategoryEditor({
     return <SectionSkeleton />
   }
 
+  if (sectionQuery.error) {
+    return (
+      <ErrorBox>
+        {sectionQuery.error instanceof Error
+          ? sectionQuery.error.message
+          : "Не удалось загрузить раздел каталога."}
+      </ErrorBox>
+    )
+  }
+
   const section = sectionQuery.data
   if (!section || !isSectionData(section)) {
     return null
@@ -2438,13 +2223,11 @@ function CatalogSectionCategoryEditor({
   const save = (input: RepairEstimateCatalogNodeMutation) => {
     switch (kind) {
       case "works":
-        return saveRepairEstimateWorkCatalogItem(input, warehouseId)
+        return saveRepairEstimateWorkCatalogItem(request, input)
       case "materials":
-        return saveRepairEstimateMaterialCatalogItem(input, warehouseId)
-      case "furniture":
-        return saveRepairEstimateFurnitureCatalogItem(input, warehouseId)
+        return saveRepairEstimateMaterialCatalogItem(request, input)
       case null:
-        return saveRepairEstimateWorkCatalogItem(input, warehouseId)
+        return saveRepairEstimateWorkCatalogItem(request, input)
     }
   }
 
@@ -2465,8 +2248,6 @@ function CatalogSectionCategoryEditor({
               value: createBlankNodeMutation({
                 nodeType: section.sectionType,
                 parentId: category.id,
-                furnitureCategory: kind === "furniture",
-                sortOrder: items.length * 10 + 10,
               }),
               save,
             })
@@ -2512,28 +2293,25 @@ function CatalogSectionCategoryEditor({
 }
 
 function EstimateCategoryEditor({
+  request,
   action,
   categoryId,
-  warehouseId,
 }: {
+  request: RepairEstimateCatalogRequest
   action: EstimateCatalogSettingsActionDto
   categoryId: string
-  warehouseId: string
 }) {
   if (action.id === "repair-estimate-catalog-canvas") {
     return (
-      <CatalogCanvasCategoryEditor
-        categoryId={categoryId}
-        warehouseId={warehouseId}
-      />
+      <CatalogCanvasCategoryEditor request={request} categoryId={categoryId} />
     )
   }
 
   return (
     <CatalogSectionCategoryEditor
+      request={request}
       action={action}
       categoryId={categoryId}
-      warehouseId={warehouseId}
     />
   )
 }
@@ -2561,25 +2339,26 @@ function BreadcrumbTitle({
 }
 
 function EstimateDrilldownView({
+  request,
   screen,
-  warehouseId,
   onBack,
   onOpenCategory,
 }: {
+  request: RepairEstimateCatalogRequest
   screen: Exclude<EstimateScreen, { level: "root" }>
-  warehouseId: string
   onBack: () => void
   onOpenCategory: (categoryId: string) => void
 }) {
   const categoryNameQuery = useQuery({
     queryKey: [
       ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
-      warehouseId,
+      request.warehouseId,
+      request.catalogVersionId,
       "category-title",
       screen.action.id,
       screen.level === "category" ? screen.categoryId : null,
     ],
-    queryFn: () => getEstimateActionData(screen.action, warehouseId),
+    queryFn: () => getEstimateActionData(request, screen.action),
     enabled: screen.level === "category",
   })
 
@@ -2610,15 +2389,15 @@ function EstimateDrilldownView({
       <div className="min-h-0 flex-1 overflow-auto p-4">
         {screen.level === "action" ? (
           <EstimateActionCategoryMenu
+            request={request}
             action={screen.action}
-            warehouseId={warehouseId}
             onOpenCategory={onOpenCategory}
           />
         ) : (
           <EstimateCategoryEditor
+            request={request}
             action={screen.action}
             categoryId={screen.categoryId}
-            warehouseId={warehouseId}
           />
         )}
       </div>
@@ -2626,36 +2405,106 @@ function EstimateDrilldownView({
   )
 }
 
-function RepairMockPanel({
-  action,
-}: {
-  action: RepairSettingsActionDto | null
-}) {
-  if (action === null) {
-    return (
-      <div className="rounded-lg border bg-muted/20 p-3 text-sm text-muted-foreground">
-        Настройки ремонта пока работают как тестовые mock-действия.
-      </div>
-    )
-  }
-
-  return (
-    <div className="rounded-lg border bg-muted/20 p-3 text-sm">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-medium">{action.title}</span>
-        <Badge variant="secondary">Тест</Badge>
-      </div>
-    </div>
-  )
-}
-
 export function EstimatesRepairsSettingsPage() {
+  const { accessToken } = useAuth()
   const { selectedWarehouseId } = useWarehouse()
+  const queryClient = useQueryClient()
   const [estimateScreen, setEstimateScreen] = useState<EstimateScreen>({
     level: "root",
   })
-  const [selectedRepairAction, setSelectedRepairAction] =
-    useState<RepairSettingsActionDto | null>(null)
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(
+    null
+  )
+  const [commandError, setCommandError] = useState<string | null>(null)
+  const importInputRef = useRef<HTMLInputElement>(null)
+
+  const versionsQuery = useQuery({
+    queryKey: [
+      ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
+      selectedWarehouseId,
+      "versions",
+    ],
+    queryFn: () =>
+      listRepairEstimateCatalogVersions(accessToken!, selectedWarehouseId!),
+    enabled: Boolean(accessToken && selectedWarehouseId),
+  })
+
+  const selectedVersion = useMemo(() => {
+    const versions = versionsQuery.data ?? []
+    return (
+      versions.find((version) => version.id === selectedVersionId) ??
+      versions.find((version) => version.lifecycle === "DRAFT") ??
+      versions.find((version) => version.lifecycle === "ACTIVE") ??
+      versions[0] ??
+      null
+    )
+  }, [selectedVersionId, versionsQuery.data])
+
+  const catalogRequest = useMemo<RepairEstimateCatalogRequest | null>(() => {
+    if (!accessToken || !selectedWarehouseId || !selectedVersion) return null
+    return {
+      accessToken,
+      warehouseId: selectedWarehouseId,
+      catalogVersionId: selectedVersion.id,
+    }
+  }, [accessToken, selectedVersion, selectedWarehouseId])
+
+  const refreshCatalog = () => {
+    void queryClient.invalidateQueries({
+      queryKey: REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
+    })
+  }
+
+  const importMutation = useMutation({
+    mutationFn: async (file: File) => {
+      if (!accessToken || !selectedWarehouseId) {
+        throw new Error("Не выбран склад или отсутствует токен доступа.")
+      }
+      return importRepairEstimateCatalog(
+        accessToken,
+        selectedWarehouseId,
+        await file.text()
+      )
+    },
+    onSuccess: (version) => {
+      setCommandError(null)
+      setSelectedVersionId(version.id)
+      setEstimateScreen({ level: "root" })
+      refreshCatalog()
+    },
+    onError: (error) => {
+      setCommandError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось импортировать каталог."
+      )
+    },
+  })
+
+  const activationMutation = useMutation({
+    mutationFn: () => {
+      if (!catalogRequest || !selectedVersion) {
+        throw new Error("Версия каталога не выбрана.")
+      }
+      return activateRepairEstimateCatalog(
+        catalogRequest,
+        selectedVersion.version
+      )
+    },
+    onSuccess: (version) => {
+      setCommandError(null)
+      setSelectedVersionId(version.id)
+      setEstimateScreen({ level: "root" })
+      refreshCatalog()
+    },
+    onError: (error) => {
+      setCommandError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось активировать каталог."
+      )
+    },
+  })
 
   const catalogCanvasQuery = useQuery({
     queryKey: ["estimate-settings", "repair-estimate-catalog-canvas"],
@@ -2672,22 +2521,11 @@ export function EstimatesRepairsSettingsPage() {
     queryFn: getRepairEstimateMaterialCatalogSettings,
   })
 
-  const furnitureCatalogQuery = useQuery({
-    queryKey: ["estimate-settings", "repair-estimate-catalog-furniture"],
-    queryFn: getRepairEstimateFurnitureCatalogSettings,
-  })
-
-  const repairSettingsQuery = useQuery({
-    queryKey: ["repair-settings", "actions"],
-    queryFn: getRepairSettingsActions,
-  })
-
   const estimateActions = useMemo(() => {
     return [
       catalogCanvasQuery.data,
       workCatalogQuery.data,
       materialCatalogQuery.data,
-      furnitureCatalogQuery.data,
     ]
       .filter((action): action is EstimateCatalogSettingsActionDto =>
         Boolean(action)
@@ -2696,33 +2534,23 @@ export function EstimatesRepairsSettingsPage() {
       .map((action) => ({ ...action, group: "estimate" as const }))
   }, [
     catalogCanvasQuery.data,
-    furnitureCatalogQuery.data,
     materialCatalogQuery.data,
     workCatalogQuery.data,
   ])
 
-  const repairActions = useMemo(() => {
-    return (repairSettingsQuery.data ?? [])
-      .slice()
-      .sort((left, right) => left.order - right.order)
-      .map((action) => ({ ...action, group: "repair" as const }))
-  }, [repairSettingsQuery.data])
-
   const estimateLoading =
     catalogCanvasQuery.isLoading ||
     workCatalogQuery.isLoading ||
-    materialCatalogQuery.isLoading ||
-    furnitureCatalogQuery.isLoading
-
-  if (selectedWarehouseId === null) {
-    return <ErrorBox>Выберите склад для настройки каталога ремонта.</ErrorBox>
-  }
+    materialCatalogQuery.isLoading
 
   if (estimateScreen.level !== "root") {
+    if (!catalogRequest || selectedVersion?.lifecycle !== "DRAFT") {
+      return <ErrorBox>Выберите черновую версию каталога.</ErrorBox>
+    }
     return (
       <EstimateDrilldownView
+        request={catalogRequest}
         screen={estimateScreen}
-        warehouseId={selectedWarehouseId}
         onBack={() => {
           if (estimateScreen.level === "category") {
             setEstimateScreen({
@@ -2747,6 +2575,98 @@ export function EstimatesRepairsSettingsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
+      <section className="rounded-lg border bg-card p-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <Field className="min-w-72 flex-1">
+            <FieldLabel htmlFor="maintenance-catalog-version">
+              Версия каталога
+            </FieldLabel>
+            <NativeSelect
+              id="maintenance-catalog-version"
+              value={selectedVersion?.id ?? ""}
+              disabled={!versionsQuery.data?.length}
+              onChange={(value) => {
+                setSelectedVersionId(value)
+                setEstimateScreen({ level: "root" })
+                setCommandError(null)
+              }}
+            >
+              {!versionsQuery.data?.length && (
+                <option value="">Версий пока нет</option>
+              )}
+              {(versionsQuery.data ?? []).map((version) => (
+                <option key={version.id} value={version.id}>
+                  {version.lifecycle} · v{version.version} · {version.nodeCount}{" "}
+                  узлов
+                </option>
+              ))}
+            </NativeSelect>
+          </Field>
+
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => refreshCatalog()}
+            disabled={versionsQuery.isFetching}
+          >
+            <HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" />
+            Обновить
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => importInputRef.current?.click()}
+            disabled={
+              !accessToken || !selectedWarehouseId || importMutation.isPending
+            }
+          >
+            Импортировать JSON
+          </Button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              if (file) importMutation.mutate(file)
+              event.currentTarget.value = ""
+            }}
+          />
+          <Button
+            type="button"
+            onClick={() => activationMutation.mutate()}
+            disabled={
+              selectedVersion?.lifecycle !== "DRAFT" ||
+              activationMutation.isPending
+            }
+          >
+            Активировать
+          </Button>
+        </div>
+
+        {selectedVersion?.lifecycle === "ACTIVE" && (
+          <p className="mt-3 text-sm text-muted-foreground">
+            Активная версия доступна рабочим экранам только для чтения. Для
+            изменений импортируйте или выберите черновик.
+          </p>
+        )}
+        {!accessToken && (
+          <ErrorBox>Не получен токен доступа к maintenance-service.</ErrorBox>
+        )}
+        {accessToken && !selectedWarehouseId && (
+          <ErrorBox>Выберите склад для каталога ремонта.</ErrorBox>
+        )}
+        {versionsQuery.error && (
+          <ErrorBox>
+            {versionsQuery.error instanceof Error
+              ? versionsQuery.error.message
+              : "Не удалось загрузить версии каталога."}
+          </ErrorBox>
+        )}
+        {commandError && <ErrorBox>{commandError}</ErrorBox>}
+      </section>
+
       <SettingsSection title="Настройка смет" count={estimateActions.length}>
         {estimateLoading ? (
           <SectionSkeleton />
@@ -2757,37 +2677,13 @@ export function EstimatesRepairsSettingsPage() {
                 key={action.id}
                 action={action}
                 active={false}
+                disabled={selectedVersion?.lifecycle !== "DRAFT"}
                 onClick={(selected) => {
-                  if (selected.group === "estimate") {
-                    setEstimateScreen({ level: "action", action: selected })
-                  }
+                  if (selectedVersion?.lifecycle !== "DRAFT") return
+                  setEstimateScreen({ level: "action", action: selected })
                 }}
               />
             ))}
-          </div>
-        )}
-      </SettingsSection>
-
-      <SettingsSection title="Настройка ремонтов" count={repairActions.length}>
-        {repairSettingsQuery.isLoading ? (
-          <SectionSkeleton />
-        ) : (
-          <div className="flex flex-col gap-4">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {repairActions.map((action) => (
-                <SettingsActionButton
-                  key={action.id}
-                  action={action}
-                  active={selectedRepairAction?.id === action.id}
-                  onClick={(selected) => {
-                    if (selected.group === "repair") {
-                      setSelectedRepairAction(selected)
-                    }
-                  }}
-                />
-              ))}
-            </div>
-            <RepairMockPanel action={selectedRepairAction} />
           </div>
         )}
       </SettingsSection>

@@ -20,7 +20,6 @@ import {
   type RepairEstimateCatalogPager,
 } from "@/features/repair-estimates/repair-estimate-catalog-picker"
 import { RepairEstimateLinesEditor } from "@/features/repair-estimates/repair-estimate-lines-editor"
-import { RepairEstimatePhotos } from "@/features/repair-estimates/repair-estimate-photos"
 import { RepairEstimateWorkspaceLayout } from "@/features/repair-estimates/repair-estimate-workspace-layout"
 import {
   RepairWorkCompletionDialog,
@@ -50,6 +49,7 @@ import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
 type RepairTaskEditorWorkspaceProps = {
   warehouseId: string
   task: RepairTaskDto | null
+  sourceTask?: RepairTaskDto | null
   loading?: boolean
   seed?: RepairTaskReworkSeed
   initialRentalItemId?: string
@@ -60,6 +60,7 @@ type RepairTaskEditorWorkspaceProps = {
 export function RepairTaskEditorWorkspace({
   warehouseId,
   task,
+  sourceTask,
   loading = false,
   seed,
   initialRentalItemId,
@@ -83,6 +84,7 @@ export function RepairTaskEditorWorkspace({
       key={editorKey}
       warehouseId={warehouseId}
       task={task}
+      sourceTask={sourceTask}
       seed={seed}
       initialRentalItemId={initialRentalItemId}
       onClose={onClose}
@@ -94,6 +96,7 @@ export function RepairTaskEditorWorkspace({
 function RepairTaskEditorContent({
   warehouseId,
   task,
+  sourceTask,
   seed,
   initialRentalItemId,
   onClose,
@@ -112,6 +115,7 @@ function RepairTaskEditorContent({
           rentalItemId: seed?.rentalItemId ?? initialRentalItemId ?? "",
         }
   )
+  const planSource = task ?? sourceTask ?? null
   const [catalogPager, setCatalogPager] =
     useState<RepairEstimateCatalogPager | null>(null)
   const [completionOpen, setCompletionOpen] = useState(false)
@@ -217,9 +221,22 @@ function RepairTaskEditorContent({
       setError("Выберите бытовку")
       return false
     }
+    if (draft.kind === "REWORK" && !draft.reason.trim()) {
+      setError("Укажите причину доработки")
+      return false
+    }
+    if (draft.lines.length === 0 && !planSource?.subtasks.length) {
+      setError("Добавьте хотя бы одну работу или материал")
+      return false
+    }
     try {
       assertEstimateLinesValid(draft.lines)
-      if (forQueue) assertRepairTaskCanBeQueued(draft.lines)
+      if (
+        forQueue &&
+        !(draft.lines.length === 0 && planSource?.subtasks.length)
+      ) {
+        assertRepairTaskCanBeQueued(draft.lines)
+      }
       setError(null)
       return true
     } catch (unknownError) {
@@ -250,12 +267,13 @@ function RepairTaskEditorContent({
     <RepairWorkInformationFields
       warehouseId={warehouseId}
       rentalItemId={draft.rentalItemId}
-      contextLabel="Причина"
+      contextLabel={draft.kind === "REWORK" ? "Причина" : "Источник"}
       contextValue={draft.reason}
       dispatchDate={draft.dispatchDate}
       comment={draft.comment}
-      disabled={mutationPending}
-      rentalItemDisabled={draft.kind === "REWORK"}
+      showComment={false}
+      disabled={mutationPending || Boolean(task)}
+      rentalItemDisabled={Boolean(task) || draft.kind === "REWORK"}
       rentalItemInvalid={Boolean(error && !draft.rentalItemId)}
       onRentalItemChange={(rentalItemId) =>
         setDraft((current) => ({ ...current, rentalItemId }))
@@ -279,6 +297,7 @@ function RepairTaskEditorContent({
           lines={draft.lines}
           readOnly={mutationPending}
           mode="TASK"
+          catalogOnly
           onChange={(lines) => setDraft((current) => ({ ...current, lines }))}
         />
       </div>
@@ -388,7 +407,13 @@ function RepairTaskEditorContent({
     <>
       <RepairEstimateWorkspaceLayout
         ariaLabel="Редактор ремонтного задания"
-        informationDescription="Заполните бытовку, причину, дату прибытия и общий комментарий."
+        informationDescription={
+          task
+            ? "Сервис разрешает менять у черновика только план этапов."
+            : draft.kind === "REWORK"
+              ? "Укажите причину доработки; бытовка определяется исходным ремонтом."
+              : "Выберите бытовку, источник и дату прибытия."
+        }
         message={
           error ? (
             <p role="alert" className="text-xs text-destructive">
@@ -397,18 +422,10 @@ function RepairTaskEditorContent({
           ) : null
         }
         photos={
-          <RepairEstimatePhotos
-            viewerContext="WORK"
-            media={draft.media}
-            pendingUploads={draft.pendingUploads}
-            readOnly={mutationPending}
-            onMediaChange={(media) =>
-              setDraft((current) => ({ ...current, media }))
-            }
-            onPendingUploadsChange={(pendingUploads) =>
-              setDraft((current) => ({ ...current, pendingUploads }))
-            }
-          />
+          <p className="text-sm text-muted-foreground">
+            Фото для ремонтов временно недоступны: media-service ещё не
+            подтверждает владельца MAINTENANCE_REPAIR.
+          </p>
         }
         information={information}
         estimate={taskLines}
@@ -416,7 +433,6 @@ function RepairTaskEditorContent({
         catalogAction={catalogAction}
       />
       <RepairWorkCompletionDialog
-        warehouseId={warehouseId}
         open={completionOpen}
         lines={draft.lines}
         pending={queueMutation.isPending}
@@ -426,6 +442,28 @@ function RepairTaskEditorContent({
         completeLabel="Создать задание"
         pendingLabel="Создание..."
         previewKey={`direct-repair:${draft.taskId ?? "new"}:${draft.expectedVersion ?? 0}`}
+        initialCompletionMode="MANUAL"
+        initialMovementRequired={planSource?.subtasks.some(
+          (subtask) => subtask.kind !== "REPAIR_WORK"
+        )}
+        reconcileInitialPlans={
+          draft.lines.length === 0 && planSource
+            ? () =>
+                planSource.subtasks.map((subtask) => ({
+                  id: subtask.id,
+                  kind: subtask.kind,
+                  includedLineIds: [],
+                  primaryLineId: null,
+                  groupComment: subtask.groupComment,
+                  queueId: subtask.queueId ?? null,
+                  queueCode: subtask.queueCode,
+                  routeQueueKind: subtask.routeQueueKind,
+                  sortOrder: subtask.sortOrder,
+                  generationStatus: "UNKNOWN",
+                  workflowRequestRef: null,
+                }))
+            : undefined
+        }
         onOpenChange={(open) => {
           setCompletionOpen(open)
           setError(null)

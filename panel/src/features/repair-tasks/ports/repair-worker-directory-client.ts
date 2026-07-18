@@ -5,6 +5,7 @@ import type {
 
 export interface RepairWorkerDirectoryClient {
   listGroups(
-    query: RepairWorkerGroupsQuery
+    query: RepairWorkerGroupsQuery,
+    accessToken: string
   ): Promise<RepairWorkerDirectoryGroupDto[]>
 }

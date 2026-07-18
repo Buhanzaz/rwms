@@ -1,9 +1,5 @@
 import type { RepairEstimateCatalogRouteQueueKind } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
-import type {
-  MediaKind,
-  MediaProcessingStatus,
-  MediaProvenanceDto,
-} from "@/features/media/model/media"
+import type { MediaProcessingStatus } from "@/features/media/model/media"
 
 export type RepairEstimateId = string
 export type RepairEstimateLineId = string
@@ -11,29 +7,27 @@ export type RepairEstimateTaskPlanId = string
 export type RepairEstimateMediaId = string
 
 export type RepairEstimateStatus = "DRAFT" | "COMPLETED"
-export type RepairEstimateLineType = "WORK" | "MATERIAL"
+export type RepairEstimateLineType = "WORK" | "MATERIAL" | "UNSPECIFIED"
 export type RepairEstimateCompletionMode = "AUTO" | "MANUAL"
 export type RepairEstimateTaskPlanGenerationStatus =
-  "PENDING_GENERATION" | "GENERATED" | "FAILED"
+  "PENDING_GENERATION" | "GENERATED" | "FAILED" | "UNKNOWN"
 export type RepairEstimateTaskPlanKind =
   "REPAIR_WORK" | "MOVE_TO_REPAIR" | "MOVE_FROM_REPAIR"
 export type RepairEstimateMediaRotationDegrees = 0 | 90 | 180 | 270
+
+export type MaintenanceMediaReferenceDto = {
+  mediaId: string
+  generation: number
+}
 
 /** Decimal money value serialized at the service boundary, for example `1250.00`. */
 export type MoneyDecimal = string
 
 export type RepairEstimateCatalogLineSnapshotDto = {
   nodeId: string
-  catalogVersionId?: string
   code: string
   name: string
   nodeType: "WORK" | "MATERIAL" | "OPTION"
-  unit?: string | null
-  unitPrice?: MoneyDecimal | null
-  durationMinutes?: number
-  queueId?: string | null
-  queueCode?: string | null
-  queueKind?: RepairEstimateCatalogRouteQueueKind | null
 }
 
 export type RepairEstimateLineDto = {
@@ -47,6 +41,7 @@ export type RepairEstimateLineDto = {
   unitPrice: MoneyDecimal
   lineTotal: MoneyDecimal
   catalogSnapshot: RepairEstimateCatalogLineSnapshotDto | null
+  maintenanceMediaReferences?: MaintenanceMediaReferenceDto[]
 }
 
 export type RepairEstimateMediaVariantDto = {
@@ -59,12 +54,8 @@ export type RepairEstimateMediaVariantDto = {
 
 export type RepairEstimateMediaRefDto = {
   id: RepairEstimateMediaId
-  generation?: number
-  opaqueOnly?: boolean
   fileName: string
   mimeType: string
-  /** Optional while legacy browser fixtures are being migrated to media-service. */
-  kind?: MediaKind
   rotationDegrees: RepairEstimateMediaRotationDegrees
   variants: {
     small: RepairEstimateMediaVariantDto
@@ -73,7 +64,6 @@ export type RepairEstimateMediaRefDto = {
   }
   processingStatus?: MediaProcessingStatus
   originalAvailable?: boolean
-  provenance?: MediaProvenanceDto
   createdAt: string
 }
 
@@ -88,8 +78,9 @@ export type RepairEstimateTaskPlanDto = {
   includedLineIds: RepairEstimateLineId[]
   primaryLineId: RepairEstimateLineId | null
   groupComment: string
-  queueCode: string | null
+  /** Canonical task-board queue id carried by the maintenance routing snapshot. */
   queueId?: string | null
+  queueCode: string | null
   routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
   sortOrder: number
   generationStatus: RepairEstimateTaskPlanGenerationStatus
@@ -119,6 +110,10 @@ export type RepairEstimateDto = {
   totalAmount: MoneyDecimal
   lines: RepairEstimateLineDto[]
   media: RepairEstimateMediaRefDto[]
+  /** Opaque server-owned references; preview URLs are resolved only by media-service. */
+  maintenanceMediaReferences?: MaintenanceMediaReferenceDto[]
+  repairId?: string | null
+  deliveryState?: "PENDING" | "RETRY_PENDING" | "DELIVERED" | "QUARANTINED"
   completionMode: RepairEstimateCompletionMode | null
   movementRequired: boolean | null
   taskPlans: RepairEstimateTaskPlanDto[]
@@ -157,6 +152,7 @@ export type RepairEstimateDraftCommand = {
   comment: string
   lines: RepairEstimateLineDto[]
   media: RepairEstimateMediaRefDto[]
+  maintenanceMediaReferences?: MaintenanceMediaReferenceDto[]
 }
 
 export type CompleteRepairEstimateCommand = RepairEstimateDraftCommand & {
@@ -172,7 +168,7 @@ export type AmendCompletedRepairEstimateCommand = Omit<
   estimateId: RepairEstimateId
   expectedVersion: number
   expectedLinkedRepairVersion: number | null
-  amendmentReason: string
+  reason: string
 }
 
 export type RepairEstimateListQuery = {
@@ -218,24 +214,8 @@ export type RepairEstimateEditorDraft = {
   comment: string
   lines: RepairEstimateLineDto[]
   media: RepairEstimateMediaRefDto[]
+  maintenanceMediaReferences?: MaintenanceMediaReferenceDto[]
   pendingUploads: PendingEstimateMediaUpload[]
-}
-
-/** Typed navigation seed from the target-only rental return inspection flow. */
-export type LogisticsEstimateSeed = {
-  type: "logistics-return-estimate-seed-v1"
-  returnTaskId: string
-  returnTaskVersion: number
-  rentalItemId: string
-  cabinNumber: string
-  sourceParty: string
-  dispatchDate: string
-  media: RepairEstimateMediaRefDto[]
-  pendingUploads: PendingEstimateMediaUpload[]
-  sourceMediaIds: string[]
-  /** Deterministic browser-mock lines for expected furniture missing on return. */
-  replacementLines: RepairEstimateLineDto[]
-  replacementWarnings: string[]
 }
 
 export type CompleteRepairEstimateInput = {
@@ -248,5 +228,5 @@ export type CompleteRepairEstimateInput = {
 
 export type AmendCompletedRepairEstimateInput = CompleteRepairEstimateInput & {
   expectedTaskVersion: number | null
-  amendmentReason: string
+  reason: string
 }

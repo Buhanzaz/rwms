@@ -1,208 +1,79 @@
-import type { WarehouseInfo } from "@/api/warehouse-api"
-import type {
-  RentalItemContentsItemDto,
-  RentalItemStatus,
-} from "@/features/rental-items/model/rental-item"
+export const TRANSFER_DOCUMENT_STATES = [
+  "DRAFT",
+  "DEPARTING",
+  "IN_TRANSIT",
+  "ARRIVING",
+  "COMPLETED",
+  "CANCELLED",
+  "CONFLICT",
+  "RECONCILIATION_REQUIRED",
+] as const
 
-export type WarehouseTransferLineStatus =
-  | "PREPARING"
-  | "READY_TO_DEPART"
-  | "IN_TRANSIT"
-  | "RECEIVED"
-  | "CONFLICT"
-  | "CANCELLED"
+export type TransferDocumentState = (typeof TRANSFER_DOCUMENT_STATES)[number]
 
-export type WarehouseTransferActorSnapshot = {
-  id: string | null
-  displayName: string
-}
+export const TRANSFER_LINE_STATES = [
+  "PENDING",
+  "DEPARTING",
+  "DEPARTED",
+  "ARRIVING",
+  "ARRIVED",
+  "CONFLICT",
+  "CANCELLED",
+] as const
 
-export type WarehouseTransferWarehouseSnapshot = Pick<
-  WarehouseInfo,
-  "id" | "code" | "name" | "city"
->
+export type TransferLineState = (typeof TRANSFER_LINE_STATES)[number]
 
-export type WarehouseTransferTaskRef = {
-  boardTaskId: string
-  taskVersion: number
-  queueId: string
-  queueCode: string
-}
-
-export type WarehouseTransferPhoto = {
+export type TransferLine = {
   id: string
-  fileName: string
-  mimeType: string
-  rotationDegrees: 0 | 90 | 180 | 270
-  storageRef: string
-  previewStorageRef: string
-  originalAvailable: boolean
-  processingStatus: "UPLOADING" | "PROCESSING" | "READY" | "FAILED"
-  createdAt: string
+  version: number
+  lineNumber: number
+  assetId: string
+  assetVersion: number
+  state: TransferLineState
+  tenantSnapshot: string | null
 }
 
-export type WarehouseTransferPhotoUpload = {
+export type TransferDocument = {
   id: string
-  fileName: string
-  dataUrl: string
-  rotationDegrees: 0 | 90 | 180 | 270
-}
-
-export type WarehouseTransferReturnConflictLink = {
+  version: number
+  documentType: "TRANSFER"
+  state: TransferDocumentState
   warehouseId: string
-  returnItemId: string
-  expectedVersion: number
-}
-
-export type WarehouseTransferApplicationAttempt =
-  | {
-      kind: "DEPARTURE"
-      startedAt: string
-      expectedRentalItemVersion: number
-    }
-  | {
-      kind: "ARRIVAL"
-      startedAt: string
-      expectedRentalItemVersion: number
-      photos: WarehouseTransferPhoto[]
-    }
-
-export type WarehouseTransferLine = {
-  id: string
-  version: number
-  rentalItemId: string
-  cabinNumber: string
-  sourceStatus: Extract<RentalItemStatus, "FREE" | "WAREHOUSE" | "OWN_NEEDS">
-  rentalItemVersion: number
-  contentsSnapshot: RentalItemContentsItemDto[]
-  status: WarehouseTransferLineStatus
-  sourceExternalTaskId: string
-  destinationExternalTaskId: string
-  sourceTask: WarehouseTransferTaskRef | null
-  destinationTask: WarehouseTransferTaskRef | null
-  photos: WarehouseTransferPhoto[]
-  departedAt: string | null
-  receivedAt: string | null
-  conflictReason: string | null
-  lastError: string | null
-  /** Durable browser-saga intent. Optional only for records created before recovery support. */
-  applicationAttempt?: WarehouseTransferApplicationAttempt | null
-  /** Optional import-conflict continuation proof for records created by a deep link. */
-  returnConflict?: WarehouseTransferReturnConflictLink | null
-}
-
-export type WarehouseTransferDocument = {
-  id: string
-  requestId: string
-  version: number
-  sourceWarehouse: WarehouseTransferWarehouseSnapshot
-  destinationWarehouse: WarehouseTransferWarehouseSnapshot
-  plannedDate: string
-  driverName: string
-  /** Read-only compatibility for previously stored documents. New commands keep it null. */
-  vehicle: string | null
-  comment: string | null
-  actor: WarehouseTransferActorSnapshot
+  destinationWarehouseId: string
+  partySnapshot: null
+  driverSnapshot: null
+  lines: TransferLine[]
   createdAt: string
   updatedAt: string
-  lines: WarehouseTransferLine[]
 }
 
-export type CreateWarehouseTransferCommand = {
-  requestId: string
-  accessToken: string
-  sourceWarehouse: WarehouseTransferWarehouseSnapshot
-  destinationWarehouse: WarehouseTransferWarehouseSnapshot
-  plannedDate: string
-  driverName: string
-  comment: string | null
-  actor: WarehouseTransferActorSnapshot
-  cabins: Array<{
-    rentalItemId: string
-    expectedVersion: number
-    returnConflict?: WarehouseTransferReturnConflictLink | null
-  }>
+export type CreateTransferLine = {
+  assetId: string
+  assetVersion: number
 }
 
-export type WarehouseTransferTaskCommand = {
-  externalTaskId: string
-  serviceWarehouseId: string
-  direction: "SOURCE" | "DESTINATION"
-  sourceWarehouse: WarehouseTransferWarehouseSnapshot
-  destinationWarehouse: WarehouseTransferWarehouseSnapshot
-  cabin: Pick<
-    WarehouseTransferLine,
-    "rentalItemId" | "cabinNumber" | "contentsSnapshot"
-  >
-  plannedDate: string
-  driverName: string
+export type TransferMediaReference = {
+  mediaId: string
+  generation: number
 }
 
-export type WarehouseTransferEventType =
-  | "TRANSFER_CREATED"
-  | "SOURCE_TASK_REGISTERED"
-  | "DEPARTURE_CONFIRMED"
-  | "DESTINATION_TASK_REGISTERED"
-  | "ARRIVAL_CONFLICT"
-  | "ARRIVAL_CONFIRMED"
-  | "TRANSFER_CANCELLED"
-  | "ACCOUNTING_CORRECTION_CREATED"
-  | "ACCOUNTING_CORRECTION_APPROVED"
-  | "ACCOUNTING_CORRECTION_APPLIED"
-  | "ACCOUNTING_CORRECTION_REJECTED"
-
-export type WarehouseTransferEvent = {
-  id: string
-  documentId: string
-  lineId: string | null
-  rentalItemId: string | null
-  type: WarehouseTransferEventType
-  occurredAt: string
-  actor: WarehouseTransferActorSnapshot
-  comment: string | null
-}
-
-export type WarehouseCorrectionStatus =
-  "PENDING_APPROVALS" | "APPLYING" | "APPLIED" | "REJECTED"
-
-export type WarehouseCorrectionApproval = {
-  warehouseId: string
-  approvedAt: string
-  actor: WarehouseTransferActorSnapshot
-}
-
-export type WarehouseAccountingCorrection = {
-  id: string
-  version: number
-  rentalItemId: string
-  cabinNumber: string
-  expectedRentalItemVersion: number
-  sourceWarehouse: WarehouseTransferWarehouseSnapshot
-  destinationWarehouse: WarehouseTransferWarehouseSnapshot
-  reason: string
-  status: WarehouseCorrectionStatus
-  approvals: WarehouseCorrectionApproval[]
-  rejectedReason: string | null
-  createdAt: string
-  updatedAt: string
-  /** Optional import-conflict continuation proof for records created by a deep link. */
-  returnConflict?: WarehouseTransferReturnConflictLink | null
-}
-
-export const warehouseTransferStatusLabels: Record<
-  WarehouseTransferLineStatus,
-  string
-> = {
-  PREPARING: "Подготовка",
-  READY_TO_DEPART: "Готова к отправке",
+export const TRANSFER_STATE_LABELS: Record<TransferDocumentState, string> = {
+  DRAFT: "Черновик",
+  DEPARTING: "Отправляется",
   IN_TRANSIT: "В пути",
-  RECEIVED: "Принята",
+  ARRIVING: "Принимается",
+  COMPLETED: "Завершено",
+  CANCELLED: "Отменено",
+  CONFLICT: "Конфликт",
+  RECONCILIATION_REQUIRED: "Требуется сверка",
+}
+
+export const TRANSFER_LINE_STATE_LABELS: Record<TransferLineState, string> = {
+  PENDING: "Ожидает отправки",
+  DEPARTING: "Отправляется",
+  DEPARTED: "В пути",
+  ARRIVING: "Принимается",
+  ARRIVED: "Принята",
   CONFLICT: "Конфликт",
   CANCELLED: "Отменена",
 }
-
-export const WAREHOUSE_TRANSFER_ALLOWED_STATUSES: RentalItemStatus[] = [
-  "FREE",
-  "WAREHOUSE",
-  "OWN_NEEDS",
-]

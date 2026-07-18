@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { isGlobalAdministrator } from "@/features/auth/auth-model"
-import { DEV_AUTH_BYPASS_ENABLED } from "@/features/auth/auth-config"
 import { useAuth } from "@/features/auth/use-auth"
 import {
   taskBoardSettingsClient,
@@ -29,7 +28,6 @@ import {
   queueTypeLabels,
 } from "@/features/settings/task-board/model/task-board-settings"
 import { QueueOrderSettings } from "@/features/settings/task-board/queue-order-settings"
-import { ScheduleSettings } from "@/features/settings/task-board/schedule-settings"
 import {
   ClassEditorDialog,
   CredentialPasswordDialog,
@@ -69,7 +67,7 @@ export function TaskBoardSettingsPage() {
   const queryClient = useQueryClient()
   const { accessToken, currentUser } = useAuth()
   const { selectedWarehouse } = useWarehouse()
-  const warehouseId = selectedWarehouse?.id ?? ""
+  const warehouseId = selectedWarehouse?.serviceId ?? ""
   const [queueEditor, setQueueEditor] = useState<WorkQueueDto | "new" | null>(
     null
   )
@@ -317,9 +315,6 @@ export function TaskBoardSettingsPage() {
           <TabsTrigger value="classes">Классы</TabsTrigger>
           <TabsTrigger value="groups">Бригады</TabsTrigger>
           <TabsTrigger value="workers">Рабочие</TabsTrigger>
-          {DEV_AUTH_BYPASS_ENABLED ? (
-            <TabsTrigger value="schedule">График</TabsTrigger>
-          ) : null}
         </TabsList>
 
         <TabsContent
@@ -620,15 +615,6 @@ export function TaskBoardSettingsPage() {
             ]}
           />
         </TabsContent>
-
-        {DEV_AUTH_BYPASS_ENABLED ? (
-          <TabsContent
-            value="schedule"
-            className="flex min-h-0 flex-1 flex-col"
-          >
-            <ScheduleSettings warehouseId={warehouseId} groups={groups} />
-          </TabsContent>
-        ) : null}
       </Tabs>
 
       {queueEditor ? (

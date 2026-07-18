@@ -3,6 +3,11 @@ import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 
 export type WarehouseInfo = {
   id: string
+  /**
+   * Transitional compile-time alias for untouched panel flows. It is always
+   * exactly the canonical warehouse UUID and is never stored or translated.
+   */
+  serviceId: string
   version: number
   code: string
   name: string
@@ -26,6 +31,20 @@ export type WarehouseWriteInput = {
 export type WarehouseCreateInput = Omit<WarehouseWriteInput, "active">
 
 const WAREHOUSES_ENDPOINT = `${getGatewayRuntimeConfig().warehouseApiBaseUrl}/v1/warehouses`
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const WAREHOUSE_CODE_PATTERN = /^[A-Z0-9][A-Z0-9_-]{0,63}$/
+const WAREHOUSE_RESPONSE_KEYS = [
+  "id",
+  "version",
+  "code",
+  "name",
+  "city",
+  "address",
+  "timeZone",
+  "active",
+  "sortOrder",
+] as const
 
 function requireAccessToken(accessToken: string | null): string {
   if (accessToken === null || accessToken.trim() === "") {
@@ -36,11 +55,52 @@ function requireAccessToken(accessToken: string | null): string {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expectedKeys: readonly string[]
+) {
+  const actualKeys = Object.keys(value)
+
+  return (
+    actualKeys.length === expectedKeys.length &&
+    expectedKeys.every((key) => Object.hasOwn(value, key))
+  )
+}
+
+function isUuid(value: unknown): value is string {
+  return typeof value === "string" && UUID_PATTERN.test(value)
+}
+
+function isNonEmptyString(value: unknown, maxLength: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    value.length <= maxLength
+  )
+}
+
+function isNullableString(
+  value: unknown,
+  maxLength: number
+): value is string | null {
+  return (
+    value === null || (typeof value === "string" && value.length <= maxLength)
+  )
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isInteger(value) && typeof value === "number" && value >= 0
+}
+
+function isOptionalSortOrder(value: unknown): value is number | null {
+  return value === null || isNonNegativeInteger(value)
 }
 
 function parseWarehouse(value: unknown): WarehouseInfo {
-  if (!isRecord(value)) {
+  if (!isRecord(value) || !hasExactKeys(value, WAREHOUSE_RESPONSE_KEYS)) {
     throw new Error("Сервис складов вернул некорректный ответ.")
   }
 
@@ -55,25 +115,24 @@ function parseWarehouse(value: unknown): WarehouseInfo {
     active,
     sortOrder,
   } = value
-  const valid =
-    typeof id === "string" &&
-    typeof version === "number" &&
-    Number.isInteger(version) &&
-    typeof code === "string" &&
-    typeof name === "string" &&
-    typeof city === "string" &&
-    (typeof address === "string" || address === null) &&
-    typeof timeZone === "string" &&
-    typeof active === "boolean" &&
-    (sortOrder === null ||
-      (typeof sortOrder === "number" && Number.isInteger(sortOrder)))
-
-  if (!valid) {
+  if (
+    !isUuid(id) ||
+    !isNonNegativeInteger(version) ||
+    typeof code !== "string" ||
+    !WAREHOUSE_CODE_PATTERN.test(code) ||
+    !isNonEmptyString(name, 255) ||
+    !isNonEmptyString(city, 255) ||
+    !isNullableString(address, 1000) ||
+    !isNonEmptyString(timeZone, 64) ||
+    typeof active !== "boolean" ||
+    !isOptionalSortOrder(sortOrder)
+  ) {
     throw new Error("Сервис складов вернул некорректный ответ.")
   }
 
   return {
     id,
+    serviceId: id,
     version,
     code,
     name,
@@ -83,6 +142,45 @@ function parseWarehouse(value: unknown): WarehouseInfo {
     active,
     sortOrder,
   }
+}
+
+function requireWarehouseId(warehouseId: string) {
+  if (!isUuid(warehouseId)) {
+    throw new Error("Идентификатор склада должен быть UUID.")
+  }
+
+  return warehouseId
+}
+
+function requireExpectedVersion(expectedVersion: number) {
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 0) {
+    throw new Error("Версия склада должна быть неотрицательным целым числом.")
+  }
+
+  return expectedVersion
+}
+
+function requireWarehouseWriteInput(input: WarehouseWriteInput) {
+  const valid =
+    WAREHOUSE_CODE_PATTERN.test(input.code) &&
+    isNonEmptyString(input.name, 255) &&
+    isNonEmptyString(input.city, 255) &&
+    isNullableString(input.address, 1000) &&
+    isNonEmptyString(input.timeZone, 64) &&
+    typeof input.active === "boolean" &&
+    isOptionalSortOrder(input.sortOrder)
+
+  if (!valid) {
+    throw new Error("Параметры склада не соответствуют контракту API.")
+  }
+}
+
+function requireIdempotencyKey(idempotencyKey: string) {
+  if (!isUuid(idempotencyKey)) {
+    throw new Error("Idempotency-Key должен быть UUID.")
+  }
+
+  return idempotencyKey
 }
 
 export async function listWarehouses(
@@ -112,8 +210,9 @@ export async function getWarehouse(
 ): Promise<WarehouseInfo> {
   const response = await bearerRequest<unknown>(
     requireAccessToken(accessToken),
-    `${WAREHOUSES_ENDPOINT}/${encodeURIComponent(warehouseId)}`
+    `${WAREHOUSES_ENDPOINT}/${encodeURIComponent(requireWarehouseId(warehouseId))}`
   )
+
   return parseWarehouse(response)
 }
 
@@ -122,15 +221,18 @@ export async function createWarehouse(
   idempotencyKey: string,
   input: WarehouseCreateInput
 ): Promise<WarehouseInfo> {
+  requireWarehouseWriteInput({ ...input, active: true })
+
   const response = await bearerRequest<unknown>(
     requireAccessToken(accessToken),
     WAREHOUSES_ENDPOINT,
     {
       method: "POST",
-      headers: { "Idempotency-Key": idempotencyKey },
+      headers: { "Idempotency-Key": requireIdempotencyKey(idempotencyKey) },
       body: JSON.stringify(input),
     }
   )
+
   return parseWarehouse(response)
 }
 
@@ -140,14 +242,20 @@ export async function replaceWarehouse(
   expectedVersion: number,
   input: WarehouseWriteInput
 ): Promise<WarehouseInfo> {
+  requireWarehouseWriteInput(input)
+
   const response = await bearerRequest<unknown>(
     requireAccessToken(accessToken),
-    `${WAREHOUSES_ENDPOINT}/${encodeURIComponent(warehouseId)}`,
+    `${WAREHOUSES_ENDPOINT}/${encodeURIComponent(requireWarehouseId(warehouseId))}`,
     {
       method: "PUT",
-      body: JSON.stringify({ ...input, expectedVersion }),
+      body: JSON.stringify({
+        ...input,
+        expectedVersion: requireExpectedVersion(expectedVersion),
+      }),
     }
   )
+
   return parseWarehouse(response)
 }
 
@@ -157,9 +265,13 @@ export async function deactivateWarehouse(
   expectedVersion: number
 ): Promise<void> {
   const endpoint = new URL(
-    `${WAREHOUSES_ENDPOINT}/${encodeURIComponent(warehouseId)}`
+    `${WAREHOUSES_ENDPOINT}/${encodeURIComponent(requireWarehouseId(warehouseId))}`
   )
-  endpoint.searchParams.set("expectedVersion", String(expectedVersion))
+  endpoint.searchParams.set(
+    "expectedVersion",
+    String(requireExpectedVersion(expectedVersion))
+  )
+
   await bearerRequest<void>(requireAccessToken(accessToken), endpoint, {
     method: "DELETE",
   })

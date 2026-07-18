@@ -6,73 +6,92 @@ export type RepairEstimateCatalogLinkType = "DEPENDENCY" | "FOLLOW_UP"
 export type RepairEstimateCatalogRouteQueueKind =
   "MOVEMENT" | "REPAIR" | "HOLDING"
 
-/** Exact decimal persisted by the catalog mock and exposed to service adapters. */
+/** Exact decimal serialized by maintenance-service. */
 export type RepairEstimateCatalogMoneyDecimal = string
 
-export type RepairEstimateCatalogSeedNode = {
+export type RepairEstimateCatalogRequest = {
+  accessToken: string
+  warehouseId: string
+  catalogVersionId: string
+}
+
+export type RepairEstimateCatalogVersionDto = {
   id: string
+  warehouseId: string
+  version: number
+  lifecycle: "DRAFT" | "ACTIVE" | "SUPERSEDED"
+  sourceSha256: string
+  nodeCount: number
+  linkCount: number
+  valid: boolean
+  createdAt: string
+  activatedAt: string | null
+}
+
+export type RepairEstimateCatalogRoutingDto = {
+  queueId: string
+  queueCode: string
+  queueKind: string
+}
+
+export type RepairEstimateCatalogReferenceDto = {
+  referenceId: string
+  code: string
+}
+
+export type RepairEstimateCatalogMediaReferenceDto = {
+  mediaId: string
+  generation: number
+}
+
+export type RepairEstimateCatalogCanvasLinkAnchors = {
+  source: "TOP" | "BOTTOM"
+  target: "TOP" | "BOTTOM"
+}
+
+export type RepairEstimateCatalogNodeDto = {
+  id: string
+  catalogVersionId: string
   code: string
   name: string
   nodeType: RepairEstimateCatalogNodeType
+  parentId: string | null
   parentCode: string | null
   active: boolean
-  sortOrder: number | null
   unit: string | null
   unitPrice: RepairEstimateCatalogMoneyDecimal | null
-  defaultQuantity: number
   durationMinutes: number | null
-  additionalOption: boolean
   showInMainMenu: boolean
-  mainMenuOrder: number | null
-  mainMenuTitle: string | null
   routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
-  workQueueCode?: string | null
+  workQueueId: string | null
+  workQueueCode: string | null
+  routing: RepairEstimateCatalogRoutingDto | null
   photoRequired: boolean
   includeInEstimate: boolean
   commonItem: boolean
-  furnitureCategory: boolean
+  references: RepairEstimateCatalogReferenceDto[]
+  mediaReferences: RepairEstimateCatalogMediaReferenceDto[]
+  /** Presentation coordinates only; canonical graph remains in maintenance-service. */
   canvasX: number | null
   canvasY: number | null
   comment: string | null
 }
 
-export type RepairEstimateCatalogSeedLink = {
-  id: string
-  sourceCode: string
-  targetCode: string
-  linkType: RepairEstimateCatalogLinkType
-  active: boolean
-  sortOrder: number | null
-  comment: string | null
-}
-
-export type RepairEstimateCatalogNodeDto = Omit<
-  RepairEstimateCatalogSeedNode,
-  "parentCode" | "workQueueCode"
-> & {
-  parentId: string | null
-  parentCode: string | null
-  workQueueCode: string | null
-}
-
 export type RepairEstimateCatalogLinkDto = {
   id: string
+  catalogVersionId: string
   sourceNodeId: string
   targetNodeId: string
   linkType: RepairEstimateCatalogLinkType
-  active: boolean
-  sortOrder: number | null
-  comment: string | null
+  sortOrder: number
+  /** Presentation anchors only; maintenance-service owns the canonical link. */
+  canvasAnchors: RepairEstimateCatalogCanvasLinkAnchors | null
 }
 
 export type RepairEstimateCatalogSnapshotDto = {
+  catalogVersion: RepairEstimateCatalogVersionDto
   nodes: RepairEstimateCatalogNodeDto[]
   links: RepairEstimateCatalogLinkDto[]
-  seedMeta: {
-    nodeCount: number
-    linkCount: number
-    note: string
-  }
 }
 
 export type RepairEstimateCatalogCanvasDto =
@@ -80,8 +99,7 @@ export type RepairEstimateCatalogCanvasDto =
     categories: RepairEstimateCatalogNodeDto[]
   }
 
-export type RepairEstimateCatalogSectionKind =
-  "works" | "materials" | "furniture"
+export type RepairEstimateCatalogSectionKind = "works" | "materials"
 
 export type RepairEstimateCatalogSectionDto = {
   kind: RepairEstimateCatalogSectionKind
@@ -99,22 +117,17 @@ export type RepairEstimateCatalogNodeMutation = {
   nodeType: RepairEstimateCatalogNodeType
   parentId: string | null
   active: boolean
-  sortOrder: number | null
   unit: string | null
   unitPrice: RepairEstimateCatalogMoneyDecimal | null
-  defaultQuantity: number
   durationMinutes: number | null
-  additionalOption: boolean
   showInMainMenu: boolean
-  mainMenuOrder: number | null
-  mainMenuTitle: string | null
   routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
+  routing?: RepairEstimateCatalogRoutingDto | null
+  references?: RepairEstimateCatalogReferenceDto[]
+  mediaReferences?: RepairEstimateCatalogMediaReferenceDto[]
   photoRequired: boolean
   includeInEstimate: boolean
   commonItem: boolean
-  furnitureCategory: boolean
-  canvasX: number | null
-  canvasY: number | null
   comment: string | null
 }
 
@@ -123,9 +136,9 @@ export type RepairEstimateCatalogLinkMutation = {
   sourceNodeId: string
   targetNodeId: string
   linkType: RepairEstimateCatalogLinkType
-  active: boolean
-  sortOrder: number | null
-  comment: string | null
+  sortOrder: number
+  /** Presentation anchors only; never sent to maintenance-service. */
+  canvasAnchors: RepairEstimateCatalogCanvasLinkAnchors | null
 }
 
 export function repairEstimateCatalogNodeTypeLabel(

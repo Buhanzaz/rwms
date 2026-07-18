@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Link, useNavigate } from "react-router-dom"
+import { useCallback, useMemo, useState } from "react"
+import { Link } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
 import { Button } from "@/components/ui/button"
@@ -26,7 +26,6 @@ import type {
   RepairEstimateCompletionMode,
   RepairEstimateDto,
   RepairEstimateEditorDraft,
-  LogisticsEstimateSeed,
   RepairEstimateTaskPlanDto,
 } from "@/features/repair-estimates/model/repair-estimate"
 import {
@@ -36,15 +35,9 @@ import {
 import { RepairEstimateCompletionDialog } from "@/features/repair-estimates/repair-estimate-completion-dialog"
 import { RepairEstimateCompletedWorkspace } from "@/features/repair-estimates/repair-estimate-completed-workspace"
 import { RepairEstimateLinesEditor } from "@/features/repair-estimates/repair-estimate-lines-editor"
-import { RepairEstimatePhotos } from "@/features/repair-estimates/repair-estimate-photos"
 import { RepairEstimateWorkspaceLayout } from "@/features/repair-estimates/repair-estimate-workspace-layout"
 import { RepairWorkInformationFields } from "@/features/repair-estimates/repair-work-information-fields"
-import {
-  REPAIR_TASKS_QUERY_KEY,
-  writeOffRepairDraft,
-} from "@/features/repair-tasks/api/repair-tasks-api"
-import { RepairTaskWriteOffDialog } from "@/features/repair-tasks/repair-task-write-off-dialog"
-import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
+import { REPAIR_TASKS_QUERY_KEY } from "@/features/repair-tasks/api/repair-tasks-api"
 
 export type RepairEstimateEditorWorkspaceProps = {
   warehouseId: string
@@ -52,10 +45,7 @@ export type RepairEstimateEditorWorkspaceProps = {
   loading?: boolean
   onClose: () => void
   onSaved: (estimate: RepairEstimateDto) => void | Promise<void>
-  seed?: LogisticsEstimateSeed
   initialRentalItemId?: string
-  onBeforePersist?: () => Promise<void>
-  onPersistFailed?: () => Promise<void>
 }
 
 export function RepairEstimateEditorWorkspace({
@@ -64,16 +54,11 @@ export function RepairEstimateEditorWorkspace({
   loading = false,
   onClose,
   onSaved,
-  seed,
   initialRentalItemId,
-  onBeforePersist,
-  onPersistFailed,
 }: RepairEstimateEditorWorkspaceProps) {
   const editorKey = estimate
     ? `${estimate.id}:${estimate.version}`
-    : seed
-      ? `return:${seed.returnTaskId}:${seed.returnTaskVersion}`
-      : `new:${warehouseId}:${initialRentalItemId ?? "unselected"}`
+    : `new:${warehouseId}:${initialRentalItemId ?? "unselected"}`
 
   if (loading) {
     return (
@@ -100,10 +85,7 @@ export function RepairEstimateEditorWorkspace({
       estimate={estimate}
       onClose={onClose}
       onSaved={onSaved}
-      seed={seed}
       initialRentalItemId={initialRentalItemId}
-      onBeforePersist={onBeforePersist}
-      onPersistFailed={onPersistFailed}
     />
   )
 }
@@ -113,72 +95,25 @@ function RepairEstimateEditorContent({
   estimate,
   onClose,
   onSaved,
-  seed,
   initialRentalItemId,
-  onBeforePersist,
-  onPersistFailed,
 }: Omit<RepairEstimateEditorWorkspaceProps, "loading">) {
   const queryClient = useQueryClient()
-  const navigate = useNavigate()
   const [draft, setDraft] = useState<RepairEstimateEditorDraft>(() =>
     estimate
       ? toEstimateEditorDraft(estimate)
-      : seed
-        ? {
-            ...createNewEstimateDraft(),
-            rentalItemId: seed.rentalItemId,
-            sourceParty: seed.sourceParty,
-            dispatchDate: seed.dispatchDate,
-            media: seed.media,
-            pendingUploads: seed.pendingUploads,
-            lines: seed.replacementLines,
-          }
-        : {
-            ...createNewEstimateDraft(),
-            rentalItemId: initialRentalItemId ?? "",
-          }
+      : {
+          ...createNewEstimateDraft(),
+          rentalItemId: initialRentalItemId ?? "",
+        }
   )
   const [catalogPager, setCatalogPager] =
     useState<RepairEstimateCatalogPager | null>(null)
   const [completionOpen, setCompletionOpen] = useState(false)
-  const [writeOffOpen, setWriteOffOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [writeOffError, setWriteOffError] = useState<string | null>(null)
-  const pendingUploadsRef = useRef(draft.pendingUploads)
   const readOnly = estimate?.status === "COMPLETED"
 
-  useEffect(() => {
-    pendingUploadsRef.current = draft.pendingUploads
-  }, [draft.pendingUploads])
-
-  useEffect(() => {
-    return () => {
-      pendingUploadsRef.current.forEach((upload) =>
-        URL.revokeObjectURL(upload.previewUrl)
-      )
-    }
-  }, [])
-
   const saveMutation = useMutation({
-    mutationFn: async () => {
-      let claimed = false
-      if (onBeforePersist) {
-        await onBeforePersist()
-        claimed = true
-      }
-      try {
-        return await saveRepairEstimateDraft({ draft, warehouseId })
-      } catch (cause) {
-        if (claimed && onPersistFailed) {
-          try {
-            await onPersistFailed()
-          } catch {
-            // Preserve the estimate persistence error; claim recovery is best-effort.
-          }
-        }
-        throw cause
-      }
-    },
+    mutationFn: () => saveRepairEstimateDraft({ draft, warehouseId }),
     onSuccess: async (saved) => {
       queryClient.setQueryData(
         repairEstimateDetailQueryKey(warehouseId, saved.id),
@@ -189,8 +124,8 @@ function RepairEstimateEditorContent({
       } catch (cause) {
         setError(
           cause instanceof Error
-            ? `Смета сохранена, но связь с возвратом не создана: ${cause.message}`
-            : "Смета сохранена, но связь с возвратом не создана"
+            ? `Смета сохранена, но редактор не закрыт: ${cause.message}`
+            : "Смета сохранена, но редактор не закрыт"
         )
         return
       }
@@ -211,29 +146,12 @@ function RepairEstimateEditorContent({
       completionMode: RepairEstimateCompletionMode
       movementRequired: boolean
       taskPlans: RepairEstimateTaskPlanDto[]
-    }) => {
-      let claimed = false
-      if (onBeforePersist) {
-        await onBeforePersist()
-        claimed = true
-      }
-      try {
-        return await completeRepairEstimate({
-          draft,
-          warehouseId,
-          ...params,
-        })
-      } catch (cause) {
-        if (claimed && onPersistFailed) {
-          try {
-            await onPersistFailed()
-          } catch {
-            // Preserve the estimate persistence error; claim recovery is best-effort.
-          }
-        }
-        throw cause
-      }
-    },
+    }) =>
+      completeRepairEstimate({
+        draft,
+        warehouseId,
+        ...params,
+      }),
     onSuccess: async (saved) => {
       setCompletionOpen(false)
       queryClient.setQueryData(
@@ -245,8 +163,8 @@ function RepairEstimateEditorContent({
       } catch (cause) {
         setError(
           cause instanceof Error
-            ? `Смета завершена, но связь с возвратом не создана: ${cause.message}`
-            : "Смета завершена, но связь с возвратом не создана"
+            ? `Смета завершена, но редактор не закрыт: ${cause.message}`
+            : "Смета завершена, но редактор не закрыт"
         )
         return
       }
@@ -265,45 +183,6 @@ function RepairEstimateEditorContent({
         unknownError instanceof Error
           ? unknownError.message
           : "Не удалось завершить смету"
-      ),
-  })
-
-  const writeOffMutation = useMutation({
-    mutationFn: (writeOffReason: string) =>
-      writeOffRepairDraft({
-        warehouseId,
-        origin: "ESTIMATE",
-        taskId: null,
-        expectedVersion: null,
-        rentalItemId: draft.rentalItemId,
-        sourceEstimateId: draft.estimateId,
-        sourceEstimateVersion: draft.expectedVersion,
-        reason: "Ремонт по смете",
-        dispatchDate: draft.dispatchDate,
-        comment: draft.comment,
-        lines: draft.lines,
-        media: draft.media,
-        pendingUploads: draft.pendingUploads,
-        writeOffReason,
-      }),
-    onSuccess: (saved) => {
-      setWriteOffOpen(false)
-      void queryClient.invalidateQueries({ queryKey: REPAIR_TASKS_QUERY_KEY })
-      void queryClient.invalidateQueries({ queryKey: ["rental-items"] })
-      void queryClient.invalidateQueries({
-        queryKey: ["rental-item-filter-options"],
-      })
-      void queryClient.invalidateQueries({ queryKey: ["rental-item"] })
-      navigate(`/write-offs?writeOffId=${encodeURIComponent(saved.id)}`, {
-        ...workspaceEntryNavigationOptions,
-        replace: true,
-      })
-    },
-    onError: (unknownError) =>
-      setWriteOffError(
-        unknownError instanceof Error
-          ? unknownError.message
-          : "Не удалось списать бытовку"
       ),
   })
 
@@ -336,16 +215,10 @@ function RepairEstimateEditorContent({
   }
 
   function closeEditor() {
-    draft.pendingUploads.forEach((upload) =>
-      URL.revokeObjectURL(upload.previewUrl)
-    )
     onClose()
   }
 
-  const mutationPending =
-    saveMutation.isPending ||
-    completeMutation.isPending ||
-    writeOffMutation.isPending
+  const mutationPending = saveMutation.isPending || completeMutation.isPending
   const interactionDisabled = readOnly || mutationPending
   const handleCatalogPagerChange = useCallback(
     (nextPager: RepairEstimateCatalogPager | null) => {
@@ -363,8 +236,8 @@ function RepairEstimateEditorContent({
       contextValue={draft.sourceParty}
       dispatchDate={draft.dispatchDate}
       comment={draft.comment}
+      showComment={false}
       disabled={interactionDisabled}
-      rentalItemDisabled={Boolean(seed)}
       readOnly={readOnly}
       rentalItemInvalid={Boolean(error && !draft.rentalItemId)}
       onRentalItemChange={(rentalItemId) =>
@@ -384,15 +257,11 @@ function RepairEstimateEditorContent({
 
   const estimateLines = (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      {seed?.replacementWarnings.length ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          {seed.replacementWarnings.join("; ")}
-        </p>
-      ) : null}
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
         <RepairEstimateLinesEditor
           lines={draft.lines}
           readOnly={interactionDisabled}
+          catalogOnly
           onChange={(lines) => setDraft((current) => ({ ...current, lines }))}
         />
       </div>
@@ -450,19 +319,6 @@ function RepairEstimateEditorContent({
           </div>
         ) : null}
         <div className="flex flex-wrap justify-end gap-2">
-          {!readOnly ? (
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={!draft.rentalItemId || mutationPending}
-              onClick={() => {
-                setWriteOffError(null)
-                setWriteOffOpen(true)
-              }}
-            >
-              Списать
-            </Button>
-          ) : null}
           <Button
             type="button"
             variant="outline"
@@ -525,17 +381,10 @@ function RepairEstimateEditorContent({
           ) : null
         }
         photos={
-          <RepairEstimatePhotos
-            media={draft.media}
-            pendingUploads={draft.pendingUploads}
-            readOnly={interactionDisabled}
-            onMediaChange={(media) =>
-              setDraft((current) => ({ ...current, media }))
-            }
-            onPendingUploadsChange={(pendingUploads) =>
-              setDraft((current) => ({ ...current, pendingUploads }))
-            }
-          />
+          <p className="text-sm text-muted-foreground">
+            Фото для смет временно недоступны: media-service ещё не подтверждает
+            владельца MAINTENANCE_ESTIMATE.
+          </p>
         }
         information={information}
         estimate={estimateLines}
@@ -544,7 +393,6 @@ function RepairEstimateEditorContent({
       />
 
       <RepairEstimateCompletionDialog
-        warehouseId={warehouseId}
         open={completionOpen}
         draft={draft}
         pending={completeMutation.isPending}
@@ -554,16 +402,6 @@ function RepairEstimateEditorContent({
           setError(null)
           completeMutation.mutate(params)
         }}
-      />
-      <RepairTaskWriteOffDialog
-        open={writeOffOpen}
-        pending={writeOffMutation.isPending}
-        error={writeOffError}
-        onOpenChange={(open) => {
-          setWriteOffOpen(open)
-          if (!open) setWriteOffError(null)
-        }}
-        onConfirm={(reason) => writeOffMutation.mutate(reason)}
       />
     </>
   )

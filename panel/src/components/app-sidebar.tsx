@@ -1,10 +1,13 @@
-import { useState, type ComponentProps } from "react"
+import { useEffect, useState, type ComponentProps } from "react"
 import { Link, useLocation } from "react-router-dom"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react"
 import {
   ArrowDown01Icon,
   ArrowRight01Icon,
+  Add01Icon,
   ChartIncreaseIcon,
+  CheckmarkCircle02Icon,
   ClipboardCheckIcon,
   ClipboardListIcon,
   ClipboardPenLineIcon,
@@ -15,6 +18,7 @@ import {
   GaugeIcon,
   HammerIcon,
   KanbanIcon,
+  Loading03Icon,
   Logout03Icon,
   PackageSearchIcon,
   Settings02Icon,
@@ -27,6 +31,14 @@ import { useIsTabletOrSmaller } from "@/hooks/use-mobile"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { isGlobalAdministrator } from "@/features/auth/auth-model"
 import { useAuth } from "@/features/auth/use-auth"
+import {
+  INVENTORY_QUERY_KEY,
+  getActiveInventory,
+  inventoryActiveQueryKey,
+  subscribeInventory,
+} from "@/features/inventory/api/inventory-api"
+import { getInventoryActor } from "@/features/inventory/inventory-access"
+import type { InventoryActorSnapshot } from "@/features/inventory/model/inventory"
 
 import {
   Select,
@@ -93,11 +105,6 @@ const navGroups: SidebarNavGroup[] = [
         title: "Доп. оборудование",
         url: "/equipment",
         icon: PackageSearchIcon,
-      },
-      {
-        title: "Инвентаризация",
-        url: "/inventory",
-        icon: ClipboardCheckIcon,
       },
     ],
   },
@@ -169,11 +176,6 @@ const settingsNavItems: SidebarNavItem[] = [
     url: "/settings/task-board",
     icon: KanbanIcon,
   },
-  {
-    title: "Имущество",
-    url: "/settings/assets",
-    icon: PackageSearchIcon,
-  },
 ]
 
 const writeOffNavItems: SidebarNavItem[] = [
@@ -197,28 +199,162 @@ function isActiveUrl(currentPath: string, url: string) {
   return currentPath.startsWith(url)
 }
 
+function InventorySidebarMenu({
+  currentPath,
+  warehouseId,
+  actor,
+  onOpen,
+  onNavigate,
+}: {
+  currentPath: string
+  warehouseId: string | null
+  actor: InventoryActorSnapshot | null
+  onOpen: () => void
+  onNavigate: () => void
+}) {
+  const queryClient = useQueryClient()
+  const isInventoryActive = isActiveUrl(currentPath, "/inventory")
+  const [menuOpen, setMenuOpen] = useState(isInventoryActive)
+  const activeQuery = useQuery({
+    queryKey: inventoryActiveQueryKey(warehouseId ?? "none"),
+    queryFn: () =>
+      warehouseId && actor
+        ? getActiveInventory({ warehouseId, actor })
+        : Promise.resolve(null),
+    enabled: warehouseId !== null && actor !== null,
+  })
+  const isLoadingActiveInventory =
+    activeQuery.isPending && activeQuery.fetchStatus === "fetching"
+
+  useEffect(
+    () =>
+      subscribeInventory(() => {
+        void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
+      }),
+    [queryClient]
+  )
+
+  const items: SidebarNavItem[] = activeQuery.data
+    ? [
+        {
+          title: "Продолжить инвентаризацию",
+          url: `/inventory/${activeQuery.data.id}`,
+          icon: ClipboardCheckIcon,
+        },
+        {
+          title: "Закончить инвентаризацию",
+          url: `/inventory/${activeQuery.data.id}/finish`,
+          icon: CheckmarkCircle02Icon,
+        },
+        {
+          title: "История инвентаризаций",
+          url: "/inventory/history",
+          icon: ClipboardListIcon,
+        },
+      ]
+    : [
+        {
+          title: "Создать инвентаризацию",
+          url: "/inventory",
+          icon: Add01Icon,
+        },
+        {
+          title: "История инвентаризаций",
+          url: "/inventory/history",
+          icon: ClipboardListIcon,
+        },
+      ]
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        type="button"
+        isActive={menuOpen || isInventoryActive}
+        aria-controls="inventory-submenu"
+        aria-expanded={menuOpen}
+        onClick={() => {
+          const next = !menuOpen
+          if (next) onOpen()
+          setMenuOpen(next)
+        }}
+        className="h-10 py-1"
+      >
+        <span className="flex size-8 shrink-0 items-center justify-center">
+          <HugeiconsIcon icon={ClipboardCheckIcon} strokeWidth={2} />
+        </span>
+        <span>Инвентаризация</span>
+        <HugeiconsIcon
+          icon={menuOpen ? ArrowDown01Icon : ArrowRight01Icon}
+          strokeWidth={2}
+          className="ml-auto transition-transform"
+        />
+      </SidebarMenuButton>
+
+      {menuOpen ? (
+        <SidebarMenuSub id="inventory-submenu">
+          {isLoadingActiveInventory ? (
+            <SidebarMenuSubItem>
+              <SidebarMenuSubButton
+                aria-disabled="true"
+                size="md"
+                className="h-8"
+              >
+                <HugeiconsIcon
+                  icon={Loading03Icon}
+                  strokeWidth={2}
+                  className="animate-spin"
+                />
+                <span>Проверяем сессию…</span>
+              </SidebarMenuSubButton>
+            </SidebarMenuSubItem>
+          ) : (
+            items.slice(0, -1).map((item) => (
+              <SidebarMenuSubItem key={item.title}>
+                <SidebarMenuSubButton
+                  asChild
+                  size="md"
+                  isActive={currentPath === item.url}
+                  className="h-8"
+                >
+                  <Link to={item.url} onClick={onNavigate}>
+                    <HugeiconsIcon icon={item.icon} strokeWidth={2} />
+                    <span>{item.title}</span>
+                  </Link>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
+            ))
+          )}
+          {items.slice(-1).map((item) => (
+            <SidebarMenuSubItem key={item.title}>
+              <SidebarMenuSubButton
+                asChild
+                size="md"
+                isActive={currentPath === item.url}
+                className="h-8"
+              >
+                <Link to={item.url} onClick={onNavigate}>
+                  <HugeiconsIcon icon={item.icon} strokeWidth={2} />
+                  <span>{item.title}</span>
+                </Link>
+              </SidebarMenuSubButton>
+            </SidebarMenuSubItem>
+          ))}
+        </SidebarMenuSub>
+      ) : null}
+    </SidebarMenuItem>
+  )
+}
+
 function WarehouseSelector() {
   const { warehouses, selectedWarehouse, setSelectedWarehouseId } =
     useWarehouse()
-
-  const warehouseCodes = warehouses.map((warehouse) => warehouse.code)
-
-  function handleWarehouseChange(value: string) {
-    const warehouse = warehouses.find((warehouse) => warehouse.code === value)
-
-    if (!warehouse) {
-      return
-    }
-
-    setSelectedWarehouseId(warehouse.id)
-  }
 
   return (
     <SidebarGroup className="pt-6 group-data-[collapsible=icon]:hidden">
       <SidebarGroupContent>
         <Select
-          value={selectedWarehouse?.code ?? ""}
-          onValueChange={handleWarehouseChange}
+          value={selectedWarehouse?.id ?? ""}
+          onValueChange={setSelectedWarehouseId}
         >
           <SelectTrigger aria-label="Выбор склада" className="w-full">
             <SelectValue placeholder="Выберите склад" />
@@ -226,9 +362,9 @@ function WarehouseSelector() {
 
           <SelectContent position="popper">
             <SelectGroup>
-              {warehouseCodes.map((item) => (
-                <SelectItem key={item} value={item}>
-                  {item}
+              {warehouses.map((warehouse) => (
+                <SelectItem key={warehouse.id} value={warehouse.id}>
+                  {warehouse.code} · {warehouse.name}
                 </SelectItem>
               ))}
             </SelectGroup>
@@ -321,6 +457,7 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
   const isSettingsActive = isActiveUrl(location.pathname, "/settings")
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(isSettingsActive)
   const [writeOffsResetKey, setWriteOffsResetKey] = useState(0)
+  const [inventoryResetKey, setInventoryResetKey] = useState(0)
   const selectedWarehouseCode = selectedWarehouse?.code ?? "Склад"
   const visibleSettingsNavItems = settingsNavItems.filter((item) => {
     if (item.url === "/settings/warehouses") {
@@ -328,7 +465,7 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
     }
 
     return (
-      (item.url !== "/settings/users" && item.url !== "/settings/assets") ||
+      item.url !== "/settings/users" ||
       (currentUser !== null && isGlobalAdministrator(currentUser.globalRole))
     )
   })
@@ -360,6 +497,7 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
 
     if (next) {
       setWriteOffsResetKey((current) => current + 1)
+      setInventoryResetKey((current) => current + 1)
     }
 
     setSettingsMenuOpen(next)
@@ -418,12 +556,32 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
                 })}
 
                 {group.title === "Имущество" ? (
-                  <WriteOffsSidebarMenu
-                    key={`${location.pathname}:${writeOffsResetKey}`}
-                    currentPath={location.pathname}
-                    onOpen={() => setSettingsMenuOpen(false)}
-                    onNavigate={closeSidebarAfterNavigation}
-                  />
+                  <>
+                    <InventorySidebarMenu
+                      key={`${selectedWarehouse?.id}:${location.pathname}:${inventoryResetKey}`}
+                      currentPath={location.pathname}
+                      warehouseId={selectedWarehouse?.id ?? null}
+                      actor={
+                        selectedWarehouse
+                          ? getInventoryActor(currentUser, selectedWarehouse.id)
+                          : null
+                      }
+                      onOpen={() => {
+                        setSettingsMenuOpen(false)
+                        setWriteOffsResetKey((current) => current + 1)
+                      }}
+                      onNavigate={closeSidebarAfterNavigation}
+                    />
+                    <WriteOffsSidebarMenu
+                      key={`${location.pathname}:${writeOffsResetKey}`}
+                      currentPath={location.pathname}
+                      onOpen={() => {
+                        setSettingsMenuOpen(false)
+                        setInventoryResetKey((current) => current + 1)
+                      }}
+                      onNavigate={closeSidebarAfterNavigation}
+                    />
+                  </>
                 ) : null}
               </SidebarMenu>
             </SidebarGroupContent>

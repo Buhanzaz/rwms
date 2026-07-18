@@ -279,6 +279,20 @@ export type InventoryStatisticsSummary = {
   statistics: InventoryFrozenStatistics
 }
 
+export type InventorySessionStatistics = {
+  inventoryId: string
+  warehouseId: string
+  businessDate: string
+  startedAt: string
+  completedAt: string
+  statistics: InventoryFrozenStatistics
+}
+
+export type InventoryStatisticsPage = {
+  content: InventorySessionStatistics[]
+  page: InventoryPageMetadata
+}
+
 export type InventoryMediaAsset = {
   id: string
   fileName: string

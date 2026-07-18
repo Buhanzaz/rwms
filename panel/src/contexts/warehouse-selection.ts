@@ -1,21 +1,17 @@
 import type { WarehouseInfo } from "@/api/warehouse-api"
 
-export const LEGACY_WAREHOUSE_SELECTIONS: Readonly<Record<string, string>> = {
-  spb: "00000000-0000-0000-0000-000000000001",
-  msk: "00000000-0000-0000-0000-000000000002",
-}
-
+/**
+ * Keeps only a server-issued UUID preference. Obsolete slugs and any synthetic
+ * service identifier are deliberately treated as stale and fall back to the
+ * first active warehouse returned by the service.
+ */
 export function resolveWarehouseSelection(
   savedWarehouseId: string | null,
   activeWarehouses: WarehouseInfo[]
 ) {
-  const candidate =
-    savedWarehouseId === null
-      ? null
-      : (LEGACY_WAREHOUSE_SELECTIONS[savedWarehouseId] ?? savedWarehouseId)
-
   return (
-    activeWarehouses.find((warehouse) => warehouse.id === candidate)?.id ??
+    activeWarehouses.find((warehouse) => warehouse.id === savedWarehouseId)
+      ?.id ??
     activeWarehouses[0]?.id ??
     null
   )

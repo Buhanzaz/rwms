@@ -13,7 +13,7 @@ type RepairWorkInformationFieldsProps = {
   warehouseId: string
   rentalItemId: string
   rentalItemNumber?: string
-  contextLabel: "От кого" | "Причина"
+  contextLabel: "От кого" | "Причина" | "Источник"
   contextValue: string
   dispatchDate: string | null
   comment: string
@@ -21,6 +21,7 @@ type RepairWorkInformationFieldsProps = {
   rentalItemDisabled?: boolean
   readOnly?: boolean
   rentalItemInvalid?: boolean
+  showComment?: boolean
   onRentalItemChange: (rentalItemId: string) => void
   onContextChange: (value: string) => void
   onDispatchDateChange: (value: string | null) => void
@@ -42,13 +43,18 @@ export function RepairWorkInformationFields({
   rentalItemDisabled = false,
   readOnly = false,
   rentalItemInvalid = false,
+  showComment = true,
   onRentalItemChange,
   onContextChange,
   onDispatchDateChange,
   onCommentChange,
 }: RepairWorkInformationFieldsProps) {
   const contextId =
-    contextLabel === "Причина" ? "repair-task-reason" : "estimate-source-party"
+    contextLabel === "Причина"
+      ? "repair-task-reason"
+      : contextLabel === "Источник"
+        ? "repair-source-party"
+        : "estimate-source-party"
 
   return (
     <FieldGroup className="gap-3">
@@ -61,7 +67,7 @@ export function RepairWorkInformationFields({
         <FieldLabel htmlFor="repair-work-rental-item">Бытовка</FieldLabel>
         <FieldContent className="min-w-0">
           {readOnly ? (
-            <p id="repair-work-rental-item" className="break-words py-2">
+            <p id="repair-work-rental-item" className="py-2 break-words">
               {rentalItemNumber || "—"}
             </p>
           ) : (
@@ -115,17 +121,21 @@ export function RepairWorkInformationFields({
         </FieldContent>
       </Field>
 
-      <Field data-disabled={disabled}>
-        <FieldLabel htmlFor="repair-work-comment">Общий комментарий</FieldLabel>
-        <Textarea
-          id="repair-work-comment"
-          aria-label="Общий комментарий"
-          className="field-sizing-fixed h-32 min-h-32 resize-none"
-          disabled={disabled}
-          value={comment}
-          onChange={(event) => onCommentChange(event.target.value)}
-        />
-      </Field>
+      {showComment ? (
+        <Field data-disabled={disabled}>
+          <FieldLabel htmlFor="repair-work-comment">
+            Общий комментарий
+          </FieldLabel>
+          <Textarea
+            id="repair-work-comment"
+            aria-label="Общий комментарий"
+            className="field-sizing-fixed h-32 min-h-32 resize-none"
+            disabled={disabled}
+            value={comment}
+            onChange={(event) => onCommentChange(event.target.value)}
+          />
+        </Field>
+      ) : null}
     </FieldGroup>
   )
 }

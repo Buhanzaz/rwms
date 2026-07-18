@@ -86,11 +86,19 @@ public class AssetService {
   }
 
   @Transactional(readOnly = true)
-  public RentalItemPage listRentalItems(UUID warehouseId, int page, int size, String search) {
+  public RentalItemPage listRentalItems(
+      UUID warehouseId,
+      int page,
+      int size,
+      String search,
+      java.util.Set<RentalItemStatus> excludedStatuses) {
     if (page < 0 || size < 1 || size > 200) throw new IllegalArgumentException("Invalid page request");
     List<RentalItem> values = rentalItems.findAllByWarehouseIdOrderByNumber(warehouseId);
     String needle = search == null ? "" : search.trim().toUpperCase(java.util.Locale.ROOT);
+    java.util.Set<RentalItemStatus> exclusions =
+        excludedStatuses == null ? java.util.Set.of() : java.util.Set.copyOf(excludedStatuses);
     List<RentalItemResponse> all = values.stream()
+        .filter(item -> !exclusions.contains(item.getStatus()))
         .filter(item -> needle.isEmpty() || item.getNumber().contains(needle))
         .map(this::rentalResponse).toList();
     int from = Math.min(Math.multiplyExact(page, size), all.size());

@@ -1,506 +1,261 @@
-import { beforeEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
-  EQUIPMENT_DISPOSITIONS_STORAGE_KEY,
-  EQUIPMENT_MOCK_STORAGE_KEY,
+  disposeEquipment,
   getEquipmentItems,
-  getUnresolvedReturnEquipmentDispositionCases,
-  hasUnresolvedReturnEquipmentDispositionForRentalItem,
-  moveRentalItemEquipmentToStock,
-  prepareReturnEquipmentDispositionReconciliation,
-  reconcileReturnEquipmentDispositionCases,
-  resolveReturnEquipmentDisposition,
+  listEquipmentDispositionItems,
 } from "@/api/equipment-api"
-import {
-  addInventoryFromWarehouseStock,
-  transferInventoryFromRentalItem,
-} from "@/api/rental-item-inventory-api"
-import {
-  getRentalItemsForContentsMove,
-  moveRentalItemContentsToRentalItem,
-  readRentalItems,
-  runRentalItemMutation,
-  writeRentalItems,
-} from "@/features/rental-items/api/rental-items-api"
+import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 
-function seedCabins(equipmentName = "Стул") {
-  const items = readRentalItems()
-  const warehouseItems = items.filter((item) => item.warehouseId === "spb")
-  const source = {
-    ...warehouseItems[0],
-    id: "return-source",
-    number: "БЫТ-ВОЗВРАТ",
-    status: "AFTER_RENT" as const,
-    contentsItems: [{ name: equipmentName, quantity: 4 }],
-  }
-  const target = {
-    ...warehouseItems[1],
-    id: "return-target",
-    number: "БЫТ-ЦЕЛЬ",
-    status: "FREE" as const,
-    contentsItems: [{ name: equipmentName, quantity: 1 }],
-  }
-  writeRentalItems([
-    ...items.filter(
-      (item) =>
-        item.id !== warehouseItems[0].id && item.id !== warehouseItems[1].id
-    ),
-    source,
-    target,
-  ])
-  return { source, target }
+const warehouseId = "00000000-0000-0000-0000-000000000001"
+const equipmentId = "00000000-0000-0000-0000-000000000101"
+const balanceId = "00000000-0000-0000-0000-000000000201"
+const targetBalanceId = "00000000-0000-0000-0000-000000000202"
+const movementId = "00000000-0000-0000-0000-000000000301"
+const idempotencyKey = "00000000-0000-0000-0000-000000000901"
+
+const equipmentWarehouse = {
+  equipment: {
+    id: equipmentId,
+    version: 4,
+    code: "CHAIR",
+    name: "Стул",
+    category: "FURNITURE",
+    active: true,
+    comment: null,
+    createdAt: "2026-07-18T10:00:00Z",
+    updatedAt: "2026-07-18T10:00:00Z",
+  },
+  totals: {
+    equipmentId,
+    warehouseId,
+    totalQuantity: 12,
+    stockQuantity: 8,
+    nonRentedCabinQuantity: 2,
+    rentedCabinQuantity: 1,
+    writtenOffQuantity: 1,
+    lostQuantity: 0,
+    activeHeldQuantity: 1,
+    availableStock: 7,
+    balances: [
+      {
+        id: balanceId,
+        version: 9,
+        equipmentId,
+        warehouseId,
+        rentalItemId: null,
+        locationKind: "STOCK",
+        quantity: 8,
+        activeHeldQuantity: 1,
+        availableStock: 7,
+      },
+    ],
+  },
 }
 
-async function register(equipmentName = "Стул") {
-  return (
-    await reconcileReturnEquipmentDispositionCases({
-      warehouseId: "spb",
-      returnReceiptId: "receipt-1",
-      returnItemId: "return-item-1",
-      sourceRentalItemId: "return-source",
-      sourceCabinNumber: "БЫТ-ВОЗВРАТ",
-      receivedAt: "2026-07-11T10:00:00.000Z",
-      contents: [{ name: equipmentName, quantity: 4 }],
-    })
-  )[0]
+const disposition = {
+  movement: {
+    id: movementId,
+    version: 2,
+    equipmentId,
+    sourceBalanceId: balanceId,
+    targetBalanceId,
+    quantity: 2,
+    kind: "EQUIPMENT_WRITTEN_OFF",
+    occurredAt: "2026-07-18T11:00:00Z",
+  },
+  equipmentCode: "CHAIR",
+  equipmentName: "Стул",
 }
 
-beforeEach(() => {
-  window.localStorage.clear()
+function jsonResponse(value: unknown, status = 200) {
+  return new Response(JSON.stringify(value), {
+    status,
+    headers: { "content-type": "application/json" },
+  })
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
-describe("return equipment disposition ledger", () => {
-  it("registers deterministically, resolves partially and replays idempotently", async () => {
-    seedCabins()
-    const first = await register()
-    const repeated = await register()
-
-    expect(repeated.id).toBe(first.id)
-    expect(repeated.version).toBe(1)
-
-    const resolved = await resolveReturnEquipmentDisposition({
-      caseId: first.id,
-      expectedVersion: 1,
-      idempotencyKey: "stock-attempt-1",
-      action: "RETURN_TO_STOCK",
-      quantity: 2,
-      createdBy: "Проверяющий",
-    })
-    const replay = await resolveReturnEquipmentDisposition({
-      caseId: first.id,
-      expectedVersion: 1,
-      idempotencyKey: "stock-attempt-1",
-      action: "RETURN_TO_STOCK",
-      quantity: 2,
-      createdBy: "Проверяющий",
-    })
-
-    expect(resolved.status).toBe("PARTIALLY_RESOLVED")
-    expect(resolved.remainingQuantity).toBe(2)
-    expect(replay).toEqual(resolved)
-    expect(
-      readRentalItems().find((item) => item.id === "return-source")
-        ?.contentsItems
-    ).toEqual([{ name: "Стул", quantity: 2 }])
-    const stock = await getEquipmentItems({ warehouseId: "spb" })
-    expect(stock.find((item) => item.name === "Стул")?.stockQuantity).toBe(2)
+describe("asset-service equipment HTTP adapter", () => {
+  it("requires an actual Bearer token rather than a browser fallback", async () => {
+    await expect(
+      getEquipmentItems(null, { warehouseId })
+    ).rejects.toMatchObject({ status: 401 })
   })
 
-  it("rejects stale versions and quantities larger than the remainder", async () => {
-    seedCabins()
-    const disposition = await register()
+  it("maps canonical warehouse equipment and sends the gateway Bearer request", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse([equipmentWarehouse]))
+    vi.stubGlobal("fetch", fetchMock)
 
     await expect(
-      resolveReturnEquipmentDisposition({
-        caseId: disposition.id,
-        expectedVersion: 99,
-        idempotencyKey: "stale",
-        action: "WRITE_OFF",
-        quantity: 1,
-        reason: "Повреждено",
-        createdBy: "Проверяющий",
-      })
-    ).rejects.toThrow("другой вкладке")
-    await expect(
-      resolveReturnEquipmentDisposition({
-        caseId: disposition.id,
-        expectedVersion: 1,
-        idempotencyKey: "too-much",
-        action: "RETURN_TO_STOCK",
-        quantity: 5,
-        createdBy: "Проверяющий",
-      })
-    ).rejects.toThrow("от 1 до 4")
-  })
-
-  it("writes off with an audit reason and preserves conservation", async () => {
-    seedCabins()
-    const disposition = await register()
-    const before = await getEquipmentItems({ warehouseId: "spb" })
-    const beforeWrittenOff =
-      before.find((item) => item.name === "Стул")?.writtenOffQuantity ?? 0
-
-    await expect(
-      resolveReturnEquipmentDisposition({
-        caseId: disposition.id,
-        expectedVersion: 1,
-        idempotencyKey: "write-off-no-reason",
-        action: "WRITE_OFF",
-        quantity: 1,
-        createdBy: "Проверяющий",
-      })
-    ).rejects.toThrow("причину")
-    const saved = await resolveReturnEquipmentDisposition({
-      caseId: disposition.id,
-      expectedVersion: 1,
-      idempotencyKey: "write-off-1",
-      action: "WRITE_OFF",
-      quantity: 1,
-      reason: "Сломан при возврате",
-      createdBy: "Проверяющий",
-    })
-
-    expect(saved.remainingQuantity).toBe(3)
-    expect(saved.resolutions[0]).toMatchObject({
-      action: "WRITE_OFF",
-      quantity: 1,
-      reason: "Сломан при возврате",
-      createdBy: "Проверяющий",
-    })
-    const after = await getEquipmentItems({ warehouseId: "spb" })
-    expect(after.find((item) => item.name === "Стул")?.writtenOffQuantity).toBe(
-      beforeWrittenOff + 1
-    )
-  })
-
-  it("transfers only to another eligible cabin in the same warehouse", async () => {
-    seedCabins()
-    const disposition = await register()
-    const saved = await resolveReturnEquipmentDisposition({
-      caseId: disposition.id,
-      expectedVersion: 1,
-      idempotencyKey: "transfer-1",
-      action: "TRANSFER_TO_CABIN",
-      quantity: 3,
-      targetRentalItemId: "return-target",
-      createdBy: "Проверяющий",
-    })
-
-    expect(saved.remainingQuantity).toBe(1)
-    expect(
-      readRentalItems().find((item) => item.id === "return-source")
-        ?.contentsItems
-    ).toEqual([{ name: "Стул", quantity: 1 }])
-    expect(
-      readRentalItems().find((item) => item.id === "return-target")
-        ?.contentsItems
-    ).toEqual([{ name: "Стул", quantity: 4 }])
-    expect(
-      await getUnresolvedReturnEquipmentDispositionCases({
-        sourceRentalItemId: "return-source",
-      })
-    ).toHaveLength(1)
-  })
-
-  it("requires explicit confirmation before creating a new stock position", async () => {
-    seedCabins("Редкая тумба")
-    const disposition = await register("Редкая тумба")
-
-    await expect(
-      resolveReturnEquipmentDisposition({
-        caseId: disposition.id,
-        expectedVersion: 1,
-        idempotencyKey: "new-master-1",
-        action: "RETURN_TO_STOCK",
-        quantity: 4,
-        createdBy: "Проверяющий",
-      })
-    ).rejects.toThrow("Подтвердите создание")
-    const saved = await resolveReturnEquipmentDisposition({
-      caseId: disposition.id,
-      expectedVersion: 1,
-      idempotencyKey: "new-master-2",
-      action: "RETURN_TO_STOCK",
-      quantity: 4,
-      createdBy: "Проверяющий",
-      confirmCreateMasterItem: true,
-    })
-
-    expect(saved.status).toBe("RESOLVED")
-    const stock = await getEquipmentItems({ warehouseId: "spb" })
-    expect(
-      stock.find((item) => item.name === "Редкая тумба")?.stockQuantity
-    ).toBe(4)
-  })
-
-  it("recovers only touched entities and preserves unrelated concurrent edits", async () => {
-    const { target } = seedCabins()
-    const disposition = await register()
-    const beforeRentals = readRentalItems()
-    const beforeMaster = JSON.parse(
-      window.localStorage.getItem(EQUIPMENT_MOCK_STORAGE_KEY)!
-    ) as Array<{ id: string; stockQuantity: number }>
-    const beforeState = JSON.parse(
-      window.localStorage.getItem(EQUIPMENT_DISPOSITIONS_STORAGE_KEY)!
-    ) as {
-      revision: number
-      cases: Array<{ id: string; version: number; remainingQuantity: number }>
-    }
-
-    const resolved = await resolveReturnEquipmentDisposition({
-      caseId: disposition.id,
-      expectedVersion: 1,
-      idempotencyKey: "crash-attempt",
-      action: "RETURN_TO_STOCK",
-      quantity: 2,
-      createdBy: "Проверяющий",
-    })
-    const afterRentals = readRentalItems()
-    const afterMaster = JSON.parse(
-      window.localStorage.getItem(EQUIPMENT_MOCK_STORAGE_KEY)!
-    ) as Array<{ id: string; stockQuantity: number }>
-    const afterState = JSON.parse(
-      window.localStorage.getItem(EQUIPMENT_DISPOSITIONS_STORAGE_KEY)!
-    ) as {
-      revision: number
-      cases: Array<{ id: string; version: number; remainingQuantity: number }>
-    }
-    const beforeSource = beforeRentals.find(
-      (item) => item.id === "return-source"
-    )!
-    const afterSource = afterRentals.find(
-      (item) => item.id === "return-source"
-    )!
-    const beforeChair = beforeMaster.find((item) => item.id === "spb-chair")!
-    const afterChair = afterMaster.find((item) => item.id === "spb-chair")!
-    const beforeCase = beforeState.cases.find(
-      (item) => item.id === disposition.id
-    )!
-    const afterCase = afterState.cases.find(
-      (item) => item.id === disposition.id
-    )!
-
-    writeRentalItems(
-      afterRentals.map((item) =>
-        item.id === target.id ? { ...item, comment: "Чужое изменение" } : item
-      )
-    )
-    window.localStorage.setItem(
-      EQUIPMENT_MOCK_STORAGE_KEY,
-      JSON.stringify(
-        afterMaster.map((item) =>
-          item.id === "spb-table"
-            ? { ...item, stockQuantity: item.stockQuantity + 7 }
-            : item
-        )
-      )
-    )
-    window.localStorage.setItem(
-      EQUIPMENT_DISPOSITIONS_STORAGE_KEY,
-      JSON.stringify({
-        ...afterState,
-        revision: afterState.revision + 1,
-        cases: [
-          ...afterState.cases,
-          { ...afterCase, id: "unrelated-case", version: 5 },
-        ],
-      })
-    )
-    window.localStorage.setItem(
-      "wms:mock-return-equipment-disposition-journal",
-      JSON.stringify({
-        id: "crash-attempt",
-        state: "PREPARED",
-        rentalItems: [
-          { id: "return-source", before: beforeSource, after: afterSource },
-        ],
-        masterItems: [
-          { id: "spb-chair", before: beforeChair, after: afterChair },
-        ],
-        dispositionCases: [
-          { id: disposition.id, before: beforeCase, after: afterCase },
-        ],
-      })
-    )
-
-    expect(
-      hasUnresolvedReturnEquipmentDispositionForRentalItem("return-source")
-    ).toBe(true)
-    expect(
-      readRentalItems().find((item) => item.id === "return-source")
-        ?.contentsItems
-    ).toEqual([{ name: "Стул", quantity: 4 }])
-    expect(
-      readRentalItems().find((item) => item.id === target.id)?.comment
-    ).toBe("Чужое изменение")
-    const recoveredMaster = JSON.parse(
-      window.localStorage.getItem(EQUIPMENT_MOCK_STORAGE_KEY)!
-    ) as Array<{ id: string; stockQuantity: number }>
-    expect(recoveredMaster.find((item) => item.id === "spb-chair")).toEqual(
-      beforeChair
-    )
-    expect(
-      recoveredMaster.find((item) => item.id === "spb-table")?.stockQuantity
-    ).toBe(
-      (afterMaster.find((item) => item.id === "spb-table")?.stockQuantity ??
-        0) + 7
-    )
-    expect(
-      window.localStorage.getItem(
-        "wms:mock-return-equipment-disposition-journal"
-      )
-    ).toBeNull()
-    const recoveredState = JSON.parse(
-      window.localStorage.getItem(EQUIPMENT_DISPOSITIONS_STORAGE_KEY)!
-    ) as { cases: Array<{ id: string; version: number }> }
-    expect(
-      recoveredState.cases.find((item) => item.id === "unrelated-case")?.version
-    ).toBe(5)
-
-    const replay = await resolveReturnEquipmentDisposition({
-      caseId: disposition.id,
-      expectedVersion: 1,
-      idempotencyKey: "crash-attempt",
-      action: "RETURN_TO_STOCK",
-      quantity: 2,
-      createdBy: "Проверяющий",
-    })
-    expect(replay.remainingQuantity).toBe(2)
-    expect(replay.resolutions).toHaveLength(1)
-    expect(resolved.remainingQuantity).toBe(2)
-  })
-
-  it("refreshes metadata after a partial resolution without changing history", async () => {
-    seedCabins()
-    const disposition = await register()
-    const partial = await resolveReturnEquipmentDisposition({
-      caseId: disposition.id,
-      expectedVersion: 1,
-      idempotencyKey: "metadata-partial",
-      action: "RETURN_TO_STOCK",
-      quantity: 2,
-      createdBy: "Проверяющий",
-    })
-
-    const [updated] = await reconcileReturnEquipmentDispositionCases({
-      warehouseId: "spb",
-      returnReceiptId: "receipt-1",
-      returnItemId: "return-item-1",
-      sourceRentalItemId: "return-source",
-      sourceCabinNumber: "БЫТ-ВОЗВРАТ",
-      receivedAt: "2026-07-12T10:00:00.000Z",
-      contents: [{ name: "Стул", quantity: 2 }],
-    })
-
-    expect(updated.id).toBe(disposition.id)
-    expect(updated.version).toBe(partial.version + 1)
-    expect(updated.receivedQuantity).toBe(4)
-    expect(updated.remainingQuantity).toBe(2)
-    expect(updated.resolutions).toEqual(partial.resolutions)
-    expect(updated.receivedAt).toBe("2026-07-12T10:00:00.000Z")
-  })
-
-  it("blocks generic stock movement while the return case is unresolved", async () => {
-    seedCabins()
-    await register()
-
-    await expect(
-      moveRentalItemEquipmentToStock("return-source", [
-        { name: "Стул", quantity: 1 },
-      ])
-    ).rejects.toThrow("ожидает решения")
-    expect(
-      readRentalItems().find((item) => item.id === "return-source")
-        ?.contentsItems
-    ).toEqual([{ name: "Стул", quantity: 4 }])
-  })
-
-  it("rechecks quarantine after waiting for the shared rental lock", async () => {
-    seedCabins()
-    let releaseRegistration!: () => void
-    let registrationPrepared!: () => void
-    const release = new Promise<void>((resolve) => {
-      releaseRegistration = resolve
-    })
-    const prepared = new Promise<void>((resolve) => {
-      registrationPrepared = resolve
-    })
-    const registration = runRentalItemMutation(async () => {
-      const reconciliation = prepareReturnEquipmentDispositionReconciliation({
-        upserts: [
-          {
-            warehouseId: "spb",
-            returnReceiptId: "race-receipt",
-            returnItemId: "race-return-item",
-            sourceRentalItemId: "return-source",
-            sourceCabinNumber: "БЫТ-ВОЗВРАТ",
-            receivedAt: "2026-07-11T10:00:00.000Z",
-            contents: [{ name: "Стул", quantity: 4 }],
-          },
-        ],
-      })
-      registrationPrepared()
-      await release
-      reconciliation.commit()
-    })
-    await prepared
-    const movement = moveRentalItemEquipmentToStock("return-source", [
-      { name: "Стул", quantity: 1 },
+      getEquipmentItems("access-token", { warehouseId, search: "сту" })
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: equipmentId,
+        warehouseId,
+        name: "Стул",
+        stockQuantity: 8,
+        cabinStockQuantity: 2,
+        rentedQuantity: 1,
+        writtenOffQuantity: 1,
+        availableStock: 7,
+        usages: [],
+      }),
     ])
-    releaseRegistration()
-    await registration
 
-    await expect(movement).rejects.toThrow("ожидает решения")
-    expect(
-      readRentalItems().find((item) => item.id === "return-source")
-        ?.contentsItems
-    ).toEqual([{ name: "Стул", quantity: 4 }])
+    const endpoint = new URL(String(fetchMock.mock.calls[0]?.[0]))
+    expect(`${endpoint.origin}${endpoint.pathname}`).toBe(
+      `${getGatewayRuntimeConfig().assetApiBaseUrl}/v1/equipment`
+    )
+    expect(endpoint.searchParams.get("warehouseId")).toBe(warehouseId)
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(new Headers(request.headers).get("Authorization")).toBe(
+      "Bearer access-token"
+    )
   })
 
-  it("blocks direct source and target transfers at the rental API boundary", async () => {
-    seedCabins()
-    await register()
+  it("rejects malformed service balances instead of deriving browser values", async () => {
+    const malformed = structuredClone(equipmentWarehouse)
+    malformed.totals.balances[0].warehouseId =
+      "00000000-0000-0000-0000-000000000099"
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse([malformed])))
 
     await expect(
-      moveRentalItemContentsToRentalItem({
-        sourceRentalItemId: "return-source",
-        targetRentalItemId: "return-target",
-        payload: [{ name: "Стул", quantity: 1 }],
-      })
-    ).rejects.toThrow("ожидает решения")
-    await expect(
-      transferInventoryFromRentalItem({
-        targetRentalItemId: "return-target",
-        payload: {
-          sourceRentalItemId: "return-source",
-          items: [{ name: "Стул", quantity: 1 }],
-        },
-      })
-    ).rejects.toThrow("ожидает решения")
-    const candidates = await getRentalItemsForContentsMove({
-      warehouseId: "spb",
-      sourceRentalItemId: "return-target",
-    })
-    expect(candidates.some((item) => item.id === "return-source")).toBe(false)
+      getEquipmentItems("access-token", { warehouseId })
+    ).rejects.toThrow("несогласованный баланс")
   })
 
-  it("blocks warehouse stock additions to a quarantined target", async () => {
-    seedCabins()
-    await reconcileReturnEquipmentDispositionCases({
-      warehouseId: "spb",
-      returnReceiptId: "receipt-target",
-      returnItemId: "return-item-target",
-      sourceRentalItemId: "return-target",
-      sourceCabinNumber: "БЫТ-ЦЕЛЬ",
-      receivedAt: "2026-07-11T10:00:00.000Z",
-      contents: [{ name: "Стул", quantity: 1 }],
-    })
+  it("preserves forbidden warehouse access from asset-service", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ detail: "Нет доступа к складу" }, 403)
+        )
+    )
 
     await expect(
-      addInventoryFromWarehouseStock({
-        targetRentalItemId: "return-target",
-        payload: { items: [{ name: "Кровать", quantity: 1 }] },
+      getEquipmentItems("access-token", { warehouseId })
+    ).rejects.toMatchObject({ status: 403, message: "Нет доступа к складу" })
+  })
+
+  it("preserves a missing source balance as not found", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ detail: "Остаток не найден" }, 404))
+    )
+
+    await expect(
+      disposeEquipment("access-token", idempotencyKey, {
+        equipmentId,
+        warehouseId,
+        sourceRentalItemId: null,
+        sourceLocationKind: "STOCK",
+        sourceExpectedVersion: 9,
+        quantity: 2,
+        disposition: "WRITE_OFF",
       })
-    ).rejects.toThrow("ожидает решения")
+    ).rejects.toMatchObject({ status: 404, message: "Остаток не найден" })
+  })
+
+  it("maps disposition history through the canonical endpoint and local search", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse([disposition]))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      listEquipmentDispositionItems("access-token", {
+        warehouseId,
+        search: "стул",
+      })
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: movementId,
+        equipmentId,
+        equipmentName: "Стул",
+        kind: "EQUIPMENT_WRITTEN_OFF",
+      }),
+    ])
+
+    const endpoint = new URL(String(fetchMock.mock.calls[0]?.[0]))
+    expect(`${endpoint.origin}${endpoint.pathname}`).toBe(
+      `${getGatewayRuntimeConfig().assetApiBaseUrl}/v1/equipment/dispositions`
+    )
+    expect(endpoint.searchParams.get("warehouseId")).toBe(warehouseId)
+  })
+
+  it("sends a versioned, idempotent asset-service disposition command", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(disposition.movement, 201))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      disposeEquipment("access-token", idempotencyKey, {
+        equipmentId,
+        warehouseId,
+        sourceRentalItemId: null,
+        sourceLocationKind: "STOCK",
+        sourceExpectedVersion: 9,
+        quantity: 2,
+        disposition: "WRITE_OFF",
+      })
+    ).resolves.toMatchObject({
+      id: movementId,
+      sourceBalanceId: balanceId,
+      targetBalanceId,
+    })
+
+    const endpoint = new URL(String(fetchMock.mock.calls[0]?.[0]))
+    expect(`${endpoint.origin}${endpoint.pathname}`).toBe(
+      `${getGatewayRuntimeConfig().assetApiBaseUrl}/v1/equipment/dispositions`
+    )
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(request.method).toBe("POST")
+    expect(new Headers(request.headers).get("Authorization")).toBe(
+      "Bearer access-token"
+    )
+    expect(new Headers(request.headers).get("Idempotency-Key")).toBe(
+      idempotencyKey
+    )
+    expect(JSON.parse(String(request.body))).toEqual({
+      equipmentId,
+      warehouseId,
+      sourceRentalItemId: null,
+      sourceLocationKind: "STOCK",
+      sourceExpectedVersion: 9,
+      quantity: 2,
+      disposition: "WRITE_OFF",
+    })
+  })
+
+  it("preserves canonical conflict failures for the caller to refresh", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ detail: "Версия остатка устарела" }, 409)
+        )
+    )
+
+    await expect(
+      disposeEquipment("access-token", idempotencyKey, {
+        equipmentId,
+        warehouseId,
+        sourceRentalItemId: null,
+        sourceLocationKind: "STOCK",
+        sourceExpectedVersion: 9,
+        quantity: 2,
+        disposition: "WRITE_OFF",
+      })
+    ).rejects.toMatchObject({ status: 409, message: "Версия остатка устарела" })
   })
 })
