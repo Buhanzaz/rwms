@@ -972,3 +972,27 @@ All Stage 10 KPI/product gaps above remain unresolved. The user explicitly
 deferred implementation, so they are no longer an active planning gate and no
 analytics runtime may be created until new explicit authorization follows a
 completed Stage 9.
+
+## 2026-07-18 Stage 9 implementation resolution and remaining unknowns
+
+The Stage 9 v1 implementation unknowns are resolved for runtime persistence,
+the accepted producer/topic/schema matrix, direct and deferred subject rules,
+gap/DLT/outage recovery, media lifecycle, replay, publication, read filters,
+cursor behavior and authorization. The final service matrix is green and the
+service-side gate is complete.
+
+The following remain deliberately unresolved and outside that completion:
+
+- producer-owned additive cabin-subject facts for current logistics and
+  task-board activity, including correct multi-cabin document semantics;
+- any expansion of the fixed visible activity vocabulary or producer-owned
+  semantic deep-link reference types;
+- production dossier panel cutover and retirement/migration of browser dossier
+  storage;
+- production operations, retention/backfill policy beyond canonical retained
+  facts, and any source-side replay API;
+- all Stage 10 KPI formulas, periods/timezones, correction/backfill,
+  authorization, performance and export decisions.
+
+These unknowns do not reopen Stage 9 service-side completion. They authorize
+no producer, panel or analytics implementation by inference.

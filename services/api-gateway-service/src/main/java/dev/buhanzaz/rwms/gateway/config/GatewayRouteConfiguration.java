@@ -6,6 +6,7 @@ import static org.springframework.cloud.gateway.server.mvc.filter.BeforeFilterFu
 import static org.springframework.cloud.gateway.server.mvc.filter.BeforeFilterFunctions.uri;
 import static org.springframework.cloud.gateway.server.mvc.handler.GatewayRouterFunctions.route;
 import static org.springframework.cloud.gateway.server.mvc.handler.HandlerFunctions.http;
+import static org.springframework.web.servlet.function.RequestPredicates.method;
 import static org.springframework.web.servlet.function.RequestPredicates.path;
 
 import dev.buhanzaz.rwms.gateway.web.GatewayUpstreamProblemHandler;
@@ -14,6 +15,7 @@ import java.util.Locale;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.web.servlet.function.RequestPredicate;
 import org.springframework.web.servlet.function.RouterFunction;
 import org.springframework.web.servlet.function.ServerResponse;
@@ -161,6 +163,27 @@ public class GatewayRouteConfiguration {
     return route("logistics-service")
         .route(publicLogisticsPath, http())
         .before(uri(properties.getRoutes().getLogisticsUri()))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
+  @Bean
+  RouterFunction<ServerResponse> dossierRoutes(
+      GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
+    RequestPredicate publicDossierPath =
+        path("/api/dossier/**")
+            .and(method(HttpMethod.GET))
+            .and(request -> safePath(request.path()))
+            .and(
+                request -> {
+                  String decoded = decodedPath(request.path());
+                  return !decoded.startsWith("/api/dossier/internal")
+                      && !decoded.startsWith("/api/dossier/private");
+                });
+    return route("dossier-service")
+        .route(publicDossierPath, http())
+        .before(uri(properties.getRoutes().getDossierUri()))
         .before(removeRequestHeader(HttpHeaders.COOKIE))
         .onError(upstreamProblems::supports, upstreamProblems::handle)
         .build();

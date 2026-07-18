@@ -680,3 +680,20 @@ Stage 9 service-side implementation is authorized under the approved dossier
 contract. It may build only the append-only projection, replay/recovery, safe
 read API, sanitized downstream fact and stateless gateway boundary; panel work
 and every source-domain command remain forbidden.
+
+### Stage 9 dossier implementation resolution (2026-07-18)
+
+The authorized service boundary is complete. Asset and maintenance direct
+subjects and inventory finding associations create fixed-code cabin activity;
+inventory media converges whether media or finding arrives first. Current
+logistics and task-board facts remain truthful `SUBJECT_NOT_PROVIDED` evidence
+and never become cabin activity through identifier inference.
+
+Duplicates are harmless, missing prefixes and identity/generation conflicts
+block only their source aggregate, and unrelated aggregates/cabins progress.
+Replay captures partition high-water marks, builds an inactive generation,
+applies the tail, compares canonical output and changes the active pointer only
+through successful CAS. Query results preserve absent business dates/actors,
+compose approved filters, use stable null-last cursors, hide deleted media and
+report `PARTIAL` for authorized-but-incomplete evidence. No panel adapter was
+cut over.

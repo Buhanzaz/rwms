@@ -557,3 +557,18 @@ PostgreSQL `domain_event` is the replay authority. Kafka uses
 checkpoint, DLT and quarantine state remains local. The stateless gateway owns
 only the public route. The final Java 25 suite passed 18 classes/116 tests with
 no failure, error or skip.
+
+## Dossier-service boundary (verified Stage 9, 2026-07-18)
+
+`dossier-service` is an isolated append-only/read-only projection deployable.
+It owns only sanitized source evidence, cabin-subject associations, activity
+and media projections, consumer/replay state and its cabin-keyed publication
+outbox. It has no producer client, source-database access, command endpoint,
+shared JPA entity or dependency on another business-service implementation.
+
+All runtime persistence, including technical inbox, checkpoints, gap state,
+DLT, replay and outbox operations, goes through Spring Data JPA. Manual JDBC,
+`JdbcTemplate`, native runtime SQL and Spring Data JDBC are absent. The shared
+architecture suite enforces that boundary together with the stateless/no-Kafka/
+no-database gateway rule and passed 42/42. The gateway adds only the public GET
+route; it does not acquire dossier authorization or state.

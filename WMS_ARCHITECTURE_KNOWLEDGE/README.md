@@ -71,4 +71,8 @@ The stateless gateway has an explicit `/api/logistics/**` route, but no panel
 cutover was performed. Stage 7 is complete in `51460a3`. Stage 8 implementation
 is recorded in `08c262f`; its containing closure/fix commit records the final
 JPA boundary, V7, replay/outbox recovery evidence and pointer transition. Stage
-8 is complete, and Stage 9 dossier service-side implementation is active.
+8 is complete. The authorized Stage 9 service-side `dossier-service` boundary
+is also complete: JPA-only runtime persistence, Flyway V1, canonical contracts,
+Kafka/recovery/replay, secured read API and the stateless gateway route passed
+their final matrix. No panel cutover was authorized or performed. Stage 10/KPI
+implementation remains explicitly deferred and is not an active gate.

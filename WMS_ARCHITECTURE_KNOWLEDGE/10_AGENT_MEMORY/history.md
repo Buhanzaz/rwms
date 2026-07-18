@@ -4120,3 +4120,35 @@ panel, database migration or Stage 7 behavior changed.
   authorized; panel and producer changes are not.
 - The user explicitly deferred Stage 10/KPI implementation. No analytics
   runtime, schema, contract, gateway, KPI value or panel work is authorized.
+
+## 2026-07-18 Stage 9 dossier service-side completion
+
+- Added canonical dossier OpenAPI, an eleven-topic strict AsyncAPI entrance
+  matrix, sanitized DLT schema and deterministic cabin-activity publication
+  schema. No producer deployable was changed and no missing cabin subject is
+  inferred.
+- Added the isolated `dossier-service` and `dossier-db`. Immutable Flyway V1
+  owns fifteen source/inbox/checkpoint/projection/replay/DLT/outbox tables;
+  Hibernate only validates them. Every runtime persistence path, including the
+  technical recovery paths, uses Spring Data JPA with no JDBC/native SQL.
+- Implemented atomic source journal/inbox/checkpoints/projection/outbox,
+  producer-specific stream origins, gap blocking/recovery, inventory finding
+  and media convergence, fixed-code append-only activity, deterministic
+  inactive-generation replay/CAS activation and stable cabin-keyed
+  publication identity.
+- Implemented the warehouse-filtered read API with composable source/activity/
+  actor/time filters, tamper-detected null-last cursor, `PARTIAL` semantics and
+  404 anti-enumeration. USER readers require `rwms.read` plus warehouse `VIEW`;
+  service readers and malformed claims fail closed.
+- Real Kafka 4.3.1/PostgreSQL coverage proves acknowledgement, Kafka outage
+  retry, database-outage consumer stop, JPA-health restart, redelivery
+  deduplication and sanitized DLT. Concurrency/replay/media/query/security
+  regressions include first publication, 64-bit Kafka offsets and the default
+  producer's synchronous acknowledgement configuration.
+- Final verification passed dossier 95/95, architecture 42/42, gateway 38/38,
+  the root approved-dependency verifier and local
+  Compose configuration. Zero skipped tests, failures or errors are recorded
+  in the three Java suites.
+- Stage 9 service-side work is complete. The panel dossier adapter remains
+  unchanged because panel cutover was not authorized. Stage 10/KPI remains
+  explicitly deferred; no analytics runtime or active next gate is claimed.

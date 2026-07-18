@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/dossier/dossier-cabin-activity-v1.schema.json",
+  "title": "RWMS dossier cabin activity projected fact v1",
+  "description": "Sanitized DomainEventEnvelopeV2 fact keyed by cabinId. Its stable eventId is derived from contract version, source eventId and cabinId; replay and backfill preserve the same identity.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelopeVersion",
+    "eventId",
+    "eventType",
+    "eventVersion",
+    "occurredAt",
+    "recordedAt",
+    "producer",
+    "aggregateType",
+    "aggregateId",
+    "aggregateVersion",
+    "correlation",
+    "actorRef",
+    "payload"
+  ],
+  "properties": {
+    "envelopeVersion": {"const": 2},
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {"const": "dossier.cabin-activity.projected.v1"},
+    "eventVersion": {"const": 1},
+    "occurredAt": {"$ref": "#/$defs/nullableDateTime"},
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "producer": {"const": "dossier-service"},
+    "aggregateType": {"const": "CABIN"},
+    "aggregateId": {"type": "string", "format": "uuid"},
+    "aggregateVersion": {"type": "integer", "format": "int64", "minimum": 0},
+    "correlation": {"$ref": "#/$defs/correlationContext"},
+    "actorRef": {
+      "oneOf": [
+        {"$ref": "#/$defs/opaqueActorReference"},
+        {"type": "null"}
+      ]
+    },
+    "payload": {"$ref": "#/$defs/activityFact"}
+  },
+  "x-rwms-envelope": "DomainEventEnvelopeV2",
+  "x-rwms-topic": "rwms.dossier.cabin-activity.v1",
+  "x-rwms-record-key": "aggregateId",
+  "x-rwms-key-invariants": [
+    "Kafka record key equals aggregateId",
+    "aggregateId equals payload.cabinId"
+  ],
+  "x-rwms-event-id": "UUID derived from contract version, private source eventId and payload.cabinId",
+  "x-rwms-delivery": {
+    "producer": "transactional-postgresql-outbox",
+    "markPublished": "AFTER_BROKER_ACK",
+    "key": "aggregateId",
+    "atLeastOnce": true,
+    "replayPreservesEventId": true
+  },
+  "x-rwms-prohibitedFields": [
+    "authorization",
+    "displayName",
+    "login",
+    "email",
+    "comment",
+    "note",
+    "reason",
+    "filename",
+    "mimeType",
+    "objectKey",
+    "objectPath",
+    "signedUrl",
+    "rawError",
+    "requestBody",
+    "password",
+    "secret",
+    "token",
+    "jwt",
+    "href"
+  ],
+  "$defs": {
+    "nullableDateTime": {
+      "oneOf": [
+        {"type": "string", "format": "date-time"},
+        {"type": "null"}
+      ]
+    },
+    "nullableUuid": {
+      "oneOf": [
+        {"type": "string", "format": "uuid"},
+        {"type": "null"}
+      ]
+    },
+    "correlationContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correlationId", "causationId"],
+      "properties": {
+        "correlationId": {"type": "string", "format": "uuid"},
+        "causationId": {"$ref": "#/$defs/nullableUuid"}
+      }
+    },
+    "opaqueActorReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subjectId", "principalType", "profileRevision"],
+      "properties": {
+        "subjectId": {"type": "string", "format": "uuid"},
+        "principalType": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"},
+        "profileRevision": {
+          "oneOf": [
+            {"type": "string", "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "sourceReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["producer", "aggregateType", "aggregateId"],
+      "properties": {
+        "producer": {"enum": ["asset-service", "maintenance-service", "inventory-service", "media-service"]},
+        "aggregateType": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,127}$"},
+        "aggregateId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "secondaryId": {"type": "string", "format": "uuid"}
+      }
+    },
+    "activityFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["activityId", "cabinId", "warehouseId", "activityCode", "sourceRef"],
+      "properties": {
+        "activityId": {"type": "string", "format": "uuid"},
+        "cabinId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "activityCode": {
+          "enum": [
+            "CABIN_CREATED",
+            "CABIN_PASSPORT_CHANGED",
+            "CABIN_STATUS_CHANGED",
+            "CABIN_WAREHOUSE_CHANGED",
+            "CABIN_LOGISTICS_EFFECT_APPLIED",
+            "CABIN_COMMENT_REVISION_CHANGED",
+            "CABIN_MANUAL_NOTE_ADDED",
+            "ESTIMATE_CREATED",
+            "ESTIMATE_DRAFT_CHANGED",
+            "ESTIMATE_COMPLETED",
+            "ESTIMATE_AMENDED",
+            "REPAIR_CREATED",
+            "REPAIR_PLAN_CHANGED",
+            "REPAIR_QUEUED",
+            "REPAIR_STAGE_COMPLETED",
+            "REPAIR_PENDING_ACCEPTANCE",
+            "REPAIR_REWORK_CREATED",
+            "REPAIR_ACCEPTED",
+            "REPAIR_WRITTEN_OFF",
+            "INVENTORY_FINDING_ADDED",
+            "INVENTORY_INSPECTION_SAVED",
+            "INVENTORY_PUBLICATION_READY",
+            "INVENTORY_PUBLICATION_REQUESTED",
+            "INVENTORY_PUBLICATION_SUCCEEDED",
+            "INVENTORY_PUBLICATION_TRANSIENT_FAILED",
+            "INVENTORY_PUBLICATION_BLOCKED",
+            "INVENTORY_PUBLICATION_CLOSED_BLOCKED",
+            "MEDIA_READY",
+            "MEDIA_FAILED",
+            "MEDIA_ROTATED",
+            "MEDIA_DELETED"
+          ]
+        },
+        "sourceRef": {"$ref": "#/$defs/sourceReference"}
+      }
+    }
+  }
+}

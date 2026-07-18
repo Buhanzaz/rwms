@@ -55,7 +55,7 @@ class GatewayArchitectureTest {
   }
 
   @Test
-  void moduleContainsNoDatabaseOrMigrationTree() {
+  void moduleContainsNoDatabaseMigrationBusinessAggregationOrServiceClientTree() throws Exception {
     Path projectDir = Path.of(System.getProperty("rwms.test.project-dir"));
     assertThat(projectDir).isDirectory();
     List<Path> forbidden =
@@ -65,8 +65,15 @@ class GatewayArchitectureTest {
             projectDir.resolve("src/main/resources/database"),
             projectDir.resolve("src/main/java/dev/buhanzaz/rwms/gateway/domain"),
             projectDir.resolve("src/main/java/dev/buhanzaz/rwms/gateway/persistence"),
-            projectDir.resolve("src/main/java/dev/buhanzaz/rwms/gateway/eventing"));
+            projectDir.resolve("src/main/java/dev/buhanzaz/rwms/gateway/eventing"),
+            projectDir.resolve("src/main/java/dev/buhanzaz/rwms/gateway/repository"),
+            projectDir.resolve("src/main/java/dev/buhanzaz/rwms/gateway/service"),
+            projectDir.resolve("src/main/java/dev/buhanzaz/rwms/gateway/client"),
+            projectDir.resolve("src/main/java/dev/buhanzaz/rwms/gateway/integration"));
     assertThat(forbidden).allSatisfy(path -> assertThat(Files.exists(path)).isFalse());
+
+    Path buildFile = projectDir.resolve("build.gradle.kts");
+    assertThat(Files.readString(buildFile)).doesNotContain("project(\":services:");
   }
 
   private static boolean classExists(String name) {

@@ -556,3 +556,21 @@ non-empty-unversioned rejection plus JPA validation. The reviewed legacy
 catalog is a packaged, hash-pinned command artifact imported into a DRAFT
 stream, not a Flyway seed, cross-database query or raw-SQL runtime path. Import,
 event append, synchronous projection and idempotency commit atomically.
+
+## Dossier Flyway V1 (verified Stage 9, 2026-07-18)
+
+`V1__dossier_schema.sql` under the dossier service's Flyway location is the
+cumulative empty-database installation for the isolated dossier PostgreSQL
+database. Its fifteen tables separate immutable
+source facts, inbox, partition and aggregate checkpoints, projection
+generations/active pointer, subject associations, append-only activities,
+current media, unlinked evidence, sanitized DLT, replay run/high-water marks,
+per-cabin publication heads and transactional outbox.
+
+Flyway alone owns schema creation and checksums, `baselineOnMigrate=false`, and
+Hibernate uses `ddl-auto=validate` in every profile. The schema has no source-
+service table, shared table, cross-database foreign key, browser import or
+legacy seed. Testcontainers coverage in the final 95-test dossier suite proves
+clean V1 install, repeat validation, checksum drift rejection, non-empty
+unversioned rejection, explicit baseline policy, constraints and JPA
+validation.

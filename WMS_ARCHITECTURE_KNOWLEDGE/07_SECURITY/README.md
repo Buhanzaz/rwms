@@ -581,3 +581,15 @@ are unrestricted. Foreign-warehouse rows are omitted and make visibility
 `PARTIAL`; when no visible evidence proves the cabin, the API returns 404 to
 avoid enumeration. Actor references remain opaque. Service tokens are not
 public readers, and the stateless gateway grants no authorization bypass.
+
+### Stage 9 dossier authorization verification (2026-07-18)
+
+The implemented GET boundary enforces the approved USER principal,
+`rwms.read` and per-row warehouse `VIEW` policy after local issuer/audience
+validation. `SYSTEM_ADMIN` and `WMS_ADMIN` retain the approved unrestricted
+read. Malformed claims and ineligible principals fail closed; foreign-
+warehouse rows are omitted, produce `PARTIAL` when other evidence remains, and
+hidden-only cabins return 404 to prevent enumeration. Opaque actor references
+are filterable without resolving or exposing names/PII. Gateway verification
+passed 38/38 and confirms no edge authorization bypass or internal/private
+dossier route.

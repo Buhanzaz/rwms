@@ -1,0 +1,491 @@
+asyncapi: 3.1.0
+info:
+  title: RWMS Dossier Projection Events
+  version: 1.0.0
+  description: >-
+    Stage 9 strict DomainEventEnvelopeV2 source matrix and sanitized cabin
+    activity publication. Every source record key equals aggregateId. Source
+    validation, immutable journal, inbox decision, partition checkpoint,
+    aggregate checkpoint, projection and local outbox commit in one PostgreSQL
+    transaction. Dossier starts at earliest, never infers a missing prefix or
+    cabin subject and never reads a producer database or API.
+defaultContentType: application/json
+servers:
+  kafka:
+    host: configured-at-runtime
+    protocol: kafka
+    description: Runtime bootstrap servers are supplied by service configuration.
+channels:
+  assetRentalItemFacts:
+    address: rwms.asset.rental-item.v1
+    messages:
+      assetRentalItemFactV1: { $ref: '#/components/messages/AssetRentalItemFactV1' }
+  maintenanceEstimateFacts:
+    address: rwms.maintenance.estimate.v1
+    messages:
+      maintenanceEstimateFactV1: { $ref: '#/components/messages/MaintenanceEstimateFactV1' }
+  maintenanceRepairFacts:
+    address: rwms.maintenance.repair.v1
+    messages:
+      maintenanceRepairFactV1: { $ref: '#/components/messages/MaintenanceRepairFactV1' }
+  inventoryFindingFacts:
+    address: rwms.inventory.session.v1
+    description: >-
+      SESSION and FINDING are both valid families on this shared producer
+      topic. SESSION is journaled as SUBJECT_NOT_PROVIDED. A non-null finding
+      payload.assetId proves the finding-to-cabin association; null remains
+      deferred.
+    messages:
+      inventorySessionFactV1: { $ref: '#/components/messages/InventorySessionFactV1' }
+      inventoryFindingFactV1: { $ref: '#/components/messages/InventoryFindingFactV1' }
+  inventoryPublicationFacts:
+    address: rwms.inventory.publication.v1
+    messages:
+      inventoryPublicationFactV1: { $ref: '#/components/messages/InventoryPublicationFactV1' }
+  mediaFacts:
+    address: rwms.media.media.v1
+    description: >-
+      Only ownerType INVENTORY_FINDING is accepted. ownerId is associated
+      through the canonical inventory finding fact; arrival order is irrelevant.
+    messages:
+      mediaFactV1: { $ref: '#/components/messages/MediaFactV1' }
+  logisticsReturnFacts:
+    address: rwms.logistics.return.v1
+    description: Validated and journaled as SUBJECT_NOT_PROVIDED; never visible.
+    messages:
+      logisticsReturnFactV1: { $ref: '#/components/messages/LogisticsReturnFactV1' }
+  logisticsShipmentFacts:
+    address: rwms.logistics.shipment.v1
+    description: Validated and journaled as SUBJECT_NOT_PROVIDED; never visible.
+    messages:
+      logisticsShipmentFactV1: { $ref: '#/components/messages/LogisticsShipmentFactV1' }
+  logisticsTransferFacts:
+    address: rwms.logistics.transfer.v1
+    description: Validated and journaled as SUBJECT_NOT_PROVIDED; never visible.
+    messages:
+      logisticsTransferFactV1: { $ref: '#/components/messages/LogisticsTransferFactV1' }
+  taskBoardBoardTaskFacts:
+    address: rwms.task-board.board-task.v1
+    description: Validated and journaled as SUBJECT_NOT_PROVIDED; never visible.
+    messages:
+      taskBoardBoardTaskFactV1: { $ref: '#/components/messages/TaskBoardBoardTaskFactV1' }
+  taskBoardQueueEntryFacts:
+    address: rwms.task-board.queue-entry.v1
+    description: Validated and journaled as SUBJECT_NOT_PROVIDED; never visible.
+    messages:
+      taskBoardQueueEntryFactV1: { $ref: '#/components/messages/TaskBoardQueueEntryFactV1' }
+  cabinActivityFacts:
+    address: rwms.dossier.cabin-activity.v1
+    description: >-
+      Sanitized activity keyed by cabinId. Replay and backfill preserve stable
+      event IDs, and an outbox row is published only after broker ACK.
+    messages:
+      cabinActivityProjectedV1: { $ref: '#/components/messages/CabinActivityProjectedV1' }
+  assetRentalItemDlt:
+    address: rwms.asset.rental-item.v1.dossier-projection-v1.dlt
+    messages: { sanitizedDltV1: { $ref: '#/components/messages/SanitizedDltV1' } }
+  maintenanceEstimateDlt:
+    address: rwms.maintenance.estimate.v1.dossier-projection-v1.dlt
+    messages: { sanitizedDltV1: { $ref: '#/components/messages/SanitizedDltV1' } }
+  maintenanceRepairDlt:
+    address: rwms.maintenance.repair.v1.dossier-projection-v1.dlt
+    messages: { sanitizedDltV1: { $ref: '#/components/messages/SanitizedDltV1' } }
+  inventoryFindingDlt:
+    address: rwms.inventory.session.v1.dossier-projection-v1.dlt
+    messages: { sanitizedDltV1: { $ref: '#/components/messages/SanitizedDltV1' } }
+  inventoryPublicationDlt:
+    address: rwms.inventory.publication.v1.dossier-projection-v1.dlt
+    messages: { sanitizedDltV1: { $ref: '#/components/messages/SanitizedDltV1' } }
+  mediaDlt:
+    address: rwms.media.media.v1.dossier-projection-v1.dlt
+    messages: { sanitizedDltV1: { $ref: '#/components/messages/SanitizedDltV1' } }
+  logisticsReturnDlt:
+    address: rwms.logistics.return.v1.dossier-projection-v1.dlt
+    messages: { sanitizedDltV1: { $ref: '#/components/messages/SanitizedDltV1' } }
+  logisticsShipmentDlt:
+    address: rwms.logistics.shipment.v1.dossier-projection-v1.dlt
+    messages: { sanitizedDltV1: { $ref: '#/components/messages/SanitizedDltV1' } }
+  logisticsTransferDlt:
+    address: rwms.logistics.transfer.v1.dossier-projection-v1.dlt
+    messages: { sanitizedDltV1: { $ref: '#/components/messages/SanitizedDltV1' } }
+  taskBoardBoardTaskDlt:
+    address: rwms.task-board.board-task.v1.dossier-projection-v1.dlt
+    messages: { sanitizedDltV1: { $ref: '#/components/messages/SanitizedDltV1' } }
+  taskBoardQueueEntryDlt:
+    address: rwms.task-board.queue-entry.v1.dossier-projection-v1.dlt
+    messages: { sanitizedDltV1: { $ref: '#/components/messages/SanitizedDltV1' } }
+operations:
+  consumeAssetRentalItemFacts: { action: receive, channel: { $ref: '#/channels/assetRentalItemFacts' } }
+  consumeMaintenanceEstimateFacts: { action: receive, channel: { $ref: '#/channels/maintenanceEstimateFacts' } }
+  consumeMaintenanceRepairFacts: { action: receive, channel: { $ref: '#/channels/maintenanceRepairFacts' } }
+  consumeInventoryFindingFacts: { action: receive, channel: { $ref: '#/channels/inventoryFindingFacts' } }
+  consumeInventoryPublicationFacts: { action: receive, channel: { $ref: '#/channels/inventoryPublicationFacts' } }
+  consumeMediaFacts: { action: receive, channel: { $ref: '#/channels/mediaFacts' } }
+  consumeLogisticsReturnFacts: { action: receive, channel: { $ref: '#/channels/logisticsReturnFacts' } }
+  consumeLogisticsShipmentFacts: { action: receive, channel: { $ref: '#/channels/logisticsShipmentFacts' } }
+  consumeLogisticsTransferFacts: { action: receive, channel: { $ref: '#/channels/logisticsTransferFacts' } }
+  consumeTaskBoardBoardTaskFacts: { action: receive, channel: { $ref: '#/channels/taskBoardBoardTaskFacts' } }
+  consumeTaskBoardQueueEntryFacts: { action: receive, channel: { $ref: '#/channels/taskBoardQueueEntryFacts' } }
+  publishCabinActivityFacts: { action: send, channel: { $ref: '#/channels/cabinActivityFacts' } }
+  publishAssetRentalItemDlt: { action: send, channel: { $ref: '#/channels/assetRentalItemDlt' } }
+  publishMaintenanceEstimateDlt: { action: send, channel: { $ref: '#/channels/maintenanceEstimateDlt' } }
+  publishMaintenanceRepairDlt: { action: send, channel: { $ref: '#/channels/maintenanceRepairDlt' } }
+  publishInventoryFindingDlt: { action: send, channel: { $ref: '#/channels/inventoryFindingDlt' } }
+  publishInventoryPublicationDlt: { action: send, channel: { $ref: '#/channels/inventoryPublicationDlt' } }
+  publishMediaDlt: { action: send, channel: { $ref: '#/channels/mediaDlt' } }
+  publishLogisticsReturnDlt: { action: send, channel: { $ref: '#/channels/logisticsReturnDlt' } }
+  publishLogisticsShipmentDlt: { action: send, channel: { $ref: '#/channels/logisticsShipmentDlt' } }
+  publishLogisticsTransferDlt: { action: send, channel: { $ref: '#/channels/logisticsTransferDlt' } }
+  publishTaskBoardBoardTaskDlt: { action: send, channel: { $ref: '#/channels/taskBoardBoardTaskDlt' } }
+  publishTaskBoardQueueEntryDlt: { action: send, channel: { $ref: '#/channels/taskBoardQueueEntryDlt' } }
+components:
+  messages:
+    AssetRentalItemFactV1:
+      name: dossier.input.asset.rental-item.v1
+      payload:
+        allOf:
+          - { $ref: './technical/domain-event-envelope-v2.schema.yaml' }
+          - { $ref: './asset/asset-events-v1.schema.json' }
+          - $ref: '#/components/schemas/AssetRentalItemDiscriminator'
+      x-rwms-record-key: aggregateId
+      x-rwms-activity-code-map:
+        asset.rental-item.created.v1: CABIN_CREATED
+        asset.rental-item.passport-changed.v1: CABIN_PASSPORT_CHANGED
+        asset.rental-item.status-changed.v1: CABIN_STATUS_CHANGED
+        asset.rental-item.warehouse-changed.v1: CABIN_WAREHOUSE_CHANGED
+        asset.rental-item.logistics-effect-applied.v1: CABIN_LOGISTICS_EFFECT_APPLIED
+        asset.rental-item.general-comment-changed.v1: CABIN_COMMENT_REVISION_CHANGED
+        asset.rental-item.manual-note-added.v1: CABIN_MANUAL_NOTE_ADDED
+    MaintenanceEstimateFactV1:
+      name: dossier.input.maintenance.estimate.v1
+      payload:
+        allOf:
+          - { $ref: './technical/domain-event-envelope-v2.schema.yaml' }
+          - { $ref: './maintenance/maintenance-events-v1.schema.json' }
+          - $ref: '#/components/schemas/MaintenanceEstimateDiscriminator'
+      x-rwms-record-key: aggregateId
+      x-rwms-activity-code-map:
+        maintenance.estimate.created.v1: ESTIMATE_CREATED
+        maintenance.estimate.draft-changed.v1: ESTIMATE_DRAFT_CHANGED
+        maintenance.estimate.completed.v1: ESTIMATE_COMPLETED
+        maintenance.estimate.amended.v1: ESTIMATE_AMENDED
+    MaintenanceRepairFactV1:
+      name: dossier.input.maintenance.repair.v1
+      payload:
+        allOf:
+          - { $ref: './technical/domain-event-envelope-v2.schema.yaml' }
+          - { $ref: './maintenance/maintenance-events-v1.schema.json' }
+          - $ref: '#/components/schemas/MaintenanceRepairDiscriminator'
+      x-rwms-record-key: aggregateId
+      x-rwms-activity-code-map:
+        maintenance.repair.created.v1: REPAIR_CREATED
+        maintenance.repair.plan-changed.v1: REPAIR_PLAN_CHANGED
+        maintenance.repair.queued.v1: REPAIR_QUEUED
+        maintenance.repair.stage-completed.v1: REPAIR_STAGE_COMPLETED
+        maintenance.repair.pending-acceptance.v1: REPAIR_PENDING_ACCEPTANCE
+        maintenance.repair.rework-created.v1: REPAIR_REWORK_CREATED
+        maintenance.repair.accepted.v1: REPAIR_ACCEPTED
+        maintenance.repair.written-off.v1: REPAIR_WRITTEN_OFF
+    InventoryFindingFactV1:
+      name: dossier.input.inventory.finding.v1
+      payload:
+        allOf:
+          - { $ref: './technical/domain-event-envelope-v2.schema.yaml' }
+          - { $ref: './inventory/inventory-events-v1.schema.json' }
+          - $ref: '#/components/schemas/InventoryFindingDiscriminator'
+      x-rwms-record-key: aggregateId
+      x-rwms-activity-code-map:
+        inventory.finding.added.v1: INVENTORY_FINDING_ADDED
+        inventory.finding.inspection-saved.v1: INVENTORY_INSPECTION_SAVED
+        inventory.finding.owner-proof.v1: null
+    InventorySessionFactV1:
+      name: dossier.input.inventory.session.v1
+      payload:
+        allOf:
+          - { $ref: './technical/domain-event-envelope-v2.schema.yaml' }
+          - { $ref: './inventory/inventory-events-v1.schema.json' }
+          - $ref: '#/components/schemas/InventorySessionDiscriminator'
+      x-rwms-record-key: aggregateId
+      x-rwms-unlinked-reason: SUBJECT_NOT_PROVIDED
+    InventoryPublicationFactV1:
+      name: dossier.input.inventory.publication.v1
+      payload:
+        allOf:
+          - { $ref: './technical/domain-event-envelope-v2.schema.yaml' }
+          - { $ref: './inventory/inventory-events-v1.schema.json' }
+          - $ref: '#/components/schemas/InventoryPublicationDiscriminator'
+      x-rwms-record-key: aggregateId
+      x-rwms-activity-code-map:
+        inventory.publication.ready.v1: INVENTORY_PUBLICATION_READY
+        inventory.publication.requested.v1: INVENTORY_PUBLICATION_REQUESTED
+        inventory.publication.succeeded.v1: INVENTORY_PUBLICATION_SUCCEEDED
+        inventory.publication.transient-failed.v1: INVENTORY_PUBLICATION_TRANSIENT_FAILED
+        inventory.publication.blocked.v1: INVENTORY_PUBLICATION_BLOCKED
+        inventory.publication.closed-blocked.v1: INVENTORY_PUBLICATION_CLOSED_BLOCKED
+    MediaFactV1:
+      name: dossier.input.media.media.v1
+      payload:
+        allOf:
+          - { $ref: './technical/domain-event-envelope-v2.schema.yaml' }
+          - { $ref: './media/media-facts-v1.schema.json' }
+      x-rwms-record-key: aggregateId
+      x-rwms-owner-type: INVENTORY_FINDING
+      x-rwms-activity-code-map:
+        media.media.uploaded.v1: null
+        media.media.ready.v1: MEDIA_READY
+        media.media.failed.v1: MEDIA_FAILED
+        media.media.rotated.v1: MEDIA_ROTATED
+        media.media.deleted.v1: MEDIA_DELETED
+    LogisticsReturnFactV1:
+      name: dossier.input.logistics.return.v1
+      payload:
+        allOf:
+          - { $ref: './technical/domain-event-envelope-v2.schema.yaml' }
+          - { $ref: './logistics/logistics-events-v1.schema.json' }
+          - $ref: '#/components/schemas/LogisticsReturnDiscriminator'
+      x-rwms-record-key: aggregateId
+      x-rwms-unlinked-reason: SUBJECT_NOT_PROVIDED
+    LogisticsShipmentFactV1:
+      name: dossier.input.logistics.shipment.v1
+      payload:
+        allOf:
+          - { $ref: './technical/domain-event-envelope-v2.schema.yaml' }
+          - { $ref: './logistics/logistics-events-v1.schema.json' }
+          - $ref: '#/components/schemas/LogisticsShipmentDiscriminator'
+      x-rwms-record-key: aggregateId
+      x-rwms-unlinked-reason: SUBJECT_NOT_PROVIDED
+    LogisticsTransferFactV1:
+      name: dossier.input.logistics.transfer.v1
+      payload:
+        allOf:
+          - { $ref: './technical/domain-event-envelope-v2.schema.yaml' }
+          - { $ref: './logistics/logistics-events-v1.schema.json' }
+          - $ref: '#/components/schemas/LogisticsTransferDiscriminator'
+      x-rwms-record-key: aggregateId
+      x-rwms-unlinked-reason: SUBJECT_NOT_PROVIDED
+    TaskBoardBoardTaskFactV1:
+      name: dossier.input.task-board.board-task.v1
+      payload:
+        allOf:
+          - { $ref: './technical/domain-event-envelope-v2.schema.yaml' }
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - $ref: '#/components/schemas/TaskBoardBoardTaskDiscriminator'
+      x-rwms-record-key: aggregateId
+      x-rwms-unlinked-reason: SUBJECT_NOT_PROVIDED
+    TaskBoardQueueEntryFactV1:
+      name: dossier.input.task-board.queue-entry.v1
+      payload:
+        allOf:
+          - { $ref: './technical/domain-event-envelope-v2.schema.yaml' }
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - $ref: '#/components/schemas/TaskBoardQueueEntryDiscriminator'
+      x-rwms-record-key: aggregateId
+      x-rwms-unlinked-reason: SUBJECT_NOT_PROVIDED
+    CabinActivityProjectedV1:
+      name: dossier.cabin-activity.projected.v1
+      payload:
+        allOf:
+          - { $ref: './technical/domain-event-envelope-v2.schema.yaml' }
+          - { $ref: './dossier/dossier-cabin-activity-v1.schema.json' }
+      x-rwms-record-key: aggregateId
+    SanitizedDltV1:
+      name: dossier.source.sanitized-dlt.v1
+      payload: { $ref: './dossier/dossier-sanitized-dlt-v1.schema.json' }
+      x-rwms-record-key: source aggregateId when valid; UUIDv5(OID namespace, SHA-256(raw source bytes)) when invalid
+  schemas:
+    AssetRentalItemDiscriminator:
+      type: object
+      required: [producer, aggregateType, eventType, eventVersion]
+      properties:
+        producer: { const: asset-service }
+        aggregateType: { const: RENTAL_ITEM }
+        eventType:
+          enum:
+            - asset.rental-item.created.v1
+            - asset.rental-item.passport-changed.v1
+            - asset.rental-item.status-changed.v1
+            - asset.rental-item.warehouse-changed.v1
+            - asset.rental-item.logistics-effect-applied.v1
+            - asset.rental-item.general-comment-changed.v1
+            - asset.rental-item.manual-note-added.v1
+        eventVersion: { const: 1 }
+    MaintenanceEstimateDiscriminator:
+      type: object
+      required: [producer, aggregateType, eventType, eventVersion]
+      properties:
+        producer: { const: maintenance-service }
+        aggregateType: { const: ESTIMATE }
+        eventType:
+          enum:
+            - maintenance.estimate.created.v1
+            - maintenance.estimate.draft-changed.v1
+            - maintenance.estimate.completed.v1
+            - maintenance.estimate.amended.v1
+        eventVersion: { const: 1 }
+    MaintenanceRepairDiscriminator:
+      type: object
+      required: [producer, aggregateType, eventType, eventVersion]
+      properties:
+        producer: { const: maintenance-service }
+        aggregateType: { const: REPAIR }
+        eventType:
+          enum:
+            - maintenance.repair.created.v1
+            - maintenance.repair.plan-changed.v1
+            - maintenance.repair.queued.v1
+            - maintenance.repair.stage-completed.v1
+            - maintenance.repair.pending-acceptance.v1
+            - maintenance.repair.rework-created.v1
+            - maintenance.repair.accepted.v1
+            - maintenance.repair.written-off.v1
+        eventVersion: { const: 1 }
+    InventoryFindingDiscriminator:
+      type: object
+      required: [producer, aggregateType, eventType, eventVersion]
+      properties:
+        producer: { const: inventory-service }
+        aggregateType: { const: FINDING }
+        eventType:
+          enum:
+            - inventory.finding.added.v1
+            - inventory.finding.inspection-saved.v1
+            - inventory.finding.owner-proof.v1
+        eventVersion: { const: 1 }
+    InventorySessionDiscriminator:
+      type: object
+      required: [producer, aggregateType, eventType, eventVersion]
+      properties:
+        producer: { const: inventory-service }
+        aggregateType: { const: SESSION }
+        eventType:
+          enum:
+            - inventory.session.started.v1
+            - inventory.session.completed.v1
+            - inventory.session.cancelled.v1
+        eventVersion: { const: 1 }
+    InventoryPublicationDiscriminator:
+      type: object
+      required: [producer, aggregateType, eventType, eventVersion]
+      properties:
+        producer: { const: inventory-service }
+        aggregateType: { const: PUBLICATION }
+        eventType:
+          enum:
+            - inventory.publication.ready.v1
+            - inventory.publication.requested.v1
+            - inventory.publication.succeeded.v1
+            - inventory.publication.transient-failed.v1
+            - inventory.publication.blocked.v1
+            - inventory.publication.closed-blocked.v1
+        eventVersion: { const: 1 }
+    LogisticsReturnDiscriminator:
+      type: object
+      required: [producer, aggregateType, eventType, eventVersion]
+      properties:
+        producer: { const: logistics-service }
+        aggregateType: { const: RETURN }
+        eventType:
+          enum:
+            - logistics.return.created.v1
+            - logistics.return.registration-started.v1
+            - logistics.return.inspection-required.v1
+            - logistics.return.acceptance-started.v1
+            - logistics.return.accepted.v1
+            - logistics.return.estimate-started.v1
+            - logistics.return.estimate-requested.v1
+            - logistics.return.conflicted.v1
+            - logistics.return.conflict.v1
+            - logistics.return.reconciliation-required.v1
+        eventVersion: { const: 1 }
+    LogisticsShipmentDiscriminator:
+      type: object
+      required: [producer, aggregateType, eventType, eventVersion]
+      properties:
+        producer: { const: logistics-service }
+        aggregateType: { const: SHIPMENT }
+        eventType:
+          enum:
+            - logistics.shipment.created.v1
+            - logistics.shipment.preparation-started.v1
+            - logistics.shipment.planned.v1
+            - logistics.shipment.confirmation-started.v1
+            - logistics.shipment.preparation-confirmed.v1
+            - logistics.shipment.cancellation-started.v1
+            - logistics.shipment.cancelled.v1
+            - logistics.shipment.conflict.v1
+            - logistics.shipment.reconciliation-required.v1
+        eventVersion: { const: 1 }
+    LogisticsTransferDiscriminator:
+      type: object
+      required: [producer, aggregateType, eventType, eventVersion]
+      properties:
+        producer: { const: logistics-service }
+        aggregateType: { const: TRANSFER }
+        eventType:
+          enum:
+            - logistics.transfer.created.v1
+            - logistics.transfer.departure-started.v1
+            - logistics.transfer.departed.v1
+            - logistics.transfer.arrival-started.v1
+            - logistics.transfer.line-arrived.v1
+            - logistics.transfer.completed.v1
+            - logistics.transfer.cancelled.v1
+            - logistics.transfer.conflict.v1
+            - logistics.transfer.reconciliation-required.v1
+        eventVersion: { const: 1 }
+    TaskBoardBoardTaskDiscriminator:
+      type: object
+      required: [producer, aggregateType, eventType, eventVersion]
+      properties:
+        producer: { const: task-board-service }
+        aggregateType: { const: BOARD_TASK }
+        eventType:
+          enum:
+            - task-board.board-task.created.v1
+            - task-board.board-task.changed.v1
+            - task-board.board-task.completed.v1
+            - task-board.board-task.cancelled.v1
+        eventVersion: { const: 1 }
+    TaskBoardQueueEntryDiscriminator:
+      type: object
+      required: [producer, aggregateType, eventType, eventVersion]
+      properties:
+        producer: { const: task-board-service }
+        aggregateType: { const: QUEUE_ENTRY }
+        eventType:
+          enum:
+            - task-board.queue-entry.created.v1
+            - task-board.queue-entry.changed.v1
+            - task-board.queue-entry.taken.v1
+            - task-board.queue-entry.paused.v1
+            - task-board.queue-entry.resumed.v1
+            - task-board.queue-entry.completed.v1
+            - task-board.queue-entry.moved.v1
+            - task-board.queue-entry.cancelled.v1
+            - task-board.queue-entry.interrupted.v1
+            - task-board.queue-entry.returning.v1
+        eventVersion: { const: 1 }
+x-rwms-consumer-group: dossier-projection-v1
+x-rwms-consumer-start-offset: earliest
+x-rwms-aggregate-version-origin:
+  media-service:
+    initialAppliedVersion: 0
+    firstExpectedVersion: 1
+  otherAcceptedProducers:
+    initialAppliedVersion: -1
+    firstExpectedVersion: 0
+x-rwms-delivery:
+  atLeastOnce: true
+  transientRetriesSeconds: [1, 2, 4]
+  permanentValidationFailure: SANITIZED_DLT_NO_RETRY
+  offsetCommit: AFTER_LOCAL_TRANSACTION
+  aggregateGap: QUARANTINE_AGGREGATE
+  missingPrefix: PARTIAL_NEVER_IMPLICIT_BASELINE
+x-rwms-prohibited-derivation:
+  - producer database read
+  - producer API call
+  - browser join
+  - identifier parsing
+  - inferred cabin subject
+  - free-form activity summary
+  - href persistence or publication

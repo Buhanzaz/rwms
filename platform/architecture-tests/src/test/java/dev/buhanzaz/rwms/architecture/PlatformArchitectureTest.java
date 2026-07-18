@@ -27,7 +27,8 @@ class PlatformArchitectureTest {
             "dev.buhanzaz.rwms.warehouse",
             "dev.buhanzaz.rwms.maintenance",
             "dev.buhanzaz.rwms.inventory",
-            "dev.buhanzaz.rwms.logistics");
+            "dev.buhanzaz.rwms.logistics",
+            "dev.buhanzaz.rwms.dossier");
 
     ArchitectureRules.MAPPERS_LIVE_IN_MAPPING_PACKAGES.check(classes);
     ArchitectureRules.MAPPERS_DO_NOT_MUTATE_ENTITIES_FROM_COMMANDS.check(classes);
@@ -44,11 +45,13 @@ class PlatformArchitectureTest {
             "dev.buhanzaz.rwms.asset",
             "dev.buhanzaz.rwms.maintenance",
             "dev.buhanzaz.rwms.inventory",
-            "dev.buhanzaz.rwms.logistics");
+            "dev.buhanzaz.rwms.logistics",
+            "dev.buhanzaz.rwms.dossier");
 
     ArchitectureRules.SERVICES_DO_NOT_USE_FIELD_INJECTION.check(classes);
     ArchitectureRules.SERVICES_DO_NOT_USE_METHOD_INJECTION.check(classes);
     ArchitectureRules.INVENTORY_DOES_NOT_DEPEND_ON_OTHER_SERVICES.check(classes);
     ArchitectureRules.LOGISTICS_DOES_NOT_DEPEND_ON_OTHER_SERVICES.check(classes);
+    ArchitectureRules.DOSSIER_DOES_NOT_DEPEND_ON_OTHER_SERVICES.check(classes);
   }
 }

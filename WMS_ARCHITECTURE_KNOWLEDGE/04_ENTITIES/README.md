@@ -398,3 +398,19 @@ business `LogisticsDocumentService` contains no JDBC; its concurrent
 subject/operation/key serialization is invoked through the Spring Data JPA
 repository. Low-level SQL remains restricted to named technical event-store,
 outbox, inbox, recovery, DLT and deterministic replay adapters.
+
+## Stage 9 dossier entity model (verified, 2026-07-18)
+
+The dossier model separates `DossierSourceFact`, `DossierInbox`, partition and
+aggregate checkpoints, projection generation/pointer, subject association,
+immutable activity, current media projection, unlinked fact, sanitized dead
+letter, replay run/partition high-water, cabin publication head and outbox.
+These are dossier-local JPA entities with no association to a producer model.
+
+Visible activity identity is deterministic per source event and cabin within a
+generation. A cabin publication head serializes monotonically versioned,
+stable-ID downstream facts without turning the activity projection into a
+command aggregate. Inventory finding associations are producer-owned evidence;
+once proven, their cabin/warehouse identity cannot be silently rewritten.
+Media state is generation-aware and `DELETED` is absent from visible groups
+without deleting immutable source/activity evidence.
