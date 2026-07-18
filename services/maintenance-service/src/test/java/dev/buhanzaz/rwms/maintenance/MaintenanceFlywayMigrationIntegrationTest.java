@@ -41,7 +41,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTheAuthoritativeMaintenanceSchema() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -53,7 +53,8 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "maintenance_inbound_replay_message", "maintenance_inbound_correlation",
         "rental_item_fact_projection", "operation_lease_fact_projection",
         "maintenance_idempotency_record", "integration_reconciliation",
-        "inventory_repair_source_operation", "inventory_repair_source");
+        "inventory_repair_source_operation", "inventory_repair_source",
+        "logistics_return_shortage");
     assertThat(columnCount("maintenance_estimate", "rental_item_version_snapshot")).isOne();
     assertThat(columnCount("maintenance_repair", "rental_item_version_snapshot")).isOne();
     assertThat(columnCount("maintenance_repair", "dispatch_date")).isOne();
@@ -86,9 +87,29 @@ class MaintenanceFlywayMigrationIntegrationTest {
             "plan_request_sha256", "plan_fingerprint", "source_fingerprint", "{64}");
     assertThat(triggerDefinition("trg_inventory_repair_source_immutable"))
         .contains("enforce_inventory_repair_source_immutability");
-
+    assertThat(columns("logistics_return_shortage")).contains(
+        "return_id", "line_id", "rental_item_id", "rental_item_version_snapshot",
+        "source_sha256", "snapshot_sha256", "shortage_snapshot");
+    assertThat(constraintDefinition(
+        "logistics_return_shortage", "ck_logistics_return_shortage_snapshot"))
+        .contains("jsonb_typeof");
     assertThat(jdbc.queryForObject("select count(*) from catalog_version", Integer.class)).isZero();
     assertThat(jdbc.queryForObject("select count(*) from maintenance_repair", Integer.class)).isZero();
+  }
+
+  @Test
+  void appliedMigrationChecksumDriftIsRejected(@TempDir Path directory) throws IOException {
+    copyMigration(directory, "V1__maintenance_schema.sql");
+    copyMigration(directory, "V2__inventory_source.sql");
+    Path migration = copyMigration(directory, "V3__logistics_return_shortage.sql");
+    String location = "filesystem:" + directory.toAbsolutePath().toString().replace('\\', '/');
+    flyway(location).migrate();
+    Files.writeString(migration, Files.readString(migration)
+        .replace("shortage_snapshot jsonb NOT NULL", "shortage_snapshot jsonb NULL"));
+
+    assertThatThrownBy(() -> flyway(location).validate())
+        .isInstanceOf(FlywayValidateException.class)
+        .hasMessageContaining("checksum");
   }
 
   @Test
@@ -96,6 +117,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
       throws IOException {
     copyMigration(directory, "V1__maintenance_schema.sql");
     Path migration = copyMigration(directory, "V2__inventory_source.sql");
+    copyMigration(directory, "V3__logistics_return_shortage.sql");
     String location = "filesystem:" + directory.toAbsolutePath().toString().replace('\\', '/');
     flyway(location).migrate();
     Files.writeString(migration, Files.readString(migration)
@@ -108,7 +130,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
   }
 
   @Test
-  void existingV1SchemaUpgradesInPlaceToV2AndRemainsRepeatSafe(@TempDir Path directory)
+  void existingV1SchemaUpgradesInPlaceToV3AndRemainsRepeatSafe(@TempDir Path directory)
       throws IOException {
     copyMigration(directory, "V1__maintenance_schema.sql");
     String location = "filesystem:" + directory.toAbsolutePath().toString().replace('\\', '/');
@@ -116,8 +138,10 @@ class MaintenanceFlywayMigrationIntegrationTest {
 
     copyMigration(directory, "V2__inventory_source.sql");
     assertThat(flyway(location).migrate().migrationsExecuted).isOne();
+    copyMigration(directory, "V3__logistics_return_shortage.sql");
+    assertThat(flyway(location).migrate().migrationsExecuted).isOne();
     assertThat(flyway(location).migrate().migrationsExecuted).isZero();
-    assertThat(tableNames()).contains("inventory_repair_source");
+    assertThat(tableNames()).contains("inventory_repair_source", "logistics_return_shortage");
     assertThat(constraintDefinition("maintenance_repair", "ck_repair_origin"))
         .contains("INVENTORY");
   }

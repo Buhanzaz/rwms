@@ -16,6 +16,15 @@ public record OAuthClientProperties(List<Client> clients) {
     static final String INVENTORY_SECRET_ENVIRONMENT = "INVENTORY_CLIENT_SECRET";
     static final Set<String> INVENTORY_SCOPES =
             Set.of("warehouse.read", "asset.inventory", "maintenance.inventory");
+    static final String LOGISTICS_CLIENT_ID = "logistics-service";
+    static final String LOGISTICS_AUDIENCE = "rwms-services";
+    static final String LOGISTICS_SECRET_ENVIRONMENT = "LOGISTICS_CLIENT_SECRET";
+    static final Set<String> LOGISTICS_SCOPES = Set.of(
+            "warehouse.logistics",
+            "asset.logistics",
+            "task-board.logistics",
+            "maintenance.logistics",
+            "media.logistics");
 
     public OAuthClientProperties {
         clients = clients == null ? List.of() : List.copyOf(clients);
@@ -71,6 +80,10 @@ public record OAuthClientProperties(List<Client> clients) {
 
         boolean inventoryServiceClient() {
             return INVENTORY_CLIENT_ID.equals(clientId);
+        }
+
+        boolean logisticsServiceClient() {
+            return LOGISTICS_CLIENT_ID.equals(clientId);
         }
 
         @Override

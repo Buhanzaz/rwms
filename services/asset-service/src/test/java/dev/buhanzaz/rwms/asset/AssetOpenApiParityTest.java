@@ -53,7 +53,15 @@ class AssetOpenApiParityTest {
         "/api/internal/asset/v1/maintenance/operation-leases/{id}/renew",
         "/api/internal/asset/v1/maintenance/operation-leases/{id}/release",
         "/api/internal/asset/v1/maintenance/rental-items/{id}/fenced-status",
-
+        "/api/internal/asset/v1/logistics/rental-items/{id}/snapshot",
+        "/api/internal/asset/v1/logistics/operation-leases",
+        "/api/internal/asset/v1/logistics/operation-leases/{id}/renew",
+        "/api/internal/asset/v1/logistics/operation-leases/{id}/release",
+        "/api/internal/asset/v1/logistics/rental-items/{id}/effects",
+        "/api/internal/asset/v1/logistics/equipment-holds",
+        "/api/internal/asset/v1/logistics/equipment-holds/{id}/renew",
+        "/api/internal/asset/v1/logistics/equipment-holds/{id}/commit",
+        "/api/internal/asset/v1/logistics/equipment-holds/{id}/release",
         "/api/internal/asset/v1/inventory/captures",
         "/api/internal/asset/v1/inventory/captures/{captureId}",
         "/api/internal/asset/v1/inventory/captures/{captureId}/members",
@@ -72,7 +80,32 @@ class AssetOpenApiParityTest {
             "WRITE_OFF");
     assertThat(child(schemas, "MaintenanceFencedStatusRequest").toString())
         .doesNotContain("RentalItemStatus", "status=");
-
+    assertThat(list(child(schemas, "LogisticsLeaseOwnerType").get("enum")))
+        .containsExactly(
+            "LOGISTICS_RETURN",
+            "LOGISTICS_SHIPMENT",
+            "LOGISTICS_TRANSFER");
+    assertThat(list(child(schemas, "LogisticsRentalItemAction").get("enum")))
+        .containsExactly(
+            "RETURN_INTAKE",
+            "RETURN_SETTLE_FREE",
+            "RETURN_SETTLE_SHORTAGE",
+            "SHIPMENT_CONFIRM",
+            "TRANSFER_DEPART",
+            "TRANSFER_ARRIVE");
+    assertThat(child(schemas, "LogisticsRentalItemSnapshot").toString())
+        .doesNotContain(
+            "number",
+            "passport",
+            "comment",
+            "identityMatchKey",
+            "equipmentCode",
+            "locationKind");
+    assertThat(child(schemas, "LogisticsFencedEffectRequest").toString())
+        .doesNotContain("RentalItemStatus", "status=");
+    assertThat(paths.keySet().stream().filter(path -> path.contains("/logistics/")).toList())
+        .noneMatch(path -> path.contains("classifier") || path.contains("passport")
+            || path.contains("manual-note") || path.contains("warehouse"));
     assertThat(list(child(schemas, "InventoryCaptureMember").get("required")))
         .contains("assetId", "version", "warehouseId", "status", "displayCanonicalNumber",
             "identityMatchKey", "passportSnapshot", "contentsSnapshot");

@@ -34,6 +34,9 @@ public class SecurityConfiguration {
     boolean bypass = developmentAuthBypass && environment.matchesProfiles("dev") && !production;
     http.authorizeHttpRequests(authorize -> {
       authorize.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();
+      authorize
+          .requestMatchers("/api/internal/maintenance/v1/logistics/**")
+          .hasAuthority("SCOPE_maintenance.logistics");
       if (bypass) authorize.requestMatchers("/api/maintenance/**").permitAll();
       authorize.anyRequest().authenticated();
     });

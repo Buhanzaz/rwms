@@ -10,6 +10,8 @@ import org.springframework.stereotype.Component;
 public class TaskSyncAuthorizer {
   private static final String REQUIRED_SCOPE = "task-board.task-sync";
   private static final String MAINTENANCE_SERVICE = "maintenance-service";
+  private static final String LOGISTICS_SCOPE = "task-board.logistics";
+  private static final String LOGISTICS_SERVICE = "logistics-service";
 
   public String requireTaskSync(Jwt jwt) {
     String clientId = jwt == null ? null : jwt.getClaimAsString("client_id");
@@ -23,6 +25,19 @@ public class TaskSyncAuthorizer {
           "A permitted service credential with exactly task-board.task-sync is required");
     }
     return clientId;
+  }
+
+  /** Stage 8 can create, read and cancel only its dedicated task surface. */
+  public void requireLogisticsTaskAccess(Jwt jwt) {
+    String clientId = jwt == null ? null : jwt.getClaimAsString("client_id");
+    if (jwt == null
+        || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
+        || !LOGISTICS_SERVICE.equals(clientId)
+        || !LOGISTICS_SERVICE.equals(jwt.getSubject())
+        || !scopes(jwt).equals(List.of(LOGISTICS_SCOPE))) {
+      throw new AccessDeniedException(
+          "The logistics-service credential with exactly task-board.logistics is required");
+    }
   }
 
   private static List<String> scopes(Jwt jwt) {

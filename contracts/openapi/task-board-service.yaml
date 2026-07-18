@@ -6,7 +6,8 @@ info:
     Canonical F2 inventory of the active task-board, workforce and queue
     registry HTTP API. All warehouse-scoped operations validate the warehouse
     claim locally. Internal queue-reference operations require a SERVICE
-    principal, queue-registry.write and an allow-listed client_id.
+    principal, queue-registry.write and an allow-listed client_id. The narrow
+    Stage 8 logistics surface registers source-owned preparation tasks only.
 servers:
   - url: /api
 security:
@@ -262,6 +263,72 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /internal/task-board/v1/logistics/preparation-tasks:
+    post:
+      operationId: registerLogisticsPreparationTask
+      description: >-
+        Private only. Requires exactly the logistics-service SERVICE principal
+        with one task-board.logistics scope. externalTaskId is the stable
+        registration identity: the identical request replays the immutable
+        snapshot and changed input conflicts. Logistics cannot select a queue,
+        worker, route or free-form task text; task-board creates the work in
+        its own UNASSIGNED column.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterLogisticsPreparationTaskRequest' }
+      responses:
+        '201':
+          description: Source-owned task registration or identical replay.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LogisticsTaskSnapshot' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /internal/task-board/v1/logistics/preparation-tasks/{externalTaskId}:
+    parameters:
+      - $ref: '#/components/parameters/ExternalTaskId'
+    get:
+      operationId: getLogisticsPreparationTask
+      description: Returns only the logistics-service-owned immutable task/status snapshot.
+      responses:
+        '200':
+          description: Current source-owned logistics preparation task.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LogisticsTaskSnapshot' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /internal/task-board/v1/logistics/preparation-tasks/{externalTaskId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/ExternalTaskId'
+    post:
+      operationId: cancelLogisticsPreparationTask
+      description: >-
+        Cancels only the matching unfinished logistics preparation task. The
+        cancellation reason is a task-board-owned safe code, not caller text.
+        An identical retry returns the current CANCELLED snapshot without a
+        second cancellation event.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CancelLogisticsPreparationTaskRequest' }
+      responses:
+        '200':
+          description: Current source-owned logistics task snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LogisticsTaskSnapshot' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
   /internal/task-board/v1/tasks/{externalTaskId}:
     parameters:
@@ -1010,6 +1077,32 @@ components:
           type: array
           minItems: 1
           items: { $ref: '#/components/schemas/RouteStepRequest' }
+      additionalProperties: false
+    RegisterLogisticsPreparationTaskRequest:
+      type: object
+      required: [warehouseId, externalTaskId]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        externalTaskId: { type: string, format: uuid }
+        plannedDurationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        deadlineAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+      additionalProperties: false
+    CancelLogisticsPreparationTaskRequest:
+      type: object
+      required: [expectedTaskVersion]
+      properties:
+        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
+      additionalProperties: false
+    LogisticsTaskSnapshot:
+      type: object
+      required: [taskId, taskVersion, warehouseId, externalTaskId, status, doneAt]
+      properties:
+        taskId: { type: string, format: uuid }
+        taskVersion: { type: integer, format: int64, minimum: 0 }
+        warehouseId: { type: string, format: uuid }
+        externalTaskId: { type: string, format: uuid }
+        status: { type: string, enum: [ACTIVE, DONE, CANCELLED] }
+        doneAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
       additionalProperties: false
     PreStartUpdateTaskRequest:
       type: object

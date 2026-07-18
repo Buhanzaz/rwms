@@ -49,11 +49,13 @@ type repository interface {
 	ReadOriginal(context.Context, uuid.UUID, string, string, uuid.UUID,
 		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
 	GetAssetScoped(context.Context, uuid.UUID, string, string, uuid.UUID) (persistence.AssetRecord, error)
+	ValidateLogisticsReferences(context.Context, persistence.ValidateLogisticsReferencesCommand) error
 	Rotate(context.Context, persistence.RotateCommand) (persistence.AssetRecord, bool, error)
 }
 
 type tokenValidator interface {
 	Validate(context.Context, string) (auth.Principal, error)
+	ValidateService(context.Context, string) (auth.ServicePrincipal, error)
 }
 
 type objectStore interface {
@@ -105,6 +107,7 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("GET /api/media/v1/assets", server.listOwner)
 	server.mux.HandleFunc("GET /api/media/v1/assets/{mediaId}/original", server.getOriginal)
 	server.mux.HandleFunc("POST /api/media/v1/assets/{mediaId}/rotation", server.rotate)
+	server.mux.HandleFunc("POST /api/internal/media/v1/logistics/references/validate", server.validateLogisticsReferences)
 	server.mux.HandleFunc("/health/live", server.methodNotAllowed)
 	server.mux.HandleFunc("/health/ready", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/upload-sessions", server.methodNotAllowed)
@@ -112,6 +115,7 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("/api/media/v1/assets", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/assets/{mediaId}/original", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/assets/{mediaId}/rotation", server.methodNotAllowed)
+	server.mux.HandleFunc("/api/internal/media/v1/logistics/references/validate", server.methodNotAllowed)
 	server.mux.HandleFunc("/", server.notFound)
 }
 
@@ -139,6 +143,87 @@ func (server *Server) ready(response http.ResponseWriter, request *http.Request)
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]string{"status": "UP"})
+}
+
+type logisticsMediaReferenceRequest struct {
+	MediaID    string `json:"mediaId"`
+	Generation int    `json:"generation"`
+}
+
+type validateLogisticsReferencesRequest struct {
+	OwnerType   string                           `json:"ownerType"`
+	DocumentID  string                           `json:"documentId"`
+	LineID      string                           `json:"lineId"`
+	WarehouseID string                           `json:"warehouseId"`
+	References  []logisticsMediaReferenceRequest `json:"references"`
+}
+
+type logisticsMediaReferenceResponse struct {
+	MediaID    uuid.UUID `json:"mediaId"`
+	Generation int       `json:"generation"`
+}
+
+type validateLogisticsReferencesResponse struct {
+	OwnerType   string                            `json:"ownerType"`
+	DocumentID  uuid.UUID                         `json:"documentId"`
+	LineID      uuid.UUID                         `json:"lineId"`
+	WarehouseID uuid.UUID                         `json:"warehouseId"`
+	References  []logisticsMediaReferenceResponse `json:"references"`
+}
+
+// validateLogisticsReferences proves only the caller-supplied opaque
+// mediaId/generation references. It never returns an object key, signed URL,
+// filename, content type, status or any other media-policy detail.
+func (server *Server) validateLogisticsReferences(response http.ResponseWriter, request *http.Request) {
+	if !server.logisticsPrincipal(response, request) {
+		return
+	}
+	var body validateLogisticsReferencesRequest
+	if !server.decode(response, request, &body) {
+		return
+	}
+	documentID, documentErr := uuid.Parse(body.DocumentID)
+	lineID, lineErr := uuid.Parse(body.LineID)
+	warehouseID, warehouseErr := uuid.Parse(body.WarehouseID)
+	if documentErr != nil || lineErr != nil || warehouseErr != nil || !persistence.IsLogisticsOwnerType(body.OwnerType) ||
+		len(body.References) < 1 || len(body.References) > 20 {
+		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_LOGISTICS_REFERENCE", "Invalid logistics media reference request")
+		return
+	}
+	references := make([]persistence.ReadyMediaReference, 0, len(body.References))
+	responseReferences := make([]logisticsMediaReferenceResponse, 0, len(body.References))
+	seen := make(map[uuid.UUID]struct{}, len(body.References))
+	for _, reference := range body.References {
+		mediaID, err := uuid.Parse(reference.MediaID)
+		if err != nil || reference.Generation <= 0 {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_LOGISTICS_REFERENCE", "Invalid logistics media reference request")
+			return
+		}
+		if _, duplicate := seen[mediaID]; duplicate {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_LOGISTICS_REFERENCE", "Invalid logistics media reference request")
+			return
+		}
+		seen[mediaID] = struct{}{}
+		references = append(references, persistence.ReadyMediaReference{MediaID: mediaID, Generation: reference.Generation})
+		responseReferences = append(responseReferences, logisticsMediaReferenceResponse{MediaID: mediaID, Generation: reference.Generation})
+	}
+	err := server.repository.ValidateLogisticsReferences(request.Context(), persistence.ValidateLogisticsReferencesCommand{
+		OwnerType: body.OwnerType, OwnerID: persistence.LogisticsOwnerID(documentID, lineID),
+		WarehouseID: warehouseID, References: references,
+	})
+	if errors.Is(err, persistence.ErrReferenceNotReady) {
+		server.problem(response, request, http.StatusConflict, "MEDIA_REFERENCE_NOT_READY", "A media reference is not ready for this logistics owner")
+		return
+	}
+	if err != nil {
+		server.repositoryProblem(response, request, err)
+		return
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	writeJSON(response, http.StatusOK, validateLogisticsReferencesResponse{
+		OwnerType: body.OwnerType, DocumentID: documentID, LineID: lineID,
+		WarehouseID: warehouseID, References: responseReferences,
+	})
 }
 
 type createUploadRequest struct {
@@ -614,6 +699,23 @@ func (server *Server) principal(response http.ResponseWriter, request *http.Requ
 		return auth.Principal{}, false
 	}
 	return principal, true
+}
+
+func (server *Server) logisticsPrincipal(response http.ResponseWriter, request *http.Request) bool {
+	principal, err := server.auth.ValidateService(request.Context(), request.Header.Get("Authorization"))
+	if err == nil {
+		err = principal.RequireExact("logistics-service", "media.logistics")
+	}
+	if err == nil {
+		return true
+	}
+	status := http.StatusUnauthorized
+	code := "MEDIA_UNAUTHORIZED"
+	if errors.Is(err, auth.ErrForbidden) {
+		status, code = http.StatusForbidden, "MEDIA_FORBIDDEN"
+	}
+	server.problem(response, request, status, code, "Access is denied")
+	return false
 }
 
 func (server *Server) decode(response http.ResponseWriter, request *http.Request, target any) bool {

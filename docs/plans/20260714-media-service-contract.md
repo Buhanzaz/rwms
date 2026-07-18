@@ -70,3 +70,20 @@ in the full-screen viewer.
 - The active-stage pointer still names W1/Stage 2 in the current working tree.
   This user-approved combined service contract must be reconciled into the
   roadmap and pointer without claiming Stage 2 completed.
+
+## Stage 8 private logistics readiness boundary (2026-07-17)
+
+`POST /api/internal/media/v1/logistics/references/validate` is a private,
+read-only service-to-service boundary. It accepts only an issuer/audience-valid
+`SERVICE` JWT where `sub=client_id=logistics-service` and the one scope is
+`media.logistics`. A USER token, another client, a combined or foreign scope,
+or a malformed service identity fails closed.
+
+The caller supplies a declared logistics owner type, document/line/warehouse
+UUIDs and one to twenty unique opaque media ID/generation pairs. The service
+derives the owner ID from the document line, verifies the exact owner,
+warehouse and current `READY` generation, and responds only with those opaque
+identifiers. It does not reveal object keys, URLs, file metadata or retention
+policy. The receiver neither creates uploads/bindings nor changes media state,
+schema, outbox or Kafka topology; its direct base-asset query does not call
+the concurrent Stage 7 inventory owner-proof projection.

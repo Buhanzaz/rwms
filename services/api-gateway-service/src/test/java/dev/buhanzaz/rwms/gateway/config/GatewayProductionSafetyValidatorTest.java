@@ -69,7 +69,7 @@ class GatewayProductionSafetyValidatorTest {
         .hasMessageContaining("HTTPS");
 
     GatewayProperties loopback = validProperties();
-    loopback.getRoutes().setInventoryUri(URI.create("http://127.0.0.1:8089"));
+    loopback.getRoutes().setLogisticsUri(URI.create("http://127.0.0.1:8090"));
     assertThatThrownBy(() -> new GatewayProductionSafetyValidator(loopback, production).validate())
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("loopback");
@@ -85,6 +85,7 @@ class GatewayProductionSafetyValidatorTest {
     properties.getRoutes().setMaintenanceUri(URI.create("http://maintenance-service:8087"));
     properties.getRoutes().setMediaUri(URI.create("http://media-service:8085"));
     properties.getRoutes().setInventoryUri(URI.create("http://inventory-service:8089"));
+    properties.getRoutes().setLogisticsUri(URI.create("http://logistics-service:8090"));
     properties.getSecurity().setIssuer("https://panel.example/auth");
     properties.getSecurity().setAudience("rwms-services");
     properties.getSecurity().setJwkSetUri(URI.create("http://auth-service:9000/oauth2/jwks"));

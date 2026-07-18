@@ -16,6 +16,7 @@ public class AssetAuthorizer {
   private static final UUID DEV_SUBJECT = UUID.fromString("00000000-0000-0000-0000-0000000000d5");
   private static final String MAINTENANCE_CLIENT_ID = "maintenance-service";
   private static final String INVENTORY_CLIENT_ID = "inventory-service";
+  private static final String LOGISTICS_CLIENT_ID = "logistics-service";
   private final boolean developmentPublicBypass;
 
   public AssetAuthorizer(
@@ -103,6 +104,22 @@ public class AssetAuthorizer {
     return serviceSubjectId(INVENTORY_CLIENT_ID);
   }
 
+  /** Stage 8 may reach only the dedicated logistics lease/effect/hold surface. */
+  public void requireLogisticsAssetAccess(Jwt jwt) {
+    if (jwt == null
+        || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
+        || !LOGISTICS_CLIENT_ID.equals(jwt.getClaimAsString("client_id"))
+        || !LOGISTICS_CLIENT_ID.equals(jwt.getSubject())
+        || !exactScope(jwt, "asset.logistics")) {
+      throw new AccessDeniedException(
+          "The logistics-service credential with exactly asset.logistics is required");
+    }
+  }
+
+  public UUID logisticsSubjectId(Jwt jwt) {
+    requireLogisticsAssetAccess(jwt);
+    return serviceSubjectId(LOGISTICS_CLIENT_ID);
+  }
 
   public UUID subjectId(Jwt jwt) {
     if (developmentPublicBypass) return DEV_SUBJECT;
