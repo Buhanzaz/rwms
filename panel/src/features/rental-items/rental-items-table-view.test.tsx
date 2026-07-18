@@ -81,49 +81,21 @@ describe("rental items table cells", () => {
     expect(screen.queryByRole("button")).toBeNull()
   })
 
-  it("shows only Add when the cabin has no contents", async () => {
-    const user = userEvent.setup()
-    const onAddContents = vi.fn()
+  it("renders empty contents without a browser-backed add control", () => {
+    render(<ContentsCell item={rentalItem([])} />)
 
-    render(
-      <ContentsCell
-        item={rentalItem([])}
-        open={false}
-        onOpenChange={vi.fn()}
-        onAddContents={onAddContents}
-        onMoveToRentalItem={vi.fn()}
-        onMoveToStock={vi.fn()}
-      />
-    )
-
-    await user.click(screen.getByRole("button", { name: "Добавить" }))
-
-    expect(onAddContents).toHaveBeenCalledOnce()
-    expect(screen.queryByRole("button", { name: /^Переместить/ })).toBeNull()
+    expect(screen.getByText("Не указано")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Добавить" })).toBeNull()
   })
 
-  it("preserves both move actions when contents exist", async () => {
+  it("shows contents read-only without browser-backed move actions", async () => {
     const user = userEvent.setup()
-    const onMoveToRentalItem = vi.fn()
-    const onMoveToStock = vi.fn()
 
-    render(
-      <ContentsCell
-        item={rentalItem([{ name: "Стол", quantity: 2 }])}
-        open
-        onOpenChange={vi.fn()}
-        onAddContents={vi.fn()}
-        onMoveToRentalItem={onMoveToRentalItem}
-        onMoveToStock={onMoveToStock}
-      />
-    )
+    render(<ContentsCell item={rentalItem([{ name: "Стол", quantity: 2 }])} />)
 
-    await user.click(screen.getByRole("button", { name: "Переместить" }))
-    await user.click(
-      screen.getByRole("button", { name: "Переместить на склад" })
-    )
+    await user.click(screen.getByRole("button", { name: "Стол 2 шт." }))
 
-    expect(onMoveToRentalItem).toHaveBeenCalledOnce()
-    expect(onMoveToStock).toHaveBeenCalledOnce()
+    expect(screen.getByText(/Изменение наполнения будет доступно/)).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /^Переместить/ })).toBeNull()
   })
 })

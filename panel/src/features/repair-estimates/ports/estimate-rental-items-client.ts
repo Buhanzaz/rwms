@@ -12,9 +12,4 @@ export interface EstimateRentalItemsClient {
     warehouseId: string,
     rentalItemId: string
   ): Promise<EstimateRentalItemOptionDto | null>
-  resolveLinkedReturnEstimate(
-    warehouseId: string,
-    rentalItemId: string,
-    estimateId: string
-  ): Promise<EstimateRentalItemOptionDto | null>
 }

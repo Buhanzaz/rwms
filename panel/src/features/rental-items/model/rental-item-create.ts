@@ -1,8 +1,4 @@
-import type {
-  RentalItemContentsItemDto,
-  RentalItemPhotoVariantDto,
-  RentalItemStatus,
-} from "@/features/rental-items/model/rental-item"
+import type { RentalItemStatus } from "@/features/rental-items/model/rental-item"
 
 export const NEW_RENTAL_ITEM_CATEGORY = "Новая"
 export const NEW_RENTAL_ITEM_STATUS = "NEW" satisfies RentalItemStatus
@@ -103,49 +99,6 @@ export type SanblockSettings = {
   toilets: number
   sinks: number
   showers: number
-}
-
-export type RentalItemCreationPhoto = {
-  id: string
-  name: string
-  sourceDataUrl: string
-  url: string
-  rotation: 0 | 90 | 180 | 270
-  variants: {
-    small: RentalItemPhotoVariantDto
-    largeWebp: RentalItemPhotoVariantDto
-  }
-  createdAt: string
-}
-
-export type CreateRentalItemPayload = {
-  warehouseId: string
-  number: string
-  type: RentalItemCreationType
-  dimensions: string
-  finishing: RentalItemFinishing
-  category: string
-  characteristics: string[]
-  photos: RentalItemCreationPhoto[]
-  linoleum: boolean
-  status: RentalItemStatus
-  contentsItems?: RentalItemContentsItemDto[]
-  shipmentDate?: string | null
-  tenant?: string | null
-}
-
-export type CreateInventoryRentalItemPayload = {
-  warehouseId: string
-  inventoryId: string
-  findingId: string
-  condition: "NEW" | "USED"
-  number: string
-  type: RentalItemCreationType
-  dimensions: string
-  finishing: RentalItemFinishing
-  category: (typeof INVENTORY_RENTAL_ITEM_CATEGORIES)[number]
-  characteristics: string[]
-  linoleum: boolean
 }
 
 export function getRentalItemDimensionsForType(

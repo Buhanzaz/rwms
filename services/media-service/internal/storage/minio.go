@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
-	"time"
 
 	"dev.buhanzaz.rwms/media-service/internal/media"
 	"github.com/minio/minio-go/v7"
@@ -24,7 +22,8 @@ var (
 )
 
 // MinIOOptions contains server-only storage credentials. They must never be
-// serialized into an API response; callers receive signed URLs instead.
+// serialized into an API response; all public object traffic is streamed by
+// the authenticated same-origin media API.
 type MinIOOptions struct {
 	Endpoint  string
 	AccessKey string
@@ -36,11 +35,6 @@ type MinIOOptions struct {
 type MinIOObjectStore struct {
 	client *minio.Client
 	bucket string
-}
-
-type UploadPolicy struct {
-	URL    *url.URL
-	Fields map[string]string
 }
 
 func NewMinIOObjectStore(options MinIOOptions) (*MinIOObjectStore, error) {
@@ -126,54 +120,45 @@ func (store *MinIOObjectStore) PutVersion(ctx context.Context, key string, sourc
 	return media.ObjectMetadata{SizeBytes: info.Size, ContentType: contentType, ETag: strings.Trim(info.ETag, "\""), VersionID: info.VersionID}, nil
 }
 
-// SignedUploadPolicy constrains ingress to one opaque key, exact content type,
-// exact length, and the caller's declared SHA-256 metadata. Bucket versioning
-// then makes the finalized version immutable even if this short-lived policy is
-// replayed before it expires.
-func (store *MinIOObjectStore) SignedUploadPolicy(
+// PutIngressVersion streams one browser upload to the private versioned bucket.
+// The checksum is stored as immutable object metadata and is verified again by
+// the API before the upload session is finalized.
+func (store *MinIOObjectStore) PutIngressVersion(
 	ctx context.Context,
-	key, contentType, checksumSHA256 string,
-	contentLength int64,
-	expiresIn time.Duration,
-) (UploadPolicy, error) {
-	if strings.TrimSpace(key) == "" || strings.TrimSpace(contentType) == "" {
-		return UploadPolicy{}, fmt.Errorf("upload key and content type are required")
-	}
-	if contentLength <= 0 || expiresIn <= 0 {
-		return UploadPolicy{}, fmt.Errorf("upload length and expiry must be positive")
+	key string,
+	source io.Reader,
+	sizeBytes int64,
+	contentType, checksumSHA256 string,
+) (media.ObjectMetadata, error) {
+	if sizeBytes <= 0 || strings.TrimSpace(key) == "" || strings.TrimSpace(contentType) == "" {
+		return media.ObjectMetadata{}, fmt.Errorf("ingress object metadata is required")
 	}
 	if len(checksumSHA256) != 64 {
-		return UploadPolicy{}, fmt.Errorf("upload checksum must be lowercase SHA-256")
+		return media.ObjectMetadata{}, fmt.Errorf("ingress checksum must be lowercase SHA-256")
 	}
 	for _, character := range checksumSHA256 {
 		if !(character >= '0' && character <= '9') && !(character >= 'a' && character <= 'f') {
-			return UploadPolicy{}, fmt.Errorf("upload checksum must be lowercase SHA-256")
+			return media.ObjectMetadata{}, fmt.Errorf("ingress checksum must be lowercase SHA-256")
 		}
 	}
-	policy := minio.NewPostPolicy()
-	if err := policy.SetBucket(store.bucket); err != nil {
-		return UploadPolicy{}, fmt.Errorf("constrain upload bucket: %w", err)
-	}
-	if err := policy.SetKey(key); err != nil {
-		return UploadPolicy{}, fmt.Errorf("constrain upload key: %w", err)
-	}
-	if err := policy.SetContentType(contentType); err != nil {
-		return UploadPolicy{}, fmt.Errorf("constrain upload content type: %w", err)
-	}
-	if err := policy.SetContentLengthRange(contentLength, contentLength); err != nil {
-		return UploadPolicy{}, fmt.Errorf("constrain upload length: %w", err)
-	}
-	if err := policy.SetUserMetadata("sha256", checksumSHA256); err != nil {
-		return UploadPolicy{}, fmt.Errorf("constrain upload checksum: %w", err)
-	}
-	if err := policy.SetExpires(time.Now().UTC().Add(expiresIn)); err != nil {
-		return UploadPolicy{}, fmt.Errorf("constrain upload expiry: %w", err)
-	}
-	signedURL, fields, err := store.client.PresignedPostPolicy(ctx, policy)
+	info, err := store.client.PutObject(ctx, store.bucket, key, source, sizeBytes, minio.PutObjectOptions{
+		ContentType: contentType,
+		UserMetadata: map[string]string{
+			"sha256": checksumSHA256,
+		},
+	})
 	if err != nil {
-		return UploadPolicy{}, fmt.Errorf("sign constrained upload policy: %w", err)
+		return media.ObjectMetadata{}, fmt.Errorf("put MinIO ingress object %q: %w", key, err)
 	}
-	return UploadPolicy{URL: signedURL, Fields: fields}, nil
+	if info.VersionID == "" || strings.TrimSpace(info.ETag) == "" {
+		return media.ObjectMetadata{}, fmt.Errorf("MinIO did not return immutable ingress metadata")
+	}
+	return media.ObjectMetadata{
+		SizeBytes:   info.Size,
+		ContentType: contentType,
+		ETag:        strings.Trim(info.ETag, "\""),
+		VersionID:   info.VersionID,
+	}, nil
 }
 
 func (store *MinIOObjectStore) EnsureVersioning(ctx context.Context) error {
@@ -185,23 +170,6 @@ func (store *MinIOObjectStore) EnsureVersioning(ctx context.Context) error {
 		return fmt.Errorf("MinIO bucket versioning must be Enabled")
 	}
 	return nil
-}
-
-func (store *MinIOObjectStore) SignedVersionDownloadURL(
-	ctx context.Context,
-	key, versionID string,
-	expiresIn time.Duration,
-) (*url.URL, error) {
-	if expiresIn <= 0 || strings.TrimSpace(versionID) == "" {
-		return nil, fmt.Errorf("download URL expiry and version ID are required")
-	}
-	parameters := make(url.Values)
-	parameters.Set("versionId", versionID)
-	signedURL, err := store.client.PresignedGetObject(ctx, store.bucket, key, expiresIn, parameters)
-	if err != nil {
-		return nil, fmt.Errorf("sign pinned download URL for %q: %w", key, err)
-	}
-	return signedURL, nil
 }
 
 func metadata(info minio.ObjectInfo) media.ObjectMetadata {

@@ -83,8 +83,12 @@ public class InventoryController {
   }
 
   @GetMapping("/sessions/active")
-  public SessionView active(@AuthenticationPrincipal Jwt jwt, @RequestParam UUID warehouseId) {
-    return inventory.active(jwt, warehouseId);
+  public ResponseEntity<SessionView> active(
+      @AuthenticationPrincipal Jwt jwt, @RequestParam UUID warehouseId) {
+    return inventory
+        .active(jwt, warehouseId)
+        .map(ResponseEntity::ok)
+        .orElseGet(() -> ResponseEntity.noContent().build());
   }
 
   @GetMapping("/sessions/{inventoryId}")

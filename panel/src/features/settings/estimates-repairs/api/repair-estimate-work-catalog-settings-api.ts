@@ -4,7 +4,10 @@ import {
   getRepairEstimateCatalogSection,
   saveRepairEstimateCatalogNode,
 } from "@/features/settings/estimates-repairs/api/repair-estimate-catalog-store"
-import type { RepairEstimateCatalogNodeMutation } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
+import type {
+  RepairEstimateCatalogNodeMutation,
+  RepairEstimateCatalogRequest,
+} from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
 
 const REPAIR_ESTIMATE_WORK_CATALOG_SETTINGS: EstimateCatalogSettingsActionDto =
   {
@@ -22,27 +25,25 @@ export async function getRepairEstimateWorkCatalogSettings() {
   return REPAIR_ESTIMATE_WORK_CATALOG_SETTINGS
 }
 
-export async function getRepairEstimateWorkCatalogMock(warehouseId?: string) {
-  return getRepairEstimateCatalogSection("works", warehouseId)
+export async function getRepairEstimateWorkCatalog(
+  request: RepairEstimateCatalogRequest
+) {
+  return getRepairEstimateCatalogSection(request, "works")
 }
 
 export async function saveRepairEstimateWorkCatalogItem(
-  input: RepairEstimateCatalogNodeMutation,
-  warehouseId?: string
+  request: RepairEstimateCatalogRequest,
+  input: RepairEstimateCatalogNodeMutation
 ) {
-  return saveRepairEstimateCatalogNode(
-    {
-      ...input,
-      nodeType: "WORK",
-      furnitureCategory: false,
-    },
-    warehouseId
-  )
+  return saveRepairEstimateCatalogNode(request, {
+    ...input,
+    nodeType: "WORK",
+  })
 }
 
 export async function deleteRepairEstimateWorkCatalogItem(
-  id: string,
-  warehouseId?: string
+  request: RepairEstimateCatalogRequest,
+  id: string
 ) {
-  return deleteRepairEstimateCatalogNode(id, warehouseId)
+  return deleteRepairEstimateCatalogNode(request, id)
 }

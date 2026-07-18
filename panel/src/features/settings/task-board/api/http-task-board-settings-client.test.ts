@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import { HttpTaskBoardSettingsClient } from "@/features/settings/task-board/api/http-task-board-settings-client"
 
 describe("HttpTaskBoardSettingsClient gateway routes", () => {
-  it("uses the public task-board service prefix", async () => {
+  it("uses the same-origin public task-board prefix", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
       async () =>
         new Response("[]", {

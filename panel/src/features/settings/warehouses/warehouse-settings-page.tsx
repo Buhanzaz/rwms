@@ -29,7 +29,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
@@ -41,6 +41,7 @@ import {
 } from "@/components/ui/dialog"
 import {
   Field,
+  FieldContent,
   FieldError,
   FieldGroup,
   FieldLabel,
@@ -49,6 +50,7 @@ import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -58,46 +60,16 @@ import {
   getWarehouseMutationError,
   isWarehouseConflict,
 } from "@/features/settings/warehouses/warehouse-settings-errors"
+import {
+  createWarehouseFormValues,
+  parseWarehouseForm,
+  type WarehouseFormValues,
+} from "@/features/settings/warehouses/warehouse-settings-form"
 import { useWarehouse } from "@/hooks/use-warehouse"
 
 const WAREHOUSES_QUERY_KEY = ["warehouse-settings"] as const
 
 type ActivityFilter = "all" | "active" | "inactive"
-
-function makeWriteInput(
-  code: string,
-  name: string,
-  city: string,
-  address: string,
-  timeZone: string,
-  active: boolean,
-  sortOrder: string
-): WarehouseWriteInput | null {
-  const normalizedSortOrder = sortOrder.trim()
-  const parsedSortOrder = normalizedSortOrder
-    ? Number(normalizedSortOrder)
-    : null
-  if (
-    !code.trim() ||
-    !name.trim() ||
-    !city.trim() ||
-    !timeZone.trim() ||
-    (parsedSortOrder !== null &&
-      (!Number.isInteger(parsedSortOrder) || parsedSortOrder < 0))
-  ) {
-    return null
-  }
-
-  return {
-    code: code.trim().toUpperCase(),
-    name: name.trim(),
-    city: city.trim(),
-    address: address.trim() || null,
-    timeZone: timeZone.trim(),
-    active,
-    sortOrder: parsedSortOrder,
-  }
-}
 
 function WarehouseEditorDialog({
   warehouse,
@@ -110,42 +82,32 @@ function WarehouseEditorDialog({
   pending: boolean
   serverError: string | null
   onOpenChange: (open: boolean) => void
-  onSave: (input: WarehouseWriteInput) => Promise<void>
+  onSave: (input: WarehouseWriteInput) => void
 }) {
-  const [code, setCode] = useState(warehouse?.code ?? "")
-  const [name, setName] = useState(warehouse?.name ?? "")
-  const [city, setCity] = useState(warehouse?.city ?? "")
-  const [address, setAddress] = useState(warehouse?.address ?? "")
-  const [timeZone, setTimeZone] = useState(
-    warehouse?.timeZone ?? "Europe/Moscow"
-  )
-  const [active, setActive] = useState(warehouse?.active ?? true)
-  const [sortOrder, setSortOrder] = useState(
-    warehouse?.sortOrder === null || warehouse?.sortOrder === undefined
-      ? ""
-      : String(warehouse.sortOrder)
+  const [values, setValues] = useState<WarehouseFormValues>(() =>
+    createWarehouseFormValues(warehouse)
   )
   const [validationError, setValidationError] = useState<string | null>(null)
+  const formError = validationError ?? serverError
+
+  function updateValue<Key extends keyof WarehouseFormValues>(
+    key: Key,
+    value: WarehouseFormValues[Key]
+  ) {
+    setValues((current) => ({ ...current, [key]: value }))
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const input = makeWriteInput(
-      code,
-      name,
-      city,
-      address,
-      timeZone,
-      active,
-      sortOrder
-    )
-    if (input === null) {
-      setValidationError(
-        "Укажите код, название, город, временную зону и целый неотрицательный порядок."
-      )
+
+    const result = parseWarehouseForm(values)
+    if (result.input === null) {
+      setValidationError(result.error)
       return
     }
+
     setValidationError(null)
-    await onSave(input)
+    onSave(result.input)
   }
 
   return (
@@ -154,96 +116,113 @@ function WarehouseEditorDialog({
         <DialogHeader>
           <DialogTitle>{warehouse ? "Склад" : "Новый склад"}</DialogTitle>
           <DialogDescription>
-            Каноническая идентичность склада. Топология и locations в этом этапе
-            не редактируются.
+            Идентичность, метаданные и временная зона. Топология склада здесь не
+            редактируется.
           </DialogDescription>
         </DialogHeader>
-        <form
-          onSubmit={(event) => void submit(event)}
-          className="flex flex-col gap-6"
-        >
+
+        <form onSubmit={(event) => void submit(event)}>
           <FieldGroup className="grid gap-4 md:grid-cols-2">
-            <Field>
+            <Field data-invalid={formError !== null || undefined}>
               <FieldLabel htmlFor="warehouse-code">Код</FieldLabel>
               <Input
                 id="warehouse-code"
-                value={code}
+                value={values.code}
                 maxLength={64}
-                onChange={(event) => setCode(event.target.value)}
+                onChange={(event) => updateValue("code", event.target.value)}
                 placeholder="WH_NORTH"
                 required
+                aria-invalid={formError !== null}
               />
             </Field>
-            <Field>
+            <Field data-invalid={formError !== null || undefined}>
               <FieldLabel htmlFor="warehouse-name">Название</FieldLabel>
               <Input
                 id="warehouse-name"
-                value={name}
+                value={values.name}
                 maxLength={255}
-                onChange={(event) => setName(event.target.value)}
+                onChange={(event) => updateValue("name", event.target.value)}
                 required
+                aria-invalid={formError !== null}
               />
             </Field>
-            <Field>
+            <Field data-invalid={formError !== null || undefined}>
               <FieldLabel htmlFor="warehouse-city">Город</FieldLabel>
               <Input
                 id="warehouse-city"
-                value={city}
+                value={values.city}
                 maxLength={255}
-                onChange={(event) => setCity(event.target.value)}
+                onChange={(event) => updateValue("city", event.target.value)}
                 required
+                aria-invalid={formError !== null}
               />
             </Field>
-            <Field>
+            <Field data-invalid={formError !== null || undefined}>
               <FieldLabel htmlFor="warehouse-time-zone">
                 Временная зона
               </FieldLabel>
               <Input
                 id="warehouse-time-zone"
-                value={timeZone}
+                value={values.timeZone}
                 maxLength={64}
-                onChange={(event) => setTimeZone(event.target.value)}
+                onChange={(event) =>
+                  updateValue("timeZone", event.target.value)
+                }
                 placeholder="Europe/Moscow"
                 required
+                aria-invalid={formError !== null}
               />
             </Field>
-            <Field className="md:col-span-2">
+            <Field
+              className="md:col-span-2"
+              data-invalid={formError !== null || undefined}
+            >
               <FieldLabel htmlFor="warehouse-address">Адрес</FieldLabel>
               <Input
                 id="warehouse-address"
-                value={address}
+                value={values.address}
                 maxLength={1000}
-                onChange={(event) => setAddress(event.target.value)}
+                onChange={(event) => updateValue("address", event.target.value)}
                 placeholder="Необязательно"
+                aria-invalid={formError !== null}
               />
             </Field>
-            <Field>
+            <Field data-invalid={formError !== null || undefined}>
               <FieldLabel htmlFor="warehouse-sort-order">Порядок</FieldLabel>
               <Input
                 id="warehouse-sort-order"
                 type="number"
                 min={0}
                 step={1}
-                value={sortOrder}
-                onChange={(event) => setSortOrder(event.target.value)}
+                value={values.sortOrder}
+                onChange={(event) =>
+                  updateValue("sortOrder", event.target.value)
+                }
                 placeholder="Необязательно"
+                aria-invalid={formError !== null}
               />
             </Field>
             {warehouse ? (
               <Field orientation="horizontal" className="self-end pb-2">
                 <Checkbox
                   id="warehouse-active"
-                  checked={active}
-                  onCheckedChange={(value) => setActive(value === true)}
+                  checked={values.active}
+                  onCheckedChange={(value) =>
+                    updateValue("active", value === true)
+                  }
                 />
-                <FieldLabel htmlFor="warehouse-active">Активен</FieldLabel>
+                <FieldContent>
+                  <FieldLabel htmlFor="warehouse-active">Активен</FieldLabel>
+                </FieldContent>
               </Field>
             ) : null}
           </FieldGroup>
-          {validationError || serverError ? (
-            <FieldError>{validationError ?? serverError}</FieldError>
+
+          {formError ? (
+            <FieldError className="mt-4">{formError}</FieldError>
           ) : null}
-          <DialogFooter>
+
+          <DialogFooter className="mt-6">
             <Button
               type="button"
               variant="outline"
@@ -259,6 +238,55 @@ function WarehouseEditorDialog({
         </form>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function WarehouseActions({
+  warehouse,
+  pending,
+  onEdit,
+  onDeactivate,
+  onReactivate,
+}: {
+  warehouse: WarehouseInfo
+  pending: boolean
+  onEdit: (warehouse: WarehouseInfo) => void
+  onDeactivate: (warehouse: WarehouseInfo) => void
+  onReactivate: (warehouse: WarehouseInfo) => void
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={pending}
+        onClick={() => onEdit(warehouse)}
+      >
+        Изменить
+      </Button>
+      {warehouse.active ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={pending}
+          onClick={() => onDeactivate(warehouse)}
+        >
+          Деактивировать
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={pending}
+          onClick={() => onReactivate(warehouse)}
+        >
+          Активировать
+        </Button>
+      )}
+    </div>
   )
 }
 
@@ -286,9 +314,18 @@ export function WarehouseSettingsPage() {
     ])
   }
 
+  async function refreshAfterConflict() {
+    await refreshAfterMutation()
+    setEditor(null)
+    setDeactivating(null)
+  }
+
   const saveMutation = useMutation({
     mutationFn: async (input: WarehouseWriteInput) => {
-      if (accessToken === null) throw new Error("Сессия завершена.")
+      if (accessToken === null) {
+        throw new Error("Сессия завершена.")
+      }
+
       if (editor === "new") {
         const createInput: WarehouseCreateInput = {
           code: input.code,
@@ -298,13 +335,13 @@ export function WarehouseSettingsPage() {
           timeZone: input.timeZone,
           sortOrder: input.sortOrder,
         }
-        return createWarehouse(
-          accessToken,
-          crypto.randomUUID(),
-          createInput satisfies WarehouseCreateInput
-        )
+        return createWarehouse(accessToken, crypto.randomUUID(), createInput)
       }
-      if (editor === null) throw new Error("Склад не выбран.")
+
+      if (editor === null) {
+        throw new Error("Склад не выбран.")
+      }
+
       return replaceWarehouse(accessToken, editor.id, editor.version, input)
     },
     onSuccess: async () => {
@@ -315,12 +352,13 @@ export function WarehouseSettingsPage() {
     },
     onError: async (error) => {
       const message = getWarehouseMutationError(error)
+
       if (isWarehouseConflict(error)) {
-        await refreshAfterMutation()
-        setEditor(null)
+        await refreshAfterConflict()
       } else {
         setServerError(message)
       }
+
       toast.error(message)
     },
   })
@@ -330,6 +368,7 @@ export function WarehouseSettingsPage() {
       if (accessToken === null || deactivating === null) {
         throw new Error("Сессия завершена или склад не выбран.")
       }
+
       await deactivateWarehouse(
         accessToken,
         deactivating.id,
@@ -344,18 +383,54 @@ export function WarehouseSettingsPage() {
     },
     onError: async (error) => {
       const message = getWarehouseMutationError(error)
+
       if (isWarehouseConflict(error)) {
-        await refreshAfterMutation()
-        setDeactivating(null)
+        await refreshAfterConflict()
       } else {
         setServerError(message)
       }
+
+      toast.error(message)
+    },
+  })
+
+  const reactivateMutation = useMutation({
+    mutationFn: async (warehouse: WarehouseInfo) => {
+      if (accessToken === null) {
+        throw new Error("Сессия завершена.")
+      }
+
+      return replaceWarehouse(accessToken, warehouse.id, warehouse.version, {
+        code: warehouse.code,
+        name: warehouse.name,
+        city: warehouse.city,
+        address: warehouse.address,
+        timeZone: warehouse.timeZone,
+        active: true,
+        sortOrder: warehouse.sortOrder,
+      })
+    },
+    onSuccess: async () => {
+      await refreshAfterMutation()
+      setServerError(null)
+      toast.success("Склад активирован.")
+    },
+    onError: async (error) => {
+      const message = getWarehouseMutationError(error)
+
+      if (isWarehouseConflict(error)) {
+        await refreshAfterConflict()
+      } else {
+        setServerError(message)
+      }
+
       toast.error(message)
     },
   })
 
   const visibleWarehouses = useMemo(() => {
     const normalizedSearch = search.trim().toLocaleLowerCase("ru")
+
     return (warehousesQuery.data ?? []).filter((warehouse) => {
       const matchesActivity =
         activityFilter === "all" ||
@@ -371,6 +446,7 @@ export function WarehouseSettingsPage() {
         ].some((value) =>
           value.toLocaleLowerCase("ru").includes(normalizedSearch)
         )
+
       return matchesActivity && matchesSearch
     })
   }, [activityFilter, search, warehousesQuery.data])
@@ -378,11 +454,24 @@ export function WarehouseSettingsPage() {
   if (!canManage) {
     return (
       <Card size="sm">
+        <CardHeader>
+          <CardTitle>Склады</CardTitle>
+        </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
           Управление складами доступно только системному администратору.
         </CardContent>
       </Card>
     )
+  }
+
+  const isMutating =
+    saveMutation.isPending ||
+    deactivateMutation.isPending ||
+    reactivateMutation.isPending
+
+  function openEditor(nextEditor: WarehouseInfo | "new") {
+    setServerError(null)
+    setEditor(nextEditor)
   }
 
   return (
@@ -396,13 +485,7 @@ export function WarehouseSettingsPage() {
           </p>
         </PageToolbarContent>
         <PageToolbarActions>
-          <Button
-            type="button"
-            onClick={() => {
-              setServerError(null)
-              setEditor("new")
-            }}
-          >
+          <Button type="button" onClick={() => openEditor("new")}>
             Создать склад
           </Button>
         </PageToolbarActions>
@@ -428,9 +511,11 @@ export function WarehouseSettingsPage() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">Все статусы</SelectItem>
-            <SelectItem value="active">Активные</SelectItem>
-            <SelectItem value="inactive">Неактивные</SelectItem>
+            <SelectGroup>
+              <SelectItem value="all">Все статусы</SelectItem>
+              <SelectItem value="active">Активные</SelectItem>
+              <SelectItem value="inactive">Неактивные</SelectItem>
+            </SelectGroup>
           </SelectContent>
         </Select>
       </div>
@@ -439,8 +524,11 @@ export function WarehouseSettingsPage() {
         <p className="text-sm text-muted-foreground">Загрузка складов…</p>
       ) : warehousesQuery.isError ? (
         <Card size="sm">
-          <CardContent className="flex flex-col gap-3 text-sm text-destructive">
-            <p role="alert">
+          <CardHeader>
+            <CardTitle>Не удалось загрузить склады</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3 text-sm">
+            <p role="alert" className="text-destructive">
               {getWarehouseMutationError(warehousesQuery.error)}
             </p>
             <Button
@@ -502,34 +590,21 @@ export function WarehouseSettingsPage() {
                 id: "actions",
                 label: "Действия",
                 getSortValue: () => null,
-                cellClassName: "w-52",
+                cellClassName: "w-72",
                 render: (warehouse) => (
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setServerError(null)
-                        setEditor(warehouse)
-                      }}
-                    >
-                      Изменить
-                    </Button>
-                    {warehouse.active ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          setServerError(null)
-                          setDeactivating(warehouse)
-                        }}
-                      >
-                        Деактивировать
-                      </Button>
-                    ) : null}
-                  </div>
+                  <WarehouseActions
+                    warehouse={warehouse}
+                    pending={isMutating}
+                    onEdit={openEditor}
+                    onDeactivate={(selected) => {
+                      setServerError(null)
+                      setDeactivating(selected)
+                    }}
+                    onReactivate={(selected) => {
+                      setServerError(null)
+                      reactivateMutation.mutate(selected)
+                    }}
+                  />
                 ),
               },
             ]}
@@ -538,46 +613,37 @@ export function WarehouseSettingsPage() {
           <div className="flex min-h-0 flex-col gap-3 overflow-y-auto md:hidden">
             {visibleWarehouses.map((warehouse) => (
               <Card key={warehouse.id} size="sm">
-                <CardContent className="flex flex-col gap-3 text-sm">
+                <CardHeader>
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="font-medium">{warehouse.name}</p>
-                      <p className="text-muted-foreground">{warehouse.code}</p>
+                      <CardTitle>{warehouse.name}</CardTitle>
+                      <p className="text-sm text-muted-foreground">
+                        {warehouse.code}
+                      </p>
                     </div>
                     <Badge variant={warehouse.active ? "secondary" : "outline"}>
                       {warehouse.active ? "Активен" : "Неактивен"}
                     </Badge>
                   </div>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-3 text-sm">
                   <p className="text-muted-foreground">
                     {warehouse.city} · {warehouse.timeZone} · порядок{" "}
                     {warehouse.sortOrder ?? "—"}
                   </p>
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setServerError(null)
-                        setEditor(warehouse)
-                      }}
-                    >
-                      Изменить
-                    </Button>
-                    {warehouse.active ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          setServerError(null)
-                          setDeactivating(warehouse)
-                        }}
-                      >
-                        Деактивировать
-                      </Button>
-                    ) : null}
-                  </div>
+                  <WarehouseActions
+                    warehouse={warehouse}
+                    pending={isMutating}
+                    onEdit={openEditor}
+                    onDeactivate={(selected) => {
+                      setServerError(null)
+                      setDeactivating(selected)
+                    }}
+                    onReactivate={(selected) => {
+                      setServerError(null)
+                      reactivateMutation.mutate(selected)
+                    }}
+                  />
                 </CardContent>
               </Card>
             ))}
@@ -597,9 +663,7 @@ export function WarehouseSettingsPage() {
               setServerError(null)
             }
           }}
-          onSave={async (input) => {
-            await saveMutation.mutateAsync(input)
-          }}
+          onSave={(input) => saveMutation.mutate(input)}
         />
       ) : null}
 
@@ -618,7 +682,7 @@ export function WarehouseSettingsPage() {
               <AlertDialogTitle>Деактивировать склад?</AlertDialogTitle>
               <AlertDialogDescription>
                 Склад {deactivating.code} исчезнет из обычного выбора.
-                Реактивация выполняется через изменение записи.
+                Реактивировать его можно из этого списка.
               </AlertDialogDescription>
             </AlertDialogHeader>
             {serverError ? <FieldError>{serverError}</FieldError> : null}
@@ -631,7 +695,7 @@ export function WarehouseSettingsPage() {
                 disabled={deactivateMutation.isPending}
                 onClick={(event) => {
                   event.preventDefault()
-                  void deactivateMutation.mutateAsync()
+                  deactivateMutation.mutate()
                 }}
               >
                 {deactivateMutation.isPending ? "Выполняем…" : "Деактивировать"}

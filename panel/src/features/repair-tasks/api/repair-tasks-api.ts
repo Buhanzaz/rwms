@@ -1,25 +1,21 @@
 import {
   createRepairEstimateCatalogIndex,
-  getOperationalMaintenanceCatalog,
+  getOperationalRepairEstimateCatalog,
 } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
-import { IndexedDbRepairEstimateMediaAdapter } from "@/features/repair-estimates/adapters/indexed-db-repair-estimate-media-adapter"
-import { panelRepairTaskRentalItemsClient } from "@/features/repair-tasks/adapters/panel-repair-task-rental-items-client"
 import {
-  assertEstimateLinesValid,
   buildRepairEstimateTaskPlans,
   finalizeTaskPlans,
   validateAutoCompletion,
 } from "@/features/repair-estimates/domain/repair-estimate-domain"
 import type {
-  RepairEstimateDto,
+  PendingEstimateMediaUpload,
   RepairEstimateCompletionMode,
+  RepairEstimateDto,
   RepairEstimateMediaRefDto,
   RepairEstimateTaskPlanDto,
-  PendingEstimateMediaUpload,
 } from "@/features/repair-estimates/model/repair-estimate"
-import { LocalStorageRepairTasksAdapter } from "@/features/repair-tasks/adapters/local-storage-repair-tasks-adapter"
-import { httpRepairTasksAdapter } from "@/features/repair-tasks/adapters/http-repair-tasks-adapter"
-import { DEV_MAINTENANCE_FIXTURES_ENABLED } from "@/features/maintenance/maintenance-runtime"
+import { HttpMaintenanceRepairTasksAdapter } from "@/features/repair-tasks/adapters/http-maintenance-repair-tasks-adapter"
+import { panelRepairTaskRentalItemsClient } from "@/features/repair-tasks/adapters/panel-repair-task-rental-items-client"
 import {
   assertRepairTaskCanBeQueued,
   buildDirectRepairTaskSubtasks,
@@ -28,29 +24,16 @@ import {
 import type {
   RepairTaskDto,
   RepairTaskEditorDraft,
-  RepairTaskFromInventoryFindingCommand,
   RepairTaskOrigin,
   RepairTaskSubtaskDto,
   RepairTaskWriteCommand,
 } from "@/features/repair-tasks/model/repair-task"
 import type { RepairTasksClient } from "@/features/repair-tasks/ports/repair-tasks-client"
-import { listRepairWorkerGroups } from "@/features/repair-tasks/api/repair-worker-directory-api"
-import type {
-  RepairTaskWorkerGroupSnapshotDto,
-  RepairTaskWorkerSnapshotDto,
-} from "@/features/repair-tasks/model/repair-task"
 
 export const REPAIR_TASKS_QUERY_KEY = ["repair-tasks"] as const
 
-const fixtureMediaClient = new IndexedDbRepairEstimateMediaAdapter()
-const localRepairTasksAdapter = new LocalStorageRepairTasksAdapter(
-  panelRepairTaskRentalItemsClient
-)
-const stage6RepairTasksClient: RepairTasksClient =
-  DEV_MAINTENANCE_FIXTURES_ENABLED
-    ? localRepairTasksAdapter
-    : httpRepairTasksAdapter
-const repairTasksClient = stage6RepairTasksClient
+const repairTasksClient: RepairTasksClient =
+  new HttpMaintenanceRepairTasksAdapter(panelRepairTaskRentalItemsClient)
 
 export function repairTasksListQueryKey(warehouseId: string) {
   return [...REPAIR_TASKS_QUERY_KEY, "list", warehouseId] as const
@@ -75,20 +58,6 @@ export function repairTaskBySourceEstimateQueryKey(
   ] as const
 }
 
-export function repairTaskByInventoryFindingQueryKey(
-  warehouseId: string,
-  sourceInventoryId: string | null,
-  sourceInventoryFindingId: string | null
-) {
-  return [
-    ...REPAIR_TASKS_QUERY_KEY,
-    "source-inventory-finding",
-    warehouseId,
-    sourceInventoryId,
-    sourceInventoryFindingId,
-  ] as const
-}
-
 export function repairAcceptanceListQueryKey(warehouseId: string) {
   return [...REPAIR_TASKS_QUERY_KEY, "acceptance", warehouseId] as const
 }
@@ -109,33 +78,15 @@ export function listRepairWriteOffs(warehouseId: string) {
   return repairTasksClient.listWriteOffs(warehouseId)
 }
 
-export async function getRepairTask(taskId: string, warehouseId: string) {
-  const task = await repairTasksClient.getById(taskId, warehouseId)
-  if (!task) {
-    return null
-  }
-  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) return task
-  return {
-    ...task,
-    media: await fixtureMediaClient.hydrate(task.media),
-    subtasks: await Promise.all(
-      task.subtasks.map(async (subtask) => ({
-        ...subtask,
-        resultMedia: await fixtureMediaClient.hydrate(subtask.resultMedia),
-      }))
-    ),
-  }
+export function getRepairTask(taskId: string, warehouseId: string) {
+  return repairTasksClient.getById(taskId, warehouseId)
 }
 
-export async function getRepairTaskBySourceEstimateId(
+export function getRepairTaskBySourceEstimateId(
   sourceEstimateId: string,
   warehouseId: string
 ) {
-  const task = await getRepairTaskSnapshotBySourceEstimateId(
-    sourceEstimateId,
-    warehouseId
-  )
-  return task ? hydrateCommittedTaskMedia(task) : null
+  return repairTasksClient.getBySourceEstimateId(sourceEstimateId, warehouseId)
 }
 
 export function getRepairTaskSnapshotBySourceEstimateId(
@@ -145,37 +96,16 @@ export function getRepairTaskSnapshotBySourceEstimateId(
   return repairTasksClient.getBySourceEstimateId(sourceEstimateId, warehouseId)
 }
 
-export async function getRepairTaskByInventoryFinding(
-  sourceInventoryId: string,
-  sourceInventoryFindingId: string,
-  warehouseId: string
-) {
-  const task = await getRepairTaskSnapshotByInventoryFinding(
-    sourceInventoryId,
-    sourceInventoryFindingId,
-    warehouseId
-  )
-  return task ? hydrateFixtureTaskMedia(task) : null
-}
-
-export function getRepairTaskSnapshotByInventoryFinding(
-  sourceInventoryId: string,
-  sourceInventoryFindingId: string,
-  warehouseId: string
-) {
-  return localRepairTasksAdapter.getByInventoryFinding(
-    sourceInventoryId,
-    sourceInventoryFindingId,
-    warehouseId
-  )
-}
-
 function buildWriteCommand(params: {
   draft: RepairTaskEditorDraft
   warehouseId: string
-  media: RepairEstimateMediaRefDto[]
   subtasks: RepairTaskSubtaskDto[]
 }): RepairTaskWriteCommand {
+  if (params.draft.pendingUploads.length > 0 || params.draft.media.length > 0) {
+    throw new Error(
+      "Фото для ремонтов временно недоступны: media-service ещё не подтверждает владельца MAINTENANCE_REPAIR."
+    )
+  }
   return {
     taskId: params.draft.taskId,
     expectedVersion: params.draft.expectedVersion,
@@ -189,38 +119,13 @@ function buildWriteCommand(params: {
     rentalItemId: params.draft.rentalItemId,
     reason: params.draft.reason,
     dispatchDate: params.draft.dispatchDate,
-    comment: params.draft.comment,
-    media: DEV_MAINTENANCE_FIXTURES_ENABLED
-      ? fixtureMediaClient.dehydrate(params.media)
-      : params.media,
+    comment: "",
+    media: [],
     subtasks: params.subtasks,
   }
 }
 
-async function hydrateFixtureTaskMedia(task: RepairTaskDto) {
-  try {
-    return {
-      ...task,
-      media: await fixtureMediaClient.hydrate(task.media),
-      subtasks: await Promise.all(
-        task.subtasks.map(async (subtask) => ({
-          ...subtask,
-          resultMedia: await fixtureMediaClient.hydrate(subtask.resultMedia),
-        }))
-      ),
-    }
-  } catch {
-    return task
-  }
-}
-
-function hydrateCommittedTaskMedia(task: RepairTaskDto) {
-  return DEV_MAINTENANCE_FIXTURES_ENABLED
-    ? hydrateFixtureTaskMedia(task)
-    : Promise.resolve(task)
-}
-
-async function persistTaskWithMedia(params: {
+async function planSubtasks(params: {
   draft: RepairTaskEditorDraft
   warehouseId: string
   status: "DRAFT" | "QUEUED"
@@ -228,23 +133,63 @@ async function persistTaskWithMedia(params: {
   completionMode?: RepairEstimateCompletionMode
   movementRequired?: boolean
 }) {
-  assertEstimateLinesValid(params.draft.lines)
+  const existing = params.draft.taskId
+    ? await repairTasksClient.getById(params.draft.taskId, params.warehouseId)
+    : params.draft.kind === "REWORK" && params.draft.sourceRepairTaskId
+      ? await repairTasksClient.getById(
+          params.draft.sourceRepairTaskId,
+          params.warehouseId
+        )
+      : null
+  if (params.draft.lines.length === 0 && existing?.subtasks.length) {
+    if (params.taskPlans?.length) {
+      const existingById = new Map(
+        existing.subtasks.map((subtask) => [subtask.id, subtask])
+      )
+      return params.taskPlans
+        .slice()
+        .sort((left, right) => left.sortOrder - right.sortOrder)
+        .map((plan, index): RepairTaskSubtaskDto => {
+          const current = existingById.get(plan.id)
+          return {
+            id: plan.id,
+            externalTaskId: current?.externalTaskId ?? null,
+            kind: plan.kind,
+            status: current?.status ?? "WAITING",
+            workLines: current?.workLines ?? [],
+            materialLines: current?.materialLines ?? [],
+            groupComment: plan.groupComment,
+            queueId: plan.queueId ?? null,
+            queueCode: plan.queueCode,
+            routeQueueKind: plan.routeQueueKind,
+            sortOrder: index,
+            queuePosition: index,
+            plannedDurationMinutes: current?.plannedDurationMinutes ?? null,
+            startedAt: current?.startedAt ?? null,
+            completedAt: current?.completedAt ?? null,
+            activeStartedAt: current?.activeStartedAt ?? null,
+            activeWorkSeconds: current?.activeWorkSeconds ?? 0,
+            workerGroup: current?.workerGroup ?? null,
+            assignments: current?.assignments ?? [],
+          }
+        })
+    }
+    return existing.subtasks.map((subtask) => ({ ...subtask }))
+  }
   if (params.status === "QUEUED") {
     assertRepairTaskCanBeQueued(params.draft.lines)
   }
-  const snapshot = await getOperationalMaintenanceCatalog(params.warehouseId)
+  const snapshot = await getOperationalRepairEstimateCatalog()
   const catalog = createRepairEstimateCatalogIndex(snapshot)
   if (params.status === "QUEUED" && params.completionMode === "AUTO") {
-    const autoIssues = validateAutoCompletion(params.draft.lines, catalog)
-    if (autoIssues.length > 0) {
-      throw new Error(autoIssues.slice(0, 3).join("; "))
-    }
+    const issues = validateAutoCompletion(params.draft.lines, catalog)
+    if (issues.length > 0) throw new Error(issues.slice(0, 3).join("; "))
   }
   const basePlans =
     params.completionMode === "AUTO"
       ? buildRepairEstimateTaskPlans(params.draft.lines, catalog)
       : params.taskPlans
-  const taskPlans =
+  const plans =
     basePlans && params.completionMode
       ? finalizeTaskPlans({
           plans: basePlans,
@@ -252,71 +197,35 @@ async function persistTaskWithMedia(params: {
           movementRequired: Boolean(params.movementRequired),
         })
       : null
-  const subtasks = taskPlans
+  return plans
     ? buildRepairTaskSubtasks({
         lines: params.draft.lines,
-        plans: taskPlans,
+        plans,
         catalog,
       })
     : buildDirectRepairTaskSubtasks(params.draft.lines, catalog)
-  if (
-    params.status === "QUEUED" &&
-    params.movementRequired &&
-    (!subtasks.some((subtask) => subtask.kind === "MOVE_TO_REPAIR") ||
-      !subtasks.some((subtask) => subtask.kind === "MOVE_FROM_REPAIR"))
-  ) {
-    throw new Error("Добавьте оба этапа перемещения в план ремонта")
-  }
-  const existing = params.draft.taskId
-    ? await repairTasksClient.getById(params.draft.taskId, params.warehouseId)
-    : null
-  if (
-    !DEV_MAINTENANCE_FIXTURES_ENABLED &&
-    params.draft.pendingUploads.length > 0
-  ) {
-    throw new Error(
-      "Загрузка медиа недоступна: защищённый HTTP runtime media-service ещё не подключён."
-    )
-  }
-  const uploaded = DEV_MAINTENANCE_FIXTURES_ENABLED
-    ? await fixtureMediaClient.upload(params.draft.pendingUploads)
-    : []
-  const media = [...params.draft.media, ...uploaded]
-  let saved: RepairTaskDto
+}
 
-  try {
-    const command = buildWriteCommand({ ...params, media, subtasks })
-    saved =
-      params.status === "QUEUED"
-        ? await repairTasksClient.queue(command)
-        : await repairTasksClient.saveDraft(command)
-  } catch (error) {
-    try {
-      await fixtureMediaClient.discard(uploaded.map((item) => item.id))
-    } catch {
-      // Preserve the task persistence error; media compensation is best-effort.
-    }
-    throw error
-  }
-
-  const committedIds = new Set(saved.media.map((item) => item.id))
-  const removedIds =
-    existing?.media
-      .map((item) => item.id)
-      .filter((id) => !committedIds.has(id)) ?? []
-  try {
-    await fixtureMediaClient.discard(removedIds)
-  } catch {
-    // Cleanup after the durable task write is best-effort.
-  }
-  return hydrateCommittedTaskMedia(saved)
+async function persistRepair(params: {
+  draft: RepairTaskEditorDraft
+  warehouseId: string
+  status: "DRAFT" | "QUEUED"
+  taskPlans?: RepairEstimateTaskPlanDto[]
+  completionMode?: RepairEstimateCompletionMode
+  movementRequired?: boolean
+}) {
+  const subtasks = await planSubtasks(params)
+  const command = buildWriteCommand({ ...params, subtasks })
+  return params.status === "QUEUED"
+    ? repairTasksClient.queue(command)
+    : repairTasksClient.saveDraft(command)
 }
 
 export function saveRepairTaskDraft(params: {
   draft: RepairTaskEditorDraft
   warehouseId: string
 }) {
-  return persistTaskWithMedia({ ...params, status: "DRAFT" })
+  return persistRepair({ ...params, status: "DRAFT" })
 }
 
 export function queueRepairTask(params: {
@@ -326,7 +235,7 @@ export function queueRepairTask(params: {
   movementRequired: boolean
   taskPlans: RepairEstimateTaskPlanDto[]
 }) {
-  return persistTaskWithMedia({ ...params, status: "QUEUED" })
+  return persistRepair({ ...params, status: "QUEUED" })
 }
 
 export function updateRepairTaskSubtasks(params: {
@@ -341,161 +250,28 @@ export function updateRepairTaskSubtasks(params: {
   })
 }
 
-export function moveRepairTaskEntry(params: {
-  task: RepairTaskDto
-  subtaskId: string
-  targetQueueCode: string | null
-  targetRouteQueueKind: RepairTaskSubtaskDto["routeQueueKind"]
-  targetQueuePosition: number
-}) {
-  return repairTasksClient.moveEntry({
-    taskId: params.task.id,
-    subtaskId: params.subtaskId,
-    expectedVersion: params.task.version,
-    warehouseId: params.task.warehouseId,
-    targetQueueCode: params.targetQueueCode,
-    targetRouteQueueKind: params.targetRouteQueueKind,
-    targetQueuePosition: params.targetQueuePosition,
-  })
-}
-
-export async function takeRepairTaskEntry(params: {
-  task: RepairTaskDto
-  subtaskId: string
-  workerGroup: RepairTaskWorkerGroupSnapshotDto
-  workers?: RepairTaskWorkerSnapshotDto[]
-  accessToken?: string
-}) {
-  const subtask = params.task.subtasks.find(
-    (candidate) => candidate.id === params.subtaskId
-  )
-  if (!subtask) {
-    throw new Error("Подзадание не найдено")
-  }
-  const groups = await listRepairWorkerGroups(
-    {
-      warehouseId: params.task.warehouseId,
-      queueCode: subtask.queueCode,
-      routeQueueKind: subtask.routeQueueKind,
-    },
-    params.accessToken
-  )
-  const selectedGroup = groups.find(
-    (group) => group.id === params.workerGroup.id && group.active
-  )
-  if (!selectedGroup) {
-    throw new Error("Рабочая группа недоступна для этой очереди")
-  }
-  const requestedWorkers = params.workers ?? []
-  if (requestedWorkers.length > 1) {
-    throw new Error("Выберите одного исполнителя или всю рабочую группу")
-  }
-  const requestedWorker = requestedWorkers[0]
-  const directoryWorker = requestedWorker
-    ? selectedGroup.members.find((member) => member.id === requestedWorker.id)
-    : null
-  if (requestedWorker && !directoryWorker) {
-    throw new Error("Выбранный исполнитель не состоит в рабочей группе")
-  }
-  return repairTasksClient.takeEntry({
-    taskId: params.task.id,
-    subtaskId: params.subtaskId,
-    expectedVersion: params.task.version,
-    warehouseId: params.task.warehouseId,
-    workerGroup: {
-      id: selectedGroup.id,
-      name: selectedGroup.name,
-    },
-    workers: directoryWorker ? [directoryWorker] : selectedGroup.members,
-  })
-}
-
-export function pauseRepairTaskEntry(params: {
-  task: RepairTaskDto
-  subtaskId: string
-}) {
-  return repairTasksClient.pauseEntry({
-    taskId: params.task.id,
-    subtaskId: params.subtaskId,
-    expectedVersion: params.task.version,
-    warehouseId: params.task.warehouseId,
-  })
-}
-
-export function resumeRepairTaskEntry(params: {
-  task: RepairTaskDto
-  subtaskId: string
-}) {
-  return repairTasksClient.resumeEntry({
-    taskId: params.task.id,
-    subtaskId: params.subtaskId,
-    expectedVersion: params.task.version,
-    warehouseId: params.task.warehouseId,
-  })
-}
-
-export async function completeRepairTaskEntry(params: {
-  task: RepairTaskDto
-  subtaskId: string
-  pendingUploads: PendingEstimateMediaUpload[]
-}) {
-  if (!DEV_MAINTENANCE_FIXTURES_ENABLED) {
-    if (params.pendingUploads.length > 0) {
-      throw new Error(
-        "Загрузка результата недоступна: защищённый HTTP runtime media-service ещё не подключён."
-      )
-    }
-    throw new Error(
-      "Завершите этап через производственный HTTP API доски заданий."
-    )
-  }
-  if (params.pendingUploads.length > 20) {
-    throw new Error("К этапу можно прикрепить не более 20 фотографий")
-  }
-  const uploaded = await fixtureMediaClient.upload(params.pendingUploads)
-  try {
-    const saved = await repairTasksClient.completeEntry({
-      taskId: params.task.id,
-      subtaskId: params.subtaskId,
-      expectedVersion: params.task.version,
-      warehouseId: params.task.warehouseId,
-      resultMedia: fixtureMediaClient.dehydrate(uploaded),
-    })
-    return hydrateCommittedTaskMedia(saved)
-  } catch (error) {
-    try {
-      await fixtureMediaClient.discard(uploaded.map((media) => media.id))
-    } catch {
-      // Preserve the task completion error; compensation is best-effort.
-    }
-    throw error
-  }
-}
-
-export async function acceptRepairTask(params: {
+export function acceptRepairTask(params: {
   task: RepairTaskDto
   comment: string
 }) {
-  const saved = await repairTasksClient.accept({
+  return repairTasksClient.accept({
     taskId: params.task.id,
     expectedVersion: params.task.version,
     warehouseId: params.task.warehouseId,
     comment: params.comment,
   })
-  return hydrateCommittedTaskMedia(saved)
 }
 
-export async function writeOffRepairTask(params: {
+export function writeOffRepairTask(params: {
   task: RepairTaskDto
   reason: string
 }) {
-  const saved = await repairTasksClient.writeOff({
+  return repairTasksClient.writeOff({
     taskId: params.task.id,
     expectedVersion: params.task.version,
     warehouseId: params.task.warehouseId,
     reason: params.reason,
   })
-  return hydrateCommittedTaskMedia(saved)
 }
 
 export async function writeOffRepairDraft(params: {
@@ -514,139 +290,35 @@ export async function writeOffRepairDraft(params: {
   pendingUploads: PendingEstimateMediaUpload[]
   writeOffReason: string
 }) {
-  const snapshot = await getOperationalMaintenanceCatalog(params.warehouseId)
-  const catalog = createRepairEstimateCatalogIndex(snapshot)
-  const subtasks = buildDirectRepairTaskSubtasks(params.lines, catalog)
-  const existing = params.taskId
-    ? await repairTasksClient.getById(params.taskId, params.warehouseId)
-    : params.sourceEstimateId
-      ? await repairTasksClient.getBySourceEstimateId(
-          params.sourceEstimateId,
-          params.warehouseId
-        )
-      : null
-  if (!DEV_MAINTENANCE_FIXTURES_ENABLED && params.pendingUploads.length > 0) {
+  if (params.origin === "ESTIMATE" && params.taskId === null) {
     throw new Error(
-      "Загрузка медиа недоступна: защищённый HTTP runtime media-service ещё не подключён."
+      "Списание из незавершённой сметы не определено maintenance-контрактом. Сначала завершите смету."
     )
   }
-  const uploaded = DEV_MAINTENANCE_FIXTURES_ENABLED
-    ? await fixtureMediaClient.upload(params.pendingUploads)
-    : []
-  const media = [...params.media, ...uploaded]
-  let saved: RepairTaskDto
-
-  try {
-    saved = await repairTasksClient.earlyWriteOff({
-      taskId: params.taskId,
-      expectedVersion: params.expectedVersion,
-      kind: "REPAIR",
-      sourceRepairTaskId: null,
-      sourceRepairTaskVersion: null,
-      warehouseId: params.warehouseId,
-      rentalItemId: params.rentalItemId,
-      origin: params.origin,
-      sourceEstimateId: params.sourceEstimateId,
-      sourceEstimateVersion: params.sourceEstimateVersion,
-      reason: params.reason,
-      dispatchDate: params.dispatchDate,
-      comment: params.comment,
-      media: DEV_MAINTENANCE_FIXTURES_ENABLED
-        ? fixtureMediaClient.dehydrate(media)
-        : media,
-      subtasks,
-      writeOffReason: params.writeOffReason,
-    })
-  } catch (error) {
-    try {
-      await fixtureMediaClient.discard(uploaded.map((item) => item.id))
-    } catch {
-      // Preserve the write-off error; media compensation is best-effort.
-    }
-    throw error
+  const draft: RepairTaskEditorDraft = {
+    taskId: params.taskId,
+    expectedVersion: params.expectedVersion,
+    kind: "REPAIR",
+    origin: params.origin,
+    sourceRepairTaskId: null,
+    sourceRepairTaskVersion: null,
+    sourceEstimateId: params.sourceEstimateId,
+    sourceEstimateVersion: params.sourceEstimateVersion,
+    rentalItemId: params.rentalItemId,
+    reason: params.reason,
+    dispatchDate: params.dispatchDate,
+    comment: "",
+    lines: params.lines,
+    media: params.media,
+    pendingUploads: params.pendingUploads,
   }
-
-  const committedIds = new Set(saved.media.map((item) => item.id))
-  const removedIds =
-    existing?.media
-      .map((item) => item.id)
-      .filter((id) => !committedIds.has(id)) ?? []
-  try {
-    await fixtureMediaClient.discard(removedIds)
-  } catch {
-    // Cleanup after the durable write-off is best-effort.
-  }
-  return hydrateCommittedTaskMedia(saved)
-}
-
-export async function createRepairTaskFromCompletedEstimate(params: {
-  estimate: RepairEstimateDto
-  taskPlans: RepairEstimateTaskPlanDto[]
-  allowWaitingEstimateConfirmation?: boolean
-}) {
-  const snapshot = await getOperationalMaintenanceCatalog(
-    params.estimate.warehouseId
-  )
-  const catalog = createRepairEstimateCatalogIndex(snapshot)
-  return repairTasksClient.upsertFromEstimate({
-    warehouseId: params.estimate.warehouseId,
-    rentalItemId: params.estimate.rentalItemId,
-    cabinNumber: params.estimate.cabinNumber,
-    authorName: params.estimate.authorName,
-    sourceEstimateId: params.estimate.id,
-    sourceEstimateVersion: params.estimate.version,
-    allowWaitingEstimateConfirmation: params.allowWaitingEstimateConfirmation,
-    reason: "Ремонт по смете",
-    dispatchDate: params.estimate.dispatchDate,
-    comment: params.estimate.comment,
-    media: params.estimate.media.map((media) => structuredClone(media)),
-    subtasks: buildRepairTaskSubtasks({
-      lines: params.estimate.lines,
-      plans: params.taskPlans,
-      catalog,
-    }),
+  const subtasks = await planSubtasks({
+    draft,
+    warehouseId: params.warehouseId,
+    status: "DRAFT",
   })
-}
-
-export async function upsertRepairTaskByInventoryFinding(
-  command: RepairTaskFromInventoryFindingCommand
-) {
-  const saved = await localRepairTasksAdapter.upsertByInventoryFinding({
-    ...command,
-    media: fixtureMediaClient.dehydrate(command.media),
-    subtasks: command.subtasks.map((subtask) => ({
-      ...structuredClone(subtask),
-      resultMedia: fixtureMediaClient.dehydrate(subtask.resultMedia),
-    })),
-  })
-  return hydrateFixtureTaskMedia(saved)
-}
-
-export async function syncRepairTaskFromCompletedEstimate(params: {
-  estimate: RepairEstimateDto
-  taskPlans: RepairEstimateTaskPlanDto[]
-  expectedTaskVersion: number | null
-}) {
-  const snapshot = await getOperationalMaintenanceCatalog(
-    params.estimate.warehouseId
-  )
-  const catalog = createRepairEstimateCatalogIndex(snapshot)
-  return repairTasksClient.syncFromEstimate({
-    warehouseId: params.estimate.warehouseId,
-    rentalItemId: params.estimate.rentalItemId,
-    cabinNumber: params.estimate.cabinNumber,
-    authorName: params.estimate.authorName,
-    sourceEstimateId: params.estimate.id,
-    sourceEstimateVersion: params.estimate.version,
-    expectedTaskVersion: params.expectedTaskVersion,
-    reason: "Ремонт по смете",
-    dispatchDate: params.estimate.dispatchDate,
-    comment: params.estimate.comment,
-    media: params.estimate.media.map((media) => structuredClone(media)),
-    subtasks: buildRepairTaskSubtasks({
-      lines: params.estimate.lines,
-      plans: params.taskPlans,
-      catalog,
-    }),
+  return repairTasksClient.earlyWriteOff({
+    ...buildWriteCommand({ draft, warehouseId: params.warehouseId, subtasks }),
+    writeOffReason: params.writeOffReason,
   })
 }

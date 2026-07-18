@@ -28,9 +28,7 @@ import { Textarea } from "@/components/ui/textarea"
 import {
   REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
   createRepairEstimateCatalogIndex,
-  getOperationalMaintenanceCatalog,
   getOperationalRepairEstimateCatalog,
-  getRepairEstimateCatalogMainMenuTitle,
 } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import type { RepairEstimateCatalogNodeDto } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 import { repairEstimateCatalogNodeTypeLabel } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
@@ -55,7 +53,6 @@ type CatalogBreadcrumb = {
 type RepairEstimateCatalogPickerProps = {
   lines: RepairEstimateLineDto[]
   readOnly: boolean
-  warehouseId?: string
   onChange: (lines: RepairEstimateLineDto[]) => void
   onPagerChange?: (pager: RepairEstimateCatalogPager | null) => void
 }
@@ -76,18 +73,12 @@ function uniqueNodes(nodes: readonly RepairEstimateCatalogNodeDto[]) {
 export function RepairEstimateCatalogPicker({
   lines,
   readOnly,
-  warehouseId,
   onChange,
   onPagerChange,
 }: RepairEstimateCatalogPickerProps) {
   const catalogQuery = useQuery({
-    queryKey: warehouseId
-      ? [...REPAIR_ESTIMATE_CATALOG_QUERY_KEY, warehouseId]
-      : REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
-    queryFn: () =>
-      warehouseId
-        ? getOperationalMaintenanceCatalog(warehouseId)
-        : getOperationalRepairEstimateCatalog(),
+    queryKey: REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
+    queryFn: getOperationalRepairEstimateCatalog,
   })
   const catalog = useMemo(
     () =>
@@ -170,11 +161,6 @@ export function RepairEstimateCatalogPicker({
     })
   }, [catalog, currentNode, mode, pendingMaterial, pendingWork, search])
 
-  const showMainMenuTitles =
-    search.trim() === "" &&
-    path.length === 0 &&
-    pendingWork === null &&
-    pendingMaterial === null
   const breadcrumbs: CatalogBreadcrumb[] = [
     {
       key: "main-menu",
@@ -552,9 +538,7 @@ export function RepairEstimateCatalogPicker({
               >
                 <CardHeader>
                   <CardTitle className="min-w-0 break-words">
-                    {showMainMenuTitles
-                      ? getRepairEstimateCatalogMainMenuTitle(node)
-                      : node.name}
+                    {node.name}
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="mt-auto">
@@ -590,9 +574,7 @@ function CatalogAddDialog({
   onOpenChange: (open: boolean) => void
   onConfirm: (quantity: number, comment: string) => void
 }) {
-  const [quantity, setQuantity] = useState(
-    Math.max(1, context?.quantityNode.defaultQuantity ?? 1)
-  )
+  const [quantity, setQuantity] = useState(1)
   const [comment, setComment] = useState("")
   return (
     <Dialog open={context !== null} onOpenChange={onOpenChange}>

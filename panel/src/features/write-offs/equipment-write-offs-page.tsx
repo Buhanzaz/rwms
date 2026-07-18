@@ -1,36 +1,20 @@
-import { useEffect, useRef, useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 
 import {
-  EQUIPMENT_DISPOSITIONS_STORAGE_KEY,
-  EQUIPMENT_DISPOSITIONS_UPDATED_EVENT,
-  EQUIPMENT_MOCK_STORAGE_KEY,
-  EQUIPMENT_MOCK_UPDATED_EVENT,
+  disposeEquipment,
+  getEquipmentItems,
   listEquipmentDispositionItems,
-  listEquipmentDispositionTransferTargets,
-  resolveReturnEquipmentDisposition,
 } from "@/api/equipment-api"
 import { OperationsListGrid } from "@/components/operations-list-grid"
-import { PageToolbar, PageToolbarContent } from "@/components/page-toolbar"
+import {
+  PageToolbar,
+  PageToolbarActions,
+  PageToolbarContent,
+} from "@/components/page-toolbar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Combobox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxGroup,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxList,
-} from "@/components/ui/combobox"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -55,17 +39,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/features/auth/use-auth"
-import {
-  RENTAL_ITEMS_MOCK_STORAGE_KEY,
-  RENTAL_ITEMS_MOCK_UPDATED_EVENT,
-} from "@/features/rental-items/api/rental-items-api"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import type {
   EquipmentDispositionListItemDto,
-  ReturnEquipmentDispositionAction,
-  ReturnEquipmentDispositionCaseDto,
+  EquipmentItemDto,
 } from "@/types/equipment"
 
 const EQUIPMENT_WRITE_OFFS_QUERY_KEY = ["equipment-write-offs"] as const
@@ -75,379 +53,243 @@ function equipmentWriteOffsQueryKey(warehouseId: string, search: string) {
 }
 
 function dateLabel(value: string) {
-  return new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium" }).format(
-    new Date(value)
-  )
+  return new Intl.DateTimeFormat("ru-RU", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value))
 }
 
-function itemName(item: EquipmentDispositionListItemDto) {
-  return item.kind === "RETURN_DISPOSITION" ? item.equipmentName : item.name
-}
-
-function DispositionStatusBadge({
-  item,
-}: {
-  item: EquipmentDispositionListItemDto
-}) {
-  if (item.kind === "HISTORICAL_WRITE_OFF") {
-    return <Badge variant="destructive">Списано</Badge>
-  }
-  return item.status === "ACTION_REQUIRED" ? (
-    <Badge variant="secondary">Требует действия</Badge>
-  ) : (
-    <Badge variant="outline">Частично обработано</Badge>
-  )
+function operationLabel(item: EquipmentDispositionListItemDto) {
+  return item.kind
 }
 
 function EquipmentDispositionMobileCard({
   item,
-  onAction,
 }: {
   item: EquipmentDispositionListItemDto
-  onAction: (item: ReturnEquipmentDispositionCaseDto) => void
 }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{itemName(item)}</CardTitle>
+        <CardTitle>{item.equipmentName}</CardTitle>
       </CardHeader>
       <CardContent className="grid grid-cols-2 gap-2 text-sm">
-        <span className="text-muted-foreground">Бытовка / источник</span>
-        <span>
-          {item.kind === "RETURN_DISPOSITION"
-            ? item.sourceCabinNumber
-            : "История списаний"}
-        </span>
-        <span className="text-muted-foreground">Получено</span>
-        <span>
-          {item.kind === "RETURN_DISPOSITION"
-            ? `${item.receivedQuantity} шт.`
-            : "—"}
-        </span>
-        <span className="text-muted-foreground">Осталось</span>
-        <span>
-          {item.kind === "RETURN_DISPOSITION"
-            ? `${item.remainingQuantity} шт.`
-            : `${item.writtenOffQuantity} шт. списано`}
-        </span>
+        <span className="text-muted-foreground">Код</span>
+        <span>{item.equipmentCode}</span>
+        <span className="text-muted-foreground">Количество</span>
+        <span>{item.quantity} шт.</span>
+        <span className="text-muted-foreground">Операция</span>
+        <Badge className="w-fit" variant="outline">
+          {operationLabel(item)}
+        </Badge>
         <span className="text-muted-foreground">Дата</span>
-        <span>
-          {item.kind === "RETURN_DISPOSITION"
-            ? dateLabel(item.receivedAt)
-            : "—"}
-        </span>
-        <span className="text-muted-foreground">Статус</span>
-        <DispositionStatusBadge item={item} />
+        <span>{dateLabel(item.occurredAt)}</span>
       </CardContent>
-      {item.kind === "RETURN_DISPOSITION" ? (
-        <CardFooter className="justify-end">
-          <Button size="sm" variant="outline" onClick={() => onAction(item)}>
-            Выбрать действие
-          </Button>
-        </CardFooter>
-      ) : null}
     </Card>
   )
 }
 
-export function EquipmentWriteOffsPage() {
-  const { selectedWarehouseId } = useWarehouse()
-  const queryClient = useQueryClient()
-  const [search, setSearch] = useState("")
-  const [selectedCase, setSelectedCase] =
-    useState<ReturnEquipmentDispositionCaseDto | null>(null)
-  const normalizedSearch = search.trim()
-  const listQuery = useQuery({
-    queryKey: equipmentWriteOffsQueryKey(
-      selectedWarehouseId ?? "none",
-      normalizedSearch
-    ),
-    queryFn: () =>
-      listEquipmentDispositionItems({
-        warehouseId: selectedWarehouseId!,
-        search: normalizedSearch,
-      }),
-    enabled: selectedWarehouseId !== null,
-  })
-
-  useEffect(() => {
-    const invalidate = () => {
-      void queryClient.invalidateQueries({
-        queryKey: EQUIPMENT_WRITE_OFFS_QUERY_KEY,
-      })
-    }
-    const handleStorage = (event: StorageEvent) => {
-      if (
-        event.key === EQUIPMENT_MOCK_STORAGE_KEY ||
-        event.key === EQUIPMENT_DISPOSITIONS_STORAGE_KEY ||
-        event.key === RENTAL_ITEMS_MOCK_STORAGE_KEY
-      ) {
-        invalidate()
-      }
-    }
-
-    window.addEventListener(EQUIPMENT_MOCK_UPDATED_EVENT, invalidate)
-    window.addEventListener(EQUIPMENT_DISPOSITIONS_UPDATED_EVENT, invalidate)
-    window.addEventListener(RENTAL_ITEMS_MOCK_UPDATED_EVENT, invalidate)
-    window.addEventListener("storage", handleStorage)
-
-    return () => {
-      window.removeEventListener(EQUIPMENT_MOCK_UPDATED_EVENT, invalidate)
-      window.removeEventListener(
-        EQUIPMENT_DISPOSITIONS_UPDATED_EVENT,
-        invalidate
-      )
-      window.removeEventListener(RENTAL_ITEMS_MOCK_UPDATED_EVENT, invalidate)
-      window.removeEventListener("storage", handleStorage)
-    }
-  }, [queryClient])
-
-  const items = listQuery.data ?? []
-  const openAction = (item: ReturnEquipmentDispositionCaseDto) =>
-    setSelectedCase(item)
-
-  return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
-      <PageToolbar>
-        <PageToolbarContent className="max-w-sm">
-          <Input
-            aria-label="Поиск доп. оборудования для списания"
-            placeholder="Наименование или номер бытовки"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </PageToolbarContent>
-      </PageToolbar>
-
-      <div className="min-h-0 flex-1 overflow-y-auto md:flex">
-        {listQuery.isLoading ? (
-          <p className="text-xs text-muted-foreground">
-            Загрузка доп. оборудования...
-          </p>
-        ) : listQuery.isError ? (
-          <p role="alert" className="text-xs text-destructive">
-            Не удалось загрузить список доп. оборудования.
-          </p>
-        ) : (
-          <>
-            <div className="hidden min-h-full min-w-0 flex-1 md:block">
-              <OperationsListGrid
-                className="min-h-full"
-                items={items}
-                columns={[
-                  {
-                    id: "name",
-                    label: "Наименование",
-                    getSortValue: itemName,
-                    render: itemName,
-                  },
-                  {
-                    id: "source",
-                    label: "Бытовка / источник",
-                    getSortValue: (item) =>
-                      item.kind === "RETURN_DISPOSITION"
-                        ? item.sourceCabinNumber
-                        : "История списаний",
-                    render: (item) =>
-                      item.kind === "RETURN_DISPOSITION"
-                        ? item.sourceCabinNumber
-                        : "История списаний",
-                  },
-                  {
-                    id: "received",
-                    label: "Получено",
-                    cellClassName: "tabular-nums",
-                    getSortValue: (item) =>
-                      item.kind === "RETURN_DISPOSITION"
-                        ? item.receivedQuantity
-                        : null,
-                    render: (item) =>
-                      item.kind === "RETURN_DISPOSITION"
-                        ? `${item.receivedQuantity} шт.`
-                        : "—",
-                  },
-                  {
-                    id: "remaining",
-                    label: "Осталось",
-                    cellClassName: "tabular-nums",
-                    getSortValue: (item) =>
-                      item.kind === "RETURN_DISPOSITION"
-                        ? item.remainingQuantity
-                        : item.writtenOffQuantity,
-                    render: (item) =>
-                      item.kind === "RETURN_DISPOSITION"
-                        ? `${item.remainingQuantity} шт.`
-                        : `${item.writtenOffQuantity} шт. списано`,
-                  },
-                  {
-                    id: "date",
-                    label: "Дата",
-                    getSortValue: (item) =>
-                      item.kind === "RETURN_DISPOSITION"
-                        ? item.receivedAt
-                        : null,
-                    render: (item) =>
-                      item.kind === "RETURN_DISPOSITION"
-                        ? dateLabel(item.receivedAt)
-                        : "—",
-                  },
-                  {
-                    id: "status",
-                    label: "Статус",
-                    getSortValue: (item) =>
-                      item.kind === "RETURN_DISPOSITION"
-                        ? item.status
-                        : "RESOLVED",
-                    render: (item) => <DispositionStatusBadge item={item} />,
-                  },
-                  {
-                    id: "actions",
-                    label: "Действия",
-                    getSortValue: () => null,
-                    render: (item) =>
-                      item.kind === "RETURN_DISPOSITION" ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => openAction(item)}
-                        >
-                          Выбрать
-                        </Button>
-                      ) : (
-                        "—"
-                      ),
-                  },
-                ]}
-              />
-            </div>
-
-            {items.length > 0 ? (
-              <div className="grid gap-3 md:hidden">
-                {items.map((item) => (
-                  <EquipmentDispositionMobileCard
-                    key={item.id}
-                    item={item}
-                    onAction={openAction}
-                  />
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground md:hidden">
-                Доп. оборудования, требующего действия, нет.
-              </p>
-            )}
-          </>
-        )}
-      </div>
-
-      <EquipmentDispositionActionDialog
-        key={
-          selectedCase ? `${selectedCase.id}:${selectedCase.version}` : "closed"
-        }
-        item={selectedCase}
-        onOpenChange={(open) => {
-          if (!open) setSelectedCase(null)
-        }}
-        onSaved={() => {
-          setSelectedCase(null)
-          void queryClient.invalidateQueries({
-            queryKey: EQUIPMENT_WRITE_OFFS_QUERY_KEY,
-          })
-          void queryClient.invalidateQueries({ queryKey: ["equipment-items"] })
-          void queryClient.invalidateQueries({ queryKey: ["rental-items"] })
-        }}
-      />
-    </div>
+function stockBalance(item: EquipmentItemDto) {
+  return item.balances.find(
+    (balance) => balance.locationKind === "STOCK" && balance.availableStock > 0
   )
 }
 
-function EquipmentDispositionActionDialog({
-  item,
+function EquipmentDispositionDialog({
+  accessToken,
+  warehouseId,
+  open,
   onOpenChange,
   onSaved,
 }: {
-  item: ReturnEquipmentDispositionCaseDto | null
+  accessToken: string | null
+  warehouseId: string
+  open: boolean
   onOpenChange: (open: boolean) => void
   onSaved: () => void
 }) {
-  const { currentUser } = useAuth()
-  const [action, setAction] =
-    useState<ReturnEquipmentDispositionAction>("RETURN_TO_STOCK")
-  const [quantity, setQuantity] = useState(1)
-  const [targetRentalItemId, setTargetRentalItemId] = useState("")
-  const [reason, setReason] = useState("")
-  const [confirmCreateMasterItem, setConfirmCreateMasterItem] = useState(false)
+  const queryClient = useQueryClient()
+  const [equipmentId, setEquipmentId] = useState("")
+  const [quantity, setQuantity] = useState("1")
+  const [disposition, setDisposition] = useState<"WRITE_OFF" | "LOSS">(
+    "WRITE_OFF"
+  )
+  const [attempt, setAttempt] = useState<{
+    key: string
+    signature: string
+  } | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const dialogContentRef = useRef<HTMLDivElement>(null)
-  const targetsQuery = useQuery({
-    queryKey: [
-      "equipment-disposition-targets",
-      item?.warehouseId,
-      item?.sourceRentalItemId,
-    ],
-    queryFn: () =>
-      listEquipmentDispositionTransferTargets({
-        warehouseId: item!.warehouseId,
-        sourceRentalItemId: item!.sourceRentalItemId,
-      }),
-    enabled: Boolean(item && action === "TRANSFER_TO_CABIN"),
+
+  const equipmentQuery = useQuery({
+    queryKey: ["equipment-items", warehouseId, "disposition-sources"],
+    queryFn: () => getEquipmentItems(accessToken, { warehouseId }),
+    enabled: open && Boolean(accessToken),
   })
+  const sourceItems = useMemo(
+    () => (equipmentQuery.data ?? []).filter(stockBalance),
+    [equipmentQuery.data]
+  )
+  const selectedItem = sourceItems.find((item) => item.id === equipmentId)
+  const selectedBalance = selectedItem ? stockBalance(selectedItem) : undefined
+  const parsedQuantity = Number(quantity)
+  const quantityIsValid =
+    Number.isSafeInteger(parsedQuantity) &&
+    parsedQuantity >= 1 &&
+    parsedQuantity <= (selectedBalance?.availableStock ?? 0)
+
   const mutation = useMutation({
-    mutationFn: () =>
-      resolveReturnEquipmentDisposition({
-        caseId: item!.id,
-        expectedVersion: item!.version,
-        idempotencyKey: crypto.randomUUID(),
-        action,
-        quantity,
-        targetRentalItemId:
-          action === "TRANSFER_TO_CABIN" ? targetRentalItemId : null,
-        reason: action === "WRITE_OFF" ? reason : null,
-        createdBy: currentUser?.displayName ?? "Текущий пользователь",
-        confirmCreateMasterItem,
-      }),
-    onSuccess: onSaved,
+    mutationFn: ({ idempotencyKey }: { idempotencyKey: string }) => {
+      if (!selectedItem || !selectedBalance) {
+        throw new Error("Выберите оборудование с доступным складским остатком.")
+      }
+
+      return disposeEquipment(accessToken, idempotencyKey, {
+        equipmentId: selectedItem.id,
+        warehouseId,
+        sourceRentalItemId: null,
+        sourceLocationKind: "STOCK",
+        sourceExpectedVersion: selectedBalance.version,
+        quantity: parsedQuantity,
+        disposition,
+      })
+    },
+    onSuccess: () => {
+      onSaved()
+      void queryClient.invalidateQueries({
+        queryKey: ["equipment-items", warehouseId],
+      })
+      void queryClient.invalidateQueries({
+        queryKey: EQUIPMENT_WRITE_OFFS_QUERY_KEY,
+      })
+    },
     onError: (mutationError) => {
       setError(
         mutationError instanceof Error
           ? mutationError.message
-          : "Не удалось выполнить действие"
+          : "Не удалось провести операцию оборудования."
       )
+      void queryClient.invalidateQueries({
+        queryKey: ["equipment-items", warehouseId],
+      })
     },
   })
-  const needsMasterConfirmation =
-    action === "RETURN_TO_STOCK" && item?.equipmentMasterItemId === null
 
   function reset(nextOpen: boolean) {
     onOpenChange(nextOpen)
     if (!nextOpen) return
-    setAction("RETURN_TO_STOCK")
-    setQuantity(1)
-    setTargetRentalItemId("")
-    setReason("")
-    setConfirmCreateMasterItem(false)
+    setEquipmentId("")
+    setQuantity("1")
+    setDisposition("WRITE_OFF")
+    setAttempt(null)
     setError(null)
   }
 
+  function submit() {
+    if (!selectedItem || !selectedBalance || !quantityIsValid) return
+
+    const signature = JSON.stringify({
+      equipmentId: selectedItem.id,
+      warehouseId,
+      balanceId: selectedBalance.id,
+      sourceExpectedVersion: selectedBalance.version,
+      quantity: parsedQuantity,
+      disposition,
+    })
+    const idempotencyKey =
+      attempt?.signature === signature ? attempt.key : crypto.randomUUID()
+
+    if (attempt?.signature !== signature) {
+      setAttempt({ key: idempotencyKey, signature })
+    }
+
+    mutation.mutate({ idempotencyKey })
+  }
+
   return (
-    <Dialog open={item !== null} onOpenChange={reset}>
-      <DialogContent ref={dialogContentRef}>
+    <Dialog open={open} onOpenChange={reset}>
+      <DialogContent>
         <DialogHeader>
-          <DialogTitle>Обработать доп. оборудование</DialogTitle>
+          <DialogTitle>Операция с оборудованием</DialogTitle>
           <DialogDescription>
-            {item
-              ? `${item.equipmentName}, бытовка ${item.sourceCabinNumber}. Осталось ${item.remainingQuantity} шт.`
-              : "Выберите действие для карантинной позиции."}
+            Доступно только списание или фиксация утраты со складского остатка.
+            Перемещения и обработка возвратов требуют отдельного контракта
+            asset-service.
           </DialogDescription>
         </DialogHeader>
 
         <FieldGroup>
-          <Field>
-            <FieldLabel>Действие</FieldLabel>
+          <Field data-invalid={Boolean(error && !selectedItem)}>
+            <FieldLabel>Оборудование</FieldLabel>
             <Select
-              value={action}
+              value={equipmentId}
               onValueChange={(value) => {
-                setAction(value as ReturnEquipmentDispositionAction)
+                setEquipmentId(value)
+                setAttempt(null)
+                setError(null)
+              }}
+              disabled={equipmentQuery.isLoading || equipmentQuery.isError}
+            >
+              <SelectTrigger
+                className="w-full"
+                aria-invalid={Boolean(error && !selectedItem)}
+              >
+                <SelectValue placeholder="Выберите позицию" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {sourceItems.map((item) => {
+                    const balance = stockBalance(item)!
+                    return (
+                      <SelectItem key={item.id} value={item.id}>
+                        {item.name} — доступно {balance.availableStock} шт.
+                      </SelectItem>
+                    )
+                  })}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            {equipmentQuery.isError ? (
+              <FieldError>
+                Не удалось загрузить доступные складские остатки.
+              </FieldError>
+            ) : (
+              <FieldDescription>
+                Используется актуальная версия складского баланса asset-service.
+              </FieldDescription>
+            )}
+          </Field>
+
+          <Field data-invalid={Boolean(error && !quantityIsValid)}>
+            <FieldLabel htmlFor="equipment-disposition-quantity">
+              Количество
+            </FieldLabel>
+            <Input
+              id="equipment-disposition-quantity"
+              type="number"
+              min={1}
+              max={selectedBalance?.availableStock ?? 1}
+              value={quantity}
+              aria-invalid={Boolean(error && !quantityIsValid)}
+              onChange={(event) => {
+                setQuantity(event.target.value)
+                setAttempt(null)
+                setError(null)
+              }}
+            />
+            {selectedBalance ? (
+              <FieldDescription>
+                Доступно к операции: {selectedBalance.availableStock} шт.
+              </FieldDescription>
+            ) : null}
+          </Field>
+
+          <Field>
+            <FieldLabel>Тип операции</FieldLabel>
+            <Select
+              value={disposition}
+              onValueChange={(value) => {
+                setDisposition(value as "WRITE_OFF" | "LOSS")
+                setAttempt(null)
                 setError(null)
               }}
             >
@@ -456,100 +298,12 @@ function EquipmentDispositionActionDialog({
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
-                  <SelectItem value="RETURN_TO_STOCK">
-                    Вернуть на склад
-                  </SelectItem>
-                  <SelectItem value="TRANSFER_TO_CABIN">
-                    Переместить в бытовку
-                  </SelectItem>
-                  <SelectItem value="WRITE_OFF">Списать</SelectItem>
+                  <SelectItem value="WRITE_OFF">Списание</SelectItem>
+                  <SelectItem value="LOSS">Утрата</SelectItem>
                 </SelectGroup>
               </SelectContent>
             </Select>
           </Field>
-
-          <Field>
-            <FieldLabel htmlFor="equipment-disposition-quantity">
-              Количество
-            </FieldLabel>
-            <Input
-              id="equipment-disposition-quantity"
-              type="number"
-              min={1}
-              max={item?.remainingQuantity ?? 1}
-              value={quantity}
-              onChange={(event) => setQuantity(Number(event.target.value))}
-            />
-          </Field>
-
-          {action === "TRANSFER_TO_CABIN" ? (
-            <Field data-invalid={Boolean(error && !targetRentalItemId)}>
-              <FieldLabel>Куда переместить</FieldLabel>
-              <Combobox
-                items={(targetsQuery.data ?? []).map((target) => target.number)}
-                value={
-                  targetsQuery.data?.find(
-                    (target) => target.id === targetRentalItemId
-                  )?.number ?? null
-                }
-                onValueChange={(value) =>
-                  setTargetRentalItemId(
-                    targetsQuery.data?.find((target) => target.number === value)
-                      ?.id ?? ""
-                  )
-                }
-              >
-                <ComboboxInput
-                  placeholder="Введите номер бытовки"
-                  aria-invalid={Boolean(error && !targetRentalItemId)}
-                />
-                <ComboboxContent portalContainer={dialogContentRef}>
-                  <ComboboxList>
-                    <ComboboxEmpty>Доступные бытовки не найдены</ComboboxEmpty>
-                    <ComboboxGroup>
-                      {(targetsQuery.data ?? []).map((target) => (
-                        <ComboboxItem key={target.id} value={target.number}>
-                          {target.number}
-                        </ComboboxItem>
-                      ))}
-                    </ComboboxGroup>
-                  </ComboboxList>
-                </ComboboxContent>
-              </Combobox>
-              <FieldDescription>
-                Доступны активные бытовки того же склада, кроме арендованных.
-              </FieldDescription>
-            </Field>
-          ) : null}
-
-          {action === "WRITE_OFF" ? (
-            <Field data-invalid={Boolean(error && !reason.trim())}>
-              <FieldLabel htmlFor="equipment-disposition-reason">
-                Причина списания
-              </FieldLabel>
-              <Textarea
-                id="equipment-disposition-reason"
-                value={reason}
-                aria-invalid={Boolean(error && !reason.trim())}
-                onChange={(event) => setReason(event.target.value)}
-              />
-            </Field>
-          ) : null}
-
-          {needsMasterConfirmation ? (
-            <Field orientation="horizontal">
-              <Checkbox
-                id="equipment-create-master"
-                checked={confirmCreateMasterItem}
-                onCheckedChange={(checked) =>
-                  setConfirmCreateMasterItem(checked === true)
-                }
-              />
-              <FieldLabel htmlFor="equipment-create-master">
-                Создать новую позицию на складе
-              </FieldLabel>
-            </Field>
-          ) : null}
 
           {error ? <FieldError>{error}</FieldError> : null}
         </FieldGroup>
@@ -563,23 +317,166 @@ function EquipmentDispositionActionDialog({
             Отмена
           </Button>
           <Button
-            variant={action === "WRITE_OFF" ? "destructive" : "default"}
+            variant="destructive"
             disabled={
               mutation.isPending ||
-              !item ||
-              !Number.isInteger(quantity) ||
-              quantity < 1 ||
-              quantity > (item?.remainingQuantity ?? 0) ||
-              (action === "TRANSFER_TO_CABIN" && !targetRentalItemId) ||
-              (action === "WRITE_OFF" && !reason.trim()) ||
-              (needsMasterConfirmation && !confirmCreateMasterItem)
+              !accessToken ||
+              !selectedItem ||
+              !selectedBalance ||
+              !quantityIsValid
             }
-            onClick={() => mutation.mutate()}
+            onClick={submit}
           >
-            Применить
+            Провести операцию
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+export function EquipmentWriteOffsPage() {
+  const { accessToken } = useAuth()
+  const { selectedWarehouseId } = useWarehouse()
+  const queryClient = useQueryClient()
+  const [search, setSearch] = useState("")
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const normalizedSearch = search.trim()
+  const listQuery = useQuery({
+    queryKey: equipmentWriteOffsQueryKey(
+      selectedWarehouseId ?? "none",
+      normalizedSearch
+    ),
+    queryFn: () =>
+      listEquipmentDispositionItems(accessToken, {
+        warehouseId: selectedWarehouseId!,
+        search: normalizedSearch,
+      }),
+    enabled: Boolean(selectedWarehouseId && accessToken),
+  })
+  const items = listQuery.data ?? []
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
+      <PageToolbar>
+        <PageToolbarContent className="max-w-sm">
+          <Input
+            aria-label="Поиск операций оборудования"
+            placeholder="Наименование оборудования"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </PageToolbarContent>
+        <PageToolbarActions>
+          <Button
+            disabled={!accessToken || !selectedWarehouseId}
+            onClick={() => setDialogOpen(true)}
+          >
+            Операция с оборудованием
+          </Button>
+        </PageToolbarActions>
+      </PageToolbar>
+
+      {!selectedWarehouseId ? (
+        <p className="text-sm text-muted-foreground">Склад не выбран.</p>
+      ) : !accessToken ? (
+        <p className="text-sm text-muted-foreground">
+          Для операций с оборудованием требуется авторизация.
+        </p>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto md:flex">
+          {listQuery.isLoading ? (
+            <p className="text-xs text-muted-foreground">
+              Загрузка операций оборудования...
+            </p>
+          ) : listQuery.isError ? (
+            <p role="alert" className="text-xs text-destructive">
+              {listQuery.error instanceof Error
+                ? listQuery.error.message
+                : "Не удалось загрузить операции оборудования."}
+            </p>
+          ) : (
+            <>
+              {items.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Операций оборудования пока нет.
+                </p>
+              ) : (
+                <>
+                  <div className="hidden min-h-full min-w-0 flex-1 md:block">
+                    <OperationsListGrid
+                      className="min-h-full"
+                      items={items}
+                      columns={[
+                        {
+                          id: "name",
+                          label: "Наименование",
+                          getSortValue: (item) => item.equipmentName,
+                          render: (item) => item.equipmentName,
+                        },
+                        {
+                          id: "code",
+                          label: "Код",
+                          getSortValue: (item) => item.equipmentCode,
+                          render: (item) => item.equipmentCode,
+                        },
+                        {
+                          id: "quantity",
+                          label: "Количество",
+                          cellClassName: "tabular-nums",
+                          getSortValue: (item) => item.quantity,
+                          render: (item) => `${item.quantity} шт.`,
+                        },
+                        {
+                          id: "kind",
+                          label: "Операция",
+                          getSortValue: (item) => item.kind,
+                          render: (item) => (
+                            <Badge variant="outline">
+                              {operationLabel(item)}
+                            </Badge>
+                          ),
+                        },
+                        {
+                          id: "date",
+                          label: "Дата",
+                          getSortValue: (item) => item.occurredAt,
+                          render: (item) => dateLabel(item.occurredAt),
+                        },
+                      ]}
+                    />
+                  </div>
+
+                  <div className="grid gap-3 md:hidden">
+                    {items.map((item) => (
+                      <EquipmentDispositionMobileCard
+                        key={item.id}
+                        item={item}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {selectedWarehouseId ? (
+        <EquipmentDispositionDialog
+          key={`${selectedWarehouseId}:${dialogOpen}`}
+          accessToken={accessToken}
+          warehouseId={selectedWarehouseId}
+          open={dialogOpen}
+          onOpenChange={setDialogOpen}
+          onSaved={() => {
+            setDialogOpen(false)
+            void queryClient.invalidateQueries({
+              queryKey: EQUIPMENT_WRITE_OFFS_QUERY_KEY,
+            })
+          }}
+        />
+      ) : null}
+    </div>
   )
 }

@@ -22,6 +22,14 @@ paths:
         - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
         - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
         - { name: search, in: query, schema: { type: string, maxLength: 128 } }
+        - name: excludeStatus
+          in: query
+          description: Rental-item statuses omitted before pagination.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: '#/components/schemas/RentalItemStatus' }
       responses:
         '200': { description: Page of canonical rental items, content: { application/json: { schema: { $ref: '#/components/schemas/RentalItemPage' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }

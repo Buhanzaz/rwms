@@ -1,6 +1,49 @@
 import type { RentalItemStatus } from "@/features/rental-items/model/rental-item"
 
-export type EquipmentCategory = "FURNITURE" | "ELECTRICAL"
+export type EquipmentCategory = "FURNITURE" | "ELECTRICAL" | "OTHER"
+
+export type EquipmentBalanceLocationKind =
+  "STOCK" | "CABIN_NON_RENTED" | "CABIN_RENTED" | "WRITTEN_OFF" | "LOST"
+
+export type EquipmentBalanceDto = {
+  id: string
+  version: number
+  equipmentId: string
+  warehouseId: string
+  rentalItemId: string | null
+  locationKind: EquipmentBalanceLocationKind
+  quantity: number
+  activeHeldQuantity: number
+  availableStock: number
+}
+
+/**
+ * Asset-service equipment and its immutable-ledger totals for one warehouse.
+ * `usages` deliberately remains empty: the public API does not expose a
+ * per-cabin usage read model, so the panel must not reconstruct one locally.
+ */
+export type EquipmentItemDto = {
+  id: string
+  version: number
+  warehouseId: string
+  category: EquipmentCategory
+  code: string
+  name: string
+  active: boolean
+  comment: string | null
+
+  totalQuantity: number
+  stockQuantity: number
+  cabinStockQuantity: number
+  rentedQuantity: number
+  writtenOffQuantity: number
+  lostQuantity: number
+  activeHeldQuantity: number
+  availableStock: number
+  balances: EquipmentBalanceDto[]
+
+  usages: EquipmentRentalUsageDto[]
+}
 
 export type EquipmentRentalUsageDto = {
   id: string
@@ -10,23 +53,6 @@ export type EquipmentRentalUsageDto = {
   rentalItemStatus: RentalItemStatus
   warehouseId: string
   quantity: number
-}
-
-export type EquipmentItemDto = {
-  id: string
-  warehouseId: string
-  category: EquipmentCategory
-
-  name: string
-
-  totalQuantity: number
-  stockQuantity: number
-  cabinStockQuantity: number
-  rentedQuantity: number
-  writtenOffQuantity: number
-  lostQuantity: number
-
-  usages: EquipmentRentalUsageDto[]
 }
 
 export type EquipmentItemsQueryParams = {
@@ -41,6 +67,33 @@ export type EquipmentWriteOffSummaryDto = {
   writtenOffQuantity: number
 }
 
+export type EquipmentMovementDto = {
+  id: string
+  version: number
+  equipmentId: string
+  sourceBalanceId: string
+  targetBalanceId: string
+  quantity: number
+  kind: string
+  occurredAt: string
+}
+
+export type EquipmentDispositionDto = EquipmentMovementDto & {
+  equipmentCode: string
+  equipmentName: string
+}
+
+export type DisposeEquipmentInput = {
+  equipmentId: string
+  warehouseId: string
+  sourceRentalItemId: string | null
+  sourceLocationKind: EquipmentBalanceLocationKind
+  sourceExpectedVersion: number
+  quantity: number
+  disposition: "WRITE_OFF" | "LOSS"
+}
+
+/** The types below are retained only for explicit fail-closed transition stubs. */
 export type ReturnEquipmentDispositionStatus =
   "ACTION_REQUIRED" | "PARTIALLY_RESOLVED" | "RESOLVED"
 
@@ -77,9 +130,7 @@ export type ReturnEquipmentDispositionCaseDto = {
   resolutions: ReturnEquipmentDispositionResolutionDto[]
 }
 
-export type EquipmentDispositionListItemDto =
-  | ({ kind: "RETURN_DISPOSITION" } & ReturnEquipmentDispositionCaseDto)
-  | ({ kind: "HISTORICAL_WRITE_OFF" } & EquipmentWriteOffSummaryDto)
+export type EquipmentDispositionListItemDto = EquipmentDispositionDto
 
 export type RegisterReturnEquipmentDispositionInput = {
   warehouseId: string

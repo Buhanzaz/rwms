@@ -1,6 +1,5 @@
-import { useEffect } from "react"
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Add01Icon, ArrowLeft01Icon } from "@hugeicons/core-free-icons"
 
@@ -15,17 +14,11 @@ import {
 import { OperationsListGrid } from "@/components/operations-list-grid"
 import { PageToolbar, PageToolbarActions } from "@/components/page-toolbar"
 import {
-  REPAIR_TASKS_QUERY_KEY,
   getRepairTask,
   listRepairTasks,
   repairTaskDetailQueryKey,
   repairTasksListQueryKey,
 } from "@/features/repair-tasks/api/repair-tasks-api"
-import {
-  REPAIR_TASKS_MOCK_STORAGE_KEY,
-  REPAIR_TASKS_UPDATED_EVENT,
-} from "@/features/repair-tasks/adapters/local-storage-repair-tasks-adapter"
-import { DEV_MAINTENANCE_FIXTURES_ENABLED } from "@/features/maintenance/maintenance-runtime"
 import type {
   RepairTaskDto,
   RepairsLocationState,
@@ -70,10 +63,10 @@ function RepairMobileCard({
         </CardTitle>
       </CardHeader>
       <CardContent className="grid grid-cols-2 gap-2">
-        <span className="text-muted-foreground">Причина</span>
-        <span>{repair.reason || "—"}</span>
-        <span className="text-muted-foreground">Автор</span>
-        <span>{repair.authorName}</span>
+        <span className="text-muted-foreground">Источник</span>
+        <span>{repair.sourceParty || "—"}</span>
+        <span className="text-muted-foreground">Идентификатор автора</span>
+        <span>{repair.actorId || "—"}</span>
         <span className="text-muted-foreground">Статус</span>
         <span>
           <RepairTaskStatusBadge status={repair.status} />
@@ -87,7 +80,6 @@ function RepairMobileCard({
 
 export function RepairsPage() {
   const { selectedWarehouseId } = useWarehouse()
-  const queryClient = useQueryClient()
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams] = useSearchParams()
@@ -128,24 +120,6 @@ export function RepairsPage() {
       getRepairTask(reworkSeed!.sourceRepairTaskId, selectedWarehouseId!),
     enabled: Boolean(reworkSeed && selectedWarehouseId),
   })
-
-  useEffect(() => {
-    if (!DEV_MAINTENANCE_FIXTURES_ENABLED) return
-    const invalidate = () => {
-      void queryClient.invalidateQueries({ queryKey: REPAIR_TASKS_QUERY_KEY })
-    }
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === REPAIR_TASKS_MOCK_STORAGE_KEY) {
-        invalidate()
-      }
-    }
-    window.addEventListener(REPAIR_TASKS_UPDATED_EVENT, invalidate)
-    window.addEventListener("storage", handleStorage)
-    return () => {
-      window.removeEventListener(REPAIR_TASKS_UPDATED_EVENT, invalidate)
-      window.removeEventListener("storage", handleStorage)
-    }
-  }, [queryClient])
 
   const repairs = listQuery.data ?? []
   const selectedRepair = detailQuery.data ?? null
@@ -212,6 +186,7 @@ export function RepairsPage() {
           <RepairTaskEditorWorkspace
             warehouseId={selectedWarehouseId}
             task={selectedRepair}
+            sourceTask={reworkSourceQuery.data}
             seed={reworkSourceQuery.data ? reworkSeed : undefined}
             initialRentalItemId={
               repairId || reworkSeed ? undefined : rentalItemSeed?.rentalItemId
@@ -281,18 +256,18 @@ export function RepairsPage() {
                         ),
                       },
                       {
-                        id: "reason",
-                        label: "Причина",
+                        id: "sourceParty",
+                        label: "Источник",
                         className: "w-52",
-                        getSortValue: (repair) => repair.reason,
-                        render: (repair) => repair.reason || "—",
+                        getSortValue: (repair) => repair.sourceParty,
+                        render: (repair) => repair.sourceParty || "—",
                       },
                       {
-                        id: "authorName",
-                        label: "Автор",
+                        id: "actorId",
+                        label: "Идентификатор автора",
                         className: "w-48",
-                        getSortValue: (repair) => repair.authorName,
-                        render: (repair) => repair.authorName,
+                        getSortValue: (repair) => repair.actorId,
+                        render: (repair) => repair.actorId || "—",
                       },
                       {
                         id: "status",

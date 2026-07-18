@@ -3,8 +3,9 @@
 `media-service` is the single stateful Go runtime for upload authorization,
 metadata, immutable MinIO object generations, image/video processing and media
 facts. PostgreSQL is its replay authority; Kafka is at-least-once transport.
-Browsers transfer bytes directly to MinIO through short-lived capabilities and
-never receive storage credentials.
+Browsers upload and read bytes only through authenticated same-origin media API
+paths. MinIO remains private: no storage origin, object key, signed URL or
+credential is returned to the browser.
 
 Every aggregate event and latest snapshot stores the exact SHA-256-protected
 full local state (asset, upload session, processing jobs and variants). Shadow
@@ -21,12 +22,13 @@ rotation. An unproved video dimension remains SQL `NULL`.
 
 Flyway is external to this process. Apply
 `db/migration/V1__media_schema.sql` and
-`db/migration/V2__media_runtime_recovery.sql` with Flyway before starting the
+`db/migration/V2__media_runtime_recovery.sql`, then
+`db/migration/V3__inventory_owner_proof.sql` with Flyway before starting the
 service. The Go application never migrates, baselines, repairs or silently
 adopts a database.
 
-- New local/test databases migrate through V1 and V2.
-- A database already at the exact V1 history is upgraded by applying V2.
+- New local/test databases migrate through V1, V2 and V3.
+- A database already at the exact V2 history is upgraded by applying V3.
 - `baselineOnMigrate` must remain `false`; a non-empty unversioned database is
   rejected.
 - Startup verifies both successful Flyway history rows, their versions,
@@ -62,7 +64,6 @@ absent.
 | `MEDIA_MAX_VIDEO_OUTPUT_BYTES` | Maximum encoded video output |
 | `MEDIA_ALLOWED_MIME_TYPES` | Comma-separated allowlist: JPEG, PNG, WebP, MP4 or WebM |
 | `MEDIA_UPLOAD_EXPIRY` | Constrained upload capability lifetime, for example `5m` |
-| `MEDIA_DOWNLOAD_EXPIRY` | Original download capability lifetime |
 | `MEDIA_PROCESSING_TIMEOUT` | Per-job processor timeout |
 | `MEDIA_KAFKA_BROKERS` | Comma-separated Kafka bootstrap addresses |
 | `MEDIA_KAFKA_INVENTORY_TOPIC` | Canonical inventory fact topic |
@@ -91,10 +92,14 @@ requests are rejected before any MinIO operation.
 
 ## Storage and owner safety
 
-The bucket must have versioning enabled. Finalization verifies and pins the
-exact object version, ETag, length, content type, checksum and content sniff;
-derived writes are version-pinned as well. The runtime has no unversioned
-download path and no delete, retention or orphan-cleanup behavior.
+The bucket must have versioning enabled. Authenticated upload ingress is
+serialized per upload session across service instances, streams the exact
+declared length to private MinIO, and commits finalization before acknowledging
+the caller. Finalization verifies and pins the exact object version, ETag,
+length, content type, checksum and content sniff; derived writes are
+version-pinned as well. Public reads stream the pinned version through the media
+API with private/no-store headers. The runtime has no unversioned download path
+and no delete, retention or orphan-cleanup behavior.
 
 Public access is restricted to a `USER` JWT with a UUID subject, exact RWMS
 scope and warehouse grant. The only Stage 7 owner shape is

@@ -1,5 +1,4 @@
-import { useEffect } from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { ArrowLeft01Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -20,17 +19,11 @@ import {
 import { AcceptanceStatusBadge } from "@/features/acceptance/acceptance-presentation"
 import { RepairAcceptanceDossier } from "@/features/acceptance/repair-acceptance-dossier"
 import {
-  REPAIR_TASKS_QUERY_KEY,
   getRepairTask,
   listRepairWriteOffs,
   repairTaskDetailQueryKey,
   repairWriteOffsListQueryKey,
 } from "@/features/repair-tasks/api/repair-tasks-api"
-import {
-  REPAIR_TASKS_MOCK_STORAGE_KEY,
-  REPAIR_TASKS_UPDATED_EVENT,
-} from "@/features/repair-tasks/adapters/local-storage-repair-tasks-adapter"
-import { DEV_MAINTENANCE_FIXTURES_ENABLED } from "@/features/maintenance/maintenance-runtime"
 import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import {
@@ -64,12 +57,10 @@ function WriteOffMobileCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="grid grid-cols-2 gap-2">
-        <span className="text-muted-foreground">Причина списания</span>
-        <span>{task.acceptanceComment || "—"}</span>
-        <span className="text-muted-foreground">Автор</span>
-        <span>{task.acceptanceDecidedBy || "—"}</span>
+        <span className="text-muted-foreground">Идентификатор автора</span>
+        <span>{task.decisionActorId || "—"}</span>
         <span className="text-muted-foreground">Дата списания</span>
-        <span>{formatAcceptanceDateTime(task.acceptanceDecidedAt)}</span>
+        <span>{formatAcceptanceDateTime(task.writtenOffAt ?? null)}</span>
         <span className="text-muted-foreground">Статус</span>
         <span>
           <AcceptanceStatusBadge status={task.acceptanceStatus} />
@@ -81,7 +72,6 @@ function WriteOffMobileCard({
 
 export function WriteOffsPage() {
   const { selectedWarehouseId } = useWarehouse()
-  const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const writeOffId = searchParams.get("writeOffId")
@@ -104,24 +94,6 @@ export function WriteOffsPage() {
     queryFn: () => getRepairTask(writeOffId!, selectedWarehouseId!),
     enabled: Boolean(writeOffId && selectedWarehouseId),
   })
-
-  useEffect(() => {
-    if (!DEV_MAINTENANCE_FIXTURES_ENABLED) return
-    const invalidate = () => {
-      void queryClient.invalidateQueries({ queryKey: REPAIR_TASKS_QUERY_KEY })
-    }
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === REPAIR_TASKS_MOCK_STORAGE_KEY) {
-        invalidate()
-      }
-    }
-    window.addEventListener(REPAIR_TASKS_UPDATED_EVENT, invalidate)
-    window.addEventListener("storage", handleStorage)
-    return () => {
-      window.removeEventListener(REPAIR_TASKS_UPDATED_EVENT, invalidate)
-      window.removeEventListener("storage", handleStorage)
-    }
-  }, [queryClient])
 
   const tasks = listQuery.data ?? []
   const selectedTask = detailQuery.data ?? null
@@ -175,10 +147,6 @@ export function WriteOffsPage() {
           <p role="alert" className="text-xs text-destructive">
             Не удалось загрузить список списанных бытовок.
           </p>
-        ) : tasks.length === 0 ? (
-          <p role="status" className="p-4 text-sm text-muted-foreground">
-            Списанные бытовки отсутствуют.
-          </p>
         ) : (
           <>
             <div className="hidden min-h-full min-w-0 flex-1 md:block">
@@ -213,29 +181,22 @@ export function WriteOffsPage() {
                       repairTaskOriginLabel(task.origin, task.kind),
                   },
                   {
-                    id: "reason",
-                    label: "Причина списания",
-                    className: "w-56",
-                    getSortValue: (task) => task.acceptanceComment,
-                    render: (task) => task.acceptanceComment || "—",
-                  },
-                  {
                     id: "author",
-                    label: "Автор",
+                    label: "Идентификатор автора",
                     className: "w-44",
-                    getSortValue: (task) => task.acceptanceDecidedBy,
-                    render: (task) => task.acceptanceDecidedBy || "—",
+                    getSortValue: (task) => task.decisionActorId,
+                    render: (task) => task.decisionActorId || "—",
                   },
                   {
                     id: "decidedAt",
                     label: "Дата списания",
                     className: "w-48",
                     getSortValue: (task) =>
-                      task.acceptanceDecidedAt
-                        ? new Date(task.acceptanceDecidedAt).getTime()
+                      task.writtenOffAt
+                        ? new Date(task.writtenOffAt).getTime()
                         : null,
                     render: (task) =>
-                      formatAcceptanceDateTime(task.acceptanceDecidedAt),
+                      formatAcceptanceDateTime(task.writtenOffAt ?? null),
                   },
                   {
                     id: "status",
@@ -250,15 +211,17 @@ export function WriteOffsPage() {
               />
             </div>
 
-            <div className="grid gap-3 md:hidden">
-              {tasks.map((task) => (
-                <WriteOffMobileCard
-                  key={task.id}
-                  task={task}
-                  onOpen={() => openTask(task.id)}
-                />
-              ))}
-            </div>
+            {tasks.length > 0 ? (
+              <div className="grid gap-3 md:hidden">
+                {tasks.map((task) => (
+                  <WriteOffMobileCard
+                    key={task.id}
+                    task={task}
+                    onOpen={() => openTask(task.id)}
+                  />
+                ))}
+              </div>
+            ) : null}
           </>
         )}
       </div>

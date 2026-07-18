@@ -24,7 +24,6 @@ type Config struct {
 	MaxUploadBytes      int64
 	AllowedMIMETypes    map[string]struct{}
 	UploadExpiry        time.Duration
-	DownloadExpiry      time.Duration
 	MaxDecodedPixels    int64
 	MaxImageOutputBytes int64
 	MaxVideoOutputBytes int64
@@ -82,9 +81,6 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if configuration.UploadExpiry, err = requiredPositiveDuration("MEDIA_UPLOAD_EXPIRY"); err != nil {
-		return Config{}, err
-	}
-	if configuration.DownloadExpiry, err = requiredPositiveDuration("MEDIA_DOWNLOAD_EXPIRY"); err != nil {
 		return Config{}, err
 	}
 	if configuration.ProcessingTimeout, err = requiredPositiveDuration("MEDIA_PROCESSING_TIMEOUT"); err != nil {

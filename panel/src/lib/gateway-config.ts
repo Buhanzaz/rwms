@@ -9,55 +9,43 @@ export type GatewayRuntimeConfig = {
   maintenanceApiBaseUrl: string
   inventoryApiBaseUrl: string
   mediaApiBaseUrl: string
+  logisticsApiBaseUrl: string
+  dossierApiBaseUrl: string
 }
 
-function parseOriginOnlyUrl(value: string, settingName: string) {
-  if (value.trim() === "") {
-    throw new Error(`${settingName} must not be empty`)
-  }
-
+function parseOrigin(value: string, settingName: string) {
   let url: URL
+
   try {
     url = new URL(value)
   } catch {
     throw new Error(`${settingName} must be an absolute HTTP(S) URL`)
   }
 
-  if (!HTTP_PROTOCOLS.has(url.protocol)) {
-    throw new Error(`${settingName} must use HTTP or HTTPS`)
-  }
-
   if (
+    !HTTP_PROTOCOLS.has(url.protocol) ||
     url.username ||
     url.password ||
     url.pathname !== "/" ||
     url.search ||
     url.hash
   ) {
-    throw new Error(`${settingName} must contain an origin only`)
+    throw new Error(`${settingName} must be an origin-only HTTP(S) URL`)
   }
 
   return url.origin
 }
 
+/**
+ * Browser calls are intentionally pinned to the panel origin. In development
+ * Vite forwards `/auth` and `/api` to the local gateway; deployed panels use
+ * the same paths through their gateway/ingress. A service origin is never a
+ * browser runtime setting.
+ */
 export function createGatewayRuntimeConfig(
-  configuredGatewayUrl: string | undefined,
   browserOrigin: string
 ): GatewayRuntimeConfig {
-  const normalizedBrowserOrigin = parseOriginOnlyUrl(
-    browserOrigin,
-    "Browser origin"
-  )
-  const gatewayOrigin = parseOriginOnlyUrl(
-    configuredGatewayUrl ?? normalizedBrowserOrigin,
-    "VITE_GATEWAY_URL"
-  )
-
-  if (gatewayOrigin !== normalizedBrowserOrigin) {
-    throw new Error(
-      "VITE_GATEWAY_URL must use the panel origin; route the browser through the gateway or its trusted ingress"
-    )
-  }
+  const gatewayOrigin = parseOrigin(browserOrigin, "Browser origin")
 
   return {
     gatewayOrigin,
@@ -68,15 +56,14 @@ export function createGatewayRuntimeConfig(
     maintenanceApiBaseUrl: `${gatewayOrigin}/api/maintenance`,
     inventoryApiBaseUrl: `${gatewayOrigin}/api/inventory`,
     mediaApiBaseUrl: `${gatewayOrigin}/api/media`,
+    logisticsApiBaseUrl: `${gatewayOrigin}/api/logistics`,
+    dossierApiBaseUrl: `${gatewayOrigin}/api/dossier`,
   }
 }
 
 let runtimeConfig: GatewayRuntimeConfig | undefined
 
 export function getGatewayRuntimeConfig() {
-  runtimeConfig ??= createGatewayRuntimeConfig(
-    import.meta.env.VITE_GATEWAY_URL,
-    window.location.origin
-  )
+  runtimeConfig ??= createGatewayRuntimeConfig(window.location.origin)
   return runtimeConfig
 }

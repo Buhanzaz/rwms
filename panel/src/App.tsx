@@ -1,30 +1,33 @@
 import { type CSSProperties } from "react"
 import { Route, Routes } from "react-router-dom"
+import { RentalItemDetailPage } from "@/features/rental-items/rental-item-detail-page"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { WarehouseProvider } from "@/contexts/warehouse-provider"
+import { RentalItemsPage } from "@/features/rental-items/rental-items-page"
 import { useWarehouse } from "@/hooks/use-warehouse"
-import { AssetEquipmentPage } from "@/features/assets/asset-equipment-page"
-import { AssetEquipmentWriteOffsPage } from "@/features/assets/asset-equipment-write-offs-page"
-import { AssetRentalItemDetailPage } from "@/features/assets/asset-rental-item-detail-page"
-import { AssetRentalItemsPage } from "@/features/assets/asset-rental-items-page"
-import { AssetSettingsPage } from "@/features/assets/asset-settings-page"
-import { AcceptancePage } from "@/features/acceptance/acceptance-page"
+import { EquipmentPage } from "@/features/equipment/equipment-page"
+import { EstimatesRepairsSettingsPage } from "@/features/settings/estimates-repairs/estimates-repairs-settings-page"
 import { RepairEstimatesPage } from "@/features/repair-estimates/repair-estimates-page"
 import { RepairsPage } from "@/features/repairs/repairs-page"
-import { EstimatesRepairsSettingsPage } from "@/features/settings/estimates-repairs/estimates-repairs-settings-page"
-import { InventoryFeatureRoutes } from "@/features/inventory/inventory-feature-routes"
 import { TaskBoardPage } from "@/features/task-board/task-board-page"
+import { AcceptancePage } from "@/features/acceptance/acceptance-page"
 import { WriteOffsPage } from "@/features/write-offs/write-offs-page"
+import { EquipmentWriteOffsPage } from "@/features/write-offs/equipment-write-offs-page"
 import { UsersPage } from "@/features/settings/users/users-page"
-import { TaskBoardSettingsPage } from "@/features/settings/task-board/task-board-settings-page"
 import { WarehouseSettingsPage } from "@/features/settings/warehouses/warehouse-settings-page"
+import { TaskBoardSettingsPage } from "@/features/settings/task-board/task-board-settings-page"
+import { LogisticsReturnsPage } from "@/features/logistics/logistics-returns-page"
+import { LogisticsShipmentsPage } from "@/features/logistics/logistics-shipments-page"
+import { WarehouseTransfersPage } from "@/features/logistics/warehouse-transfers/warehouse-transfers-page"
 import {
-  Card,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+  InventoryEntryPage,
+  InventoryFinishPage,
+  InventoryHistoryDetailPage,
+  InventoryHistoryPage,
+  InventorySessionPage,
+} from "@/features/inventory/inventory-pages"
+import { Card, CardDescription, CardHeader } from "@/components/ui/card"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 
 type PageConfig = {
@@ -139,20 +142,6 @@ function EmptyPage({ title }: { title: string }) {
   )
 }
 
-function DeferredWorkflowPage({ title }: { title: string }) {
-  return (
-    <Card className="h-full" size="sm">
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>
-          Этот workflow отложен до своего сервисного этапа. Production panel не
-          использует для него browser fixtures или local storage.
-        </CardDescription>
-      </CardHeader>
-    </Card>
-  )
-}
-
 function AppLayout() {
   const { isLoading, error } = useWarehouse()
 
@@ -191,31 +180,47 @@ function AppLayout() {
           <Routes>
             <Route
               path="/warehouse/:rentalItemId"
-              element={<AssetRentalItemDetailPage />}
+              element={<RentalItemDetailPage />}
             />
-            <Route path="/equipment" element={<AssetEquipmentPage />} />
-            <Route path="/warehouse" element={<AssetRentalItemsPage />} />
-            <Route path="/inventory/*" element={<InventoryFeatureRoutes />} />
+            <Route path="/equipment" element={<EquipmentPage />} />
+            <Route path="/warehouse" element={<RentalItemsPage />} />
+            <Route path="/inventory" element={<InventoryEntryPage />} />
+            <Route
+              path="/inventory/history"
+              element={<InventoryHistoryPage />}
+            />
+            <Route
+              path="/inventory/history/:inventoryId"
+              element={<InventoryHistoryDetailPage />}
+            />
+            <Route
+              path="/inventory/:inventoryId/finish"
+              element={<InventoryFinishPage />}
+            />
+            <Route
+              path="/inventory/:inventoryId"
+              element={<InventorySessionPage />}
+            />
             <Route path="/estimates" element={<RepairEstimatesPage />} />
             <Route path="/repairs" element={<RepairsPage />} />
             <Route path="/task-board" element={<TaskBoardPage />} />
             <Route path="/acceptance" element={<AcceptancePage />} />
             <Route
               path="/logistics/returns"
-              element={<DeferredWorkflowPage title="Возврат из аренды" />}
+              element={<LogisticsReturnsPage />}
             />
             <Route
               path="/logistics/shipments"
-              element={<DeferredWorkflowPage title="Отгрузка в аренду" />}
+              element={<LogisticsShipmentsPage />}
             />
             <Route
               path="/logistics/transfers"
-              element={<DeferredWorkflowPage title="Перемещения" />}
+              element={<WarehouseTransfersPage />}
             />
             <Route path="/write-offs" element={<WriteOffsPage />} />
             <Route
               path="/write-offs/equipment"
-              element={<AssetEquipmentWriteOffsPage />}
+              element={<EquipmentWriteOffsPage />}
             />
             <Route
               path="/settings/estimates-repairs"
@@ -230,7 +235,6 @@ function AppLayout() {
               path="/settings/task-board"
               element={<TaskBoardSettingsPage />}
             />
-            <Route path="/settings/assets" element={<AssetSettingsPage />} />
 
             {pages
               .filter(
@@ -249,8 +253,8 @@ function AppLayout() {
                     "/write-offs",
                     "/write-offs/equipment",
                     "/settings/estimates-repairs",
+                    "/settings/warehouses",
                     "/settings/task-board",
-                    "/settings/assets",
                   ].includes(page.path)
               )
               .map((page) => (

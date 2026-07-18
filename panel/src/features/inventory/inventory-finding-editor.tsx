@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/card"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { saveInventoryInspection } from "@/features/inventory/adapters/http-inventory-adapter"
+import { saveInventoryInspection } from "@/features/inventory/api/inventory-api"
 import { buildAutoInventoryPlan } from "@/features/inventory/domain/inventory-plan-mapper"
 import { InventoryMediaEditor } from "@/features/inventory/inventory-media-editor"
 import { reconciliationLabel } from "@/features/inventory/inventory-service-formatters"
@@ -50,6 +50,7 @@ export function InventoryFindingEditor({
     finding.inspection === "WORK_STAGED" ? "WORK_STAGED" : "READY"
   )
   const [media, setMedia] = useState<InventoryMediaReference[]>(finding.media)
+  const [mediaPending, setMediaPending] = useState(true)
   const [catalogLines, setCatalogLines] = useState<RepairEstimateLineDto[]>([])
   const planSelection = buildAutoInventoryPlan(catalogLines)
   const mutation = useMutation({
@@ -86,7 +87,7 @@ export function InventoryFindingEditor({
           <PageToolbarActions>
             <Button
               type="button"
-              disabled={mutation.isPending || invalidWork}
+              disabled={mutation.isPending || invalidWork || mediaPending}
               onClick={() => mutation.mutate()}
             >
               {mutation.isPending ? "Сохраняем..." : "Сохранить осмотр"}
@@ -141,7 +142,6 @@ export function InventoryFindingEditor({
               <RepairEstimateCatalogPicker
                 lines={catalogLines}
                 readOnly={false}
-                warehouseId={session.warehouseId}
                 onChange={(lines) =>
                   setCatalogLines(
                     lines.filter(
@@ -187,6 +187,7 @@ export function InventoryFindingEditor({
             scope={{ ownerId: finding.id, warehouseId: session.warehouseId }}
             readOnly={readOnly}
             onReadyChange={setReadyMedia}
+            onPendingChange={setMediaPending}
           />
           <FrozenPlanView finding={finding} />
         </CardContent>

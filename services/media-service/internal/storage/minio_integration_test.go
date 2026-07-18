@@ -3,10 +3,10 @@ package storage
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestVersionPinnedStorageAndConstrainedPolicyIntegration(t *testing.T) {
+func TestVersionPinnedStorageAndPrivateIngressIntegration(t *testing.T) {
 	endpoint := os.Getenv("MEDIA_TEST_MINIO_ENDPOINT")
 	if endpoint == "" {
 		t.Skip("MEDIA_TEST_MINIO_ENDPOINT is not configured")
@@ -61,28 +61,21 @@ func TestVersionPinnedStorageAndConstrainedPolicyIntegration(t *testing.T) {
 	if err != nil || stat.VersionID != first.VersionID || stat.SizeBytes != int64(len(firstBody)) {
 		t.Fatalf("StatVersion(first) = %#v, %v", stat, err)
 	}
-	signed, err := store.SignedVersionDownloadURL(ctx, key, first.VersionID, time.Minute)
-	if err != nil || signed.Query().Get("versionId") != first.VersionID {
-		t.Fatalf("SignedVersionDownloadURL() = %v, %v", signed, err)
-	}
-
-	checksum := strings.Repeat("a", 64)
-	policy, err := store.SignedUploadPolicy(ctx, "integration/"+uuid.NewString()+"/upload.jpg", "image/jpeg", checksum, 128, time.Minute)
+	ingressBody := []byte("private same-origin ingress body")
+	ingressSum := sha256.Sum256(ingressBody)
+	checksum := hex.EncodeToString(ingressSum[:])
+	ingressKey := "integration/" + uuid.NewString() + "/upload.jpg"
+	ingress, err := store.PutIngressVersion(ctx, ingressKey, bytes.NewReader(ingressBody),
+		int64(len(ingressBody)), "image/jpeg", checksum)
 	if err != nil {
-		t.Fatalf("SignedUploadPolicy() error = %v", err)
+		t.Fatalf("PutIngressVersion() error = %v", err)
 	}
-	if policy.Fields["key"] == "" || policy.Fields["Content-Type"] != "image/jpeg" ||
-		policy.Fields["x-amz-meta-sha256"] != checksum {
-		t.Fatalf("constrained POST fields = %#v", policy.Fields)
+	if ingress.VersionID == "" || ingress.ETag == "" || ingress.SizeBytes != int64(len(ingressBody)) {
+		t.Fatalf("PutIngressVersion() metadata = %#v", ingress)
 	}
-	encodedPolicy := policy.Fields["policy"]
-	decodedPolicy, err := base64.StdEncoding.DecodeString(encodedPolicy)
-	if err != nil {
-		t.Fatalf("decode POST policy: %v", err)
-	}
-	policyText := strings.ReplaceAll(string(decodedPolicy), " ", "")
-	if !strings.Contains(policyText, `["content-length-range",128,128]`) ||
-		!strings.Contains(policyText, `["eq","$x-amz-meta-sha256","`+checksum+`"]`) {
-		t.Fatalf("POST policy is not exact-length/checksum constrained: %s", policyText)
+	ingressStat, err := store.StatVersion(ctx, ingressKey, ingress.VersionID)
+	if err != nil || ingressStat.VersionID != ingress.VersionID ||
+		ingressStat.UserMetadata["sha256"] != checksum {
+		t.Fatalf("StatVersion(ingress) = %#v, %v", ingressStat, err)
 	}
 }

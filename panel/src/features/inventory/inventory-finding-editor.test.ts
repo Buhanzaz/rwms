@@ -19,7 +19,6 @@ function catalogLine(
     lineTotal: "200.00",
     catalogSnapshot: {
       nodeId: id,
-      catalogVersionId: "00000000-0000-4000-8000-000000000700",
       code: `CODE-${id}`,
       name: `${nodeType}-${id}`,
       nodeType,

@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Link, useNavigate } from "react-router-dom"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   closestCenter,
   DndContext,
@@ -11,67 +9,45 @@ import {
   TouchSensor,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
-  type CollisionDetection,
 } from "@dnd-kit/core"
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Add01Icon, Search01Icon } from "@hugeicons/core-free-icons"
-import { toast } from "sonner"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { Link, useNavigate } from "react-router-dom"
 
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import {
   PageToolbar,
   PageToolbarActions,
   PageToolbarContent,
 } from "@/components/page-toolbar"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupInput,
 } from "@/components/ui/input-group"
 import { Skeleton } from "@/components/ui/skeleton"
-import { cn } from "@/lib/utils"
-import { DEV_MAINTENANCE_FIXTURES_ENABLED } from "@/features/maintenance/maintenance-runtime"
 import { useAuth } from "@/features/auth/use-auth"
 import {
-  REPAIR_TASKS_MOCK_STORAGE_KEY,
-  REPAIR_TASKS_UPDATED_EVENT,
-} from "@/features/repair-tasks/adapters/local-storage-repair-tasks-adapter"
-import { REPAIR_TASKS_QUERY_KEY } from "@/features/repair-tasks/api/repair-tasks-api"
-import type { PendingEstimateMediaUpload } from "@/features/repair-estimates/model/repair-estimate"
-import type {
-  RepairTaskWorkerGroupSnapshotDto,
-  RepairTaskWorkerSnapshotDto,
-} from "@/features/repair-tasks/model/repair-task"
-import {
-  TASK_BOARD_QUERY_KEY,
   completeTaskBoardEntry,
-  confirmTaskBoardGroupReturned,
-  evaluateTaskBoardMock,
-  getTaskBoardActiveWorkerId,
   getTaskBoard,
-  listTaskBoardNotifications,
-  listTaskBoardWorkers,
-  markAllTaskBoardNotificationsRead,
-  markTaskBoardNotificationRead,
   moveTaskBoardEntry,
   pauseTaskBoardEntry,
   resumeTaskBoardEntry,
-  setTaskBoardActiveWorker,
-  subscribeTaskBoardMock,
   takeTaskBoardEntry,
-  TASK_BOARD_NOTIFICATIONS_QUERY_KEY,
+  TASK_BOARD_QUERY_KEY,
   taskBoardQueryKey,
 } from "@/features/task-board/api/task-board-api"
 import {
   canMoveEntryToQueue,
   mergeQueueCollapsedSettings,
-  taskBoardEntryTitle,
-  taskBoardQueuePositionAt,
+  taskBoardTargetIndexAt,
 } from "@/features/task-board/domain/task-board-domain"
 import type {
   TaskBoardEntryDto,
@@ -82,25 +58,21 @@ import { TaskBoardCardPreview } from "@/features/task-board/task-board-card"
 import { TaskBoardColumn } from "@/features/task-board/task-board-column"
 import { TaskBoardCompletionDialog } from "@/features/task-board/task-board-completion-dialog"
 import { TaskBoardTakeDialog } from "@/features/task-board/task-board-take-dialog"
-import { TaskBoardMockToolbar } from "@/features/task-board/task-board-mock-toolbar"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
+import { cn } from "@/lib/utils"
 
 type BoardAction =
   | {
       kind: "take"
       entry: TaskBoardEntryDto
-      workerGroup: RepairTaskWorkerGroupSnapshotDto
-      workers?: RepairTaskWorkerSnapshotDto[]
+      workerGroupId: string
+      workerId: string | null
     }
   | { kind: "pause"; entry: TaskBoardEntryDto }
   | { kind: "resume"; entry: TaskBoardEntryDto }
-  | {
-      kind: "complete"
-      entry: TaskBoardEntryDto
-      pendingUploads: PendingEstimateMediaUpload[]
-    }
+  | { kind: "complete"; entry: TaskBoardEntryDto }
 
 type DropPlacement = "before" | "after" | "end"
 type DropTarget = { overId: string; placement: DropPlacement }
@@ -119,8 +91,6 @@ const taskBoardCollisionDetection: CollisionDetection = (args) => {
   const ownQueueId =
     typeof activeQueueKey === "string" ? `queue:${activeQueueKey}` : null
 
-  // At the untouched origin pointerWithin sees the transformed card and its
-  // parent queue. Preserve the active collision so drag-end resolves to no-op.
   if (
     activeCollision &&
     ownQueueId &&
@@ -133,7 +103,7 @@ const taskBoardCollisionDetection: CollisionDetection = (args) => {
   return nonActiveCollisions
 }
 
-function cloneBoard(board: TaskBoardSnapshotDto) {
+function cloneBoard(board: TaskBoardSnapshotDto): TaskBoardSnapshotDto {
   return {
     ...board,
     queues: board.queues.map((queue) => ({
@@ -169,7 +139,7 @@ function previewMove(
   const entry = sourceQueue.entries.find(
     (candidate) => candidate.id === activeId
   )
-  if (!entry || !canMoveEntryToQueue(entry, targetQueue)) return board
+  if (!entry || !canMoveEntryToQueue(entry)) return board
 
   const next = cloneBoard(board)
   const nextSource = next.queues.find((queue) => queue.key === sourceQueue.key)!
@@ -191,6 +161,8 @@ function previewMove(
   nextTarget.entries.splice(insertionIndex, 0, {
     ...moved,
     queueKey: nextTarget.key,
+    queueId: nextTarget.settingsQueueId,
+    queueCode: nextTarget.queueCode,
   })
 
   if (
@@ -214,13 +186,17 @@ function placementForEvent(event: DragOverEvent | DragEndEvent): DropPlacement {
   return activeCenter < overCenter ? "before" : "after"
 }
 
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback
+}
+
 export function TaskBoardPage() {
   const isMobile = useIsMobile()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { accessToken } = useAuth()
-  const { selectedWarehouse, selectedWarehouseId } = useWarehouse()
-  const serviceWarehouseId = selectedWarehouse?.id ?? null
+  const { selectedWarehouse } = useWarehouse()
+  const warehouseId = selectedWarehouse?.serviceId ?? null
   const [search, setSearch] = useState("")
   const [showFuture, setShowFuture] = useState(false)
   const [collapsedQueues, setCollapsedQueues] = useState<Set<string>>(
@@ -239,44 +215,15 @@ export function TaskBoardPage() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
-  const [activeWorkerId, setActiveWorkerId] = useState<string | null>(null)
   const collapsedSettingsRef = useRef<{
     warehouseId: string
     values: Map<string, boolean>
   } | null>(null)
-  const seenNotificationIdsRef = useRef<Set<string> | null>(null)
-  const runtimeEvaluationPendingRef = useRef(false)
 
   const boardQuery = useQuery({
-    queryKey: taskBoardQueryKey(
-      selectedWarehouseId ?? "none",
-      serviceWarehouseId ?? "none"
-    ),
-    queryFn: () =>
-      getTaskBoard(selectedWarehouseId!, serviceWarehouseId!, accessToken),
-    enabled: selectedWarehouseId !== null && serviceWarehouseId !== null,
-  })
-  const workersQuery = useQuery({
-    queryKey: ["task-board", serviceWarehouseId, "mock-workers"],
-    queryFn: () => listTaskBoardWorkers(serviceWarehouseId!),
-    enabled: DEV_MAINTENANCE_FIXTURES_ENABLED && serviceWarehouseId !== null,
-  })
-  const activeMockWorkerQuery = useQuery({
-    queryKey: ["task-board", "mock-active-worker"],
-    queryFn: getTaskBoardActiveWorkerId,
-    enabled: DEV_MAINTENANCE_FIXTURES_ENABLED,
-  })
-  const activeWorker = (workersQuery.data ?? []).find(
-    (worker) =>
-      worker.id === (activeWorkerId ?? activeMockWorkerQuery.data ?? null)
-  )
-  const effectiveActiveWorkerId =
-    activeWorker?.id ?? workersQuery.data?.[0]?.id ?? null
-  const notificationsQuery = useQuery({
-    queryKey: [...TASK_BOARD_NOTIFICATIONS_QUERY_KEY, effectiveActiveWorkerId],
-    queryFn: () => listTaskBoardNotifications(effectiveActiveWorkerId),
-    enabled:
-      DEV_MAINTENANCE_FIXTURES_ENABLED && Boolean(effectiveActiveWorkerId),
+    queryKey: taskBoardQueryKey(warehouseId ?? "none"),
+    queryFn: () => getTaskBoard(accessToken!, warehouseId!),
+    enabled: Boolean(accessToken && warehouseId),
   })
 
   const setPreview = useCallback(
@@ -302,186 +249,90 @@ export function TaskBoardPage() {
   }, [boardQuery.data, setPreview])
 
   useEffect(() => {
-    if (!selectedWarehouseId || !boardQuery.data) return
+    if (!warehouseId || !boardQuery.data) return
     const previous = collapsedSettingsRef.current
     const merged = mergeQueueCollapsedSettings({
       current: collapsedQueues,
-      previous:
-        previous?.warehouseId === selectedWarehouseId ? previous.values : null,
+      previous: previous?.warehouseId === warehouseId ? previous.values : null,
       queues: boardQuery.data.queues,
-      reset: previous?.warehouseId !== selectedWarehouseId,
+      reset: previous?.warehouseId !== warehouseId,
     })
-    collapsedSettingsRef.current = {
-      warehouseId: selectedWarehouseId,
-      values: merged.settings,
-    }
+    collapsedSettingsRef.current = { warehouseId, values: merged.settings }
     if (
       merged.collapsed.size !== collapsedQueues.size ||
       [...merged.collapsed].some((queueKey) => !collapsedQueues.has(queueKey))
     ) {
       setCollapsedQueues(merged.collapsed)
     }
-  }, [boardQuery.data, collapsedQueues, selectedWarehouseId])
+  }, [boardQuery.data, collapsedQueues, warehouseId])
 
   useEffect(() => {
-    const notifications = notificationsQuery.data
-    if (!notifications) return
-    const currentIds = new Set(notifications.map((item) => item.id))
-    if (seenNotificationIdsRef.current) {
-      notifications
-        .filter(
-          (item) =>
-            !item.readAt && !seenNotificationIdsRef.current?.has(item.id)
-        )
-        .forEach((item) => toast(item.message))
-    }
-    seenNotificationIdsRef.current = currentIds
-  }, [notificationsQuery.data])
-
-  useEffect(() => {
-    if (DEV_MAINTENANCE_FIXTURES_ENABLED) return
     const timer = window.setInterval(() => setNow(Date.now()), 1_000)
     return () => window.clearInterval(timer)
   }, [])
 
-  useEffect(() => {
-    if (!DEV_MAINTENANCE_FIXTURES_ENABLED || !serviceWarehouseId) return
-    const reconcile = async () => {
-      if (runtimeEvaluationPendingRef.current) return
-      runtimeEvaluationPendingRef.current = true
-      try {
-        await evaluateTaskBoardMock()
-        await queryClient.invalidateQueries({ queryKey: TASK_BOARD_QUERY_KEY })
-        await queryClient.invalidateQueries({
-          queryKey: TASK_BOARD_NOTIFICATIONS_QUERY_KEY,
-        })
-      } catch (unknownError) {
-        setError(
-          unknownError instanceof Error
-            ? unknownError.message
-            : "Не удалось обновить MOCK-время доски"
-        )
-      } finally {
-        runtimeEvaluationPendingRef.current = false
-      }
-    }
-    const timer = window.setInterval(() => void reconcile(), 1_000)
-    return () => window.clearInterval(timer)
-  }, [queryClient, serviceWarehouseId])
-
-  useEffect(() => {
-    if (!DEV_MAINTENANCE_FIXTURES_ENABLED) return
-    const invalidate = () => {
-      void queryClient.invalidateQueries({ queryKey: TASK_BOARD_QUERY_KEY })
-    }
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === REPAIR_TASKS_MOCK_STORAGE_KEY) invalidate()
-    }
-    window.addEventListener(REPAIR_TASKS_UPDATED_EVENT, invalidate)
-    window.addEventListener("storage", handleStorage)
-    return () => {
-      window.removeEventListener(REPAIR_TASKS_UPDATED_EVENT, invalidate)
-      window.removeEventListener("storage", handleStorage)
-    }
-  }, [queryClient])
-
-  useEffect(() => {
-    return subscribeTaskBoardMock(() => {
-      void queryClient.invalidateQueries({ queryKey: TASK_BOARD_QUERY_KEY })
-      void queryClient.invalidateQueries({
-        queryKey: TASK_BOARD_NOTIFICATIONS_QUERY_KEY,
-      })
-      void queryClient.invalidateQueries({
-        queryKey: ["task-board", serviceWarehouseId, "mock-workers"],
-      })
-      void queryClient.invalidateQueries({
-        queryKey: ["task-board", "mock-active-worker"],
-      })
-    })
-  }, [queryClient, serviceWarehouseId])
-
-  const invalidateTaskData = useCallback(
-    () =>
-      Promise.all([
-        queryClient.invalidateQueries({ queryKey: TASK_BOARD_QUERY_KEY }),
-        queryClient.invalidateQueries({ queryKey: REPAIR_TASKS_QUERY_KEY }),
-      ]),
+  const invalidateTaskBoard = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: TASK_BOARD_QUERY_KEY }),
     [queryClient]
   )
 
   const actionMutation = useMutation({
-    mutationFn: async (action: BoardAction) => {
+    mutationFn: (action: BoardAction) => {
+      if (!accessToken)
+        throw new Error("Не получен токен доступа к доске заданий.")
       if (action.kind === "take") {
         return takeTaskBoardEntry({
+          accessToken,
           entry: action.entry,
-          workerGroup: action.workerGroup,
-          workers: action.workers,
-          accessToken: accessToken ?? undefined,
+          workerGroupId: action.workerGroupId,
+          workerId: action.workerId,
         })
       }
       if (action.kind === "pause") {
-        return pauseTaskBoardEntry(action.entry, accessToken)
+        return pauseTaskBoardEntry(accessToken, action.entry)
       }
       if (action.kind === "resume") {
-        return resumeTaskBoardEntry(action.entry, accessToken)
+        return resumeTaskBoardEntry(accessToken, action.entry)
       }
-      return completeTaskBoardEntry(
-        action.entry,
-        action.pendingUploads,
-        accessToken
-      )
+      return completeTaskBoardEntry(accessToken, action.entry)
     },
     onMutate: () => setNotice(null),
     onSuccess: async () => {
       setError(null)
       setTakeEntry(null)
       setCompleteEntry(null)
-      await invalidateTaskData()
+      await invalidateTaskBoard()
     },
     onError: async (unknownError) => {
       setNotice(null)
-      setError(
-        unknownError instanceof Error
-          ? unknownError.message
-          : "Не удалось изменить подзадание"
-      )
-      await invalidateTaskData()
+      setError(errorMessage(unknownError, "Не удалось изменить этап"))
+      await invalidateTaskBoard()
     },
   })
 
   const dragMutation = useMutation<
     unknown,
     Error,
-    {
-      entry: TaskBoardEntryDto
-      queue: TaskBoardQueueDto
-      queuePosition: number
-    }
+    { entry: TaskBoardEntryDto; queue: TaskBoardQueueDto; targetIndex: number }
   >({
-    mutationFn: (params) =>
-      moveTaskBoardEntry({
-        task: params.entry.task,
-        subtaskId: params.entry.subtask.id,
-        queue: params.queue,
-        queuePosition: params.queuePosition,
-        entry: params.entry,
-        accessToken,
-      }),
+    mutationFn: (params) => {
+      if (!accessToken)
+        throw new Error("Не получен токен доступа к доске заданий.")
+      return moveTaskBoardEntry({ accessToken, ...params })
+    },
     onMutate: () => setNotice(null),
     onSuccess: async () => {
       setError(null)
       setNotice("Положение карточки сохранено.")
-      await invalidateTaskData()
+      await invalidateTaskBoard()
     },
     onError: async (unknownError) => {
       setPreview(boardQuery.data ? cloneBoard(boardQuery.data) : null)
       setNotice(null)
       setError(
-        unknownError instanceof Error
-          ? unknownError.message
-          : "Не удалось сохранить положение карточки"
+        errorMessage(unknownError, "Не удалось сохранить положение карточки")
       )
-      await invalidateTaskData()
+      await invalidateTaskBoard()
     },
   })
 
@@ -502,16 +353,14 @@ export function TaskBoardPage() {
           if (!showFuture && entry.entryType === "SHADOW") return false
           if (!normalizedSearch) return true
           const haystack = [
-            entry.task.cabinNumber,
-            entry.task.reason,
-            entry.task.authorName,
-            entry.task.comment,
-            entry.subtask.assigneeName ?? "",
-            entry.subtask.workerGroup?.name ?? "",
-            ...entry.subtask.assignments.map(
-              (assignment) => assignment.worker?.name ?? ""
-            ),
-            taskBoardEntryTitle(entry.subtask),
+            entry.unitNumber ?? "",
+            entry.title,
+            entry.taskText ?? "",
+            entry.externalTaskId ?? "",
+            ...entry.assignments.flatMap((assignment) => [
+              assignment.workerName ?? "",
+              assignment.workerGroupName ?? "",
+            ]),
           ]
             .join(" ")
             .toLocaleLowerCase("ru")
@@ -555,9 +404,7 @@ export function TaskBoardPage() {
     if (!event.over || !baseline) {
       dragOutcomeRef.current = "Перенос карточки отменён."
       setPreview(boardQuery.data ? cloneBoard(boardQuery.data) : null)
-      setActiveEntryId(null)
-      dragBaselineRef.current = null
-      lastDropTargetRef.current = null
+      clearDrag()
       return
     }
     const eventOverId = String(event.over.id)
@@ -568,9 +415,7 @@ export function TaskBoardPage() {
     if (!finalTarget) {
       dragOutcomeRef.current = `${draggedLabel} осталась на прежнем месте.`
       setPreview(baseline)
-      setActiveEntryId(null)
-      dragBaselineRef.current = null
-      lastDropTargetRef.current = null
+      clearDrag()
       return
     }
     const requestedQueue = targetQueueForOver(baseline, finalTarget.overId)
@@ -580,15 +425,13 @@ export function TaskBoardPage() {
     if (
       !requestedQueue ||
       !baselineEntry ||
-      !canMoveEntryToQueue(baselineEntry, requestedQueue)
+      !canMoveEntryToQueue(baselineEntry)
     ) {
       dragOutcomeRef.current = requestedQueue
-        ? `${draggedLabel} нельзя поместить в очередь «${requestedQueue.label}».`
+        ? `${draggedLabel} сейчас нельзя переместить.`
         : "Цель переноса недоступна."
       setPreview(baseline)
-      setActiveEntryId(null)
-      dragBaselineRef.current = null
-      lastDropTargetRef.current = null
+      clearDrag()
       return
     }
     const current = previewMove(
@@ -606,9 +449,7 @@ export function TaskBoardPage() {
     if (!sourceQueue || !targetQueue || !entry) {
       dragOutcomeRef.current = "Цель переноса недоступна."
       setPreview(baseline)
-      setActiveEntryId(null)
-      dragBaselineRef.current = null
-      lastDropTargetRef.current = null
+      clearDrag()
       return
     }
     const sourceIndex = sourceQueue.entries.findIndex(
@@ -619,25 +460,22 @@ export function TaskBoardPage() {
     )
     if (sourceQueue.key === targetQueue.key && sourceIndex === targetIndex) {
       dragOutcomeRef.current = `${draggedLabel} осталась на прежнем месте.`
-      setActiveEntryId(null)
-      dragBaselineRef.current = null
-      lastDropTargetRef.current = null
+      clearDrag()
       return
     }
     dragOutcomeRef.current = `${draggedLabel} отпущена в очереди «${targetQueue.label}». Положение сохраняется.`
-    setActiveEntryId(null)
-    dragBaselineRef.current = null
-    lastDropTargetRef.current = null
+    clearDrag()
     dragMutation.mutate({
       entry,
       queue: targetQueue,
-      queuePosition: taskBoardQueuePositionAt(targetQueue.entries, activeId),
+      targetIndex: taskBoardTargetIndexAt(targetQueue.entries, activeId),
     })
   }
 
-  function openTakeDialog(entry: TaskBoardEntryDto) {
-    setTakeEntry(entry)
-    setError(null)
+  function clearDrag() {
+    setActiveEntryId(null)
+    dragBaselineRef.current = null
+    lastDropTargetRef.current = null
   }
 
   function describeEntry(entryId: string) {
@@ -645,7 +483,7 @@ export function TaskBoardPage() {
     const entry = board?.queues
       .flatMap((queue) => queue.entries)
       .find((candidate) => candidate.id === entryId)
-    return entry ? `карточка бытовки ${entry.task.cabinNumber}` : "карточка"
+    return entry ? `карточка ${entry.unitNumber ?? entry.title}` : "карточка"
   }
 
   function describeQueue(overId: string | undefined) {
@@ -656,38 +494,6 @@ export function TaskBoardPage() {
 
   const busy = actionMutation.isPending || dragMutation.isPending
   const actionsBusy = busy || activeEntryId !== null
-  const boardNow = preview?.now ? Date.parse(preview.now) : now
-  const effectiveNow = Number.isFinite(boardNow) ? boardNow : now
-
-  const returnMutation = useMutation({
-    mutationFn: confirmTaskBoardGroupReturned,
-    onSuccess: async () => {
-      toast.success("Возвращение бригады подтверждено")
-      await invalidateTaskData()
-    },
-    onError: (unknownError) =>
-      setError(
-        unknownError instanceof Error
-          ? unknownError.message
-          : "Не удалось подтвердить возвращение бригады"
-      ),
-  })
-
-  const notificationMutation = useMutation({
-    mutationFn: markTaskBoardNotificationRead,
-    onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: TASK_BOARD_NOTIFICATIONS_QUERY_KEY,
-      }),
-  })
-
-  const allNotificationsMutation = useMutation({
-    mutationFn: markAllTaskBoardNotificationsRead,
-    onSuccess: () =>
-      queryClient.invalidateQueries({
-        queryKey: TASK_BOARD_NOTIFICATIONS_QUERY_KEY,
-      }),
-  })
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
@@ -702,44 +508,18 @@ export function TaskBoardPage() {
               aria-label="Поиск по доске задач"
               name="task-board-search"
               autoComplete="off"
-              placeholder="Бытовка, причина или исполнитель"
+              placeholder="Бытовка, задание или исполнитель"
               onChange={(event) => setSearch(event.target.value)}
             />
           </InputGroup>
         </PageToolbarContent>
 
         <PageToolbarActions className="w-full sm:w-auto">
-          {DEV_MAINTENANCE_FIXTURES_ENABLED ? (
-            <TaskBoardMockToolbar
-              workers={workersQuery.data ?? []}
-              activeWorkerId={effectiveActiveWorkerId}
-              notifications={notificationsQuery.data ?? []}
-              onWorkerChange={(workerId) => {
-                setActiveWorkerId(workerId)
-                seenNotificationIdsRef.current = null
-                void setTaskBoardActiveWorker(workerId)
-                void queryClient.invalidateQueries({
-                  queryKey: ["task-board", "mock-active-worker"],
-                })
-              }}
-              onMarkRead={(notification) =>
-                notificationMutation.mutate(notification)
-              }
-              onMarkAllRead={() => {
-                if (effectiveActiveWorkerId) {
-                  allNotificationsMutation.mutate({
-                    workerId: effectiveActiveWorkerId,
-                    notifications: notificationsQuery.data ?? [],
-                  })
-                }
-              }}
-            />
-          ) : null}
           <div className="grid w-full grid-cols-2 gap-2 sm:contents">
             <Button
               asChild
               className="w-full sm:w-auto"
-              disabled={!selectedWarehouseId}
+              disabled={!warehouseId}
             >
               <Link
                 to="/repairs?create=1"
@@ -779,6 +559,11 @@ export function TaskBoardPage() {
           видимых карточек остаются доступны.
         </p>
       ) : null}
+      {!accessToken ? (
+        <p role="alert" className="text-xs text-destructive">
+          Не получен токен доступа к доске заданий.
+        </p>
+      ) : null}
       {error ? (
         <p role="alert" className="text-xs text-destructive">
           {error}
@@ -806,7 +591,7 @@ export function TaskBoardPage() {
         </div>
       ) : boardQuery.isError ? (
         <p role="alert" className="text-xs text-destructive">
-          Не удалось загрузить доску задач.
+          {errorMessage(boardQuery.error, "Не удалось загрузить доску задач.")}
         </p>
       ) : preview ? (
         <DndContext
@@ -817,9 +602,7 @@ export function TaskBoardPage() {
           onDragEnd={handleDragEnd}
           onDragCancel={() => {
             dragOutcomeRef.current = "Перенос карточки отменён."
-            setActiveEntryId(null)
-            dragBaselineRef.current = null
-            lastDropTargetRef.current = null
+            clearDrag()
             setPreview(boardQuery.data ? cloneBoard(boardQuery.data) : null)
           }}
           accessibility={{
@@ -864,7 +647,7 @@ export function TaskBoardPage() {
                   key={queue.key}
                   queue={queue}
                   visibleEntries={visibleEntries}
-                  now={effectiveNow}
+                  now={now}
                   mobile={isMobile}
                   collapsed={collapsedQueues.has(queue.key)}
                   dragDisabled={busy || Boolean(normalizedSearch)}
@@ -882,14 +665,16 @@ export function TaskBoardPage() {
                     entry.detailsHref &&
                     navigate(entry.detailsHref, workspaceEntryNavigationOptions)
                   }
-                  onTake={openTakeDialog}
+                  onTake={(entry) => {
+                    setTakeEntry(entry)
+                    setError(null)
+                  }}
                   onPause={(entry) =>
                     actionMutation.mutate({ kind: "pause", entry })
                   }
                   onResume={(entry) =>
                     actionMutation.mutate({ kind: "resume", entry })
                   }
-                  onConfirmReturn={(entry) => returnMutation.mutate(entry)}
                   onComplete={(entry) => {
                     setCompleteEntry(entry)
                     setError(null)
@@ -900,7 +685,7 @@ export function TaskBoardPage() {
           </div>
           <DragOverlay>
             {activeEntry ? (
-              <TaskBoardCardPreview entry={activeEntry} now={effectiveNow} />
+              <TaskBoardCardPreview entry={activeEntry} now={now} />
             ) : null}
           </DragOverlay>
         </DndContext>
@@ -916,13 +701,13 @@ export function TaskBoardPage() {
             setError(null)
           }
         }}
-        onTake={({ workerGroup, workers }) => {
+        onTake={({ workerGroupId, workerId }) => {
           if (!takeEntry) return
           actionMutation.mutate({
             kind: "take",
             entry: takeEntry,
-            workerGroup,
-            workers,
+            workerGroupId,
+            workerId,
           })
         }}
       />
@@ -936,13 +721,9 @@ export function TaskBoardPage() {
             setError(null)
           }
         }}
-        onComplete={(pendingUploads) => {
+        onComplete={() => {
           if (!completeEntry) return
-          actionMutation.mutate({
-            kind: "complete",
-            entry: completeEntry,
-            pendingUploads,
-          })
+          actionMutation.mutate({ kind: "complete", entry: completeEntry })
         }}
       />
     </div>

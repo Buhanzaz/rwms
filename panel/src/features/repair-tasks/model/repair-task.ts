@@ -36,12 +36,12 @@ export type RepairTaskAssignmentDto = {
   pausedAt: string | null
   finishedAt: string | null
   activeStartedAt: string | null
-  activeWorkSeconds: number
   status: RepairTaskAssignmentStatus
 }
 
 export type RepairTaskSubtaskDto = {
   id: string
+  externalTaskId?: string | null
   kind: RepairTaskSubtaskKind
   status: RepairTaskSubtaskStatus
   workLines: RepairEstimateLineDto[]
@@ -53,16 +53,12 @@ export type RepairTaskSubtaskDto = {
   sortOrder: number
   queuePosition: number
   plannedDurationMinutes: number | null
-  photoRequired: boolean
   startedAt: string | null
   completedAt: string | null
   activeStartedAt: string | null
   activeWorkSeconds: number
   workerGroup: RepairTaskWorkerGroupSnapshotDto | null
   assignments: RepairTaskAssignmentDto[]
-  resultMedia: RepairEstimateMediaRefDto[]
-  /** @deprecated Compatibility snapshot for schema-v1 records and old UI. */
-  assigneeName: string | null
 }
 
 export type RepairTaskDto = {
@@ -74,17 +70,13 @@ export type RepairTaskDto = {
   acceptanceStatus: RepairTaskAcceptanceStatus
   startedAt: string | null
   completedAt: string | null
-  acceptanceDecidedAt: string | null
-  acceptanceDecidedBy: string | null
-  acceptanceComment: string | null
   warehouseId: string
   rentalItemId: string
   cabinNumber: string
-  authorName: string
-  reason: string
+  actorId: string
+  sourceParty?: string | null
   dispatchDate: string | null
-  comment: string
-  media: RepairEstimateMediaRefDto[]
+  maintenanceMediaReferences?: Array<{ mediaId: string; generation: number }>
   subtasks: RepairTaskSubtaskDto[]
   sourceEstimateId: string | null
   sourceEstimateVersion: number | null
@@ -92,6 +84,10 @@ export type RepairTaskDto = {
   sourceInventoryFindingId: string | null
   sourceRepairTaskId: string | null
   sourceRepairTaskVersion: number | null
+  readyAt?: string | null
+  writtenOffAt?: string | null
+  decisionActorId?: string | null
+  taskBoardAvailable?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -156,28 +152,6 @@ export type RepairTaskSubtasksCommand = {
   orderedSubtaskIds: string[]
 }
 
-export type RepairTaskEntryRefCommand = {
-  taskId: string
-  subtaskId: string
-  expectedVersion: number
-  warehouseId: string
-}
-
-export type RepairTaskCompleteEntryCommand = RepairTaskEntryRefCommand & {
-  resultMedia: RepairEstimateMediaRefDto[]
-}
-
-export type RepairTaskMoveEntryCommand = RepairTaskEntryRefCommand & {
-  targetQueueCode: string | null
-  targetRouteQueueKind: RepairEstimateCatalogRouteQueueKind | null
-  targetQueuePosition: number
-}
-
-export type RepairTaskTakeEntryCommand = RepairTaskEntryRefCommand & {
-  workerGroup: RepairTaskWorkerGroupSnapshotDto
-  workers: RepairTaskWorkerSnapshotDto[]
-}
-
 export type RepairTaskAcceptCommand = {
   taskId: string
   expectedVersion: number
@@ -198,37 +172,3 @@ export type RepairTaskEarlyWriteOffCommand = RepairTaskWriteCommand & {
   sourceEstimateVersion: number | null
   writeOffReason: string
 }
-
-export type RepairTaskFromEstimateCommand = {
-  warehouseId: string
-  rentalItemId: string
-  cabinNumber: string
-  authorName: string
-  sourceEstimateId: string
-  sourceEstimateVersion: number
-  allowWaitingEstimateConfirmation?: boolean
-  reason: string
-  dispatchDate: string | null
-  comment: string
-  media: RepairEstimateMediaRefDto[]
-  subtasks: RepairTaskSubtaskDto[]
-}
-
-export type RepairTaskFromInventoryFindingCommand = {
-  warehouseId: string
-  rentalItemId: string
-  cabinNumber: string
-  authorName: string
-  sourceInventoryId: string
-  sourceInventoryFindingId: string
-  reason: string
-  dispatchDate: string | null
-  comment: string
-  media: RepairEstimateMediaRefDto[]
-  subtasks: RepairTaskSubtaskDto[]
-}
-
-export type RepairTaskSyncFromEstimateCommand =
-  RepairTaskFromEstimateCommand & {
-    expectedTaskVersion: number | null
-  }

@@ -13,7 +13,6 @@ import {
   Camera01Icon,
   Cancel01Icon,
   Home01Icon,
-  PlayIcon,
   RotateLeft01Icon,
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -37,14 +36,9 @@ import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 import { cn } from "@/lib/utils"
 
 type PhotoCarouselControlsVisibility = "hover" | "always" | "mobile-visible"
-type Orientation = 0 | 90 | 180 | 270
-
 export type PhotoCarouselPhoto = {
   id: string
   url: string
-  kind?: "IMAGE" | "VIDEO"
-  mimeType?: string
-  rotationDegrees?: Orientation
   variants?: {
     small?: { url: string }
     largeWebp?: { url: string }
@@ -54,6 +48,7 @@ export type PhotoCarouselPhoto = {
 }
 
 type PhotoSource = string | PhotoCarouselPhoto
+type Orientation = 0 | 90 | 180 | 270
 
 type PhotoCarouselProps = {
   photos: PhotoSource[]
@@ -78,14 +73,6 @@ type PhotoCarouselProps = {
   hideEdgeControlsOnMobile?: boolean
   showViewerToolbar?: boolean
   disableFullscreenViewer?: boolean
-  /**
-   * Production media passes this command through to media-service. When it is
-   * absent, the carousel retains the current browser-mock-only rotation.
-   */
-  onRotateMedia?: (
-    media: PhotoCarouselPhoto,
-    rotationDegrees: Orientation
-  ) => void | Promise<void>
 }
 
 type SwipeStartPosition = {
@@ -129,16 +116,6 @@ function buildVariantUrl(url: string, variant: "small" | "largeWebp") {
   }
 }
 
-function isVideoMedia(media: PhotoCarouselPhoto) {
-  return Boolean(
-    media.kind === "VIDEO" || media.mimeType?.toLowerCase().startsWith("video/")
-  )
-}
-
-function mediaLabel(media: PhotoCarouselPhoto | undefined) {
-  return media && isVideoMedia(media) ? "видео" : "фото"
-}
-
 function normalizePhotoSource(
   photo: PhotoSource,
   index: number,
@@ -157,22 +134,10 @@ function normalizePhotoSource(
     }
   }
 
-  return photo.url
-    ? {
-        ...photo,
-        kind:
-          photo.kind ??
-          (photo.mimeType?.toLowerCase().startsWith("video/")
-            ? "VIDEO"
-            : "IMAGE"),
-      }
-    : null
+  return photo.url ? photo : null
 }
 
 function getPhotoPreviewUrl(photo: PhotoCarouselPhoto) {
-  if (isVideoMedia(photo)) {
-    return photo.variants?.original?.url ?? photo.url
-  }
   return photo.variants?.small?.url ?? photo.url
 }
 
@@ -180,9 +145,6 @@ function getPhotoFullscreenUrl(
   photo: PhotoCarouselPhoto,
   quality: "preview" | "original"
 ) {
-  if (isVideoMedia(photo)) {
-    return photo.variants?.original?.url ?? photo.url
-  }
   if (quality === "original" && photo.variants?.original?.url) {
     return photo.variants.original.url
   }
@@ -309,7 +271,6 @@ export function PhotoCarousel({
   hideEdgeControlsOnMobile = false,
   showViewerToolbar = true,
   disableFullscreenViewer = false,
-  onRotateMedia,
 }: PhotoCarouselProps) {
   const [api, setApi] = useState<CarouselApi>()
   const [internalActiveIndex, setInternalActiveIndex] = useState(0)
@@ -319,12 +280,7 @@ export function PhotoCarousel({
     const normalized = photos
       .map((photo, index) => normalizePhotoSource(photo, index, item))
       .filter((photo): photo is PhotoCarouselPhoto => photo !== null)
-    return normalized.length > 0
-      ? normalized.sort(
-          (left, right) =>
-            Number(isVideoMedia(left)) - Number(isVideoMedia(right))
-        )
-      : buildItemFallbackPhotos(item)
+    return normalized.length > 0 ? normalized : buildItemFallbackPhotos(item)
   }, [item, photos])
   const requestedIndex = controlledActiveIndex ?? internalActiveIndex
   const safeActiveIndex =
@@ -361,7 +317,7 @@ export function PhotoCarousel({
           className ?? "h-[320px]"
         )}
       >
-        Загрузка медиа...
+        Загрузка фотографий...
       </div>
     )
   }
@@ -377,7 +333,7 @@ export function PhotoCarousel({
         {placeholder ?? (
           <HugeiconsIcon icon={Home01Icon} className="size-10 opacity-50" />
         )}
-        <span>Медиа не загружены.</span>
+        <span>Фото не загружены.</span>
       </div>
     )
   }
@@ -398,28 +354,7 @@ export function PhotoCarousel({
       >
         <CarouselContent className="-ml-0 h-full">
           {safePhotos.map((photo, index) => {
-            const video = isVideoMedia(photo)
-            const visual = video ? (
-              <div className="relative h-full w-full">
-                <video
-                  src={getPhotoPreviewUrl(photo)}
-                  aria-label={`Видео ${index + 1} из ${safePhotos.length}`}
-                  muted
-                  playsInline
-                  preload="metadata"
-                  className={cn(
-                    "h-full w-full select-none",
-                    fit === "cover" ? "object-cover" : "object-contain",
-                    imageClassName
-                  )}
-                />
-                <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                  <span className="flex size-12 items-center justify-center rounded-full bg-black/60 text-white shadow-lg">
-                    <HugeiconsIcon icon={PlayIcon} />
-                  </span>
-                </span>
-              </div>
-            ) : (
+            const image = (
               <img
                 src={
                   imageVariant === "fullscreen"
@@ -447,14 +382,14 @@ export function PhotoCarousel({
                 {interactive ? (
                   <button
                     type="button"
-                    aria-label={`Открыть ${mediaLabel(photo)} ${index + 1}`}
+                    aria-label={`Открыть фото ${index + 1}`}
                     className="block h-full w-full cursor-zoom-in touch-pan-y"
                     onClick={handleCenterClick}
                   >
-                    {visual}
+                    {image}
                   </button>
                 ) : (
-                  <div className="h-full w-full touch-pan-y">{visual}</div>
+                  <div className="h-full w-full touch-pan-y">{image}</div>
                 )}
               </CarouselItem>
             )
@@ -524,7 +459,6 @@ export function PhotoCarousel({
         title={title ?? `Фото${item ? ` — ${item.number}` : ""}`}
         quality={fullscreenQuality}
         showToolbar={showViewerToolbar}
-        onRotateMedia={onRotateMedia}
         onActiveIndexChange={changeIndex}
         onOpenChange={setViewerOpen}
       />
@@ -539,10 +473,6 @@ type PhotoFullscreenViewerProps = {
   title: string
   quality: "preview" | "original"
   showToolbar: boolean
-  onRotateMedia?: (
-    media: PhotoCarouselPhoto,
-    rotationDegrees: Orientation
-  ) => void | Promise<void>
   onActiveIndexChange: (index: number) => void
   onOpenChange: (open: boolean) => void
 }
@@ -554,7 +484,6 @@ function PhotoFullscreenViewer({
   title,
   quality,
   showToolbar,
-  onRotateMedia,
   onActiveIndexChange,
   onOpenChange,
 }: PhotoFullscreenViewerProps) {
@@ -562,7 +491,6 @@ function PhotoFullscreenViewer({
   const [orientationById, setOrientationById] = useState<
     Record<string, Orientation>
   >({})
-  const [rotatingMediaId, setRotatingMediaId] = useState<string | null>(null)
   const safeIndex =
     activeIndex >= 0 && activeIndex < photos.length ? activeIndex : 0
   useCarouselIndex(api, safeIndex, onActiveIndexChange)
@@ -570,27 +498,14 @@ function PhotoFullscreenViewer({
   const goPrev = useCallback(() => api?.scrollPrev(), [api])
   const goNext = useCallback(() => api?.scrollNext(), [api])
 
-  async function rotateCurrentMedia() {
-    const media = photos[safeIndex]
-    if (!media || rotatingMediaId) return
-    const currentOrientation =
-      orientationById[media.id] ?? media.rotationDegrees ?? 0
-    const nextOrientation = ((currentOrientation + 270) % 360) as Orientation
-
-    if (onRotateMedia) {
-      setRotatingMediaId(media.id)
-      try {
-        await onRotateMedia(media, nextOrientation)
-      } finally {
-        setRotatingMediaId(null)
-      }
-      return
-    }
-
+  function rotateCurrentPhoto() {
+    const photo = photos[safeIndex]
+    if (!photo) return
     setOrientationById((current) => {
+      const orientation = current[photo.id] ?? 0
       return {
         ...current,
-        [media.id]: nextOrientation,
+        [photo.id]: ((orientation + 270) % 360) as Orientation,
       }
     })
   }
@@ -640,37 +555,22 @@ function PhotoFullscreenViewer({
           aria-label={title}
         >
           <CarouselContent className="-ml-0 h-dvh">
-            {photos.map((media, index) => (
+            {photos.map((photo, index) => (
               <CarouselItem
-                key={media.id}
+                key={photo.id}
                 aria-label={`${index + 1} из ${photos.length}`}
                 className="flex h-dvh items-center justify-center p-12"
               >
-                {isVideoMedia(media) ? (
-                  <video
-                    src={getPhotoFullscreenUrl(media, quality)}
-                    aria-label={`${title}, видео ${index + 1} из ${photos.length}`}
-                    controls
-                    autoPlay={index === safeIndex}
-                    playsInline
-                    className="max-h-full max-w-full object-contain select-none"
-                    style={{
-                      transform: `rotate(${orientationById[media.id] ?? media.rotationDegrees ?? 0}deg)`,
-                      transformOrigin: "center center",
-                    }}
-                  />
-                ) : (
-                  <img
-                    src={getPhotoFullscreenUrl(media, quality)}
-                    alt={`${title}, фото ${index + 1} из ${photos.length}`}
-                    draggable={false}
-                    className="max-h-full max-w-full object-contain select-none"
-                    style={{
-                      transform: `rotate(${orientationById[media.id] ?? media.rotationDegrees ?? 0}deg)`,
-                      transformOrigin: "center center",
-                    }}
-                  />
-                )}
+                <img
+                  src={getPhotoFullscreenUrl(photo, quality)}
+                  alt={`${title}, фото ${index + 1} из ${photos.length}`}
+                  draggable={false}
+                  className="max-h-full max-w-full object-contain select-none"
+                  style={{
+                    transform: `rotate(${orientationById[photo.id] ?? 0}deg)`,
+                    transformOrigin: "center center",
+                  }}
+                />
               </CarouselItem>
             ))}
           </CarouselContent>
@@ -745,10 +645,9 @@ function PhotoFullscreenViewer({
                 type="button"
                 size="icon"
                 variant="ghost"
-                aria-label={`Повернуть ${mediaLabel(photos[safeIndex] ?? photos[0])}`}
+                aria-label="Повернуть фото"
                 className="rounded-full text-white hover:bg-white/20 hover:text-white"
-                disabled={rotatingMediaId !== null}
-                onClick={() => void rotateCurrentMedia()}
+                onClick={rotateCurrentPhoto}
               >
                 <HugeiconsIcon icon={RotateLeft01Icon} />
               </Button>

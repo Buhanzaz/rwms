@@ -61,6 +61,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.slf4j.MDC;
@@ -405,12 +406,11 @@ public class InventoryApplicationService {
         new PageMetadata(page, size, result.getTotalElements(), result.getTotalPages()));
   }
 
-  public SessionView active(Jwt jwt, UUID warehouseId) {
+  public Optional<SessionView> active(Jwt jwt, UUID warehouseId) {
     authorizer.requireRead(jwt, warehouseId);
-    return sessionView(
-        sessions
-            .findByWarehouseIdAndLifecycle(warehouseId, SessionLifecycle.ACTIVE)
-            .orElseThrow(() -> InventoryException.notFound("Active inventory session not found")));
+    return sessions
+        .findByWarehouseIdAndLifecycle(warehouseId, SessionLifecycle.ACTIVE)
+        .map(this::sessionView);
   }
 
   public SessionView session(Jwt jwt, UUID inventoryId) {

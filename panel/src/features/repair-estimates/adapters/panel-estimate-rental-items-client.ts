@@ -1,10 +1,9 @@
 import {
-  getRentalItem,
-  getRentalItems,
-} from "@/features/rental-items/api/rental-items-api"
+  getAssetRentalItem,
+  listAssetRentalItems,
+} from "@/features/rental-items/api/asset-rental-items-api"
+import { currentMaintenanceAccessToken } from "@/features/repair-estimates/api/maintenance-auth"
 import type { EstimateRentalItemsClient } from "@/features/repair-estimates/ports/estimate-rental-items-client"
-import { isLinkedReturnEstimate } from "@/features/logistics/api/logistics-api"
-import { hasActiveWarehouseTransferLowLevel } from "@/features/logistics/warehouse-transfers/active-transfer-guard"
 
 function toOption(item: { id: string; warehouseId: string; number: string }) {
   return {
@@ -20,7 +19,9 @@ async function search({
   page: pageNumber,
   size,
 }: Parameters<EstimateRentalItemsClient["search"]>[0]) {
-  const page = await getRentalItems({
+  const accessToken = await currentMaintenanceAccessToken()
+  const page = await listAssetRentalItems({
+    accessToken,
     warehouseId,
     search: searchValue,
     page: pageNumber,
@@ -30,7 +31,6 @@ async function search({
 
   return {
     items: page.content
-      .filter((item) => !hasActiveWarehouseTransferLowLevel(item.id))
       .map(toOption)
       .sort((left, right) => left.number.localeCompare(right.number, "ru")),
     page: page.page,
@@ -43,24 +43,12 @@ async function search({
 export const panelEstimateRentalItemsClient: EstimateRentalItemsClient = {
   search,
   async resolveById(warehouseId, rentalItemId) {
-    const item = await getRentalItem(rentalItemId)
-    return item?.warehouseId === warehouseId &&
+    const accessToken = await currentMaintenanceAccessToken()
+    const item = await getAssetRentalItem(accessToken, rentalItemId)
+    return item.warehouseId === warehouseId &&
       item.status !== "WRITTEN_OFF" &&
-      item.status !== "WAITING_ESTIMATE_CONFIRMATION" &&
-      !hasActiveWarehouseTransferLowLevel(item.id)
+      item.status !== "WAITING_ESTIMATE_CONFIRMATION"
       ? toOption(item)
       : null
-  },
-  async resolveLinkedReturnEstimate(warehouseId, rentalItemId, estimateId) {
-    const item = await getRentalItem(rentalItemId)
-    if (
-      !item ||
-      item.warehouseId !== warehouseId ||
-      item.status !== "WAITING_ESTIMATE_CONFIRMATION" ||
-      hasActiveWarehouseTransferLowLevel(item.id) ||
-      !(await isLinkedReturnEstimate(warehouseId, rentalItemId, estimateId))
-    )
-      return null
-    return toOption(item)
   },
 }

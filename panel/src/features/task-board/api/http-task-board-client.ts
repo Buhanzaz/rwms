@@ -1,12 +1,14 @@
+import type { WorkerGroupDto } from "@/features/settings/task-board/model/task-board-settings"
 import type {
-  RepairTaskAssignmentDto,
-  RepairTaskDto,
-  RepairTaskSubtaskDto,
-} from "@/features/repair-tasks/model/repair-task"
-import type {
+  TaskBoardAssignmentDto,
+  TaskBoardAssignmentStatus,
   TaskBoardEntryDto,
+  TaskBoardEntryStatus,
+  TaskBoardEntryType,
   TaskBoardQueueDto,
+  TaskBoardQueueKind,
   TaskBoardSnapshotDto,
+  TaskBoardTaskStatus,
 } from "@/features/task-board/model/task-board"
 import { bearerRequest } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
@@ -43,286 +45,222 @@ function integer(value: unknown) {
   return value as number
 }
 
-function token(value: string | null | undefined) {
-  if (!value?.trim())
-    throw new Error("Не получен токен доступа к доске заданий.")
-  return value
+function oneOf<T extends string>(value: unknown, values: readonly T[]): T {
+  const candidate = text(value)
+  if (!values.includes(candidate as T)) invalid()
+  return candidate as T
 }
 
-function assignment(value: unknown): RepairTaskAssignmentDto {
+function assignment(value: unknown): TaskBoardAssignmentDto {
   const source = object(value)
-  const workerId = nullableText(source.workerId)
-  const workerName = nullableText(source.workerName)
-  const status = text(source.status)
-  if (
-    status !== "ACTIVE" &&
-    status !== "PAUSED" &&
-    status !== "DONE" &&
-    status !== "CANCELLED"
-  )
-    invalid()
   return {
     id: text(source.id),
-    worker: workerId ? { id: workerId, name: workerName ?? workerId } : null,
+    version: integer(source.version),
+    workerId: nullableText(source.workerId),
+    workerName: nullableText(source.workerName),
+    workerGroupId: nullableText(source.workerGroupId),
+    workerGroupName: nullableText(source.workerGroupName),
+    status: oneOf<TaskBoardAssignmentStatus>(source.status, [
+      "ACTIVE",
+      "PAUSED",
+      "DONE",
+      "CANCELLED",
+    ]),
     assignedAt: text(source.assignedAt),
     startedAt: nullableText(source.startedAt),
     pausedAt: nullableText(source.pausedAt),
     finishedAt: nullableText(source.finishedAt),
-    activeStartedAt: nullableText(source.startedAt),
-    activeWorkSeconds: 0,
-    status,
   }
 }
 
-function subtask(source: JsonRecord): RepairTaskSubtaskDto {
-  const status = text(source.status)
-  if (
-    status !== "WAITING" &&
-    status !== "IN_PROGRESS" &&
-    status !== "PAUSED" &&
-    status !== "DONE" &&
-    status !== "CANCELLED"
-  )
-    invalid()
-  const assignmentSources = list(source.assignments).map(object)
-  const assignments = assignmentSources.map(assignment)
-  const groupSource = assignmentSources.find((item) =>
-    nullableText(item.workerGroupId)
-  )
-  const groupId = groupSource ? nullableText(groupSource.workerGroupId) : null
+function detailsHref(externalTaskId: string | null) {
+  return externalTaskId
+    ? `/repairs?repairId=${encodeURIComponent(externalTaskId)}`
+    : null
+}
+
+function entry(
+  value: unknown,
+  warehouseId: string,
+  queueKey: string
+): TaskBoardEntryDto {
+  const source = object(value)
+  const externalTaskId = nullableText(source.externalTaskId)
   return {
     id: text(source.id),
-    kind: "REPAIR_WORK",
-    status,
-    workLines: [],
-    materialLines: [],
-    groupComment: nullableText(source.taskText) ?? "",
-    queueCode: text(source.queueCode),
+    version: integer(source.version),
+    warehouseId,
+    queueKey,
     queueId: nullableText(source.queueId),
-    routeQueueKind: null,
-    sortOrder: integer(source.routeIndex),
+    queueCode: text(source.queueCode),
+    entryType: oneOf<TaskBoardEntryType>(source.entryType, ["REAL", "SHADOW"]),
+    routeIndex: integer(source.routeIndex),
+    routeLength: 1,
     queuePosition: integer(source.queuePosition),
+    taskId: text(source.taskId),
+    externalTaskId,
+    taskVersion: integer(source.taskVersion),
+    title: text(source.title),
+    unitNumber: nullableText(source.unitNumber),
+    taskStatus: oneOf<TaskBoardTaskStatus>(source.taskStatus, [
+      "ACTIVE",
+      "DONE",
+      "CANCELLED",
+    ]),
+    status: oneOf<TaskBoardEntryStatus>(source.status, [
+      "WAITING",
+      "IN_PROGRESS",
+      "PAUSED",
+      "DONE",
+      "CANCELLED",
+    ]),
+    taskText: nullableText(source.taskText),
     plannedDurationMinutes:
       source.plannedDurationMinutes === null
         ? null
         : integer(source.plannedDurationMinutes),
-    photoRequired: false,
-    startedAt: nullableText(source.activeStartedAt),
-    completedAt: null,
     activeStartedAt: nullableText(source.activeStartedAt),
+    pausedAt: nullableText(source.pausedAt),
     activeWorkSeconds: integer(source.activeWorkSeconds),
-    workerGroup: groupId
-      ? {
-          id: groupId,
-          name: nullableText(groupSource?.workerGroupName) ?? groupId,
-        }
-      : null,
-    assignments,
-    resultMedia: [],
-    assigneeName: null,
-  }
-}
-
-function viewTask(source: JsonRecord, warehouseId: string): RepairTaskDto {
-  const taskStatus = text(source.taskStatus)
-  const status =
-    taskStatus === "DONE"
-      ? "COMPLETED"
-      : taskStatus === "CANCELLED"
-        ? "CANCELLED"
-        : text(source.status) === "WAITING"
-          ? "QUEUED"
-          : "IN_PROGRESS"
-  const id = nullableText(source.externalTaskId) ?? text(source.taskId)
-  return {
-    id,
-    version: integer(source.taskVersion),
-    status,
-    kind: "REPAIR",
-    origin: "DIRECT_REPAIR",
-    acceptanceStatus: "NOT_READY",
-    startedAt: nullableText(source.activeStartedAt),
-    completedAt: null,
-    acceptanceDecidedAt: null,
-    acceptanceDecidedBy: null,
-    acceptanceComment: null,
-    warehouseId,
-    rentalItemId: nullableText(source.unitNumber) ?? text(source.taskId),
-    cabinNumber: nullableText(source.unitNumber) ?? text(source.taskId),
-    authorName: "",
-    reason: text(source.title),
-    dispatchDate: null,
-    comment: nullableText(source.taskText) ?? "",
-    media: [],
-    subtasks: [subtask(source)],
-    sourceEstimateId: null,
-    sourceEstimateVersion: null,
-    sourceInventoryId: null,
-    sourceInventoryFindingId: null,
-    sourceRepairTaskId: null,
-    sourceRepairTaskVersion: null,
-    createdAt: "",
-    updatedAt: "",
+    assignments: list(source.assignments).map(assignment),
+    detailsHref: detailsHref(externalTaskId),
   }
 }
 
 function parseBoard(value: unknown): TaskBoardSnapshotDto {
   const source = object(value)
   const warehouseId = text(source.warehouseId)
-  const queues: TaskBoardQueueDto[] = list(source.columns).map((item) => {
-    const column = object(item)
-    const queueCode = text(column.queueCode)
+  const queues: TaskBoardQueueDto[] = list(source.columns).map((value) => {
+    const column = object(value)
     const queueId = nullableText(column.queueId)
-    const kind = nullableText(column.queueType)
-    const routeQueueKind =
-      kind === "MOVEMENT" || kind === "REPAIR" || kind === "HOLDING"
-        ? kind
-        : null
-    const entries: TaskBoardEntryDto[] = list(column.entries).map(
-      (entryValue) => {
-        const entry = object(entryValue)
-        const task = viewTask(entry, warehouseId)
-        const taskSubtask = task.subtasks[0]!
-        return {
-          id: text(entry.id),
-          queueKey: queueId ?? `virtual:${queueCode}`,
-          entryType: text(entry.entryType) === "SHADOW" ? "SHADOW" : "REAL",
-          routeIndex: integer(entry.routeIndex),
-          routeLength: 1,
-          queuePosition: integer(entry.queuePosition),
-          task,
-          subtask: taskSubtask,
-          taskBoardEntryVersion: integer(entry.version),
-          taskBoardWarehouseId: warehouseId,
-          taskBoardQueueId: queueId,
-          detailsHref: null,
-        }
-      }
-    )
+    const queueCode = text(column.queueCode)
+    const key = queueId ?? `virtual:${queueCode}`
+    const queueType = nullableText(column.queueType)
+    const kind: TaskBoardQueueKind =
+      queueType === "MOVEMENT" ||
+      queueType === "REPAIR" ||
+      queueType === "HOLDING"
+        ? queueType
+        : "UNASSIGNED"
     return {
-      key: queueId ?? `virtual:${queueCode}`,
+      key,
       label: text(column.queueName),
-      kind: routeQueueKind ?? "UNASSIGNED",
+      kind,
       queueCode,
-      routeQueueKind,
       settingsQueueId: queueId,
       settingsCollapsed: false,
-      entries,
+      entries: list(column.entries).map((value) =>
+        entry(value, warehouseId, key)
+      ),
     }
   })
   const entries = queues.flatMap((queue) => queue.entries)
   const routeLengths = new Map<string, number>()
-  entries.forEach((entry) => {
+  entries.forEach((item) => {
     routeLengths.set(
-      entry.task.id,
-      Math.max(routeLengths.get(entry.task.id) ?? 1, entry.routeIndex + 1)
+      item.taskId,
+      Math.max(routeLengths.get(item.taskId) ?? 1, item.routeIndex + 1)
     )
   })
-  entries.forEach((entry) => {
-    entry.routeLength = routeLengths.get(entry.task.id) ?? 1
+  entries.forEach((item) => {
+    item.routeLength = routeLengths.get(item.taskId) ?? 1
   })
   return {
     warehouseId,
     queues,
     totalEntries: entries.length,
-    realEntries: entries.filter((entry) => entry.entryType === "REAL").length,
-    shadowEntries: entries.filter((entry) => entry.entryType === "SHADOW")
-      .length,
+    realEntries: entries.filter((item) => item.entryType === "REAL").length,
+    shadowEntries: entries.filter((item) => item.entryType === "SHADOW").length,
   }
-}
-
-function entryVersion(entry: TaskBoardEntryDto) {
-  if (entry.taskBoardEntryVersion === undefined) {
-    throw new Error("Не подтверждена версия записи доски заданий.")
-  }
-  return entry.taskBoardEntryVersion
 }
 
 function entryPath(entry: TaskBoardEntryDto, effect: string) {
-  return `${TASK_BOARD_API}/warehouses/${encodeURIComponent(entry.taskBoardWarehouseId ?? entry.task.warehouseId)}/task-board/entries/${encodeURIComponent(entry.id)}/${effect}`
+  return `${TASK_BOARD_API}/warehouses/${encodeURIComponent(entry.warehouseId)}/task-board/entries/${encodeURIComponent(entry.id)}/${effect}`
+}
+
+function command(entry: TaskBoardEntryDto, effect: string, body: unknown) {
+  return {
+    url: entryPath(entry, effect),
+    init: { method: "POST", body: JSON.stringify(body) },
+  }
 }
 
 export async function getHttpTaskBoard(
-  accessToken: string | null | undefined,
+  accessToken: string,
   warehouseId: string
 ) {
   return parseBoard(
     await bearerRequest<unknown>(
-      token(accessToken),
+      accessToken,
       `${TASK_BOARD_API}/warehouses/${encodeURIComponent(warehouseId)}/task-board?includeShadow=true`
     )
   )
 }
 
+export function listHttpEligibleWorkerGroups(
+  accessToken: string,
+  warehouseId: string,
+  queueId: string
+) {
+  return bearerRequest<WorkerGroupDto[]>(
+    accessToken,
+    `${TASK_BOARD_API}/warehouses/${encodeURIComponent(warehouseId)}/task-board/queues/${encodeURIComponent(queueId)}/eligible-groups`
+  )
+}
+
 export function moveHttpTaskBoardEntry(
-  accessToken: string | null | undefined,
+  accessToken: string,
   entry: TaskBoardEntryDto,
   targetQueueId: string | null,
   targetIndex: number
 ) {
-  return bearerRequest<unknown>(token(accessToken), entryPath(entry, "move"), {
-    method: "POST",
-    body: JSON.stringify({
-      expectedVersion: entryVersion(entry),
-      targetQueueId,
-      targetIndex,
-    }),
-  }).then(parseBoard)
+  const request = command(entry, "move", {
+    expectedVersion: entry.version,
+    targetQueueId,
+    targetIndex,
+  })
+  return bearerRequest<unknown>(accessToken, request.url, request.init).then(
+    parseBoard
+  )
 }
 
 export function takeHttpTaskBoardEntry(
-  accessToken: string | null | undefined,
+  accessToken: string,
   entry: TaskBoardEntryDto,
   workerGroupId: string | null,
   workerId: string | null
 ) {
-  return bearerRequest<unknown>(token(accessToken), entryPath(entry, "take"), {
-    method: "POST",
-    body: JSON.stringify({
-      expectedVersion: entryVersion(entry),
-      workerGroupId,
-      workerId,
-    }),
+  const request = command(entry, "take", {
+    expectedVersion: entry.version,
+    workerGroupId,
+    workerId,
   })
+  return bearerRequest<unknown>(accessToken, request.url, request.init)
 }
 
 export function pauseHttpTaskBoardEntry(
-  accessToken: string | null | undefined,
+  accessToken: string,
   entry: TaskBoardEntryDto
 ) {
-  return bearerRequest<unknown>(token(accessToken), entryPath(entry, "pause"), {
-    method: "POST",
-    body: JSON.stringify({
-      expectedVersion: entryVersion(entry),
-      reason: null,
-    }),
+  const request = command(entry, "pause", {
+    expectedVersion: entry.version,
+    reason: null,
   })
+  return bearerRequest<unknown>(accessToken, request.url, request.init)
 }
 
 export function resumeHttpTaskBoardEntry(
-  accessToken: string | null | undefined,
+  accessToken: string,
   entry: TaskBoardEntryDto
 ) {
-  return bearerRequest<unknown>(
-    token(accessToken),
-    entryPath(entry, "resume"),
-    {
-      method: "POST",
-      body: JSON.stringify({ expectedVersion: entryVersion(entry) }),
-    }
-  )
+  const request = command(entry, "resume", { expectedVersion: entry.version })
+  return bearerRequest<unknown>(accessToken, request.url, request.init)
 }
 
 export function completeHttpTaskBoardEntry(
-  accessToken: string | null | undefined,
+  accessToken: string,
   entry: TaskBoardEntryDto
 ) {
-  return bearerRequest<unknown>(
-    token(accessToken),
-    entryPath(entry, "complete"),
-    {
-      method: "POST",
-      body: JSON.stringify({ expectedVersion: entryVersion(entry) }),
-    }
-  )
+  const request = command(entry, "complete", { expectedVersion: entry.version })
+  return bearerRequest<unknown>(accessToken, request.url, request.init)
 }

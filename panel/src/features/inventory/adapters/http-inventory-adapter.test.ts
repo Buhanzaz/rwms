@@ -4,11 +4,15 @@ import {
   closeBlockedFindingPublication,
   completeInventorySession,
   createAndAttachInventoryAsset,
+  getActiveInventorySession,
   getInventorySession,
+  getInventoryStatisticsSummary,
+  listInventorySessionStatistics,
   listInventorySessions,
   previewInventoryCompletion,
   publishInventoryFindings,
   retryFindingPublication,
+  saveInventoryInspection,
   startInventorySession,
 } from "@/features/inventory/adapters/http-inventory-adapter"
 import type {
@@ -128,6 +132,107 @@ describe("http inventory adapter", () => {
     expect(fetchMock.mock.calls[1][0]).toContain(
       `/sessions/${session.id}/findings?page=0&size=200`
     )
+  })
+
+  it("loads the active session and treats a 204 response as empty", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(session), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            content: [],
+            page: { page: 0, size: 200, totalElements: 0, totalPages: 0 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      getActiveInventorySession("inventory-token", session.warehouseId)
+    ).resolves.toMatchObject({
+      id: session.id,
+      sessionRevision: session.sessionRevision,
+      findings: [],
+    })
+    await expect(
+      getActiveInventorySession("inventory-token", session.warehouseId)
+    ).resolves.toBeNull()
+
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      `/sessions/active?warehouseId=${session.warehouseId}`
+    )
+  })
+
+  it("sends server revisions, ready media generations and plan selection for inspection", async () => {
+    const findingId = "00000000-0000-4000-8000-000000000130"
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: findingId }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await saveInventoryInspection({
+      accessToken: "inventory-token",
+      inventoryId: session.id,
+      findingId,
+      expectedSessionRevision: 3,
+      expectedFindingRevision: 8,
+      inspection: "WORK_STAGED",
+      media: [
+        {
+          mediaId: "00000000-0000-4000-8000-000000000131",
+          generation: 2,
+        },
+      ],
+      planSelection: {
+        mode: "AUTO",
+        lines: [
+          {
+            aggregationKind: "CATALOG",
+            catalogNodeId: "00000000-0000-4000-8000-000000000132",
+            description: null,
+            type: null,
+            unit: null,
+            quantity: "1",
+            unitPriceMinor: null,
+            normativeMinutes: null,
+            groupComment: null,
+            mediaReferences: [],
+          },
+        ],
+        stages: [],
+      },
+    })
+
+    const request = fetchMock.mock.calls[0]
+    expect(request[0]).toContain(
+      `/sessions/${session.id}/findings/${findingId}/inspection`
+    )
+    expect(request[1].method).toBe("PUT")
+    expect(JSON.parse(request[1].body)).toMatchObject({
+      expectedSessionRevision: 3,
+      expectedFindingRevision: 8,
+      inspection: "WORK_STAGED",
+      media: [
+        {
+          mediaId: "00000000-0000-4000-8000-000000000131",
+          generation: 2,
+        },
+      ],
+      planSelection: {
+        mode: "AUTO",
+      },
+    })
   })
 
   it("round-trips server preview revisions and hashes into completion", async () => {
@@ -305,5 +410,120 @@ describe("http inventory adapter", () => {
       expectedPublicationRevision: 8,
       reason: "Закрыто оператором после сверки",
     })
+  })
+
+  it("reads persisted session statistics and the server summary without recomputing", async () => {
+    const statistics = {
+      expectedCount: 3,
+      inspectedCount: 2,
+      missingCount: 1,
+      readyCount: 1,
+      withWorkCount: 1,
+      addedCount: 0,
+      unexpectedExistingCount: 0,
+      conflictCount: 1,
+      workLineCount: 1,
+      materialLineCount: 0,
+      workTotalMinor: 12500,
+      materialTotalMinor: 0,
+      grandTotalMinor: 12500,
+      roundingAdjustmentMinor: 0,
+      normativeMinutes: "60",
+      durationSeconds: 900,
+      aggregateLines: [],
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            content: [
+              {
+                inventoryId: session.id,
+                warehouseId: session.warehouseId,
+                businessDate: session.businessDate,
+                startedAt: session.startedAt,
+                completedAt: "2026-07-17T10:15:00Z",
+                statistics,
+              },
+            ],
+            page: { page: 0, size: 50, totalElements: 1, totalPages: 1 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ sessionCount: 1, statistics }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+    vi.stubGlobal("fetch", fetchMock)
+
+    const page = await listInventorySessionStatistics(
+      "inventory-token",
+      session.warehouseId
+    )
+    const summary = await getInventoryStatisticsSummary(
+      "inventory-token",
+      session.warehouseId
+    )
+
+    expect(page.content[0].statistics.grandTotalMinor).toBe(12500)
+    expect(summary).toEqual({ sessionCount: 1, statistics })
+    expect(fetchMock.mock.calls[0][0]).toContain(
+      "/api/inventory/v1/statistics/sessions"
+    )
+    expect(fetchMock.mock.calls[1][0]).toContain(
+      "/api/inventory/v1/statistics/summary"
+    )
+  })
+
+  it("preserves 401, 403, 404 and 409 Problem Details for the UI", async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+
+    for (const status of [401, 403]) {
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify({ detail: `Ошибка ${status}` }), {
+          status,
+          headers: { "Content-Type": "application/problem+json" },
+        })
+      )
+      const request = listInventorySessions(
+        "inventory-token",
+        session.warehouseId
+      )
+      await expect(request).rejects.toMatchObject({ status })
+    }
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ detail: "Сессия не найдена" }), {
+        status: 404,
+        headers: { "Content-Type": "application/problem+json" },
+      })
+    )
+    await expect(
+      getInventorySession("inventory-token", session.id)
+    ).rejects.toMatchObject({ status: 404 })
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ detail: "Версия устарела" }), {
+        status: 409,
+        headers: { "Content-Type": "application/problem+json" },
+      })
+    )
+    await expect(
+      saveInventoryInspection({
+        accessToken: "inventory-token",
+        inventoryId: session.id,
+        findingId: "00000000-0000-4000-8000-000000000140",
+        expectedSessionRevision: 3,
+        expectedFindingRevision: 8,
+        inspection: "READY",
+        media: [],
+        planSelection: null,
+      })
+    ).rejects.toMatchObject({ status: 409 })
   })
 })

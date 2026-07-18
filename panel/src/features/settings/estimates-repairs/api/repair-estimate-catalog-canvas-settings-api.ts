@@ -3,13 +3,13 @@ import {
   deleteRepairEstimateCatalogLink,
   deleteRepairEstimateCatalogNode,
   getRepairEstimateCatalogCanvas,
-  resetRepairEstimateCatalogMock,
   saveRepairEstimateCatalogLink,
   saveRepairEstimateCatalogNode,
 } from "@/features/settings/estimates-repairs/api/repair-estimate-catalog-store"
 import type {
   RepairEstimateCatalogLinkMutation,
   RepairEstimateCatalogNodeMutation,
+  RepairEstimateCatalogRequest,
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
 
 const REPAIR_ESTIMATE_CATALOG_CANVAS_SETTINGS: EstimateCatalogSettingsActionDto =
@@ -28,40 +28,36 @@ export async function getRepairEstimateCatalogCanvasSettings() {
   return REPAIR_ESTIMATE_CATALOG_CANVAS_SETTINGS
 }
 
-export async function getRepairEstimateCatalogCanvasMock(warehouseId?: string) {
-  return getRepairEstimateCatalogCanvas(warehouseId)
+export async function getRepairEstimateCatalogCanvasSettingsData(
+  request: RepairEstimateCatalogRequest
+) {
+  return getRepairEstimateCatalogCanvas(request)
 }
 
 export async function saveRepairEstimateCatalogCanvasNode(
-  input: RepairEstimateCatalogNodeMutation,
-  warehouseId?: string
+  request: RepairEstimateCatalogRequest,
+  input: RepairEstimateCatalogNodeMutation
 ) {
-  return saveRepairEstimateCatalogNode(input, warehouseId)
+  return saveRepairEstimateCatalogNode(request, input)
 }
 
 export async function deleteRepairEstimateCatalogCanvasNode(
-  id: string,
-  warehouseId?: string
+  request: RepairEstimateCatalogRequest,
+  id: string
 ) {
-  return deleteRepairEstimateCatalogNode(id, warehouseId)
+  return deleteRepairEstimateCatalogNode(request, id)
 }
 
 export async function saveRepairEstimateCatalogCanvasLink(
-  input: RepairEstimateCatalogLinkMutation,
-  warehouseId?: string
+  request: RepairEstimateCatalogRequest,
+  input: RepairEstimateCatalogLinkMutation
 ) {
-  return saveRepairEstimateCatalogLink(input, warehouseId)
+  return saveRepairEstimateCatalogLink(request, input)
 }
 
 export async function deleteRepairEstimateCatalogCanvasLink(
-  id: string,
-  warehouseId?: string
+  request: RepairEstimateCatalogRequest,
+  id: string
 ) {
-  return deleteRepairEstimateCatalogLink(id, warehouseId)
-}
-
-export async function resetRepairEstimateCatalogCanvasMock(
-  warehouseId?: string
-) {
-  return resetRepairEstimateCatalogMock(warehouseId)
+  return deleteRepairEstimateCatalogLink(request, id)
 }

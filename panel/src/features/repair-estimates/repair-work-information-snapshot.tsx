@@ -9,11 +9,13 @@ import {
 
 type RepairWorkInformationSnapshotProps = {
   cabinNumber: string
-  contextLabel: "От кого" | "Причина"
+  contextLabel: "От кого" | "Причина" | "Источник"
   contextValue: string
   dispatchDate: string | null
   comment: string
   authorName?: string
+  authorLabel?: string
+  showComment?: boolean
   status?: ReactNode
 }
 
@@ -31,7 +33,7 @@ function formatDateOnly(value: string | null) {
 function SnapshotField({ label, value }: { label: string; value: ReactNode }) {
   return (
     <Field orientation="horizontal" className="items-start gap-3">
-      <FieldTitle className="w-32 shrink-0 flex-none text-muted-foreground">
+      <FieldTitle className="w-32 flex-none shrink-0 text-muted-foreground">
         {label}
       </FieldTitle>
       <FieldContent className="min-w-0">
@@ -48,6 +50,8 @@ export function RepairWorkInformationSnapshot({
   dispatchDate,
   comment,
   authorName,
+  authorLabel = "Автор",
+  showComment = true,
   status,
 }: RepairWorkInformationSnapshotProps) {
   return (
@@ -56,12 +60,14 @@ export function RepairWorkInformationSnapshot({
       <SnapshotField label={contextLabel} value={contextValue || "—"} />
       <SnapshotField label="Прибытие" value={formatDateOnly(dispatchDate)} />
       {authorName !== undefined ? (
-        <SnapshotField label="Автор" value={authorName || "—"} />
+        <SnapshotField label={authorLabel} value={authorName || "—"} />
       ) : null}
       {status !== undefined ? (
         <SnapshotField label="Статус" value={status} />
       ) : null}
-      <SnapshotField label="Общий комментарий" value={comment || "—"} />
+      {showComment ? (
+        <SnapshotField label="Общий комментарий" value={comment || "—"} />
+      ) : null}
     </FieldGroup>
   )
 }

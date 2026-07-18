@@ -31,7 +31,7 @@ import { Textarea } from "@/components/ui/textarea"
 import {
   closeBlockedFindingPublication,
   retryFindingPublication,
-} from "@/features/inventory/adapters/http-inventory-adapter"
+} from "@/features/inventory/api/inventory-api"
 import type {
   InventoryFinding,
   InventoryPublicationIntent,

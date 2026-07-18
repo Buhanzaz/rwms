@@ -1,7 +1,5 @@
 import type { RepairEstimateCatalogClient } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-client"
-import { repairEstimateCatalogMockClient } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-mock-adapter"
 import { httpRepairEstimateCatalogClient } from "@/features/repair-estimate-catalog/api/http-repair-estimate-catalog-client"
-import { DEV_MAINTENANCE_FIXTURES_ENABLED } from "@/features/maintenance/maintenance-runtime"
 import type {
   RepairEstimateCatalogEffectiveQueueBinding,
   RepairEstimateCatalogLinkDto,
@@ -11,14 +9,11 @@ import type {
 } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 
 const catalogClient: RepairEstimateCatalogClient =
-  DEV_MAINTENANCE_FIXTURES_ENABLED
-    ? repairEstimateCatalogMockClient
-    : httpRepairEstimateCatalogClient
+  httpRepairEstimateCatalogClient
 
 /**
  * Stable query-key prefix shared by settings and operational estimate screens.
- * Prefix invalidation refreshes every catalog projection without coupling a
- * consumer to the current mock persistence implementation.
+ * Prefix invalidation refreshes every maintenance-service catalog projection.
  */
 export const REPAIR_ESTIMATE_CATALOG_QUERY_KEY = ["estimate-catalog"] as const
 
@@ -28,48 +23,23 @@ function compareNodes(
   left: RepairEstimateCatalogNodeDto,
   right: RepairEstimateCatalogNodeDto
 ) {
-  const leftOrder = left.sortOrder ?? Number.MAX_SAFE_INTEGER
-  const rightOrder = right.sortOrder ?? Number.MAX_SAFE_INTEGER
-  if (leftOrder !== rightOrder) {
-    return leftOrder - rightOrder
-  }
-
-  return left.name.localeCompare(right.name, "ru")
+  return (
+    left.name.localeCompare(right.name, "ru") || left.id.localeCompare(right.id)
+  )
 }
 
 function compareMainMenuNodes(
   left: RepairEstimateCatalogNodeDto,
   right: RepairEstimateCatalogNodeDto
 ) {
-  const leftOrder = left.mainMenuOrder ?? Number.MAX_SAFE_INTEGER
-  const rightOrder = right.mainMenuOrder ?? Number.MAX_SAFE_INTEGER
-  if (leftOrder !== rightOrder) {
-    return leftOrder - rightOrder
-  }
-
-  const titleResult = getRepairEstimateCatalogMainMenuTitle(left).localeCompare(
-    getRepairEstimateCatalogMainMenuTitle(right),
-    "ru"
-  )
-  if (titleResult !== 0) {
-    return titleResult
-  }
-
-  const nameResult = left.name.localeCompare(right.name, "ru")
-  return nameResult !== 0 ? nameResult : left.id.localeCompare(right.id)
+  return compareNodes(left, right)
 }
 
 function compareLinkOrder(
   left: RepairEstimateCatalogLinkDto,
   right: RepairEstimateCatalogLinkDto
 ) {
-  const leftOrder = left.sortOrder ?? Number.MAX_SAFE_INTEGER
-  const rightOrder = right.sortOrder ?? Number.MAX_SAFE_INTEGER
-  if (leftOrder !== rightOrder) {
-    return leftOrder - rightOrder
-  }
-
-  return 0
+  return left.sortOrder - right.sortOrder
 }
 
 function compareLinks(
@@ -237,7 +207,6 @@ export function createRepairEstimateCatalogIndex(
 
   const activeLinks = snapshot.links.filter(
     (link) =>
-      link.active &&
       activeNodeIds.has(link.sourceNodeId) &&
       activeNodeIds.has(link.targetNodeId)
   )
@@ -415,23 +384,8 @@ export function createRepairEstimateCatalogIndex(
 }
 
 /**
- * Service-client boundary for operational estimate screens. The current mock
- * adapter delegates to the settings-backed catalog store; a future HTTP client
- * can replace that delegation without changing consumers, DTOs, selectors, or
- * query keys.
+ * Service-client boundary for operational estimate screens.
  */
 export async function getOperationalRepairEstimateCatalog(): Promise<RepairEstimateCatalogSnapshotDto> {
-  return repairEstimateCatalogMockClient.getOperationalCatalog()
-}
-
-export async function getOperationalMaintenanceCatalog(
-  warehouseId: string
-): Promise<RepairEstimateCatalogSnapshotDto> {
-  return catalogClient.getOperationalCatalog(warehouseId)
-}
-
-export function getRepairEstimateCatalogMainMenuTitle(
-  node: RepairEstimateCatalogNodeDto
-) {
-  return node.mainMenuTitle?.trim() || node.name
+  return catalogClient.getOperationalCatalog()
 }

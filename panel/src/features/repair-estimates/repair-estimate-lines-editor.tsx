@@ -35,6 +35,7 @@ type RepairEstimateLinesEditorProps = {
   lines: RepairEstimateLineDto[]
   readOnly: boolean
   mode?: "ESTIMATE" | "TASK"
+  catalogOnly?: boolean
   onChange: (lines: RepairEstimateLineDto[]) => void
 }
 
@@ -42,6 +43,7 @@ export function RepairEstimateLinesEditor({
   lines,
   readOnly,
   mode = "ESTIMATE",
+  catalogOnly = false,
   onChange,
 }: RepairEstimateLinesEditorProps) {
   function updateLine(
@@ -72,7 +74,7 @@ export function RepairEstimateLinesEditor({
           </p>
         </div>
 
-        {!readOnly ? (
+        {!readOnly && !catalogOnly ? (
           <Button
             type="button"
             variant="outline"
@@ -91,8 +93,10 @@ export function RepairEstimateLinesEditor({
           </CardHeader>
           <CardContent className="text-muted-foreground">
             {mode === "TASK"
-              ? "Пустой черновик можно сохранить, но для постановки в очередь добавьте работу или материал."
-              : "Пустую смету можно сохранить или завершить. Для добавления выберите позицию каталога либо создайте ручную строку."}
+              ? "Для ремонтного задания требуется хотя бы один этап. Добавьте работу или материал из каталога."
+              : catalogOnly
+                ? "Пустую смету можно сохранить или завершить. Для добавления выберите позицию каталога."
+                : "Пустую смету можно сохранить или завершить. Для добавления выберите позицию каталога либо создайте ручную строку."}
           </CardContent>
         </Card>
       ) : (
@@ -125,7 +129,7 @@ export function RepairEstimateLinesEditor({
                       Тип
                     </FieldLabel>
                     <Select
-                      disabled={readOnly}
+                      disabled={readOnly || catalogOnly}
                       value={line.lineType}
                       onValueChange={(value) =>
                         updateLine(line.id, (current) => ({
@@ -145,6 +149,9 @@ export function RepairEstimateLinesEditor({
                         <SelectGroup>
                           <SelectItem value="WORK">Работа</SelectItem>
                           <SelectItem value="MATERIAL">Материал</SelectItem>
+                          <SelectItem value="UNSPECIFIED">
+                            Тип не задан сервисом
+                          </SelectItem>
                         </SelectGroup>
                       </SelectContent>
                     </Select>
@@ -251,7 +258,7 @@ export function RepairEstimateLinesEditor({
                     <Input
                       id={`line-unit-${line.id}`}
                       aria-label={`Единица измерения строки ${index + 1}`}
-                      disabled={readOnly}
+                      disabled={readOnly || catalogOnly}
                       value={line.unit}
                       onChange={(event) =>
                         replaceLine(line.id, (current) => ({

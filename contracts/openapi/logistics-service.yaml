@@ -347,7 +347,7 @@ components:
         documentType: { type: string, enum: [RETURN, SHIPMENT, TRANSFER] }
         state:
           type: string
-          enum: [DRAFT, REGISTERING, INSPECTION_REQUIRED, ACCEPTING, ACCEPTED, ESTIMATE_PENDING, ESTIMATE_REQUESTED, PREPARING, AWAITING_CONFIRMATION, CONFIRMING_PREPARATION, SHIPPED, DEPARTING, IN_TRANSIT, ARRIVING, COMPLETED, CANCELLED, CONFLICT, RECONCILIATION_REQUIRED]
+          enum: [DRAFT, REGISTERING, INSPECTION_REQUIRED, ACCEPTING, ACCEPTED, ESTIMATE_PENDING, ESTIMATE_REQUESTED, PREPARING, AWAITING_CONFIRMATION, CONFIRMING_PREPARATION, SHIPPED, CANCELLING, DEPARTING, IN_TRANSIT, ARRIVING, COMPLETED, CANCELLED, CONFLICT, RECONCILIATION_REQUIRED]
         warehouseId: { type: string, format: uuid }
         destinationWarehouseId: { type: [string, 'null'], format: uuid }
         partySnapshot: { type: [string, 'null'], maxLength: 512, description: Immutable, trimmed workflow snapshot; no directory identity. }

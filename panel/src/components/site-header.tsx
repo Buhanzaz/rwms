@@ -14,9 +14,13 @@ import {
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
-import { getAssetRentalItem } from "@/api/asset-api"
-import { AssetEquipmentItemCountBadge } from "@/features/assets/asset-equipment-item-count-badge"
+import { EquipmentItemCountBadge } from "@/features/equipment/equipment-item-count-badge"
 import { useAuth } from "@/features/auth/use-auth"
+import { getAssetRentalItem } from "@/features/rental-items/api/asset-rental-items-api"
+import {
+  getRepairTask,
+  repairTaskDetailQueryKey,
+} from "@/features/repair-tasks/api/repair-tasks-api"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { cn } from "@/lib/utils"
 
@@ -33,7 +37,6 @@ type RentalItemHeaderBreadcrumb = {
 const routeTitles = [
   { path: "/settings/estimates-repairs", title: "Настройка смет и ремонтов" },
   { path: "/settings/task-board", title: "Настройка доски задач" },
-  { path: "/settings/assets", title: "Настройка имущества" },
   { path: "/warehouse", title: "Склад" },
   { path: "/equipment", title: "Доп. оборудование" },
   { path: "/inventory", title: "Инвентаризация" },
@@ -52,7 +55,8 @@ const routeTitles = [
 function resolveHeaderBreadcrumbs(
   pathname: string,
   search: string,
-  rentalItemBreadcrumb: RentalItemHeaderBreadcrumb | null
+  rentalItemBreadcrumb: RentalItemHeaderBreadcrumb | null,
+  repairCabinNumber: string | null
 ): HeaderBreadcrumb[] {
   const searchParams = new URLSearchParams(search)
 
@@ -123,7 +127,7 @@ function resolveHeaderBreadcrumbs(
   if (pathname === "/acceptance" && searchParams.has("acceptanceId")) {
     return [
       { title: "Приёмка и доработки", to: "/acceptance" },
-      { title: "Бытовка" },
+      { title: repairCabinNumber ?? "Бытовка" },
     ]
   }
 
@@ -131,7 +135,7 @@ function resolveHeaderBreadcrumbs(
     return [
       { title: "Списание" },
       { title: "Склад", to: "/write-offs" },
-      { title: "Бытовка" },
+      { title: repairCabinNumber ?? "Бытовка" },
     ]
   }
 
@@ -184,15 +188,30 @@ function getRentalItemId(pathname: string) {
 export function SiteHeader() {
   const { pathname, search } = useLocation()
   const navigate = useNavigate()
-  const { selectedWarehouse, warehouses } = useWarehouse()
   const { accessToken } = useAuth()
+  const { selectedWarehouse, warehouses } = useWarehouse()
+  const searchParams = new URLSearchParams(search)
   const rentalItemId = getRentalItemId(pathname)
+  const repairTaskId =
+    pathname === "/acceptance"
+      ? searchParams.get("acceptanceId")
+      : pathname === "/write-offs"
+        ? searchParams.get("writeOffId")
+        : null
   const rentalItemQuery = useQuery({
-    queryKey: ["asset-rental-item", rentalItemId],
+    queryKey: ["rental-item", rentalItemId],
     queryFn: () => getAssetRentalItem(accessToken, rentalItemId ?? ""),
     enabled: rentalItemId !== null && accessToken !== null,
   })
   const rentalItem = rentalItemQuery.data ?? null
+  const repairTaskQuery = useQuery({
+    queryKey: repairTaskDetailQueryKey(
+      selectedWarehouse?.id ?? "none",
+      repairTaskId
+    ),
+    queryFn: () => getRepairTask(repairTaskId!, selectedWarehouse!.id),
+    enabled: repairTaskId !== null && selectedWarehouse !== null,
+  })
   const rentalItemWarehouse = rentalItem
     ? (warehouses.find(
         (warehouse) => warehouse.id === rentalItem.warehouseId
@@ -208,7 +227,8 @@ export function SiteHeader() {
   const breadcrumbs = resolveHeaderBreadcrumbs(
     pathname,
     search,
-    rentalItemBreadcrumb
+    rentalItemBreadcrumb,
+    repairTaskQuery.data?.cabinNumber ?? null
   )
   const isNested = breadcrumbs.length > 1
   const useSlashSeparator = rentalItemId !== null
@@ -320,7 +340,7 @@ function FragmentBreadcrumb({
             <BreadcrumbPage className="truncate text-base font-medium">
               {breadcrumb.title}
             </BreadcrumbPage>
-            {showEquipmentItemCount ? <AssetEquipmentItemCountBadge /> : null}
+            {showEquipmentItemCount ? <EquipmentItemCountBadge /> : null}
           </>
         ) : breadcrumb.to ? (
           <BreadcrumbLink asChild className="truncate text-base">

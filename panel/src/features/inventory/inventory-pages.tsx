@@ -1,14 +1,6 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { HugeiconsIcon } from "@hugeicons/react"
-import {
-  Add01Icon,
-  ArrowLeft01Icon,
-  CheckmarkCircle02Icon,
-  ClipboardCheckIcon,
-  SentIcon,
-} from "@hugeicons/core-free-icons"
-import { useNavigate, useParams, useSearchParams } from "react-router-dom"
+import { useNavigate, useParams } from "react-router-dom"
 import { toast } from "sonner"
 
 import { PageToolbar, PageToolbarActions } from "@/components/page-toolbar"
@@ -18,998 +10,663 @@ import {
   Card,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Field, FieldLabel } from "@/components/ui/field"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import {
-  INVENTORY_QUERY_KEY,
-  completeInventory,
-  discardInventoryMedia,
-  getActiveInventory,
-  getInventory,
-  inventoryActiveQueryKey,
-  inventoryDetailQueryKey,
-  inventoryFinishPreviewQueryKey,
-  inventoryListQueryKey,
-  listInventories,
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
+  completeInventorySession,
+  createAndAttachInventoryAsset,
+  getActiveInventorySession,
+  getInventorySession,
+  getInventoryStatisticsSummary,
+  listInventorySessions,
   previewInventoryCompletion,
-  publishInventoryWorks,
-  saveInventoryFinding,
-  startInventory,
-  subscribeInventory,
-  uploadInventoryMedia,
+  publishInventoryFindings,
+  resolveInventoryNumber,
+  startInventorySession,
 } from "@/features/inventory/api/inventory-api"
-import {
-  getInventoryActor,
-  hasInventoryWarehouseAccess,
-} from "@/features/inventory/inventory-access"
-import { InventoryAddDialog } from "@/features/inventory/inventory-add-dialog"
-import { InventoryFindingsList } from "@/features/inventory/inventory-findings-list"
-import { InventoryInspectionWorkspace } from "@/features/inventory/inventory-inspection-workspace"
-import {
-  InventoryEmptyState,
-  InventoryUnavailable,
-} from "@/features/inventory/inventory-presentation"
-import {
-  inventoryPublicationLabel,
-  inventoryPublicationNotice,
-} from "@/features/inventory/inventory-publication-presentation"
-import { InventorySessionList } from "@/features/inventory/inventory-session-list"
+import { InventoryFindingEditor } from "@/features/inventory/inventory-finding-editor"
+import { InventoryPublicationPanel } from "@/features/inventory/inventory-publication-panel"
 import { InventoryStartDialog } from "@/features/inventory/inventory-start-dialog"
-import { InventoryStatistics } from "@/features/inventory/inventory-statistics"
 import {
-  inventoryCompletionRiskSignature,
-  reconcileInventoryRepairTaskPlans,
-  toInventoryRepairPlanSnapshot,
-} from "@/features/inventory/domain/inventory-domain"
+  FindingList,
+  InventoryStatisticsView,
+  InventoryUnavailable,
+  SessionCards,
+} from "@/features/inventory/inventory-service-ui"
+import { formatDateTime } from "@/features/inventory/inventory-service-formatters"
 import type {
-  InventoryFindingDto,
-  InventorySessionDto,
-} from "@/features/inventory/model/inventory"
-import { RENTAL_ITEM_STATUS_LABEL } from "@/features/rental-items/model/rental-item"
-import type {
-  PendingEstimateMediaUpload,
-  RepairEstimateLineDto,
-  RepairEstimateMediaRefDto,
-} from "@/features/repair-estimates/model/repair-estimate"
-import { RepairEstimateLinesSnapshot } from "@/features/repair-estimates/repair-estimate-lines-snapshot"
-import {
-  RepairWorkCompletionDialog,
-  type RepairWorkCompletionResult,
-} from "@/features/repair-estimates/repair-work-completion-dialog"
+  InventoryCompletionPreview,
+  InventoryCreateIntent,
+} from "@/features/inventory/model/inventory-service"
 import { useAuth } from "@/features/auth/use-auth"
 import { useWarehouse } from "@/hooks/use-warehouse"
-import {
-  useWorkspaceBack,
-  workspaceEntryNavigationOptions,
-} from "@/hooks/use-workspace-back"
+import { ApiError } from "@/lib/api-client"
 
-type FindingFilter =
-  "ALL" | "INSPECTED" | "WORK" | "CONFLICT" | "ADDED" | "MISSING"
-
-const filterLabels: Record<FindingFilter, string> = {
-  ALL: "Все",
-  INSPECTED: "Проверены",
-  WORK: "С работами",
-  CONFLICT: "Конфликты",
-  ADDED: "Добавлены",
-  MISSING: "Не найдены",
+const inventoryKeys = {
+  all: ["inventory-service"] as const,
+  active: (warehouseId: string) =>
+    ["inventory-service", "active", warehouseId] as const,
+  history: (warehouseId: string, page: number) =>
+    ["inventory-service", "history", warehouseId, page] as const,
+  detail: (inventoryId: string) =>
+    ["inventory-service", "detail", inventoryId] as const,
+  summary: (warehouseId: string) =>
+    ["inventory-service", "summary", warehouseId] as const,
 }
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Операция не выполнена"
 }
 
-function showPublicationNotice(session: InventorySessionDto) {
-  const notice = inventoryPublicationNotice(session)
-  toast[notice.kind](notice.message)
+function retryInventoryQuery(failureCount: number, error: unknown) {
+  if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+    return false
+  }
+  return failureCount < 3
 }
 
-function conflictValue(value: string | null) {
-  return value?.trim() || "—"
-}
-
-function useInventorySync() {
-  const queryClient = useQueryClient()
-  useEffect(
-    () =>
-      subscribeInventory(
-        () =>
-          void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
-      ),
-    [queryClient]
+function useStableCommandKey(signature: string) {
+  const intent = useMemo(
+    () => ({ signature, idempotencyKey: crypto.randomUUID() }),
+    [signature]
   )
-}
-
-function businessDateInTimeZone(timeZone: string) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date())
-  const get = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((part) => part.type === type)?.value ?? ""
-  return `${get("year")}-${get("month")}-${get("day")}`
-}
-
-function filterFindings(
-  findings: InventoryFindingDto[],
-  filter: FindingFilter
-) {
-  if (filter === "INSPECTED")
-    return findings.filter((item) => item.inspectionStatus !== "NOT_INSPECTED")
-  if (filter === "WORK") return findings.filter((item) => item.lines.length > 0)
-  if (filter === "CONFLICT")
-    return findings.filter((item) => item.conflicts.length > 0)
-  if (filter === "ADDED")
-    return findings.filter(
-      (item) => item.origin === "ADDED_NEW" || item.origin === "ADDED_USED"
-    )
-  if (filter === "MISSING")
-    return findings.filter((item) => item.reconciliationStatus === "MISSING")
-  return findings
-}
-
-function InventoryLoading({
-  children = "Загрузка инвентаризации...",
-}: {
-  children?: string
-}) {
-  return <p className="text-sm text-muted-foreground">{children}</p>
+  return intent.idempotencyKey
 }
 
 export function InventoryEntryPage() {
-  useInventorySync()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const { accessToken, currentUser } = useAuth()
   const { selectedWarehouse } = useWarehouse()
-  const { currentUser } = useAuth()
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const warehouseId = selectedWarehouse?.id ?? "none"
-  const actor = selectedWarehouse
-    ? getInventoryActor(currentUser, selectedWarehouse.id)
-    : null
+  const [startOpen, setStartOpen] = useState(false)
+  const startIdempotencyKey = useStableCommandKey(
+    `start:${selectedWarehouse?.id ?? "none"}`
+  )
   const activeQuery = useQuery({
-    queryKey: inventoryActiveQueryKey(warehouseId),
+    queryKey: inventoryKeys.active(selectedWarehouse?.id ?? "none"),
     queryFn: () =>
-      selectedWarehouse && actor
-        ? getActiveInventory({ warehouseId: selectedWarehouse.id, actor })
-        : Promise.resolve(null),
-    enabled: selectedWarehouse !== null && actor !== null,
+      getActiveInventorySession(accessToken, selectedWarehouse!.id),
+    enabled: accessToken !== null && selectedWarehouse !== null,
+    retry: retryInventoryQuery,
+  })
+  const startMutation = useMutation({
+    mutationFn: () =>
+      startInventorySession(
+        accessToken,
+        selectedWarehouse!.id,
+        startIdempotencyKey
+      ),
+    onSuccess: async (session) => {
+      await queryClient.invalidateQueries({ queryKey: inventoryKeys.all })
+      navigate(`/inventory/${session.id}`)
+    },
   })
 
   useEffect(() => {
-    if (activeQuery.data)
+    if (activeQuery.data) {
       navigate(`/inventory/${activeQuery.data.id}`, { replace: true })
+    }
   }, [activeQuery.data, navigate])
 
-  const startMutation = useMutation({
-    mutationFn: () => {
-      if (!selectedWarehouse || !actor) throw new Error("Нет доступа к складу")
-      return startInventory({
-        warehouse: {
-          id: selectedWarehouse.id,
-          code: selectedWarehouse.code,
-          name: selectedWarehouse.name,
-          timeZone: selectedWarehouse.timeZone,
-        },
-        actor,
-        businessDate: businessDateInTimeZone(selectedWarehouse.timeZone),
-      })
-    },
-    onSuccess: (session) => {
-      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
-      navigate(`/inventory/${session.id}`, { replace: true })
-    },
-  })
-
   if (!selectedWarehouse)
+    return <InventoryUnavailable>Выберите склад в меню.</InventoryUnavailable>
+  if (!accessToken)
     return (
-      <InventoryUnavailable
-        title="Склад не выбран"
-        description="Выберите склад в меню."
-      />
+      <InventoryUnavailable>Войдите в систему повторно.</InventoryUnavailable>
     )
-  if (
-    !actor ||
-    !hasInventoryWarehouseAccess(currentUser, selectedWarehouse.id, "VIEW")
-  )
+  if (activeQuery.error)
     return (
-      <InventoryUnavailable
-        title="Инвентаризация недоступна"
-        description="Нет доступа к выбранному складу."
-      />
+      <InventoryUnavailable>
+        {errorMessage(activeQuery.error)}
+      </InventoryUnavailable>
     )
-  if (activeQuery.isLoading || activeQuery.data) return <InventoryLoading />
+  if (activeQuery.isLoading)
+    return <p className="text-sm text-muted-foreground">Загрузка...</p>
+  if (activeQuery.data) return null
 
-  const canStart = hasInventoryWarehouseAccess(
-    currentUser,
-    selectedWarehouse.id,
-    "EDIT"
-  )
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
-      <Card className="max-w-2xl">
-        <CardHeader>
-          <CardTitle>Инвентаризация склада</CardTitle>
-          <CardDescription>
-            Активной сессии для склада «{selectedWarehouse.name}» нет.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            disabled={!canStart}
-            onClick={() => setDialogOpen(true)}
-          >
-            <HugeiconsIcon icon={ClipboardCheckIcon} data-icon="inline-start" />
-            Создать инвентаризацию
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => navigate("/inventory/history")}
-          >
-            История
-          </Button>
-        </CardContent>
-      </Card>
+    <Card className="max-w-2xl">
+      <CardHeader>
+        <CardTitle>Инвентаризация склада</CardTitle>
+        <CardDescription>
+          Активной сессии для склада «{selectedWarehouse.name}» нет.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-wrap gap-2">
+        <Button type="button" onClick={() => setStartOpen(true)}>
+          Начать инвентаризацию
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => navigate("/inventory/history")}
+        >
+          История
+        </Button>
+      </CardContent>
       <InventoryStartDialog
-        open={dialogOpen}
+        open={startOpen}
         warehouseName={selectedWarehouse.name}
-        authorName={actor.displayName}
-        businessDate={businessDateInTimeZone(selectedWarehouse.timeZone)}
+        authorName={
+          currentUser?.displayName ||
+          currentUser?.username ||
+          "Текущий пользователь"
+        }
+        businessDate="Определяется сервером"
         pending={startMutation.isPending}
         error={startMutation.error ? errorMessage(startMutation.error) : null}
-        onOpenChange={setDialogOpen}
+        onOpenChange={setStartOpen}
         onConfirm={() => startMutation.mutate()}
       />
-    </div>
+    </Card>
   )
 }
 
-function FindingEditor({
-  session,
-  finding,
-  readOnly,
-  onBack,
+export function InventorySessionPage({
+  readOnly = false,
 }: {
-  session: InventorySessionDto
-  finding: InventoryFindingDto
-  readOnly: boolean
-  onBack: () => void
-}) {
-  const { currentUser } = useAuth()
-  const queryClient = useQueryClient()
-  const actor = getInventoryActor(currentUser, session.warehouseId)
-  const [comment, setComment] = useState(finding.comment)
-  const [lines, setLines] = useState<RepairEstimateLineDto[]>(finding.lines)
-  const [media, setMedia] = useState<RepairEstimateMediaRefDto[]>(finding.media)
-  const [pendingUploads, setPendingUploads] = useState<
-    PendingEstimateMediaUpload[]
-  >([])
-  const [completionOpen, setCompletionOpen] = useState(false)
-  const mutation = useMutation({
-    mutationFn: async (completion: RepairWorkCompletionResult | null) => {
-      if (!actor) throw new Error("Нет доступа")
-      const uploaded = await uploadInventoryMedia(pendingUploads)
-      try {
-        return await saveInventoryFinding({
-          inventoryId: session.id,
-          expectedVersion: session.version,
-          actor,
-          findingId: finding.id,
-          comment,
-          media: [...media, ...uploaded],
-          lines,
-          repairPlans: completion
-            ? completion.taskPlans.map(toInventoryRepairPlanSnapshot)
-            : finding.repairPlans,
-          repairCompletionMode: completion?.completionMode ?? null,
-          movementRequired: completion?.movementRequired ?? false,
-        })
-      } catch (error) {
-        await discardInventoryMedia(uploaded.map((item) => item.id))
-        throw error
-      }
-    },
-    onSuccess: () => {
-      setCompletionOpen(false)
-      pendingUploads.forEach((upload) => URL.revokeObjectURL(upload.previewUrl))
-      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
-      toast.success(
-        lines.length > 0
-          ? "Осмотр и работы сохранены"
-          : "Бытовка готова по результату инвентаризации"
-      )
-      onBack()
-    },
-  })
-  const snapshot = finding.currentSnapshot ?? finding.expectedSnapshot
-  return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
-      <PageToolbar>
-        <Button type="button" variant="outline" onClick={onBack}>
-          <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
-          Назад
-        </Button>
-        {!readOnly ? (
-          <PageToolbarActions>
-            <Button
-              type="button"
-              disabled={mutation.isPending}
-              onClick={() =>
-                lines.length > 0
-                  ? setCompletionOpen(true)
-                  : mutation.mutate(null)
-              }
-            >
-              {mutation.isPending ? "Сохраняем..." : "Сохранить осмотр"}
-            </Button>
-          </PageToolbarActions>
-        ) : null}
-      </PageToolbar>
-      {mutation.error ? (
-        <p role="alert" className="text-sm text-destructive">
-          {errorMessage(mutation.error)}
-        </p>
-      ) : null}
-      <InventoryInspectionWorkspace
-        cabinNumber={finding.cabinNumber}
-        statusLabel={snapshot ? RENTAL_ITEM_STATUS_LABEL[snapshot.status] : "—"}
-        tenant={snapshot?.tenant ?? null}
-        businessDate={session.businessDate}
-        comment={comment}
-        lines={lines}
-        repairCompletionMode={finding.repairCompletionMode}
-        movementRequired={finding.movementRequired}
-        repairPlans={finding.repairPlans}
-        media={media}
-        pendingUploads={pendingUploads}
-        readOnly={readOnly}
-        message={
-          finding.conflicts.map((conflict) => conflict.message).join("; ") ||
-          null
-        }
-        onCommentChange={setComment}
-        onLinesChange={setLines}
-        onMediaChange={setMedia}
-        onPendingUploadsChange={setPendingUploads}
-      />
-      <RepairWorkCompletionDialog
-        open={completionOpen}
-        lines={lines}
-        pending={mutation.isPending}
-        error={
-          completionOpen && mutation.error ? errorMessage(mutation.error) : null
-        }
-        title="Настройка работ по осмотру"
-        description="Выберите режим, перемещения, очереди и порядок этапов. Настройка будет сохранена в снимке инвентаризации и передана в ремонт только после её завершения."
-        completeLabel="Сохранить осмотр"
-        pendingLabel="Сохраняем..."
-        previewKey={`inventory:${session.id}:${finding.id}:${session.version}`}
-        initialCompletionMode={finding.repairCompletionMode ?? undefined}
-        initialMovementRequired={finding.movementRequired}
-        reconcileInitialPlans={
-          finding.repairPlans.length > 0
-            ? (prepared) =>
-                reconcileInventoryRepairTaskPlans({
-                  lines,
-                  stored: finding.repairPlans,
-                  prepared,
-                })
-            : undefined
-        }
-        onOpenChange={setCompletionOpen}
-        onComplete={(completion) => mutation.mutate(completion)}
-      />
-    </div>
-  )
-}
-
-function useInventoryDetailRoute() {
-  useInventorySync()
+  readOnly?: boolean
+} = {}) {
   const { inventoryId = "" } = useParams()
-  const { currentUser } = useAuth()
-  const { selectedWarehouse } = useWarehouse()
-  const actor = selectedWarehouse
-    ? getInventoryActor(currentUser, selectedWarehouse.id)
-    : null
-  const query = useQuery({
-    queryKey: inventoryDetailQueryKey(inventoryId),
-    queryFn: () => getInventory(inventoryId, actor!),
-    enabled: Boolean(inventoryId && actor),
-  })
-  const session =
-    query.data && query.data.warehouseId === selectedWarehouse?.id
-      ? query.data
-      : null
-  return { inventoryId, actor, selectedWarehouse, query, session }
-}
-
-export function InventorySessionPage() {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
-  const { currentUser } = useAuth()
-  const { inventoryId, actor, selectedWarehouse, query, session } =
-    useInventoryDetailRoute()
-  const [filter, setFilter] = useState<FindingFilter>("ALL")
-  const [addOpen, setAddOpen] = useState(false)
-  const findingId = searchParams.get("findingId")
-  const goBack = useWorkspaceBack(`/inventory/${inventoryId}`)
-  const selectedFinding =
-    session?.findings.find((item) => item.id === findingId) ?? null
-
-  if (!actor || !selectedWarehouse)
-    return (
-      <InventoryUnavailable
-        title="Инвентаризация недоступна"
-        description="Нет доступа к выбранному складу."
-      />
-    )
-  if (query.isLoading) return <InventoryLoading />
+  const { accessToken } = useAuth()
+  const [selectedFindingId, setSelectedFindingId] = useState<string | null>(
+    null
+  )
+  const [number, setNumber] = useState("")
+  const [pendingCreateIntent, setPendingCreateIntent] =
+    useState<InventoryCreateIntent | null>(null)
+  const [origin, setOrigin] = useState<"ADDED_NEW" | "ADDED_USED">("ADDED_USED")
+  const queryClient = useQueryClient()
+  const query = useQuery({
+    queryKey: inventoryKeys.detail(inventoryId),
+    queryFn: () => getInventorySession(accessToken, inventoryId),
+    enabled: accessToken !== null && Boolean(inventoryId),
+    retry: retryInventoryQuery,
+  })
+  const resolveIdempotencyKey = useStableCommandKey(
+    `resolve:${inventoryId}:${query.data?.sessionRevision ?? "loading"}:${number.trim()}`
+  )
+  const publishSignature = query.data
+    ? query.data.findings
+        .map(
+          (finding) =>
+            `${finding.id}:${finding.publication?.publicationRevision ?? "none"}`
+        )
+        .join("|")
+    : "loading"
+  const publishIdempotencyKey = useStableCommandKey(
+    `publish:${inventoryId}:${query.data?.sessionRevision ?? "loading"}:${publishSignature}`
+  )
+  const refreshSession = async () => {
+    await queryClient.invalidateQueries({
+      queryKey: inventoryKeys.detail(inventoryId),
+    })
+  }
+  const resolveMutation = useMutation({
+    mutationFn: () =>
+      resolveInventoryNumber({
+        accessToken,
+        inventoryId,
+        expectedSessionRevision: query.data!.sessionRevision,
+        submittedNumber: number,
+        idempotencyKey: resolveIdempotencyKey,
+      }),
+    onSuccess: async (resolution) => {
+      if (resolution.finding) setSelectedFindingId(resolution.finding.id)
+      if (resolution.outcome === "NOT_FOUND") {
+        setPendingCreateIntent((current) =>
+          current?.number === resolution.displayCanonicalNumber
+            ? current
+            : {
+                findingId: crypto.randomUUID(),
+                idempotencyKey: crypto.randomUUID(),
+                number: resolution.displayCanonicalNumber,
+              }
+        )
+      } else {
+        setPendingCreateIntent(null)
+      }
+      await refreshSession()
+    },
+  })
+  const createMutation = useMutation({
+    mutationFn: () =>
+      createAndAttachInventoryAsset({
+        accessToken,
+        inventoryId,
+        findingId: pendingCreateIntent!.findingId,
+        expectedSessionRevision: query.data!.sessionRevision,
+        expectedFindingRevision: 0,
+        origin,
+        displayCanonicalNumber: pendingCreateIntent!.number,
+        safePassport: {},
+        idempotencyKey: pendingCreateIntent!.idempotencyKey,
+      }),
+    onSuccess: async (finding) => {
+      setPendingCreateIntent(null)
+      setSelectedFindingId(finding.id)
+      await refreshSession()
+    },
+  })
+  const publishMutation = useMutation({
+    mutationFn: () =>
+      publishInventoryFindings({
+        accessToken,
+        inventoryId,
+        expectedSessionRevision: query.data!.sessionRevision,
+        idempotencyKey: publishIdempotencyKey,
+      }),
+    onSuccess: async (batch) => {
+      await refreshSession()
+      toast.success(`Публикация: ${batch.aggregateState}`)
+    },
+  })
+  const session = query.data
+  const selectedFinding = session?.findings.find(
+    (finding) => finding.id === selectedFindingId
+  )
+  if (query.isLoading)
+    return <p className="text-sm text-muted-foreground">Загрузка...</p>
   if (!session)
     return (
-      <InventoryUnavailable
-        title="Инвентаризация недоступна"
-        description="Сессия не найдена на выбранном складе или нет прав на просмотр."
-      />
+      <InventoryUnavailable>
+        {query.error
+          ? errorMessage(query.error)
+          : "Сессия не найдена или недоступна."}
+      </InventoryUnavailable>
     )
-  if (session.status !== "ACTIVE") {
-    navigate(`/inventory/history/${session.id}`, { replace: true })
-    return <InventoryLoading />
-  }
-  if (findingId) {
-    if (!selectedFinding)
-      return (
-        <InventoryUnavailable
-          title="Бытовка недоступна"
-          description="Результат осмотра не найден."
-        />
-      )
+  if (selectedFinding) {
     return (
-      <FindingEditor
-        key={`${selectedFinding.id}:${session.version}`}
+      <InventoryFindingEditor
         session={session}
         finding={selectedFinding}
-        readOnly={
-          !hasInventoryWarehouseAccess(currentUser, session.warehouseId, "EDIT")
-        }
-        onBack={goBack}
+        readOnly={readOnly || session.lifecycle !== "ACTIVE"}
+        onClose={() => setSelectedFindingId(null)}
+        onSaved={refreshSession}
       />
     )
   }
-
-  const inspected = session.findings.filter(
-    (item) => item.inspectionStatus !== "NOT_INSPECTED"
-  ).length
-  const canEdit = hasInventoryWarehouseAccess(
-    currentUser,
-    session.warehouseId,
-    "EDIT"
+  const hasBatchEligiblePublication = session.findings.some(
+    (finding) =>
+      finding.publication?.state === "READY" ||
+      finding.publication?.state === "TRANSIENT_FAILED"
   )
-  const canManage = hasInventoryWarehouseAccess(
-    currentUser,
-    session.warehouseId,
-    "MANAGE"
-  )
-  const visible = filterFindings(session.findings, filter)
-  const openFinding = (finding: InventoryFindingDto) =>
-    navigate(
-      `/inventory/${session.id}?findingId=${encodeURIComponent(finding.id)}`,
-      workspaceEntryNavigationOptions
-    )
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto">
       <PageToolbar>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap gap-2">
           <Badge variant="secondary">
-            Проверено {inspected} из {session.findings.length}
+            Проверено {session.inspectedCount} из {session.expectedCount}
           </Badge>
-          <div
-            className="h-2 w-40 overflow-hidden rounded-full bg-muted"
-            role="progressbar"
-            aria-valuemin={0}
-            aria-valuemax={session.findings.length}
-            aria-valuenow={inspected}
-            aria-label="Прогресс сверки"
-          >
-            <div
-              className="h-full bg-primary"
-              style={{
-                width: `${session.findings.length ? (inspected / session.findings.length) * 100 : 0}%`,
-              }}
-            />
-          </div>
+          <Badge variant="outline">Ревизия {session.sessionRevision}</Badge>
         </div>
         <PageToolbarActions>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={!canEdit}
-            onClick={() => setAddOpen(true)}
-          >
-            <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-            Добавить бытовку
-          </Button>
-          <Button
-            type="button"
-            disabled={!canManage}
-            onClick={() =>
-              navigate(
-                `/inventory/${session.id}/finish`,
-                workspaceEntryNavigationOptions
-              )
-            }
-          >
-            <HugeiconsIcon
-              icon={CheckmarkCircle02Icon}
-              data-icon="inline-start"
-            />
-            Закончить инвентаризацию
-          </Button>
+          {session.lifecycle === "ACTIVE" && !readOnly ? (
+            <Button
+              type="button"
+              onClick={() => navigate(`/inventory/${session.id}/finish`)}
+            >
+              Завершить
+            </Button>
+          ) : null}
+          {session.lifecycle === "COMPLETED" && hasBatchEligiblePublication ? (
+            <Button
+              type="button"
+              disabled={publishMutation.isPending}
+              onClick={() => publishMutation.mutate()}
+            >
+              Передать доступные работы
+            </Button>
+          ) : null}
         </PageToolbarActions>
       </PageToolbar>
-      <ToggleGroup
-        type="single"
-        value={filter}
-        onValueChange={(value) => value && setFilter(value as FindingFilter)}
-        variant="outline"
-        className="flex flex-wrap justify-start"
-      >
-        {(Object.keys(filterLabels) as FindingFilter[]).map((value) => (
-          <ToggleGroupItem key={value} value={value}>
-            {filterLabels[value]}
-          </ToggleGroupItem>
-        ))}
-      </ToggleGroup>
-      <div className="min-h-0 flex-1 overflow-y-auto md:flex">
-        {visible.length > 0 ? (
-          <InventoryFindingsList
-            findings={visible}
-            canInspect={canEdit}
-            onOpen={openFinding}
-          />
-        ) : (
-          <InventoryEmptyState>
-            По выбранному фильтру бытовок нет.
-          </InventoryEmptyState>
-        )}
-      </div>
-      <InventoryAddDialog
-        open={addOpen}
-        session={session}
-        actor={actor}
-        onOpenChange={setAddOpen}
-        onResolved={(_, finding) => openFinding(finding)}
+      {session.lifecycle === "ACTIVE" && !readOnly ? (
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>Найти или добавить бытовку</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="inventory-number">Номер</FieldLabel>
+                <Input
+                  id="inventory-number"
+                  value={number}
+                  onChange={(event) => {
+                    setNumber(event.target.value)
+                    setPendingCreateIntent(null)
+                  }}
+                />
+              </Field>
+              <Button
+                type="button"
+                disabled={!number.trim() || resolveMutation.isPending}
+                onClick={() => resolveMutation.mutate()}
+              >
+                Проверить номер
+              </Button>
+            </FieldGroup>
+          </CardContent>
+        </Card>
+      ) : null}
+      {pendingCreateIntent ? (
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>Создать отсутствующую бытовку</CardTitle>
+            <CardDescription>{pendingCreateIntent.number}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Field>
+              <FieldLabel htmlFor="inventory-origin">Состояние</FieldLabel>
+              <Select
+                value={origin}
+                onValueChange={(value) => {
+                  setOrigin(value as typeof origin)
+                  setPendingCreateIntent((current) =>
+                    current
+                      ? {
+                          ...current,
+                          findingId: crypto.randomUUID(),
+                          idempotencyKey: crypto.randomUUID(),
+                        }
+                      : null
+                  )
+                }}
+              >
+                <SelectTrigger id="inventory-origin">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem value="ADDED_NEW">Новая</SelectItem>
+                    <SelectItem value="ADDED_USED">Б/у</SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </Field>
+          </CardContent>
+          <CardFooter>
+            <Button
+              type="button"
+              disabled={createMutation.isPending}
+              onClick={() => createMutation.mutate()}
+            >
+              Создать и прикрепить
+            </Button>
+          </CardFooter>
+        </Card>
+      ) : null}
+      {resolveMutation.error ||
+      createMutation.error ||
+      publishMutation.error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {errorMessage(
+            resolveMutation.error ??
+              createMutation.error ??
+              publishMutation.error
+          )}
+        </p>
+      ) : null}
+      <FindingList
+        findings={session.findings}
+        onOpen={(finding) => setSelectedFindingId(finding.id)}
       />
+      {session.lifecycle === "COMPLETED" ? (
+        <InventoryPublicationPanel
+          inventoryId={session.id}
+          findings={session.findings}
+          onChanged={refreshSession}
+        />
+      ) : null}
+      {session.statistics ? (
+        <InventoryStatisticsView statistics={session.statistics} />
+      ) : null}
     </div>
   )
 }
 
 export function InventoryFinishPage() {
+  const { inventoryId = "" } = useParams()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { currentUser } = useAuth()
-  const { actor, query, session } = useInventoryDetailRoute()
-  const [acknowledgedRiskSignature, setAcknowledgedRiskSignature] = useState<
-    string | null
-  >(null)
-  const canManage = Boolean(
-    session &&
-    hasInventoryWarehouseAccess(currentUser, session.warehouseId, "MANAGE")
-  )
-  const previewQueryKey = inventoryFinishPreviewQueryKey(
-    session?.id ?? null,
-    session?.version ?? null
+  const { accessToken } = useAuth()
+  const [acknowledged, setAcknowledged] = useState(false)
+  const sessionQuery = useQuery({
+    queryKey: inventoryKeys.detail(inventoryId),
+    queryFn: () => getInventorySession(accessToken, inventoryId),
+    enabled: accessToken !== null && Boolean(inventoryId),
+    retry: retryInventoryQuery,
+  })
+  const revisionSignature = sessionQuery.data
+    ? sessionQuery.data.findings
+        .map((finding) => `${finding.id}:${finding.findingRevision}`)
+        .join("|")
+    : "loading"
+  const previewIdempotencyKey = useStableCommandKey(
+    `preview:${inventoryId}:${sessionQuery.data?.sessionRevision ?? "loading"}:${revisionSignature}`
   )
   const previewQuery = useQuery({
-    queryKey: previewQueryKey,
+    queryKey: [
+      "inventory-service",
+      "preview",
+      inventoryId,
+      sessionQuery.data?.sessionRevision,
+      revisionSignature,
+    ],
     queryFn: () =>
-      session && actor
-        ? previewInventoryCompletion({
-            inventoryId: session.id,
-            expectedVersion: session.version,
-            actor,
-          })
-        : Promise.resolve(null),
-    enabled: Boolean(
-      session && actor && canManage && session.status === "ACTIVE"
-    ),
-    refetchOnWindowFocus: "always",
+      previewInventoryCompletion({
+        accessToken,
+        session: sessionQuery.data!,
+        idempotencyKey: previewIdempotencyKey,
+      }),
+    enabled: Boolean(sessionQuery.data?.lifecycle === "ACTIVE"),
+    retry: retryInventoryQuery,
   })
-  const reviewedSession = previewQuery.data
-  const mutation = useMutation({
-    mutationFn: async (publish: boolean) => {
-      if (!reviewedSession || !actor)
-        throw new Error("Инвентаризация недоступна")
-      const refreshed = await previewInventoryCompletion({
-        inventoryId: reviewedSession.id,
-        expectedVersion: reviewedSession.version,
-        actor,
-      })
-      queryClient.setQueryData(previewQueryKey, refreshed)
-      const completed = await completeInventory({
-        inventoryId: refreshed.id,
-        expectedVersion: refreshed.version,
-        actor,
-        acknowledgedRiskSignature,
-      })
-      return publish
-        ? publishInventoryWorks({ inventoryId: completed.id, actor })
-        : completed
-    },
-    onSuccess: (completed, publish) => {
-      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
-      if (publish) {
-        showPublicationNotice(completed)
-      }
-      navigate(`/inventory/history/${completed.id}`, { replace: true })
+  const completeIdempotencyKey = useStableCommandKey(
+    `complete:${inventoryId}:${previewQuery.data?.acknowledgementSha256 ?? "loading"}:${previewQuery.data?.validationSha256 ?? "loading"}`
+  )
+  const completeMutation = useMutation({
+    mutationFn: (preview: InventoryCompletionPreview) =>
+      completeInventorySession({
+        accessToken,
+        preview,
+        idempotencyKey: completeIdempotencyKey,
+      }),
+    onSuccess: async (session) => {
+      await queryClient.invalidateQueries({ queryKey: inventoryKeys.all })
+      navigate(`/inventory/history/${session.id}`, { replace: true })
     },
   })
-  const goBack = useWorkspaceBack(
-    session ? `/inventory/${session.id}` : "/inventory"
-  )
-  if (query.isLoading || previewQuery.isLoading) return <InventoryLoading />
-  if (!session || !actor || !canManage)
+  if (sessionQuery.isLoading || previewQuery.isLoading)
+    return <p className="text-sm text-muted-foreground">Проверяем итоги...</p>
+  const preview = previewQuery.data
+  if (!sessionQuery.data || !preview)
     return (
-      <InventoryUnavailable
-        title="Сверка недоступна"
-        description="Сессия не найдена на выбранном складе или нет прав MANAGE."
-      />
+      <InventoryUnavailable>
+        {errorMessage(sessionQuery.error ?? previewQuery.error)}
+      </InventoryUnavailable>
     )
-  if (session.status !== "ACTIVE")
-    return (
-      <InventoryUnavailable
-        title="Инвентаризация уже завершена"
-        description="Откройте её в истории."
-      />
-    )
-  if (previewQuery.error || !reviewedSession)
-    return (
-      <InventoryUnavailable
-        title="Сверка не обновлена"
-        description={
-          previewQuery.error
-            ? errorMessage(previewQuery.error)
-            : "Не удалось получить актуальное состояние реестра."
-        }
-      />
-    )
-  const missing = reviewedSession.findings.filter(
-    (item) => item.reconciliationStatus === "MISSING"
-  ).length
-  const conflictingFindings = reviewedSession.findings.filter(
-    (item) => item.conflicts.length > 0
-  )
-  const withWork = reviewedSession.findings.filter(
-    (item) => item.lines.length > 0
-  )
-  const riskSignature = inventoryCompletionRiskSignature(
-    reviewedSession.findings
-  )
-  const confirmationRequired = riskSignature.length > 0
-  const confirmed =
-    !confirmationRequired || acknowledgedRiskSignature === riskSignature
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto">
+    <div className="flex flex-col gap-4 overflow-y-auto">
       <PageToolbar>
-        <Button type="button" variant="outline" onClick={goBack}>
-          <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => navigate(`/inventory/${inventoryId}`)}
+        >
           Назад
         </Button>
       </PageToolbar>
+      <InventoryStatisticsView statistics={preview.statistics} />
       <Card>
         <CardHeader>
-          <CardTitle>Итоговая сверка</CardTitle>
+          <CardTitle>Риски завершения</CardTitle>
           <CardDescription>
-            Завершение зафиксирует неизменяемый снимок результатов.
+            Проверка выполнена сервером {formatDateTime(preview.validatedAt)}.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          <div className="flex flex-wrap gap-2">
-            <Badge variant="secondary">
-              Всего: {reviewedSession.findings.length}
-            </Badge>
-            <Badge variant="secondary">Не найдено: {missing}</Badge>
-            <Badge variant="secondary">
-              Конфликты: {conflictingFindings.length}
-            </Badge>
-            <Badge variant="secondary">С работами: {withWork.length}</Badge>
-          </div>
-          {confirmationRequired ? (
-            <Field orientation="horizontal">
-              <Checkbox
-                id="inventory-finish-confirm"
-                checked={confirmed}
-                onCheckedChange={(value) =>
-                  setAcknowledgedRiskSignature(
-                    value === true ? riskSignature : null
-                  )
-                }
-              />
-              <FieldLabel
-                htmlFor="inventory-finish-confirm"
-                className="font-normal"
-              >
-                Я проверил ненайденные бытовки и конфликты
-              </FieldLabel>
-            </Field>
-          ) : null}
-          {mutation.error ? (
-            <p role="alert" className="text-sm text-destructive">
-              {errorMessage(mutation.error)}
+        <CardContent className="flex flex-col gap-3">
+          {preview.risks.length > 0 ? (
+            preview.risks.map((risk) => (
+              <Badge key={`${risk.findingId}:${risk.code}`} variant="secondary">
+                {risk.code}
+              </Badge>
+            ))
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Блокирующих рисков нет.
             </p>
-          ) : null}
-          <div className="flex flex-wrap gap-2">
-            {withWork.length > 0 ? (
-              <>
-                <Button
-                  type="button"
-                  disabled={
-                    mutation.isPending ||
-                    previewQuery.isFetching ||
-                    (confirmationRequired && !confirmed)
-                  }
-                  onClick={() => mutation.mutate(true)}
-                >
-                  <HugeiconsIcon icon={SentIcon} data-icon="inline-start" />
-                  Завершить и передать работы
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={
-                    mutation.isPending ||
-                    previewQuery.isFetching ||
-                    (confirmationRequired && !confirmed)
-                  }
-                  onClick={() => mutation.mutate(false)}
-                >
-                  Завершить без передачи
-                </Button>
-              </>
-            ) : (
-              <Button
-                type="button"
-                disabled={
-                  mutation.isPending ||
-                  previewQuery.isFetching ||
-                  (confirmationRequired && !confirmed)
-                }
-                onClick={() => mutation.mutate(false)}
-              >
-                Завершить
-              </Button>
-            )}
-          </div>
+          )}
+          <Field orientation="horizontal">
+            <Checkbox
+              id="inventory-finish-ack"
+              checked={acknowledged}
+              onCheckedChange={(value) => setAcknowledged(value === true)}
+            />
+            <FieldLabel htmlFor="inventory-finish-ack">
+              Подтверждаю серверную сверку и необратимое завершение
+            </FieldLabel>
+          </Field>
         </CardContent>
+        <CardFooter>
+          <Button
+            type="button"
+            disabled={!acknowledged || completeMutation.isPending}
+            onClick={() => completeMutation.mutate(preview)}
+          >
+            {completeMutation.isPending
+              ? "Завершаем..."
+              : "Завершить инвентаризацию"}
+          </Button>
+        </CardFooter>
       </Card>
-      {reviewedSession.statistics ? (
-        <section
-          className="flex flex-col gap-3"
-          aria-labelledby="preview-title"
-        >
-          <h2 id="preview-title" className="text-lg font-semibold">
-            Предварительные итоги
-          </h2>
-          <InventoryStatistics statistics={reviewedSession.statistics} />
-        </section>
+      {completeMutation.error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {errorMessage(completeMutation.error)}
+        </p>
       ) : null}
-      {conflictingFindings.length > 0 ? (
-        <section
-          className="flex flex-col gap-3"
-          aria-labelledby="conflicts-title"
-        >
-          <h2 id="conflicts-title" className="text-lg font-semibold">
-            Конфликты реестра
-          </h2>
-          {conflictingFindings.map((finding) => (
-            <Card key={finding.id} size="sm">
-              <CardHeader>
-                <CardTitle>{finding.cabinNumber}</CardTitle>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-3 text-sm">
-                <ul className="flex list-disc flex-col gap-2 pl-5">
-                  {finding.conflicts.map((conflict) => (
-                    <li key={conflict.code}>
-                      <p>{conflict.message}</p>
-                      <p className="text-muted-foreground">
-                        Было: {conflictValue(conflict.expected)}; сейчас:{" "}
-                        {conflictValue(conflict.actual)}
-                      </p>
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
-          ))}
-        </section>
-      ) : null}
-      <InventoryFindingsList
-        findings={reviewedSession.findings}
-        canInspect={false}
-        onOpen={(finding) =>
-          navigate(
-            `/inventory/${reviewedSession.id}?findingId=${finding.id}`,
-            workspaceEntryNavigationOptions
-          )
-        }
-      />
-      {withWork.map((finding) => (
-        <Card key={finding.id} size="sm">
-          <CardHeader>
-            <CardTitle>{finding.cabinNumber}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <RepairEstimateLinesSnapshot lines={finding.lines} />
-          </CardContent>
-        </Card>
-      ))}
     </div>
   )
 }
 
 export function InventoryHistoryPage() {
-  useInventorySync()
   const navigate = useNavigate()
-  const { currentUser } = useAuth()
+  const { accessToken } = useAuth()
   const { selectedWarehouse } = useWarehouse()
-  const canView = selectedWarehouse
-    ? hasInventoryWarehouseAccess(currentUser, selectedWarehouse.id, "VIEW")
-    : false
-  const query = useQuery({
-    queryKey: inventoryListQueryKey(selectedWarehouse?.id ?? "none"),
+  const warehouseId = selectedWarehouse?.id ?? "none"
+  const [pagination, setPagination] = useState({ warehouseId, page: 0 })
+  const page = pagination.warehouseId === warehouseId ? pagination.page : 0
+  const historyQuery = useQuery({
+    queryKey: inventoryKeys.history(selectedWarehouse?.id ?? "none", page),
     queryFn: () =>
-      listInventories(
-        selectedWarehouse!.id,
-        getInventoryActor(currentUser, selectedWarehouse!.id)!
-      ),
-    enabled: Boolean(selectedWarehouse && canView),
+      listInventorySessions(accessToken, selectedWarehouse!.id, page),
+    enabled: accessToken !== null && selectedWarehouse !== null,
+    retry: retryInventoryQuery,
   })
-  if (!canView)
-    return (
-      <InventoryUnavailable
-        title="История недоступна"
-        description="Нет прав VIEW на выбранном складе."
-      />
-    )
-  if (query.isLoading)
-    return <InventoryLoading>Загрузка истории...</InventoryLoading>
-  const sessions = query.data ?? []
-  return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="min-h-0 flex-1 overflow-y-auto md:flex">
-        {sessions.length > 0 ? (
-          <InventorySessionList
-            sessions={sessions}
-            onOpen={(session) =>
-              navigate(
-                session.status === "ACTIVE"
-                  ? `/inventory/${session.id}`
-                  : `/inventory/history/${session.id}`,
-                workspaceEntryNavigationOptions
-              )
-            }
-          />
-        ) : (
-          <InventoryEmptyState>Инвентаризаций пока нет.</InventoryEmptyState>
-        )}
-      </div>
-    </div>
-  )
-}
-
-export function InventoryHistoryDetailPage() {
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
-  const [searchParams] = useSearchParams()
-  const { currentUser } = useAuth()
-  const { inventoryId, actor, query, session } = useInventoryDetailRoute()
-  const findingId = searchParams.get("findingId")
-  const selectedFinding =
-    session?.findings.find((item) => item.id === findingId) ?? null
-  const goBack = useWorkspaceBack(`/inventory/history/${inventoryId}`)
-  const publishMutation = useMutation({
-    mutationFn: () => {
-      if (!session || !actor) throw new Error("Инвентаризация недоступна")
-      return publishInventoryWorks({ inventoryId: session.id, actor })
-    },
-    onSuccess: (published) => {
-      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
-      showPublicationNotice(published)
-    },
+  const summaryQuery = useQuery({
+    queryKey: inventoryKeys.summary(selectedWarehouse?.id ?? "none"),
+    queryFn: () =>
+      getInventoryStatisticsSummary(accessToken, selectedWarehouse!.id),
+    enabled: accessToken !== null && selectedWarehouse !== null,
+    retry: retryInventoryQuery,
   })
-  if (query.isLoading) return <InventoryLoading />
-  if (!session || session.status !== "COMPLETED")
-    return (
-      <InventoryUnavailable
-        title="Результат недоступен"
-        description="Завершённая инвентаризация не найдена на выбранном складе."
-      />
-    )
-  if (selectedFinding)
-    return (
-      <FindingEditor
-        key={selectedFinding.id}
-        session={session}
-        finding={selectedFinding}
-        readOnly
-        onBack={goBack}
-      />
-    )
-  const canPublish = hasInventoryWarehouseAccess(
-    currentUser,
-    session.warehouseId,
-    "MANAGE"
-  )
-  const unpublished = session.findings.some(
-    (item) => item.lines.length > 0 && item.publicationStatus !== "PUBLISHED"
-  )
+  if (!selectedWarehouse)
+    return <InventoryUnavailable>Выберите склад в меню.</InventoryUnavailable>
+  const metadata = historyQuery.data?.page
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto">
       <PageToolbar>
         <Button
           type="button"
           variant="outline"
-          onClick={() => navigate("/inventory/history")}
+          onClick={() => navigate("/inventory")}
         >
-          <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
-          Назад
+          К текущей
         </Button>
-        {unpublished ? (
-          <PageToolbarActions>
-            <Button
-              type="button"
-              disabled={!canPublish || publishMutation.isPending}
-              onClick={() => publishMutation.mutate()}
-            >
-              <HugeiconsIcon icon={SentIcon} data-icon="inline-start" />
-              Передать в ремонты
-            </Button>
-          </PageToolbarActions>
-        ) : null}
       </PageToolbar>
-      {publishMutation.error ? (
-        <p role="alert" className="text-sm text-destructive">
-          {errorMessage(publishMutation.error)}
-        </p>
+      {summaryQuery.data ? (
+        <InventoryStatisticsView statistics={summaryQuery.data.statistics} />
       ) : null}
-      {session.statistics ? (
-        <section className="flex flex-col gap-3" aria-labelledby="frozen-title">
-          <h2 id="frozen-title" className="text-lg font-semibold">
-            Зафиксированные итоги
-          </h2>
-          <InventoryStatistics statistics={session.statistics} />
-        </section>
-      ) : null}
-      <div className="min-h-[20rem] md:flex">
-        <InventoryFindingsList
-          findings={session.findings}
-          canInspect={false}
-          showPublication
-          onOpen={(finding) =>
+      {historyQuery.data?.content.length ? (
+        <SessionCards
+          sessions={historyQuery.data.content}
+          onOpen={(session) =>
             navigate(
-              `/inventory/history/${session.id}?findingId=${finding.id}`,
-              workspaceEntryNavigationOptions
+              session.lifecycle === "ACTIVE"
+                ? `/inventory/${session.id}`
+                : `/inventory/history/${session.id}`
             )
           }
         />
-      </div>
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>Статус передачи</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Badge variant="secondary">
-            {inventoryPublicationLabel(session)}
-          </Badge>
-        </CardContent>
-      </Card>
+      ) : historyQuery.isLoading ? (
+        <p className="text-sm text-muted-foreground">Загрузка истории...</p>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Инвентаризаций пока нет.
+        </p>
+      )}
+      {metadata && metadata.totalPages > 1 ? (
+        <nav
+          aria-label="Страницы истории инвентаризаций"
+          className="flex flex-wrap items-center justify-between gap-2"
+        >
+          <Button
+            type="button"
+            variant="outline"
+            disabled={metadata.page === 0 || historyQuery.isFetching}
+            onClick={() =>
+              setPagination({
+                warehouseId,
+                page: Math.max(0, page - 1),
+              })
+            }
+          >
+            Назад
+          </Button>
+          <span className="text-sm text-muted-foreground">
+            Страница {metadata.page + 1} из {metadata.totalPages}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={
+              metadata.page + 1 >= metadata.totalPages ||
+              historyQuery.isFetching
+            }
+            onClick={() =>
+              setPagination({
+                warehouseId,
+                page: Math.min(metadata.totalPages - 1, page + 1),
+              })
+            }
+          >
+            Вперёд
+          </Button>
+        </nav>
+      ) : null}
+      {historyQuery.error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {errorMessage(historyQuery.error)}
+        </p>
+      ) : null}
     </div>
   )
+}
+
+export function InventoryHistoryDetailPage() {
+  return <InventorySessionPage readOnly />
 }

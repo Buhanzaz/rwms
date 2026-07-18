@@ -36,7 +36,11 @@ export function RepairEstimateLinesSnapshot({
               <CardTitle className="flex flex-wrap items-center gap-2">
                 <span>{line.description.trim() || `Строка ${index + 1}`}</span>
                 <Badge variant="secondary">
-                  {line.lineType === "WORK" ? "Работа" : "Материал"}
+                  {line.lineType === "WORK"
+                    ? "Работа"
+                    : line.lineType === "MATERIAL"
+                      ? "Материал"
+                      : "Тип не задан сервисом"}
                 </Badge>
               </CardTitle>
             </CardHeader>

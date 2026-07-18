@@ -1,51 +1,39 @@
 import type {
-  Shipment,
-  ShipmentCandidate,
-  ShipmentDraftInput,
-  ShipmentSourceCandidate,
+  ShipmentDocument,
+  ShipmentPlanLine,
 } from "@/features/logistics/shipments/model"
 
-export type ShipmentCommandContext = {
-  warehouseId: string
-  serviceWarehouseId: string
+export type ShipmentCreateCommand = {
   accessToken: string
-  actor: string
+  warehouseId: string
+  partySnapshot: string
+  driverSnapshot: string
+  lines: ShipmentPlanLine[]
+  idempotencyKey: string
+}
+
+export type ShipmentPlanCommand = {
+  accessToken: string
+  documentId: string
+  expectedVersion: number
+  partySnapshot: string
+  driverSnapshot: string
+  lines: ShipmentPlanLine[]
+  idempotencyKey: string
+}
+
+export type ShipmentVersionedCommand = {
+  accessToken: string
+  documentId: string
+  expectedVersion: number
+  idempotencyKey: string
 }
 
 export interface ShipmentClient {
-  list(warehouseId: string): Promise<Shipment[]>
-  listAvailableWarehouseStock(
-    warehouseId: string,
-    exceptShipmentId?: string | null
-  ): Promise<Array<{ name: string; availableQuantity: number }>>
-  listCandidates(
-    warehouseId: string,
-    company: string
-  ): Promise<ShipmentCandidate[]>
-  listSourceCabins(
-    warehouseId: string,
-    excludedIds: string[],
-    exceptShipmentId?: string | null
-  ): Promise<ShipmentSourceCandidate[]>
-  saveDraft(input: ShipmentDraftInput): Promise<Shipment>
-  dispatchPreparation(
-    context: ShipmentCommandContext,
-    shipmentId: string,
-    rentalItemId: string
-  ): Promise<Shipment>
-  confirmPreparation(
-    warehouseId: string,
-    shipmentId: string,
-    actor: string
-  ): Promise<Shipment>
-  finalize(
-    warehouseId: string,
-    shipmentId: string,
-    actor: string
-  ): Promise<Shipment>
-  cancel(
-    context: ShipmentCommandContext,
-    shipmentId: string,
-    reason: string
-  ): Promise<Shipment>
+  list(accessToken: string, warehouseId: string): Promise<ShipmentDocument[]>
+  get(accessToken: string, documentId: string): Promise<ShipmentDocument>
+  create(input: ShipmentCreateCommand): Promise<ShipmentDocument>
+  replacePlan(input: ShipmentPlanCommand): Promise<ShipmentDocument>
+  confirmPreparation(input: ShipmentVersionedCommand): Promise<ShipmentDocument>
+  cancel(input: ShipmentVersionedCommand): Promise<ShipmentDocument>
 }

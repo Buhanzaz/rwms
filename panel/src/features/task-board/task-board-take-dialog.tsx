@@ -2,7 +2,6 @@ import { useState, type FormEvent } from "react"
 import { useQuery } from "@tanstack/react-query"
 
 import { Button } from "@/components/ui/button"
-import { useAuth } from "@/features/auth/use-auth"
 import {
   Dialog,
   DialogContent,
@@ -20,14 +19,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  listRepairWorkerGroups,
-  repairWorkerGroupsQueryKey,
-} from "@/features/repair-tasks/api/repair-worker-directory-api"
-import type {
-  RepairTaskWorkerGroupSnapshotDto,
-  RepairTaskWorkerSnapshotDto,
-} from "@/features/repair-tasks/model/repair-task"
+import { useAuth } from "@/features/auth/use-auth"
+import { listEligibleTaskBoardGroups } from "@/features/task-board/api/task-board-api"
 import type { TaskBoardEntryDto } from "@/features/task-board/model/task-board"
 
 type TaskBoardTakeDialogProps = {
@@ -35,10 +28,7 @@ type TaskBoardTakeDialogProps = {
   pending: boolean
   error: string | null
   onOpenChange: (open: boolean) => void
-  onTake: (params: {
-    workerGroup: RepairTaskWorkerGroupSnapshotDto
-    workers?: RepairTaskWorkerSnapshotDto[]
-  }) => void
+  onTake: (params: { workerGroupId: string; workerId: string | null }) => void
 }
 
 export function TaskBoardTakeDialog({
@@ -57,7 +47,7 @@ export function TaskBoardTakeDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Взять подзадание в работу</DialogTitle>
+          <DialogTitle>Взять этап в работу</DialogTitle>
           <DialogDescription>
             Выберите доступную для очереди рабочую группу и, при необходимости,
             одного исполнителя.
@@ -65,7 +55,7 @@ export function TaskBoardTakeDialog({
         </DialogHeader>
         {entry ? (
           <TaskBoardTakeForm
-            key={`${entry.task.id}:${entry.task.version}:${entry.subtask.id}`}
+            key={`${entry.id}:${entry.version}`}
             entry={entry}
             pending={pending}
             error={error}
@@ -92,14 +82,15 @@ function TaskBoardTakeForm({
   onTake: TaskBoardTakeDialogProps["onTake"]
 }) {
   const { accessToken } = useAuth()
-  const query = {
-    warehouseId: entry.task.warehouseId,
-    queueCode: entry.subtask.queueCode,
-    routeQueueKind: entry.subtask.routeQueueKind,
-  }
   const groupsQuery = useQuery({
-    queryKey: repairWorkerGroupsQueryKey(query),
-    queryFn: () => listRepairWorkerGroups(query, accessToken ?? undefined),
+    queryKey: [
+      "task-board",
+      entry.warehouseId,
+      entry.queueId,
+      "eligible-groups",
+    ],
+    queryFn: () => listEligibleTaskBoardGroups(accessToken!, entry),
+    enabled: Boolean(accessToken && entry.queueId),
   })
   const [groupId, setGroupId] = useState("")
   const [workerId, setWorkerId] = useState("ALL")
@@ -109,16 +100,16 @@ function TaskBoardTakeForm({
     : (groups[0]?.id ?? "")
   const selectedGroup =
     groups.find((candidate) => candidate.id === effectiveGroupId) ?? null
+  const workers = selectedGroup?.members.filter((member) => member.active) ?? []
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!selectedGroup) return
-    const selectedWorker = selectedGroup.members.find(
-      (worker) => worker.id === workerId
-    )
     onTake({
-      workerGroup: { id: selectedGroup.id, name: selectedGroup.name },
-      workers: selectedWorker ? [selectedWorker] : undefined,
+      workerGroupId: selectedGroup.id,
+      workerId: workers.some((worker) => worker.workerId === workerId)
+        ? workerId
+        : null,
     })
   }
 
@@ -179,9 +170,9 @@ function TaskBoardTakeForm({
             <SelectContent>
               <SelectGroup>
                 <SelectItem value="ALL">Вся группа</SelectItem>
-                {selectedGroup?.members.map((worker) => (
-                  <SelectItem key={worker.id} value={worker.id}>
-                    {worker.name}
+                {workers.map((worker) => (
+                  <SelectItem key={worker.id} value={worker.workerId}>
+                    {worker.workerName}
                   </SelectItem>
                 ))}
               </SelectGroup>
@@ -192,18 +183,17 @@ function TaskBoardTakeForm({
 
       {groupsQuery.isError ? (
         <p role="alert" className="text-xs text-destructive">
-          Не удалось загрузить рабочие группы.
+          Не удалось загрузить доступные рабочие группы.
+        </p>
+      ) : !entry.queueId ? (
+        <p role="alert" className="text-xs text-destructive">
+          Сначала назначьте этап в реальную очередь.
         </p>
       ) : groups.length === 0 && !groupsQuery.isLoading ? (
         <p role="alert" className="text-xs text-destructive">
           Для этой очереди нет доступных рабочих групп.
         </p>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          Если выбран вариант «Вся группа», задание получат все активные
-          участники группы.
-        </p>
-      )}
+      ) : null}
       {error ? (
         <p role="alert" className="text-xs text-destructive">
           {error}

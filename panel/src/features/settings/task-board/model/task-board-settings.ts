@@ -138,10 +138,7 @@ export type WorkerGroupRequest = {
   members: GroupMemberRequest[]
 }
 
-/**
- * Browser-MOCK-only scheduling contract. The production task-board service does
- * not expose this contract yet; keep it behind the MOCK capability port.
- */
+/** @deprecated Retained only for deferred browser logistics fixtures. */
 export type RestPeriodDto = {
   id: string
   version: number
@@ -152,6 +149,7 @@ export type RestPeriodDto = {
   autoPause: boolean
 }
 
+/** @deprecated Retained only for deferred browser logistics fixtures. */
 export type ScheduleDayDto = {
   dayOfWeek: 1 | 2 | 3 | 4 | 5 | 6 | 7
   enabled: boolean
@@ -161,6 +159,7 @@ export type ScheduleDayDto = {
   restPeriods: RestPeriodDto[]
 }
 
+/** @deprecated Retained only for deferred browser logistics fixtures. */
 export type GroupScheduleDto = {
   id: string
   version: number
@@ -171,11 +170,13 @@ export type GroupScheduleDto = {
   days: ScheduleDayDto[]
 }
 
+/** @deprecated Retained only for deferred browser logistics fixtures. */
 export type GroupScheduleRequest = Omit<
   GroupScheduleDto,
   "id" | "warehouseId" | "workerGroupId"
 >
 
+/** @deprecated Retained only for deferred browser logistics fixtures. */
 export type CopyGroupScheduleRequest = {
   sourceGroupId: string
   sourceExpectedVersion: number

@@ -14,15 +14,8 @@ import {
   type VisibilityState,
 } from "@tanstack/react-table"
 import { HugeiconsIcon } from "@hugeicons/react"
-import {
-  Exchange01Icon,
-  Image01Icon,
-  MinusSignIcon,
-  PlusSignIcon,
-  WarehouseIcon,
-} from "@hugeicons/core-free-icons"
+import { Image01Icon } from "@hugeicons/core-free-icons"
 
-import { Button } from "@/components/ui/button"
 import {
   GRID_CELL_CLASS,
   GRID_HEADER_CELL_CLASS,
@@ -35,9 +28,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
-import { AddContentsDialog } from "@/features/rental-items/add-contents-dialog"
-import { MoveContentsToRentalItemDialog } from "@/features/rental-items/move-contents-to-rental-item-dialog"
-import { MoveContentsToStockDialog } from "@/features/rental-items/move-contents-to-stock-dialog"
 import { RentalItemStatusBadge } from "@/features/rental-items/rental-item-status-badge"
 import {
   formatRentalItemContents,
@@ -224,66 +214,7 @@ export function ExpandableTextCell({
   )
 }
 
-function ContentsPopoverBody({
-  item,
-  onMoveToRentalItem,
-  onMoveToStock,
-}: {
-  item: RentalItemDto
-  onMoveToRentalItem: () => void
-  onMoveToStock: () => void
-}) {
-  const [draftRows, setDraftRows] = useState(() =>
-    item.contentsItems.map((row) => ({
-      ...row,
-    }))
-  )
-
-  const hasChanges = draftRows.some((draftRow) => {
-    const originalRow = item.contentsItems.find((row) => {
-      return row.name === draftRow.name
-    })
-
-    return originalRow?.quantity !== draftRow.quantity
-  })
-
-  function decreaseQuantity(name: string) {
-    setDraftRows((currentRows) =>
-      currentRows.map((row) => {
-        if (row.name !== name) {
-          return row
-        }
-
-        return {
-          ...row,
-          quantity: Math.max(0, row.quantity - 1),
-        }
-      })
-    )
-  }
-
-  function increaseQuantity(name: string) {
-    setDraftRows((currentRows) =>
-      currentRows.map((row) => {
-        if (row.name !== name) {
-          return row
-        }
-
-        return {
-          ...row,
-          quantity: row.quantity + 1,
-        }
-      })
-    )
-  }
-
-  function applyChanges() {
-    console.log("Изменить наполнение", {
-      rentalItemId: item.id,
-      contentsItems: draftRows,
-    })
-  }
-
+function ContentsPopoverBody({ item }: { item: RentalItemDto }) {
   return (
     <div className="flex max-h-[380px] flex-col">
       <div className="border-b px-3 py-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
@@ -291,133 +222,39 @@ function ContentsPopoverBody({
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {draftRows.map((row) => (
+        {item.contentsItems.map((row) => (
           <div
-            key={`${item.id}-${row.name}`}
+            key={`${item.id}-${row.equipmentId ?? row.name}`}
             className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b px-3 py-2 text-sm last:border-b-0"
           >
             <div className="truncate font-medium">{row.name}</div>
-
-            <div className="flex items-center gap-2 whitespace-nowrap">
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className="size-7"
-                aria-label={`Уменьшить количество: ${row.name}`}
-                disabled={row.quantity <= 0}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  decreaseQuantity(row.name)
-                }}
-              >
-                <HugeiconsIcon icon={MinusSignIcon} />
-              </Button>
-
-              <div className="min-w-12 text-center text-muted-foreground">
-                <span className="font-semibold text-foreground">
-                  {row.quantity}
-                </span>{" "}
-                шт.
-              </div>
-
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className="size-7"
-                aria-label={`Увеличить количество: ${row.name}`}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  increaseQuantity(row.name)
-                }}
-              >
-                <HugeiconsIcon icon={PlusSignIcon} />
-              </Button>
+            <div className="min-w-12 text-center text-muted-foreground">
+              <span className="font-semibold text-foreground">
+                {row.quantity}
+              </span>{" "}
+              шт.
             </div>
           </div>
         ))}
       </div>
 
-      <div className="grid gap-2 border-t bg-background p-2 sm:grid-cols-2">
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-8 justify-center whitespace-nowrap"
-          onClick={(event) => {
-            event.stopPropagation()
-            onMoveToRentalItem()
-          }}
-        >
-          <HugeiconsIcon icon={Exchange01Icon} data-icon="inline-start" />
-          Переместить
-        </Button>
-
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-8 justify-center whitespace-nowrap"
-          onClick={(event) => {
-            event.stopPropagation()
-            onMoveToStock()
-          }}
-        >
-          <HugeiconsIcon icon={WarehouseIcon} data-icon="inline-start" />
-          Переместить на склад
-        </Button>
-
-        {hasChanges && (
-          <Button
-            size="sm"
-            className="h-8 justify-center whitespace-nowrap sm:col-span-2"
-            onClick={(event) => {
-              event.stopPropagation()
-              applyChanges()
-            }}
-          >
-            Изменить
-          </Button>
-        )}
+      <div className="border-t bg-background px-3 py-2 text-xs text-muted-foreground">
+        Изменение наполнения будет доступно после появления публичной операции
+        asset-service.
       </div>
     </div>
   )
 }
 
-export function ContentsCell({
-  item,
-  open,
-  onOpenChange,
-  onAddContents,
-  onMoveToRentalItem,
-  onMoveToStock,
-}: {
-  item: RentalItemDto
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  onAddContents: () => void
-  onMoveToRentalItem: () => void
-  onMoveToStock: () => void
-}) {
+export function ContentsCell({ item }: { item: RentalItemDto }) {
   const hasRows = item.contentsItems.length > 0
 
   if (!hasRows) {
-    return (
-      <Button
-        size="sm"
-        variant="secondary"
-        className="h-8"
-        onClick={(event) => {
-          event.stopPropagation()
-          onAddContents()
-        }}
-      >
-        Добавить
-      </Button>
-    )
+    return <span className="text-muted-foreground">Не указано</span>
   }
 
   return (
-    <Popover open={open} onOpenChange={onOpenChange}>
+    <Popover>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -437,14 +274,7 @@ export function ContentsCell({
           event.stopPropagation()
         }}
       >
-        <ContentsPopoverBody
-          key={`${item.id}-${open}-${item.contentsItems
-            .map((contentItem) => `${contentItem.name}:${contentItem.quantity}`)
-            .join("|")}`}
-          item={item}
-          onMoveToRentalItem={onMoveToRentalItem}
-          onMoveToStock={onMoveToStock}
-        />
+        <ContentsPopoverBody item={item} />
       </PopoverContent>
     </Popover>
   )
@@ -499,20 +329,6 @@ export function RentalItemsTableView({
     }
   }, [columnSizing, defaultColumnSizing])
 
-  const [openedContentsItemId, setOpenedContentsItemId] = useState<
-    string | null
-  >(null)
-
-  const [addContentsItem, setAddContentsItem] = useState<RentalItemDto | null>(
-    null
-  )
-
-  const [moveContentsToStockItem, setMoveContentsToStockItem] =
-    useState<RentalItemDto | null>(null)
-
-  const [moveContentsToRentalItem, setMoveContentsToRentalItem] =
-    useState<RentalItemDto | null>(null)
-
   useEffect(() => {
     persistTableState({
       columnSizing,
@@ -553,6 +369,10 @@ export function RentalItemsTableView({
           }
 
           if (columnConfig.id === "hasPhotos") {
+            if (item.mediaAvailability === "UNAVAILABLE") {
+              return <span className="text-muted-foreground">Недоступно</span>
+            }
+
             if (!item.hasPhotos) {
               return <span className="text-muted-foreground">Нет</span>
             }
@@ -576,27 +396,7 @@ export function RentalItemsTableView({
           }
 
           if (columnConfig.id === "contents") {
-            return (
-              <ContentsCell
-                item={item}
-                open={openedContentsItemId === item.id}
-                onOpenChange={(open) => {
-                  setOpenedContentsItemId(open ? item.id : null)
-                }}
-                onAddContents={() => {
-                  setOpenedContentsItemId(null)
-                  setAddContentsItem(item)
-                }}
-                onMoveToRentalItem={() => {
-                  setOpenedContentsItemId(null)
-                  setMoveContentsToRentalItem(item)
-                }}
-                onMoveToStock={() => {
-                  setOpenedContentsItemId(null)
-                  setMoveContentsToStockItem(item)
-                }}
-              />
-            )
+            return <ContentsCell item={item} />
           }
 
           if (columnConfig.dataType === "boolean") {
@@ -643,7 +443,7 @@ export function RentalItemsTableView({
           )
         },
       })),
-    [activeColumnsConfig, onOpenItem, onOpenPhotos, openedContentsItemId]
+    [activeColumnsConfig, onOpenItem, onOpenPhotos]
   )
 
   const table = useReactTable({
@@ -784,36 +584,6 @@ export function RentalItemsTableView({
           </table>
         </div>
       </div>
-
-      <AddContentsDialog
-        item={addContentsItem}
-        open={addContentsItem !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setAddContentsItem(null)
-          }
-        }}
-      />
-
-      <MoveContentsToRentalItemDialog
-        item={moveContentsToRentalItem}
-        open={moveContentsToRentalItem !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setMoveContentsToRentalItem(null)
-          }
-        }}
-      />
-
-      <MoveContentsToStockDialog
-        item={moveContentsToStockItem}
-        open={moveContentsToStockItem !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setMoveContentsToStockItem(null)
-          }
-        }}
-      />
     </>
   )
 }

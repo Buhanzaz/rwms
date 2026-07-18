@@ -16,7 +16,6 @@ import (
 	"io"
 	"log/slog"
 	"math/big"
-	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -35,7 +34,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestHTTPUploadMultipartFinalizeAndRestartIntegration(t *testing.T) {
+func TestHTTPSameOriginUploadFinalizeAndRestartIntegration(t *testing.T) {
 	databaseURL := os.Getenv("MEDIA_TEST_DATABASE_URL")
 	minioEndpoint := os.Getenv("MEDIA_TEST_MINIO_ENDPOINT")
 	if databaseURL == "" || minioEndpoint == "" {
@@ -98,8 +97,7 @@ func TestHTTPUploadMultipartFinalizeAndRestartIntegration(t *testing.T) {
 		AllowedMIMETypes: map[string]struct{}{
 			"image/jpeg": {},
 		},
-		UploadExpiry:   5 * time.Minute,
-		DownloadExpiry: time.Minute,
+		UploadExpiry: 5 * time.Minute,
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -139,51 +137,57 @@ func TestHTTPUploadMultipartFinalizeAndRestartIntegration(t *testing.T) {
 		t.Fatalf("create status = %d, want %d; body=%s", createdResponse.status, http.StatusCreated, createdResponse.body)
 	}
 	var created struct {
-		UploadSessionID uuid.UUID         `json:"uploadSessionId"`
-		MediaID         uuid.UUID         `json:"mediaId"`
-		UploadURL       string            `json:"uploadUrl"`
-		FormFields      map[string]string `json:"formFields"`
+		UploadSessionID uuid.UUID `json:"uploadSessionId"`
+		MediaID         uuid.UUID `json:"mediaId"`
+		ContentPath     string    `json:"contentUploadUrl"`
 	}
 	if err := json.Unmarshal(createdResponse.body, &created); err != nil {
 		t.Fatalf("decode create response: %v; body=%s", err, createdResponse.body)
 	}
-	if created.UploadSessionID == uuid.Nil || created.MediaID == uuid.Nil || created.UploadURL == "" || len(created.FormFields) == 0 {
+	if created.UploadSessionID == uuid.Nil || created.MediaID == uuid.Nil ||
+		created.ContentPath != "/api/media/v1/upload-sessions/"+created.UploadSessionID.String()+"/content" {
 		t.Fatalf("incomplete create response = %#v", created)
 	}
-	if created.FormFields["x-amz-meta-sha256"] != checksum || created.FormFields["Content-Type"] != "image/jpeg" {
-		t.Fatalf("upload policy lost exact checksum/type constraints: %#v", created.FormFields)
-	}
-
-	firstVersion := postIntegrationMultipart(t, client, created.UploadURL, created.FormFields, "http-integration.jpg", file)
-	secondVersion := postIntegrationMultipart(t, client, created.UploadURL, created.FormFields, "http-integration.jpg", file)
-	if firstVersion.versionID == "" || secondVersion.versionID == "" || firstVersion.versionID == secondVersion.versionID {
-		t.Fatalf("MinIO versions = first:%q second:%q; want two immutable versions", firstVersion.versionID, secondVersion.versionID)
-	}
-	if firstVersion.etag == "" || firstVersion.etag != secondVersion.etag {
-		t.Fatalf("MinIO ETags = first:%q second:%q; want the same content ETag", firstVersion.etag, secondVersion.etag)
+	for _, forbidden := range []string{`"uploadUrl":`, `"formFields":`, minioEndpoint, "http://", "https://"} {
+		if bytes.Contains(createdResponse.body, []byte(forbidden)) {
+			t.Fatalf("create response leaked %q: %s", forbidden, createdResponse.body)
+		}
 	}
 
 	finalizeKey := uuid.New()
+	contentURL := runtime.baseURL + created.ContentPath
+	foreignContent := doIntegrationContent(t, client, contentURL, foreignSubjectToken, uuid.New(), "image/jpeg", file)
+	assertIntegrationProblem(t, foreignContent, http.StatusNotFound, "MEDIA_NOT_FOUND")
+	uploadedResponse := doIntegrationContent(t, client, contentURL, validToken, finalizeKey, "image/jpeg", file)
+	if uploadedResponse.status != http.StatusCreated {
+		t.Fatalf("content status = %d, want %d; body=%s", uploadedResponse.status, http.StatusCreated, uploadedResponse.body)
+	}
+	var uploaded uploadedObjectResponse
+	if err := json.Unmarshal(uploadedResponse.body, &uploaded); err != nil {
+		t.Fatalf("decode uploaded object: %v; body=%s", err, uploadedResponse.body)
+	}
+	if uploaded.ObjectVersionID == "" || uploaded.ETag == "" || uploaded.ChecksumSHA256 != checksum {
+		t.Fatalf("uploaded object = %#v", uploaded)
+	}
+	replayedContent := doIntegrationContent(t, client, contentURL, validToken, finalizeKey, "image/jpeg", file)
+	if replayedContent.status != http.StatusOK || !bytes.Equal(replayedContent.body, uploadedResponse.body) {
+		t.Fatalf("content replay = %d %s; want exact %s", replayedContent.status, replayedContent.body, uploadedResponse.body)
+	}
+	conflictingContent := doIntegrationContent(t, client, contentURL, validToken, uuid.New(), "image/jpeg", file)
+	assertIntegrationProblem(t, conflictingContent, http.StatusConflict, "MEDIA_CONFLICT")
+
 	finalizeBody := map[string]any{
-		"objectVersionId": firstVersion.versionID,
-		"etag":            firstVersion.etag,
+		"objectVersionId": uploaded.ObjectVersionID,
+		"etag":            uploaded.ETag,
 		"checksumSha256":  checksum,
 	}
 	finalizeURL := runtime.baseURL + "/api/media/v1/upload-sessions/" + created.UploadSessionID.String() + "/complete"
-	missingVersionBody := map[string]any{
-		"objectVersionId": uuid.NewString(),
-		"etag":            firstVersion.etag,
-		"checksumSha256":  checksum,
-	}
-	missingVersion := doIntegrationJSON(t, client, http.MethodPost, finalizeURL, validToken, uuid.New(), missingVersionBody)
-	assertIntegrationProblem(t, missingVersion, http.StatusConflict, "MEDIA_OBJECT_MISMATCH")
-
 	foreignFinalize := doIntegrationJSON(t, client, http.MethodPost, finalizeURL, foreignSubjectToken, uuid.New(), finalizeBody)
 	assertIntegrationProblem(t, foreignFinalize, http.StatusNotFound, "MEDIA_NOT_FOUND")
 
 	finalizedResponse := doIntegrationJSON(t, client, http.MethodPost, finalizeURL, validToken, finalizeKey, finalizeBody)
-	if finalizedResponse.status != http.StatusAccepted {
-		t.Fatalf("finalize status = %d, want %d; body=%s", finalizedResponse.status, http.StatusAccepted, finalizedResponse.body)
+	if finalizedResponse.status != http.StatusOK {
+		t.Fatalf("finalize status = %d, want %d; body=%s", finalizedResponse.status, http.StatusOK, finalizedResponse.body)
 	}
 	var finalized integrationAssetResponse
 	if err := json.Unmarshal(finalizedResponse.body, &finalized); err != nil {
@@ -193,26 +197,14 @@ func TestHTTPUploadMultipartFinalizeAndRestartIntegration(t *testing.T) {
 		t.Fatalf("finalized response = %#v; want media=%s status=%s version=2", finalized, created.MediaID, media.StatusProcessing)
 	}
 
-	replayResponse := doIntegrationJSON(t, client, http.MethodPost, finalizeURL, validToken, finalizeKey, finalizeBody)
-	if replayResponse.status != http.StatusOK {
-		t.Fatalf("finalize replay status = %d, want %d; body=%s", replayResponse.status, http.StatusOK, replayResponse.body)
-	}
-	var replayed integrationAssetResponse
-	if err := json.Unmarshal(replayResponse.body, &replayed); err != nil {
-		t.Fatalf("decode finalize replay response: %v; body=%s", err, replayResponse.body)
-	}
-	if replayed != finalized {
-		t.Fatalf("finalize replay = %#v, want %#v", replayed, finalized)
-	}
-
 	stored, err := repository.GetAssetScoped(ctx, created.MediaID, persistence.OwnerTypeInventoryFinding, ownerID.String(), warehouseID)
 	if err != nil {
 		t.Fatalf("GetAssetScoped() error = %v", err)
 	}
-	if stored.SourceVersionID != firstVersion.versionID || stored.SourceVersionID == secondVersion.versionID {
-		t.Fatalf("stored source version = %q, want explicitly finalized first version %q and not latest %q", stored.SourceVersionID, firstVersion.versionID, secondVersion.versionID)
+	if stored.SourceVersionID != uploaded.ObjectVersionID {
+		t.Fatalf("stored source version = %q, want exact ingress version %q", stored.SourceVersionID, uploaded.ObjectVersionID)
 	}
-	if stored.SourceETag != firstVersion.etag || stored.SourceChecksum != checksum || stored.Status != media.StatusProcessing || stored.Version != 2 {
+	if stored.SourceETag != uploaded.ETag || stored.SourceChecksum != checksum || stored.Status != media.StatusProcessing || stored.Version != 2 {
 		t.Fatalf("stored immutable source metadata = %#v", stored)
 	}
 
@@ -279,51 +271,32 @@ func assertIntegrationProblem(t *testing.T, response integrationHTTPResponse, st
 	}
 }
 
-type integrationUploadedVersion struct {
-	versionID string
-	etag      string
-}
-
-func postIntegrationMultipart(t *testing.T, client *http.Client, target string, fields map[string]string, fileName string, body []byte) integrationUploadedVersion {
+func doIntegrationContent(
+	t *testing.T,
+	client *http.Client,
+	target, token string,
+	idempotencyKey uuid.UUID,
+	contentType string,
+	body []byte,
+) integrationHTTPResponse {
 	t.Helper()
-	var requestBody bytes.Buffer
-	writer := multipart.NewWriter(&requestBody)
-	for name, value := range fields {
-		if err := writer.WriteField(name, value); err != nil {
-			t.Fatalf("write multipart field %q: %v", name, err)
-		}
-	}
-	filePart, err := writer.CreateFormFile("file", fileName)
+	request, err := http.NewRequest(http.MethodPut, target, bytes.NewReader(body))
 	if err != nil {
-		t.Fatalf("create multipart file part: %v", err)
+		t.Fatalf("create content request: %v", err)
 	}
-	if _, err := filePart.Write(body); err != nil {
-		t.Fatalf("write multipart file: %v", err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("close multipart body: %v", err)
-	}
-	request, err := http.NewRequest(http.MethodPost, target, &requestBody)
-	if err != nil {
-		t.Fatalf("create multipart request: %v", err)
-	}
-	request.Header.Set("Content-Type", writer.FormDataContentType())
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Idempotency-Key", idempotencyKey.String())
+	request.Header.Set("Content-Type", contentType)
 	response, err := client.Do(request)
 	if err != nil {
-		t.Fatalf("POST constrained multipart upload: %v", err)
+		t.Fatalf("PUT same-origin content: %v", err)
 	}
 	defer response.Body.Close()
 	responseBody, readErr := io.ReadAll(response.Body)
 	if readErr != nil {
-		t.Fatalf("read multipart upload response: %v", readErr)
+		t.Fatalf("read content upload response: %v", readErr)
 	}
-	if response.StatusCode != http.StatusNoContent && response.StatusCode != http.StatusCreated {
-		t.Fatalf("multipart upload status = %d, want 204 or 201; body=%s", response.StatusCode, responseBody)
-	}
-	return integrationUploadedVersion{
-		versionID: strings.TrimSpace(response.Header.Get("X-Amz-Version-Id")),
-		etag:      strings.ToLower(strings.Trim(response.Header.Get("ETag"), `"`)),
-	}
+	return integrationHTTPResponse{status: response.StatusCode, header: response.Header.Clone(), body: responseBody}
 }
 
 func integrationJPEG(t *testing.T) []byte {
