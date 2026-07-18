@@ -521,21 +521,141 @@ retryable intent, MANAGE reconcile-and-retry and terminal `CLOSED_BLOCKED`.
 ### Stage 7 verified integration resolution (2026-07-17)
 
 The direct prerequisites, inventory HTTP/events, stateless gateway and panel
-cutover are implemented. Asset capture membership, catalog and balance reads
-run inside one inner repeatable-read snapshot. Inventory start idempotency uses
-a lease-locked exact-response record; its external capture release runs only
-from transaction `afterCompletion`. Maintenance's complete inventory-source
-reconciliation path is JPA. Media applies owner event-ID conflict evidence,
-quarantine, binding deactivation and sanitized DLT atomically; public media
-reads include the locked owner-proof/checkpoint/quarantine predicate in the
-same statement that returns rows, so concurrent revocation fails closed.
+cutover are implemented. The complete media real-dependency gate/build passed.
+Inventory's real Kafka/PostgreSQL class passed 3/3, covering owner-proof
+outbox ack/recovery, ordering, duplicates, gap quarantine, bounded retries,
+sanitized `PROCESSING_FAILED` DLT and recovered consumption. Final totals are
+inventory 36/36, architecture 26/26, gateway 34/34, Vitest 48 and Playwright
+9/9, with panel typecheck/lint/build green. Final review/commit remains open.
 
-The final Stage 7-only candidate suites passed inventory 46/46, asset 57/57,
-maintenance 131/131, Stage 7 architecture 27/27, auth 11/11, warehouse 12/12,
-gateway 36/36 and media's canonical real PostgreSQL, drift-PostgreSQL, Kafka
-and MinIO matrix 73/73, all with zero failures, errors or skips. Media also
-passed a reproducible build; panel typecheck/lint/build, Vitest 48 and
-Playwright 9/9 passed. Earlier shared asset 64/64, maintenance 136/136 and
-architecture 33/34 runs mixed in Stage 8 diagnostics and are not Stage 7
-closure totals. Closure is recorded by the containing scoped Stage 7 commit
-without inventing a SHA.
+## Stage 8 logistics auth integration prerequisite (2026-07-17)
+
+The first Stage 8 prerequisite is complete in `auth-service` only. The
+disabled `logistics-service` client can request one exact direct-call scope at
+a time: `warehouse.logistics`, `asset.logistics`, `task-board.logistics`,
+`maintenance.logistics` or `media.logistics`. It has no generic asset/media
+scope, no USER token and no multi-receiver token.
+
+No upstream endpoint or client invocation is implemented yet. Each receiving
+service must add its own direct private endpoint and local JWT validation
+before logistics can consume that scope; the gateway remains outside this path.
+
+### Completed warehouse receiver (2026-07-17)
+
+`GET /api/internal/warehouse/v1/warehouses/logistics/{id}/identity` is the
+only implemented Stage 8 upstream path. It returns exact identity/version/
+active/timezone data and no topology/location fields. A known inactive
+warehouse is returned with `active=false`; logistics must treat it as a
+workflow conflict and must not infer a fallback location or state.
+
+### Completed asset receiver (2026-07-17)
+
+`asset-service` now owns the only implemented `asset.logistics` direct-call
+boundary: `/api/internal/asset/v1/logistics/**`. It returns a safe snapshot
+only, keeps lease/hold identifiers opaque, derives document-line owners
+locally and accepts only closed fenced return, shipment and transfer actions.
+Transfer arrival moves attached non-zero cabin balances through asset-owned
+`CABIN_TO_CABIN` ledger movements; logistics cannot set a raw status, location
+or accounting correction. The receiver is independently verified (focused 13,
+full asset suite 63). At that standalone receiver checkpoint logistics had not
+yet invoked it; the completed workflow record below describes its constrained
+consumption.
+
+### Completed task-board receiver (2026-07-17)
+
+`task-board-service` now owns the only implemented
+`task-board.logistics` direct-call boundary:
+`/api/internal/task-board/v1/logistics/preparation-tasks`. It registers,
+reads and source-cancels a stable logistics preparation task while retaining
+task-board ownership of queue/worker/route selection in `UNASSIGNED`.
+Registration/status/cancellation return or accept only safe identifiers,
+versions, lifecycle data and constrained scheduling values; free task content
+and arbitrary cancel reasons remain unavailable.
+
+The receiver is independently verified (focused 4; full task-board suite 104).
+At that standalone checkpoint logistics had not yet invoked it; maintenance and
+media were still separate prerequisites. The completed workflow record below
+describes their later constrained consumption.
+
+### Completed maintenance receiver (2026-07-17)
+
+`maintenance-service` now owns the only implemented
+`maintenance.logistics` direct-call boundary:
+`/api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/shortage`.
+It stores/reads a permanent, immutable source-keyed equipment-shortage
+snapshot under maintenance ownership. It deliberately does not create a
+repair/estimate or invoke asset, task-board or inventory behavior.
+
+The receiver is independently verified (focused 25; full maintenance suite
+131). At that standalone checkpoint logistics had not yet invoked it and media
+was the remaining separate prerequisite; later Stage 8 workflow evidence
+records their constrained consumption.
+
+### Completed media receiver (2026-07-17)
+
+`media-service` now owns the only implemented `media.logistics` direct-call
+boundary: `POST /api/internal/media/v1/logistics/references/validate`. It
+derives a document-line owner from supplied UUIDs and validates one to twenty
+unique opaque media ID/current-generation references for one declared
+logistics owner type and warehouse. It returns only opaque IDs/generations;
+storage URLs, object keys, filenames, content type, status and policy do not
+cross this boundary.
+
+The receiver is independently verified (focused auth/API/contract; full Go
+suite: 10 passing packages and 2 no-test packages). At that standalone
+checkpoint logistics had not yet invoked it. It adds no event, owner-projection,
+upload or Stage 7 dependency; later Stage 8 work uses only its opaque
+validation boundary.
+
+## Stage 8 logistics return-registration consumption (2026-07-17)
+
+The first logistics-owned consumer invokes only the following independently
+authenticated private contracts, using one exact service scope per request:
+
+- `GET /api/internal/warehouse/v1/warehouses/logistics/{warehouseId}/identity`
+  with `warehouse.logistics`;
+- `GET /api/internal/asset/v1/logistics/rental-items/{rentalItemId}/snapshot`,
+  `POST /api/internal/asset/v1/logistics/operation-leases`, and
+  `PUT /api/internal/asset/v1/logistics/rental-items/{rentalItemId}/effects`
+  with `asset.logistics`.
+
+The consumer sends a typed `LOGISTICS_RETURN` owner reference, exact expected
+rental-item version, opaque lease/fence values returned by asset, and the same
+stable idempotency operation ID on every lease/effect retry. It commits its
+local attempt/event/outbox work before network I/O and uses a durable relay
+with bounded 1s/2s/4s retries. No HTTP result is transformed into a shared
+Java model. The V2 registration slice did not consume task-board, maintenance
+or media; later line-level workflow work uses only their approved contracts.
+
+## Stage 8 logistics workflow and inbound integrations (2026-07-17)
+
+The completed return, shipment and transfer sagas now call only their approved
+private receiver contracts. Return acceptance validates opaque line media and
+performs fenced asset settlement; a shortage request writes the maintenance
+source; shipment uses asset holds plus stable task-board preparation records;
+transfer uses origin/destination asset effects. Every remote mutation carries
+a stable logistics attempt ID, and an unknown HTTP outcome becomes local
+reconciliation rather than a speculative reverse call.
+
+Kafka input is restricted to six declared source topics: rental-item,
+operation-lease and equipment-hold facts from asset; board-task facts;
+maintenance estimates; and media facts. The consumer validates exact producer,
+aggregate, key and payload shape, stages evidence locally, deduplicates by
+event ID, checkpoints each source aggregate and quarantines version gaps.
+It retries transient local effects at 1s/2s/4s, writes a hash-only DLT, stops
+fail-closed when PostgreSQL is unavailable and restarts only after local health
+returns. Inbound facts are read-only evidence and never mutate the source
+owner's state.
+
+## Stage 9 dossier consumer decision (2026-07-18)
+
+Stage 9 may consume only canonical V2 producer facts through a service-owned
+inbox, source-aggregate checkpoint and replay projection; it cannot query a
+producer database or make a source-service HTTP call to derive a cabin link.
+Asset and maintenance carry direct `rentalItemId`; inventory finding facts may
+associate a non-null `assetId`, and `INVENTORY_FINDING` media converges through
+that association regardless of arrival order. Current logistics and task-board
+facts lack a canonical cabin subject: Stage 9 validates and journals them as
+sanitized `SUBJECT_NOT_PROVIDED` technical evidence and never exposes them as
+cabin activity. Dossier performs no producer HTTP or database lookup and never
+infers a cabin ID.

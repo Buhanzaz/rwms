@@ -454,18 +454,130 @@ not implemented or approved, until the Stage 7 contract entrance gate closes.
 
 Public USER VIEW/EDIT/MANAGE authorization and exact single-scope inventory
 service credentials now fail closed. Gateway routing remains stateless;
-downstream JWT validation is local and event/DLT evidence is sanitized.
-Warehouse metadata uses a concealment matrix: absent, inactive and a valid ID
-outside the caller's warehouse scope are indistinguishable `404` responses.
-Media event-ID/body conflicts quarantine the affected owner aggregate and make
-authorization fail closed; public metadata and signed-URL reads validate and
-lock the current owner proof in the same SQL statement, preventing stale proof
-reuse during concurrent revocation.
+downstream JWT validation is local and event/DLT evidence is sanitized. The
+inventory 36/36, architecture 26/26, gateway 34/34, complete media real gate
+and Kafka 3/3 passed. Completion still requires final review and commit SHA.
 
-The final Stage 7-only security candidate evidence passed inventory 46/46,
-asset 57/57, maintenance 131/131, Stage 7 architecture 27/27, auth 11/11,
-warehouse 12/12, gateway 36/36 and media 73/73, all with zero failures, errors
-or skips. Earlier shared asset 64/64, maintenance 136/136 and architecture
-33/34 runs mixed in Stage 8 diagnostics and are not Stage 7 closure totals.
-Closure is recorded by the containing scoped Stage 7 commit without inventing
-a SHA.
+## Stage 8 logistics OAuth client prerequisite (2026-07-17)
+
+`auth-service` now declares a disabled-by-default `logistics-service`
+confidential client. It uses only external `LOGISTICS_CLIENT_SECRET` material,
+client credentials and audience `rwms-services`; no development or repository
+secret is allowed. A token request receives exactly one scope from
+`warehouse.logistics`, `asset.logistics`, `task-board.logistics`,
+`maintenance.logistics` or `media.logistics`.
+
+The authorization server locally rejects omitted/combined/foreign scopes and
+wrong USER, subject, client-id, audience or resource overrides. JWTs are bound
+to `principal_type=SERVICE`, `sub=client_id=logistics-service` and contain no
+user/warehouse/worker or profile claims. The client is not enabled in any
+checked-in profile, and no receiver may trust it until it independently checks
+issuer, audience, principal type, client identity and the one exact scope.
+
+## Stage 8 warehouse logistics receiver (2026-07-17)
+
+`warehouse-service` validates its own JWT issuer/audience before the private
+route accepts only `principal_type=SERVICE`,
+`sub=client_id=logistics-service`, and one `warehouse.logistics` scope. The
+route is internal and never uses the development public-auth bypass. It returns
+only `id`, `version`, `active` and `timeZone`; an inactive identity stays
+explicit rather than being authorized as an active warehouse.
+
+## Stage 8 asset logistics receiver (2026-07-17)
+
+`asset-service` validates local issuer/audience before its private logistics
+surface accepts only `principal_type=SERVICE`,
+`sub=client_id=logistics-service`, and one `asset.logistics` scope. The
+security matcher and controller authorization both reject `asset.internal`,
+maintenance, inventory, USER and mismatched-service credentials. The response
+never contains a passport, display number, comments, tags, catalog
+code/name, tenant field, URL or generic projection.
+
+Lease/effect/hold commands remain subject-bound and idempotent under the same
+exact service credential; wrong owner, stale version, fence, expiry or
+competing operation produces the established conflict family. No development
+public-auth bypass, token forwarding or logistics consumer is enabled.
+
+## Stage 8 task-board logistics receiver (2026-07-17)
+
+`task-board-service` validates local issuer/audience before its dedicated
+preparation-task surface accepts only `principal_type=SERVICE`,
+`sub=client_id=logistics-service`, and exactly one
+`task-board.logistics` scope. The private matcher and controller reject a
+combined scope, other receiver scope, maintenance identity, USER and
+mismatched service credentials.
+
+The service credential authorizes source-owned registration/status/cancellation
+only. It cannot select a queue, worker, route, title, description or arbitrary
+cancel reason, and it does not enable logistics-side token use, forwarding or a
+development bypass.
+
+## Stage 8 maintenance logistics receiver (2026-07-17)
+
+`maintenance-service` validates local issuer/audience before the private
+return-shortage source surface accepts only `principal_type=SERVICE`,
+`sub=client_id=logistics-service`, and exactly one
+`maintenance.logistics` scope. Its matcher and controller reject combined
+scope, other receiver scope, inventory identity, USER and mismatched service
+credentials.
+
+The credential permits source-keyed immutable shortage upsert/read only. It
+cannot create an estimate/repair, acquire a lease, change asset state, assign a
+task or call the Stage 7 inventory boundary. Development bypasses and token
+forwarding do not apply.
+
+## Stage 8 media logistics receiver (2026-07-17)
+
+`media-service` validates local issuer/audience before its private readiness
+surface accepts only `principal_type=SERVICE`,
+`sub=client_id=logistics-service` and exactly one `media.logistics` scope.
+Its service-token parser rejects USER, missing/mismatched subject or client,
+combined/duplicate scopes and foreign receiver scope; the endpoint repeats
+the fixed client/scope allowlist before querying media state.
+
+The credential authorizes only opaque readiness/ownership validation. It
+cannot upload or mutate media, request an original or signed URL, expose object
+provenance, create an owner binding or invoke the Stage 7 inventory proof
+path. Development bypasses and token forwarding do not apply.
+
+## Stage 8 logistics return-registration caller (2026-07-17)
+
+`logistics-service` uses its disabled-by-default client-credentials client for
+each direct caller operation. It asks for exactly one of
+`warehouse.logistics` or `asset.logistics`, verifies that the received bearer
+token has that one exact receiver scope, and never forwards the public USER
+JWT. The dependency base URLs, token endpoint and secret remain external
+configuration; no secret or permissive fallback is checked in.
+
+The public registration command remains locally authenticated/authorized as a
+USER command. Remote workflow credentials authorize only the constrained
+private identity, snapshot, typed lease and fenced effect operations. They
+cannot authorize a raw asset status, tenant inference, arbitrary owner string,
+or a best-effort recovery after an unknown remote result.
+
+## Stage 8 logistics workflow and edge authorization (2026-07-17)
+
+The logistics caller now uses the same disabled-by-default client-credentials
+configuration for each approved receiver-specific scope:
+`warehouse.logistics`, `asset.logistics`, `task-board.logistics`,
+`maintenance.logistics` and `media.logistics`. It demands exactly one scope on
+each outbound request and never forwards a public USER bearer token. Public
+commands use the authenticated USER's warehouse `READ`, `EDIT` or `MANAGE`
+authority; transfer arrival/cancellation and cross-warehouse reconciliation
+require authority at both warehouses.
+
+The gateway route is stateless: it removes cookies before forwarding and
+explicitly denies `/api/logistics/internal/**` and
+`/api/logistics/private/**`. Production configuration rejects a loopback
+logistics upstream. It grants no internal-service bypass and does not transfer
+workflow authorization to the edge.
+
+## Stage 9 dossier authorization decision (2026-07-18)
+
+The approved read surface validates the USER JWT locally and requires
+`rwms.read` plus at least `VIEW` in the established `warehouse_access` claim
+for every returned row's warehouse snapshot. `SYSTEM_ADMIN` and `WMS_ADMIN`
+are unrestricted. Foreign-warehouse rows are omitted and make visibility
+`PARTIAL`; when no visible evidence proves the cabin, the API returns 404 to
+avoid enumeration. Actor references remain opaque. Service tokens are not
+public readers, and the stateless gateway grants no authorization bypass.

@@ -3857,6 +3857,178 @@ a substitute source.
   migration, canonical YAML/schema, panel file, test result or commit is claimed.
   Stage 8 remains forbidden until the complete Stage 7 exit and reviewed commit.
 
+## 2026-07-17 Stage 8 logistics parallel foundation
+
+- The user explicitly authorized Stage 8 in parallel with the unfinished Stage
+  7. The active pointer retains Stage 7 as in progress and records this as a
+  narrow isolated-service exception only.
+- Added the `logistics-service` Gradle module, canonical OpenAPI/event
+  contracts, a clean service-owned Flyway V1, safe JPA/Lombok/MapStruct
+  foundation and DRAFT create/read/list runtime for return, shipment and
+  transfer documents.
+- Creation atomically stores a sanitized creation fact, snapshot/checkpoint and
+  outbox record. The service uses a subject/operation/key advisory lock for
+  concurrent idempotency and a checksum/envelope-validated relay with bounded
+  retry, quarantine and sanitized DLT metadata.
+- Focused Java 25 verification passed `:services:logistics-service:test` with
+  24 tests and zero failures. An isolated PostgreSQL 17 V1/outbox/DLT probe
+  also passed. No Stage 7 hunk, panel file, gateway route or upstream service
+  behavior was changed.
+
+## 2026-07-17 Stage 8 logistics auth prerequisite
+
+- The user authorized the first Stage 8 prerequisite. `auth-service` now has a
+  disabled `logistics-service` client with external secret name
+  `LOGISTICS_CLIENT_SECRET`, audience `rwms-services`, and exact configured
+  scopes `warehouse.logistics`, `asset.logistics`, `task-board.logistics`,
+  `maintenance.logistics` and `media.logistics`.
+- Every client-credentials request is constrained to one of those scopes. The
+  implementation rejects omitted/combined/foreign scopes, wrong client,
+  `USER`, and subject/client/audience/resource override mismatches. It embeds
+  no user or warehouse data in the service JWT.
+- Focused Java 25 auth verification passed 25 tests. The first complete auth
+  run had two timeouts in the unchanged Kafka recovery class; its two forced
+  isolated runs passed, and the final forced `:services:auth-service:test`
+  passed 153 tests with 0 failures and 1 skipped test.
+- No receiver endpoint, upstream service behavior, gateway route, panel file,
+  database migration or Stage 7 behavior changed. The next sequential work is
+  a reviewed warehouse private boundary only.
+
+## 2026-07-17 Stage 8 logistics warehouse prerequisite
+
+- `warehouse-service` now owns the exact private route
+  `/api/internal/warehouse/v1/warehouses/logistics/{id}/identity`. It accepts
+  only the local-valid `logistics-service` SERVICE JWT with matching
+  subject/client ID and exactly `warehouse.logistics`.
+- The MapStruct entity-read response contains only `id`, `version`, `active`
+  and `timeZone`. Inactive state remains `active=false`; warehouse topology and
+  location data remain unavailable to logistics.
+- Java 25 focused verification passed 16 tests; full
+  `:services:warehouse-service:test` passed 29 tests, zero failures/skips. No
+asset/task-board/maintenance/media behavior, logistics consumption, gateway,
+panel, database migration or Stage 7 behavior changed.
+
+## 2026-07-17 Stage 8 logistics asset prerequisite
+
+- `asset-service` now owns the exact private `asset.logistics` receiver,
+  `/api/internal/asset/v1/logistics/**`, with a local exact-service JWT
+  allowlist and no public/dev bypass. Its MapStruct snapshot is deliberately
+  smaller than the generic asset projection; typed leases/holds expose opaque
+  identifiers only.
+- The fenced API uses a closed action-to-state mapping rather than a raw status
+  write. Return, shipment and transfer references are derived from typed
+  document-line input; transfer arrival changes warehouse and moves attached
+  cabin balances through asset-owned immutable ledger movements.
+- Immutable asset Flyway V4 extends only the asset event-type check constraint
+  for the new sanitized logistics-effect fact. It creates no logistics schema
+  and changes no historical migration. Java 25 focused verification passed 13
+  tests; forced complete `:services:asset-service:test --rerun-tasks` passed
+  63 tests with zero failures.
+- No logistics client invocation, task-board/maintenance/media behavior,
+  gateway route, panel file or Stage 7 hunk was added. The next and only
+  authorized receiver subgate is task-board.
+
+## 2026-07-17 Stage 8 logistics task-board prerequisite
+
+- `task-board-service` now owns the dedicated private logistics preparation
+  task registration/status/cancellation surface. The exact receiver identity is
+  the local-valid `logistics-service` SERVICE JWT with matching
+  `sub=client_id` and one `task-board.logistics` scope.
+- The stable external source identity creates a task-board-owned `UNASSIGNED`
+  preparation task. Caller-selected queue, worker, route, title, text and
+  cancel reason are unavailable; source ownership and same-key replay stay in
+  `TaskSyncSource`.
+- The MapStruct response is limited to task/version, warehouse, external ID,
+  status and completion time. Cancellation is idempotent for an unfinished
+  matching source and records only `LOGISTICS_PREPARATION_CANCELLED`.
+- Java 25 focused verification passed 4 tests; forced complete
+  `:services:task-board-service:test --rerun-tasks` passed 104 tests with
+  zero failures. No logistics invocation, maintenance/media behavior, gateway,
+  panel or Stage 7 runtime change was introduced. Maintenance is the next
+  isolated receiver subgate.
+
+## 2026-07-17 Stage 8 logistics maintenance prerequisite
+
+- `maintenance-service` now owns the dedicated private source boundary
+  `PUT /api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/shortage`.
+  It accepts only the local-valid `logistics-service` SERVICE JWT with matching
+  subject/client identity and exactly `maintenance.logistics`.
+- The permanent source identity is `(returnId, lineId)`. A shortage snapshot is
+  canonicalized by equipment ID, requires unique positive quantities, and is
+  immutable after first write: an identical replay succeeds and a changed
+  source conflicts. The boundary never creates a repair, estimate, task, lease
+  or asset/inventory/logistics effect.
+- Immutable Flyway V3 creates only `logistics_return_shortage`. It has no
+  foreign key or SQL reference to the concurrent Stage 7 inventory tables.
+  The JPA model uses safe Lombok and its MapStruct mapper is entity-read only.
+- Java 25 focused verification passed 25 tests; forced complete
+  `:services:maintenance-service:test --rerun-tasks` passed 131 tests with
+  zero failures or skips. No logistics invocation, gateway/panel behavior or
+  Stage 7 runtime dependency was added. Media is the final isolated receiver
+  subgate.
+
+## 2026-07-17 Stage 8 logistics media prerequisite
+
+- `media-service` now owns the dedicated private read-only endpoint
+  `POST /api/internal/media/v1/logistics/references/validate`. It accepts only
+  the local-valid `logistics-service` SERVICE JWT with matching
+  `sub=client_id` and exactly `media.logistics`.
+- A request accepts one to twenty unique opaque `mediaId,generation` pairs for
+  one declared return/shipment/transfer document line. Media derives the owner
+  key from the document and line UUIDs, verifies exact owner/warehouse/current
+  `READY` generation, and returns only the submitted opaque IDs/generations.
+  Wrong owner, absent, deleted, processing, failed and stale generation remain
+  one non-revealing conflict.
+- No Flyway migration, schema object, media upload, owner binding, event,
+  outbox row, Kafka consumer, object-storage call or logistics invocation was
+  added. The query uses base `media_asset` fields only and deliberately does
+  not use the concurrent Stage 7 inventory owner-proof projection.
+- Focused Go 1.25 `internal/auth`, `internal/api` and `internal/contract`
+  suites passed. Full `go test ./...` passed 10 packages; `db/migration` and
+  `internal/testsupport` correctly have no test files. The prerequisite chain
+  is complete; at that prerequisite checkpoint logistics client/saga consumption
+  remained unimplemented. Later Stage 8 completion evidence records its use of
+  this boundary.
+
+## 2026-07-17 Stage 8 return-registration consumer slice
+
+- logistics-service now implements the first durable return saga:
+  DRAFT -> REGISTERING -> INSPECTION_REQUIRED. The public registration command
+  requires document CAS and a subject-bound idempotency key; it commits the
+  local transition, event/outbox fact and warehouse attempt before any external
+  HTTP call.
+- The relay calls only the exact private boundaries in order: warehouse
+  identity, asset snapshot, typed LOGISTICS_RETURN lease, then fenced
+  RETURN_INTAKE. Each mutating asset call uses its persisted attempt UUID as
+  its external idempotency key. A permanent rejection moves the document to
+  CONFLICT; configuration/unknown outcomes or exhausted 1s/2s/4s retries
+  create a durable RECONCILIATION_REQUIRED record.
+- V2__return_registration_attempts.sql changes only the service-owned
+  idempotency check and attempt uniqueness. JPA uses safe Lombok entities for
+  guards, external attempts and reconciliations; MapStruct remains limited to
+  document/event read projections.
+- Java 25 full :services:logistics-service:test --rerun-tasks passed. The
+  suite includes happy path, stale/non-rented snapshot, timeout/replay with
+  the same asset idempotency key, API authorization/ETag, exact-scope HTTP
+  client and Flyway V2 tests.
+- Asset's approved narrow logistics contract contains no tenant field and
+  cannot compare the submitted tenantSnapshot; it is retained as immutable
+  local evidence, while canonical tenant validation remains UNKNOWN.
+
+## 2026-07-17 Stage 8 logistics architecture guard
+
+- `platform:architecture-tests` now includes `logistics-service` on its
+  production classpath and rejects a logistics dependency on any other service
+  implementation through ArchUnit. Constructor-injection and MapStruct
+  boundary checks cover the new package with the existing services.
+- `LogisticsSourcePolicy` protects the source tree from panel/browser/legacy
+  runtime leakage, direct service project dependencies, broad/forbidden scope
+  literals, arbitrary JDBC use and request-to-entity MapStruct mutation. It
+  requires the service-local event/outbox/inbox/checkpoint/quarantine schema
+  and the exact-scope direct client verifier.
+- Java 25 focused `LogisticsSourcePolicyTest`, `ServiceBoundaryArchitectureTest`
+  and `PlatformArchitectureTest` passed 13 tests with zero failures; the full
+  `:platform:architecture-tests:test --rerun-tasks` suite passed 33 tests.
 
 ## 2026-07-17 Stage 7 inventory exit readiness
 
@@ -3870,34 +4042,81 @@ a substitute source.
 - Stage 7 is ready for final diff review and one scoped human commit. It is not
   complete and no completion SHA is claimed.
 
-## 2026-07-17 Stage 7 inventory completion
+## 2026-07-17 Stage 8 logistics workflow, inbound and gateway completion
 
-- Closed Inventory business persistence on Spring Data JPA with Flyway V1 as
-  schema/checksum authority. Exactly six technical adapters retain low-level
-  SQL: `InventoryDeadLetterRelay`, `InventoryDeadLetterStore`,
-  `InventoryEventStore`, `InventoryMediaInboxProcessor`,
-  `InventoryMediaRetryStore` and `InventoryOutboxStore`.
-- Closed atomic idempotency and start recovery: a lease-locked reservation owns
-  the exact stored response; intermediate capture state uses independent
-  transactions; session commit joins the command transaction; external capture
-  release runs only from transaction `afterCompletion` and remains recoverable.
-- Closed prerequisite boundaries: warehouse absent/inactive/foreign IDs share
-  the same `404` concealment matrix; asset freezes capture rows in one inner
-  repeatable-read snapshot; maintenance inventory reconciliation is JPA
-  end-to-end.
-- Closed media owner-proof security: event-ID/body conflicts atomically record
-  evidence, quarantine/deactivate the affected owner and sanitize the DLT;
-  public metadata/variant/signed-URL reads validate and lock current proof in
-  the same SQL statement, preventing stale authorization during revocation.
-- Closed the stateless gateway route and production panel HTTP cutover. Browser
-  stores remain development fixtures and are not migration inputs.
-- Final Stage 7-only candidate suites passed inventory 46/46, asset 57/57,
-  maintenance 131/131, Stage 7 architecture 27/27, auth 11/11, warehouse 12/12,
-  gateway 36/36 and media canonical real PostgreSQL + drift-PostgreSQL + Kafka
-  + MinIO 73/73, all with zero failures, errors or skips. Media also passed a
-  reproducible build; panel typecheck/lint/build, Vitest 48 and Playwright 9/9
-  passed. Earlier shared asset 64/64, maintenance 136/136 and architecture
-  33/34 runs mixed in Stage 8 diagnostics and are not Stage 7 closure totals.
-- `ACTIVE_STAGE.md` remains on `STAGE_7_INVENTORY_SERVICE` with status
-  `COMPLETE`; `next_state` is metadata only. Closure is recorded by the
-  containing scoped Stage 7 commit, so no SHA is invented here.
+- `logistics-service` now owns the approved return-completion/estimate,
+  shipment and transfer workflows under its own JPA/Flyway V1--V6 schema.
+  Lombok is safe-accessor-only on entities and MapStruct remains constructor-
+  injected read/event mapping with no request-to-entity mutation.
+- Return acceptance uses line-scoped media generations; maintenance shortage
+  evidence is persisted before its source request. Shipment persists stable
+  asset-hold/task-board attempt identities. Transfer enforces origin/destination
+  distinction, per-line CAS/fences and no cancellation after departure. A
+  reconciliation request records operator intent only and never fabricates a
+  reverse physical effect.
+- The Kafka consumer accepts only the six declared source facts, stages and
+  deduplicates safe evidence, quarantines version gaps, verifies deterministic
+  live/shadow replay and emits only hash-only consumer DLTs after 1s/2s/4s
+  retries. The real broker/PostgreSQL gate proved dedupe, gap quarantine, DLT
+  sanitization and stop/restart behavior across a database outage.
+- Gateway routing is limited to public `/api/logistics/**`, strips cookies and
+  denies internal/private logistics paths. Production loopback routing is
+  rejected. No panel file was changed.
+- Final Java 25 verification passed logistics 51/51 (20 suites), gateway 37/37
+  and architecture 35/35. The first parallel gateway run failed before tests
+  while shared outputs were compiling; the sequential full rerun passed. The
+  architecture policy was corrected to allow only named technical inbound JDBC
+  adapters and to recognize actual scope literals rather than topic/media names.
+- Stage 8 is ready for independent scoped commit review, not complete: this
+  shared worktree also contains unrelated Stage 7/user changes and no Stage 8
+  commit SHA has been created.
+
+## 2026-07-18 Stage 9 dossier evidence and contract proposal
+
+- The user authorized parallel Stage 9 evidence/contract work only. The
+  operational pointer records no runtime, migration, JPA, consumer, gateway or
+  panel authority before the dossier contract is approved.
+- Current producer facts prove direct cabin correlation for asset and
+  maintenance only. Logistics document, task-board task and media owner facts
+  lack an approved cabin subject; the inventory owner-type rule also needs
+  exact confirmation. The proposal preserves those facts as unlinked technical
+  evidence rather than inventing cabin history.
+- `docs/plans/20260718-dossier-service-contract.md` records the proposed
+  append-only projection, inbox/checkpoint/replay model and approval inputs.
+
+## 2026-07-18 Stage 10 analytics evidence and contract proposal
+
+- The user authorized parallel Stage 10 evidence/contract work. Analytics is
+  constrained to read-only asynchronous projections and cannot enter a command
+  path or read source databases.
+- `docs/plans/20260718-analytics-service-contract.md` records the Stage 9
+  event dependency and the unresolved KPI formulas, business timezone/period,
+  correction, performance, export and authorization decisions. No analytics
+  runtime, schema or KPI value is claimed.
+
+## 2026-07-18 Stage 7/8 closure reconciliation and Stage 9 activation
+
+- The preceding readiness/parallel statements are retained as audit history.
+  Stage 7 is complete in reviewed commit `51460a3`. Stage 8 implementation is
+  recorded by `08c262f`; its final closure/fix evidence is recorded by the
+  containing scoped commit without predeclaring that commit's SHA.
+- Stage 8 business persistence remains JPA. `LogisticsDocumentService` no
+  longer uses `JdbcTemplate`; concurrent idempotency serialization is invoked
+  through its Spring Data JPA repository. Immutable Flyway V7 versions only
+  mutable external-attempt, guard and media-reference projections and proves
+  V1-to-latest preservation plus Hibernate validation.
+- Focused package A passed Flyway/JPA/idempotency 8/8 and exact architecture
+  policy 7/7. The replay verifier runs in one `REPEATABLE_READ` transaction;
+  its expanded 6/6 suite proves deterministic live/snapshot/shadow parity and
+  rejects recomputed-checksum actor, correlation and authoritative-payload
+  tampering. The real Kafka business-outbox outage/ack/recovery gate passed
+  1/1. Final Java 25 verification passed logistics 60/60 and architecture
+  36/36; gateway remains 37/37. The preceding 51/51 and 35/35 results are the
+  explicitly historical pre-closure baseline.
+- Stage 8 is complete with no logistics panel cutover. The approved dossier
+  contract now makes Stage 9 the sole active service-side implementation gate:
+  canonical contracts, isolated JPA/Flyway service, Kafka/replay/read API,
+  authorization, architecture, tests and a stateless gateway route are
+  authorized; panel and producer changes are not.
+- The user explicitly deferred Stage 10/KPI implementation. No analytics
+  runtime, schema, contract, gateway, KPI value or panel work is authorized.

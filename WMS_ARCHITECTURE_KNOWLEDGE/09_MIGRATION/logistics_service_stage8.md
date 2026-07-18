@@ -1,12 +1,12 @@
-# Stage 8 Logistics Service Foundation (2026-07-17)
+# Stage 8 Logistics Service Foundation And Completion (2026-07-17--18)
 
 ## Authority and scope
 
-The user explicitly authorized a parallel Stage 8 exception while Stage 7
-remains in progress. `docs/plans/ACTIVE_STAGE.md` remains the operational
-record: this is neither a Stage 7 completion claim nor authority for a panel
-cutover, gateway route, upstream service change, deployment work or a mixed
-commit.
+The user initially authorized a parallel Stage 8 exception while Stage 7 was
+in progress. This is retained as ordering history. Stage 7 later completed in
+`51460a3`; Stage 8 implementation is recorded in `08c262f` and final closure
+evidence in its containing scoped closure/fix commit. No panel cutover or
+deployment work is implied.
 
 ## Clean database boundary
 
@@ -23,12 +23,14 @@ profile.
 
 ## Implemented foundation
 
-The service currently supports idempotent `DRAFT` creation, reads and
-warehouse-scoped lists for return, shipment and transfer documents. JPA owns
+At the foundation checkpoint the service supported idempotent `DRAFT`
+creation, reads and warehouse-scoped lists for return, shipment and transfer
+documents. JPA owns
 the application model; Lombok is restricted to safe getters/no-args and
 constructor injection; MapStruct maps entity reads and a sanitized event
-projection only. A subject/operation/idempotency-key PostgreSQL advisory lock
-prevents concurrent retries from creating two documents.
+projection only. A subject/operation/idempotency-key PostgreSQL advisory lock,
+later moved behind a Spring Data JPA repository, prevents concurrent retries
+from creating two documents without business-service JDBC.
 
 Creation appends a local creation fact, synchronous checkpoint/snapshot and
 outbox row inside one transaction. The relay checks canonical checksums and
@@ -204,3 +206,25 @@ Kafka recovery proof. The focused gateway tests and full gateway suite (37)
 passed; full architecture tests (35) passed after adding the narrow inbox/replay
 technical-adapter allowlist. No panel cutover or Stage 7 schema change is part
 of this evidence.
+
+## Stage 8 V7 and final exit (2026-07-18)
+
+Immutable `V7__mutable_projection_versions.sql` adds non-negative
+`row_version` columns only to mutable `logistics_external_attempt`,
+`logistics_guard` and `logistics_media_reference`. The V1-to-latest upgrade
+preserves existing document, line and mutable-projection rows, repeats safely
+and starts Spring with Hibernate validation. The focused Flyway/JPA/
+idempotency suite passed 8/8; the exact logistics architecture policy passed
+7/7. The policy no longer permits JDBC in `LogisticsDocumentService` and
+requires the named technical replay verifier.
+
+The replay verifier executes in one `REPEATABLE_READ` transaction. Its 6/6
+suite proves deterministic local event-store/live/snapshot/shadow parity and
+rejects recomputed-checksum actor, correlation and authoritative-payload
+tampering. The real Kafka business-outbox test passed 1/1 end-to-end outage,
+broker-acknowledgement and database-recovery scenario without duplicate
+publication. Final Java 25 verification passed logistics 60/60 and
+architecture 36/36; gateway remains 37/37. The earlier 51/37/35 totals are
+retained as the historical pre-closure baseline. `08c262f` records
+implementation; the containing scoped closure/fix commit records these final
+fixes and memory without predeclaring its SHA. Stage 8 is complete.

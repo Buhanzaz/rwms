@@ -12,6 +12,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.sql.Types;
 import java.time.OffsetDateTime;
 import java.util.UUID;
@@ -34,6 +35,10 @@ public class LogisticsExternalAttempt {
   @GeneratedValue(strategy = GenerationType.UUID)
   @Column(name = "id", nullable = false)
   private UUID id;
+
+  @Version
+  @Column(name = "row_version", nullable = false)
+  private long rowVersion;
 
   @ManyToOne(fetch = FetchType.LAZY, optional = false)
   @JoinColumn(

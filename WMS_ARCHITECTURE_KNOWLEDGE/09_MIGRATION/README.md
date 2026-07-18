@@ -404,17 +404,103 @@ remain forbidden until their respective approvals.
 Asset V3, maintenance V2 and clean inventory Flyway V1 are implemented and
 verified without legacy/browser ETL. Inventory business persistence is JPA
 with Hibernate validation; Flyway remains the sole schema/checksum authority.
-Low-level SQL is confined to exactly `InventoryDeadLetterRelay`,
-`InventoryDeadLetterStore`, `InventoryEventStore`,
-`InventoryMediaInboxProcessor`, `InventoryMediaRetryStore` and
-`InventoryOutboxStore`; business tables and maintenance reconciliation are JPA.
+Low-level SQL is confined to the six exact technical eventing adapters.
+Evidence passed inventory 36/36, architecture 26/26, complete media real
+gate/build, gateway 34/34, panel typecheck/lint/build, Vitest 48, Playwright
+9/9 and real Kafka 3/3. The migration/cutover is ready for final review, but no
+Stage 7 completion commit SHA exists.
 
-The final Stage 7-only candidate suites passed inventory 46/46, asset 57/57,
-maintenance 131/131, Stage 7 architecture 27/27, auth 11/11, warehouse 12/12,
-gateway 36/36 and media's canonical real PostgreSQL, drift-PostgreSQL, Kafka
-and MinIO matrix 73/73, all with zero failures, errors or skips. Media also
-passed a reproducible build, and the complete panel matrix passed. Earlier
-shared asset 64/64, maintenance 136/136 and architecture 33/34 runs mixed in
-Stage 8 diagnostics and are not Stage 7 closure totals. The migration/cutover
-is complete, and closure is recorded by the containing scoped Stage 7 commit
-without inventing a SHA.
+## Stage 8 logistics parallel foundation (2026-07-17)
+
+The user explicitly authorized an isolated Stage 8 foundation in parallel with
+unfinished Stage 7; it does not advance or complete the Stage 7 pointer. The
+clean `logistics-service` Flyway/JPA/outbox baseline, its verification evidence
+and retained logistics UNKNOWNs are recorded in
+[`09_MIGRATION/logistics_service_stage8.md`](logistics_service_stage8.md).
+
+### Stage 8 warehouse prerequisite (2026-07-17)
+
+The completed private warehouse identity boundary changed no Flyway schema and
+added no logistics-side persistence. Its exact security, response and test
+evidence are retained in
+[`09_MIGRATION/logistics_service_stage8.md`](logistics_service_stage8.md).
+No browser/legacy ETL, panel cutover, gateway route or upstream service
+migration is implied by this record.
+
+### Stage 8 auth prerequisite (2026-07-17)
+
+The completed `auth-service` logistics client prerequisite has no Flyway or
+database impact. It is a disabled external-secret OAuth client and does not
+authorize a service-to-service call until each owning receiver boundary is
+implemented and verified. Its detailed evidence is retained in
+[`09_MIGRATION/logistics_service_stage8.md`](logistics_service_stage8.md).
+
+### Stage 8 asset prerequisite (2026-07-17)
+
+The completed asset receiver adds only immutable asset Flyway V4, extending
+the asset domain-event check constraint for a sanitized logistics-effect fact.
+It changes no historical migration and creates no logistics-side schema or
+shared persistence. Its exact private contract and Java 25 verification
+(focused 13; full asset suite 63, zero failures) are retained in
+[`09_MIGRATION/logistics_service_stage8.md`](logistics_service_stage8.md).
+
+### Stage 8 task-board prerequisite (2026-07-17)
+
+The completed task-board receiver reuses its existing JPA/Flyway-managed
+`BoardTask` and `TaskSyncSource` persistence and adds no migration or schema
+change. It creates no logistics-side schema or shared persistence. Its exact
+private contract and Java 25 verification (focused 4; full task-board suite
+104, zero failures) are retained in
+[`09_MIGRATION/logistics_service_stage8.md`](logistics_service_stage8.md).
+
+### Stage 8 maintenance prerequisite (2026-07-17)
+
+The completed maintenance receiver adds immutable Flyway V3,
+`logistics_return_shortage`. The table owns only the permanent logistics
+return/line source, contains no foreign key or SQL reference to the parallel
+Stage 7 inventory tables, and creates no logistics-side/shared persistence.
+Its exact private contract and Java 25 verification (focused 25; full
+maintenance suite 131, zero failures/skips) are retained in
+[`09_MIGRATION/logistics_service_stage8.md`](logistics_service_stage8.md).
+
+### Stage 8 media prerequisite (2026-07-17)
+
+The completed media readiness receiver creates no Flyway migration, schema
+object, logistics-side persistence or cross-service relation. It reads only
+the existing media-owned `media_asset` state, separately from the concurrent
+Stage 7 owner-proof projection. Its exact private contract and Go 1.25
+verification (focused auth/API/contract; full `go test ./...`: 10 passing
+packages and 2 no-test packages) are retained in
+[`09_MIGRATION/logistics_service_stage8.md`](logistics_service_stage8.md).
+
+### Stage 8 logistics service (2026-07-17)
+
+`logistics-service` owns Flyway V1--V7 and uses `hibernate.ddl-auto=validate`;
+no JPA profile creates, updates or drops schema. V2 adds registration attempt
+identity, V3 return completion/shortage evidence, V4 shipment workflow state,
+V5 transfer operation vocabulary, and V6 inbound/replay/reconciliation data.
+V6 deliberately keeps newly added source-envelope fields nullable for
+pre-existing inbox rows, preserving history without inventing source evidence.
+V7 adds non-negative optimistic versions only to mutable guard, external-
+attempt and media-reference projections. The V1-to-latest upgrade preserves
+existing rows and passes Spring JPA validation.
+It has no cross-database foreign key, shared table or migration dependency on
+the parallel Stage 7 schema. Detailed migration and verification evidence is
+retained in [`09_MIGRATION/logistics_service_stage8.md`](logistics_service_stage8.md).
+
+### Stage 9 dossier migration boundary (2026-07-18)
+
+The approved Stage 9 contract authorizes one isolated `dossier-service`
+PostgreSQL database, immutable Flyway migrations and JPA mappings validated
+with `ddl-auto=validate`. Its schema may own only validated source evidence,
+inbox/checkpoints/quarantine/DLT, append-only activity/media projections,
+inactive replay generations and its transactional outbox. It must never depend
+on a source-service table, schema, shared JPA entity or cross-database foreign
+key, and it imports no browser/legacy history.
+
+### Stage 10 analytics evidence boundary (2026-07-18)
+
+No `analytics-service` database, Flyway migration or JPA mapping is authorized
+until the Stage 9 event boundary and KPI formula/period decisions are approved.
+Analytics will own only its isolated projections and must never obtain a KPI by
+joining, copying or querying a source-service database.

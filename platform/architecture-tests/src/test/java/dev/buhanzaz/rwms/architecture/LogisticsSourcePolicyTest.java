@@ -143,19 +143,20 @@ class LogisticsSourcePolicyTest {
     AssertionError failure =
         assertThrows(AssertionError.class, () -> LogisticsSourcePolicy.assertSafe(temporaryDirectory));
     assertTrue(failure.getMessage().contains("LogisticsEventStore.java"));
+    assertTrue(failure.getMessage().contains("LogisticsReplayVerifier.java"));
     assertTrue(failure.getMessage().contains("V1__logistics_schema.sql"));
   }
 
   @Test
   void rejectsLowLevelSqlOutsideTheNarrowTechnicalAdapters() throws Exception {
     write(
-        "src/main/java/dev/buhanzaz/rwms/logistics/service/UnsafeJdbcService.java",
+        "src/main/java/dev/buhanzaz/rwms/logistics/service/LogisticsDocumentService.java",
         """
         package dev.buhanzaz.rwms.logistics.service;
 
         import org.springframework.jdbc.core.JdbcTemplate;
 
-        final class UnsafeJdbcService {
+        final class LogisticsDocumentService {
           private JdbcTemplate jdbc;
         }
         """);
@@ -165,6 +166,28 @@ class LogisticsSourcePolicyTest {
             AssertionError.class,
             () -> LogisticsSourcePolicy.assertSourceBoundarySafe(temporaryDirectory));
     assertTrue(failure.getMessage().contains("low-level SQL is restricted"));
+  }
+
+  @Test
+  void rejectsArbitraryNativeSqlInABusinessRepository() throws Exception {
+    write(
+        "src/main/java/dev/buhanzaz/rwms/logistics/repository/UnsafeBusinessRepository.java",
+        """
+        package dev.buhanzaz.rwms.logistics.repository;
+
+        interface UnsafeBusinessRepository {
+          @org.springframework.data.jpa.repository.Query(
+              value = "select * from logistics_document",
+              nativeQuery = true)
+          java.util.List<Object> findEverythingWithNativeSql();
+        }
+        """);
+
+    AssertionError failure =
+        assertThrows(
+            AssertionError.class,
+            () -> LogisticsSourcePolicy.assertSourceBoundarySafe(temporaryDirectory));
+    assertTrue(failure.getMessage().contains("native JPA SQL is restricted"));
   }
 
   private void write(String relativePath, String source) throws Exception {

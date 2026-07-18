@@ -51,8 +51,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.core.ResultSetExtractor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.node.ArrayNode;
@@ -118,7 +116,6 @@ public class LogisticsDocumentService {
   private final LogisticsDocumentResponseMapper responseMapper;
   private final LogisticsIdempotencyProperties idempotencyProperties;
   private final LogisticsEventStore eventStore;
-  private final JdbcTemplate jdbc;
 
   @Transactional
   public CreateResult createReturn(
@@ -916,10 +913,7 @@ public class LogisticsDocumentService {
       throw new IllegalArgumentException("subjectId and Idempotency-Key are required");
     }
     String lockKey = subjectId + "\u001f" + operation + "\u001f" + idempotencyKey;
-    jdbc.query(
-        "select pg_advisory_xact_lock(hashtextextended(?::text, 0))",
-        (ResultSetExtractor<Void>) resultSet -> null,
-        lockKey);
+    idempotencyRepository.acquireTransactionLock(lockKey);
   }
 
   private void remember(
