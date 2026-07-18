@@ -1442,3 +1442,27 @@ entry does not close F4T.
 - Stage 10/KPI work is `DEFERRED_BY_USER_2026-07-18`. It cannot resume until
   Stage 9 completes and the user explicitly reauthorizes a product-approved
   KPI contract.
+
+## 2026-07-18 Stage 9 dossier closure decision
+
+- Mark the authorized Stage 9 service-side boundary complete. This includes
+  canonical contracts, the isolated JPA/Flyway service, Kafka validation and
+  recovery, append-only activity/media projections, deterministic replay,
+  sanitized cabin-activity outbox, secured read API, architecture guards and
+  the stateless public gateway route.
+- Keep all runtime dossier persistence on Spring Data JPA, including inbox,
+  checkpoints, gap recovery, replay, DLT and outbox. Flyway SQL remains schema
+  migration evidence only; JDBC, native runtime queries and Spring Data JDBC
+  are not dossier runtime extension points.
+- Preserve the strict subject rule: direct asset/maintenance subjects and
+  producer-proven inventory finding associations may become visible. Current
+  logistics/task-board facts without a cabin subject remain unlinked evidence;
+  identifiers, browser state and producer lookups can never fill that gap.
+- Preserve replay and publication identities. A new generation becomes active
+  only after high-water tailing and canonical parity; cabin publication is
+  serialized by a dossier-owned head and marked published only after broker
+  acknowledgement.
+- Do not equate service completion with panel cutover. The existing browser
+  dossier adapter remains until separately authorized client work. Keep
+  Stage 10/KPI deferred and `next_state` non-active until new explicit user
+  authorization.

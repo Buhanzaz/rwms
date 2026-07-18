@@ -5,6 +5,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -44,6 +45,7 @@ class GatewayRouteIntegrationTest {
   private static HttpServer media;
   private static HttpServer inventory;
   private static HttpServer logistics;
+  private static HttpServer dossier;
   private static final List<CapturedRequest> AUTH_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> TASK_BOARD_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> WAREHOUSE_REQUESTS = new CopyOnWriteArrayList<>();
@@ -53,6 +55,7 @@ class GatewayRouteIntegrationTest {
   private static final List<CapturedRequest> MEDIA_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> INVENTORY_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> LOGISTICS_REQUESTS = new CopyOnWriteArrayList<>();
+  private static final List<CapturedRequest> DOSSIER_REQUESTS = new CopyOnWriteArrayList<>();
 
   @Autowired MockMvc mvc;
 
@@ -66,6 +69,7 @@ class GatewayRouteIntegrationTest {
     media = server(MEDIA_REQUESTS);
     inventory = server(INVENTORY_REQUESTS);
     logistics = server(LOGISTICS_REQUESTS);
+    dossier = server(DOSSIER_REQUESTS);
   }
 
   @AfterAll
@@ -78,6 +82,7 @@ class GatewayRouteIntegrationTest {
     media.stop(0);
     inventory.stop(0);
     logistics.stop(0);
+    dossier.stop(0);
   }
 
   @DynamicPropertySource
@@ -90,6 +95,7 @@ class GatewayRouteIntegrationTest {
     registry.add("rwms.gateway.routes.media-uri", () -> origin(media));
     registry.add("rwms.gateway.routes.inventory-uri", () -> origin(inventory));
     registry.add("rwms.gateway.routes.logistics-uri", () -> origin(logistics));
+    registry.add("rwms.gateway.routes.dossier-uri", () -> origin(dossier));
     registry.add("rwms.gateway.public-base-uri", () -> "https://panel.example");
     registry.add("rwms.gateway.cors.allowed-origins", () -> "https://panel.example");
     registry.add("rwms.gateway.security.issuer", () -> "https://panel.example/auth");
@@ -298,6 +304,49 @@ class GatewayRouteIntegrationTest {
   }
 
   @Test
+  void proxiesOnlyPublicDossierPathsWithoutCookiesOrPathRewriting() throws Exception {
+    DOSSIER_REQUESTS.clear();
+
+    mvc.perform(
+            publicGet("/api/dossier/v1/cabins/cabin-1?limit=25")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer original-token")
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.path").value("/api/dossier/v1/cabins/cabin-1"));
+
+    assertThat(DOSSIER_REQUESTS).singleElement().satisfies(request -> {
+      assertThat(request.path()).isEqualTo("/api/dossier/v1/cabins/cabin-1");
+      assertThat(request.query()).isEqualTo("limit=25");
+      assertThat(request.authorization()).isEqualTo("Bearer original-token");
+      assertThat(request.cookie()).isNull();
+    });
+
+    DOSSIER_REQUESTS.clear();
+    mvc.perform(
+            publicGet("/api/dossier/%69nternal/replay")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().is4xxClientError());
+    mvc.perform(
+            publicGet("/api/dossier/private/source-facts")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            publicGet("/api/dossier/%2e%2e/asset/v1/rental-items")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().is4xxClientError());
+    mvc.perform(
+            publicPost("/api/dossier/v1/cabins/cabin-1")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().is4xxClientError());
+    mvc.perform(
+            publicPut("/api/dossier/v1/cabins/cabin-1")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().is4xxClientError());
+    assertThat(DOSSIER_REQUESTS).isEmpty();
+  }
+
+  @Test
   void removesSpoofedForwardedMetadataFromUntrustedRequests() throws Exception {
     TASK_BOARD_REQUESTS.clear();
 
@@ -444,6 +493,7 @@ class GatewayRouteIntegrationTest {
     MEDIA_REQUESTS.clear();
     INVENTORY_REQUESTS.clear();
     LOGISTICS_REQUESTS.clear();
+    DOSSIER_REQUESTS.clear();
 
     mvc.perform(
             publicGet("/api/task-board/internal/work-queues")
@@ -484,6 +534,11 @@ class GatewayRouteIntegrationTest {
                 .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
         .andExpect(status().isForbidden())
         .andExpect(jsonPath("$.code").value("GATEWAY_FORBIDDEN"));
+    mvc.perform(
+            publicGet("/api/dossier/internal/replay")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.code").value("GATEWAY_FORBIDDEN"));
 
     assertThat(TASK_BOARD_REQUESTS).isEmpty();
     assertThat(AUTH_REQUESTS).isEmpty();
@@ -492,6 +547,7 @@ class GatewayRouteIntegrationTest {
     assertThat(MEDIA_REQUESTS).isEmpty();
     assertThat(INVENTORY_REQUESTS).isEmpty();
     assertThat(LOGISTICS_REQUESTS).isEmpty();
+    assertThat(DOSSIER_REQUESTS).isEmpty();
   }
 
   @Test
@@ -592,6 +648,7 @@ class GatewayRouteIntegrationTest {
   private static CapturedRequest capture(HttpExchange exchange) {
     return new CapturedRequest(
         exchange.getRequestURI().getPath(),
+        exchange.getRequestURI().getRawQuery(),
         exchange.getRequestHeaders().getFirst(HttpHeaders.AUTHORIZATION),
         exchange.getRequestHeaders().getOrDefault("Forwarded", List.of()),
         exchange.getRequestHeaders().getOrDefault("X-Forwarded-Host", List.of()),
@@ -633,6 +690,11 @@ class GatewayRouteIntegrationTest {
     return options(path).header(HttpHeaders.HOST, "panel.example");
   }
 
+  private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder publicPut(
+      String path) {
+    return put(path).header(HttpHeaders.HOST, "panel.example");
+  }
+
   @TestConfiguration
   static class DecoderConfiguration {
     @Bean
@@ -651,6 +713,7 @@ class GatewayRouteIntegrationTest {
 
   private record CapturedRequest(
       String path,
+      String query,
       String authorization,
       List<String> forwarded,
       List<String> forwardedHost,

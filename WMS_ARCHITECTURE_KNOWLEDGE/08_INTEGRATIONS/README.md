@@ -659,3 +659,21 @@ facts lack a canonical cabin subject: Stage 9 validates and journals them as
 sanitized `SUBJECT_NOT_PROVIDED` technical evidence and never exposes them as
 cabin activity. Dossier performs no producer HTTP or database lookup and never
 infers a cabin ID.
+
+### Stage 9 dossier Kafka and recovery resolution (2026-07-18)
+
+The consumer binds the eleven approved source topics from asset, maintenance,
+inventory, media, logistics and task-board and validates exact V2 producer,
+topic, key, aggregate, event version and payload shape. Source journal, inbox,
+partition checkpoint, aggregate checkpoint, association, projection and outbox
+effects commit locally; gaps quarantine one aggregate and a recovered prefix
+drains it in order. Initial stream origins remain explicit: media starts at
+version 1, while the other accepted families start at version 0.
+
+Real Kafka 4.3.1/PostgreSQL coverage proves earliest consumption, broker-ack
+publication, Kafka outage/retry, database-outage consumer stop, JPA-health
+restart, redelivery deduplication and hash-only DLT publication with no raw
+envelope leakage. Terminal outbox/DLT rows require explicit recovery and are
+never silently requeued. The outbound `rwms.dossier.cabin-activity.v1` facts
+are keyed by cabin, use deterministic event IDs and preserve replay/backfill
+identity for the deferred Stage 10 consumer.

@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/dossier/dossier-sanitized-dlt-v1.schema.json",
+  "title": "RWMS dossier source projection sanitized DLT v1",
+  "description": "Hash-only dossier-owned permanent rejection metadata. Raw source bodies, payload values, actor data, warehouse values and credentials are forbidden.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "failureId",
+    "failureCode",
+    "sourceTopic",
+    "sourcePartition",
+    "sourceOffset",
+    "recordKeySha256",
+    "messageSha256",
+    "eventId",
+    "recordedAt"
+  ],
+  "properties": {
+    "failureId": {"type": "string", "format": "uuid"},
+    "failureCode": {
+      "enum": [
+        "INVALID_ENVELOPE",
+        "UNSUPPORTED_PRODUCER",
+        "UNSUPPORTED_AGGREGATE_TYPE",
+        "UNSUPPORTED_EVENT_TYPE",
+        "UNSUPPORTED_EVENT_VERSION",
+        "INVALID_PAYLOAD",
+        "RECORD_KEY_MISMATCH",
+        "EVENT_IDENTITY_CONFLICT",
+        "MEDIA_GENERATION_CONFLICT",
+        "PROCESSING_FAILED"
+      ]
+    },
+    "sourceTopic": {
+      "enum": [
+        "rwms.asset.rental-item.v1",
+        "rwms.maintenance.estimate.v1",
+        "rwms.maintenance.repair.v1",
+        "rwms.inventory.session.v1",
+        "rwms.inventory.publication.v1",
+        "rwms.media.media.v1",
+        "rwms.logistics.return.v1",
+        "rwms.logistics.shipment.v1",
+        "rwms.logistics.transfer.v1",
+        "rwms.task-board.board-task.v1",
+        "rwms.task-board.queue-entry.v1"
+      ]
+    },
+    "sourcePartition": {"type": "integer", "minimum": 0},
+    "sourceOffset": {"type": "integer", "format": "int64", "minimum": 0},
+    "recordKeySha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "messageSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "eventId": {
+      "oneOf": [
+        {"type": "string", "format": "uuid"},
+        {"type": "null"}
+      ]
+    },
+    "recordedAt": {"type": "string", "format": "date-time"}
+  },
+  "x-rwms-prohibitedFields": [
+    "rawBody",
+    "payload",
+    "recordKey",
+    "actorRef",
+    "warehouseId",
+    "ownerId",
+    "rentalItemId",
+    "comment",
+    "reason",
+    "filename",
+    "objectKey",
+    "signedUrl",
+    "rawError",
+    "authorization",
+    "password",
+    "secret",
+    "token",
+    "jwt"
+  ]
+}

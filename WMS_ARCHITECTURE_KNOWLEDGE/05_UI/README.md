@@ -947,3 +947,12 @@ the operator-facing ordering convention.
 Panel ESLint, TypeScript, the production build and 46 Vitest files/261 tests
 passed. `panel/e2e/maintenance-cutover.spec.ts` passed desktop, tablet and
 mobile, 3/3, with bundled Chromium in the official Playwright container.
+
+## Stage 9 dossier panel boundary (2026-07-18)
+
+The `dossier-service` backend and stateless gateway read route are complete,
+but Stage 9 did not authorize panel changes. The existing rental-item dossier
+UI and browser adapter were not cut over, and no production HTTP-adapter claim
+is made for that surface. A future client cutover must be separately
+authorized and preserve the current responsive dossier presentation while
+remaining fail-closed in production. Stage 10/KPI UI work is also deferred.

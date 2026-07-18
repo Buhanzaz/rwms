@@ -1,0 +1,108 @@
+server:
+  port: ${DOSSIER_SERVICE_PORT:8091}
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+  metrics:
+    tags:
+      application: dossier-service
+  tracing:
+    sampling:
+      probability: ${DOSSIER_TRACING_SAMPLING_PROBABILITY:0.1}
+
+logging:
+  structured:
+    format:
+      console: ecs
+
+spring:
+  application:
+    name: dossier-service
+  datasource:
+    url: ${DOSSIER_DB_URL}
+    username: ${DOSSIER_DB_USERNAME}
+    password: ${DOSSIER_DB_PASSWORD}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    clean-disabled: true
+    out-of-order: false
+    validate-migration-naming: true
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  cloud:
+    function:
+      definition: dossierSourceConsumer
+    stream:
+      dynamic-destinations:
+        - rwms.dossier.cabin-activity.v1
+        - rwms.asset.rental-item.v1.dossier-projection-v1.dlt
+        - rwms.maintenance.estimate.v1.dossier-projection-v1.dlt
+        - rwms.maintenance.repair.v1.dossier-projection-v1.dlt
+        - rwms.inventory.session.v1.dossier-projection-v1.dlt
+        - rwms.inventory.publication.v1.dossier-projection-v1.dlt
+        - rwms.media.media.v1.dossier-projection-v1.dlt
+        - rwms.logistics.return.v1.dossier-projection-v1.dlt
+        - rwms.logistics.shipment.v1.dossier-projection-v1.dlt
+        - rwms.logistics.transfer.v1.dossier-projection-v1.dlt
+        - rwms.task-board.board-task.v1.dossier-projection-v1.dlt
+        - rwms.task-board.queue-entry.v1.dossier-projection-v1.dlt
+      bindings:
+        dossierSourceConsumer-in-0:
+          destination: rwms.asset.rental-item.v1,rwms.maintenance.estimate.v1,rwms.maintenance.repair.v1,rwms.inventory.session.v1,rwms.inventory.publication.v1,rwms.media.media.v1,rwms.logistics.return.v1,rwms.logistics.shipment.v1,rwms.logistics.transfer.v1,rwms.task-board.board-task.v1,rwms.task-board.queue-entry.v1
+          group: dossier-projection-v1
+          consumer:
+            max-attempts: 1
+            multiplex: true
+      kafka:
+        bindings:
+          dossierSourceConsumer-in-0:
+            consumer:
+              enable-dlq: false
+              start-offset: earliest
+        binder:
+          brokers: ${DOSSIER_KAFKA_BROKERS:}
+          auto-create-topics: false
+          configuration:
+            acks: all
+            enable.idempotence: true
+            compression.type: zstd
+        default:
+          producer:
+            sync: true
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTH_ISSUER}
+          audiences: ${AUTH_AUDIENCE:rwms-services}
+
+rwms:
+  platform:
+    kafka:
+      enabled: ${DOSSIER_KAFKA_ENABLED:false}
+      destinations:
+        - rwms.dossier.cabin-activity.v1
+  dossier:
+    cursor:
+      secret: ${DOSSIER_CURSOR_SECRET:}
+    security:
+      dev-auth-bypass: ${DOSSIER_DEV_AUTH_BYPASS:false}
+  cors:
+    allowed-origins: ${PANEL_ORIGIN}

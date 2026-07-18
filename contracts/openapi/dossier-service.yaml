@@ -1,0 +1,334 @@
+openapi: 3.1.0
+info:
+  title: RWMS Dossier Service API
+  version: 1.0.0
+  x-rwms-owner: dossier-service
+  x-rwms-stability: approved-stage-9
+  description: >-
+    Read-only Stage 9 cabin activity projection. Results are assembled only
+    from validated canonical facts and are warehouse-authorized per immutable
+    row snapshot. Missing producer subjects remain truthful partial coverage.
+servers:
+  - url: /
+security:
+  - bearerJwt: []
+tags:
+  - name: Cabin dossier
+paths:
+  /api/dossier/v1/cabins/{cabinId}:
+    get:
+      tags: [Cabin dossier]
+      operationId: getCabinDossier
+      summary: Read a cabin's visible activity dossier
+      description: >-
+        Requires a locally validated USER principal, rwms.read and at least
+        VIEW in warehouse_access for every returned row's warehouse snapshot.
+        SYSTEM_ADMIN and WMS_ADMIN are unrestricted. Unauthorized rows are
+        omitted and make visibility PARTIAL. If no visible evidence proves the
+        cabin, the response is 404. There is no hidden-row count. With no time
+        range, dated and undated activity is returned; when either time bound
+        is present, undated activity does not match. Results are ordered by
+        non-null occurredAt descending, recordedAt descending, source event ID
+        descending and cabin ID descending; null occurredAt follows dated rows.
+      parameters:
+        - $ref: '#/components/parameters/CabinId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/After'
+        - $ref: '#/components/parameters/OccurredFrom'
+        - $ref: '#/components/parameters/OccurredBefore'
+        - $ref: '#/components/parameters/ActivityCodes'
+        - $ref: '#/components/parameters/SourceTypes'
+        - $ref: '#/components/parameters/ActorSubjectId'
+      responses:
+        '200': { $ref: '#/components/responses/CabinDossier' }
+        '400': { $ref: '#/components/responses/InvalidQuery' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+components:
+  securitySchemes:
+    bearerJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  headers:
+    X-Correlation-Id:
+      required: true
+      schema: { type: string, format: uuid }
+  parameters:
+    CabinId:
+      name: cabinId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+    After:
+      name: after
+      in: query
+      description: >-
+        Opaque, versioned, expiring and tamper-detected keyset cursor bound to
+        the cabin ID and normalized filters.
+      schema: { type: string, minLength: 1, maxLength: 4096 }
+    OccurredFrom:
+      name: occurredFrom
+      in: query
+      description: Inclusive RFC 3339 business-time lower bound.
+      schema: { type: string, format: date-time }
+    OccurredBefore:
+      name: occurredBefore
+      in: query
+      description: >-
+        Exclusive RFC 3339 business-time upper bound. It must be later than
+        occurredFrom when both are supplied.
+      schema: { type: string, format: date-time }
+    ActivityCodes:
+      name: activityCode
+      in: query
+      description: Repeated fixed activity-code allowlist filter.
+      style: form
+      explode: true
+      schema:
+        type: array
+        uniqueItems: true
+        items: { $ref: '#/components/schemas/ActivityCode' }
+    SourceTypes:
+      name: sourceType
+      in: query
+      description: Repeated canonical producer-family allowlist filter.
+      style: form
+      explode: true
+      schema:
+        type: array
+        uniqueItems: true
+        items: { $ref: '#/components/schemas/SourceType' }
+    ActorSubjectId:
+      name: actorSubjectId
+      in: query
+      description: Opaque actor subject UUID; display-name filtering is forbidden.
+      schema: { type: string, format: uuid }
+  responses:
+    CabinDossier:
+      description: Caller-visible immutable cabin activity and current media state.
+      headers:
+        X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CabinDossierResponse' }
+    InvalidQuery:
+      description: Invalid limit, instant, allowlist value or cursor.
+      headers:
+        X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/InvalidQueryProblem' }
+    Unauthorized:
+      description: Missing or invalid Bearer JWT.
+      headers:
+        X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/UnauthorizedProblem' }
+    Forbidden:
+      description: Authenticated principal or rwms.read scope is not eligible.
+      headers:
+        X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ForbiddenProblem' }
+    NotFound:
+      description: No caller-visible evidence proves the requested cabin.
+      headers:
+        X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/NotFoundProblem' }
+  schemas:
+    Visibility:
+      type: string
+      enum: [COMPLETE, PARTIAL]
+    SourceType:
+      type: string
+      enum: [ASSET, MAINTENANCE, INVENTORY, MEDIA, LOGISTICS, TASK_BOARD]
+    ActivityCode:
+      type: string
+      enum:
+        - CABIN_CREATED
+        - CABIN_PASSPORT_CHANGED
+        - CABIN_STATUS_CHANGED
+        - CABIN_WAREHOUSE_CHANGED
+        - CABIN_LOGISTICS_EFFECT_APPLIED
+        - CABIN_COMMENT_REVISION_CHANGED
+        - CABIN_MANUAL_NOTE_ADDED
+        - ESTIMATE_CREATED
+        - ESTIMATE_DRAFT_CHANGED
+        - ESTIMATE_COMPLETED
+        - ESTIMATE_AMENDED
+        - REPAIR_CREATED
+        - REPAIR_PLAN_CHANGED
+        - REPAIR_QUEUED
+        - REPAIR_STAGE_COMPLETED
+        - REPAIR_PENDING_ACCEPTANCE
+        - REPAIR_REWORK_CREATED
+        - REPAIR_ACCEPTED
+        - REPAIR_WRITTEN_OFF
+        - INVENTORY_FINDING_ADDED
+        - INVENTORY_INSPECTION_SAVED
+        - INVENTORY_PUBLICATION_READY
+        - INVENTORY_PUBLICATION_REQUESTED
+        - INVENTORY_PUBLICATION_SUCCEEDED
+        - INVENTORY_PUBLICATION_TRANSIENT_FAILED
+        - INVENTORY_PUBLICATION_BLOCKED
+        - INVENTORY_PUBLICATION_CLOSED_BLOCKED
+        - MEDIA_READY
+        - MEDIA_FAILED
+        - MEDIA_ROTATED
+        - MEDIA_DELETED
+    MediaState:
+      type: string
+      enum: [PROCESSING, READY, FAILED, DELETED]
+    NullableDateTime:
+      oneOf:
+        - { type: string, format: date-time }
+        - { type: 'null' }
+    NullableUuid:
+      oneOf:
+        - { type: string, format: uuid }
+        - { type: 'null' }
+    OpaqueActorReference:
+      type: object
+      additionalProperties: false
+      required: [subjectId, principalType, profileRevision]
+      properties:
+        subjectId: { type: string, format: uuid }
+        principalType: { type: string, pattern: '^[A-Z][A-Z0-9_]{0,63}$' }
+        profileRevision:
+          oneOf:
+            - type: string
+              pattern: '^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$'
+            - { type: 'null' }
+    SourceReference:
+      type: object
+      additionalProperties: false
+      required: [producer, aggregateType, aggregateId]
+      properties:
+        producer:
+          type: string
+          enum: [asset-service, maintenance-service, inventory-service, media-service]
+        aggregateType: { type: string, pattern: '^[A-Z][A-Z0-9_]{0,127}$' }
+        aggregateId: { type: string, minLength: 1, maxLength: 256 }
+        secondaryId: { type: string, format: uuid }
+    MediaProjection:
+      type: object
+      additionalProperties: false
+      required: [mediaId, findingId, generation, state]
+      properties:
+        mediaId: { type: string, format: uuid }
+        findingId: { type: string, format: uuid }
+        generation: { type: integer, format: int64, minimum: 0 }
+        state: { $ref: '#/components/schemas/MediaState' }
+    Activity:
+      type: object
+      additionalProperties: false
+      required:
+        - activityId
+        - cabinId
+        - warehouseId
+        - activityCode
+        - occurredAt
+        - recordedAt
+        - actorRef
+        - sourceRef
+        - media
+      properties:
+        activityId: { type: string, format: uuid }
+        cabinId: { type: string, format: uuid }
+        warehouseId:
+          type: string
+          format: uuid
+          description: Immutable authorization snapshot from the source fact.
+        activityCode: { $ref: '#/components/schemas/ActivityCode' }
+        occurredAt: { $ref: '#/components/schemas/NullableDateTime' }
+        recordedAt:
+          type: string
+          format: date-time
+          description: Technical evidence time; it is not an inferred business time.
+        actorRef:
+          oneOf:
+            - { $ref: '#/components/schemas/OpaqueActorReference' }
+            - { type: 'null' }
+        sourceRef: { $ref: '#/components/schemas/SourceReference' }
+        media:
+          type: array
+          items: { $ref: '#/components/schemas/MediaProjection' }
+    CabinDossierResponse:
+      type: object
+      additionalProperties: false
+      required: [cabinId, activities, nextCursor, visibility]
+      properties:
+        cabinId: { type: string, format: uuid }
+        activities:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/Activity' }
+        nextCursor:
+          oneOf:
+            - { type: string, minLength: 1, maxLength: 4096 }
+            - { type: 'null' }
+        visibility: { $ref: '#/components/schemas/Visibility' }
+    CorrelationContext:
+      type: object
+      additionalProperties: false
+      required: [correlationId, causationId]
+      properties:
+        correlationId: { type: string, format: uuid }
+        causationId: { $ref: '#/components/schemas/NullableUuid' }
+    ProblemDetail:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, detail, instance, code, correlation]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer, minimum: 400, maximum: 599 }
+        detail: { type: string }
+        instance: { type: string, format: uri-reference }
+        code:
+          type: string
+          enum:
+            - DOSSIER_UNAUTHORIZED
+            - DOSSIER_FORBIDDEN
+            - DOSSIER_NOT_FOUND
+            - DOSSIER_INVALID_FILTER
+            - DOSSIER_INVALID_CURSOR
+        correlation: { $ref: '#/components/schemas/CorrelationContext' }
+    InvalidQueryProblem:
+      allOf:
+        - { $ref: '#/components/schemas/ProblemDetail' }
+        - type: object
+          properties:
+            status: { const: 400 }
+            code: { enum: [DOSSIER_INVALID_FILTER, DOSSIER_INVALID_CURSOR] }
+    UnauthorizedProblem:
+      allOf:
+        - { $ref: '#/components/schemas/ProblemDetail' }
+        - type: object
+          properties:
+            status: { const: 401 }
+            code: { const: DOSSIER_UNAUTHORIZED }
+    ForbiddenProblem:
+      allOf:
+        - { $ref: '#/components/schemas/ProblemDetail' }
+        - type: object
+          properties:
+            status: { const: 403 }
+            code: { const: DOSSIER_FORBIDDEN }
+    NotFoundProblem:
+      allOf:
+        - { $ref: '#/components/schemas/ProblemDetail' }
+        - type: object
+          properties:
+            status: { const: 404 }
+            code: { const: DOSSIER_NOT_FOUND }
