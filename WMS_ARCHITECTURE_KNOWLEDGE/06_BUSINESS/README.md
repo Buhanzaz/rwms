@@ -559,18 +559,124 @@ approval in `docs/plans/20260717-inventory-service-contract.md`.
 The server-owned lifecycle, frozen population, independent finding dimensions,
 completion/statistics freeze and retryable publication are implemented. The
 media, auth, warehouse, asset V3 and maintenance V2 prerequisites are closed
-without moving canonical ownership into inventory. Asset freezes the complete
-capture in one inner repeatable-read snapshot. Inventory idempotency replays the
-exact stored response, holds a lease-locked reservation during the effect and
-releases the copied capture only after transaction completion. Maintenance plan,
-source and reconciliation business persistence is JPA end-to-end.
+without moving canonical ownership into inventory. Verification passed
+inventory 36/36, architecture 26/26, complete media real gate/build, gateway
+34/34, panel typecheck/lint/build, Vitest 48, Playwright 9/9 and real Kafka
+3/3. The later final Stage 7-only matrix and reviewed commit `51460a3` close
+the gate.
 
-The final Stage 7-only candidate suites passed inventory 46/46, asset 57/57,
-maintenance 131/131, Stage 7 architecture 27/27, auth 11/11, warehouse 12/12,
-gateway 36/36 and media's canonical real PostgreSQL, drift-PostgreSQL, Kafka
-and MinIO matrix 73/73, all with zero failures, errors or skips. Media also
-passed a reproducible build; panel typecheck/lint/build, Vitest 48 and
-Playwright 9/9 passed. Earlier shared asset 64/64, maintenance 136/136 and
-architecture 33/34 runs mixed in Stage 8 diagnostics and are not Stage 7
-closure totals. Closure is recorded by the containing scoped Stage 7 commit
-without inventing a SHA.
+## Stage 8 asset logistics effects (2026-07-17)
+
+Asset remains the canonical state owner for the narrow approved logistics
+effects. A valid matching operation lease/fence may perform only
+`RENTED -> AFTER_RENT` return intake, `AFTER_RENT -> FREE` or
+`WAITING_ESTIMATE_CONFIRMATION` return settlement, `FREE -> RENTED` shipment
+confirmation, `FREE -> IN_TRANSFER` departure, and
+`IN_TRANSFER -> FREE` arrival. The caller never sends a raw target status.
+
+Arrival additionally requires a distinct active destination warehouse and
+atomically represents every attached non-zero cabin balance move as an
+asset-owned `CABIN_TO_CABIN` movement plus immutable ledger rows. Shipment
+equipment holds are document-line-specific; return and transfer do not gain a
+general inventory reservation or accounting-correction capability. Logistics
+did not invoke this boundary at the standalone receiver checkpoint; subsequent
+Stage 8 workflow evidence records its constrained consumption.
+
+## Stage 8 task-board preparation prerequisite (2026-07-17)
+
+A logistics document may bind one stable external preparation-task identity to
+one task-board task. Registration is idempotent only when its constrained
+warehouse/duration/deadline input matches; changed input and another source's
+identity collision conflict. Task-board, not logistics, owns the unassigned
+queue, worker allocation, route, fixed title and task text.
+
+Read status exposes only the safe snapshot. Cancellation is idempotent and
+source-scoped for an unfinished logistics preparation task, with the fixed
+safe code `LOGISTICS_PREPARATION_CANCELLED`. This prerequisite implements no
+logistics workflow call, maintenance shortage, media validation or
+post-departure compensation.
+
+## Stage 8 maintenance return-shortage prerequisite (2026-07-17)
+
+One logistics return line may bind one permanent `returnId:lineId` source to
+one immutable canonical equipment-shortage snapshot. Equivalent input replays;
+any changed warehouse, rental-item/version or shortage quantity conflicts.
+The snapshot is evidence for a later maintenance-owned workflow, not an
+automatic repair/estimate or an asset/accounting correction.
+
+Maintenance retains all repair, estimate, lease, task and acceptance authority.
+At this standalone prerequisite checkpoint logistics had not invoked the source;
+the completed workflow later consumes only the immutable source boundary. This
+does not resolve shortage compensation or post-departure policy.
+
+## Stage 8 media readiness prerequisite (2026-07-17)
+
+A logistics document line can prove one to twenty unique opaque media
+ID/generation references only when they belong to its declared
+return/shipment/transfer owner type, exact warehouse and current `READY`
+generation. The source never supplies a free-form owner ID; media derives it
+from the document/line pair. A missing, wrong-owner or stale/non-ready
+reference is one non-revealing conflict, never a signed download or a policy
+decision.
+
+This is a read-only prerequisite. It does not upload, bind, rotate, delete,
+retain, publish or consume media. At its standalone checkpoint logistics had
+not invoked it; completed workflows later use only its opaque validation
+boundary. Media retention/orphan/legal-hold policy and logistics compensation
+remain unresolved.
+
+## Stage 8 return-registration workflow slice (2026-07-17)
+
+The public `POST /api/logistics/v1/returns/{documentId}/register` command is
+warehouse-scoped, requires `rwms.write` plus warehouse `EDIT`, an
+`Idempotency-Key` and the document's expected version. It commits a durable
+`REGISTER_RETURN` idempotency record, one warehouse-validation external attempt
+and `DRAFT -> REGISTERING` before the asynchronous relay makes a direct call.
+
+For each committed workflow pass the relay validates the exact active warehouse
+identity and canonical IANA timezone, then validates the rental item is the
+same warehouse/version and currently `RENTED`. It creates one stable typed
+`LOGISTICS_RETURN` asset lease and submits one stable fenced `RETURN_INTAKE`
+effect. The stable external operation ID is reused for every retry; duplicate
+delivery is therefore harmless at the asset boundary. A stale/non-rented or
+otherwise permanent precondition is a local conflict. Configuration failure,
+timeout/unknown outcome, or exhaustion of the 1s/2s/4s bounded retry schedule
+requires reconciliation rather than a guessed compensating transition.
+
+The asset boundary has no canonical tenant-owner field in its safe snapshot or
+effect contract. Thus the submitted tenant snapshot is preserved only as
+immutable operator evidence; this slice does not falsely claim exact tenant
+normalization/validation. That business invariant remains `UNKNOWN` until an
+approved owner and private contract are available.
+
+## Stage 8 logistics workflows (2026-07-17)
+
+Return completion accepts line-scoped `{mediaId, generation}` evidence and
+uses the existing fenced asset workflow only after its local saga conditions
+are met. A maintenance estimate request first persists one immutable
+return-line shortage snapshot, then invokes the maintenance-owned source
+boundary. Both flows use stable external attempt IDs, local idempotency/CAS and
+visible `CONFLICT` or `RECONCILIATION_REQUIRED` outcomes instead of inferred
+compensation.
+
+Shipment planning validates snapshots, creates document-line equipment holds
+and stable task-board preparation references, then confirms only after the
+approved hold/task/fenced asset effects succeed. It permits cancellation only
+before shipment confirmation and releases/records effects through the durable
+saga. Transfer requires distinct origin and destination warehouses; departure
+and arrival are per-line CAS/fence operations with immutable in-transit
+contents evidence. A transfer may be cancelled only before departure. No
+location/accounting correction or post-departure reversal is implemented.
+
+## Stage 9 dossier evidence boundary (2026-07-18)
+
+`dossier-service` is approved solely as an append-only materialized activity
+view for a cabin. It cannot make a document, task, media owner or warehouse
+fact into cabin history unless the producer supplies an explicit canonical
+cabin subject. Unlinked facts remain technical evidence, not operator-visible
+activity; missing dates and actors remain absent rather than inferred.
+
+Stage 9 service-side implementation is authorized under the approved dossier
+contract. It may build only the append-only projection, replay/recovery, safe
+read API, sanitized downstream fact and stateless gateway boundary; panel work
+and every source-domain command remain forbidden.

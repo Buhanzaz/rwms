@@ -32,21 +32,31 @@ final class LogisticsSourcePolicy {
   private static final Pattern LOW_LEVEL_SQL =
       Pattern.compile(
           "org\\.springframework\\.jdbc|\\bJdbcTemplate\\b|\\bJdbcClient\\b|java\\.sql\\.(?:Connection|Statement|ResultSet)");
+  private static final Pattern NATIVE_JPA_QUERY =
+      Pattern.compile("\\bnativeQuery\\s*=\\s*true\\b");
+  private static final Pattern APPROVED_ADVISORY_LOCK_QUERY =
+      Pattern.compile(
+          "(?s)@(?:org\\.springframework\\.data\\.jpa\\.repository\\.)?Query\\s*\\(\\s*"
+              + "value\\s*=\\s*\"select 1 from pg_advisory_xact_lock\\(hashtextextended\\(cast\\(:lockKey as text\\), 0\\)\\)\"\\s*,\\s*"
+              + "nativeQuery\\s*=\\s*true\\s*\\)");
+  private static final String ADVISORY_LOCK_REPOSITORY =
+      "dev/buhanzaz/rwms/logistics/repository/LogisticsIdempotencyRecordRepository.java";
   private static final Set<String> LOW_LEVEL_SQL_ADAPTERS =
       Set.of(
           "dev/buhanzaz/rwms/logistics/eventing/LogisticsEventStore.java",
           "dev/buhanzaz/rwms/logistics/eventing/LogisticsOutboxStore.java",
+          "dev/buhanzaz/rwms/logistics/eventing/LogisticsReplayVerifier.java",
           "dev/buhanzaz/rwms/logistics/eventing/LogisticsSanitizedDltStore.java",
           "dev/buhanzaz/rwms/logistics/eventing/inbound/LogisticsInboxProcessor.java",
           "dev/buhanzaz/rwms/logistics/eventing/inbound/LogisticsInboundStagingStore.java",
           "dev/buhanzaz/rwms/logistics/eventing/inbound/LogisticsInboundObservationStore.java",
           "dev/buhanzaz/rwms/logistics/eventing/inbound/LogisticsInboundGapRecoveryService.java",
-          "dev/buhanzaz/rwms/logistics/eventing/inbound/LogisticsKafkaConsumerRecoveryMonitor.java",
-          "dev/buhanzaz/rwms/logistics/service/LogisticsDocumentService.java");
+          "dev/buhanzaz/rwms/logistics/eventing/inbound/LogisticsKafkaConsumerRecoveryMonitor.java");
   private static final Set<String> REQUIRED_INFRASTRUCTURE_SOURCES =
       Set.of(
           "src/main/java/dev/buhanzaz/rwms/logistics/eventing/LogisticsEventStore.java",
           "src/main/java/dev/buhanzaz/rwms/logistics/eventing/LogisticsOutboxStore.java",
+          "src/main/java/dev/buhanzaz/rwms/logistics/eventing/LogisticsReplayVerifier.java",
           "src/main/java/dev/buhanzaz/rwms/logistics/eventing/LogisticsSanitizedDltStore.java",
           "src/main/java/dev/buhanzaz/rwms/logistics/integration/LogisticsDependencyGateway.java",
           "src/main/java/dev/buhanzaz/rwms/logistics/integration/HttpLogisticsDependencyGateway.java");
@@ -146,7 +156,16 @@ final class LogisticsSourcePolicy {
     if (LOW_LEVEL_SQL.matcher(source).find() && !LOW_LEVEL_SQL_ADAPTERS.contains(relative)) {
       violations.add(
           path
-              + ": low-level SQL is restricted to the event-store, outbox, DLT and idempotency CAS adapters");
+              + ": low-level SQL is restricted to technical event-store, outbox, inbox, recovery and DLT adapters");
+    }
+    long nativeQueries = NATIVE_JPA_QUERY.matcher(source).results().count();
+    if (nativeQueries > 0
+        && (!ADVISORY_LOCK_REPOSITORY.equals(relative)
+            || nativeQueries != 1
+            || !APPROVED_ADVISORY_LOCK_QUERY.matcher(source).find())) {
+      violations.add(
+          path
+              + ": native JPA SQL is restricted to the exact transaction advisory-lock repository query");
     }
     if (MAPPER.matcher(source).find()) {
       if (!relative.contains("/mapper/") && !relative.contains("/mapping/")) {

@@ -297,13 +297,104 @@ eventing adapters retain SQL: `InventoryDeadLetterRelay`,
 `InventoryDeadLetterStore`, `InventoryEventStore`,
 `InventoryMediaInboxProcessor`, `InventoryMediaRetryStore` and
 `InventoryOutboxStore`. Flyway V1 owns the schema; Hibernate validates it.
-The idempotency aggregate stores the exact response while a lease-locked row
-prevents duplicate effects. Start-capture bookkeeping survives intermediate
-failures, and release becomes eligible only with the committed session before
-the external release runs from transaction `afterCompletion`. The final Stage
-7-only candidate suites passed inventory 46/46, asset 57/57, maintenance
-131/131, Stage 7 architecture 27/27, auth 11/11, warehouse 12/12, gateway 36/36
-and media 73/73, all with zero failures, errors or skips. Earlier shared asset
-64/64, maintenance 136/136 and architecture 33/34 runs mixed in Stage 8
-diagnostics and are not Stage 7 closure totals. Closure is recorded by the
-containing scoped Stage 7 commit without inventing a SHA.
+The final Stage 7-only matrix and reviewed commit `51460a3` close this aggregate
+boundary.
+
+## Stage 8 asset logistics boundary (2026-07-17)
+
+The `RentalItem`, asset-owned operation lease and allocation-hold aggregates
+remain in `asset-service`; logistics has no JPA association, foreign key or
+shared mutable entity. Its private read model is a MapStruct-safe snapshot of
+only asset ID, version, warehouse ID, status and attached
+`{equipmentId, quantity}` values. Lease and hold responses are opaque DTOs.
+
+Typed return/shipment/transfer document-line input is converted to an
+asset-local owner reference and never persisted as an arbitrary caller string.
+Transfer arrival changes the canonical rental item and rebalances attached
+cabin equipment through the existing asset movement/ledger aggregates in the
+same asset transaction. The new sanitized effect fact is covered by asset
+Flyway V4; no Stage 8 entity exists in the asset schema.
+
+## Stage 8 task-board logistics boundary (2026-07-17)
+
+`BoardTask` and `TaskSyncSource` remain task-board JPA aggregates; logistics
+has no JPA association, foreign key, shared entity or task-table ownership.
+The source record binds a stable logistics external task ID to one task-board
+task and prevents an unrelated source from reusing that identity. A MapStruct
+read mapper exposes only the safe logistics snapshot
+`{taskId, taskVersion, warehouseId, externalTaskId, status, doneAt}`.
+
+The task is created in task-board's `UNASSIGNED` queue under its own fixed
+preparation route. Logistics supplies no mutable entity-shaped task payload and
+cannot map a request into a task entity or domain transition.
+
+## Stage 8 maintenance logistics boundary (2026-07-17)
+
+`LogisticsReturnShortage` and its `returnId,lineId` embedded JPA key remain
+maintenance-owned. The source is an immutable record of warehouse, rental-item
+version and canonical `{equipmentId, missingQuantity}` values; there is no
+JPA association, foreign key or shared mutable entity with logistics, asset or
+inventory.
+
+MapStruct maps only the entity read to a safe private stored snapshot before
+the service parses its local JSON array. The logistics request never maps into
+an entity and cannot create an estimate/repair, task, lease or asset
+transition.
+
+## Stage 8 media logistics boundary (2026-07-17)
+
+No Stage 8 media entity, owner binding or schema relation is introduced.
+`media_asset` remains media-owned; logistics stores only opaque media ID and
+generation references later in its own bounded context. The private receiver
+derives its transient owner key from document/line UUIDs and checks exact
+owner/warehouse/current-ready state without a foreign key, JPA association,
+shared model or call into the Stage 7 inventory owner proof.
+
+## Stage 8 logistics return-registration consumer slice (2026-07-17)
+
+`logistics-service` now maps only its own Flyway V1/V2 tables through JPA.
+`LogisticsDocument` and `LogisticsDocumentLine` remain the public workflow
+aggregate and preserve immutable expected/factual contents snapshots as JSON
+evidence. `LogisticsExternalAttempt`, `LogisticsGuard` and
+`LogisticsReconciliation` are logistics-local durable workflow records: they
+hold stable idempotency operation IDs, opaque remote lease references and
+reconciliation/audit state, never an asset, warehouse, task, maintenance or
+media JPA association.
+
+Return registration persists `DRAFT -> REGISTERING` and its warehouse attempt
+before it calls another service. The relay then obtains a safe warehouse
+identity, captures the safe asset snapshot, obtains a typed asset operation
+lease and requests the fenced return-intake effect. The resulting line keeps
+only copied safe contents evidence and opaque remote identifiers. A permanent
+boundary rejection reaches `CONFLICT`; an indeterminate outcome or exhausted
+bounded retry reaches `RECONCILIATION_REQUIRED`. No local entity assumes that
+a timed-out asset effect was undone.
+
+## Stage 8 logistics workflow and inbound evidence model (2026-07-17)
+
+`LogisticsDocument`/`LogisticsDocumentLine` remain the only public workflow
+aggregate and line model. The service-local `LogisticsGuard`,
+`LogisticsExternalAttempt`, `LogisticsEquipmentHoldReference`,
+`LogisticsTaskReference`, `LogisticsMediaReference`,
+`LogisticsReturnShortageSnapshot`, `LogisticsReconciliation` and
+`LogisticsReconciliationRequest` retain opaque remote IDs and immutable local
+evidence only. They have no JPA association or foreign key to warehouse,
+asset, task-board, maintenance, media or inventory persistence.
+
+V3 adds line-scoped media generation and shortage-snapshot support; V4 adds
+versioned shipment hold/task references; V5 supplies transfer operation
+vocabulary; V6 adds validated inbound replay/observation records. The latter
+are technical evidence projections, not source aggregate replicas or command
+owners. JPA maps the business model; technical event/outbox/inbox/replay
+adapters use their narrowly allowlisted JDBC transactions.
+
+### Stage 8 mutable projection version resolution (2026-07-18)
+
+Immutable Flyway V7 adds `row_version` only to the mutable
+`LogisticsExternalAttempt`, `LogisticsGuard` and `LogisticsMediaReference` JPA
+projections. Immutable idempotency, shortage-snapshot and reconciliation-
+request evidence rows are deliberately not given meaningless versions. The
+business `LogisticsDocumentService` contains no JDBC; its concurrent
+subject/operation/key serialization is invoked through the Spring Data JPA
+repository. Low-level SQL remains restricted to named technical event-store,
+outbox, inbox, recovery, DLT and deterministic replay adapters.

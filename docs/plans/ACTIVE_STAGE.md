@@ -1,12 +1,12 @@
 ---
 roadmap: docs/plans/20260712-panel-microservices-decomposition.md
 roadmap_status: APPROVED_WORKING_ROADMAP
-state: STAGE_7_INVENTORY_SERVICE
-status: COMPLETE
-sequence: F0 -> F1 -> F2 -> F3 -> F1C -> F4K -> F4MA -> F4MT -> F4A -> F4T -> F4R -> F4G -> W1 -> STAGE_2_TASK_BOARD_SERVICE -> STAGE_3_4_MEDIA_SERVICE -> STAGE_5_ASSET_SERVICE -> STAGE_6_MAINTENANCE_SERVICE -> STAGE_7_INVENTORY_SERVICE
-service_owner: inventory-service
+state: STAGE_9_DOSSIER_SERVICE
+status: CONTRACT_APPROVED_IMPLEMENTATION_AUTHORIZED
+sequence: F0 -> F1 -> F2 -> F3 -> F1C -> F4K -> F4MA -> F4MT -> F4A -> F4T -> F4R -> F4G -> W1 -> STAGE_2_TASK_BOARD_SERVICE -> STAGE_3_4_MEDIA_SERVICE -> STAGE_5_ASSET_SERVICE -> STAGE_6_MAINTENANCE_SERVICE -> STAGE_7_INVENTORY_SERVICE -> STAGE_8_LOGISTICS_SERVICE
+service_owner: dossier-service
 delivery_owner: RWMS lead/reviewer
-next_state: STAGE_8_LOGISTICS_SERVICE
+next_state: STAGE_10_ANALYTICS_SERVICE
 ---
 
 # Active RWMS Implementation Stage
@@ -197,6 +197,8 @@ instruction `Начинай Stage 7 все разрешаю`, followed by `Пр�
 the complete inventory contract, its narrow sequential prerequisites, the
 separate media-runtime closure and the Stage 7 panel cutover. Implementation is
 authorized under `docs/plans/20260717-inventory-service-implementation.md`.
+Reviewed scoped commit `51460a3` records the complete Stage 7 exit. The later
+Stage 8 work did not alter its ownership, contracts or verification evidence.
 
 ### Allowed scope
 
@@ -228,7 +230,9 @@ authorized under `docs/plans/20260717-inventory-service-implementation.md`.
   envelope as a production contract or migration source;
 - treating browser DTOs, local storage, legacy mobile admin behavior, legacy
   deletion or seed identifiers as a production contract or migration source;
-- Stage 8 work;
+- Stage 8 work outside the separately approved parallel exception below. The
+  exception must not alter Stage 7 contracts, ownership, data, routes, events,
+  media types or exit evidence, nor represent Stage 7 as complete;
 - deployment/hosting/Kubernetes/CI/CD or production operations work.
 
 ### Approved entrance gate and delivery order
@@ -240,8 +244,9 @@ The approved delivery order is strict:
 `architecture guards -> inventory contracts/Flyway V1/runtime -> gateway ->`
 `panel -> full exit review and one commit`.
 
-Every subgate contained success and negative tests and passed before the next
-began. The media runtime closure is part of the verified Stage 7 evidence.
+Every subgate contains success and negative tests and must pass before the next
+begins. The media runtime remains missing current implementation evidence; its
+approval removes the authority blocker, not the verification requirement.
 
 ### Stage 7 exit gate
 
@@ -263,20 +268,247 @@ began. The media runtime closure is part of the verified Stage 7 evidence.
 
 ### Stage 7 verified completion (2026-07-17)
 
-All implementation, independent review and verification subgates are complete.
-Inventory business persistence is JPA; Flyway V1 is the sole schema authority.
-Low-level SQL is restricted by service and shared architecture policies to the
-six exact technical CAS/outbox/inbox/checkpoint/retry/DLT eventing adapters.
-Idempotency persists the exact response under a lease-locked reservation, and
-capture release runs only after the containing transaction completes.
+Inventory business persistence is JPA and Flyway V1 is the sole schema
+authority. Exactly six named technical eventing adapters retain low-level SQL.
+The final Stage 7-only verification recorded inventory 46/46, asset 57/57,
+maintenance 131/131, architecture 27/27, auth 11/11, warehouse 12/12, gateway
+36/36 and media real PostgreSQL/drift/Kafka/MinIO 73/73, plus the reproducible
+media build and the approved panel typecheck/lint/build, Vitest 48 and
+Playwright 9/9. Commit `51460a3` closes the gate.
 
-The final Stage 7-only candidate suites passed inventory 46/46, asset 57/57,
-maintenance 131/131, Stage 7 architecture 27/27, auth 11/11, warehouse 12/12,
-gateway 36/36 and media's canonical real PostgreSQL, drift-PostgreSQL, Kafka
-and MinIO matrix 73/73, all with zero failures, errors or skips. Media also
-passed a reproducible build. Panel typecheck, lint and build passed with Vitest
-48 and Playwright desktop/tablet/mobile 9/9. Earlier shared asset 64/64,
-maintenance 136/136 and architecture 33/34 runs mixed in Stage 8 diagnostics
-and are not Stage 7 closure totals. Closure is recorded by the containing
-scoped Stage 7 commit; no SHA is invented in advance. `next_state` remains
-metadata only.
+## Completed gate: `STAGE_8_LOGISTICS_SERVICE`
+
+The user initially authorized Stage 8 as an isolated parallel exception. That
+historical ordering did not transfer Stage 7 ownership. Stage 7 was then closed
+by `51460a3`; Stage 8 implementation was recorded by `08c262f` and its final
+closure/fix evidence is recorded by the containing scoped closure commit.
+
+### Allowed scope
+
+- perform the Stage 8 evidence and contract lifecycle for
+  `logistics-service` while preserving every unresolved rule as `UNKNOWN`;
+- after the contract gives each implemented capability an approved ownership,
+  state machine, authorization, idempotency, concurrency, migration and
+  integration boundary, implement and test only `logistics-service`, its
+  service-local PostgreSQL/Flyway schema, contracts and local/test dependencies;
+- add a stateless logistics gateway route only after the service boundary has
+  passed its focused verification;
+- maintain isolated Stage 8 memory, verification and commit evidence.
+- the user's `Начни 1` authorization on 2026-07-17 permits the first
+  prerequisite only: an `auth-service` disabled-by-default
+  `logistics-service` client, its exact five scopes/audience/external-secret
+  contract, and focused auth-service tests.
+- after the verified auth prerequisite, the next sequential subgate is limited
+  to `warehouse-service`: its exact `warehouse.logistics` private identity
+  boundary, canonical contract update and focused positive/negative tests.
+- after the verified warehouse prerequisite, the next sequential subgate is
+  limited to `asset-service`: its exact `asset.logistics` private lease,
+  fenced canonical effect, equipment-hold and read-snapshot contract, plus
+  focused positive/negative/recovery tests.
+- after the verified asset prerequisite, the next sequential subgate is
+  limited to `task-board-service`: its exact `task-board.logistics` task
+  registration/status/cancellation contract, plus focused
+  positive/negative/recovery tests.
+
+### Guardrails
+
+- the preceding parallel guardrail is historical: Stage 7 is complete in
+  `51460a3`, and Stage 8 is independently complete;
+- no behavior may be inferred from browser envelopes, seed data, legacy mobile
+  endpoints or missing company/reservation/location/media decisions;
+- this exception does not implicitly authorize panel changes. A logistics panel
+  cutover still needs explicit user authorization under the service-only
+  delivery boundary;
+- Stage 8 must not modify or rely on unfinished Stage 7 runtime behavior.
+- the verified warehouse subgate authorizes only the asset receiver next.
+  Task-board, maintenance and media receiver changes remain unauthorized until
+  the asset subgate is green and its narrow diff is reviewed; logistics still
+  must not consume a private endpoint yet.
+- That warehouse-to-asset ordering statement is now historical. The verified
+  asset subgate authorizes only the task-board receiver next. Maintenance and
+  media receiver changes remain unauthorized until task-board is green and its
+  narrow diff is reviewed; logistics still must not consume a private endpoint.
+
+### Current Stage 8 foundation evidence
+
+- `logistics-service`, canonical logistics OpenAPI/events, Flyway V1, JPA
+  mappings, safe Lombok boilerplate, MapStruct read/event mappings and the
+  transactional outbox relay are implemented only within the allowed isolated
+  service scope.
+- The focused Java 25 command
+  `:services:logistics-service:test` passed 24 tests with zero failures. It
+  includes Flyway clean/repeat/checksum/non-empty-schema checks, JPA validation,
+  domain/idempotency/concurrency behavior and relay/DLT safety checks.
+- This paragraph records the earlier foundation checkpoint. The later closure
+  below supersedes its then-open return/ship/transfer, inbound, gateway,
+  review and commit items. Panel cutover remains intentionally outside Stage 8.
+- The first sequential prerequisite is complete: `auth-service` declares a
+  disabled-by-default `logistics-service` confidential client with no
+  repository/development secret. It can mint exactly one of
+  `warehouse.logistics`, `asset.logistics`, `task-board.logistics`,
+  `maintenance.logistics` or `media.logistics`, for audience `rwms-services`.
+  Combined, omitted, foreign, wrong-client, USER and mismatched-override
+  requests fail closed. No upstream receiver or logistics HTTP consumption was
+  enabled by this subgate.
+- Java 25 focused auth verification passed 25 tests. The forced complete
+  `:services:auth-service:test` regression passed 153 tests with zero failures
+  and one skipped test. A preceding non-forced full run had two timeouts only in
+  the unchanged Kafka recovery class; the class passed twice with forced
+  isolated execution before the final complete rerun.
+- The second sequential prerequisite is complete: `warehouse-service` exposes
+  only `GET /api/internal/warehouse/v1/warehouses/logistics/{id}/identity`.
+  It requires the exact `logistics-service` SERVICE principal, matching
+  `sub`/`client_id`, and the one `warehouse.logistics` scope. Its MapStruct
+  response is exactly `{id, version, active, timeZone}`; inactive state remains
+  explicit and topology/location data cannot cross this boundary.
+- Java 25 focused warehouse verification passed 16 tests and the full
+  `:services:warehouse-service:test` suite passed 29 tests with zero failures
+  or skips.
+- The third sequential prerequisite is complete: `asset-service` exposes only
+  the private `/api/internal/asset/v1/logistics/**` surface to the exact
+  `logistics-service` SERVICE JWT with matching `sub`/`client_id` and one
+  `asset.logistics` scope. It exposes safe asset snapshots, typed opaque
+  operation leases, fenced closed-action effects and shipment-line equipment
+  holds; raw status, arbitrary owner strings and generic asset projections do
+  not cross this boundary.
+- The closed actions are return intake/settlement, shipment confirmation and
+  transfer departure/arrival only. Transfer arrival atomically moves attached
+  cabin balances through asset-owned `CABIN_TO_CABIN` ledger movements. The
+  event check-constraint extension is immutable asset Flyway V4; no logistics
+  schema, client invocation, gateway or panel change is implied.
+- Java 25 focused asset verification passed 13 tests; the forced complete
+  `:services:asset-service:test --rerun-tasks` suite passed 63 tests with zero
+  failures. This enables only the next task-board receiver subgate.
+- That asset-to-task-board ordering statement is now historical. The verified
+  task-board subgate authorizes only the maintenance receiver next. Media
+  receiver changes remain unauthorized until maintenance is green and its
+  narrow diff is reviewed; logistics still must not consume a private endpoint.
+- The fourth sequential prerequisite is complete: `task-board-service`
+  exposes only `/api/internal/task-board/v1/logistics/preparation-tasks` to
+  the exact `logistics-service` SERVICE JWT with matching
+  `sub`/`client_id` and one `task-board.logistics` scope. Registration
+  accepts a stable external task ID and constrained duration/deadline only;
+  task-board retains the `UNASSIGNED` queue/worker/route choice and no
+  caller-controlled title, queue, worker, route or free-text crosses the
+  boundary.
+- The safe read snapshot contains task ID/version, warehouse ID, external task
+  ID, status and completion time only. Cancellation is source-owned,
+  idempotent and uses the fixed task-board reason
+  `LOGISTICS_PREPARATION_CANCELLED`; no arbitrary reason or task mutation is
+  available. Java 25 focused verification passed 4 tests and the forced
+  complete `:services:task-board-service:test --rerun-tasks` suite passed
+  104 tests with zero failures. No logistics invocation, maintenance/media
+  behavior, gateway, panel or Stage 7 runtime changed.
+- That task-board-to-maintenance ordering statement is now historical. The
+  verified maintenance subgate authorizes only the media receiver next.
+  Logistics still must not consume a private endpoint, and media remains
+  unauthorized until its narrow diff is green and reviewed.
+- The fifth sequential prerequisite is complete: `maintenance-service` exposes
+  only `GET|PUT /api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/shortage`
+  to the exact `logistics-service` SERVICE JWT with matching `sub`/`client_id`
+  and one `maintenance.logistics` scope. It binds the permanent
+  `returnId:lineId` key to an immutable, canonically ordered
+  `{equipmentId, missingQuantity}` shortage snapshot; identical replay is
+  harmless and changed input is a conflict.
+- The receiver creates no estimate, repair, task, lease, asset effect or
+  inventory call. Its MapStruct read mapping exposes only the accepted source
+  metadata/snapshot. Maintenance Flyway V3 creates only
+  `logistics_return_shortage` with no foreign key or SQL reference to the
+  unfinished Stage 7 inventory tables. Java 25 focused verification passed 25
+  tests and the forced complete `:services:maintenance-service:test --rerun-tasks`
+  suite passed 131 tests with zero failures or skips. No logistics invocation,
+  media behavior, gateway, panel or Stage 7 runtime behavior changed.
+- The sixth and final receiver prerequisite is complete: `media-service`
+  exposes only
+  `POST /api/internal/media/v1/logistics/references/validate` to the exact
+  `logistics-service` SERVICE JWT with matching `sub`/`client_id` and one
+  `media.logistics` scope. It accepts a declared logistics owner type,
+  document/line/warehouse UUIDs and 1–20 unique opaque
+  `{mediaId,generation}` references; the owner ID is derived locally as
+  `<documentId>:<lineId>`.
+- The endpoint reads only base `media_asset` fields and succeeds only when
+  every supplied reference is the exact owner/warehouse's current `READY`
+  generation. It returns only the caller's opaque IDs/generations and no URL,
+  object key, filename, MIME, status or media-policy detail. It creates no
+  upload, owner binding, migration, event, outbox row, Kafka consumer or
+  logistics invocation and deliberately does not call the unfinished Stage 7
+  inventory owner-proof projection.
+- Focused Go 1.25 checks for `internal/auth`, `internal/api` and
+  `internal/contract` passed. The full `go test ./...` passed 10 test packages;
+  `db/migration` and `internal/testsupport` correctly have no tests. This
+  completed the private prerequisite chain. Later Stage 8 evidence closes the
+  logistics clients/sagas, gateway and backend exit matrix; panel cutover was
+  not authorized and remains outside the completed backend gate.
+
+### Stage 8 verified completion (2026-07-18)
+
+- `logistics-service` owns return, shipment and transfer workflows through
+  service-local JPA business persistence and immutable Flyway V1--V7. V7 adds
+  optimistic versions only to mutable guard, external-attempt and media-
+  reference projections. The idempotency advisory lock is invoked through a
+  Spring Data JPA repository; no business service is JDBC-allowlisted.
+- Named low-level SQL remains only in technical event-store, outbox, inbox,
+  recovery, DLT and deterministic replay adapters. The replay verifier runs in
+  one `REPEATABLE_READ` transaction; its 6/6 suite proves deterministic live/
+  snapshot/shadow parity and rejects recomputed-checksum actor, correlation and
+  authoritative-payload tampering. The real Kafka business-outbox outage/ack/
+  recovery gate passed 1/1.
+- The focused JPA/Flyway/idempotency package passed 8/8 and its exact
+  architecture policy passed 7/7. Final Java 25 verification passed logistics
+  60/60 and architecture 36/36; gateway remains 37/37. The earlier 51/51 and
+  35/35 totals are retained only as the historical pre-closure baseline.
+- `08c262f` is the reviewed implementation commit. The containing scoped
+  closure/fix commit records V7, replay/outbox recovery, memory reconciliation
+  and the pointer transition without inventing its SHA in advance. No panel
+  cutover, location/accounting correction or post-departure reversal is
+  claimed.
+
+## Active gate: `STAGE_9_DOSSIER_SERVICE`
+
+The user approved `docs/plans/20260718-dossier-service-contract.md` and the
+bounded service-side implementation. Stage 7 and Stage 8 are complete; Stage 9
+is now the sole active implementation gate.
+
+### Allowed scope
+
+- canonical dossier OpenAPI and event schemas;
+- one isolated `dossier-service` with service-owned PostgreSQL, JPA mappings,
+  immutable Flyway migrations and `hibernate.ddl-auto=validate`;
+- Kafka validation, inbox/checkpoint/gap quarantine, bounded retry/DLT,
+  deterministic replay, append-only activity/read projections and sanitized
+  Stage 10 outbox facts;
+- read-only API authorization, architecture guards, service tests and the
+  stateless `/api/dossier/**` gateway route;
+- durable memory, independent review and one scoped Stage 9 commit.
+
+### Forbidden scope
+
+- panel changes or a dossier panel cutover;
+- commands, source-aggregate ownership, producer changes, cross-service database access,
+  shared mutable JPA models, source-service contract changes or synthesized
+  dates, actors or legacy history;
+- direct producer HTTP/database reads, inferred cabin subjects, free-form
+  source text, signed media URLs or operational command-path dependencies;
+- Stage 10 analytics runtime or KPI implementation.
+
+## Deferred next gate: `STAGE_10_ANALYTICS_SERVICE`
+
+The user explicitly deferred Stage 10/KPI implementation on 2026-07-18. The
+evidence record `docs/plans/20260718-analytics-service-contract.md` has status
+`DEFERRED_BY_USER_2026-07-18`; it supplies no runtime authority.
+
+### Allowed scope
+
+- retain the evidence-only ownership boundary and unresolved KPI/product
+  decisions as durable `UNKNOWN`s;
+- resume only after Stage 9 completion and new explicit user authorization.
+
+### Forbidden scope
+
+- creating `analytics-service`, migrations, JPA entities, Kafka consumers,
+  OpenAPI, gateway routes, KPI values or panel changes;
+- treating a browser chart, legacy row, seed value, event count or service
+  database as an approved KPI formula or reporting period;
+- command ownership, source-service database access, shared mutable JPA
+  models, synchronous source calls or any dependency that can block an
+  operational command.

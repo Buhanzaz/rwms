@@ -762,21 +762,213 @@ gate, not a product `UNKNOWN`.
   evidence, contract and implementation remain forbidden until Stage 7 exit and
   commit; all logistics semantics remain outside this gate.
 
+## Stage 8 parallel-foundation resolution (2026-07-17)
+
+The preceding Stage 8-forbidden wording is retained as audit history and is
+superseded only by the user's explicit parallel authorization. The implemented
+local foundation resolves the service owner, clean database boundary, DRAFT
+identity/idempotency boundary, sanitized creation-event envelope and local
+outbox/DLT mechanics. It does not resolve any physical logistics outcome.
+
+Still `UNKNOWN` and excluded from the current runtime are the exact external
+asset lease/fence/status/settlement and equipment-hold calls; task-board
+registration/status/cancellation semantics; maintenance shortage source
+upsert; media owner/readiness validation; warehouse private identity contract;
+company/customer/reservation ownership; location/accounting correction;
+post-departure reversal; media retention/orphan/legal-hold policy; panel
+cutover; gateway route; and production operations. Stage 7 remains independent
+and incomplete.
+
+## Stage 8 auth-client resolution (2026-07-17)
+
+The logistics OAuth identity and its five exact scope names are no longer
+`UNKNOWN`: `auth-service` enforces the disabled external-secret
+`logistics-service` client and one-scope service-token rule. The still-unknown
+items are each receiving service's private endpoint shape, receiver-side JWT
+allowlist and its domain/retry/recovery semantics; this client does not resolve
+or authorize any of those effects.
+
+## Stage 8 warehouse prerequisite resolution (2026-07-17)
+
+The logistics warehouse identity endpoint and receiver JWT allowlist are no
+longer `UNKNOWN`: warehouse returns the exact inactive-aware identity shape
+under `warehouse.logistics`. Asset lease/status/hold/settlement, task-board
+task lifecycle, maintenance shortage source, media readiness/ownership and all
+remaining external-effect recovery semantics remain `UNKNOWN` until their own
+sequential receiver subgates are implemented and verified.
+
+## Stage 8 asset prerequisite resolution (2026-07-17)
+
+The preceding asset-unknown wording is retained as audit history. The exact
+asset private receiver, JWT allowlist, sanitized snapshot, typed lease/fence
+and shipment-line hold semantics are now implemented and verified; the asset
+event fact is covered by immutable Flyway V4. This resolves no consumer call:
+at that standalone receiver checkpoint logistics had not invoked the receiver.
+Later Stage 8 workflow evidence records constrained consumption and preserves
+the remaining unknowns below.
+
+Still `UNKNOWN` are the exact task-board registration/status/cancellation and
+its recovery semantics; maintenance shortage source/upsert and compensation;
+media ownership/readiness validation; company/customer/reservation ownership;
+location/accounting correction; post-departure reversal; media retention,
+orphan/legal-hold policy; gateway/panel cutover and production operations.
+Stage 7 remains independent and incomplete.
+
+## Stage 8 return acceptance and estimate command shape (2026-07-17)
+
+UNKNOWN: the approved public `AcceptReturnRequest` exposes one document-wide
+`readyMediaIds` UUID array, but the approved private media receiver accepts
+only `{mediaId, generation}` pairs for one exact `documentId,lineId` owner.
+For a multi-line return, UUIDs alone cannot prove the required current
+generation or which line owns each reference. Logistics must not silently
+invent a line assignment or treat a UUID as a current generation.
+
+UNKNOWN: `POST /returns/{id}/request-estimate` currently has no body, while
+the approved private maintenance source requires a separate immutable shortage
+snapshot for every return line: warehouse ID, rental-item ID/version and a
+non-empty `{equipmentId, missingQuantity}` array. The information cannot be
+derived from a safe asset snapshot or a browser DTO.
+
+The return acceptance/estimate implementation is paused only at these two
+public command shapes. A privacy/contract-approved amendment must define
+line-associated media generation references and per-line shortage input before
+logistics invokes media or maintenance. The already-implemented registration
+slice remains valid and independent of this decision.
+
+## Stage 8 task-board prerequisite resolution (2026-07-17)
+
+The preceding task-board-unknown wording is retained as audit history. The
+exact private registration/status/cancellation receiver, JWT allowlist,
+source-key replay/collision handling and fixed safe cancellation semantics are
+now implemented and verified. This resolves no consumer call: logistics does
+not invoke the receiver yet.
+
+Still `UNKNOWN` are maintenance shortage source/upsert and compensation;
+media ownership/readiness validation; company/customer/reservation ownership;
+location/accounting correction; post-departure reversal; media retention,
+orphan/legal-hold policy; gateway/panel cutover and production operations.
+Stage 7 remains independent and incomplete.
+
+## Stage 8 maintenance prerequisite resolution (2026-07-17)
+
+The preceding maintenance-source wording is retained as audit history. The
+exact private shortage source/upsert receiver, its local JWT allowlist,
+canonical immutable replay/conflict behavior and no-auto-repair boundary are
+now implemented and verified. This resolves no consumer call: logistics does
+not invoke maintenance yet.
+
+Still `UNKNOWN` are shortage compensation; media ownership/readiness
+validation; company/customer/reservation ownership; location/accounting
+correction; post-departure reversal; media retention, orphan/legal-hold policy;
+gateway/panel cutover and production operations. Stage 7 remains independent
+and incomplete.
 
 ## Stage 7 implementation resolution (2026-07-17)
 
 The approved Stage 7 service, prerequisites, media owner-proof path, gateway
-and panel cutover are no longer implementation `UNKNOWN`s; independent review
-and the final matrix are complete. The final Stage 7-only candidate suites
-passed inventory 46/46, asset 57/57, maintenance 131/131, Stage 7 architecture
-27/27, auth 11/11, warehouse 12/12, gateway 36/36 and media 73/73, all with zero
-failures, errors or skips. Media also passed a reproducible build; panel
-typecheck/lint/build with Vitest 48 and Playwright 9/9 passed. Earlier shared
-asset 64/64, maintenance 136/136 and architecture 33/34 runs mixed in Stage 8
-diagnostics and are not Stage 7 closure totals or a Stage 7 unknown.
+and panel cutover are no longer implementation `UNKNOWN`s; their final matrix
+is green. This does not resolve reopen/correct/delete/export, reopening
+`CLOSED_BLOCKED`, applying observations to canonical existing assets,
+authoritative tenant/customer history, media retention/orphan/legal-hold or
+production operations. Stage 7 still awaits final review and a scoped commit
+SHA, which is a delivery gate rather than a product `UNKNOWN`.
 
-This resolution does not remove the still-open product UNKNOWNs for
-reopen/correct/delete/export, reopening `CLOSED_BLOCKED`, applying observations
-to canonical existing assets, authoritative tenant/customer history, media
-retention/orphan/legal-hold or production operations. Closure is recorded by
-the containing scoped Stage 7 commit without inventing a SHA.
+## Stage 8 canonical return tenant validation (2026-07-17)
+
+UNKNOWN: the approved return contract says registration must compare the
+submitted normalized tenant snapshot with canonical cabin tenant truth, but
+the only approved asset logistics snapshot and fenced-effect contracts expose
+asset ID, version, warehouse, status and contents only. Asset has no tenant
+field in either request/response and logistics may not infer one from an asset
+ID, warehouse, local submitted text or a browser record.
+
+Until an owning service and a privacy-reviewed exact private validation
+boundary are approved, tenantSnapshot is immutable operator evidence only. The
+implemented return registration validates the proven warehouse/status/version/
+lease/fence conditions but does not claim tenant matching. This also blocks a
+claim that the full return acceptance/estimate contract is complete.
+
+## Stage 8 media prerequisite resolution (2026-07-17)
+
+The preceding media-readiness wording is retained as audit history. The exact
+private readiness/ownership receiver, its local service JWT allowlist, declared
+owner types, opaque response and current-generation conflict behavior are now
+implemented and verified. This resolves no consumer call: logistics does not
+invoke media yet.
+
+Still `UNKNOWN` are logistics-media upload/attachment lifecycle ownership and
+compensation, retention/orphan/legal-hold policy, company/customer/reservation
+ownership, location/accounting correction, post-departure reversal,
+gateway/panel cutover and production operations. Stage 7 remains independent
+and incomplete.
+
+## Stage 8 return completion and estimate resolution (2026-07-17)
+
+The preceding paused-contract wording is retained as audit history. The approved
+Stage 8 contract now supplies line-scoped media ID/generation references and
+per-line immutable equipment-shortage input, so return acceptance and
+maintenance-source request flows are implemented. This resolves neither
+canonical tenant validation nor an authority to infer a missing media or
+shortage association from browser/legacy data.
+
+## Stage 8 irreversible correction policy (2026-07-17)
+
+UNKNOWN: after a shipment confirmation or transfer departure, no approved
+compensation model defines a reverse movement, location correction, accounting
+correction or physical-stock rollback. The service deliberately records a
+conflict/reconciliation request rather than inventing any of those effects.
+
+UNKNOWN: whether the current read-only inbound evidence projection should later
+trigger a separate product workflow is not decided. The completed consumer
+therefore preserves only validated source facts and does not make inbound asset,
+task-board, maintenance or media events command inputs. Panel cutover and
+production operations remain outside this Stage 8 backend scope.
+
+## 2026-07-18 Stage 9 dossier contract gaps
+
+- Logistics document facts, task-board task facts and media owner facts do not
+  currently provide an approved canonical cabin subject. Dossier cannot infer
+  one from document/task/external/owner IDs, a warehouse or browser/legacy
+  state. Producer-owned additive subject/deep-link contracts remain `UNKNOWN`.
+- The exact inventory owner type that canonically represents a cabin remains
+  `UNKNOWN` for dossier consumption.
+- Dossier query authorization, warehouse-grant claim/scope, pagination token,
+  date-filter timezone, search semantics and actor filtering/display resolution
+  remain `UNKNOWN`. Missing source `occurredAt` or actor values must never be
+  synthesized from `recordedAt`, entity version or browser history.
+- Whether the Stage 9 gate may retain valid but unlinked technical facts while
+  upstream source contracts lack a cabin subject remains `UNKNOWN`; it cannot
+  be treated as a completed cross-domain cabin projection.
+
+## 2026-07-18 Stage 10 analytics contract gaps
+
+- KPI formulas, inclusions/exclusions, rounding, reporting timezone, period
+  boundaries/DST, dimensions, freshness, correction/backfill, performance
+  budgets, exports and dashboard authorization remain `UNKNOWN`.
+- The approved Stage 9 dossier event boundary does not exist yet. Analytics
+  must not read a dossier table, count generic producer events or reconstruct a
+  KPI from browser/legacy/seed values while that dependency is unresolved.
+
+## 2026-07-18 Stage 9 contract-gap resolution
+
+The preceding Stage 9 gap list is retained as proposal audit history. The
+approved dossier contract resolves the v1 entrance decisions: asset and
+maintenance have direct cabin subjects; inventory uses non-null finding
+`assetId`; `INVENTORY_FINDING` media converges through that association;
+logistics and task-board facts without a subject are journalled only as
+`SUBJECT_NOT_PROVIDED` technical evidence. The contract also fixes USER/
+`rwms.read`/warehouse-VIEW authorization, anti-enumeration, cursor/filter/time
+semantics, opaque actor filtering and partial visibility. Missing values are
+never synthesized.
+
+Still `UNKNOWN`, but not blockers for Stage 9 v1, are future producer-owned
+additive cabin subjects for logistics/task-board facts and any later expansion
+of visible activity vocabulary. Stage 9 must not implement those producer
+changes itself.
+
+## 2026-07-18 Stage 10 deferral resolution
+
+All Stage 10 KPI/product gaps above remain unresolved. The user explicitly
+deferred implementation, so they are no longer an active planning gate and no
+analytics runtime may be created until new explicit authorization follows a
+completed Stage 9.
