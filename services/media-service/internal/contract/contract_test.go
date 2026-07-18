@@ -136,13 +136,14 @@ func TestOpenAPIParsesAndExposesOnlyApprovedRuntimePaths(t *testing.T) {
 	}
 	paths := objectAt(t, document, "paths")
 	approved := map[string]string{
-		"/health/live":                  "get",
-		"/health/ready":                 "get",
-		"/api/media/v1/upload-sessions": "post",
+		"/health/live":  "get",
+		"/health/ready": "get",
+		"/api/internal/media/v1/logistics/references/validate":     "post",
+		"/api/media/v1/upload-sessions":                            "post",
 		"/api/media/v1/upload-sessions/{uploadSessionId}/complete": "post",
-		"/api/media/v1/assets":                    "get",
-		"/api/media/v1/assets/{mediaId}/original": "get",
-		"/api/media/v1/assets/{mediaId}/rotation": "post",
+		"/api/media/v1/assets":                                     "get",
+		"/api/media/v1/assets/{mediaId}/original":                  "get",
+		"/api/media/v1/assets/{mediaId}/rotation":                  "post",
 	}
 	if len(paths) != len(approved) {
 		t.Fatalf("OpenAPI paths = %d, want exactly %d", len(paths), len(approved))
@@ -155,6 +156,38 @@ func TestOpenAPIParsesAndExposesOnlyApprovedRuntimePaths(t *testing.T) {
 		if _, ok := pathItem["delete"]; ok {
 			t.Errorf("%s exposes forbidden delete operation", path)
 		}
+	}
+}
+
+func TestLogisticsReferenceValidationContractIsPrivateAndOpaque(t *testing.T) {
+	root := repositoryRoot(t)
+	var document map[string]any
+	if err := yaml.Unmarshal(readContract(t, filepath.Join(root, "contracts", "openapi", "media-service.yaml")), &document); err != nil {
+		t.Fatalf("decode media-service.yaml: %v", err)
+	}
+	paths := objectAt(t, document, "paths")
+	operation := objectAt(t, objectAt(t, paths, "/api/internal/media/v1/logistics/references/validate"), "post")
+	if got := stringAt(t, operation, "operationId"); got != "validateLogisticsMediaReferences" {
+		t.Fatalf("operationId = %q", got)
+	}
+	schemas := objectAt(t, objectAt(t, document, "components"), "schemas")
+	request := objectAt(t, schemas, "LogisticsMediaReferenceValidationRequest")
+	response := objectAt(t, schemas, "LogisticsMediaReferenceValidation")
+	for name, schema := range map[string]map[string]any{"request": request, "response": response} {
+		if schema["additionalProperties"] != false {
+			t.Errorf("%s schema allows undeclared properties", name)
+		}
+		properties := objectAt(t, schema, "properties")
+		for _, forbidden := range []string{"ownerId", "url", "objectKey", "sourceObjectKey", "fileName", "contentType", "status"} {
+			if _, present := properties[forbidden]; present {
+				t.Errorf("%s schema exposes forbidden %q", name, forbidden)
+			}
+		}
+	}
+	reference := objectAt(t, schemas, "OpaqueReadyMediaReference")
+	properties := objectAt(t, reference, "properties")
+	if len(properties) != 2 || properties["mediaId"] == nil || properties["generation"] == nil {
+		t.Fatalf("opaque reference properties = %#v", properties)
 	}
 }
 

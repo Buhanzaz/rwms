@@ -35,6 +35,9 @@ public class GatewayProductionSafetyValidator {
     URI inventoryTarget =
         requireOrigin(
             "rwms.gateway.routes.inventory-uri", properties.getRoutes().getInventoryUri());
+    URI logisticsTarget =
+        requireOrigin(
+            "rwms.gateway.routes.logistics-uri", properties.getRoutes().getLogisticsUri());
     URI jwkSetUri = requireHttpUri("rwms.gateway.security.jwk-set-uri", properties.getSecurity().getJwkSetUri());
     if (jwkSetUri.getPath() == null
         || jwkSetUri.getPath().isBlank()
@@ -64,6 +67,7 @@ public class GatewayProductionSafetyValidator {
       forbidLoopback("maintenance target", maintenanceTarget);
       forbidLoopback("media target", mediaTarget);
       forbidLoopback("inventory target", inventoryTarget);
+      forbidLoopback("logistics target", logisticsTarget);
       forbidLoopback("internal JWKS target", jwkSetUri);
     }
   }

@@ -175,7 +175,8 @@ public class AuthorizationServerConfiguration {
                 clientCredentials.setAuthenticationValidator(
                         OAuth2ClientCredentialsAuthenticationValidator.DEFAULT_SCOPE_VALIDATOR
                                 .andThen(AuthorizationServerConfiguration::validateMaintenanceDownstreamScope)
-                                .andThen(AuthorizationServerConfiguration::validateInventoryDownstreamRequest));
+                                .andThen(AuthorizationServerConfiguration::validateInventoryDownstreamRequest)
+                                .andThen(AuthorizationServerConfiguration::validateLogisticsDownstreamRequest));
             }
         });
     }
@@ -201,6 +202,14 @@ public class AuthorizationServerConfiguration {
                 OAuthClientProperties.INVENTORY_CLIENT_ID,
                 OAuthClientProperties.INVENTORY_SCOPES,
                 OAuthClientProperties.INVENTORY_AUDIENCE);
+    }
+
+    static void validateLogisticsDownstreamRequest(OAuth2ClientCredentialsAuthenticationContext context) {
+        validateExactDownstreamRequest(
+                context,
+                OAuthClientProperties.LOGISTICS_CLIENT_ID,
+                OAuthClientProperties.LOGISTICS_SCOPES,
+                OAuthClientProperties.LOGISTICS_AUDIENCE);
     }
 
     private static void validateExactDownstreamRequest(

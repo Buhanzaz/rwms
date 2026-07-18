@@ -41,7 +41,7 @@ class AssetFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsNoProductionFixtures() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -96,10 +96,10 @@ class AssetFlywayMigrationIntegrationTest {
         """, existingId, UUID.randomUUID());
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(2);
     latest.validate();
 
-    assertThat(appliedVersions()).containsExactly("1", "2", "3");
+    assertThat(appliedVersions()).containsExactly("1", "2", "3", "4");
     assertThat(columnCount("rental_item", "number")).isZero();
     assertThat(columnCount("rental_item", "display_canonical_number")).isEqualTo(1);
     assertThat(columnCount("rental_item", "identity_match_key")).isEqualTo(1);

@@ -10,11 +10,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceCatalogController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceEstimateController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceInventoryController;
+import dev.buhanzaz.rwms.maintenance.api.MaintenanceLogisticsController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceRepairController;
 import dev.buhanzaz.rwms.maintenance.config.MaintenanceSecurityProblemWriter;
 import dev.buhanzaz.rwms.maintenance.config.SecurityConfiguration;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
+import dev.buhanzaz.rwms.maintenance.service.LogisticsReturnShortageService;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import dev.buhanzaz.rwms.platform.web.RwmsProblemDetailFactory;
@@ -38,6 +40,7 @@ import org.springframework.test.web.servlet.MockMvc;
       MaintenanceCatalogController.class,
       MaintenanceEstimateController.class,
       MaintenanceInventoryController.class,
+      MaintenanceLogisticsController.class,
       MaintenanceRepairController.class
     },
     properties = {
@@ -58,6 +61,7 @@ class MaintenanceBearerSecurityMockMvcTest {
 
   @MockitoBean MaintenanceApplicationService service;
   @MockitoBean InventoryMaintenanceService inventoryService;
+  @MockitoBean LogisticsReturnShortageService logisticsService;
   @MockitoBean JwtDecoder jwtDecoder;
 
   @Test
@@ -69,7 +73,9 @@ class MaintenanceBearerSecurityMockMvcTest {
               operation.path()
                   .replace("{id}", ID.toString())
                   .replace("{inventoryId}", ID.toString())
-                  .replace("{findingId}", ID.toString()))
+                  .replace("{findingId}", ID.toString())
+                  .replace("{returnId}", ID.toString())
+                  .replace("{lineId}", ID.toString()))
               .header(CorrelationIdFilter.HEADER_NAME, ID.toString()))
           .andExpect(status().isUnauthorized())
           .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))

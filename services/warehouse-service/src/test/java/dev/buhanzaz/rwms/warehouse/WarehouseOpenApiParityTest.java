@@ -43,7 +43,8 @@ class WarehouseOpenApiParityTest {
             "/api/warehouse/v1/warehouses/{id}",
             "/api/internal/warehouse/v1/warehouses/{id}/existence",
             "/api/internal/warehouse/v1/warehouses/asset/{id}/existence",
-            "/api/internal/warehouse/v1/warehouses/inventory/{id}/metadata");
+            "/api/internal/warehouse/v1/warehouses/inventory/{id}/metadata",
+            "/api/internal/warehouse/v1/warehouses/logistics/{id}/identity");
     Map<String, Object> create = child(child(paths, "/api/warehouse/v1/warehouses"), "post");
     assertThat(list(create.get("parameters")).getFirst())
         .isInstanceOfSatisfying(
@@ -67,6 +68,12 @@ class WarehouseOpenApiParityTest {
             child(child(child(schemas, "InventoryWarehouseMetadata"), "properties"), "active")
                 .get("const"))
         .isEqualTo(true);
+    assertThat(list(child(schemas, "LogisticsWarehouseIdentity").get("required")))
+        .containsExactlyInAnyOrder("id", "version", "active", "timeZone");
+    assertThat(child(schemas, "LogisticsWarehouseIdentity").get("additionalProperties"))
+        .isEqualTo(false);
+    assertThat(child(child(schemas, "LogisticsWarehouseIdentity"), "properties"))
+        .containsKeys("id", "version", "active", "timeZone");
     assertAllLocalReferencesResolve(document, document);
   }
 

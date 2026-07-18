@@ -27,7 +27,7 @@ final class ArchitectureRules {
       Pattern.compile(".*(Aggregate|Command|Request)$");
   private static final Pattern BUSINESS_MODEL_TYPE =
       Pattern.compile(
-          ".*(Asset|Cabin|Catalog|Company|Contract|Dossier|Equipment|Estimate|Finding|Hold|Inventory|Lease|Maintenance|Rental|Repair|Reservation|Shipment|Stock|Task|Transfer|Warehouse|Worker|WriteOff).*",
+          ".*(Asset|Cabin|Catalog|Company|Contract|Dossier|Equipment|Estimate|Finding|Hold|Inventory|Lease|Logistics|Maintenance|Rental|Repair|Reservation|Shipment|Stock|Task|Transfer|Warehouse|Worker|WriteOff).*",
           Pattern.CASE_INSENSITIVE);
   private static final String[] SERVICE_PACKAGES = {
     "dev.buhanzaz.rwms.auth..",
@@ -36,6 +36,7 @@ final class ArchitectureRules {
     "dev.buhanzaz.rwms.asset..",
     "dev.buhanzaz.rwms.maintenance..",
     "dev.buhanzaz.rwms.inventory..",
+    "dev.buhanzaz.rwms.logistics..",
     "dev.buhanzaz.rwms.media.."
   };
   private static final String[] NON_INVENTORY_SERVICE_PACKAGES = {
@@ -46,6 +47,16 @@ final class ArchitectureRules {
     "dev.buhanzaz.rwms.maintenance..",
     "dev.buhanzaz.rwms.media.."
   };
+  private static final String[] NON_LOGISTICS_SERVICE_PACKAGES = {
+    "dev.buhanzaz.rwms.auth..",
+    "dev.buhanzaz.rwms.taskboard..",
+    "dev.buhanzaz.rwms.warehouse..",
+    "dev.buhanzaz.rwms.asset..",
+    "dev.buhanzaz.rwms.maintenance..",
+    "dev.buhanzaz.rwms.inventory..",
+    "dev.buhanzaz.rwms.media.."
+  };
+
   static final ArchRule TECHNICAL_CONTRACTS_ARE_FRAMEWORK_NEUTRAL =
       noClasses()
           .that()
@@ -85,6 +96,16 @@ final class ArchitectureRules {
           .dependOnClassesThat()
           .resideInAnyPackage(NON_INVENTORY_SERVICE_PACKAGES)
           .because("inventory owns its models and integrates only through versioned transport contracts")
+          .allowEmptyShould(true);
+
+  static final ArchRule LOGISTICS_DOES_NOT_DEPEND_ON_OTHER_SERVICES =
+      noClasses()
+          .that()
+          .resideInAPackage("dev.buhanzaz.rwms.logistics..")
+          .should()
+          .dependOnClassesThat()
+          .resideInAnyPackage(NON_LOGISTICS_SERVICE_PACKAGES)
+          .because("logistics owns its models and integrates only through versioned transport contracts")
           .allowEmptyShould(true);
 
   static final ArchRule SERVICES_DO_NOT_USE_FIELD_INJECTION =

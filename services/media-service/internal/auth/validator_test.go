@@ -44,6 +44,108 @@ func TestValidatorAcceptsValidRS256UserToken(t *testing.T) {
 	}
 }
 
+func TestValidatorAcceptsExactLogisticsServiceToken(t *testing.T) {
+	fixture := newJWTFixture(t)
+	claims := fixture.validServiceClaims("media.logistics")
+
+	principal, err := fixture.validator.ValidateService(context.Background(), "Bearer "+fixture.sign(t, testKeyID, claims, jwt.SigningMethodRS256))
+	if err != nil {
+		t.Fatalf("ValidateService() error = %v", err)
+	}
+	if err := principal.RequireExact("logistics-service", "media.logistics"); err != nil {
+		t.Fatalf("RequireExact() error = %v", err)
+	}
+	if got := fixture.requests.Load(); got != 1 {
+		t.Fatalf("JWKS requests = %d, want 1", got)
+	}
+}
+
+func TestValidatorRejectsInvalidLogisticsServiceToken(t *testing.T) {
+	fixture := newJWTFixture(t)
+	now := time.Now()
+	tests := []struct {
+		name     string
+		claims   func() jwt.MapClaims
+		mutate   func(jwt.MapClaims)
+		want     error
+		validate func(auth string) error
+	}{
+		{
+			name:   "user principal",
+			claims: func() jwt.MapClaims { return fixture.validClaims(uuid.New()) },
+			want:   ErrForbidden,
+		},
+		{
+			name:   "wrong client",
+			claims: func() jwt.MapClaims { return fixture.validServiceClaims("media.logistics") },
+			mutate: func(claims jwt.MapClaims) { claims["client_id"] = "warehouse-service" },
+			want:   ErrForbidden,
+		},
+		{
+			name:   "combined scopes",
+			claims: func() jwt.MapClaims { return fixture.validServiceClaims("media.logistics") },
+			mutate: func(claims jwt.MapClaims) { claims["scope"] = "media.logistics asset.logistics" },
+			want:   ErrForbidden,
+		},
+		{
+			name:   "duplicate scopes",
+			claims: func() jwt.MapClaims { return fixture.validServiceClaims("media.logistics") },
+			mutate: func(claims jwt.MapClaims) { claims["scope"] = "media.logistics media.logistics" },
+			want:   ErrForbidden,
+		},
+		{
+			name:   "foreign scope",
+			claims: func() jwt.MapClaims { return fixture.validServiceClaims("asset.logistics") },
+			want:   nil,
+			validate: func(authorization string) error {
+				principal, err := fixture.validator.ValidateService(context.Background(), authorization)
+				if err != nil {
+					return err
+				}
+				return principal.RequireExact("logistics-service", "media.logistics")
+			},
+		},
+		{
+			name:   "expired",
+			claims: func() jwt.MapClaims { return fixture.validServiceClaims("media.logistics") },
+			mutate: func(claims jwt.MapClaims) { claims["exp"] = now.Add(-time.Minute).Unix() },
+			want:   ErrUnauthorized,
+		},
+		{
+			name:     "missing bearer",
+			claims:   func() jwt.MapClaims { return fixture.validServiceClaims("media.logistics") },
+			want:     ErrUnauthorized,
+			validate: func(string) error { _, err := fixture.validator.ValidateService(context.Background(), ""); return err },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			claims := test.claims()
+			if test.mutate != nil {
+				test.mutate(claims)
+			}
+			authorization := "Bearer " + fixture.sign(t, testKeyID, claims, jwt.SigningMethodRS256)
+			validate := test.validate
+			if validate == nil {
+				validate = func(value string) error {
+					_, err := fixture.validator.ValidateService(context.Background(), value)
+					return err
+				}
+			}
+			err := validate(authorization)
+			if test.want == nil {
+				if !errors.Is(err, ErrForbidden) {
+					t.Fatalf("service authorization error = %v, want %v", err, ErrForbidden)
+				}
+				return
+			}
+			if !errors.Is(err, test.want) {
+				t.Fatalf("ValidateService() error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
 func TestValidatorRejectsInvalidTokenClaimsAndAlgorithm(t *testing.T) {
 	fixture := newJWTFixture(t)
 	warehouseID := uuid.New()
@@ -299,6 +401,21 @@ func (fixture *jwtFixture) validClaims(warehouseID uuid.UUID) jwt.MapClaims {
 			"warehouseId": warehouseID.String(),
 			"level":       "EDIT",
 		}},
+	}
+}
+
+func (fixture *jwtFixture) validServiceClaims(scope string) jwt.MapClaims {
+	now := time.Now()
+	return jwt.MapClaims{
+		"iss":            fixture.issuer,
+		"aud":            fixture.audience,
+		"sub":            "logistics-service",
+		"client_id":      "logistics-service",
+		"iat":            now.Add(-time.Minute).Unix(),
+		"nbf":            now.Add(-time.Minute).Unix(),
+		"exp":            now.Add(5 * time.Minute).Unix(),
+		"principal_type": "SERVICE",
+		"scope":          scope,
 	}
 }
 

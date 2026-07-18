@@ -52,6 +52,20 @@ public class MaintenanceAuthorizer {
     }
   }
 
+  public void requireLogisticsService(Jwt jwt) {
+    if (jwt == null
+        || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
+        || !"logistics-service".equals(jwt.getSubject())
+        || !"logistics-service".equals(jwt.getClaimAsString("client_id"))
+        || jwt.getAudience().size() != 1
+        || !jwt.getAudience().contains("rwms-services")) {
+      throw new AccessDeniedException("Exact logistics-service principal is required");
+    }
+    List<String> granted = scopes(jwt);
+    if (granted.size() != 1 || !"maintenance.logistics".equals(granted.getFirst())) {
+      throw new AccessDeniedException("Exact maintenance.logistics scope is required");
+    }
+  }
 
   public UUID subjectId(Jwt jwt) {
     if (developmentPublicBypass) return DEV_SUBJECT;

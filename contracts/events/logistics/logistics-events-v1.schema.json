@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/logistics/logistics-events-v1.schema.json",
+  "title": "RWMS logistics-service event facts v1",
+  "description": "Sanitized logistics lifecycle facts. Party, tenant, driver, passport, media, contents, reason and external-service payloads remain local projections.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["envelopeVersion", "eventId", "eventType", "eventVersion", "occurredAt", "recordedAt", "producer", "aggregateType", "aggregateId", "aggregateVersion", "correlation", "actorRef", "payload"],
+  "properties": {
+    "envelopeVersion": {"const": 2},
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {
+      "enum": [
+        "logistics.return.created.v1",
+        "logistics.return.registration-started.v1",
+        "logistics.return.inspection-required.v1",
+        "logistics.return.acceptance-started.v1",
+        "logistics.return.accepted.v1",
+        "logistics.return.estimate-started.v1",
+        "logistics.return.estimate-requested.v1",
+        "logistics.return.conflicted.v1",
+        "logistics.return.conflict.v1",
+        "logistics.return.reconciliation-required.v1",
+        "logistics.shipment.created.v1",
+        "logistics.shipment.preparation-started.v1",
+        "logistics.shipment.planned.v1",
+        "logistics.shipment.confirmation-started.v1",
+        "logistics.shipment.preparation-confirmed.v1",
+        "logistics.shipment.cancellation-started.v1",
+        "logistics.shipment.cancelled.v1",
+        "logistics.shipment.conflict.v1",
+        "logistics.shipment.reconciliation-required.v1",
+        "logistics.transfer.created.v1",
+        "logistics.transfer.departure-started.v1",
+        "logistics.transfer.departed.v1",
+        "logistics.transfer.arrival-started.v1",
+        "logistics.transfer.line-arrived.v1",
+        "logistics.transfer.completed.v1",
+        "logistics.transfer.cancelled.v1",
+        "logistics.transfer.conflict.v1",
+        "logistics.transfer.reconciliation-required.v1"
+      ]
+    },
+    "eventVersion": {"const": 1},
+    "occurredAt": {"type": "string", "format": "date-time"},
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "producer": {"const": "logistics-service"},
+    "aggregateType": {"enum": ["RETURN", "SHIPMENT", "TRANSFER"]},
+    "aggregateId": {"type": "string", "format": "uuid"},
+    "aggregateVersion": {"type": "integer", "minimum": 0},
+    "correlation": {"$ref": "#/$defs/correlationContext"},
+    "actorRef": {"oneOf": [{"$ref": "#/$defs/opaqueActorReference"}, {"type": "null"}]},
+    "payload": {"$ref": "#/$defs/logisticsFact"}
+  },
+  "x-rwms-topics": ["rwms.logistics.return.v1", "rwms.logistics.shipment.v1", "rwms.logistics.transfer.v1"],
+  "$defs": {
+    "correlationContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correlationId", "causationId"],
+      "properties": {
+        "correlationId": {"type": "string", "format": "uuid"},
+        "causationId": {"oneOf": [{"type": "string", "format": "uuid"}, {"type": "null"}]}
+      }
+    },
+    "opaqueActorReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subjectId", "principalType", "profileRevision"],
+      "properties": {
+        "subjectId": {"type": "string", "format": "uuid"},
+        "principalType": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"},
+        "profileRevision": {"oneOf": [{"type": "string", "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$"}, {"type": "null"}]}
+      }
+    },
+    "logisticsFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["documentId", "documentType", "state", "warehouseId", "destinationWarehouseId", "lineCount", "resultCode"],
+      "properties": {
+        "documentId": {"type": "string", "format": "uuid"},
+        "documentType": {"enum": ["RETURN", "SHIPMENT", "TRANSFER"]},
+        "state": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "destinationWarehouseId": {"oneOf": [{"type": "string", "format": "uuid"}, {"type": "null"}]},
+        "lineCount": {"type": "integer", "minimum": 1, "maximum": 100},
+        "resultCode": {"oneOf": [{"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"}, {"type": "null"}]}
+      }
+    }
+  }
+}

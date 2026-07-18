@@ -189,6 +189,27 @@ public final class ApiModels {
       OffsetDateTime deadlineAt,
       @NotEmpty List<@Valid RouteStepRequest> route) {}
 
+  /**
+   * Deliberately no queue, worker, task text, cabin display number, party,
+   * driver or free-form description: task-board chooses the work route.
+   */
+  public record RegisterLogisticsPreparationTaskRequest(
+      @NotNull UUID warehouseId,
+      @NotNull UUID externalTaskId,
+      @Min(0) Integer plannedDurationMinutes,
+      OffsetDateTime deadlineAt) {}
+
+  public record CancelLogisticsPreparationTaskRequest(
+      @NotNull @Min(0) Long expectedTaskVersion) {}
+
+  public record LogisticsTaskSnapshot(
+      UUID taskId,
+      long taskVersion,
+      UUID warehouseId,
+      UUID externalTaskId,
+      TaskStatus status,
+      OffsetDateTime doneAt) {}
+
   public record PreStartUpdateTaskRequest(
       @NotNull @Min(0) Long expectedTaskVersion,
       @NotBlank @Size(max = 256) String title,

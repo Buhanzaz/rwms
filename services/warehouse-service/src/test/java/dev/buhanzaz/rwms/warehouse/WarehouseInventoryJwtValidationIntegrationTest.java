@@ -36,6 +36,8 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 class WarehouseInventoryJwtValidationIntegrationTest {
   private static final String INVENTORY_PATH =
       "/api/internal/warehouse/v1/warehouses/inventory/00000000-0000-0000-0000-000000000001/metadata";
+  private static final String LOGISTICS_PATH =
+      "/api/internal/warehouse/v1/warehouses/logistics/00000000-0000-0000-0000-000000000001/identity";
   private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
   private static final KeyMaterial TRUSTED = key("warehouse-inventory");
   private static final HttpServer JWKS_SERVER;
@@ -96,6 +98,38 @@ class WarehouseInventoryJwtValidationIntegrationTest {
         .andExpect(status().isUnauthorized());
   }
 
+  @Test
+  void logisticsEndpointAcceptsOnlyTheExactServiceCredentialAndAudience() throws Exception {
+    mockMvc
+        .perform(
+            get(LOGISTICS_PATH)
+                .header(
+                    HttpHeaders.AUTHORIZATION,
+                    bearer(token("rwms-services", "logistics-service", "warehouse.logistics"))))
+        .andExpect(status().isOk());
+
+    mockMvc
+        .perform(
+            get(LOGISTICS_PATH)
+                .header(
+                    HttpHeaders.AUTHORIZATION,
+                    bearer(token("wrong-audience", "logistics-service", "warehouse.logistics"))))
+        .andExpect(status().isUnauthorized());
+    mockMvc
+        .perform(
+            get(LOGISTICS_PATH)
+                .header(
+                    HttpHeaders.AUTHORIZATION,
+                    bearer(token("rwms-services", "inventory-service", "warehouse.logistics"))))
+        .andExpect(status().isForbidden());
+    mockMvc
+        .perform(
+            get(LOGISTICS_PATH)
+                .header(
+                    HttpHeaders.AUTHORIZATION,
+                    bearer(token("rwms-services", "logistics-service", "warehouse.read"))))
+        .andExpect(status().isForbidden());
+  }
 
   private String token(String audience) throws Exception {
     return token(audience, "inventory-service", "warehouse.read");

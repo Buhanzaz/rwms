@@ -84,6 +84,20 @@ public class WarehouseAuthorizer {
     }
   }
 
+  /** Logistics receives only an exact warehouse identity for origin/destination validation. */
+  public void requireInternalLogisticsService(Jwt jwt) {
+    String clientId = "logistics-service";
+    if (jwt == null
+        || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
+        || !clientId.equals(jwt.getClaimAsString("client_id"))
+        || !clientId.equals(jwt.getSubject())
+        || !exactlyScope(jwt, "warehouse.logistics")) {
+      throw new AccessDeniedException(
+          "Only logistics-service with matching subject and exactly warehouse.logistics may use this"
+              + " endpoint");
+    }
+  }
+
   private void requireInternalWarehouseReader(Jwt jwt, String clientId) {
     if (jwt == null
         || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))

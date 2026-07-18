@@ -36,6 +36,9 @@ public class SecurityConfiguration {
     http.authorizeHttpRequests(
         authorize -> {
           authorize.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();
+          authorize
+              .requestMatchers("/api/internal/task-board/v1/logistics/**")
+              .hasAuthority("SCOPE_task-board.logistics");
           authorize.requestMatchers("/api/internal/**").authenticated();
           if (bypassEnabled) {
             authorize.anyRequest().permitAll();

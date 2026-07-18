@@ -146,6 +146,26 @@ public class GatewayRouteConfiguration {
         .build();
   }
 
+  @Bean
+  RouterFunction<ServerResponse> logisticsRoutes(
+      GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
+    RequestPredicate publicLogisticsPath =
+        path("/api/logistics/**")
+            .and(request -> safePath(request.path()))
+            .and(
+                request -> {
+                  String decoded = decodedPath(request.path());
+                  return !decoded.startsWith("/api/logistics/internal")
+                      && !decoded.startsWith("/api/logistics/private");
+                });
+    return route("logistics-service")
+        .route(publicLogisticsPath, http())
+        .before(uri(properties.getRoutes().getLogisticsUri()))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
   private static String decodedPath(String path) {
     return UriUtils.decode(path, StandardCharsets.UTF_8);
   }

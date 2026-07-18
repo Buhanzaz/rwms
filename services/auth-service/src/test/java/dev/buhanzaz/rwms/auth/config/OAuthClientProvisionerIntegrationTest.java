@@ -280,6 +280,53 @@ class OAuthClientProvisionerIntegrationTest {
     }
 
     @Test
+    void logisticsClientRejectsScopeAudienceAndSecretDriftBeforeMutation() {
+        List<OAuthClientProperties.Client> invalidConfigurations = List.of(
+                logisticsClient(
+                        Set.of("warehouse.logistics", "asset.logistics"),
+                        Set.of(OAuthClientProperties.LOGISTICS_AUDIENCE),
+                        OAuthClientProperties.LOGISTICS_SECRET_ENVIRONMENT,
+                        null),
+                logisticsClient(
+                        Set.of(
+                                "warehouse.logistics",
+                                "asset.logistics",
+                                "task-board.logistics",
+                                "maintenance.logistics",
+                                "media.logistics",
+                                "asset.internal"),
+                        Set.of(OAuthClientProperties.LOGISTICS_AUDIENCE),
+                        OAuthClientProperties.LOGISTICS_SECRET_ENVIRONMENT,
+                        null),
+                logisticsClient(
+                        OAuthClientProperties.LOGISTICS_SCOPES,
+                        Set.of("other-audience"),
+                        OAuthClientProperties.LOGISTICS_SECRET_ENVIRONMENT,
+                        null),
+                logisticsClient(
+                        OAuthClientProperties.LOGISTICS_SCOPES,
+                        Set.of(OAuthClientProperties.LOGISTICS_AUDIENCE),
+                        "OTHER_CLIENT_SECRET",
+                        null),
+                logisticsClient(
+                        OAuthClientProperties.LOGISTICS_SCOPES,
+                        Set.of(OAuthClientProperties.LOGISTICS_AUDIENCE),
+                        OAuthClientProperties.LOGISTICS_SECRET_ENVIRONMENT,
+                        "repository-secret"));
+
+        invalidConfigurations.forEach(configuration -> assertThatThrownBy(() -> provisioner(configuration).run(null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("logistics-service OAuth client"));
+        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
+
+        assertThatThrownBy(() -> provisioner(logisticsClient(true)).run(null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("secret environment")
+                .hasMessageContaining("logistics-service");
+        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
+    }
+
+    @Test
     void sameRevisionRejectsConfigurationAndSecretDrift() throws Exception {
         provisioner(serviceClient(true, 1, "secret-one", false)).run(null);
 
@@ -488,4 +535,46 @@ class OAuthClientProvisionerIntegrationTest {
                 false);
     }
 
+    private OAuthClientProperties.Client logisticsClient(boolean enabled) {
+        return logisticsClient(
+                enabled,
+                OAuthClientProperties.LOGISTICS_SCOPES,
+                Set.of(OAuthClientProperties.LOGISTICS_AUDIENCE),
+                OAuthClientProperties.LOGISTICS_SECRET_ENVIRONMENT,
+                null);
+    }
+
+    private OAuthClientProperties.Client logisticsClient(
+            Set<String> scopes,
+            Set<String> audiences,
+            String secretEnvironment,
+            String developmentSecret) {
+        return logisticsClient(true, scopes, audiences, secretEnvironment, developmentSecret);
+    }
+
+    private OAuthClientProperties.Client logisticsClient(
+            boolean enabled,
+            Set<String> scopes,
+            Set<String> audiences,
+            String secretEnvironment,
+            String developmentSecret) {
+        return new OAuthClientProperties.Client(
+                OAuthClientProperties.LOGISTICS_CLIENT_ID,
+                "Logistics Service Downstream Client",
+                enabled,
+                1,
+                Set.of("client_secret_basic"),
+                Set.of("client_credentials"),
+                Set.of(),
+                Set.of(),
+                scopes,
+                false,
+                Set.of(),
+                audiences,
+                Set.of(),
+                Duration.ofMinutes(5),
+                secretEnvironment,
+                developmentSecret,
+                false);
+    }
 }

@@ -174,7 +174,36 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationFailure' }
         '503': { $ref: '#/components/responses/DependencyUnavailable' }
-
+  /api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/shortage:
+    parameters:
+      - { name: returnId, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: lineId, in: path, required: true, schema: { type: string, format: uuid } }
+    put:
+      tags: [Logistics Integration]
+      operationId: upsertLogisticsReturnShortage
+      description: >-
+        Private direct-service boundary. Requires principal_type=SERVICE,
+        sub=client_id=logistics-service, audience rwms-services and exactly the
+        maintenance.logistics scope. The permanent returnId:lineId source accepts
+        an immutable equipment-shortage snapshot only. It neither creates a
+        repair/estimate nor exposes an asset lease, task or maintenance mutation.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpsertLogisticsReturnShortageRequest' } } } }
+      responses:
+        '200': { description: Recorded or replayed immutable logistics return shortage source., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsReturnShortage' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+    get:
+      tags: [Logistics Integration]
+      operationId: getLogisticsReturnShortage
+      description: Returns only the source-owned immutable logistics return shortage snapshot.
+      responses:
+        '200': { description: Immutable logistics return shortage source., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsReturnShortage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/maintenance/v1/estimates:
     get:
       tags: [Estimates]
@@ -1167,7 +1196,44 @@ components:
         dispatchDate: { type: string, format: date }
         planFingerprint: { type: string, pattern: '^[0-9a-f]{64}$' }
         snapshot: { $ref: '#/components/schemas/FrozenInventoryPlanSnapshot' }
-
+    LogisticsEquipmentShortage:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, missingQuantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        missingQuantity: { type: integer, format: int64, minimum: 1 }
+    UpsertLogisticsReturnShortageRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, rentalItemId, rentalItemVersion, shortages]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        rentalItemVersion: { type: integer, format: int64, minimum: 0 }
+        shortages:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: '#/components/schemas/LogisticsEquipmentShortage' }
+    LogisticsReturnShortage:
+      type: object
+      additionalProperties: false
+      required: [returnId, lineId, sourceVersion, warehouseId, rentalItemId, rentalItemVersion, shortages, snapshotSha256, receivedAt]
+      properties:
+        returnId: { type: string, format: uuid }
+        lineId: { type: string, format: uuid }
+        sourceVersion: { type: integer, format: int64, minimum: 0 }
+        warehouseId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        rentalItemVersion: { type: integer, format: int64, minimum: 0 }
+        shortages:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: '#/components/schemas/LogisticsEquipmentShortage' }
+        snapshotSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        receivedAt: { type: string, format: date-time }
     RepairPlan:
       type: object
       additionalProperties: false

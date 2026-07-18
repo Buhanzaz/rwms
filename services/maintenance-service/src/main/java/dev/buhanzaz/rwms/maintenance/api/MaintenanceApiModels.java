@@ -48,7 +48,24 @@ public final class MaintenanceApiModels {
   public enum InventoryPlanLineType { WORK, MATERIAL }
 
   public record ActorSnapshot(String actorId, ActorType actorType) {}
-
+  public record LogisticsEquipmentShortage(
+      @NotNull UUID equipmentId,
+      @NotNull @Min(1) Long missingQuantity) {}
+  public record UpsertLogisticsReturnShortageRequest(
+      @NotNull UUID warehouseId,
+      @NotNull UUID rentalItemId,
+      @NotNull @Min(0) Long rentalItemVersion,
+      @NotNull @Size(min = 1, max = 100) List<@Valid LogisticsEquipmentShortage> shortages) {}
+  public record LogisticsReturnShortageResponse(
+      UUID returnId,
+      UUID lineId,
+      long sourceVersion,
+      UUID warehouseId,
+      UUID rentalItemId,
+      long rentalItemVersion,
+      List<LogisticsEquipmentShortage> shortages,
+      String snapshotSha256,
+      OffsetDateTime receivedAt) {}
   public record MediaReferenceInput(@NotNull UUID mediaId, @NotNull @Min(0) Long generation) {}
   public record RoutingSnapshot(
       @NotNull UUID queueId,
