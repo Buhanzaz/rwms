@@ -54,6 +54,7 @@ rwms:
       media-uri: ${MEDIA_SERVICE_URL}
       inventory-uri: ${INVENTORY_SERVICE_URL}
       logistics-uri: ${LOGISTICS_SERVICE_URL}
+      dossier-uri: ${DOSSIER_SERVICE_URL}
     security:
       issuer: ${AUTH_ISSUER}
       audience: ${AUTH_AUDIENCE:rwms-services}

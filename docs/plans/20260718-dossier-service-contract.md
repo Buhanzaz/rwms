@@ -157,10 +157,13 @@ optimistic retry serializes the relevant aggregate checkpoint. Append-only
 activity uniqueness makes concurrent facts from unrelated producers harmless.
 
 Ordering is scoped to producer/topic/aggregate type/aggregate ID. The initial
-applied version is `-1`; a first fact above the expected version is a missing
-prefix, not an implicit baseline. That aggregate is quarantined and later
-versions remain blocked until the missing sequence is supplied and replayed.
-Unrelated aggregates and cabins continue.
+applied version follows the canonical producer stream origin: `0` for
+`media-service`, whose first committed media fact is version `1`, and `-1` for
+the other Stage 9 input families, whose first fact is version `0`. A first fact
+above that producer-specific expected version is a missing prefix, not an
+implicit baseline. That aggregate is quarantined and later versions remain
+blocked until the missing sequence is supplied and replayed. Unrelated
+aggregates and cabins continue.
 
 The Stage 9 consumer starts from `earliest`. If broker retention no longer
 contains a required prefix, the missing history remains explicitly partial;

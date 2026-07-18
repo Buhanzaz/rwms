@@ -135,6 +135,25 @@ services:
       timeout: 5s
       retries: 10
 
+  dossier-db:
+    image: postgres:17-alpine
+    profiles: ["core"]
+    environment:
+      POSTGRES_DB: rwms_dossier
+      POSTGRES_USER: rwms_dossier
+      POSTGRES_PASSWORD: ${RWMS_DOSSIER_DB_PASSWORD:-rwms_dossier_dev}
+    ports:
+      - "127.0.0.1:5441:5432"
+    volumes:
+      - rwms-dossier-db:/var/lib/postgresql/data
+    networks:
+      - rwms-core
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rwms_dossier -d rwms_dossier"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     profiles: ["core"]
@@ -238,6 +257,7 @@ volumes:
   rwms-maintenance-db:
   rwms-media-db:
   rwms-inventory-db:
+  rwms-dossier-db:
   rwms-media-objects:
   rwms-kafka:
   rwms-rabbitmq:

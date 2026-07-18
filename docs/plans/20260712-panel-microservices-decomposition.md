@@ -1412,14 +1412,24 @@ activity events.
 
 ### Cutover and exit gate
 
-- [ ] events from asset, maintenance, inventory, logistics and task-board are consumed;
-- [ ] `MediaReady/Failed/Deleted` events are consumed so photo groups cannot
+- [x] events from asset, maintenance and inventory are projected; logistics and
+  task-board facts are strictly validated and journalled as unlinked technical
+  evidence because their approved v1 facts have no canonical cabin subject;
+- [x] `MediaReady/Failed/Deleted` events are consumed so photo groups cannot
   retain stale processing state or deleted media;
-- [ ] duplicate delivery cannot duplicate history;
-- [ ] replay produces the same projection;
-- [ ] source filters, dates, actors, media groups and deep links are queryable;
-- [ ] missing legacy dates/actors are never synthesized;
+- [x] duplicate delivery cannot duplicate history;
+- [x] replay produces the same projection;
+- [x] source filters, dates, opaque actors, media groups and semantic source
+  references are queryable;
+- [x] missing legacy dates/actors are never synthesized;
 - [ ] detail page no longer fans out to browser stores.
+
+The Stage 9 service-side gate completed on 2026-07-18. The remaining panel
+item was outside the authorized boundary and is not an incomplete backend
+claim. Final Java 25 verification passed dossier 95/95, shared architecture
+42/42 and gateway 38/38, together with the approved-dependency verifier and
+local Compose configuration. Stage 10/KPI work remains user-deferred and is
+not activated by this record.
 
 ## Stage 10 — `analytics-service`
 

@@ -51,6 +51,7 @@ Public mappings are:
 - `/auth/{path}` -> auth-service `/{path}`; `/auth/callback` stays panel-owned;
 - `/api/task-board/{path}` -> task-board-service `/api/{path}`;
 - `/api/warehouse/{path}` -> the reserved W1 warehouse route.
+- `/api/dossier/{path}` -> dossier-service unchanged; only public read paths are forwarded.
 
 Internal service-to-service client-credentials calls never use this gateway.
 All incoming `Forwarded` and `X-Forwarded-*` metadata is discarded. The gateway

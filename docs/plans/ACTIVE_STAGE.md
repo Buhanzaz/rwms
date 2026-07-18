@@ -2,16 +2,17 @@
 roadmap: docs/plans/20260712-panel-microservices-decomposition.md
 roadmap_status: APPROVED_WORKING_ROADMAP
 state: STAGE_9_DOSSIER_SERVICE
-status: CONTRACT_APPROVED_IMPLEMENTATION_AUTHORIZED
-sequence: F0 -> F1 -> F2 -> F3 -> F1C -> F4K -> F4MA -> F4MT -> F4A -> F4T -> F4R -> F4G -> W1 -> STAGE_2_TASK_BOARD_SERVICE -> STAGE_3_4_MEDIA_SERVICE -> STAGE_5_ASSET_SERVICE -> STAGE_6_MAINTENANCE_SERVICE -> STAGE_7_INVENTORY_SERVICE -> STAGE_8_LOGISTICS_SERVICE
+status: SERVICE_SIDE_COMPLETE_NEXT_GATE_DEFERRED
+sequence: F0 -> F1 -> F2 -> F3 -> F1C -> F4K -> F4MA -> F4MT -> F4A -> F4T -> F4R -> F4G -> W1 -> STAGE_2_TASK_BOARD_SERVICE -> STAGE_3_4_MEDIA_SERVICE -> STAGE_5_ASSET_SERVICE -> STAGE_6_MAINTENANCE_SERVICE -> STAGE_7_INVENTORY_SERVICE -> STAGE_8_LOGISTICS_SERVICE -> STAGE_9_DOSSIER_SERVICE
 service_owner: dossier-service
 delivery_owner: RWMS lead/reviewer
-next_state: STAGE_10_ANALYTICS_SERVICE
+next_state: STAGE_10_ANALYTICS_SERVICE_DEFERRED_NOT_AUTHORIZED
 ---
 
 # Active RWMS Implementation Stage
 
-This file is the only operational pointer for the currently authorized stage.
+This file is the only operational pointer for stage authority, completion and
+deferral.
 
 ## User-confirmed prior stages
 
@@ -463,11 +464,12 @@ closure/fix evidence is recorded by the containing scoped closure commit.
   cutover, location/accounting correction or post-departure reversal is
   claimed.
 
-## Active gate: `STAGE_9_DOSSIER_SERVICE`
+## Completed gate: `STAGE_9_DOSSIER_SERVICE`
 
 The user approved `docs/plans/20260718-dossier-service-contract.md` and the
-bounded service-side implementation. Stage 7 and Stage 8 are complete; Stage 9
-is now the sole active implementation gate.
+bounded service-side implementation. Stage 7, Stage 8 and the authorized
+service-side Stage 9 boundary are complete. No dossier panel cutover was
+authorized or performed.
 
 ### Allowed scope
 
@@ -490,6 +492,30 @@ is now the sole active implementation gate.
 - direct producer HTTP/database reads, inferred cabin subjects, free-form
   source text, signed media URLs or operational command-path dependencies;
 - Stage 10 analytics runtime or KPI implementation.
+
+### Stage 9 exit evidence
+
+- canonical OpenAPI, eleven accepted-source topic bindings, strict producer
+  schemas, sanitized DLT and cabin-activity publication schemas are present;
+- the isolated service owns Flyway V1 and fifteen dossier tables. Runtime
+  persistence, including inbox, checkpoints, replay, DLT and outbox, is Spring
+  Data JPA only; Hibernate validates and never creates or updates the schema;
+- real Kafka/PostgreSQL tests prove broker acknowledgement, retry after Kafka
+  outage, fail-closed consumer stop during database outage, JPA-health restart,
+  redelivery deduplication and sanitized DLT publication;
+- projection tests prove source ordering/gaps, direct and deferred cabin
+  association, media arrival-order convergence/lifecycle conflicts,
+  deterministic high-water replay/CAS activation, first-publication
+  concurrency and cabin-independent progress;
+- query/security tests prove composable filters, null-last stable cursors,
+  USER/scope/warehouse-VIEW enforcement, admin access, row filtering,
+  `PARTIAL` visibility and 404 anti-enumeration;
+- final Java 25 verification passed dossier 95/95, shared architecture 42/42
+  and gateway 38/38. The approved-dependency verifier and local Compose
+  configuration also passed; all three suites report zero failures, errors or
+  skipped tests;
+- the gateway route is stateless and exposes only the public read boundary.
+  No producer service, panel file or Stage 10 runtime was changed.
 
 ## Deferred next gate: `STAGE_10_ANALYTICS_SERVICE`
 

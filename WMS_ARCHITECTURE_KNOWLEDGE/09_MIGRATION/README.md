@@ -498,6 +498,11 @@ inactive replay generations and its transactional outbox. It must never depend
 on a source-service table, schema, shared JPA entity or cross-database foreign
 key, and it imports no browser/legacy history.
 
+The completed service-side implementation and final evidence are recorded in
+[`09_MIGRATION/dossier_service_stage9.md`](dossier_service_stage9.md). The
+backend boundary is complete; the browser dossier adapter was not cut over
+because panel changes were not authorized.
+
 ### Stage 10 analytics evidence boundary (2026-07-18)
 
 No `analytics-service` database, Flyway migration or JPA mapping is authorized

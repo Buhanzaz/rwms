@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import dev.buhanzaz.rwms.asset.domain.fixture.SharedAssetModel;
+import dev.buhanzaz.rwms.dossier.fixture.UnsafeDossierDependency;
 import dev.buhanzaz.rwms.inventory.fixture.SafeConstructorInjectedComponent;
 import dev.buhanzaz.rwms.inventory.fixture.UnsafeInventoryDependency;
 import dev.buhanzaz.rwms.logistics.fixture.UnsafeLogisticsDependency;
@@ -46,6 +47,17 @@ class ServiceBoundaryArchitectureTest {
     assertThrows(
         AssertionError.class,
         () -> ArchitectureRules.LOGISTICS_DOES_NOT_DEPEND_ON_OTHER_SERVICES.check(classes));
+  }
+
+  @Test
+  void rejectsDossierDependencyOnAnotherServiceModel() {
+    var classes =
+        new ClassFileImporter()
+            .importClasses(UnsafeDossierDependency.class, SharedAssetModel.class);
+
+    assertThrows(
+        AssertionError.class,
+        () -> ArchitectureRules.DOSSIER_DOES_NOT_DEPEND_ON_OTHER_SERVICES.check(classes));
   }
 
   @Test

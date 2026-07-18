@@ -37,6 +37,7 @@ final class ArchitectureRules {
     "dev.buhanzaz.rwms.maintenance..",
     "dev.buhanzaz.rwms.inventory..",
     "dev.buhanzaz.rwms.logistics..",
+    "dev.buhanzaz.rwms.dossier..",
     "dev.buhanzaz.rwms.media.."
   };
   private static final String[] NON_INVENTORY_SERVICE_PACKAGES = {
@@ -54,6 +55,16 @@ final class ArchitectureRules {
     "dev.buhanzaz.rwms.asset..",
     "dev.buhanzaz.rwms.maintenance..",
     "dev.buhanzaz.rwms.inventory..",
+    "dev.buhanzaz.rwms.media.."
+  };
+  private static final String[] NON_DOSSIER_SERVICE_PACKAGES = {
+    "dev.buhanzaz.rwms.auth..",
+    "dev.buhanzaz.rwms.taskboard..",
+    "dev.buhanzaz.rwms.warehouse..",
+    "dev.buhanzaz.rwms.asset..",
+    "dev.buhanzaz.rwms.maintenance..",
+    "dev.buhanzaz.rwms.inventory..",
+    "dev.buhanzaz.rwms.logistics..",
     "dev.buhanzaz.rwms.media.."
   };
 
@@ -106,6 +117,17 @@ final class ArchitectureRules {
           .dependOnClassesThat()
           .resideInAnyPackage(NON_LOGISTICS_SERVICE_PACKAGES)
           .because("logistics owns its models and integrates only through versioned transport contracts")
+          .allowEmptyShould(true);
+
+  static final ArchRule DOSSIER_DOES_NOT_DEPEND_ON_OTHER_SERVICES =
+      noClasses()
+          .that()
+          .resideInAPackage("dev.buhanzaz.rwms.dossier..")
+          .should()
+          .dependOnClassesThat()
+          .resideInAnyPackage(NON_DOSSIER_SERVICE_PACKAGES)
+          .because(
+              "dossier owns its projection model and consumes only versioned transport schemas")
           .allowEmptyShould(true);
 
   static final ArchRule SERVICES_DO_NOT_USE_FIELD_INJECTION =
