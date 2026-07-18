@@ -4,7 +4,10 @@ import {
   getRepairEstimateCatalogSection,
   saveRepairEstimateCatalogNode,
 } from "@/features/settings/estimates-repairs/api/repair-estimate-catalog-store"
-import type { RepairEstimateCatalogNodeMutation } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
+import type {
+  RepairEstimateCatalogNodeMutation,
+  RepairEstimateCatalogRequest,
+} from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
 
 const REPAIR_ESTIMATE_MATERIAL_CATALOG_SETTINGS: EstimateCatalogSettingsActionDto =
   {
@@ -22,29 +25,25 @@ export async function getRepairEstimateMaterialCatalogSettings() {
   return REPAIR_ESTIMATE_MATERIAL_CATALOG_SETTINGS
 }
 
-export async function getRepairEstimateMaterialCatalogMock(
-  warehouseId?: string
+export async function getRepairEstimateMaterialCatalog(
+  request: RepairEstimateCatalogRequest
 ) {
-  return getRepairEstimateCatalogSection("materials", warehouseId)
+  return getRepairEstimateCatalogSection(request, "materials")
 }
 
 export async function saveRepairEstimateMaterialCatalogItem(
-  input: RepairEstimateCatalogNodeMutation,
-  warehouseId?: string
+  request: RepairEstimateCatalogRequest,
+  input: RepairEstimateCatalogNodeMutation
 ) {
-  return saveRepairEstimateCatalogNode(
-    {
-      ...input,
-      nodeType: "MATERIAL",
-      furnitureCategory: false,
-    },
-    warehouseId
-  )
+  return saveRepairEstimateCatalogNode(request, {
+    ...input,
+    nodeType: "MATERIAL",
+  })
 }
 
 export async function deleteRepairEstimateMaterialCatalogItem(
-  id: string,
-  warehouseId?: string
+  request: RepairEstimateCatalogRequest,
+  id: string
 ) {
-  return deleteRepairEstimateCatalogNode(id, warehouseId)
+  return deleteRepairEstimateCatalogNode(request, id)
 }

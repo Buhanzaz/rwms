@@ -8,11 +8,6 @@ import {
 import type { User } from "oidc-client-ts"
 
 import { AuthContext, type AuthStatus } from "@/features/auth/auth-context"
-import {
-  DEV_AUTH_BYPASS_ENABLED,
-  DEV_AUTH_BYPASS_TOKEN,
-} from "@/features/auth/auth-config"
-import type { CurrentUser } from "@/features/auth/auth-model"
 import { getCurrentUser } from "@/features/auth/current-user-api"
 import {
   getSafeReturnTo,
@@ -24,42 +19,7 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Ошибка авторизации"
 }
 
-const developmentUser: CurrentUser = {
-  id: "00000000-0000-0000-0000-000000000001",
-  username: "local-admin",
-  displayName: "Локальный администратор",
-  firstName: "Локальный",
-  lastName: "администратор",
-  email: null,
-  principalType: "USER",
-  globalRole: "SYSTEM_ADMIN",
-  warehouseAccessAll: true,
-  warehouseAccesses: [],
-}
-
-function DevelopmentAuthProvider({ children }: { children: ReactNode }) {
-  return (
-    <AuthContext.Provider
-      value={{
-        status: "authenticated",
-        accessToken: DEV_AUTH_BYPASS_TOKEN,
-        currentUser: developmentUser,
-        error: null,
-        beginLogin: async () => undefined,
-        completeLogin: async () => "/",
-        logout: async () => undefined,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  )
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  if (DEV_AUTH_BYPASS_ENABLED) {
-    return <DevelopmentAuthProvider>{children}</DevelopmentAuthProvider>
-  }
-
   return <OidcAuthProvider>{children}</OidcAuthProvider>
 }
 

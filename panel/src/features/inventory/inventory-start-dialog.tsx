@@ -15,8 +15,8 @@ import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 type InventoryStartDialogProps = {
   open: boolean
   warehouseName: string
-  authorName?: string
-  businessDate?: string
+  authorName: string
+  businessDate: string
   pending: boolean
   error: string | null
   onOpenChange: (open: boolean) => void
@@ -26,6 +26,8 @@ type InventoryStartDialogProps = {
 export function InventoryStartDialog({
   open,
   warehouseName,
+  authorName,
+  businessDate,
   pending,
   error,
   onOpenChange,
@@ -52,10 +54,22 @@ export function InventoryStartDialog({
               {warehouseName}
             </p>
           </Field>
-          <Field>
-            <FieldLabel>Дата и инициатор</FieldLabel>
-            <p className="text-sm text-muted-foreground">
-              Будут определены сервером из склада и Bearer-сессии.
+          <Field aria-labelledby="inventory-start-author-label">
+            <FieldLabel id="inventory-start-author-label">Автор</FieldLabel>
+            <p
+              data-testid="inventory-start-author-value"
+              className="pointer-events-none flex h-9 w-full min-w-0 items-center rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs select-none md:text-sm dark:bg-input/30"
+            >
+              {authorName}
+            </p>
+          </Field>
+          <Field aria-labelledby="inventory-start-date-label">
+            <FieldLabel id="inventory-start-date-label">Дата</FieldLabel>
+            <p
+              data-testid="inventory-start-date-value"
+              className="pointer-events-none flex h-9 w-full min-w-0 items-center rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-xs select-none md:text-sm dark:bg-input/30"
+            >
+              {businessDate}
             </p>
           </Field>
         </FieldGroup>

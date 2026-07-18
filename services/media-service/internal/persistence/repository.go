@@ -40,6 +40,51 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool, now: time.Now}
 }
 
+// AcquireUploadSessionContentLock serializes byte ingress for one upload
+// session across every media-service instance. The session-level advisory lock
+// is held on a dedicated pooled connection while the bounded object stream is
+// written and finalized, preventing concurrent requests from creating two
+// accepted immutable versions for the same session.
+func (repository *Repository) AcquireUploadSessionContentLock(
+	ctx context.Context,
+	sessionID uuid.UUID,
+) (func() error, error) {
+	connection, err := repository.pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	lockName := "media-upload-session-content:" + sessionID.String()
+	if _, err := connection.Exec(ctx, `select pg_advisory_lock(hashtextextended($1,0))`, lockName); err != nil {
+		connection.Release()
+		return nil, err
+	}
+	released := false
+	return func() error {
+		if released {
+			return nil
+		}
+		released = true
+		releaseContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var unlocked bool
+		unlockErr := connection.QueryRow(releaseContext,
+			`select pg_advisory_unlock(hashtextextended($1,0))`, lockName).Scan(&unlocked)
+		if unlockErr == nil && unlocked {
+			connection.Release()
+			return nil
+		}
+		rawConnection := connection.Hijack()
+		closeErr := rawConnection.Close(releaseContext)
+		if unlockErr != nil {
+			return unlockErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		return fmt.Errorf("upload session advisory lock was not held")
+	}, nil
+}
+
 type AssetRecord struct {
 	ID                uuid.UUID
 	OwnerType         string
@@ -694,9 +739,8 @@ func (repository *Repository) GetAssetScoped(ctx context.Context, mediaID uuid.U
 	return asset, nil
 }
 
-// ReadOriginal keeps the owner binding locked through signed-URL preparation.
-// Asset metadata and the exact current-generation original are fetched by one
-// authorization-bearing SQL statement.
+// ReadOriginal fetches asset metadata and the exact current-generation
+// original with one authorization-bearing SQL statement.
 func (repository *Repository) ReadOriginal(
 	ctx context.Context,
 	mediaID uuid.UUID,
@@ -763,6 +807,88 @@ func (repository *Repository) ReadOriginal(
 		original = &variant
 	}
 	if err := consume(asset, original); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// ReadCurrentVariant selects one exact derived variant only when the requested
+// generation is still current. Owner mismatch, revoked proof and stale
+// generation remain indistinguishable from an absent media resource.
+func (repository *Repository) ReadCurrentVariant(
+	ctx context.Context,
+	mediaID uuid.UUID,
+	ownerType, ownerID string,
+	warehouseID uuid.UUID,
+	generation int,
+	requestedVariant media.Variant,
+	consume func(AssetRecord, *VariantRecord) error,
+) error {
+	if consume == nil || generation <= 0 {
+		return ErrConflict
+	}
+	switch requestedVariant {
+	case media.VariantSmall, media.VariantMedium, media.VariantLarge:
+	default:
+		return ErrConflict
+	}
+	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var asset AssetRecord
+	var hasVariant bool
+	var variant VariantRecord
+	var variantName string
+	err = tx.QueryRow(ctx, `/* media_public_current_variant_read */
+		select a.media_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
+			a.original_file_name,a.original_content_type,a.source_object_key,
+			coalesce(a.source_version_id,''),coalesce(a.source_etag,''),coalesce(a.source_checksum_sha256,''),
+			a.processing_status,a.version,a.current_generation,a.rotation_degrees,
+			a.sort_order,a.size_bytes,a.created_at,
+			(variant.media_id is not null),coalesce(variant.variant,''),
+			coalesce(variant.object_key,''),coalesce(variant.object_version_id,''),
+			coalesce(variant.content_type,''),coalesce(variant.size_bytes,0),
+			variant.width,variant.height,coalesce(variant.checksum_sha256,'')
+		from media_asset a
+		join media_owner_binding binding on binding.owner_type=a.owner_type
+		 and binding.owner_id=a.owner_id and binding.warehouse_id=a.warehouse_id and binding.active
+		join media_consumer_aggregate_checkpoint checkpoint
+		 on checkpoint.consumer_name=binding.proof_consumer_name
+		and checkpoint.aggregate_type=binding.proof_aggregate_type
+		and checkpoint.aggregate_id=binding.proof_aggregate_id
+		and checkpoint.aggregate_version>=binding.proof_aggregate_version
+		left join media_variant variant on variant.media_id=a.media_id
+		 and variant.generation=$5 and variant.variant=$6
+		where a.media_id=$1 and a.owner_type=$2 and a.owner_id=$3 and a.warehouse_id=$4
+		 and a.current_generation=$5 and a.deleted_at is null and media_asset_is_available(a.media_id)
+		 and not exists (select 1 from media_quarantined_aggregate quarantine
+			where quarantine.consumer_name=binding.proof_consumer_name
+			  and quarantine.aggregate_type=binding.proof_aggregate_type
+			  and quarantine.aggregate_id=binding.proof_aggregate_id
+			  and quarantine.reconciled_at is null)
+		for share of binding`, mediaID, ownerType, ownerID, warehouseID, generation,
+		requestedVariant).Scan(
+		&asset.ID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
+		&asset.FileName, &asset.ContentType, &asset.SourceObjectKey, &asset.SourceVersionID,
+		&asset.SourceETag, &asset.SourceChecksum, &asset.Status, &asset.Version,
+		&asset.Generation, &asset.Rotation, &asset.SortOrder, &asset.SizeBytes,
+		&asset.CreatedAt, &hasVariant, &variantName, &variant.ObjectKey,
+		&variant.ObjectVersionID, &variant.ContentType, &variant.SizeBytes, &variant.Width,
+		&variant.Height, &variant.Checksum)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	var selected *VariantRecord
+	if hasVariant {
+		variant.Variant = media.Variant(variantName)
+		selected = &variant
+	}
+	if err := consume(asset, selected); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

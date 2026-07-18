@@ -76,9 +76,9 @@ paths:
         - { $ref: '#/components/parameters/WarehouseId' }
       responses:
         '200': { $ref: '#/components/responses/SessionDetailResponse' }
+        '204': { description: The warehouse has no active inventory session. }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
   /api/inventory/v1/sessions/{inventoryId}:
     parameters:
       - { $ref: '#/components/parameters/InventoryId' }

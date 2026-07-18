@@ -1,383 +1,294 @@
 # AGENTS.md
 
-# RWMS Terra Delivery Rules
+# RWMS Panel-to-Services Development Rules
 
-## Product And Stack
+## Current Objective
 
-RWMS is an actively developed warehouse and rental-management product. The
-target is a staged microservice platform, not a screen-for-screen Jmix rewrite
-and not a service per React route.
+The current RWMS development objective is the migration described in
+[`docs/plans/20260718-panel-mocks-to-services-transition.md`](docs/plans/20260718-panel-mocks-to-services-transition.md):
+move the real user flows in `panel/` from browser mocks and browser-owned
+business state to the existing RWMS services.
 
-Current baseline:
+`panel/` is the only primary panel. Do not restore or run
+`wms-panel-old/` as a second UI. Historical stages, roadmaps and completed
+claims are context only; they do not block a user-directed panel or service
+cutover.
 
-- `panel`: React 19, TypeScript, Vite 8, React Router, TanStack Query/Table,
-  dnd-kit, Tailwind CSS v4 and shadcn/ui (`radix-mira`, Hugeicons);
-- Spring services: Spring Boot 4.1, Java 25, Gradle Kotlin multi-module, JPA and
-  PostgreSQL;
-- schema policy: JPA mappings define the application model and Flyway is the
-  sole target schema migration/version/checksum mechanism; Liquibase is
-  forbidden;
-- authentication: OAuth2/OIDC Authorization Code + PKCE for the panel and
-  Bearer JWT for APIs;
-- integration transition: RabbitMQ is the implemented F0/F2 baseline and target
-  Spring integration moves to Kafka 4.3.1 through F4; an isolated Rabbit
-  media-compat path remains only until the verified combined Stage 3–4 Go
-  media-service cutover; object storage: MinIO;
-- common edge: stateless Spring API gateway; the combined Stage 3–4
-  `media-service` is one stateful Go deployable with in-process transformations.
+The direct user command selects the flow or plan task to execute. Do not start
+later waves, commit, advance a historical stage or implement an unrelated
+service without a direct request.
 
-The verified F4K platform foundation uses Spring Cloud 2025.1.2, Spring Cloud
-Stream 5.0.2, Kafka 4.3.1, Lombok 1.18.46 and MapStruct 1.6.3. Kafka business
-publication and service-local event-sourced cutovers remain staged in F4A/F4T;
-F4K by itself does not make either application deployable event-driven.
+While Wave 0 in the migration plan is incomplete, foundation work is
+sequential: restore a green panel build, enforce gateway-only browser URLs and
+make the local all-services runtime coherent before parallel coding.
 
-Development authentication bypasses and browser mocks are development-only.
-Production always remains fail-closed.
-
-## Service-Only Delivery Boundary
-
-RWMS work ends at the application-service boundary. We implement and verify
-services, contracts, migrations, and local development/test dependencies; we
-do not deploy RWMS. Do not modify panel code unless the user explicitly
-expands a task beyond service-side scope.
-
-Do not add, retain, operate, or validate VPS/VM provisioning, Kubernetes, Helm,
-Kind, Terraform, Ansible, Docker Swarm, Compose `deploy` settings, CI/CD release
-pipelines, ingress/TLS, hosting topology, or production operations runbooks.
-`compose.yaml` is allowed only as an isolated local development/test dependency
-definition for services and must never be treated as a deployment manifest or
-stage exit gate. Testcontainers and local profiles remain allowed when a service
-test needs them.
-
-## Authority And Active Stage
+## Authority
 
 Use authority in this order:
 
-1. approved current product requirements;
-2. [`docs/plans/ACTIVE_STAGE.md`](docs/plans/ACTIVE_STAGE.md);
-3. the active staged roadmap
-   [`docs/plans/20260712-panel-microservices-decomposition.md`](docs/plans/20260712-panel-microservices-decomposition.md);
-4. durable decisions in `WMS_ARCHITECTURE_KNOWLEDGE`;
-5. current target code and tests;
-6. `wms-panel-old` and `old_db` as read-only legacy evidence.
+1. the current direct user command;
+2. this file;
+3. current code and canonical schemas under `contracts/`;
+4. the current migration plan;
+5. safety, security and data-integrity constraints;
+6. historical plans and architecture records as context only.
 
-`ACTIVE_STAGE.md` is the sole operational stage pointer. Do not duplicate its
-literal state in this file, the roadmap, or architecture memory. Before editing,
-read its allowed scope, forbidden scope, and exit gate. A roadmap entry does not
-prove implementation or authorize future-stage work.
+Do not edit `docs/plans/ACTIVE_STAGE.md` or rewrite historical stage claims
+unless the user explicitly asks. `old_db/` is read-only evidence unless the
+user explicitly authorizes a concrete data operation.
 
-Never modify `wms-panel-old` or `old_db`. When no approved decision or evidence
-proves behavior, record `UNKNOWN`; do not infer a contract from a browser DTO,
-localStorage/IndexedDB envelope, seed ID, or Jmix framework shape.
+## Stack And Target Boundaries
 
-## Foundation And Stage Order
-
-The mandatory foundation sequence is
-`F0 → F1 → F2 → F3 → F1C → F4K → F4MA → F4MT → F4A → F4T → F4R → F4G → W1`:
-
-- F0 establishes migration backups, the historical reviewed SQL release tooling, technical
-  contracts, the common starter, and RabbitMQ without changing an application
-  deployable;
-- F1 changes only `auth-service`;
-- F2 changes only `task-board-service`;
-- F3 creates only the stateless `api-gateway-service`;
-- F1C changes only `auth-service` so W1 can activate canonical warehouse-ID
-  validation without another auth-service rebuild;
-- F4K changes no application deployable and establishes Java tooling, Kafka,
-  Cloud Stream, event-store conventions and migration tests;
-- F4MA changes only `auth-service`, replaces its historical custom schema
-  runner with Flyway, and proves cumulative baseline version 2 without starting
-  event sourcing;
-- F4MT changes only `task-board-service`, replaces its historical custom schema
-  runner with Flyway, and proves cumulative baseline version 4 without starting
-  F4T event sourcing;
-- F4A changes only `auth-service` and event-sources its approved non-secret
-  authorization aggregates through Flyway migration version 3;
-- F4T changes only `task-board-service` and event-sources its approved domain
-  aggregates through Flyway migration version 5 while preserving HTTP
-  concurrency/idempotency contracts;
-- F4R retires RabbitMQ from target Spring/task-board integration after Kafka
-  parity is proved. It preserves an isolated media-compat Rabbit runtime for
-  the unchanged legacy Go worker until the combined Stage 3–4 media-service
-  cutover and deletes no historical DB evidence;
-- F4G changes only `api-gateway-service` while completing observability across
-  the three existing deployables without giving the gateway domain state;
-- W1 implements Stage 1 `warehouse-service`.
-
-The active ten-stage roadmap then proceeds one deployable at a time:
-
-| Stage | Single deployable | Canonical ownership |
-|---|---|---|
-| 1 | `warehouse-service` | warehouse identity, metadata and timezone |
-| 2 | `task-board-service` | production parity for queues, workforce, schedules, tasks, pauses, interruptions and worker inbox |
-| 3–4 | `media-service` | stateful Go upload/finalize, metadata, provenance, variants, access, retention and in-process transformations |
-| 5 | `asset-service` | cabins, statuses, equipment, balances, contents, holds, leases and write-offs |
-| 6 | `maintenance-service` | repair catalog, estimates, repairs, acceptance and rework |
-| 7 | `inventory-service` | inventory sessions, findings, completion and publication intents |
-| 8 | `logistics-service` | returns, shipments, transfers and accounting corrections |
-| 9 | `dossier-service` | append-only cross-domain cabin activity projection and replay |
-| 10 | `analytics-service` | read-only dashboard, KPI and operational projections |
-
-Do not scaffold, change contracts for, or implement a future stage early.
-
-## Stage Lifecycle
-
-Every deployable stage is completed in this order:
-
-1. **Evidence** — inspect panel ports/stores, current tests, legacy/database
-   evidence, previous migration artifacts, and unresolved decisions.
-2. **Contract** — approve ownership, state machine, OpenAPI/events, errors,
-   scopes, idempotency, concurrency, and migration mapping.
-3. **Database** — create the service-owned PostgreSQL database, versioned
-   Flyway baseline/migrations, constraints, outbox, and required inbox tables.
-4. **Implementation** — implement only the active service. Panel port/adapter
-   changes require explicit user authorization.
-5. **Cutover** — switch affected production clients to HTTP/events; mocks remain
-   only explicit development fixtures.
-6. **Tests** — run domain, authorization, Testcontainers, contract,
-   concurrency, failure/retry, migration, panel, and affected Playwright tests.
-7. **Memory** — reconcile numbered sections, `09_MIGRATION`, history, decisions,
-   and `UNKNOWN`s.
-8. **Commit** — independently review and create one scoped human commit.
-
-The next gate starts only after the current exit gate and commit are complete.
-
-## Schema Management With Flyway
-
-- Liquibase is prohibited in target services. Flyway is the sole target schema
-  migration, version-history and checksum authority.
-- For stateful Spring services, JPA/Hibernate mappings remain the application
-  model source, but Hibernate never creates, updates or drops target schemas in
-  development, test or production. Every Spring target profile uses
-  `hibernate.ddl-auto=validate`. The combined Go media-service uses native Go
-  persistence and its own schema verification instead of JPA/Hibernate.
-- Each service owns its Flyway locations and `flyway_schema_history`; migrations
-  are immutable, ordered and applied before Spring JPA validation or the
-  service-native Go schema verification.
-- New databases install from the approved cumulative schema migration followed
-  by every later versioned migration. Existing databases are baselined
-  explicitly at the proven current schema version before later migrations run.
-- `baselineOnMigrate` is always false. An operator or controlled deployment step
-  must perform the explicit baseline; an application must never silently adopt
-  a non-empty unversioned schema.
-- F4MA adopts Flyway in `auth-service`: a new database installs cumulative
-  `V2__auth_schema.sql`; a restored existing auth database is explicitly
-  baselined at version `2`. F4A later owns `V3__auth_event_sourcing.sql`.
-- F4MT adopts Flyway in `task-board-service`: a new database installs cumulative
-  `V4__task_board_schema.sql`; a restored existing task-board database is
-  explicitly baselined at version `4`. F4T later owns
-  `V5__task_board_event_sourcing.sql`.
-- Every migration gate proves clean install, previous-version upgrade, repeat
-  safety, Flyway checksum drift rejection and either Spring JPA validation or
-  service-native Go schema verification.
-- Destructive changes use expand/contract migrations. Rollback uses the verified
-  pre-migration backup or reviewed compensating migration; Flyway repair is not
-  a substitute for rollback review.
-- Historical `database/releases`, `rwms_schema_history` and
-  `databasechangelog*` evidence is retained read-only until a separate reviewed
-  cleanup. Migration work must never delete current data implicitly.
+- Panel: React 19, TypeScript, Vite 8, React Router, TanStack Query/Table,
+  Tailwind CSS v4, shadcn/ui and Hugeicons.
+- Spring services: Spring Boot 4.1, Java 25, Gradle Kotlin multi-module,
+  Spring Data JPA and PostgreSQL.
+- Schema authority: Flyway only. Liquibase is forbidden.
+- Authentication: OAuth2/OIDC Authorization Code + PKCE for the panel and
+  locally validated Bearer JWTs for APIs.
+- Messaging and objects: Kafka 4.3.1 and MinIO.
+- Edge: stateless Spring API gateway.
+- Media: one stateful Go `media-service`; do not create a separate target
+  photo-processing deployable.
 
 Every stateful service owns one PostgreSQL database. Cross-database foreign
-keys, joins, shared tables, shared JPA entities, and shared mutable domain models
+keys, joins, shared tables, shared JPA entities and shared mutable domain models
 are forbidden.
 
-## Shared Platform Boundaries
+## Flow Ownership
 
-`platform:technical-contracts` may contain only immutable framework-neutral
-technical records such as Problem Details, pagination, event envelopes, actor
-snapshots, and correlation metadata. It must contain no Spring/JPA dependency,
-business DTO, domain enum, repository, entity, or aggregate.
+Use existing services rather than creating opportunistic replacements:
 
-`platform:spring-boot-starter` may provide conditional technical
-auto-configuration for Jackson/UTC, correlation IDs, Problem Details,
-issuer/audience validation, Kafka/Cloud Stream, observability, and production
-JPA safety. RabbitMQ auto-configuration may remain only until F4R cutover.
-It must not create a `SecurityFilterChain`, embed secrets/URLs, or encode domain
-authorization rules.
+| Flow | Owner |
+| --- | --- |
+| Login, users, roles, warehouse access | `auth-service` |
+| Warehouse identity and metadata | `warehouse-service` |
+| Cabins, status, equipment, balances, holds and leases | `asset-service` |
+| Queues, workforce and operational board | `task-board-service` |
+| Catalog, estimates, repairs, acceptance and write-off decisions | `maintenance-service` |
+| Inventory sessions, findings, completion and publication | `inventory-service` |
+| Returns, shipments, transfers and their orchestration | `logistics-service` |
+| Media metadata, upload/finalize, originals and transformations | `media-service` |
+| Cross-domain cabin activity | read-only `dossier-service` projection |
 
-Use a version catalog and Gradle convention plugin for annotation processing.
-`platform:technical-contracts` must remain free of Lombok, MapStruct, Spring,
-JPA and Kafka. Lombok is encouraged for safe boilerplate reduction, but JPA
-entities must not use `@Data`, Lombok builders, generated
-`equals/hashCode/toString`, or setters for IDs, versions, timestamps and domain
-invariants. Records remain records. MapStruct uses Spring component model,
-constructor injection and `unmappedTargetPolicy=ERROR`; it maps
-projection/entity reads to DTOs and sanitized integration payloads only. It
-must not perform request-to-entity mutation, security/secret mapping,
-optimistic-version mutation, outbox/checksum construction or domain
-transitions. Architecture tests enforce these rules.
+`api-gateway-service` owns no database, Kafka participation, token storage or
+business aggregation. `dossier-service` never owns commands.
 
-F4K adds a side-by-side framework-neutral `DomainEventEnvelopeV2`: nullable
-`occurredAt`, mandatory `recordedAt`, and a sanitized opaque actor reference
-without display name, login, email or other PII. Existing Rabbit V1
-`EventEnvelope` and `ActorSnapshot` fields/JSON remain unchanged; do not
-perform a breaking in-place mutation. F4R may isolate the V1 compatibility
-contract with the media-compat runtime, but it must remain available to the
-unchanged legacy Go worker until the verified combined Stage 3–4 media-service
-cutover.
+## Definition Of A Cutover
 
-Store canonical transport schemas under `contracts/openapi` and
-`contracts/events`. Schemas, not shared Java domain models, are the cross-service
-source of truth. Generated clients remain service-local build outputs.
+Each requested flow is delivered as one vertical slice:
 
-## Event Sourcing, Kafka And Distributed Consistency
+1. inspect the current panel behavior, its port/adapter/store and the owning
+   service;
+2. compare every required action with the canonical OpenAPI/event contract;
+3. add the smallest owning-service contract/implementation change only when a
+   real gap is proven;
+4. connect the panel through the public same-origin gateway route;
+5. remove the replaced browser adapter, storage, seed, mock selector,
+   compatibility shim and mock-only tests in the same task;
+6. run focused validation and report the exact result.
 
-- RabbitMQ `rwms.domain.v1` is a completed F0/F2 historical fact, not erased
-  from migration evidence. F4 migrates target Spring integration to Kafka; F4R
-  removes AMQP from task-board/common Spring runtime only after write freeze,
-  outbox drain/retarget, Kafka lag and inbox parity. The isolated
-  media-compat Rabbit path remains until the verified combined Stage 3–4
-  media-service cutover.
-- PostgreSQL service-local event stores are authoritative for non-secret domain
-  state. Kafka is transport and is never the canonical archive.
-- Stateful event-sourced services own append-only `domain_event`,
-  `event_stream_head`, snapshots, projection checkpoints, transactional outbox,
-  inbox and consumer aggregate checkpoints. Append, synchronous projection and
-  outbox write occur in one PostgreSQL transaction with stream CAS.
-- Kafka topics are aggregate-family topics, keyed by `aggregateId`, so every
-  aggregate's events preserve order. Exact versioned facts remain in
-  `eventType`; separate created/cancelled topics for one aggregate are forbidden.
-- Producers publish only through a service-owned transactional outbox using
-  Cloud Stream `StreamBridge`; a row is marked published only after broker ack.
-- Consumers use Cloud Stream functional consumers and own inbox deduplication
-  keyed by `eventId`; effect, inbox and checkpoint commit in one DB transaction.
-- Kafka uses `acks=all`, producer idempotence and Zstd. Consumers receive the
-  first attempt plus three bounded retries at 1s/2s/4s, then a consumer-owned
-  DLT. Validation failures are not retried; transient infrastructure failures
-  are. Infinite requeue is forbidden.
-- Aggregate version gaps quarantine that aggregate and block later effects
-  until reconciliation. Topic auto-creation is local-development only.
-- Delivery is at-least-once; duplicate effects must be harmless.
+Keep one production implementation per flow. Do not introduce a compatibility
+flag, dual-write, silent fallback or a second runtime merely to preserve old
+code.
+
+Browser `localStorage`/IndexedDB data is fixture or recovery evidence, not
+trusted PostgreSQL migration input. Do not import it automatically.
+
+Local storage is acceptable only for non-authoritative UI preferences such as
+theme, the last service-issued warehouse UUID and table/grid presentation.
+
+## Panel And Gateway Rules
+
+- Browser requests use same-origin `/auth/**` and `/api/**` only.
+- Do not put internal service origins or `localhost:<service-port>` into panel
+  runtime configuration.
+- The browser never calls `/api/internal/**` or private service routes.
+- Missing token, gateway configuration or service is an error; production does
+  not fall back to a mock.
+- Use the shared Bearer client and map Problem Details consistently.
+- Mutable commands use `expectedVersion` or ETag and show a consistent
+  conflict result for `409`.
+- Retried creates/effects use `Idempotency-Key` or a stable domain external
+  ID.
+- The panel may combine independent public read projections. The gateway must
+  not aggregate business responses.
+- Preserve the transferred panel UX where it matches proved domain semantics.
+  Hide or mark unavailable a control whose service contract is undefined;
+  never fabricate success or data.
+
+## Spring Data, Flyway, Lombok And MapStruct
+
+Use Spring Data JPA for stateful Spring service persistence. When a task changes
+an entity, repository or projection, apply the `spring-data-jpa` rules before
+editing.
+
+- JPA mappings define the application model; Hibernate never creates, updates
+  or drops the target schema.
+- Every target profile uses `hibernate.ddl-auto=validate`.
+- Flyway migrations are immutable, ordered and service-local.
+- `baselineOnMigrate` remains false; non-empty legacy schemas require an
+  explicit proven baseline.
+- Destructive schema changes use expand/contract. Never delete data or volumes
+  as an implicit migration step.
+- Run a clean install or the affected upgrade path plus JPA validation when a
+  migration changes.
+
+Lombok is encouraged for safe boilerplate reduction, but JPA entities must not
+use `@Data`, Lombok builders, generated `equals/hashCode/toString`, or
+generated setters for IDs, versions, timestamps and domain invariants. Records
+remain records.
+
+MapStruct is required where a touched Spring boundary maps entity/projection
+reads to DTOs or sanitized integration payloads. Use Spring component model,
+constructor injection and `unmappedTargetPolicy=ERROR`. Do not use MapStruct
+for request-to-entity mutation, security/secret mapping, version mutation,
+outbox/checksum construction or domain transitions.
+
+`platform:technical-contracts` remains framework-neutral and contains no JPA,
+Spring, Kafka or business-domain model. Canonical transport schemas live under
+`contracts/openapi` and `contracts/events`.
+
+## Service And Event Rules
+
+- A service owns its aggregate transitions and server-side orchestration.
+  Browser sagas must be removed during their flow cutover.
+- Internal service-to-service calls use private addresses and appropriate
+  service credentials, not the public gateway.
+- PostgreSQL event stores and projections are authoritative; Kafka is
+  transport, not an archive or database.
+- Preserve transactional outbox/inbox, aggregate-key ordering, deduplication
+  and version-gap handling when a touched service already uses them.
+- Delivery is at-least-once and effects must be idempotent.
 - 2PC is forbidden. The initiating service owns saga state and compensation.
-- REST returns immediate operator outcomes; events carry committed facts and
-  downstream projection/effect requests.
-- Kafka transactions and `ChainedTransactionManager` do not replace the
-  PostgreSQL outbox. Kafka retention does not replace indefinite event-store
-  replay.
+- Remove RabbitMQ compatibility runtime/config/tests when its directed Kafka
+  or combined media replacement is complete; do not keep a parallel path.
 
-Messaging topology does not transfer domain ownership. `api-gateway-service`
-is stateless and does not own a database, Kafka binder, event store,
-outbox/inbox, consume domain events, or publish them.
+## Agent Policy: One By Default, Up To Four For Parallel Waves
 
-## Service And Data Boundaries
+Use one primary agent by default.
 
-- Mutable commands require optimistic concurrency (`expectedVersion` or ETag)
-  and a consistent `409` response.
-- Retried create/effect commands require `Idempotency-Key` or a stable domain
-  external ID.
-- JWT is validated locally by issuer/audience; auth-service is not called on
-  each request.
-- `auth-service` owns credentials, clients, roles, and warehouse access grants,
-  but only opaque warehouse IDs.
-- `asset-service` owns canonical cabin status, physical equipment balances,
-  holds, and cabin operation leases/fencing tokens.
-- `maintenance-service`, `inventory-service`, and `logistics-service` own their
-  workflows and store only opaque lease/hold references and snapshots.
-- the combined stateful Go `media-service` owns media metadata,
-  original-access decisions and in-process object transformations; no separate
-  target photo-processing deployable exists.
-- `dossier-service` and `analytics-service` are projections, never command
-  owners.
+For a genuinely parallel implementation wave, the primary agent may start up
+to three additional coding agents, so no more than four agents are active in
+normal development. Additional agents must not create their own subagents.
+More than four active agents requires an explicit user request. Four is a cap,
+not a target: do not fill slots when the work is sequential or shares files.
 
-## API Gateway And Panel Strangler
+Start each additional agent only when all of the following are true:
 
-These rules apply only when the user explicitly authorizes panel work. The
-default task scope remains service-side.
+- the new task and all active tasks are concrete coding tasks, not discovery
+  or planning;
+- their file ownership is explicit and non-overlapping;
+- neither task waits on an unfinished contract from the other;
+- both can run useful focused verification independently;
+- parallel work materially shortens the requested delivery.
 
-The gateway is a stateless Spring Cloud Gateway Server MVC edge. It owns no DB,
-message-bus participation, token storage/exchange, or business aggregation. It
-validates external Bearer tokens, while downstream services validate them
-again. Internal service-to-service calls use private addresses and
-client-credentials, not the gateway.
+Never create separate discovery, reviewer, QA, memory, status, documentation or
+commit agents. The coding agent that changes a flow writes its tests and runs
+its focused checks. The primary agent owns integration and the final report.
 
-Preserve the current UI while replacing one adapter at a time:
+Before starting any additional agent, state:
 
-`browser store → feature port → versioned HTTP client → production cutover`.
+- its exact outcome;
+- exclusive files/directories;
+- frozen inputs/contracts;
+- files it must not touch;
+- required validation.
 
-- Components never access localStorage/IndexedDB directly.
-- Production missing service/config/token is an error; never fall back to a
-  browser mock.
-- Browser data is fixture/recovery evidence, not production migration input.
-- Reuse the dashboard shell, `PageToolbar`, `OperationsListGrid`,
-  `PhotoCarousel`, route/back helpers, shadcn primitives, and feature boundaries.
-- Preserve shared grid sorting, resizing, visibility/order, row height, and
-  desktop-grid/mobile-card behavior.
+One owner at a time is mandatory for:
 
-## Durable Project Memory
+- `AGENTS.md`, the migration plan, `App.tsx`, `app-sidebar.tsx`,
+  `gateway-config.ts` and root `compose.yaml`;
+- one service's OpenAPI file, Flyway directory or JPA aggregate;
+- the current monolithic logistics API until it is split into non-overlapping
+  flow directories.
 
-Before every task read:
+Safe parallel lanes after Wave 0 include:
 
-1. `WMS_ARCHITECTURE_KNOWLEDGE/README.md`;
-2. `10_AGENT_MEMORY/history.md`, `decisions.md`, and `unknowns.md`;
-3. the relevant numbered domain section;
-4. `09_MIGRATION`, the active roadmap, and `ACTIVE_STAGE.md`.
+- warehouse/asset core;
+- task-board settings and operational board;
+- media integration;
+- maintenance catalog, provided its files do not overlap the selected first
+  media consumer.
 
-Tie claims to paths, tests, commands, schemas, or runtime observations. Label
-legacy fact, target fact, approved decision, mock-only behavior, and `UNKNOWN`.
-After each task update history, relevant numbered sections, `09_MIGRATION`, and
-durable decisions/unknowns without deleting audit history.
+These four lanes may run in one wave when their prerequisites and exclusive
+ownership are already fixed. In the next wave, inventory and maintenance
+lifecycle may run together; the remaining slots are used only for another
+dependency-ready vertical or primary-agent integration work.
 
-## Terra Multi-Agent Workflow
+Logistics decomposition and contract ownership remain sequential. After its
+code is split and the OpenAPI is frozen, returns, shipments and transfers may
+run as three independent panel tasks while one backend owner retains exclusive
+ownership of logistics-service/OpenAPI/Flyway. Dossier final integration comes
+after real producer facts.
 
-All roles use `GPT-5.6-Terra`; choose reasoning effort by complexity. The
-lead/reviewer owns scope, stage enforcement, integration, verification, memory,
-and commits. Backend owns Spring/Go, JPA, security, contracts, and backend tests.
-Frontend owns panel/adapters/responsive UI. Legacy/domain is read-only evidence.
-QA independently reviews behavior, security, concurrency, and test evidence.
+Agents work in the shared worktree, preserve user/concurrent edits, never
+revert another agent's changes and do not commit unless explicitly assigned.
+Each additional agent reports changed files, checks run and remaining risks.
 
-Give each subagent bounded, non-overlapping file ownership. Shared-worktree edits
-are visible immediately: preserve user/concurrent changes and never revert them.
-Subagents do not commit unless explicitly assigned. Reports list changed files,
-verification, risks, and memory-ready evidence.
+## Focused Verification
 
-## Verification
+Run the narrowest checks that cover the final diff. Never claim a check that
+was not executed.
 
-Run checks against the final diff and all completed gates. Never claim an
-unexecuted check.
+- Panel change: affected Vitest tests plus `npm run typecheck`; add lint/build
+  when the changed boundary requires them.
+- Spring change: affected module/package tests or compile check.
+- Contract change: owning contract validation and focused controller/client
+  compatibility test.
+- Migration change: affected Flyway install/upgrade path and JPA validation.
+- Go media change: affected package tests/build.
+- Auth, authorization, concurrency and integration changes: add the smallest
+  targeted success and failure checks.
 
-- `panel` (only when explicitly authorized): `npm run typecheck`, `npm run
-  lint`, `npm run build`, affected tests, and Playwright desktop/tablet/mobile.
-- Spring service: its Gradle test task, Testcontainers PostgreSQL Flyway
-  clean-install/explicit-baseline-upgrade/repeat/checksum/JPA-validate tests,
-  auth and concurrency tests.
-- Kafka producer/consumer: contract, aggregate ordering, duplicate, retry,
-  DLT/quarantine, ack, outbox, inbox, version-gap and outage recovery tests.
-- Event sourcing: deterministic baseline, CAS/concurrency, multi-stream
-  atomicity, replay/shadow-projection parity, snapshot and PII/secret exclusion
-  tests.
-- Go worker: `go test ./...`, reproducible build, duplicate/retry/DLT, MinIO and
-  Kafka recovery tests after its owning stage adopts the F4 platform.
-- Cross-service exit: OpenAPI/event validation, affected Compose E2E, security,
-  failure/compensation, and regression tests for completed gates.
+Use full Testcontainers, Playwright, Kafka outage/retry or cross-service suites
+only when the change requires them, focused checks reveal a wider issue or the
+user asks. If infrastructure blocks a check, name the exact blocker and run the
+narrowest honest replacement.
 
-If infrastructure or unrelated work blocks a check, name the precise blocker
-and run the narrowest valid replacement. The gate remains blocked until its full
-matrix passes.
+## Deferred Decisions
 
-## Deferred Capabilities And UNKNOWNs
-
-Do not create reservation, company, search, preference, or general notification
-services opportunistically. Keep unresolved until their roadmap gates/ADRs:
+Do not invent or opportunistically implement:
 
 - warehouse location/bin topology;
-- canonical legacy-to-target cabin status mapping;
-- formal stock balance/reservation invariant;
-- task-board timezone/DST/downtime behavior;
-- media retention, original authorization, and orphan cleanup;
-- compensation after irreversible shipment/transfer departure;
+- final old-panel-to-current cabin status mapping;
 - company/contract and customer-reservation ownership;
-- KPI formulas/reporting periods and historical backfill;
-- worker push/offline delivery;
-- hosting, deployment topology, and production operations; these are outside
-  the RWMS repository scope.
+- formal stock reservation invariants;
+- task-board schedule timezone/DST/downtime semantics;
+- worker push/offline notification delivery;
+- media retention/orphan cleanup policy;
+- compensation after irreversible shipment/transfer departure;
+- KPI formulas, periods, historical backfill or analytics-service;
+- production hosting/deployment topology.
 
-## Git And Safety
+Keep the related production controls unavailable until a direct command and
+domain decision define them.
 
-- Preserve user and concurrent changes; stage only intended hunks. Never use
-  destructive reset/checkout to clean the shared worktree.
-- Never commit secrets, migration backups, local passwords/keys, logs, build
-  output, browser artifacts, or IDE state.
-- Verify Git identity before committing. Commits use `buhanzaz` and the user's
-  configured email with short human messages.
-- Do not put agent/model/tool names in branches, folders, commits, or PR metadata.
-- Do not use a `codex/` branch prefix. Push only when explicitly requested.
+## Local Runtime And VPS
+
+`compose.yaml` is for isolated local development/test dependencies only. Do
+not add Kubernetes, Helm, Terraform, Ansible, Swarm, production ingress/TLS or
+release pipelines unless explicitly requested.
+
+When the user asks for the temporary VPS demo, Codex may start the repository's
+databases, Kafka, MinIO, services, gateway and panel; bind only the approved
+panel/gateway port; inspect logs; and restart failed demo processes.
+
+Do not expose PostgreSQL, Kafka, MinIO administration, internal service ports
+or management endpoints to the Internet. Do not commit VPS credentials,
+private keys, generated keystores, logs or runtime secrets. A temporary HTTP
+demo is not production-ready.
+
+## Git And Data Safety
+
+- Preserve all user and concurrent changes; stage only intended files/hunks.
+- Never use destructive reset/checkout to clean the worktree.
+- Never delete databases, volumes, backups or user data without explicit scope
+  and exact-target verification.
+- Do not commit secrets, generated binaries, build output, browser artifacts or
+  IDE state.
+- Do not commit, push or open a PR unless the user asks.
+- Before a requested commit, verify identity; use `buhanzaz` and the user's
+  configured email with a short human message.
+- Do not put agent/model/tool names in branches, folders, commits or PR
+  metadata, and do not use a `codex/` branch prefix.

@@ -2,12 +2,14 @@ package dev.buhanzaz.rwms.asset.api;
 
 import static dev.buhanzaz.rwms.asset.api.AssetApiModels.*;
 
+import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.security.AssetAuthorizer;
 import dev.buhanzaz.rwms.asset.service.AssetService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -39,9 +41,12 @@ public class AssetRentalItemController {
       @RequestParam UUID warehouseId,
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "50") @Min(1) @Max(200) int size,
-      @RequestParam(required = false) String search) {
+      @RequestParam(required = false) String search,
+      @RequestParam(name = "excludeStatus", required = false)
+          Set<RentalItemStatus> excludedStatuses) {
     access.requireRead(jwt, warehouseId);
-    return service.listRentalItems(warehouseId, page, size, search);
+    return service.listRentalItems(
+        warehouseId, page, size, search, excludedStatuses);
   }
 
   @GetMapping("/{id}")

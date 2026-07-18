@@ -12,26 +12,17 @@ import type {
 } from "@/features/repair-tasks/model/repair-task"
 
 function createOpaqueId(prefix: string) {
-  const suffix =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`
-  return `${prefix}-${suffix}`
+  void prefix
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID()
+  }
+  throw new Error("Браузер не поддерживает безопасные UUID.")
 }
 
 function cloneLine(line: RepairEstimateLineDto) {
   return {
     ...line,
     catalogSnapshot: line.catalogSnapshot ? { ...line.catalogSnapshot } : null,
-  }
-}
-
-export function cloneRepairLineForRework(line: RepairEstimateLineDto) {
-  const id = createOpaqueId("repair-rework-line")
-  return {
-    ...cloneLine(line),
-    id,
-    sourceLineKey: id,
   }
 }
 
@@ -47,7 +38,6 @@ function executionRequirements(
 ) {
   let hasDuration = false
   let plannedDurationMinutes = 0
-  let photoRequired = false
 
   lines
     .filter((line) => line.lineType === "WORK")
@@ -66,14 +56,12 @@ function executionRequirements(
         plannedDurationMinutes +=
           node.durationMinutes * Math.max(0, line.quantity)
       }
-      photoRequired ||= node.photoRequired
     })
 
   return {
     plannedDurationMinutes: hasDuration
       ? Math.max(0, Math.round(plannedDurationMinutes))
       : null,
-    photoRequired,
   }
 }
 
@@ -84,8 +72,8 @@ function snapshotSubtask(
     | "kind"
     | "includedLineIds"
     | "groupComment"
-    | "queueCode"
     | "queueId"
+    | "queueCode"
     | "routeQueueKind"
     | "sortOrder"
   >,
@@ -102,21 +90,18 @@ function snapshotSubtask(
       .filter((line) => line.lineType === "MATERIAL")
       .map(cloneLine),
     groupComment: plan.groupComment.trim() || commentsForLines(lines),
-    queueCode: plan.queueCode?.trim() || null,
     queueId: plan.queueId ?? null,
+    queueCode: plan.queueCode?.trim() || null,
     routeQueueKind: plan.routeQueueKind,
     sortOrder: plan.sortOrder,
     queuePosition: plan.sortOrder,
     plannedDurationMinutes: requirements.plannedDurationMinutes,
-    photoRequired: requirements.photoRequired,
     startedAt: null,
     completedAt: null,
     activeStartedAt: null,
     activeWorkSeconds: 0,
     workerGroup: null,
     assignments: [],
-    resultMedia: [],
-    assigneeName: null,
   }
 }
 
@@ -162,6 +147,7 @@ export function buildRepairTaskSubtasks(params: {
         kind: "REPAIR_WORK",
         includedLineIds: unassignedLines.map((line) => line.id),
         groupComment: commentsForLines(unassignedLines),
+        queueId: null,
         queueCode: null,
         routeQueueKind: null,
         sortOrder: (subtasks.length + 1) * 10,
@@ -235,11 +221,6 @@ export function assertRepairTaskSubtasksValid(
     ) {
       throw new Error(`Подзадание ${index + 1}: некорректный норматив времени`)
     }
-    if (subtask.resultMedia.length > 20) {
-      throw new Error(
-        `Подзадание ${index + 1}: можно сохранить не более 20 фотографий`
-      )
-    }
   })
 }
 
@@ -257,7 +238,7 @@ export function createNewRepairTaskDraft(
     sourceEstimateId: seed?.sourceEstimateId ?? null,
     sourceEstimateVersion: seed?.sourceEstimateVersion ?? null,
     rentalItemId: seed?.rentalItemId ?? "",
-    reason: seed ? "Переделка" : "",
+    reason: "",
     dispatchDate,
     comment: "",
     lines: seed?.lines.map(cloneLine) ?? [],
@@ -279,14 +260,14 @@ export function toRepairTaskEditorDraft(
     sourceEstimateId: task.sourceEstimateId,
     sourceEstimateVersion: task.sourceEstimateVersion,
     rentalItemId: task.rentalItemId,
-    reason: task.reason,
+    reason: task.sourceParty ?? "",
     dispatchDate: task.dispatchDate,
-    comment: task.comment,
+    comment: "",
     lines: task.subtasks.flatMap((subtask) => [
       ...subtask.workLines.map(cloneLine),
       ...subtask.materialLines.map(cloneLine),
     ]),
-    media: task.media.map((media) => structuredClone(media)),
+    media: [],
     pendingUploads: [],
   }
 }

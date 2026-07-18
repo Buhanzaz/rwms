@@ -13,7 +13,6 @@ type RepairEstimateCompletionDialogProps = {
   mode?: "COMPLETE" | "AMEND"
   initialMovementRequired?: boolean
   initialTaskPlans?: RepairEstimateTaskPlanDto[]
-  warehouseId: string
   onOpenChange: (open: boolean) => void
   onComplete: (params: {
     completionMode: RepairEstimateCompletionMode
@@ -66,7 +65,6 @@ function amendmentInitialPlans(params: {
     return [
       {
         ...plan,
-        id: `task-plan-amend-unassigned-${includedLineIds.join("-")}`,
         includedLineIds,
         primaryLineId,
       },
@@ -87,7 +85,6 @@ export function RepairEstimateCompletionDialog({
   mode = "COMPLETE",
   initialMovementRequired,
   initialTaskPlans,
-  warehouseId,
   onOpenChange,
   onComplete,
 }: RepairEstimateCompletionDialogProps) {
@@ -108,7 +105,6 @@ export function RepairEstimateCompletionDialog({
       }
       pendingLabel="Завершение..."
       previewKey={`${mode}:${initialTaskPlans?.map((plan) => `${plan.id}:${plan.sortOrder}`).join("|") ?? "new"}`}
-      warehouseId={warehouseId}
       allowEmpty
       initialMovementRequired={initialMovementRequired}
       reconcileInitialPlans={

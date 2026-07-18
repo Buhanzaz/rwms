@@ -9,56 +9,42 @@ export type RepairEstimateCatalogRouteQueueKind =
 /** Exact decimal serialized by the catalog service boundary. */
 export type RepairEstimateCatalogMoneyDecimal = string
 
-/** Canonical read DTO exposed by the repair-catalog service boundary. */
+/** Operational panel projection of a maintenance-service catalog node. */
 export type RepairEstimateCatalogNodeDto = {
   id: string
-  catalogVersionId?: string | null
+  catalogVersionId: string
   code: string
   name: string
   nodeType: RepairEstimateCatalogNodeType
   parentId: string | null
   parentCode: string | null
   active: boolean
-  sortOrder: number | null
   unit: string | null
   unitPrice: RepairEstimateCatalogMoneyDecimal | null
-  defaultQuantity: number
   durationMinutes: number | null
-  additionalOption: boolean
   showInMainMenu: boolean
-  mainMenuOrder: number | null
-  mainMenuTitle: string | null
   routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
+  workQueueId: string | null
   workQueueCode: string | null
-  workQueueId?: string | null
   photoRequired: boolean
   includeInEstimate: boolean
   commonItem: boolean
-  furnitureCategory: boolean
-  canvasX: number | null
-  canvasY: number | null
   comment: string | null
 }
 
-/** Canonical read DTO exposed by the repair-catalog service boundary. */
+/** Operational panel projection of a maintenance-service catalog link. */
 export type RepairEstimateCatalogLinkDto = {
   id: string
+  catalogVersionId: string
   sourceNodeId: string
   targetNodeId: string
   linkType: RepairEstimateCatalogLinkType
-  active: boolean
-  sortOrder: number | null
-  comment: string | null
+  sortOrder: number
 }
 
 export type RepairEstimateCatalogSnapshotDto = {
   nodes: RepairEstimateCatalogNodeDto[]
   links: RepairEstimateCatalogLinkDto[]
-  seedMeta: {
-    nodeCount: number
-    linkCount: number
-    note: string
-  }
 }
 
 export type RepairEstimateCatalogEffectiveQueueBinding = {

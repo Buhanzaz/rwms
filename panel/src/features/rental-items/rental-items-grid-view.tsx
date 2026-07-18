@@ -201,18 +201,26 @@ export function RentalItemsGridView({
                       className="shrink-0 overflow-hidden"
                       style={{ height: `${photoHeight}px` }}
                     >
-                      <PhotoCarousel
-                        photos={photos}
-                        photoCount={item.photoCount}
-                        showPhotoCount={item.hasPhotos}
-                        photoCountClassName="hidden sm:flex"
-                        className="h-full w-full"
-                        fit="cover"
-                        controlsVisibility="mobile-visible"
-                        onCenterClick={
-                          item.hasPhotos ? () => onOpenPhotos(item) : undefined
-                        }
-                      />
+                      {item.mediaAvailability === "UNAVAILABLE" ? (
+                        <div className="flex h-full w-full items-center justify-center bg-muted px-3 text-center text-xs text-muted-foreground">
+                          Фото недоступны через публичный asset API
+                        </div>
+                      ) : (
+                        <PhotoCarousel
+                          photos={photos}
+                          photoCount={item.photoCount}
+                          showPhotoCount={item.hasPhotos}
+                          photoCountClassName="hidden sm:flex"
+                          className="h-full w-full"
+                          fit="cover"
+                          controlsVisibility="mobile-visible"
+                          onCenterClick={
+                            item.hasPhotos
+                              ? () => onOpenPhotos(item)
+                              : undefined
+                          }
+                        />
+                      )}
                     </div>
 
                     <button

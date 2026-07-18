@@ -7,7 +7,7 @@ import {
 } from "@/features/settings/warehouses/warehouse-settings-errors"
 
 describe("warehouse settings conflict handling", () => {
-  it("marks a 409 as refresh-only rather than a local overwrite", () => {
+  it("marks a 409 as a refresh-only outcome rather than a local overwrite", () => {
     const conflict = new ApiError("Конфликт версий", 409)
 
     expect(isWarehouseConflict(conflict)).toBe(true)

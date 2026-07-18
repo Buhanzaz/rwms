@@ -42,7 +42,6 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   onTake,
   onPause,
   onResume,
-  onConfirmReturn,
   onComplete,
 }: {
   queue: TaskBoardQueueDto
@@ -58,7 +57,6 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
   onTake: (entry: TaskBoardEntryDto) => void
   onPause: (entry: TaskBoardEntryDto) => void
   onResume: (entry: TaskBoardEntryDto) => void
-  onConfirmReturn: (entry: TaskBoardEntryDto) => void
   onComplete: (entry: TaskBoardEntryDto) => void
 }) {
   const { setNodeRef, isOver } = useDroppable({
@@ -66,10 +64,10 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
     data: { type: "queue", queueKey: queue.key },
   })
   const nextWaiting = queue.entries.find(
-    (entry) => entry.entryType === "REAL" && entry.subtask.status === "WAITING"
+    (entry) => entry.entryType === "REAL" && entry.status === "WAITING"
   )
   const inProgress = queue.entries.find(
-    (entry) => entry.subtask.status === "IN_PROGRESS"
+    (entry) => entry.status === "IN_PROGRESS"
   )
 
   if (collapsed) {
@@ -175,17 +173,11 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
               entry={entry}
               now={now}
               mobile={mobile}
-              dragDisabled={
-                dragDisabled ||
-                (entry.runtimeTask
-                  ? entry.runtimeTask.status !== "QUEUED"
-                  : entry.subtask.status === "IN_PROGRESS")
-              }
+              dragDisabled={dragDisabled || entry.status === "IN_PROGRESS"}
               actionPending={actionPending}
               onDetails={onDetails}
               onPause={onPause}
               onResume={onResume}
-              onConfirmReturn={onConfirmReturn}
             />
           ))}
         </div>

@@ -1,48 +1,65 @@
-import type { RepairEstimateCatalogRouteQueueKind } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
-import type {
-  RepairTaskDto,
-  RepairTaskSubtaskDto,
-} from "@/features/repair-tasks/model/repair-task"
-import type {
-  MockTaskDto,
-  TaskInterruptionDto,
-} from "@/features/task-board/mock/model"
-
 export type TaskBoardEntryType = "REAL" | "SHADOW"
 export type TaskBoardQueueKind =
-  RepairEstimateCatalogRouteQueueKind | "UNASSIGNED"
+  "MOVEMENT" | "REPAIR" | "HOLDING" | "UNASSIGNED"
+export type TaskBoardEntryStatus =
+  "WAITING" | "IN_PROGRESS" | "PAUSED" | "DONE" | "CANCELLED"
+export type TaskBoardTaskStatus = "ACTIVE" | "DONE" | "CANCELLED"
+export type TaskBoardAssignmentStatus =
+  "ACTIVE" | "PAUSED" | "DONE" | "CANCELLED"
+
+export type TaskBoardAssignmentDto = {
+  id: string
+  version: number
+  workerId: string | null
+  workerName: string | null
+  workerGroupId: string | null
+  workerGroupName: string | null
+  status: TaskBoardAssignmentStatus
+  assignedAt: string
+  startedAt: string | null
+  pausedAt: string | null
+  finishedAt: string | null
+}
 
 export type TaskBoardQueueDto = {
   key: string
   label: string
   kind: TaskBoardQueueKind
-  queueCode: string | null
-  routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
-  settingsQueueId?: string | null
-  settingsCollapsed?: boolean
+  queueCode: string
+  settingsQueueId: string | null
+  settingsCollapsed: boolean
   entries: TaskBoardEntryDto[]
 }
 
 export type TaskBoardEntryDto = {
   id: string
+  version: number
+  warehouseId: string
   queueKey: string
+  queueId: string | null
+  queueCode: string
   entryType: TaskBoardEntryType
   routeIndex: number
   routeLength: number
   queuePosition: number
-  task: RepairTaskDto
-  subtask: RepairTaskSubtaskDto
-  runtimeTask?: MockTaskDto
-  interruption?: TaskInterruptionDto | null
-  detailsHref?: string | null
-  taskBoardEntryVersion?: number
-  taskBoardWarehouseId?: string
-  taskBoardQueueId?: string | null
+  taskId: string
+  externalTaskId: string | null
+  taskVersion: number
+  title: string
+  unitNumber: string | null
+  taskStatus: TaskBoardTaskStatus
+  status: TaskBoardEntryStatus
+  taskText: string | null
+  plannedDurationMinutes: number | null
+  activeStartedAt: string | null
+  pausedAt: string | null
+  activeWorkSeconds: number
+  assignments: TaskBoardAssignmentDto[]
+  detailsHref: string | null
 }
 
 export type TaskBoardSnapshotDto = {
   warehouseId: string
-  now?: string
   queues: TaskBoardQueueDto[]
   totalEntries: number
   realEntries: number

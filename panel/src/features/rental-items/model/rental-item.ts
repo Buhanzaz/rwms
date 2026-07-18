@@ -43,6 +43,12 @@ export const RENTAL_ITEM_STATUS_LABEL: Record<RentalItemStatus, string> = {
 export type RentalItemContentsItemDto = {
   name: string
   quantity: number
+  /** Canonical asset-service identity when the public cabin response provides it. */
+  equipmentId?: string
+  /** The public cabin response exposes a code, not an equipment display name. */
+  equipmentCode?: string
+  /** Asset-service ledger location kind for this cabin content row. */
+  locationKind?: string
 }
 
 type RentalItemCoreDto = {
@@ -66,6 +72,8 @@ type RentalItemCoreDto = {
   photoCount: number
   mainPhotoUrl: string | null
   previewPhotoUrls?: string[]
+  /** The current asset HTTP boundary exposes no cabin-media read endpoint. */
+  mediaAvailability?: "UNAVAILABLE"
   locationNodeId: string | null
   contents: string | null
   contentsItems: RentalItemContentsItemDto[]
@@ -76,30 +84,6 @@ type RentalItemCoreDto = {
 }
 
 export type RentalItemDto = RentalItemCoreDto & Record<string, unknown>
-
-export type RentalItemPhotoDto = {
-  id: string
-  rentalItemId: string
-  /**
-   * Legacy/fallback URL. UI must prefer variants.small for previews and
-   * variants.largeWebp for fullscreen when the backend provides them.
-   */
-  url: string
-  variants?: {
-    small?: RentalItemPhotoVariantDto
-    largeWebp?: RentalItemPhotoVariantDto
-  }
-  createdAt: string
-  /** False for legacy/mock registry photos that have no proven capture time. */
-  capturedAtKnown?: boolean
-}
-
-export type RentalItemPhotoVariantDto = {
-  url: string
-  width?: number
-  height?: number
-  mimeType?: string
-}
 
 export type RentalItemsViewMode = "table" | "grid"
 export type RentalItemsColumnKey = string
@@ -205,6 +189,7 @@ const INTERNAL_RENTAL_ITEM_FIELD_IDS = new Set([
   "locationNodeId",
   "mainPhotoUrl",
   "previewPhotoUrls",
+  "mediaAvailability",
   "photoCount",
   "contentsItems",
   "lastModifiedDate",

@@ -1,6 +1,5 @@
-import { ApiError, bearerRequest } from "@/lib/api-client"
+import { bearerRequest } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
-import { requireInventoryAccessToken } from "@/features/inventory/inventory-runtime"
 import type {
   InventoryCompletionPreview,
   InventoryFinding,
@@ -13,8 +12,16 @@ import type {
   InventorySessionDetail,
   InventorySessionPage,
   InventorySessionView,
+  InventoryStatisticsPage,
   InventoryStatisticsSummary,
 } from "@/features/inventory/model/inventory-service"
+
+function requireInventoryAccessToken(accessToken: string | null) {
+  if (!accessToken?.trim()) {
+    throw new Error("Для инвентаризации требуется авторизация")
+  }
+  return accessToken
+}
 
 function endpoint(path: string) {
   return `${getGatewayRuntimeConfig().inventoryApiBaseUrl}/v1${path}`
@@ -66,15 +73,15 @@ export async function getActiveInventorySession(
   accessToken: string | null,
   warehouseId: string
 ) {
-  try {
-    return await getInventorySessionByUrl(
-      requireInventoryAccessToken(accessToken),
-      `/sessions/active?warehouseId=${encodeURIComponent(warehouseId)}`
-    )
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 404) return null
-    throw error
-  }
+  const token = requireInventoryAccessToken(accessToken)
+  const detail = await bearerRequest<InventorySessionDetail | undefined>(
+    token,
+    endpoint(`/sessions/active?warehouseId=${encodeURIComponent(warehouseId)}`)
+  )
+  if (detail === undefined) return null
+
+  const findings = await listAllFindings(token, detail.id)
+  return { ...detail, findings } satisfies InventorySessionView
 }
 
 async function getInventorySessionByUrl(accessToken: string, path: string) {
@@ -320,6 +327,19 @@ export function getInventoryStatisticsSummary(
     requireInventoryAccessToken(accessToken),
     endpoint(
       `/statistics/summary?warehouseId=${encodeURIComponent(warehouseId)}`
+    )
+  )
+}
+
+export function listInventorySessionStatistics(
+  accessToken: string | null,
+  warehouseId: string,
+  page = 0
+) {
+  return bearerRequest<InventoryStatisticsPage>(
+    requireInventoryAccessToken(accessToken),
+    endpoint(
+      `/statistics/sessions?warehouseId=${encodeURIComponent(warehouseId)}&page=${page}&size=50&sort=completedAt%2Cdesc`
     )
   )
 }

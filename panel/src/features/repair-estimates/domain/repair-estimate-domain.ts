@@ -13,12 +13,11 @@ import type {
 } from "@/features/repair-estimates/model/repair-estimate"
 
 function createOpaqueId(prefix: string) {
-  const suffix =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`
-
-  return `${prefix}-${suffix}`
+  void prefix
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID()
+  }
+  throw new Error("Браузер не поддерживает безопасные UUID.")
 }
 
 function decimalToMinor(value: MoneyDecimal) {
@@ -42,6 +41,15 @@ function minorToDecimal(value: bigint): MoneyDecimal {
   return `${whole}.${fraction}`
 }
 
+function normalizeQuantity(value: number) {
+  if (!Number.isFinite(value) || value < 0) return 0
+  return Math.round(value * 1000) / 1000
+}
+
+function quantityToThousandths(value: number) {
+  return BigInt(Math.round(normalizeQuantity(value) * 1000))
+}
+
 export function normalizeMoney(value: MoneyDecimal): MoneyDecimal {
   return minorToDecimal(decimalToMinor(value || "0"))
 }
@@ -50,15 +58,15 @@ export function calculateLineTotal(
   unitPrice: MoneyDecimal,
   quantity: number
 ): MoneyDecimal {
-  return minorToDecimal(
-    decimalToMinor(unitPrice || "0") * BigInt(Math.max(1, Math.trunc(quantity)))
-  )
+  const product =
+    decimalToMinor(unitPrice || "0") * quantityToThousandths(quantity)
+  return minorToDecimal((product + 500n) / 1000n)
 }
 
 export function normalizeEstimateLine(
   line: RepairEstimateLineDto
 ): RepairEstimateLineDto {
-  const quantity = Math.max(1, Math.trunc(line.quantity || 1))
+  const quantity = normalizeQuantity(line.quantity)
   const unitPrice = normalizeMoney(line.unitPrice || "0")
 
   return {
@@ -94,9 +102,13 @@ export function assertEstimateLinesValid(lines: RepairEstimateLineDto[]) {
     }
     lineIds.add(line.id)
 
-    if (!Number.isInteger(line.quantity) || line.quantity < 1) {
+    if (
+      !Number.isFinite(line.quantity) ||
+      line.quantity < 0 ||
+      Math.round(line.quantity * 1000) !== line.quantity * 1000
+    ) {
       throw new Error(
-        `${label}: количество должно быть целым числом не меньше 1`
+        `${label}: количество должно быть неотрицательным числом с точностью до трёх знаков`
       )
     }
     decimalToMinor(line.unitPrice)
@@ -313,9 +325,6 @@ export function applyCatalogNodesToEstimateLines(params: {
         lineTotal: "0.00",
         catalogSnapshot: {
           nodeId: node.id,
-          ...(node.catalogVersionId
-            ? { catalogVersionId: node.catalogVersionId }
-            : {}),
           code: node.code,
           name: node.name,
           nodeType:
@@ -324,12 +333,6 @@ export function applyCatalogNodesToEstimateLines(params: {
               : node.nodeType === "OPTION"
                 ? "OPTION"
                 : "MATERIAL",
-          unit: node.unit,
-          unitPrice: node.unitPrice,
-          durationMinutes: node.durationMinutes ?? 0,
-          queueId: node.workQueueId ?? null,
-          queueCode: node.workQueueCode,
-          queueKind: node.routeQueueKind,
         },
       }),
     ]
@@ -368,8 +371,8 @@ export function buildRepairEstimateTaskPlans(
   lines.forEach((line) => {
     if (line.lineType === "WORK") {
       const binding = lineQueueBinding(line, catalog)
-      const queueCode = binding?.queueCode ?? null
       const queueId = binding?.queueId ?? null
+      const queueCode = binding?.queueCode ?? null
       const routeQueueKind = binding?.queueKind ?? null
       const bindingKey = queueCode
         ? `QUEUE:${queueCode}`
@@ -402,8 +405,8 @@ export function buildRepairEstimateTaskPlans(
       includedLineIds: group.lines.map((line) => line.id),
       primaryLineId: primaryLine.id,
       groupComment: commentsForLines(group.lines),
-      queueCode: group.queueCode,
       queueId: group.queueId,
+      queueCode: group.queueCode,
       routeQueueKind: group.routeQueueKind,
       sortOrder: (index + 1) * 10,
       generationStatus: "PENDING_GENERATION",
@@ -418,13 +421,13 @@ export function buildRepairEstimateTaskPlans(
     const includedLineIds = unassignedLines.map((line) => line.id)
     const primaryLine = unassignedLines.find((line) => line.lineType === "WORK")
     plans.push({
-      id: `task-plan-unassigned-${includedLineIds.join("-")}`,
+      id: createOpaqueId("task-plan-unassigned"),
       kind: "REPAIR_WORK",
       includedLineIds,
       primaryLineId: primaryLine?.id ?? null,
       groupComment: commentsForLines(unassignedLines),
-      queueCode: null,
       queueId: null,
+      queueCode: null,
       routeQueueKind: null,
       sortOrder: (plans.length + 1) * 10,
       generationStatus: "PENDING_GENERATION",
@@ -445,8 +448,8 @@ export function createRepairEstimateMovementTaskPlan(
     includedLineIds: [],
     primaryLineId: null,
     groupComment: "",
-    queueCode: null,
     queueId: null,
+    queueCode: null,
     routeQueueKind: "MOVEMENT",
     sortOrder: 0,
     generationStatus: "PENDING_GENERATION",

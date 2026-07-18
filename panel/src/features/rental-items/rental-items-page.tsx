@@ -4,11 +4,7 @@ import type { SortingState } from "@tanstack/react-table"
 import { Filter, Grid2X2, List, Plus, Settings2 } from "lucide-react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 
-import {
-  getRentalItemFilterOptions,
-  getRentalItems,
-  getRentalItemsTableSchema,
-} from "@/features/rental-items/api/rental-items-api"
+import { listAssetRentalItems } from "@/features/rental-items/api/asset-rental-items-api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -33,8 +29,13 @@ import {
 } from "@/features/rental-items/rental-items-grid-format"
 import { RentalItemsTableView } from "@/features/rental-items/rental-items-table-view"
 import { useWarehouse } from "@/hooks/use-warehouse"
+import { useAuth } from "@/features/auth/use-auth"
 import {
+  buildRentalItemsTableSchema,
   EMPTY_RENTAL_ITEMS_TABLE_SCHEMA,
+  getRentalItemFieldLabel,
+  getRentalItemSortValue,
+  getVisibleRentalItemFilterDefinitions,
   normalizeRentalItemsColumnConfig,
   type RentalItemDto,
   type RentalItemsColumnConfig,
@@ -65,8 +66,8 @@ function getStorageKey(warehouseId: string, key: string) {
   return `rental-items:${warehouseId}:${key}`
 }
 
-const EMPTY_FILTER_OPTIONS: RentalItemsFilterOptionSet[] = []
 const DESKTOP_GRID_FORMAT_MAX = 5
+const EMPTY_RENTAL_ITEMS: RentalItemDto[] = []
 
 function getInitialSearch(warehouseId: string) {
   return readLocalStorage(getStorageKey(warehouseId, "search"), "")
@@ -119,12 +120,6 @@ function getInitialGridSize(warehouseId: string) {
   }
 }
 
-function getColumnsConfigKey(columnsConfig: RentalItemsColumnConfig[]) {
-  return columnsConfig
-    .map((column) => `${column.id}:${column.visible ? "1" : "0"}`)
-    .join("|")
-}
-
 function pruneFilters(
   filters: RentalItemsFiltersState,
   filterOptions: RentalItemsFilterOptionSet[]
@@ -136,6 +131,54 @@ function pruneFilters(
       return enabledFilterIds.has(key) && values && values.length > 0
     })
   ) as RentalItemsFiltersState
+}
+
+function filterRentalItems(
+  items: RentalItemDto[],
+  filters: RentalItemsFiltersState
+) {
+  return items.filter((item) =>
+    Object.entries(filters).every(([key, values]) => {
+      if (!values || values.length === 0) return true
+      return values.includes(getRentalItemFieldLabel(item, key))
+    })
+  )
+}
+
+function sortRentalItems(
+  items: RentalItemDto[],
+  sortBy: string | undefined,
+  sortDirection: "asc" | "desc"
+) {
+  if (!sortBy) return items
+
+  const direction = sortDirection === "desc" ? -1 : 1
+  return [...items].sort((left, right) => {
+    const leftValue = getRentalItemSortValue(left, sortBy)
+    const rightValue = getRentalItemSortValue(right, sortBy)
+    const compared =
+      typeof leftValue === "number" && typeof rightValue === "number"
+        ? leftValue - rightValue
+        : String(leftValue).localeCompare(String(rightValue), "ru", {
+            numeric: true,
+          })
+    return compared * direction
+  })
+}
+
+function buildFilterOptions(
+  items: RentalItemDto[],
+  schema: typeof EMPTY_RENTAL_ITEMS_TABLE_SCHEMA,
+  columnsConfig: RentalItemsColumnConfig[]
+): RentalItemsFilterOptionSet[] {
+  return getVisibleRentalItemFilterDefinitions(schema, columnsConfig).map(
+    (filter) => ({
+      ...filter,
+      values: Array.from(
+        new Set(items.map((item) => getRentalItemFieldLabel(item, filter.id)))
+      ).sort((left, right) => left.localeCompare(right, "ru")),
+    })
+  )
 }
 
 export function RentalItemsPage() {
@@ -160,8 +203,10 @@ export function RentalItemsPage() {
 function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const { accessToken, currentUser, status } = useAuth()
 
   const [search, setSearch] = useState(() => getInitialSearch(warehouseId))
+  const [page, setPage] = useState(0)
   const [filters, setFilters] = useState<RentalItemsFiltersState>(() =>
     getInitialFilters(warehouseId)
   )
@@ -217,12 +262,33 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
     }
   }, [savedGridSize, warehouseId])
 
-  const tableSchemaQuery = useQuery({
-    queryKey: ["rental-items-table-schema", warehouseId],
-    queryFn: () => getRentalItemsTableSchema(warehouseId),
+  const rentalItemsQuery = useQuery({
+    // Never place a bearer token in a query key: it is not an identity and may
+    // be exposed by query-devtools. The authenticated subject still separates
+    // cached warehouse data when a different user signs in during this session.
+    queryKey: [
+      "rental-items",
+      currentUser?.id ?? "unknown-user",
+      warehouseId,
+      search,
+      page,
+    ],
+    queryFn: () =>
+      listAssetRentalItems({
+        accessToken,
+        warehouseId,
+        page,
+        size: 50,
+        search,
+      }),
+    enabled: status === "authenticated" && Boolean(accessToken),
   })
 
-  const tableSchema = tableSchemaQuery.data ?? EMPTY_RENTAL_ITEMS_TABLE_SCHEMA
+  const loadedItems = rentalItemsQuery.data?.content ?? EMPTY_RENTAL_ITEMS
+  const tableSchema = useMemo(
+    () => buildRentalItemsTableSchema(loadedItems),
+    [loadedItems]
+  )
 
   const columnsConfig = useMemo(() => {
     return normalizeRentalItemsColumnConfig(
@@ -231,20 +297,10 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
     )
   }, [savedColumnsConfig, tableSchema.columns])
 
-  const columnsConfigKey = useMemo(() => {
-    return getColumnsConfigKey(columnsConfig)
-  }, [columnsConfig])
-
-  const filterOptionsQuery = useQuery({
-    queryKey: ["rental-item-filter-options", warehouseId, columnsConfigKey],
-    queryFn: () =>
-      getRentalItemFilterOptions({
-        warehouseId,
-        columnsConfig,
-      }),
-  })
-
-  const filterOptions = filterOptionsQuery.data ?? EMPTY_FILTER_OPTIONS
+  const filterOptions = useMemo(
+    () => buildFilterOptions(loadedItems, tableSchema, columnsConfig),
+    [columnsConfig, loadedItems, tableSchema]
+  )
 
   const effectiveFilters = useMemo(() => {
     return pruneFilters(filters, filterOptions)
@@ -252,29 +308,15 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
 
   const sortBy = sorting[0]?.id
   const sortDirection = sorting[0]?.desc ? "desc" : "asc"
-
-  const rentalItemsQuery = useQuery({
-    queryKey: [
-      "rental-items",
-      warehouseId,
-      search,
-      effectiveFilters,
-      sortBy,
-      sortDirection,
-    ],
-    queryFn: () =>
-      getRentalItems({
-        warehouseId,
-        page: 0,
-        size: 1000,
-        search,
-        filters: effectiveFilters,
+  const items = useMemo(
+    () =>
+      sortRentalItems(
+        filterRentalItems(loadedItems, effectiveFilters),
         sortBy,
-        sortDirection,
-      }),
-  })
-
-  const items = rentalItemsQuery.data?.content ?? []
+        sortDirection
+      ),
+    [effectiveFilters, loadedItems, sortBy, sortDirection]
+  )
 
   const activeFiltersCount = useMemo(() => {
     return Object.values(effectiveFilters).filter(
@@ -313,11 +355,14 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
               <PageToolbarContent className="max-w-xl">
                 <Input
                   value={search}
-                  onChange={(event) => setSearch(event.target.value)}
+                  onChange={(event) => {
+                    setSearch(event.target.value)
+                    setPage(0)
+                  }}
                   aria-label="Поиск по реестру склада"
                   name="rental-items-search"
                   autoComplete="off"
-                  placeholder="Поиск по номеру, арендатору или комментарию…"
+                  placeholder="Поиск по номеру бытовки…"
                 />
               </PageToolbarContent>
 
@@ -423,6 +468,7 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
                 <Button
                   size="sm"
                   className="min-w-0 flex-1 justify-center px-2 text-xs lg:flex-none lg:px-3 lg:text-sm"
+                  disabled={status !== "authenticated" || !accessToken}
                   onClick={() => setCreateDialogOpen(true)}
                 >
                   <Plus data-icon="inline-start" />
@@ -456,9 +502,25 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
         ) : null}
       </div>
 
-      {rentalItemsQuery.isLoading ? (
+      {status !== "authenticated" || !accessToken ? (
+        <div
+          role="alert"
+          className="flex flex-1 items-center justify-center rounded-lg border bg-card p-4 text-sm text-muted-foreground"
+        >
+          Для просмотра реестра бытовок требуется авторизация.
+        </div>
+      ) : rentalItemsQuery.isLoading ? (
         <div className="flex flex-1 items-center justify-center rounded-lg border bg-card text-sm text-muted-foreground">
           Загрузка бытовок...
+        </div>
+      ) : rentalItemsQuery.isError ? (
+        <div
+          role="alert"
+          className="flex flex-1 items-center justify-center rounded-lg border bg-card p-4 text-sm text-destructive"
+        >
+          {rentalItemsQuery.error instanceof Error
+            ? rentalItemsQuery.error.message
+            : "Не удалось загрузить реестр бытовок."}
         </div>
       ) : viewMode === "table" ? (
         <RentalItemsTableView
@@ -478,6 +540,44 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
           onOpenItem={openRentalItem}
         />
       )}
+
+      {rentalItemsQuery.data ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+          <span>
+            {rentalItemsQuery.data.totalElements === 0
+              ? "Бытовки не найдены"
+              : `Показано ${loadedItems.length} из ${rentalItemsQuery.data.totalElements}`}
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={page === 0 || rentalItemsQuery.isFetching}
+              onClick={() => setPage((current) => Math.max(0, current - 1))}
+            >
+              Назад
+            </Button>
+            <span>
+              Страница {rentalItemsQuery.data.totalPages === 0 ? 0 : page + 1}
+              {" из "}
+              {rentalItemsQuery.data.totalPages}
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={
+                page + 1 >= rentalItemsQuery.data.totalPages ||
+                rentalItemsQuery.isFetching
+              }
+              onClick={() => setPage((current) => current + 1)}
+            >
+              Вперёд
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       <RentalItemsColumnSettingsDialog
         open={columnsDialogOpen}

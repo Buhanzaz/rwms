@@ -32,7 +32,6 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import {
   createRepairEstimateCatalogIndex,
-  getOperationalMaintenanceCatalog,
   getOperationalRepairEstimateCatalog,
 } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import {
@@ -63,7 +62,6 @@ type RepairWorkCompletionDialogProps = {
   completeLabel: string
   pendingLabel: string
   previewKey: string
-  warehouseId?: string
   allowEmpty?: boolean
   emptyTitle?: string
   emptyDescription?: string
@@ -75,6 +73,13 @@ type RepairWorkCompletionDialogProps = {
   ) => RepairEstimateTaskPlanDto[]
   onOpenChange: (open: boolean) => void
   onComplete: (result: RepairWorkCompletionResult) => void
+}
+
+function createPlanId() {
+  if (typeof crypto === "undefined" || !("randomUUID" in crypto)) {
+    throw new Error("Браузер не поддерживает безопасные UUID.")
+  }
+  return crypto.randomUUID()
 }
 
 function routeQueueKindLabel(
@@ -104,7 +109,6 @@ export function RepairWorkCompletionDialog({
   completeLabel,
   pendingLabel,
   previewKey,
-  warehouseId,
   allowEmpty = false,
   emptyTitle = "Бытовка готова",
   emptyDescription = "Пустая смета завершит осмотр, переведёт бытовку в статус «Свободная» и не создаст задание или перемещение.",
@@ -130,9 +134,7 @@ export function RepairWorkCompletionDialog({
       ]),
     ],
     queryFn: async () => {
-      const snapshot = warehouseId
-        ? await getOperationalMaintenanceCatalog(warehouseId)
-        : await getOperationalRepairEstimateCatalog()
+      const snapshot = await getOperationalRepairEstimateCatalog()
       const catalog = createRepairEstimateCatalogIndex(snapshot)
       const taskPlans = buildRepairEstimateTaskPlans(lines, catalog)
       return {
@@ -271,13 +273,9 @@ function RepairWorkCompletionForm({
   }
 
   function duplicatePlan(plan: RepairEstimateTaskPlanDto, index: number) {
-    const suffix =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(36).slice(2)}`
     const duplicate: RepairEstimateTaskPlanDto = {
       ...plan,
-      id: `task-plan-${suffix}`,
+      id: createPlanId(),
       includedLineIds: [...plan.includedLineIds],
       generationStatus: "PENDING_GENERATION",
       workflowRequestRef: null,

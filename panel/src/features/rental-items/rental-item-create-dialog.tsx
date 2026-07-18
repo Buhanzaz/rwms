@@ -9,7 +9,11 @@ import {
   UnfoldMoreIcon,
 } from "@hugeicons/core-free-icons"
 
-import { createRentalItem } from "@/features/rental-items/api/rental-items-api"
+import {
+  AssetRentalItemConflictError,
+  createAssetRentalItem,
+  createIdempotencyKey,
+} from "@/features/rental-items/api/asset-rental-items-api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -31,7 +35,7 @@ import {
   FieldSet,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { RentalItemPhotoUploader } from "@/features/rental-items/rental-item-photo-uploader"
+import { useAuth } from "@/features/auth/use-auth"
 import { cn } from "@/lib/utils"
 import {
   Popover,
@@ -47,12 +51,10 @@ import {
   getRentalItemDimensionsForType,
   isSanblockRentalItemType,
   NEW_RENTAL_ITEM_CATEGORY,
-  NEW_RENTAL_ITEM_STATUS,
   RENTAL_ITEM_CHARACTERISTIC_OPTIONS,
   RENTAL_ITEM_FINISHING_OPTIONS,
   RENTAL_ITEM_TYPE_OPTIONS,
   type RentalItemCharacteristic,
-  type RentalItemCreationPhoto,
   type RentalItemCreationType,
   type RentalItemFinishing,
   type SanblockSettings,
@@ -78,7 +80,6 @@ type RentalItemCreateFormState = {
   finishing: RentalItemFinishing | ""
   selectedCharacteristics: RentalItemCharacteristic[]
   sanblockSettings: SanblockSettings
-  photos: RentalItemCreationPhoto[]
   linoleum: LinoleumValue
 }
 
@@ -110,7 +111,6 @@ function createEmptyForm(): RentalItemCreateFormState {
     finishing: "",
     selectedCharacteristics: getDefaultRentalItemCharacteristics([]),
     sanblockSettings: DEFAULT_SANBLOCK_SETTINGS,
-    photos: [],
     linoleum: "no",
   }
 }
@@ -358,6 +358,7 @@ export function RentalItemCreateDialog({
   onOpenChange,
 }: RentalItemCreateDialogProps) {
   const queryClient = useQueryClient()
+  const { accessToken } = useAuth()
   const numberInputId = useId()
   const [form, setForm] = useState<RentalItemCreateFormState>(() =>
     createEmptyForm()
@@ -386,9 +387,31 @@ export function RentalItemCreateDialog({
   }, [form.sanblockSettings, form.type, selectedCharacteristicOptions])
 
   const createMutation = useMutation({
-    mutationFn: createRentalItem,
-    onSuccess: (createdItem) => {
-      queryClient.setQueryData(["rental-item", createdItem.id], createdItem)
+    mutationFn: (input: {
+      idempotencyKey: string
+      number: string
+      rentalType: string
+      dimensions: string
+      finishing: string
+      category: string
+      characteristics: string
+      linoleum: boolean
+    }) =>
+      createAssetRentalItem({
+        accessToken,
+        idempotencyKey: input.idempotencyKey,
+        input: {
+          warehouseId,
+          number: input.number,
+          rentalType: input.rentalType,
+          dimensions: input.dimensions,
+          finishing: input.finishing,
+          category: input.category,
+          characteristics: input.characteristics,
+          linoleum: input.linoleum,
+        },
+      }),
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["rental-items"] })
       queryClient.invalidateQueries({
         queryKey: ["rental-items-table-schema", warehouseId],
@@ -455,16 +478,14 @@ export function RentalItemCreateDialog({
     }
 
     createMutation.mutate({
-      warehouseId,
+      idempotencyKey: createIdempotencyKey(),
       number: form.number.trim(),
-      type,
+      rentalType: type,
       dimensions: form.dimensions,
       finishing,
       category: NEW_RENTAL_ITEM_CATEGORY,
-      characteristics: selectedCharacteristics,
-      photos: form.photos,
+      characteristics: selectedCharacteristics.join(", "),
       linoleum: form.linoleum === "yes",
-      status: NEW_RENTAL_ITEM_STATUS,
     })
   }
 
@@ -497,6 +518,7 @@ export function RentalItemCreateDialog({
                 <Input
                   id={numberInputId}
                   value={form.number}
+                  maxLength={128}
                   aria-invalid={submitted && form.number.trim().length === 0}
                   onChange={(event) =>
                     setForm((current) => ({
@@ -652,17 +674,21 @@ export function RentalItemCreateDialog({
               )}
             </FieldSet>
 
-            <RentalItemPhotoUploader
-              photos={form.photos}
-              disabled={createMutation.isPending}
-              onChange={(photos) =>
-                setForm((current) => ({ ...current, photos }))
-              }
-            />
+            <FieldSet>
+              <FieldLegend>Фото</FieldLegend>
+              <FieldDescription>
+                Фотографии пока недоступны: asset-service не предоставляет
+                публичный media API для бытовок.
+              </FieldDescription>
+            </FieldSet>
 
             {createMutation.isError ? (
               <FieldError>
-                Не удалось создать бытовку. Проверьте данные и повторите.
+                {createMutation.error instanceof AssetRentalItemConflictError
+                  ? "Бытовка была изменена другим пользователем. Обновите реестр и повторите действие."
+                  : createMutation.error instanceof Error
+                    ? createMutation.error.message
+                    : "Не удалось создать бытовку. Проверьте данные и повторите."}
               </FieldError>
             ) : null}
 

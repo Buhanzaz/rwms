@@ -1,21 +1,36 @@
-import { useEffect, useMemo, useRef, useState } from "react"
-import { useSearchParams } from "react-router-dom"
+import { useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { HugeiconsIcon } from "@hugeicons/react"
 import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { useSearchParams } from "react-router-dom"
+
+import { OperationsListGrid } from "@/components/operations-list-grid"
+import {
+  PageToolbar,
+  PageToolbarActions,
+  PageToolbarContent,
+} from "@/components/page-toolbar"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
-  Combobox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxGroup,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxLabel,
-  ComboboxList,
-} from "@/components/ui/combobox"
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -34,1589 +49,700 @@ import {
   FieldSet,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { Separator } from "@/components/ui/separator"
-import { OperationsListGrid } from "@/components/operations-list-grid"
-import {
-  PageToolbar,
-  PageToolbarActions,
-  PageToolbarContent,
-} from "@/components/page-toolbar"
-import { useWarehouse } from "@/hooks/use-warehouse"
 import { useAuth } from "@/features/auth/use-auth"
-import { LogisticsCabinContentsEditor } from "@/features/logistics/logistics-cabin-contents-editor"
 import {
   SHIPMENTS_QUERY_KEY,
-  SHIPMENTS_STORAGE_KEY,
-  SHIPMENTS_UPDATED_EVENT,
   cancelShipment,
-  combineShipmentPreparationCatalog,
   confirmShipmentPreparation,
-  computeShipmentContentsChanges,
-  dispatchShipmentPreparationTask,
-  finalizeShipment,
-  createShipmentPreparationTask,
-  listCompanies,
-  listShipmentCandidates,
-  listShipmentEquipment,
-  listShipmentSourceCabins,
+  createShipment,
   listShipments,
-  retryShipmentPreparationTasks,
-  shipmentPreparationIdentity,
-  stablePreparationExternalTaskId,
-  upsertShipmentDraft,
+  replaceShipmentPlan,
 } from "@/features/logistics/shipments/api"
-import type {
-  Shipment as ShipmentDto,
-  ShipmentCandidate as ShipmentCandidateDto,
-  ShipmentPreparationTask as ShipmentPreparationTaskDto,
-  ShipmentSourceAllocation,
-  ShipmentSourceCandidate,
+import {
+  SHIPMENT_STATE_LABELS,
+  type ShipmentDocument,
+  type ShipmentDocumentState,
+  type ShipmentPlanLine,
 } from "@/features/logistics/shipments/model"
-import type { RentalItemContentsItemDto } from "@/features/rental-items/model/rental-item"
-import {
-  listRepairWorkerGroups,
-  repairWorkerGroupsQueryKey,
-} from "@/features/repair-tasks/api/repair-worker-directory-api"
-import {
-  RENTAL_ITEMS_MOCK_STORAGE_KEY,
-  RENTAL_ITEMS_MOCK_UPDATED_EVENT,
-} from "@/features/rental-items/api/rental-items-api"
+import { useWarehouse } from "@/hooks/use-warehouse"
 
-const today = () => {
-  const date = new Date()
-  const month = String(date.getMonth() + 1).padStart(2, "0")
-  const day = String(date.getDate()).padStart(2, "0")
-  return `${date.getFullYear()}-${month}-${day}`
-}
-const dateLabel = (value: string) =>
-  new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium" }).format(
-    new Date(value)
-  )
+const TERMINAL_STATES = new Set<ShipmentDocumentState>(["SHIPPED", "CANCELLED"])
+const CANCELLABLE_STATES = new Set<ShipmentDocumentState>([
+  "DRAFT",
+  "PREPARING",
+  "AWAITING_CONFIRMATION",
+])
 
-type CabinDraft = {
-  slotId: string
-  rentalItemId: string
-  cabinNumber: string
-  expectedTargetVersion: number | null
-  contentsBefore: RentalItemContentsItemDto[]
-  contentsPlanned: RentalItemContentsItemDto[]
-  sourceAllocations: ShipmentSourceAllocation[]
-  preparationTask: ShipmentPreparationTaskDto | null
+function formatDateTime(value: string) {
+  return new Intl.DateTimeFormat("ru-RU", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value))
 }
 
-function newSlot(): CabinDraft {
-  return {
-    slotId: crypto.randomUUID(),
-    rentalItemId: "",
-    cabinNumber: "",
-    expectedTargetVersion: 0,
-    contentsBefore: [],
-    contentsPlanned: [],
-    sourceAllocations: [],
-    preparationTask: null,
+function statusVariant(state: ShipmentDocumentState) {
+  if (state === "CONFLICT" || state === "RECONCILIATION_REQUIRED") {
+    return "destructive" as const
   }
+  if (state === "SHIPPED" || state === "CANCELLED") {
+    return "secondary" as const
+  }
+  return "outline" as const
 }
 
-function warehouseAllocation(
-  before: RentalItemContentsItemDto[],
-  planned: RentalItemContentsItemDto[]
-): ShipmentSourceAllocation[] {
-  const items = computeShipmentContentsChanges(before, planned)
-    .filter((change) => change.direction === "BRING")
-    .map((change) => ({ name: change.name, quantity: change.quantity }))
-  return items.length
-    ? [
-        {
-          sourceType: "WAREHOUSE",
-          sourceRentalItemId: null,
-          sourceCabinNumber: null,
-          expectedSourceVersion: null,
-          items,
-        },
-      ]
-    : []
+function errorMessage(cause: unknown, fallback: string) {
+  return cause instanceof Error ? cause.message : fallback
+}
+
+function commandIdentity() {
+  return crypto.randomUUID()
 }
 
 export function LogisticsShipmentsPage() {
+  const { selectedWarehouseId } = useWarehouse()
+  const { accessToken } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
-  const selectedShipmentId = searchParams.get("shipmentId")
-  const { selectedWarehouseId, selectedWarehouse } = useWarehouse()
-  const { currentUser, accessToken } = useAuth()
-  const client = useQueryClient()
-  const [open, setOpen] = useState(false)
-  const [resumeShipment, setResumeShipment] = useState<ShipmentDto | null>(null)
+  const queryClient = useQueryClient()
+  const [createOpen, setCreateOpen] = useState(false)
+  const [showAll, setShowAll] = useState(false)
   const [search, setSearch] = useState("")
-  const [dateFrom, setDateFrom] = useState("")
-  const [dateTo, setDateTo] = useState("")
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [cancelTarget, setCancelTarget] = useState<ShipmentDocument | null>(
+    null
+  )
+  const [commandError, setCommandError] = useState<string | null>(null)
+  const commandKeys = useRef(new Map<string, string>())
+  const selectedShipmentId = searchParams.get("shipmentId")
+
   const query = useQuery({
-    queryKey: [...SHIPMENTS_QUERY_KEY, "shipments", selectedWarehouseId],
-    queryFn: () => listShipments(selectedWarehouseId!),
-    enabled: Boolean(selectedWarehouseId),
+    queryKey: [...SHIPMENTS_QUERY_KEY, selectedWarehouseId],
+    queryFn: () => listShipments(accessToken!, selectedWarehouseId!),
+    enabled: Boolean(accessToken && selectedWarehouseId),
+    refetchInterval: 5_000,
   })
-  useEffect(() => {
-    const invalidate = () => {
-      void client.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
-      void client.invalidateQueries({ queryKey: ["rental-items"] })
-    }
-    const onStorage = (event: StorageEvent) => {
-      if (
-        event.key === SHIPMENTS_STORAGE_KEY ||
-        event.key === "rwms:logistics:v1" ||
-        event.key === RENTAL_ITEMS_MOCK_STORAGE_KEY
-      )
-        invalidate()
-    }
-    window.addEventListener(SHIPMENTS_UPDATED_EVENT, invalidate)
-    window.addEventListener(RENTAL_ITEMS_MOCK_UPDATED_EVENT, invalidate)
-    window.addEventListener("storage", onStorage)
-    return () => {
-      window.removeEventListener(SHIPMENTS_UPDATED_EVENT, invalidate)
-      window.removeEventListener(RENTAL_ITEMS_MOCK_UPDATED_EVENT, invalidate)
-      window.removeEventListener("storage", onStorage)
-    }
-  }, [client])
-  const rows = useMemo(
-    () =>
-      (query.data ?? []).filter(
-        (item) =>
-          (!selectedShipmentId || item.id === selectedShipmentId) &&
-          `${item.company} ${item.driverName} ${item.items.map((cabin) => cabin.cabinNumber).join(" ")}`
-            .toLowerCase()
-            .includes(search.trim().toLowerCase()) &&
-          (!dateFrom || item.shipmentDate >= dateFrom) &&
-          (!dateTo || item.shipmentDate <= dateTo)
-      ),
-    [query.data, search, dateFrom, dateTo, selectedShipmentId]
-  )
-  return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
-      <PageToolbar>
-        <PageToolbarContent className="grid gap-2 md:grid-cols-[minmax(12rem,1fr)_auto_auto]">
-          <Input
-            aria-label="Поиск отгрузок"
-            placeholder="Компания, водитель или бытовка"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-          <Input
-            aria-label="Отгрузки с даты"
-            type="date"
-            value={dateFrom}
-            onChange={(event) => setDateFrom(event.target.value)}
-          />
-          <Input
-            aria-label="Отгрузки по дату"
-            type="date"
-            value={dateTo}
-            onChange={(event) => setDateTo(event.target.value)}
-          />
-        </PageToolbarContent>
-        <PageToolbarActions>
-          {selectedShipmentId ? (
-            <Button
-              variant="outline"
-              onClick={() => {
-                const next = new URLSearchParams(searchParams)
-                next.delete("shipmentId")
-                setSearchParams(next, { replace: true })
-              }}
-            >
-              Показать все
-            </Button>
-          ) : null}
-          <Button
-            disabled={!selectedWarehouseId}
-            onClick={() => {
-              setResumeShipment(null)
-              setOpen(true)
-            }}
-          >
-            <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-            Создать задание
-          </Button>
-        </PageToolbarActions>
-      </PageToolbar>
-      <div className="min-h-0 flex-1 overflow-auto">
-        <div className="hidden h-full md:block">
-          <OperationsListGrid
-            className="min-h-full"
-            items={rows}
-            columns={[
-              {
-                id: "date",
-                label: "Дата",
-                className: "w-44",
-                getSortValue: (item) => item.shipmentDate,
-                render: (item) => dateLabel(item.shipmentDate),
-              },
-              {
-                id: "company",
-                label: "Компания",
-                className: "w-56",
-                getSortValue: (item) => item.company,
-                render: (item) => item.company,
-              },
-              {
-                id: "driver",
-                label: "Водитель",
-                className: "w-56",
-                getSortValue: (item) => item.driverName,
-                render: (item) => item.driverName,
-              },
-              {
-                id: "cabins",
-                label: "Бытовки",
-                className: "min-w-56",
-                getSortValue: (item) => item.items.length,
-                render: (item) =>
-                  item.items.map((cabin) => cabin.cabinNumber).join(", "),
-              },
-              {
-                id: "preparation",
-                label: "Подготовка к отгрузке",
-                className: "min-w-96",
-                getSortValue: (item) =>
-                  item.items.flatMap((entry) => entry.changes).length,
-                render: (item) => (
-                  <ShipmentPreparationSummary shipment={item} />
-                ),
-              },
-              {
-                id: "status",
-                label: "Статус",
-                className: "w-36",
-                getSortValue: (item) => item.status,
-                render: (item) => <ShipmentStatusBadge status={item.status} />,
-              },
-              {
-                id: "actions",
-                label: "Действия",
-                className: "min-w-72",
-                getSortValue: (item) => item.status,
-                render: (item) =>
-                  item.status === "SHIPPED" ||
-                  item.status === "CANCELLED" ? null : (
-                    <ShipmentRecoveryActions
-                      shipment={item}
-                      warehouseId={selectedWarehouseId!}
-                      serviceWarehouseId={selectedWarehouse?.id ?? ""}
-                      accessToken={accessToken ?? ""}
-                      actor={currentUser?.displayName ?? "Текущий пользователь"}
-                      onChanged={() =>
-                        void client.invalidateQueries({
-                          queryKey: SHIPMENTS_QUERY_KEY,
-                        })
-                      }
-                      onContinue={() => {
-                        setResumeShipment(
-                          item.status === "LEGACY_QUARANTINE" ? null : item
-                        )
-                        setOpen(true)
-                      }}
-                    />
-                  ),
-              },
-            ]}
-          />
-        </div>
-        <div className="grid gap-3 md:hidden">
-          {rows.map((item) => (
-            <ShipmentCard
-              key={item.id}
-              item={item}
-              recovery={
-                item.status === "SHIPPED" ||
-                item.status === "CANCELLED" ? null : (
-                  <ShipmentRecoveryActions
-                    shipment={item}
-                    warehouseId={selectedWarehouseId!}
-                    serviceWarehouseId={selectedWarehouse?.id ?? ""}
-                    accessToken={accessToken ?? ""}
-                    actor={currentUser?.displayName ?? "Текущий пользователь"}
-                    onChanged={() =>
-                      void client.invalidateQueries({
-                        queryKey: SHIPMENTS_QUERY_KEY,
-                      })
-                    }
-                    onContinue={() => {
-                      setResumeShipment(
-                        item.status === "LEGACY_QUARANTINE" ? null : item
-                      )
-                      setOpen(true)
-                    }}
-                  />
-                )
-              }
-            />
-          ))}
-          {rows.length === 0 ? (
-            <p
-              role="status"
-              className="p-4 text-center text-sm text-muted-foreground"
-            >
-              Отгрузки не найдены
-            </p>
-          ) : null}
-        </div>
-      </div>
-      {open ? (
-        <CreateShipmentDialog
-          key={resumeShipment?.id ?? "new-shipment"}
-          open
-          resumeShipment={resumeShipment}
-          warehouseId={selectedWarehouseId}
-          serviceWarehouseId={selectedWarehouse?.id ?? null}
-          accessToken={accessToken}
-          createdBy={currentUser?.displayName ?? "Текущий пользователь"}
-          onOpenChange={setOpen}
-          onCreated={() => {
-            void client.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
-            void client.invalidateQueries({ queryKey: ["rental-items"] })
-          }}
-        />
-      ) : null}
-    </div>
-  )
-}
 
-function ShipmentPreparationSummary({ shipment }: { shipment: ShipmentDto }) {
-  const changed = shipment.items.filter((item) => item.changes.length > 0)
-  if (changed.length === 0)
-    return <span className="text-muted-foreground">Без изменений</span>
-  return (
-    <div className="flex flex-col gap-2">
-      {changed.map((item) => (
-        <div key={item.rentalItemId} className="flex flex-col gap-1">
-          <strong>{item.cabinNumber}</strong>
-          {item.changes.map((change) => (
-            <span
-              key={`${change.direction}-${change.name}`}
-              className="text-xs text-muted-foreground"
-            >
-              {change.label}
-            </span>
-          ))}
-          {item.preparationTask ? (
-            <Badge
-              variant={
-                item.preparationTask.dispatchStatus === "FAILED"
-                  ? "destructive"
-                  : "secondary"
-              }
-            >
-              {item.preparationTask.dispatchStatus === "DISPATCHED"
-                ? "Зарегистрирована"
-                : item.preparationTask.dispatchStatus === "PENDING"
-                  ? "Отправляется"
-                  : item.preparationTask.dispatchStatus === "FAILED"
-                    ? "Ошибка"
-                    : "Черновик"}
-            </Badge>
-          ) : null}
-          {item.preparationTask?.dispatchStatus === "DISPATCHED" ? (
-            <span className="text-xs text-muted-foreground">
-              Task-board: {item.preparationTask.boardTaskId} · очередь{" "}
-              {item.preparationTask.queueCode}
-            </span>
-          ) : null}
-          {item.preparationTask?.dispatchError ? (
-            <span className="text-xs text-destructive">
-              {item.preparationTask.dispatchError}
-            </span>
-          ) : null}
-        </div>
-      ))}
-    </div>
-  )
-}
+  const rows = useMemo(() => {
+    const needle = search.trim().toLocaleLowerCase("ru")
+    return (query.data ?? []).filter((shipment) => {
+      if (selectedShipmentId && shipment.id !== selectedShipmentId) return false
+      if (!showAll && TERMINAL_STATES.has(shipment.state)) return false
+      if (!needle) return true
+      return [
+        shipment.id,
+        shipment.partySnapshot,
+        shipment.driverSnapshot,
+        SHIPMENT_STATE_LABELS[shipment.state],
+        ...shipment.lines.flatMap((line) => [line.id, line.assetId]),
+      ].some((value) => value.toLocaleLowerCase("ru").includes(needle))
+    })
+  }, [query.data, search, selectedShipmentId, showAll])
 
-function ShipmentStatusBadge({ status }: { status: ShipmentDto["status"] }) {
-  return (
-    <Badge
-      variant={
-        status === "FAILED" || status === "CONFLICT"
-          ? "destructive"
-          : "secondary"
-      }
-    >
-      {status === "SHIPPED"
-        ? "Отгружено"
-        : status === "CANCELLED"
-          ? "Отменено"
-          : status === "LEGACY_QUARANTINE"
-            ? "Требуется новый план"
-            : status === "READY_TO_SHIP"
-              ? "Готово к отгрузке"
-              : status === "AWAITING_CONFIRMATION"
-                ? "Ждёт подтверждения"
-                : status === "APPLYING"
-                  ? "Применение подготовки"
-                  : status === "FINALIZING"
-                    ? "Завершение отгрузки"
-                    : status === "CONFLICT"
-                      ? "Конфликт подготовки"
-                      : status === "FAILED"
-                        ? "Ошибка подготовки"
-                        : "Подготовка"}
-    </Badge>
-  )
-}
-
-function ShipmentRecoveryActions({
-  shipment,
-  warehouseId,
-  serviceWarehouseId,
-  accessToken,
-  actor,
-  onChanged,
-  onContinue,
-}: {
-  shipment: ShipmentDto
-  warehouseId: string
-  serviceWarehouseId: string
-  accessToken: string
-  actor: string
-  onChanged: () => void
-  onContinue: () => void
-}) {
-  const [pending, setPending] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [cancelOpen, setCancelOpen] = useState(false)
-  const [cancelReason, setCancelReason] = useState("")
-  const allDispatched = shipment.items.every(
-    (item) =>
-      item.changes.length === 0 ||
-      item.preparationTask?.dispatchStatus === "DISPATCHED"
-  )
-  async function execute(command: () => Promise<unknown>) {
-    setPending(true)
-    setError(null)
-    try {
-      await command()
-      onChanged()
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Операция не выполнена")
-    } finally {
-      setPending(false)
-    }
+  function keyFor(action: string, shipment: ShipmentDocument) {
+    const identity = `${action}:${shipment.id}:${shipment.version}`
+    const existing = commandKeys.current.get(identity)
+    if (existing) return existing
+    const created = commandIdentity()
+    commandKeys.current.set(identity, created)
+    return created
   }
-  if (shipment.status === "LEGACY_QUARANTINE") {
+
+  const confirmMutation = useMutation({
+    mutationFn: (shipment: ShipmentDocument) =>
+      confirmShipmentPreparation({
+        accessToken: accessToken!,
+        documentId: shipment.id,
+        expectedVersion: shipment.version,
+        idempotencyKey: keyFor("confirm", shipment),
+      }),
+    onSuccess: (_result, shipment) => {
+      commandKeys.current.delete(`confirm:${shipment.id}:${shipment.version}`)
+      setCommandError(null)
+      void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
+    },
+    onError: (cause) =>
+      setCommandError(errorMessage(cause, "Не удалось подтвердить подготовку")),
+  })
+
+  const cancelMutation = useMutation({
+    mutationFn: (shipment: ShipmentDocument) =>
+      cancelShipment({
+        accessToken: accessToken!,
+        documentId: shipment.id,
+        expectedVersion: shipment.version,
+        idempotencyKey: keyFor("cancel", shipment),
+      }),
+    onSuccess: (_result, shipment) => {
+      commandKeys.current.delete(`cancel:${shipment.id}:${shipment.version}`)
+      setCancelTarget(null)
+      setCommandError(null)
+      void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
+    },
+    onError: (cause) =>
+      setCommandError(errorMessage(cause, "Не удалось отменить отгрузку")),
+  })
+
+  function clearSelection() {
+    const next = new URLSearchParams(searchParams)
+    next.delete("shipmentId")
+    setSearchParams(next, { replace: true })
+  }
+
+  function actions(shipment: ShipmentDocument) {
+    const confirming =
+      confirmMutation.isPending && confirmMutation.variables?.id === shipment.id
     return (
-      <div className="flex flex-col gap-2">
-        <span className="text-xs text-muted-foreground">
-          Старый MOCK не подтверждает версии и источники мебели.
-        </span>
-        <Button size="sm" variant="outline" onClick={onContinue}>
-          Создать новый план
-        </Button>
-      </div>
-    )
-  }
-  return (
-    <div className="flex flex-col gap-2">
       <div className="flex flex-wrap gap-2">
         <Button
           size="sm"
           variant="outline"
-          disabled={pending}
-          onClick={onContinue}
+          onClick={() =>
+            setExpandedId((current) =>
+              current === shipment.id ? null : shipment.id
+            )
+          }
         >
-          Продолжить
+          {expandedId === shipment.id ? "Скрыть состав" : "Показать состав"}
         </Button>
-        {!allDispatched ? (
+        {shipment.state === "DRAFT" ? (
           <Button
             size="sm"
             variant="outline"
-            disabled={pending || !accessToken || !serviceWarehouseId}
-            onClick={() =>
-              void execute(() =>
-                retryShipmentPreparationTasks({
-                  warehouseId,
-                  serviceWarehouseId,
-                  accessToken,
-                  actor,
-                  shipmentId: shipment.id,
-                })
-              )
-            }
+            disabled
+            title="Проекция отгрузки не содержит immutable equipment allocations; создайте новый план"
           >
-            Повторить задачи
+            Запустить старый черновик
           </Button>
-        ) : shipment.status === "READY_TO_SHIP" ||
-          shipment.status === "FINALIZING" ? (
+        ) : null}
+        {shipment.state === "AWAITING_CONFIRMATION" ? (
           <Button
             size="sm"
-            disabled={pending}
-            onClick={() =>
-              void execute(() =>
-                finalizeShipment({
-                  warehouseId,
-                  shipmentId: shipment.id,
-                  actor,
-                })
-              )
-            }
+            disabled={confirming || !accessToken}
+            onClick={() => confirmMutation.mutate(shipment)}
           >
-            Завершить отгрузку
+            {confirming ? "Подтверждается…" : "Подтвердить подготовку"}
           </Button>
-        ) : (
+        ) : null}
+        {CANCELLABLE_STATES.has(shipment.state) ? (
           <Button
             size="sm"
-            disabled={pending}
-            onClick={() =>
-              void execute(() =>
-                confirmShipmentPreparation({
-                  warehouseId,
-                  shipmentId: shipment.id,
-                  actor,
-                })
-              )
-            }
-          >
-            Подтвердить подготовку
-          </Button>
-        )}
-        {shipment.status !== "READY_TO_SHIP" &&
-        shipment.status !== "APPLYING" &&
-        shipment.status !== "FINALIZING" ? (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={pending}
-            onClick={() => setCancelOpen(true)}
+            variant="destructive"
+            disabled={cancelMutation.isPending || !accessToken}
+            onClick={() => setCancelTarget(shipment)}
           >
             Отменить
           </Button>
         ) : null}
       </div>
-      <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Отменить отгрузку</DialogTitle>
-            <DialogDescription>
-              Резервы будут освобождены, задания task-board — отменены.
-            </DialogDescription>
-          </DialogHeader>
-          <Field data-invalid={cancelOpen && !cancelReason.trim()}>
-            <FieldLabel htmlFor={`cancel-shipment-${shipment.id}`}>
-              Причина
-            </FieldLabel>
-            <Input
-              id={`cancel-shipment-${shipment.id}`}
-              value={cancelReason}
-              aria-invalid={cancelOpen && !cancelReason.trim()}
-              onChange={(event) => setCancelReason(event.target.value)}
-            />
-          </Field>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCancelOpen(false)}>
-              Назад
+    )
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
+      <PageToolbar>
+        <PageToolbarContent>
+          <Input
+            aria-label="Поиск отгрузок"
+            placeholder="ID документа, asset, компания или водитель"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </PageToolbarContent>
+        <PageToolbarActions>
+          {selectedShipmentId ? (
+            <Button variant="outline" onClick={clearSelection}>
+              Показать все документы
             </Button>
-            <Button
-              variant="destructive"
-              disabled={!cancelReason.trim() || pending}
+          ) : null}
+          <Button
+            variant="outline"
+            onClick={() => setShowAll((value) => !value)}
+          >
+            {showAll ? "Скрыть завершённые" : "Показать завершённые"}
+          </Button>
+          <Button
+            variant="outline"
+            disabled={!accessToken || !selectedWarehouseId || query.isFetching}
+            onClick={() => void query.refetch()}
+          >
+            {query.isFetching ? "Обновляется…" : "Обновить"}
+          </Button>
+          <Button
+            disabled={!accessToken || !selectedWarehouseId}
+            onClick={() => setCreateOpen(true)}
+          >
+            <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+            Создать отгрузку
+          </Button>
+        </PageToolbarActions>
+      </PageToolbar>
+
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle>Подготовкой управляет logistics-service</CardTitle>
+          <CardDescription>
+            Документ, версии, task-board задания, equipment holds и компенсация
+            отмены находятся на сервере. Панель не изменяет бытовки, остатки и
+            задачи напрямую.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="text-sm text-muted-foreground">
+          Справочники компаний, кандидатов, оборудования и бытовок-источников
+          пока отсутствуют в публичном shipment contract. Новый план принимает
+          явные asset ID/версии без изменений оборудования; отдельной команды
+          finalizeShipment контракт не предоставляет.
+        </CardContent>
+      </Card>
+
+      {!accessToken ? (
+        <FieldError>Для просмотра отгрузок требуется авторизация.</FieldError>
+      ) : null}
+      {!selectedWarehouseId ? (
+        <FieldError>Выберите склад для просмотра отгрузок.</FieldError>
+      ) : null}
+      {query.error ? (
+        <FieldError>
+          {errorMessage(query.error, "Не удалось загрузить отгрузки")}
+        </FieldError>
+      ) : null}
+      {commandError ? <FieldError>{commandError}</FieldError> : null}
+
+      <div className="min-h-0 flex-1 overflow-auto">
+        <div className="hidden min-h-full md:block">
+          <OperationsListGrid
+            className="min-h-full"
+            items={rows}
+            expandedItemId={expandedId}
+            renderExpandedRow={(shipment) => (
+              <ShipmentLines shipment={shipment} />
+            )}
+            columns={[
+              {
+                id: "createdAt",
+                label: "Создан",
+                className: "w-48",
+                getSortValue: (shipment) => shipment.createdAt,
+                render: (shipment) => formatDateTime(shipment.createdAt),
+              },
+              {
+                id: "document",
+                label: "Документ",
+                className: "min-w-64",
+                getSortValue: (shipment) => shipment.id,
+                render: (shipment) => (
+                  <span className="font-mono text-xs">{shipment.id}</span>
+                ),
+              },
+              {
+                id: "party",
+                label: "Компания",
+                className: "min-w-52",
+                getSortValue: (shipment) => shipment.partySnapshot,
+                render: (shipment) => shipment.partySnapshot,
+              },
+              {
+                id: "driver",
+                label: "Водитель",
+                className: "min-w-52",
+                getSortValue: (shipment) => shipment.driverSnapshot,
+                render: (shipment) => shipment.driverSnapshot,
+              },
+              {
+                id: "state",
+                label: "Статус",
+                className: "w-52",
+                getSortValue: (shipment) =>
+                  SHIPMENT_STATE_LABELS[shipment.state],
+                render: (shipment) => (
+                  <Badge variant={statusVariant(shipment.state)}>
+                    {SHIPMENT_STATE_LABELS[shipment.state]}
+                  </Badge>
+                ),
+              },
+              {
+                id: "lines",
+                label: "Строк",
+                className: "w-24",
+                getSortValue: (shipment) => shipment.lines.length,
+                render: (shipment) => shipment.lines.length,
+              },
+              {
+                id: "actions",
+                label: "Действия",
+                className: "min-w-80",
+                getSortValue: (shipment) => shipment.updatedAt,
+                render: actions,
+              },
+            ]}
+          />
+        </div>
+
+        <div className="grid gap-3 md:hidden">
+          {rows.map((shipment) => (
+            <Card key={shipment.id} size="sm">
+              <CardHeader>
+                <CardTitle>Отгрузка {shipment.id.slice(0, 8)}</CardTitle>
+                <CardDescription>
+                  {shipment.partySnapshot} · {shipment.driverSnapshot}
+                </CardDescription>
+                <CardAction>
+                  <Badge variant={statusVariant(shipment.state)}>
+                    {SHIPMENT_STATE_LABELS[shipment.state]}
+                  </Badge>
+                </CardAction>
+              </CardHeader>
+              <CardContent>
+                <ShipmentLines shipment={shipment} />
+              </CardContent>
+              <CardFooter className="flex-wrap gap-2">
+                {actions(shipment)}
+              </CardFooter>
+            </Card>
+          ))}
+          {rows.length === 0 && !query.isLoading ? (
+            <Card size="sm">
+              <CardHeader>
+                <CardTitle>Отгрузки не найдены</CardTitle>
+                <CardDescription>
+                  Измените фильтр или создайте новый документ отгрузки.
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          ) : null}
+        </div>
+      </div>
+
+      {createOpen && selectedWarehouseId && accessToken ? (
+        <CreateShipmentDialog
+          accessToken={accessToken}
+          warehouseId={selectedWarehouseId}
+          onOpenChange={setCreateOpen}
+        />
+      ) : null}
+
+      <AlertDialog
+        open={cancelTarget !== null}
+        onOpenChange={(open) => !open && setCancelTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Отменить отгрузку?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Logistics-service отменит свои task-board задания, equipment holds
+              и leases. Панель не выполняет компенсацию самостоятельно.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cancelMutation.isPending}>
+              Не отменять
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={cancelMutation.isPending}
               onClick={() =>
-                void execute(() =>
-                  cancelShipment({
-                    warehouseId,
-                    serviceWarehouseId,
-                    accessToken,
-                    actor,
-                    shipmentId: shipment.id,
-                    reason: cancelReason,
-                  })
-                ).then(() => setCancelOpen(false))
+                cancelTarget && cancelMutation.mutate(cancelTarget)
               }
             >
-              Отменить отгрузку
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      {error || shipment.error ? (
-        <span className="text-xs text-destructive">
-          {error ?? shipment.error}
-        </span>
-      ) : null}
-      {(error ?? shipment.error)?.includes("настройки доски") ? (
-        <Button asChild size="sm" variant="link">
-          <a href="/settings/task-board">Настроить доску задач</a>
-        </Button>
-      ) : null}
+              {cancelMutation.isPending ? "Отменяется…" : "Отменить"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
 
-function ShipmentCard({
-  item,
-  recovery,
-}: {
-  item: ShipmentDto
-  recovery: React.ReactNode
-}) {
+function ShipmentLines({ shipment }: { shipment: ShipmentDocument }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{item.company}</CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3 text-sm">
-        <div className="grid grid-cols-2 gap-2">
-          <span className="text-muted-foreground">Дата</span>
-          <span>{dateLabel(item.shipmentDate)}</span>
-          <span className="text-muted-foreground">Водитель</span>
-          <span>{item.driverName}</span>
-          <span className="text-muted-foreground">Бытовки</span>
-          <span>{item.items.map((cabin) => cabin.cabinNumber).join(", ")}</span>
-        </div>
-        <Separator />
-        <strong>Подготовка к отгрузке</strong>
-        <ShipmentPreparationSummary shipment={item} />
-        <ShipmentStatusBadge status={item.status} />
-        {recovery}
-      </CardContent>
-    </Card>
+    <div className="grid gap-2">
+      {shipment.lines.map((line) => (
+        <Card key={line.id} size="sm">
+          <CardHeader>
+            <CardTitle>Строка {line.lineNumber}</CardTitle>
+            <CardDescription>
+              Server-issued asset и line versions
+            </CardDescription>
+            <CardAction>
+              <Badge variant="outline">v{line.version}</Badge>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="grid gap-1 text-sm">
+            <span>
+              Asset: <span className="font-mono text-xs">{line.assetId}</span>
+            </span>
+            <span>
+              Версия asset: {line.assetVersion} · Line ID:{" "}
+              <span className="font-mono text-xs">{line.id}</span>
+            </span>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
   )
 }
 
-function CreateShipmentDialog({
-  open,
-  resumeShipment,
-  warehouseId,
-  serviceWarehouseId,
-  accessToken,
-  createdBy,
-  onOpenChange,
-  onCreated,
-}: {
-  open: boolean
-  resumeShipment: ShipmentDto | null
-  warehouseId: string | null
-  serviceWarehouseId: string | null
-  accessToken: string | null
-  createdBy: string
-  onOpenChange: (open: boolean) => void
-  onCreated: () => void
-}) {
-  const dialogContentRef = useRef<HTMLDivElement>(null)
-  const [company, setCompany] = useState(resumeShipment?.company ?? "")
-  const [companyInput, setCompanyInput] = useState(
-    resumeShipment?.company ?? ""
-  )
-  const [shipmentDate, setShipmentDate] = useState(
-    resumeShipment?.shipmentDate ?? today()
-  )
-  const [driverId, setDriverId] = useState(resumeShipment?.driverId ?? "")
-  const [cabins, setCabins] = useState<CabinDraft[]>(() =>
-    resumeShipment
-      ? resumeShipment.items.map((item) => ({
-          slotId: crypto.randomUUID(),
-          rentalItemId: item.rentalItemId,
-          cabinNumber: item.cabinNumber,
-          expectedTargetVersion: item.expectedTargetVersion,
-          contentsBefore: item.contentsBefore.map((entry) => ({ ...entry })),
-          contentsPlanned: item.contentsPlanned.map((entry) => ({ ...entry })),
-          sourceAllocations: structuredClone(item.sourceAllocations),
-          preparationTask: item.preparationTask
-            ? structuredClone(item.preparationTask)
-            : null,
-        }))
-      : [newSlot()]
-  )
-  const [shipmentDraftId, setShipmentDraftId] = useState<string | null>(
-    resumeShipment?.id ?? null
-  )
-  const [shipmentDraftVersion, setShipmentDraftVersion] = useState(
-    resumeShipment?.version
-  )
-  const [error, setError] = useState<string | null>(
-    resumeShipment?.error ?? null
-  )
-  const companies = useQuery({
-    queryKey: [...SHIPMENTS_QUERY_KEY, "companies", warehouseId, open],
-    queryFn: () => listCompanies(warehouseId!),
-    enabled: open && Boolean(warehouseId),
-  })
-  const candidates = useQuery({
-    queryKey: [
-      ...SHIPMENTS_QUERY_KEY,
-      "shipment-candidates",
-      warehouseId,
-      company,
-      open,
-    ],
-    queryFn: () => listShipmentCandidates(warehouseId!, company),
-    enabled: open && Boolean(warehouseId && company),
-  })
-  const equipment = useQuery({
-    queryKey: [
-      ...SHIPMENTS_QUERY_KEY,
-      "shipment-equipment",
-      warehouseId,
-      shipmentDraftId,
-      open,
-    ],
-    queryFn: () => listShipmentEquipment(warehouseId!, shipmentDraftId),
-    enabled: open && Boolean(warehouseId),
-  })
-  const selectedIds = cabins.map((item) => item.rentalItemId).filter(Boolean)
-  const sourceCabins = useQuery({
-    queryKey: [
-      ...SHIPMENTS_QUERY_KEY,
-      "source-cabins",
-      warehouseId,
-      selectedIds.join("|"),
-      open,
-    ],
-    queryFn: () =>
-      listShipmentSourceCabins(warehouseId!, selectedIds, shipmentDraftId),
-    enabled: open && Boolean(warehouseId),
-  })
-  const groups = useQuery({
-    queryKey: repairWorkerGroupsQueryKey({
-      warehouseId: warehouseId ?? "none",
-      queueCode: null,
-      routeQueueKind: "MOVEMENT",
-      purpose: "DRIVER_DIRECTORY",
-    }),
-    queryFn: () =>
-      listRepairWorkerGroups(
-        {
-          warehouseId: warehouseId!,
-          queueCode: null,
-          routeQueueKind: "MOVEMENT",
-          purpose: "DRIVER_DIRECTORY",
-        },
-        accessToken ?? undefined
-      ),
-    enabled: open && Boolean(warehouseId),
-  })
-  const drivers = useMemo(
-    () =>
-      Array.from(
-        new Map(
-          (groups.data ?? [])
-            .filter((group) => group.active)
-            .flatMap((group) => group.members)
-            .map((member) => [member.id, member])
-        ).values()
-      ),
-    [groups.data]
-  )
-  function buildDraft(nextCabins: CabinDraft[]) {
-    const driver = drivers.find((item) => item.id === driverId)
-    if (!driver) throw new Error("Выберите водителя")
-    return {
-      shipmentId: shipmentDraftId,
-      expectedVersion: shipmentDraftVersion,
-      warehouseId: warehouseId!,
-      accessToken,
-      company,
-      driverId: driver.id,
-      driverName: driver.name,
-      shipmentDate,
-      items: nextCabins
-        .filter((item) => item.rentalItemId)
-        .map((item) => ({
-          rentalItemId: item.rentalItemId,
-          expectedTargetVersion: item.expectedTargetVersion,
-          contentsBefore: item.contentsBefore,
-          contentsPlanned: item.contentsPlanned,
-          sourceAllocations: item.sourceAllocations,
-          preparationTask: item.preparationTask,
-        })),
-      createdBy,
-    }
-  }
+type ShipmentLineDraft = {
+  key: string
+  assetId: string
+  assetVersion: string
+}
 
-  function syncShipment(saved: ShipmentDto) {
-    setShipmentDraftId(saved.id)
-    setShipmentDraftVersion(saved.version)
-    setCabins((current) =>
-      saved.items.map((item) => ({
-        slotId:
-          current.find((entry) => entry.rentalItemId === item.rentalItemId)
-            ?.slotId ?? crypto.randomUUID(),
-        rentalItemId: item.rentalItemId,
-        cabinNumber: item.cabinNumber,
-        expectedTargetVersion: item.expectedTargetVersion,
-        contentsBefore: item.contentsBefore.map((entry) => ({ ...entry })),
-        contentsPlanned: item.contentsPlanned.map((entry) => ({ ...entry })),
-        sourceAllocations: structuredClone(item.sourceAllocations),
-        preparationTask: item.preparationTask
-          ? structuredClone(item.preparationTask)
-          : null,
-      }))
-    )
+function emptyLine(): ShipmentLineDraft {
+  return {
+    key: commandIdentity(),
+    assetId: "",
+    assetVersion: "0",
+  }
+}
+
+function CreateShipmentDialog({
+  accessToken,
+  warehouseId,
+  onOpenChange,
+}: {
+  accessToken: string
+  warehouseId: string
+  onOpenChange: (open: boolean) => void
+}) {
+  const queryClient = useQueryClient()
+  const [partySnapshot, setPartySnapshot] = useState("")
+  const [driverSnapshot, setDriverSnapshot] = useState("")
+  const [lines, setLines] = useState<ShipmentLineDraft[]>(() => [emptyLine()])
+  const [draft, setDraft] = useState<ShipmentDocument | null>(null)
+  const [createKey] = useState(commandIdentity)
+  const [planKey] = useState(commandIdentity)
+  const [validationError, setValidationError] = useState<string | null>(null)
+
+  function planLines(): ShipmentPlanLine[] {
+    return lines.map((line) => ({
+      assetId: line.assetId.trim(),
+      assetVersion: Number(line.assetVersion),
+      allocations: [],
+    }))
   }
 
   const mutation = useMutation({
     mutationFn: async () => {
-      return upsertShipmentDraft(buildDraft(cabins))
+      const immutableLines = planLines()
+      let created = draft
+      if (!created) {
+        created = await createShipment({
+          accessToken,
+          warehouseId,
+          partySnapshot: partySnapshot.trim(),
+          driverSnapshot: driverSnapshot.trim(),
+          lines: immutableLines,
+          idempotencyKey: createKey,
+        })
+        setDraft(created)
+      }
+      if (created.state !== "DRAFT") {
+        throw new Error("Созданный документ уже вышел из состояния DRAFT.")
+      }
+      return replaceShipmentPlan({
+        accessToken,
+        documentId: created.id,
+        expectedVersion: created.version,
+        partySnapshot: partySnapshot.trim(),
+        driverSnapshot: driverSnapshot.trim(),
+        lines: immutableLines,
+        idempotencyKey: planKey,
+      })
     },
-    onSuccess: (saved) => {
-      syncShipment(saved)
-      onCreated()
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
       onOpenChange(false)
-      setCompany("")
-      setCompanyInput("")
-      setDriverId("")
-      setCabins([newSlot()])
-      setError(null)
     },
-    onError: (cause) =>
-      setError(
-        cause instanceof Error ? cause.message : "Не удалось создать отгрузку"
-      ),
-  })
-  const dispatchMutation = useMutation({
-    mutationFn: async ({
-      slotId,
-      task,
-    }: {
-      slotId: string
-      task: ShipmentPreparationTaskDto
-    }) => {
-      const nextCabins = cabins.map((cabin) =>
-        cabin.slotId === slotId ? { ...cabin, preparationTask: task } : cabin
-      )
-      const draft = await upsertShipmentDraft(buildDraft(nextCabins))
-      setShipmentDraftId(draft.id)
-      const cabin = nextCabins.find((item) => item.slotId === slotId)!
-      return dispatchShipmentPreparationTask({
-        warehouseId: warehouseId!,
-        serviceWarehouseId: serviceWarehouseId!,
-        accessToken: accessToken!,
-        actor: createdBy,
-        shipmentId: draft.id,
-        rentalItemId: cabin.rentalItemId,
-      })
-    },
-    onSuccess: (saved) => {
-      syncShipment(saved)
-      setError(null)
-      onCreated()
-    },
-    onError: (cause) => {
-      setError(
-        cause instanceof Error ? cause.message : "Не удалось отправить задачу"
-      )
-      onCreated()
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
     },
   })
-  const hasDispatched = cabins.some(
-    (item) =>
-      item.preparationTask?.dispatchStatus === "DISPATCHED" ||
-      item.preparationTask?.dispatchStatus === "PENDING"
-  )
-  const unacknowledged = cabins.some((cabin) => {
-    const changes = computeShipmentContentsChanges(
-      cabin.contentsBefore,
-      cabin.contentsPlanned
-    )
-    return (
-      changes.length > 0 &&
-      cabin.preparationTask?.dispatchStatus !== "DISPATCHED"
-    )
-  })
 
-  function applyCompany(value: string) {
-    const nextValue = value.trim()
-    setCompany(nextValue)
-    setCompanyInput(nextValue)
-    setCabins([newSlot()])
-  }
-
-  function selectCabin(slotId: string, rentalItemId: string | null) {
-    const candidate = candidates.data?.find(
-      (entry) => entry.item.id === rentalItemId
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const invalidLine = lines.find(
+      (line) =>
+        !line.assetId.trim() ||
+        !Number.isSafeInteger(Number(line.assetVersion)) ||
+        Number(line.assetVersion) < 0
     )
-    setCabins((current) =>
-      current.map((slot) =>
-        slot.slotId === slotId
-          ? candidate
-            ? {
-                ...slot,
-                rentalItemId: candidate.item.id,
-                cabinNumber: candidate.item.number,
-                expectedTargetVersion: candidate.item.version,
-                contentsBefore: candidate.item.contentsItems.map((item) => ({
-                  ...item,
-                })),
-                contentsPlanned: candidate.item.contentsItems.map((item) => ({
-                  ...item,
-                })),
-                sourceAllocations: [],
-                preparationTask: null,
-              }
-            : newSlot()
-          : slot
+    if (!partySnapshot.trim() || !driverSnapshot.trim() || invalidLine) {
+      setValidationError(
+        "Укажите компанию, водителя и для каждой строки asset UUID с неотрицательной версией."
       )
-    )
-  }
-
-  function updateContents(
-    slotId: string,
-    updater: (items: RentalItemContentsItemDto[]) => RentalItemContentsItemDto[]
-  ) {
-    setCabins((current) =>
-      current.map((slot) => {
-        if (slot.slotId !== slotId) return slot
-        const contentsPlanned = updater(slot.contentsPlanned)
-        return {
-          ...slot,
-          contentsPlanned,
-          sourceAllocations: warehouseAllocation(
-            slot.contentsBefore,
-            contentsPlanned
-          ),
-          preparationTask: null,
-        }
-      })
-    )
-  }
-
-  function updateAllocations(
-    slotId: string,
-    sourceAllocations: ShipmentSourceAllocation[]
-  ) {
-    setCabins((current) =>
-      current.map((slot) =>
-        slot.slotId === slotId
-          ? { ...slot, sourceAllocations, preparationTask: null }
-          : slot
-      )
-    )
+      return
+    }
+    setValidationError(null)
+    mutation.mutate()
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        ref={dialogContentRef}
-        className="max-h-[calc(100svh-1rem)] overflow-y-auto sm:max-w-4xl"
-      >
-        <DialogHeader>
-          <DialogTitle>Создать отгрузку в аренду</DialogTitle>
-          <DialogDescription>
-            Выберите компанию, дату, водителя, бытовки и подготовьте их
-            наполнение.
-          </DialogDescription>
-        </DialogHeader>
-        <FieldGroup className="grid gap-4 sm:grid-cols-2">
-          <Field>
-            <FieldLabel htmlFor="shipment-company">Компания</FieldLabel>
-            <Combobox
-              items={companies.data ?? []}
-              value={company || null}
-              inputValue={companyInput}
-              onInputValueChange={(value, eventDetails) => {
-                if (eventDetails.reason === "input-change") {
-                  setCompanyInput(value)
-                  return
-                }
-                if (value === "" && eventDetails.reason === "clear-press") {
-                  applyCompany("")
-                }
-              }}
-              onValueChange={(value) => {
-                if (value !== null) applyCompany(value)
-              }}
-            >
-              <ComboboxInput
-                id="shipment-company"
-                aria-label="Компания"
-                placeholder="Начните вводить компанию"
-                showClear
-                disabled={hasDispatched}
-                onKeyDownCapture={(event) => {
-                  if (event.key !== "Enter") return
-                  if (event.currentTarget.getAttribute("aria-activedescendant"))
-                    return
-                  applyCompany(companyInput)
-                }}
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[calc(100svh-1rem)] overflow-y-auto sm:max-w-3xl">
+        <form onSubmit={submit}>
+          <DialogHeader>
+            <DialogTitle>Создать и запустить отгрузку</DialogTitle>
+            <DialogDescription>
+              Панель создаст immutable DRAFT и повторит тот же payload через
+              команду plan. При сетевой ошибке обе команды повторяются со
+              стабильными Idempotency-Key без browser rollback.
+            </DialogDescription>
+          </DialogHeader>
+          <FieldGroup className="py-4">
+            <Field>
+              <FieldLabel htmlFor="shipment-party">Компания</FieldLabel>
+              <Input
+                id="shipment-party"
+                required
+                maxLength={512}
+                disabled={draft !== null}
+                value={partySnapshot}
+                onChange={(event) => setPartySnapshot(event.target.value)}
               />
-              <ComboboxContent portalContainer={dialogContentRef}>
-                <ComboboxList>
-                  <ComboboxEmpty>Компании не найдены</ComboboxEmpty>
-                  <ComboboxGroup>
-                    {(companies.data ?? []).map((item) => (
-                      <ComboboxItem key={item} value={item}>
-                        {item}
-                      </ComboboxItem>
-                    ))}
-                  </ComboboxGroup>
-                </ComboboxList>
-              </ComboboxContent>
-            </Combobox>
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="shipment-date">Дата отгрузки</FieldLabel>
-            <Input
-              id="shipment-date"
-              type="date"
-              disabled={hasDispatched}
-              value={shipmentDate}
-              onChange={(event) => {
-                setShipmentDate(event.target.value)
-                setCabins((current) =>
-                  current.map((cabin) => ({
-                    ...cabin,
-                    preparationTask: null,
-                  }))
-                )
-              }}
-            />
-          </Field>
-          <Field className="sm:col-span-2">
-            <FieldLabel htmlFor="shipment-driver">Водитель</FieldLabel>
-            <Select
-              value={driverId}
-              onValueChange={setDriverId}
-              disabled={hasDispatched}
-            >
-              <SelectTrigger id="shipment-driver">
-                <SelectValue placeholder="Выберите водителя" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {drivers.map((driver) => (
-                    <SelectItem key={driver.id} value={driver.id}>
-                      {driver.name}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-        </FieldGroup>
-        <FieldSet>
-          <FieldLegend variant="label">Бытовки и наполнение</FieldLegend>
-          <FieldDescription>
-            Зарезервированные за выбранной компанией бытовки показаны первыми.
-          </FieldDescription>
-          <FieldGroup>
-            {cabins.map((cabin, index) => (
-              <Card key={cabin.slotId}>
-                <CardHeader>
-                  <CardTitle>Бытовка {index + 1}</CardTitle>
-                </CardHeader>
-                <CardContent className="flex flex-col gap-4">
-                  <Field>
-                    <FieldLabel htmlFor={`shipment-cabin-${cabin.slotId}`}>
-                      Номер бытовки
-                    </FieldLabel>
-                    <div className="flex gap-2">
-                      <Combobox
-                        items={(candidates.data ?? []).map(
-                          (entry) => entry.item.number
-                        )}
-                        value={cabin.cabinNumber || null}
-                        onValueChange={(value) =>
-                          selectCabin(
-                            cabin.slotId,
-                            (candidates.data ?? []).find(
-                              (entry) => entry.item.number === value
-                            )?.item.id ?? null
-                          )
-                        }
-                      >
-                        <ComboboxInput
-                          id={`shipment-cabin-${cabin.slotId}`}
-                          className="flex-1"
-                          placeholder={
-                            company
-                              ? "Введите номер бытовки"
-                              : "Сначала выберите компанию"
-                          }
-                          disabled={!company || hasDispatched}
-                        />
-                        <ComboboxContent portalContainer={dialogContentRef}>
-                          <ComboboxList>
-                            <ComboboxEmpty>
-                              Доступные бытовки не найдены
-                            </ComboboxEmpty>
-                            <CandidateGroups
-                              candidates={candidates.data ?? []}
-                              selectedIds={selectedIds}
-                              currentId={cabin.rentalItemId}
-                            />
-                          </ComboboxList>
-                        </ComboboxContent>
-                      </Combobox>
-                      {cabins.length > 1 ? (
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="outline"
-                          disabled={hasDispatched}
-                          aria-label={`Удалить бытовку ${index + 1}`}
-                          onClick={() =>
-                            setCabins((current) =>
-                              current.filter(
-                                (slot) => slot.slotId !== cabin.slotId
+              <FieldDescription>
+                Это immutable текстовый снимок; справочник компаний пока не
+                опубликован.
+              </FieldDescription>
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="shipment-driver">Водитель</FieldLabel>
+              <Input
+                id="shipment-driver"
+                required
+                maxLength={512}
+                disabled={draft !== null}
+                value={driverSnapshot}
+                onChange={(event) => setDriverSnapshot(event.target.value)}
+              />
+            </Field>
+            <FieldSet>
+              <FieldLegend variant="label">Строки отгрузки</FieldLegend>
+              <FieldDescription>
+                Укажите server-issued asset ID и версию. Equipment allocations
+                пусты, потому что публичного discovery contract ещё нет.
+              </FieldDescription>
+              <FieldGroup>
+                {lines.map((line, index) => (
+                  <Card key={line.key} size="sm">
+                    <CardHeader>
+                      <CardTitle>Бытовка {index + 1}</CardTitle>
+                      {lines.length > 1 ? (
+                        <CardAction>
+                          <Button
+                            type="button"
+                            size="icon-sm"
+                            variant="outline"
+                            disabled={draft !== null}
+                            aria-label={`Удалить строку ${index + 1}`}
+                            onClick={() =>
+                              setLines((current) =>
+                                current.filter((item) => item.key !== line.key)
                               )
-                            )
-                          }
-                        >
-                          <HugeiconsIcon icon={Delete02Icon} />
-                        </Button>
+                            }
+                          >
+                            <HugeiconsIcon icon={Delete02Icon} />
+                          </Button>
+                        </CardAction>
                       ) : null}
-                    </div>
-                  </Field>
-                  {cabin.rentalItemId ? (
-                    <CabinContentsEditor
-                      cabin={cabin}
-                      frozen={
-                        cabin.preparationTask?.dispatchStatus ===
-                          "DISPATCHED" ||
-                        cabin.preparationTask?.dispatchStatus === "PENDING"
-                      }
-                      onUpdate={(updater) =>
-                        updateContents(cabin.slotId, updater)
-                      }
-                      catalog={combineShipmentPreparationCatalog(
-                        equipment.data ?? [],
-                        sourceCabins.data ?? []
-                      )}
-                      sourceCabins={sourceCabins.data ?? []}
-                      onAllocationsUpdate={(allocations) =>
-                        updateAllocations(cabin.slotId, allocations)
-                      }
-                      onCreateTask={() => {
-                        const changes = computeShipmentContentsChanges(
-                          cabin.contentsBefore,
-                          cabin.contentsPlanned
-                        )
-                        const task = createShipmentPreparationTask(
-                          changes,
-                          cabin.preparationTask?.id,
-                          stablePreparationExternalTaskId(
-                            shipmentPreparationIdentity({
-                              warehouseId: warehouseId!,
-                              company,
-                              shipmentDate,
-                              rentalItemId: cabin.rentalItemId,
-                              changes,
-                              sourceAllocations: cabin.sourceAllocations,
-                            })
-                          )
-                        )
-                        dispatchMutation.mutate({ slotId: cabin.slotId, task })
-                      }}
-                    />
-                  ) : null}
-                </CardContent>
-              </Card>
-            ))}
+                    </CardHeader>
+                    <CardContent>
+                      <FieldGroup>
+                        <Field>
+                          <FieldLabel htmlFor={`shipment-asset-${line.key}`}>
+                            Asset UUID
+                          </FieldLabel>
+                          <Input
+                            id={`shipment-asset-${line.key}`}
+                            required
+                            disabled={draft !== null}
+                            placeholder="00000000-0000-0000-0000-000000000000"
+                            value={line.assetId}
+                            onChange={(event) =>
+                              setLines((current) =>
+                                current.map((item) =>
+                                  item.key === line.key
+                                    ? { ...item, assetId: event.target.value }
+                                    : item
+                                )
+                              )
+                            }
+                          />
+                        </Field>
+                        <Field>
+                          <FieldLabel htmlFor={`shipment-version-${line.key}`}>
+                            Текущая версия asset
+                          </FieldLabel>
+                          <Input
+                            id={`shipment-version-${line.key}`}
+                            type="number"
+                            min={0}
+                            step={1}
+                            required
+                            disabled={draft !== null}
+                            value={line.assetVersion}
+                            onChange={(event) =>
+                              setLines((current) =>
+                                current.map((item) =>
+                                  item.key === line.key
+                                    ? {
+                                        ...item,
+                                        assetVersion: event.target.value,
+                                      }
+                                    : item
+                                )
+                              )
+                            }
+                          />
+                        </Field>
+                      </FieldGroup>
+                    </CardContent>
+                  </Card>
+                ))}
+              </FieldGroup>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={lines.length >= 100 || draft !== null}
+                onClick={() => setLines((current) => [...current, emptyLine()])}
+              >
+                <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+                Добавить строку
+              </Button>
+            </FieldSet>
+            {draft ? (
+              <FieldDescription>
+                Черновик {draft.id} уже создан. Повтор отправит только тот же
+                immutable plan с прежним Idempotency-Key.
+              </FieldDescription>
+            ) : null}
+            {validationError ? (
+              <FieldError>{validationError}</FieldError>
+            ) : null}
+            {mutation.error ? (
+              <FieldError>
+                {errorMessage(
+                  mutation.error,
+                  "Не удалось создать или запустить отгрузку"
+                )}
+              </FieldError>
+            ) : null}
+          </FieldGroup>
+          <DialogFooter>
             <Button
               type="button"
               variant="outline"
-              disabled={
-                hasDispatched ||
-                !company ||
-                cabins.some((item) => !item.rentalItemId)
-              }
-              onClick={() => setCabins((current) => [...current, newSlot()])}
+              onClick={() => onOpenChange(false)}
             >
-              <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-              Добавить ещё бытовку
+              Закрыть
             </Button>
-          </FieldGroup>
-        </FieldSet>
-        {error ? <FieldError>{error}</FieldError> : null}
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Отмена
-          </Button>
-          <Button
-            disabled={
-              !company ||
-              !serviceWarehouseId ||
-              !accessToken ||
-              !shipmentDate ||
-              !driverId ||
-              selectedIds.length === 0 ||
-              cabins.some((item) => !item.rentalItemId) ||
-              unacknowledged ||
-              mutation.isPending
-            }
-            onClick={() => mutation.mutate()}
-          >
-            Сохранить план
-          </Button>
-        </DialogFooter>
+            <Button type="submit" disabled={mutation.isPending}>
+              {mutation.isPending
+                ? "Запускается…"
+                : draft
+                  ? "Повторить запуск подготовки"
+                  : "Создать и запустить"}
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
-  )
-}
-
-function CandidateGroups({
-  candidates,
-  selectedIds,
-  currentId,
-}: {
-  candidates: ShipmentCandidateDto[]
-  selectedIds: string[]
-  currentId: string
-}) {
-  const available = candidates.filter(
-    (entry) =>
-      !selectedIds.includes(entry.item.id) || entry.item.id === currentId
-  )
-  const reserved = available.filter((entry) => entry.reservedForCompany)
-  const free = available.filter((entry) => !entry.reservedForCompany)
-  return (
-    <>
-      {reserved.length ? (
-        <ComboboxGroup>
-          <ComboboxLabel>Зарезервированы компанией</ComboboxLabel>
-          {reserved.map((entry) => (
-            <ComboboxItem key={entry.item.id} value={entry.item.number}>
-              <span>{entry.item.number}</span>
-              <Badge variant="secondary">Зарезервирована</Badge>
-            </ComboboxItem>
-          ))}
-        </ComboboxGroup>
-      ) : null}
-      {free.length ? (
-        <ComboboxGroup>
-          <ComboboxLabel>Другие доступные</ComboboxLabel>
-          {free.map((entry) => (
-            <ComboboxItem key={entry.item.id} value={entry.item.number}>
-              {entry.item.number}
-            </ComboboxItem>
-          ))}
-        </ComboboxGroup>
-      ) : null}
-    </>
-  )
-}
-
-function CabinContentsEditor({
-  cabin,
-  frozen,
-  onUpdate,
-  catalog,
-  sourceCabins,
-  onAllocationsUpdate,
-  onCreateTask,
-}: {
-  cabin: CabinDraft
-  frozen: boolean
-  onUpdate: (
-    updater: (items: RentalItemContentsItemDto[]) => RentalItemContentsItemDto[]
-  ) => void
-  catalog: Array<{ name: string; availableQuantity: number }>
-  sourceCabins: ShipmentSourceCandidate[]
-  onAllocationsUpdate: (allocations: ShipmentSourceAllocation[]) => void
-  onCreateTask: () => void
-}) {
-  const changes = computeShipmentContentsChanges(
-    cabin.contentsBefore,
-    cabin.contentsPlanned
-  )
-  return (
-    <div className="flex flex-col gap-3">
-      <LogisticsCabinContentsEditor
-        contents={cabin.contentsPlanned}
-        catalog={catalog}
-        frozen={frozen}
-        mode="shipment"
-        onUpdate={onUpdate}
-      />
-      <ShipmentSourcesEditor
-        cabin={cabin}
-        sourceCabins={sourceCabins}
-        frozen={frozen}
-        onChange={onAllocationsUpdate}
-      />
-      {changes.length ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Подготовка к отгрузке</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2">
-            {changes.map((change) => (
-              <span key={`${change.direction}-${change.name}`}>
-                {change.label}
-              </span>
-            ))}
-            <Button
-              type="button"
-              size="sm"
-              disabled={frozen}
-              onClick={onCreateTask}
-            >
-              {cabin.preparationTask ? "Обновить задачу" : "Создать задачу"}
-            </Button>
-            {cabin.preparationTask ? (
-              <Badge variant="secondary">Задача подготовлена</Badge>
-            ) : null}
-          </CardContent>
-        </Card>
-      ) : null}
-    </div>
-  )
-}
-
-function ShipmentSourcesEditor({
-  cabin,
-  sourceCabins,
-  frozen,
-  onChange,
-}: {
-  cabin: CabinDraft
-  sourceCabins: ShipmentSourceCandidate[]
-  frozen: boolean
-  onChange: (allocations: ShipmentSourceAllocation[]) => void
-}) {
-  const [sourceId, setSourceId] = useState("")
-  const bring = computeShipmentContentsChanges(
-    cabin.contentsBefore,
-    cabin.contentsPlanned
-  ).filter((change) => change.direction === "BRING")
-  if (!bring.length) return null
-  const cabinAllocations = cabin.sourceAllocations.filter(
-    (allocation) => allocation.sourceType === "CABIN"
-  )
-
-  function commit(nextCabinAllocations: ShipmentSourceAllocation[]) {
-    const warehouseItems = bring
-      .map((change) => {
-        const fromCabins = nextCabinAllocations.reduce(
-          (sum, allocation) =>
-            sum +
-            (allocation.items.find(
-              (item) =>
-                item.name.toLocaleLowerCase("ru-RU") ===
-                change.name.toLocaleLowerCase("ru-RU")
-            )?.quantity ?? 0),
-          0
-        )
-        return { name: change.name, quantity: change.quantity - fromCabins }
-      })
-      .filter((item) => item.quantity > 0)
-    onChange([
-      ...(warehouseItems.length
-        ? [
-            {
-              sourceType: "WAREHOUSE" as const,
-              sourceRentalItemId: null,
-              sourceCabinNumber: null,
-              expectedSourceVersion: null,
-              items: warehouseItems,
-            },
-          ]
-        : []),
-      ...nextCabinAllocations.filter((allocation) => allocation.items.length),
-    ])
-  }
-
-  function changeQuantity(
-    allocation: ShipmentSourceAllocation,
-    name: string,
-    quantity: number
-  ) {
-    const required = bring.find(
-      (change) =>
-        change.name.toLocaleLowerCase("ru-RU") ===
-        name.toLocaleLowerCase("ru-RU")
-    )?.quantity
-    const source = sourceCabins.find(
-      (candidate) => candidate.id === allocation.sourceRentalItemId
-    )
-    const available =
-      source?.contentsItems.find(
-        (item) =>
-          item.name.toLocaleLowerCase("ru-RU") ===
-          name.toLocaleLowerCase("ru-RU")
-      )?.quantity ?? 0
-    const allocatedElsewhere = cabinAllocations
-      .filter(
-        (candidate) =>
-          candidate.sourceRentalItemId !== allocation.sourceRentalItemId
-      )
-      .reduce(
-        (sum, candidate) =>
-          sum +
-          (candidate.items.find(
-            (item) =>
-              item.name.toLocaleLowerCase("ru-RU") ===
-              name.toLocaleLowerCase("ru-RU")
-          )?.quantity ?? 0),
-        0
-      )
-    const nextQuantity = Math.max(
-      0,
-      Math.min(
-        quantity || 0,
-        Math.max(0, (required ?? 0) - allocatedElsewhere),
-        available
-      )
-    )
-    commit(
-      cabinAllocations.map((candidate) =>
-        candidate.sourceRentalItemId === allocation.sourceRentalItemId
-          ? {
-              ...candidate,
-              items: [
-                ...candidate.items.filter(
-                  (item) =>
-                    item.name.toLocaleLowerCase("ru-RU") !==
-                    name.toLocaleLowerCase("ru-RU")
-                ),
-                ...(nextQuantity ? [{ name, quantity: nextQuantity }] : []),
-              ],
-            }
-          : candidate
-      )
-    )
-  }
-
-  return (
-    <FieldSet>
-      <FieldLegend variant="label">Источники мебели</FieldLegend>
-      <FieldDescription>
-        Остаток, не распределённый по бытовкам, резервируется на складе.
-      </FieldDescription>
-      <FieldGroup>
-        {cabinAllocations.map((allocation) => {
-          const source = sourceCabins.find(
-            (candidate) => candidate.id === allocation.sourceRentalItemId
-          )
-          return (
-            <Card key={allocation.sourceRentalItemId} size="sm">
-              <CardHeader className="flex-row items-center justify-between">
-                <CardTitle>{allocation.sourceCabinNumber}</CardTitle>
-                <Button
-                  type="button"
-                  size="icon-xs"
-                  variant="ghost"
-                  disabled={frozen}
-                  aria-label={`Удалить источник ${allocation.sourceCabinNumber}`}
-                  onClick={() =>
-                    commit(
-                      cabinAllocations.filter(
-                        (candidate) => candidate !== allocation
-                      )
-                    )
-                  }
-                >
-                  <HugeiconsIcon icon={Delete02Icon} />
-                </Button>
-              </CardHeader>
-              <CardContent className="grid gap-3 sm:grid-cols-2">
-                {bring.map((change) => {
-                  const controlId = `shipment-source-${cabin.slotId}-${allocation.sourceRentalItemId}-${change.name.replace(/[^a-zа-яё0-9]+/gi, "-")}`
-                  const available =
-                    source?.contentsItems.find(
-                      (item) =>
-                        item.name.toLocaleLowerCase("ru-RU") ===
-                        change.name.toLocaleLowerCase("ru-RU")
-                    )?.quantity ?? 0
-                  return (
-                    <Field key={change.name}>
-                      <FieldLabel htmlFor={controlId}>
-                        {change.name} · доступно {available}
-                      </FieldLabel>
-                      <Input
-                        id={controlId}
-                        aria-label={`${change.name} из бытовки ${allocation.sourceCabinNumber}`}
-                        type="number"
-                        min={0}
-                        max={Math.min(change.quantity, available)}
-                        disabled={frozen || available === 0}
-                        value={
-                          allocation.items.find(
-                            (item) =>
-                              item.name.toLocaleLowerCase("ru-RU") ===
-                              change.name.toLocaleLowerCase("ru-RU")
-                          )?.quantity ?? 0
-                        }
-                        onChange={(event) =>
-                          changeQuantity(
-                            allocation,
-                            change.name,
-                            Number(event.target.value)
-                          )
-                        }
-                      />
-                    </Field>
-                  )
-                })}
-              </CardContent>
-            </Card>
-          )
-        })}
-        <Field>
-          <FieldLabel htmlFor={`shipment-source-select-${cabin.slotId}`}>
-            Переместить из другой бытовки
-          </FieldLabel>
-          <div className="flex gap-2">
-            <Select
-              value={sourceId}
-              onValueChange={setSourceId}
-              disabled={frozen}
-            >
-              <SelectTrigger
-                id={`shipment-source-select-${cabin.slotId}`}
-                aria-label="Выберите бытовку-источник"
-                className="flex-1"
-              >
-                <SelectValue placeholder="Переместить из другой бытовки" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {sourceCabins
-                    .filter(
-                      (source) =>
-                        !cabinAllocations.some(
-                          (allocation) =>
-                            allocation.sourceRentalItemId === source.id
-                        )
-                    )
-                    .map((source) => (
-                      <SelectItem key={source.id} value={source.id}>
-                        {source.number}
-                      </SelectItem>
-                    ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={!sourceId || frozen}
-              onClick={() => {
-                const source = sourceCabins.find(
-                  (candidate) => candidate.id === sourceId
-                )
-                if (!source) return
-                commit([
-                  ...cabinAllocations,
-                  {
-                    sourceType: "CABIN",
-                    sourceRentalItemId: source.id,
-                    sourceCabinNumber: source.number,
-                    expectedSourceVersion: source.version,
-                    items: [],
-                  },
-                ])
-                setSourceId("")
-              }}
-            >
-              Добавить источник
-            </Button>
-          </div>
-        </Field>
-      </FieldGroup>
-    </FieldSet>
   )
 }

@@ -1,17 +1,19 @@
 import { useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Add01Icon,
   ArrowLeft01Icon,
-  ImageUploadIcon,
   PencilEdit01Icon,
-  Wrench01Icon,
 } from "@hugeicons/core-free-icons"
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
+import { useParams, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 
-import { PhotoCarousel } from "@/components/media/photo-carousel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -29,12 +31,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Field,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field"
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import {
   Select,
   SelectContent,
@@ -47,49 +44,37 @@ import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/features/auth/use-auth"
-import { AddContentsDialog } from "@/features/rental-items/add-contents-dialog"
 import {
-  addRentalItemDossierComment,
-  addRentalItemDossierPhotoGroup,
-  getRentalItemDossier,
-  rentalItemDossierQueryKey,
+  getRentalItemDossierPage,
   RENTAL_ITEM_DOSSIER_QUERY_KEY,
-  updateRentalItemDossierGeneralComment,
-  updateRentalItemDossierStatus,
+  rentalItemDossierQueryKey,
 } from "@/features/rental-items/dossier/api/rental-item-dossier-api"
-import type {
-  CabinActorSnapshot,
-  CabinPhotoGroupDto,
-  RentalItemDossierDto,
-  RentalItemDossierNavigationState,
-} from "@/features/rental-items/dossier/model/rental-item-dossier"
+import {
+  DossierActivityFiltersPanel,
+  DossierActivityRegister,
+} from "@/features/rental-items/dossier/dossier-activity-register"
+import type { DossierActivityFilters } from "@/features/rental-items/dossier/model/dossier-service"
+import {
+  addAssetRentalItemManualNote,
+  createIdempotencyKey,
+  getAssetRentalItem,
+  listAssetRentalItemManualNotes,
+  updateAssetRentalItemGeneralComment,
+  updateAssetRentalItemStatus,
+} from "@/features/rental-items/api/asset-rental-items-api"
 import {
   CharacteristicTags,
-  CommentsRegister,
   EmptyDossierRegister,
-  EstimatesRegister,
-  HistoryRegister,
-  InspectionsRegister,
-  PhotosRegister,
-  RepairsRegister,
-  ShipmentsRegister,
 } from "@/features/rental-items/rental-item-dossier-registers"
 import {
   formatRentalItemContents,
   RENTAL_ITEM_STATUS_LABEL,
+  type RentalItemDto,
 } from "@/features/rental-items/model/rental-item"
-import { MoveContentsToRentalItemDialog } from "@/features/rental-items/move-contents-to-rental-item-dialog"
-import { MoveContentsToStockDialog } from "@/features/rental-items/move-contents-to-stock-dialog"
 import { RentalItemStatusBadge } from "@/features/rental-items/rental-item-status-badge"
-import {
-  RepairEstimatePhotoManagerDialog,
-  type RepairEstimatePhotoManagerItem,
-} from "@/features/repair-estimates/repair-estimate-photo-manager-dialog"
 import { useWarehouse } from "@/hooks/use-warehouse"
-import {
-  useWorkspaceBack,
-  workspaceEntryNavigationOptions,
-} from "@/hooks/use-workspace-back"
+import { useWorkspaceBack } from "@/hooks/use-workspace-back"
+import { ApiError } from "@/lib/api-client"
 
 const TAB_IDS = [
   "overview",
@@ -130,25 +115,12 @@ function isDetailTab(value: string | null): value is DetailTab {
   return TAB_IDS.includes(value as DetailTab)
 }
 
-function formatDateTime(value: string | null) {
-  if (!value) return "Дата не зафиксирована"
-  return new Intl.DateTimeFormat("ru-RU", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value))
-}
+function retryDossierQuery(failureCount: number, error: Error) {
+  if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+    return false
+  }
 
-function formatCurrency(value: number | null) {
-  if (value === null) return "—"
-  return new Intl.NumberFormat("ru-RU", {
-    style: "currency",
-    currency: "RUB",
-    maximumFractionDigits: 0,
-  }).format(value)
-}
-
-function actorLabel(actor: CabinActorSnapshot | null) {
-  return actor?.displayName || "Автор не зафиксирован"
+  return failureCount < 2
 }
 
 function DetailEmpty({
@@ -168,92 +140,19 @@ function DetailEmpty({
   )
 }
 
-function PhotoGroupDialog({
-  group,
-  open,
-  onOpenChange,
-}: {
-  group: CabinPhotoGroupDto | null
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}) {
-  const [activeIndex, setActiveIndex] = useState(0)
-  const photos = group?.photos ?? []
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl">
-        <DialogHeader>
-          <DialogTitle>{group?.sourceLabel ?? "Фотографии"}</DialogTitle>
-          <DialogDescription>
-            {group
-              ? `${formatDateTime(group.occurredAt)} · ${actorLabel(group.actor)}`
-              : "Группа фотографий"}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid max-h-40 grid-cols-3 gap-2 overflow-y-auto sm:grid-cols-5 lg:grid-cols-7">
-          {photos.map((photo, index) => (
-            <Button
-              key={photo.id}
-              type="button"
-              variant={activeIndex === index ? "secondary" : "ghost"}
-              className="aspect-square h-auto p-1"
-              aria-label={`Открыть фото ${index + 1}`}
-              onClick={() => setActiveIndex(index)}
-            >
-              <img
-                src={photo.variants.thumb.url}
-                alt=""
-                className="size-full rounded-sm object-cover"
-              />
-            </Button>
-          ))}
-        </div>
-        <PhotoCarousel
-          photos={photos.map((photo) => ({
-            id: photo.id,
-            url: photo.variants.preview.url,
-            variants: {
-              small: { url: photo.variants.thumb.url },
-              largeWebp: { url: photo.variants.preview.url },
-            },
-          }))}
-          title={group?.sourceLabel}
-          className="h-[65svh] rounded-lg border bg-muted"
-          fit="contain"
-          controlsVisibility="always"
-          activeIndex={activeIndex}
-          onActiveIndexChange={setActiveIndex}
-        />
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 function DossierActions({
-  dossier,
-  actor,
+  rentalItem,
+  accessToken,
   onSaved,
-  photoOpen,
-  onPhotoOpenChange,
 }: {
-  dossier: RentalItemDossierDto
-  actor: CabinActorSnapshot
-  onSaved: (value: RentalItemDossierDto) => void
-  photoOpen: boolean
-  onPhotoOpenChange: (open: boolean) => void
+  rentalItem: RentalItemDto
+  accessToken: string | null
+  onSaved: (value: RentalItemDto) => void
 }) {
-  const navigate = useNavigate()
   const [statusOpen, setStatusOpen] = useState(false)
-  const [photoItems, setPhotoItems] = useState<
-    Array<RepairEstimatePhotoManagerItem & { file: File }>
-  >([])
   const [status, setStatus] = useState<(typeof MANUAL_STATUSES)[number]>(
-    () =>
-      MANUAL_STATUSES.find((value) => value !== dossier.rentalItem.status) ??
-      "FREE"
+    () => MANUAL_STATUSES.find((value) => value !== rentalItem.status) ?? "FREE"
   )
-  const [reason, setReason] = useState("")
-  const [statusSubmitted, setStatusSubmitted] = useState(false)
   const statusBlocked = [
     "RENTED",
     "WRITTEN_OFF",
@@ -262,53 +161,24 @@ function DossierActions({
     "CAPITAL_REPAIR",
     "WAITING_ESTIMATE_CONFIRMATION",
     "AFTER_RENT",
-  ].includes(dossier.rentalItem.status)
+  ].includes(rentalItem.status)
   const effectiveStatus =
-    status === dossier.rentalItem.status
-      ? (MANUAL_STATUSES.find((value) => value !== dossier.rentalItem.status) ??
-        "FREE")
+    status === rentalItem.status
+      ? (MANUAL_STATUSES.find((value) => value !== rentalItem.status) ?? "FREE")
       : status
 
-  const photoMutation = useMutation({
-    mutationFn: () =>
-      addRentalItemDossierPhotoGroup({
-        rentalItemId: dossier.rentalItem.id,
-        warehouseId: dossier.rentalItem.warehouseId,
-        expectedVersion: dossier.rentalItem.version,
-        actor,
-        uploads: photoItems.map((item) => ({
-          file: item.file,
-          rotationDegrees: item.rotationDegrees,
-        })),
-      }),
-    onSuccess: (saved) => {
-      onSaved(saved)
-      photoItems.forEach((item) => URL.revokeObjectURL(item.previewUrl))
-      setPhotoItems([])
-      onPhotoOpenChange(false)
-      toast.success("Фотографии добавлены")
-    },
-    onError: (error) =>
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "Не удалось добавить фотографии"
-      ),
-  })
   const statusMutation = useMutation({
     mutationFn: () =>
-      updateRentalItemDossierStatus({
-        rentalItemId: dossier.rentalItem.id,
-        warehouseId: dossier.rentalItem.warehouseId,
-        expectedVersion: dossier.rentalItem.version,
-        actor,
-        status: effectiveStatus,
-        reason,
+      updateAssetRentalItemStatus({
+        accessToken,
+        input: {
+          id: rentalItem.id,
+          expectedVersion: rentalItem.version,
+          status: effectiveStatus,
+        },
       }),
     onSuccess: (saved) => {
       onSaved(saved)
-      setReason("")
-      setStatusSubmitted(false)
       setStatusOpen(false)
       toast.success("Статус изменён")
     },
@@ -318,55 +188,9 @@ function DossierActions({
       ),
   })
 
-  function createRepairCycle() {
-    const action = dossier.repairAction
-    if (action.type === "NONE") return
-    const state: RentalItemDossierNavigationState = {
-      rentalItemSeed:
-        action.type === "CREATE_ESTIMATE"
-          ? {
-              type: "rental-item-estimate-seed-v1",
-              warehouseId: dossier.rentalItem.warehouseId,
-              rentalItemId: dossier.rentalItem.id,
-              cabinNumber: dossier.rentalItem.number,
-            }
-          : {
-              type: "rental-item-repair-seed-v1",
-              warehouseId: dossier.rentalItem.warehouseId,
-              rentalItemId: dossier.rentalItem.id,
-              cabinNumber: dossier.rentalItem.number,
-            },
-    }
-    navigate(
-      action.type === "CREATE_ESTIMATE"
-        ? "/estimates?create=1"
-        : "/repairs?create=1",
-      {
-        ...workspaceEntryNavigationOptions,
-        state: { ...workspaceEntryNavigationOptions.state, ...state },
-      }
-    )
-  }
-
   return (
     <>
       <div className="flex flex-wrap gap-2">
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => onPhotoOpenChange(true)}
-        >
-          <HugeiconsIcon icon={ImageUploadIcon} data-icon="inline-start" />
-          Добавить фото
-        </Button>
-        {dossier.repairAction.type !== "NONE" ? (
-          <Button size="sm" variant="outline" onClick={createRepairCycle}>
-            <HugeiconsIcon icon={Wrench01Icon} data-icon="inline-start" />
-            {dossier.repairAction.type === "CREATE_ESTIMATE"
-              ? "Создать смету"
-              : "Создать ремонт"}
-          </Button>
-        ) : null}
         <Button
           size="sm"
           variant="outline"
@@ -377,61 +201,13 @@ function DossierActions({
           Изменить статус
         </Button>
       </div>
-      <RepairEstimatePhotoManagerDialog
-        open={photoOpen}
-        items={photoItems}
-        onOpenChange={onPhotoOpenChange}
-        pending={photoMutation.isPending}
-        onConfirm={() => photoMutation.mutate()}
-        onCancel={() => {
-          photoItems.forEach((item) => URL.revokeObjectURL(item.previewUrl))
-          setPhotoItems([])
-          onPhotoOpenChange(false)
-        }}
-        onAddFiles={(files) =>
-          setPhotoItems((current) => [
-            ...current,
-            ...files.map((file) => ({
-              id: crypto.randomUUID(),
-              fileName: file.name,
-              previewUrl: URL.createObjectURL(file),
-              rotationDegrees: 0 as const,
-              source: "PENDING" as const,
-              file,
-            })),
-          ])
-        }
-        onRemove={(removed) =>
-          setPhotoItems((current) => {
-            const item = current.find(
-              (candidate) => candidate.id === removed.id
-            )
-            if (item) URL.revokeObjectURL(item.previewUrl)
-            return current.filter((candidate) => candidate.id !== removed.id)
-          })
-        }
-        onRotate={(rotated, direction) =>
-          setPhotoItems((current) =>
-            current.map((item) =>
-              item.id === rotated.id
-                ? {
-                    ...item,
-                    rotationDegrees: ((item.rotationDegrees +
-                      (direction === "RIGHT" ? 90 : 270)) %
-                      360) as 0 | 90 | 180 | 270,
-                  }
-                : item
-            )
-          )
-        }
-      />
 
       <Dialog open={statusOpen} onOpenChange={setStatusOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Изменить статус</DialogTitle>
             <DialogDescription>
-              Изменение сохранится в истории бытовки.
+              Причина и история статуса пока не передаются публичным API.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
@@ -458,18 +234,6 @@ function DossierActions({
                 </SelectContent>
               </Select>
             </Field>
-            <Field data-invalid={statusSubmitted && !reason.trim()}>
-              <FieldLabel htmlFor="status-reason">Причина</FieldLabel>
-              <Textarea
-                id="status-reason"
-                value={reason}
-                aria-invalid={statusSubmitted && !reason.trim()}
-                onChange={(event) => setReason(event.target.value)}
-              />
-              {statusSubmitted && !reason.trim() ? (
-                <FieldError>Укажите причину изменения.</FieldError>
-              ) : null}
-            </Field>
           </FieldGroup>
           <DialogFooter>
             <Button variant="outline" onClick={() => setStatusOpen(false)}>
@@ -478,16 +242,12 @@ function DossierActions({
             <Button
               disabled={
                 statusMutation.isPending ||
-                effectiveStatus === dossier.rentalItem.status ||
-                !reason.trim()
+                effectiveStatus === rentalItem.status
               }
               onClick={() => {
-                setStatusSubmitted(true)
-                if (
-                  reason.trim() &&
-                  effectiveStatus !== dossier.rentalItem.status
-                )
+                if (effectiveStatus !== rentalItem.status) {
                   statusMutation.mutate()
+                }
               }}
             >
               Сохранить
@@ -505,15 +265,11 @@ export function RentalItemDetailPage() {
   const { rentalItemId } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
   const { selectedWarehouse } = useWarehouse()
-  const { currentUser } = useAuth()
-  const [selectedPhotoGroup, setSelectedPhotoGroup] =
-    useState<CabinPhotoGroupDto | null>(null)
-  const [photoManagerOpen, setPhotoManagerOpen] = useState(false)
-  const [addContentsOpen, setAddContentsOpen] = useState(false)
-  const [moveContentsToStockOpen, setMoveContentsToStockOpen] = useState(false)
-  const [moveContentsToRentalItemOpen, setMoveContentsToRentalItemOpen] =
-    useState(false)
+  const { accessToken, currentUser } = useAuth()
   const [manualComment, setManualComment] = useState("")
+  const [dossierFilters, setDossierFilters] = useState<DossierActivityFilters>(
+    {}
+  )
   const [generalCommentDraft, setGeneralCommentDraft] = useState<{
     rentalItemId: string
     value: string
@@ -522,36 +278,78 @@ export function RentalItemDetailPage() {
     ? searchParams.get("tab")!
     : "overview"
   const warehouseId = selectedWarehouse?.id ?? "none"
-  const actor = {
-    id: currentUser?.id ?? null,
-    displayName:
-      currentUser?.displayName ||
-      currentUser?.username ||
-      "Текущий пользователь",
-  }
-  const dossierQuery = useQuery({
-    queryKey: rentalItemDossierQueryKey(warehouseId, rentalItemId ?? "none"),
-    queryFn: () => getRentalItemDossier(warehouseId, rentalItemId!),
-    enabled: Boolean(rentalItemId && selectedWarehouse),
+  const userCacheKey = currentUser?.id ?? "unknown-user"
+  const currentRentalItemId = rentalItemId ?? "none"
+  const assetQueryKey = [
+    "asset-rental-item",
+    warehouseId,
+    currentRentalItemId,
+    userCacheKey,
+  ] as const
+  const manualNotesQueryKey = [
+    "asset-rental-item-manual-notes",
+    warehouseId,
+    currentRentalItemId,
+    userCacheKey,
+  ] as const
+  const assetQuery = useQuery({
+    queryKey: assetQueryKey,
+    queryFn: async () => {
+      const item = await getAssetRentalItem(accessToken, rentalItemId!)
+      return item.warehouseId === warehouseId ? item : null
+    },
+    enabled: Boolean(rentalItemId && selectedWarehouse && accessToken),
   })
-  const dossier = dossierQuery.data ?? null
-  const hasGeneralComment = Boolean(dossier?.rentalItem.comment?.trim())
+  const dossierQuery = useInfiniteQuery({
+    queryKey: [
+      ...rentalItemDossierQueryKey(currentRentalItemId, dossierFilters),
+      userCacheKey,
+    ],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }) =>
+      getRentalItemDossierPage(accessToken, rentalItemId!, {
+        ...dossierFilters,
+        limit: 25,
+        after: pageParam ?? undefined,
+      }),
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    retry: retryDossierQuery,
+    enabled: Boolean(rentalItemId && selectedWarehouse && accessToken),
+  })
+  const manualNotesQuery = useQuery({
+    queryKey: manualNotesQueryKey,
+    queryFn: () => listAssetRentalItemManualNotes(accessToken, rentalItemId!),
+    enabled: Boolean(
+      activeTab === "comments" &&
+      rentalItemId &&
+      selectedWarehouse &&
+      accessToken
+    ),
+  })
+  const rentalItem = assetQuery.data ?? null
+  const dossierPages = dossierQuery.data?.pages
+  const hasGeneralComment = Boolean(rentalItem?.comment?.trim())
   const generalComment =
-    dossier && generalCommentDraft?.rentalItemId === dossier.rentalItem.id
+    rentalItem && generalCommentDraft?.rentalItemId === rentalItem.id
       ? generalCommentDraft.value
-      : (dossier?.rentalItem.comment ?? "")
+      : (rentalItem?.comment ?? "")
 
   const commentMutation = useMutation({
     mutationFn: () =>
-      addRentalItemDossierComment({
-        rentalItemId: dossier!.rentalItem.id,
-        warehouseId,
-        actor,
-        text: manualComment,
+      addAssetRentalItemManualNote({
+        accessToken,
+        rentalItemId: rentalItem!.id,
+        expectedVersion: rentalItem!.version,
+        text: manualComment.trim(),
+        idempotencyKey: createIdempotencyKey(),
       }),
-    onSuccess: (saved) => {
-      setDossier(saved)
+    onSuccess: () => {
       setManualComment("")
+      void queryClient.invalidateQueries({ queryKey: assetQueryKey })
+      void queryClient.invalidateQueries({ queryKey: manualNotesQueryKey })
+      void queryClient.invalidateQueries({
+        queryKey: RENTAL_ITEM_DOSSIER_QUERY_KEY,
+      })
       toast.success("Комментарий добавлен")
     },
     onError: (error) =>
@@ -563,15 +361,16 @@ export function RentalItemDetailPage() {
   })
   const generalCommentMutation = useMutation({
     mutationFn: () =>
-      updateRentalItemDossierGeneralComment({
-        rentalItemId: dossier!.rentalItem.id,
-        warehouseId,
-        expectedVersion: dossier!.rentalItem.version,
-        actor,
-        comment: generalComment,
+      updateAssetRentalItemGeneralComment({
+        accessToken,
+        input: {
+          id: rentalItem!.id,
+          expectedVersion: rentalItem!.version,
+          comment: generalComment.trim() || null,
+        },
       }),
     onSuccess: (saved) => {
-      setDossier(saved)
+      setRentalItem(saved)
       setGeneralCommentDraft(null)
       toast.success(
         hasGeneralComment
@@ -587,11 +386,11 @@ export function RentalItemDetailPage() {
       ),
   })
 
-  function setDossier(saved: RentalItemDossierDto) {
-    queryClient.setQueryData(
-      rentalItemDossierQueryKey(warehouseId, saved.rentalItem.id),
-      saved
-    )
+  function setRentalItem(saved: RentalItemDto) {
+    queryClient.setQueryData(assetQueryKey, saved)
+    void queryClient.invalidateQueries({
+      queryKey: ["rental-items"],
+    })
     void queryClient.invalidateQueries({
       queryKey: RENTAL_ITEM_DOSSIER_QUERY_KEY,
     })
@@ -603,32 +402,48 @@ export function RentalItemDetailPage() {
     setSearchParams(next, { replace: true })
   }
 
-  const heroPhotos =
-    dossier?.photoGroups.flatMap((group) =>
-      group.photos.map((photo) => ({
-        id: photo.id,
-        url: photo.variants.preview.url,
-        variants: {
-          small: { url: photo.variants.thumb.url },
-          largeWebp: { url: photo.variants.preview.url },
-        },
-      }))
-    ) ?? []
-  if (dossierQuery.isLoading)
+  if (assetQuery.isLoading)
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
         Загрузка бытовки...
       </div>
     )
-  if (!dossier)
+  if (!accessToken)
+    return (
+      <DetailEmpty
+        title="Требуется авторизация"
+        description="Войдите в панель, чтобы открыть бытовку."
+      />
+    )
+  if (
+    assetQuery.isError &&
+    assetQuery.error instanceof ApiError &&
+    assetQuery.error.status === 404
+  )
+    return (
+      <DetailEmpty
+        title="Бытовка не найдена"
+        description="Asset-service не нашёл бытовку на выбранном складе."
+      />
+    )
+  if (assetQuery.isError)
+    return (
+      <DetailEmpty
+        title="Не удалось загрузить бытовку"
+        description={
+          assetQuery.error instanceof Error
+            ? assetQuery.error.message
+            : "Сервис имущества недоступен."
+        }
+      />
+    )
+  if (!rentalItem)
     return (
       <DetailEmpty
         title="Бытовка не найдена"
         description="Она отсутствует на выбранном складе."
       />
     )
-
-  const lastRecordedActivity = dossier.activities[0] ?? null
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto pb-4">
@@ -638,28 +453,20 @@ export function RentalItemDetailPage() {
       </Button>
       <section className="shrink-0 overflow-hidden rounded-lg border bg-card">
         <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(22rem,26rem)] xl:grid-cols-[minmax(0,1fr)_minmax(26rem,30rem)]">
-          <PhotoCarousel
-            photos={heroPhotos}
-            photoCount={heroPhotos.length}
-            showPhotoCount
-            className="h-[280px] bg-muted sm:h-[340px] md:h-[420px] lg:h-[560px]"
-            fit="contain"
-            controlsVisibility="mobile-visible"
-          />
+          <div className="flex h-[280px] items-center justify-center bg-muted p-6 text-center text-sm text-muted-foreground sm:h-[340px] md:h-[420px] lg:h-[560px]">
+            Фотографии бытовки недоступны: asset-service пока не предоставляет
+            публичный media API.
+          </div>
           <aside className="flex min-h-0 flex-col gap-2 border-t p-3 md:border-t-0 md:border-l">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-xl font-semibold">
-                {dossier.rentalItem.number}
-              </h1>
-              <RentalItemStatusBadge status={dossier.rentalItem.status} />
-              <Badge variant="secondary">{dossier.rentalItem.type}</Badge>
+              <h1 className="text-xl font-semibold">{rentalItem.number}</h1>
+              <RentalItemStatusBadge status={rentalItem.status} />
+              <Badge variant="secondary">{rentalItem.type}</Badge>
             </div>
             <DossierActions
-              dossier={dossier}
-              actor={actor}
-              onSaved={setDossier}
-              photoOpen={photoManagerOpen}
-              onPhotoOpenChange={setPhotoManagerOpen}
+              rentalItem={rentalItem}
+              accessToken={accessToken}
+              onSaved={setRentalItem}
             />
             <Separator />
             <dl className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-xs">
@@ -668,65 +475,48 @@ export function RentalItemDetailPage() {
                 {selectedWarehouse?.name ?? selectedWarehouse?.code ?? "Склад"}
               </dd>
               <dt className="text-muted-foreground">Габариты</dt>
-              <dd>{dossier.rentalItem.dimensions ?? "—"}</dd>
+              <dd>{rentalItem.dimensions ?? "—"}</dd>
               <dt className="text-muted-foreground">Отделка</dt>
-              <dd>{dossier.rentalItem.finishing ?? "—"}</dd>
+              <dd>{rentalItem.finishing ?? "—"}</dd>
               <dt className="text-muted-foreground">Категория</dt>
-              <dd>{dossier.rentalItem.category ?? "—"}</dd>
+              <dd>{rentalItem.category ?? "—"}</dd>
               <dt className="self-start text-muted-foreground">
                 Характеристики
               </dt>
               <dd>
-                <CharacteristicTags
-                  value={dossier.rentalItem.characteristics}
-                />
+                <CharacteristicTags value={rentalItem.characteristics} />
               </dd>
               <dt className="text-muted-foreground">Линолеум</dt>
               <dd>
-                {dossier.rentalItem.linoleum === null
+                {rentalItem.linoleum === null
                   ? "—"
-                  : dossier.rentalItem.linoleum
+                  : rentalItem.linoleum
                     ? "Да"
                     : "Нет"}
               </dd>
               <dt className="text-muted-foreground">Статус</dt>
-              <dd>{RENTAL_ITEM_STATUS_LABEL[dossier.rentalItem.status]}</dd>
+              <dd>{RENTAL_ITEM_STATUS_LABEL[rentalItem.status]}</dd>
               <dt className="text-muted-foreground">Комментарий</dt>
-              <dd>{dossier.rentalItem.comment ?? "—"}</dd>
+              <dd>{rentalItem.comment ?? "—"}</dd>
               <dt className="text-muted-foreground">Фото</dt>
-              <dd>
-                <Button
-                  type="button"
-                  variant="link"
-                  className="h-auto p-0"
-                  onClick={() => changeTab("photos")}
-                >
-                  {dossier.rentalItem.photoCount} фото
-                </Button>
-              </dd>
+              <dd>Недоступно через публичный asset API</dd>
               <dt className="text-muted-foreground">Наполнение</dt>
               <dd>
                 {formatRentalItemContents(
-                  dossier.rentalItem.contentsItems,
-                  dossier.rentalItem.contents
+                  rentalItem.contentsItems,
+                  rentalItem.contents
                 )}
               </dd>
               <dt className="text-muted-foreground">Отгрузка</dt>
-              <dd>{formatDateTime(dossier.rentalItem.shipmentDate)}</dd>
+              <dd>Недоступно через публичный asset API</dd>
               <dt className="text-muted-foreground">Арендатор</dt>
-              <dd>{dossier.rentalItem.tenant ?? "—"}</dd>
+              <dd>Недоступно через публичный asset API</dd>
               <dt className="text-muted-foreground">Цена</dt>
-              <dd>{formatCurrency(dossier.rentalItem.price)}</dd>
-              <dt className="text-muted-foreground">Последнее действие</dt>
-              <dd>
-                {lastRecordedActivity
-                  ? formatDateTime(lastRecordedActivity.occurredAt)
-                  : "Не зафиксировано"}
-              </dd>
-              <dt className="text-muted-foreground">Автор действия</dt>
-              <dd>
-                {lastRecordedActivity?.actor?.displayName || "Не зафиксировано"}
-              </dd>
+              <dd>Недоступно через публичный asset API</dd>
+              <dt className="text-muted-foreground">История</dt>
+              <dd>См. подтверждённые события во вкладке «История»</dd>
+              <dt className="text-muted-foreground">Actor</dt>
+              <dd>Opaque actor reference доступен в истории</dd>
             </dl>
           </aside>
         </div>
@@ -755,7 +545,7 @@ export function RentalItemDetailPage() {
               <div>
                 <p className="text-muted-foreground">Текущий статус</p>
                 <div className="mt-1">
-                  <RentalItemStatusBadge status={dossier.rentalItem.status} />
+                  <RentalItemStatusBadge status={rentalItem.status} />
                 </div>
               </div>
               <div>
@@ -768,15 +558,11 @@ export function RentalItemDetailPage() {
               </div>
               <div>
                 <p className="text-muted-foreground">Последний осмотр</p>
-                <p className="font-medium">
-                  {formatDateTime(dossier.overview.lastInspectionAt)}
-                </p>
+                <p className="font-medium">Недоступно через публичный API</p>
               </div>
               <div>
                 <p className="text-muted-foreground">Активные ремонты</p>
-                <p className="font-medium">
-                  {dossier.overview.activeRepairCount}
-                </p>
+                <p className="font-medium">Недоступно через публичный API</p>
               </div>
             </CardContent>
           </Card>
@@ -788,54 +574,16 @@ export function RentalItemDetailPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-muted-foreground">Арендатор</p>
-                  <p className="font-medium">
-                    {dossier.rentalItem.tenant ?? "—"}
-                  </p>
+                  <p className="font-medium">Недоступно через публичный API</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Дата отгрузки</p>
-                  <p className="font-medium">
-                    {formatDateTime(dossier.rentalItem.shipmentDate)}
-                  </p>
+                  <p className="font-medium">Недоступно через публичный API</p>
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {dossier.overview.latestEstimateId ? (
-                  <Button size="sm" variant="outline" asChild>
-                    <Link
-                      to={
-                        dossier.estimates.find(
-                          (item) =>
-                            item.id === dossier.overview.latestEstimateId
-                        )?.link.href ?? "/estimates"
-                      }
-                      state={workspaceEntryNavigationOptions.state}
-                    >
-                      Последняя смета
-                    </Link>
-                  </Button>
-                ) : null}
-                {dossier.overview.latestRepairId ? (
-                  <Button size="sm" variant="outline" asChild>
-                    <Link
-                      to={
-                        dossier.repairs.find(
-                          (item) => item.id === dossier.overview.latestRepairId
-                        )?.link.href ?? "/repairs"
-                      }
-                      state={workspaceEntryNavigationOptions.state}
-                    >
-                      Последний ремонт
-                    </Link>
-                  </Button>
-                ) : null}
-                {!dossier.overview.latestEstimateId &&
-                !dossier.overview.latestRepairId ? (
-                  <span className="text-muted-foreground">
-                    Связанных документов нет.
-                  </span>
-                ) : null}
-              </div>
+              <p className="text-muted-foreground">
+                Связанные документы не входят в публичный asset API.
+              </p>
             </CardContent>
           </Card>
           <Card>
@@ -843,32 +591,17 @@ export function RentalItemDetailPage() {
               <CardTitle>Характеристики</CardTitle>
             </CardHeader>
             <CardContent>
-              <CharacteristicTags value={dossier.rentalItem.characteristics} />
+              <CharacteristicTags value={rentalItem.characteristics} />
             </CardContent>
           </Card>
           <Card>
             <CardHeader>
               <CardTitle>Осмотр и ремонт</CardTitle>
             </CardHeader>
-            <CardContent className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <p className="text-muted-foreground">Осмотров</p>
-                <p className="font-medium">{dossier.inspections.length}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground">Ремонтов всего</p>
-                <p className="font-medium">{dossier.repairs.length}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground">Активные ремонты</p>
-                <p className="font-medium">
-                  {dossier.overview.activeRepairCount}
-                </p>
-              </div>
-              <div>
-                <p className="text-muted-foreground">Смет</p>
-                <p className="font-medium">{dossier.estimates.length}</p>
-              </div>
+            <CardContent className="text-sm text-muted-foreground">
+              Dossier-service предоставляет подтверждённые события, но не
+              вычисляет текущие агрегированные счётчики документов. Полная
+              хронология доступна во вкладке «История».
             </CardContent>
           </Card>
           <Card className="lg:col-span-2">
@@ -880,39 +613,12 @@ export function RentalItemDetailPage() {
                     Мебель и оборудование, закреплённые за бытовкой.
                   </CardDescription>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setAddContentsOpen(true)}
-                  >
-                    Добавить
-                  </Button>
-                  {dossier.rentalItem.contentsItems.length > 0 ? (
-                    <>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setMoveContentsToRentalItemOpen(true)}
-                      >
-                        В другую бытовку
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setMoveContentsToStockOpen(true)}
-                      >
-                        На склад
-                      </Button>
-                    </>
-                  ) : null}
-                </div>
               </div>
             </CardHeader>
             <CardContent>
-              {dossier.rentalItem.contentsItems.length > 0 ? (
+              {rentalItem.contentsItems.length > 0 ? (
                 <div className="flex flex-wrap gap-2">
-                  {dossier.rentalItem.contentsItems.map((item) => (
+                  {rentalItem.contentsItems.map((item) => (
                     <Badge
                       key={item.name}
                       variant="outline"
@@ -927,28 +633,41 @@ export function RentalItemDetailPage() {
                   Наполнение не указано.
                 </p>
               )}
+              <p className="mt-3 text-sm text-muted-foreground">
+                Изменение наполнения временно недоступно: версионная операция
+                перемещения исходного и целевого баланса ещё не подключена в
+                панели.
+              </p>
             </CardContent>
           </Card>
         </TabsContent>
         <TabsContent value="photos">
-          <PhotosRegister
-            values={dossier.photoGroups}
-            onOpen={setSelectedPhotoGroup}
-            onAddPhoto={() => setPhotoManagerOpen(true)}
+          <EmptyDossierRegister
+            title="Фото"
+            description="Действия с фото принадлежат media-service. Dossier показывает только подтверждённые media state references во вкладке «История»."
+            columns={["Источник", "Дата", "Статус"]}
           />
         </TabsContent>
         <TabsContent value="inspections">
-          <InspectionsRegister
-            values={dossier.inspections}
-            photoGroups={dossier.photoGroups}
-            onOpenPhotoGroup={setSelectedPhotoGroup}
+          <EmptyDossierRegister
+            title="Осмотры"
+            description="Dossier не подменяет документы inventory-service. Подтверждённые коды событий доступны во вкладке «История»."
+            columns={["Дата", "Источник", "Результат", "Исполнитель"]}
           />
         </TabsContent>
         <TabsContent value="estimates">
-          <EstimatesRegister values={dossier.estimates} />
+          <EmptyDossierRegister
+            title="Сметы"
+            description="Dossier не подменяет документы maintenance-service. Подтверждённые коды событий доступны во вкладке «История»."
+            columns={["Дата", "Статус", "Автор", "Сумма"]}
+          />
         </TabsContent>
         <TabsContent value="repair">
-          <RepairsRegister values={dossier.repairs} />
+          <EmptyDossierRegister
+            title="Ремонт"
+            description="Dossier не подменяет ремонтные документы maintenance-service. Подтверждённые коды событий доступны во вкладке «История»."
+            columns={["Дата", "Статус", "Исполнитель", "Комментарий"]}
+          />
         </TabsContent>
         <TabsContent value="reserves">
           <EmptyDossierRegister
@@ -958,7 +677,11 @@ export function RentalItemDetailPage() {
           />
         </TabsContent>
         <TabsContent value="shipments">
-          <ShipmentsRegister values={dossier.shipments} />
+          <EmptyDossierRegister
+            title="Отгрузки"
+            description="Покрытие logistics producer facts пока не подтверждено текущим dossier contract vocabulary."
+            columns={["Дата", "Направление", "Контрагент", "Статус"]}
+          />
         </TabsContent>
         <TabsContent value="returns">
           <EmptyDossierRegister
@@ -968,11 +691,20 @@ export function RentalItemDetailPage() {
           />
         </TabsContent>
         <TabsContent value="history">
-          <HistoryRegister
-            values={dossier.activities}
-            photoGroups={dossier.photoGroups}
-            onOpenPhotoGroup={setSelectedPhotoGroup}
-          />
+          <div className="flex flex-col gap-4">
+            <DossierActivityFiltersPanel
+              value={dossierFilters}
+              onApply={setDossierFilters}
+            />
+            <DossierActivityRegister
+              pages={dossierPages}
+              error={dossierQuery.error}
+              isLoading={dossierQuery.isLoading}
+              hasNextPage={Boolean(dossierQuery.hasNextPage)}
+              isFetchingNextPage={dossierQuery.isFetchingNextPage}
+              onLoadMore={() => void dossierQuery.fetchNextPage()}
+            />
+          </div>
         </TabsContent>
         <TabsContent value="comments" className="flex flex-col gap-4">
           <div className="grid items-stretch gap-4 lg:grid-cols-2">
@@ -992,10 +724,11 @@ export function RentalItemDetailPage() {
                     <Textarea
                       id="general-comment"
                       value={generalComment}
-                      placeholder={dossier.rentalItem.comment ?? "Комментарий"}
+                      maxLength={4000}
+                      placeholder={rentalItem.comment ?? "Комментарий"}
                       onChange={(event) =>
                         setGeneralCommentDraft({
-                          rentalItemId: dossier.rentalItem.id,
+                          rentalItemId: rentalItem.id,
                           value: event.target.value,
                         })
                       }
@@ -1015,9 +748,9 @@ export function RentalItemDetailPage() {
             </Card>
             <Card className="h-full">
               <CardHeader>
-                <CardTitle>Добавить запись в историю</CardTitle>
+                <CardTitle>Добавить ручную заметку</CardTitle>
                 <CardDescription>
-                  Запись сохранится в неизменяемой истории бытовки.
+                  Заметка сохранится в неизменяемом журнале asset-service.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -1027,6 +760,7 @@ export function RentalItemDetailPage() {
                     <Textarea
                       id="manual-comment"
                       value={manualComment}
+                      maxLength={4000}
                       onChange={(event) => setManualComment(event.target.value)}
                     />
                   </Field>
@@ -1037,58 +771,54 @@ export function RentalItemDetailPage() {
                   onClick={() => commentMutation.mutate()}
                 >
                   <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-                  Добавить в историю
+                  Добавить заметку
                 </Button>
               </CardContent>
             </Card>
           </div>
-          <CommentsRegister values={dossier.comments} />
+          {manualNotesQuery.isLoading ? (
+            <DetailEmpty
+              title="Загрузка ручных заметок..."
+              description="Получаем неизменяемые заметки из asset-service."
+            />
+          ) : manualNotesQuery.isError ? (
+            <DetailEmpty
+              title="Не удалось загрузить ручные заметки"
+              description={
+                manualNotesQuery.error instanceof Error
+                  ? manualNotesQuery.error.message
+                  : "Asset-service недоступен."
+              }
+            />
+          ) : manualNotesQuery.data?.length ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Ручные заметки asset-service</CardTitle>
+                <CardDescription>
+                  Ответ asset-service не содержит actor display name, поэтому он
+                  не восстанавливается в браузере.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                {manualNotesQuery.data.map((note) => (
+                  <article key={note.id} className="rounded-md border p-3">
+                    <p className="text-sm whitespace-pre-wrap">{note.text}</p>
+                    <p className="mt-2 font-mono text-xs text-muted-foreground">
+                      {new Date(note.createdAt).toLocaleString("ru-RU")} ·{" "}
+                      {note.id}
+                    </p>
+                  </article>
+                ))}
+              </CardContent>
+            </Card>
+          ) : (
+            <DetailEmpty
+              title="Ручных заметок нет"
+              description="Asset-service пока не вернул ни одной заметки."
+            />
+          )}
         </TabsContent>
       </Tabs>
-      <PhotoGroupDialog
-        key={selectedPhotoGroup?.id ?? "closed-photo-group"}
-        group={selectedPhotoGroup}
-        open={selectedPhotoGroup !== null}
-        onOpenChange={(open) => {
-          if (!open) setSelectedPhotoGroup(null)
-        }}
-      />
-      <AddContentsDialog
-        item={dossier.rentalItem}
-        open={addContentsOpen}
-        onOpenChange={(open) => {
-          setAddContentsOpen(open)
-          if (!open) {
-            void queryClient.invalidateQueries({
-              queryKey: RENTAL_ITEM_DOSSIER_QUERY_KEY,
-            })
-          }
-        }}
-      />
-      <MoveContentsToRentalItemDialog
-        item={dossier.rentalItem}
-        open={moveContentsToRentalItemOpen}
-        onOpenChange={(open) => {
-          setMoveContentsToRentalItemOpen(open)
-          if (!open) {
-            void queryClient.invalidateQueries({
-              queryKey: RENTAL_ITEM_DOSSIER_QUERY_KEY,
-            })
-          }
-        }}
-      />
-      <MoveContentsToStockDialog
-        item={dossier.rentalItem}
-        open={moveContentsToStockOpen}
-        onOpenChange={(open) => {
-          setMoveContentsToStockOpen(open)
-          if (!open) {
-            void queryClient.invalidateQueries({
-              queryKey: RENTAL_ITEM_DOSSIER_QUERY_KEY,
-            })
-          }
-        }}
-      />
     </div>
   )
 }

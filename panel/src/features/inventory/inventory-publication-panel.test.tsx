@@ -12,13 +12,13 @@ import { InventoryPublicationPanel } from "@/features/inventory/inventory-public
 import {
   closeBlockedFindingPublication,
   retryFindingPublication,
-} from "@/features/inventory/adapters/http-inventory-adapter"
+} from "@/features/inventory/api/inventory-api"
 import type { InventoryFinding } from "@/features/inventory/model/inventory-service"
 
 vi.mock("@/features/auth/use-auth", () => ({
   useAuth: () => ({ accessToken: "inventory-token" }),
 }))
-vi.mock("@/features/inventory/adapters/http-inventory-adapter", () => ({
+vi.mock("@/features/inventory/api/inventory-api", () => ({
   retryFindingPublication: vi.fn(),
   closeBlockedFindingPublication: vi.fn(),
 }))

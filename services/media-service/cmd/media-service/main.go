@@ -107,7 +107,7 @@ func run(logger *slog.Logger) error {
 	ownerConsumer := worker.NewInventoryOwnerConsumer(repository, ownerConsumerClient, logger)
 	apiServer, err := api.NewServer(repository, database, validator, objectStore, api.Configuration{
 		MaxUploadBytes: configuration.MaxUploadBytes, AllowedMIMETypes: configuration.AllowedMIMETypes,
-		UploadExpiry: configuration.UploadExpiry, DownloadExpiry: configuration.DownloadExpiry,
+		UploadExpiry: configuration.UploadExpiry,
 	}, logger)
 	if err != nil {
 		ownerConsumerClient.Close()

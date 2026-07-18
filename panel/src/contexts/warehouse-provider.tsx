@@ -27,6 +27,14 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null)
 
   const reloadWarehouses = useCallback(async () => {
+    if (accessToken === null) {
+      setWarehouses([])
+      setSelectedWarehouseIdState(null)
+      setError("Не получен токен доступа к сервису складов.")
+      setIsLoading(false)
+      return
+    }
+
     try {
       setIsLoading(true)
       setError(null)
@@ -59,10 +67,10 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
   }, [accessToken])
 
   useEffect(() => {
-    let mounted = true
+    let cancelled = false
 
     void Promise.resolve().then(() => {
-      if (mounted) {
+      if (!cancelled) {
         return reloadWarehouses()
       }
 
@@ -70,7 +78,7 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
     })
 
     return () => {
-      mounted = false
+      cancelled = true
     }
   }, [reloadWarehouses])
 
