@@ -37,6 +37,10 @@ import {
   resolveInventoryNumber,
   startInventorySession,
 } from "@/features/inventory/api/inventory-api"
+import {
+  hasInventoryWarehouseAccess,
+  INVENTORY_REQUIRED_ACCESS,
+} from "@/features/inventory/inventory-access"
 import { InventoryFindingEditor } from "@/features/inventory/inventory-finding-editor"
 import { InventoryPublicationPanel } from "@/features/inventory/inventory-publication-panel"
 import { InventoryStartDialog } from "@/features/inventory/inventory-start-dialog"
@@ -92,6 +96,13 @@ export function InventoryEntryPage() {
   const { accessToken, currentUser } = useAuth()
   const { selectedWarehouse } = useWarehouse()
   const [startOpen, setStartOpen] = useState(false)
+  const canStartInventory =
+    selectedWarehouse !== null &&
+    hasInventoryWarehouseAccess(
+      currentUser,
+      selectedWarehouse.id,
+      INVENTORY_REQUIRED_ACCESS.START
+    )
   const startIdempotencyKey = useStableCommandKey(
     `start:${selectedWarehouse?.id ?? "none"}`
   )
@@ -103,12 +114,16 @@ export function InventoryEntryPage() {
     retry: retryInventoryQuery,
   })
   const startMutation = useMutation({
-    mutationFn: () =>
-      startInventorySession(
+    mutationFn: () => {
+      if (!canStartInventory) {
+        throw new Error("Для старта инвентаризации требуется уровень EDIT")
+      }
+      return startInventorySession(
         accessToken,
         selectedWarehouse!.id,
         startIdempotencyKey
-      ),
+      )
+    },
     onSuccess: async (session) => {
       await queryClient.invalidateQueries({ queryKey: inventoryKeys.all })
       navigate(`/inventory/${session.id}`)
@@ -146,9 +161,11 @@ export function InventoryEntryPage() {
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-wrap gap-2">
-        <Button type="button" onClick={() => setStartOpen(true)}>
-          Начать инвентаризацию
-        </Button>
+        {canStartInventory ? (
+          <Button type="button" onClick={() => setStartOpen(true)}>
+            Начать инвентаризацию
+          </Button>
+        ) : null}
         <Button
           type="button"
           variant="outline"
@@ -157,20 +174,22 @@ export function InventoryEntryPage() {
           История
         </Button>
       </CardContent>
-      <InventoryStartDialog
-        open={startOpen}
-        warehouseName={selectedWarehouse.name}
-        authorName={
-          currentUser?.displayName ||
-          currentUser?.username ||
-          "Текущий пользователь"
-        }
-        businessDate="Определяется сервером"
-        pending={startMutation.isPending}
-        error={startMutation.error ? errorMessage(startMutation.error) : null}
-        onOpenChange={setStartOpen}
-        onConfirm={() => startMutation.mutate()}
-      />
+      {canStartInventory ? (
+        <InventoryStartDialog
+          open={startOpen}
+          warehouseName={selectedWarehouse.name}
+          authorName={
+            currentUser?.displayName ||
+            currentUser?.username ||
+            "Текущий пользователь"
+          }
+          businessDate="Определяется сервером"
+          pending={startMutation.isPending}
+          error={startMutation.error ? errorMessage(startMutation.error) : null}
+          onOpenChange={setStartOpen}
+          onConfirm={() => startMutation.mutate()}
+        />
+      ) : null}
     </Card>
   )
 }
@@ -182,7 +201,7 @@ export function InventorySessionPage({
 } = {}) {
   const { inventoryId = "" } = useParams()
   const navigate = useNavigate()
-  const { accessToken } = useAuth()
+  const { accessToken, currentUser } = useAuth()
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(
     null
   )
@@ -197,6 +216,38 @@ export function InventorySessionPage({
     enabled: accessToken !== null && Boolean(inventoryId),
     retry: retryInventoryQuery,
   })
+  const canEditFindings = Boolean(
+    query.data &&
+    hasInventoryWarehouseAccess(
+      currentUser,
+      query.data.warehouseId,
+      INVENTORY_REQUIRED_ACCESS.FINDING_MUTATION
+    )
+  )
+  const canMutateFindingMedia = Boolean(
+    query.data &&
+    hasInventoryWarehouseAccess(
+      currentUser,
+      query.data.warehouseId,
+      INVENTORY_REQUIRED_ACCESS.MEDIA_MUTATION
+    )
+  )
+  const canCompleteInventory = Boolean(
+    query.data &&
+    hasInventoryWarehouseAccess(
+      currentUser,
+      query.data.warehouseId,
+      INVENTORY_REQUIRED_ACCESS.COMPLETE
+    )
+  )
+  const canManagePublications = Boolean(
+    query.data &&
+    hasInventoryWarehouseAccess(
+      currentUser,
+      query.data.warehouseId,
+      INVENTORY_REQUIRED_ACCESS.PUBLICATION
+    )
+  )
   const resolveIdempotencyKey = useStableCommandKey(
     `resolve:${inventoryId}:${query.data?.sessionRevision ?? "loading"}:${number.trim()}`
   )
@@ -217,14 +268,18 @@ export function InventorySessionPage({
     })
   }
   const resolveMutation = useMutation({
-    mutationFn: () =>
-      resolveInventoryNumber({
+    mutationFn: () => {
+      if (!canEditFindings) {
+        throw new Error("Для изменения результатов требуется уровень EDIT")
+      }
+      return resolveInventoryNumber({
         accessToken,
         inventoryId,
         expectedSessionRevision: query.data!.sessionRevision,
         submittedNumber: number,
         idempotencyKey: resolveIdempotencyKey,
-      }),
+      })
+    },
     onSuccess: async (resolution) => {
       if (resolution.finding) setSelectedFindingId(resolution.finding.id)
       if (resolution.outcome === "NOT_FOUND") {
@@ -244,8 +299,11 @@ export function InventorySessionPage({
     },
   })
   const createMutation = useMutation({
-    mutationFn: () =>
-      createAndAttachInventoryAsset({
+    mutationFn: () => {
+      if (!canEditFindings) {
+        throw new Error("Для изменения результатов требуется уровень EDIT")
+      }
+      return createAndAttachInventoryAsset({
         accessToken,
         inventoryId,
         findingId: pendingCreateIntent!.findingId,
@@ -255,7 +313,8 @@ export function InventorySessionPage({
         displayCanonicalNumber: pendingCreateIntent!.number,
         safePassport: {},
         idempotencyKey: pendingCreateIntent!.idempotencyKey,
-      }),
+      })
+    },
     onSuccess: async (finding) => {
       setPendingCreateIntent(null)
       setSelectedFindingId(finding.id)
@@ -263,13 +322,17 @@ export function InventorySessionPage({
     },
   })
   const publishMutation = useMutation({
-    mutationFn: () =>
-      publishInventoryFindings({
+    mutationFn: () => {
+      if (!canManagePublications) {
+        throw new Error("Для публикации требуется уровень MANAGE")
+      }
+      return publishInventoryFindings({
         accessToken,
         inventoryId,
         expectedSessionRevision: query.data!.sessionRevision,
         idempotencyKey: publishIdempotencyKey,
-      }),
+      })
+    },
     onSuccess: async (batch) => {
       await refreshSession()
       toast.success(`Публикация: ${batch.aggregateState}`)
@@ -294,7 +357,12 @@ export function InventorySessionPage({
       <InventoryFindingEditor
         session={session}
         finding={selectedFinding}
-        readOnly={readOnly || session.lifecycle !== "ACTIVE"}
+        readOnly={
+          readOnly || session.lifecycle !== "ACTIVE" || !canEditFindings
+        }
+        mediaReadOnly={
+          readOnly || session.lifecycle !== "ACTIVE" || !canMutateFindingMedia
+        }
         onClose={() => setSelectedFindingId(null)}
         onSaved={refreshSession}
       />
@@ -315,7 +383,9 @@ export function InventorySessionPage({
           <Badge variant="outline">Ревизия {session.sessionRevision}</Badge>
         </div>
         <PageToolbarActions>
-          {session.lifecycle === "ACTIVE" && !readOnly ? (
+          {session.lifecycle === "ACTIVE" &&
+          !readOnly &&
+          canCompleteInventory ? (
             <Button
               type="button"
               onClick={() => navigate(`/inventory/${session.id}/finish`)}
@@ -323,7 +393,9 @@ export function InventorySessionPage({
               Завершить
             </Button>
           ) : null}
-          {session.lifecycle === "COMPLETED" && hasBatchEligiblePublication ? (
+          {session.lifecycle === "COMPLETED" &&
+          hasBatchEligiblePublication &&
+          canManagePublications ? (
             <Button
               type="button"
               disabled={publishMutation.isPending}
@@ -334,7 +406,7 @@ export function InventorySessionPage({
           ) : null}
         </PageToolbarActions>
       </PageToolbar>
-      {session.lifecycle === "ACTIVE" && !readOnly ? (
+      {session.lifecycle === "ACTIVE" && !readOnly && canEditFindings ? (
         <Card size="sm">
           <CardHeader>
             <CardTitle>Найти или добавить бытовку</CardTitle>
@@ -363,7 +435,7 @@ export function InventorySessionPage({
           </CardContent>
         </Card>
       ) : null}
-      {pendingCreateIntent ? (
+      {pendingCreateIntent && canEditFindings && !readOnly ? (
         <Card size="sm">
           <CardHeader>
             <CardTitle>Создать отсутствующую бытовку</CardTitle>
@@ -429,6 +501,7 @@ export function InventorySessionPage({
         <InventoryPublicationPanel
           inventoryId={session.id}
           findings={session.findings}
+          canManage={canManagePublications}
           onChanged={refreshSession}
         />
       ) : null}
@@ -443,7 +516,7 @@ export function InventoryFinishPage() {
   const { inventoryId = "" } = useParams()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { accessToken } = useAuth()
+  const { accessToken, currentUser } = useAuth()
   const [acknowledged, setAcknowledged] = useState(false)
   const sessionQuery = useQuery({
     queryKey: inventoryKeys.detail(inventoryId),
@@ -451,6 +524,14 @@ export function InventoryFinishPage() {
     enabled: accessToken !== null && Boolean(inventoryId),
     retry: retryInventoryQuery,
   })
+  const canCompleteInventory = Boolean(
+    sessionQuery.data &&
+    hasInventoryWarehouseAccess(
+      currentUser,
+      sessionQuery.data.warehouseId,
+      INVENTORY_REQUIRED_ACCESS.COMPLETE
+    )
+  )
   const revisionSignature = sessionQuery.data
     ? sessionQuery.data.findings
         .map((finding) => `${finding.id}:${finding.findingRevision}`)
@@ -473,19 +554,25 @@ export function InventoryFinishPage() {
         session: sessionQuery.data!,
         idempotencyKey: previewIdempotencyKey,
       }),
-    enabled: Boolean(sessionQuery.data?.lifecycle === "ACTIVE"),
+    enabled: Boolean(
+      sessionQuery.data?.lifecycle === "ACTIVE" && canCompleteInventory
+    ),
     retry: retryInventoryQuery,
   })
   const completeIdempotencyKey = useStableCommandKey(
     `complete:${inventoryId}:${previewQuery.data?.acknowledgementSha256 ?? "loading"}:${previewQuery.data?.validationSha256 ?? "loading"}`
   )
   const completeMutation = useMutation({
-    mutationFn: (preview: InventoryCompletionPreview) =>
-      completeInventorySession({
+    mutationFn: (preview: InventoryCompletionPreview) => {
+      if (!canCompleteInventory) {
+        throw new Error("Для завершения требуется уровень MANAGE")
+      }
+      return completeInventorySession({
         accessToken,
         preview,
         idempotencyKey: completeIdempotencyKey,
-      }),
+      })
+    },
     onSuccess: async (session) => {
       await queryClient.invalidateQueries({ queryKey: inventoryKeys.all })
       navigate(`/inventory/history/${session.id}`, { replace: true })
@@ -493,6 +580,12 @@ export function InventoryFinishPage() {
   })
   if (sessionQuery.isLoading || previewQuery.isLoading)
     return <p className="text-sm text-muted-foreground">Проверяем итоги...</p>
+  if (sessionQuery.data && !canCompleteInventory)
+    return (
+      <InventoryUnavailable>
+        Для завершения инвентаризации требуется уровень MANAGE.
+      </InventoryUnavailable>
+    )
   const preview = previewQuery.data
   if (!sessionQuery.data || !preview)
     return (

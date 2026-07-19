@@ -13,6 +13,10 @@ const transferApi = vi.hoisted(() => ({
   cancelWarehouseTransfer: vi.fn(),
   reconcileWarehouseTransfer: vi.fn(),
 }))
+const authState = vi.hoisted(() => ({
+  sourceLevel: "EDIT" as "VIEW" | "EDIT" | "MANAGE",
+  destinationLevel: "EDIT" as "VIEW" | "EDIT" | "MANAGE",
+}))
 
 vi.mock(
   "@/features/logistics/warehouse-transfers/api/warehouse-transfer-api",
@@ -23,7 +27,30 @@ vi.mock(
 )
 
 vi.mock("@/features/auth/use-auth", () => ({
-  useAuth: () => ({ accessToken: "transfer-token" }),
+  useAuth: () => ({
+    accessToken: "transfer-token",
+    currentUser: {
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      username: "logistics-manager",
+      displayName: "Менеджер логистики",
+      firstName: null,
+      lastName: null,
+      email: null,
+      principalType: "USER",
+      globalRole: "WAREHOUSE_MANAGER",
+      warehouseAccessAll: false,
+      warehouseAccesses: [
+        {
+          warehouseId: "11111111-1111-4111-8111-111111111111",
+          level: authState.sourceLevel,
+        },
+        {
+          warehouseId: "22222222-2222-4222-8222-222222222222",
+          level: authState.destinationLevel,
+        },
+      ],
+    },
+  }),
 }))
 
 const SOURCE_WAREHOUSE_ID = "11111111-1111-4111-8111-111111111111"
@@ -113,6 +140,8 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  authState.sourceLevel = "EDIT"
+  authState.destinationLevel = "EDIT"
   vi.stubGlobal("crypto", { randomUUID: () => IDEMPOTENCY_KEY })
   const draft = transferDocument(DOCUMENT_ID, "DRAFT", 4)
   transferApi.listWarehouseTransfers.mockResolvedValue([
@@ -129,6 +158,39 @@ afterEach(() => {
 })
 
 describe("WarehouseTransfersPage", () => {
+  it("keeps VIEW access read-only while preserving service reads", async () => {
+    authState.sourceLevel = "VIEW"
+    authState.destinationLevel = "VIEW"
+    renderPage()
+
+    await screen.findAllByText("Черновик")
+    expect(transferApi.listWarehouseTransfers).toHaveBeenCalledWith(
+      "transfer-token",
+      SOURCE_WAREHOUSE_ID
+    )
+    expect(
+      screen.queryByRole("button", { name: "Создать перемещение" })
+    ).toBeNull()
+    expect(screen.queryByRole("button", { name: "Отправить" })).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Отменить документ" })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Выполнить сверку" })
+    ).toBeNull()
+    expect(screen.getByRole("button", { name: "Обновить" })).not.toBeNull()
+  })
+
+  it("requires EDIT access to both warehouses before offering create", async () => {
+    authState.destinationLevel = "VIEW"
+    renderPage()
+
+    await screen.findAllByText("Черновик")
+    expect(
+      screen.queryByRole("button", { name: "Создать перемещение" })
+    ).toBeNull()
+  })
+
   it("renders service documents and hides unsupported browser-owned actions", async () => {
     const user = userEvent.setup()
     renderPage()
@@ -141,6 +203,13 @@ describe("WarehouseTransfersPage", () => {
     expect(screen.queryByText(/Повторить задачу/i)).toBeNull()
     expect(screen.queryByText(/Коррекция учёта/i)).toBeNull()
     expect(screen.queryByRole("button", { name: /Принять/i })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Отправить" })).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Отменить документ" })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Выполнить сверку" })
+    ).toBeNull()
     expect(
       screen.getByText(/Перенос наполнения между бытовками также недоступен/i)
     ).not.toBeNull()
@@ -157,6 +226,8 @@ describe("WarehouseTransfersPage", () => {
   })
 
   it("sends server document and line versions for departure", async () => {
+    authState.sourceLevel = "MANAGE"
+    authState.destinationLevel = "MANAGE"
     const user = userEvent.setup()
     transferApi.departWarehouseTransferLine.mockResolvedValue(
       transferDocument(DOCUMENT_ID, "DEPARTING", 5)
@@ -179,6 +250,8 @@ describe("WarehouseTransfersPage", () => {
   })
 
   it("uses document CAS for cancellation and reconciliation", async () => {
+    authState.sourceLevel = "MANAGE"
+    authState.destinationLevel = "MANAGE"
     const user = userEvent.setup()
     transferApi.cancelWarehouseTransfer.mockResolvedValue(
       transferDocument(DOCUMENT_ID, "CANCELLED", 5)

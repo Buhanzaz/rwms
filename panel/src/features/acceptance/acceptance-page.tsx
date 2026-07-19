@@ -12,6 +12,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { useAuth } from "@/features/auth/use-auth"
+import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import {
   getRepairTask,
   listPendingRepairAcceptance,
@@ -75,6 +77,15 @@ function AcceptanceMobileCard({
 
 export function AcceptancePage() {
   const { selectedWarehouseId } = useWarehouse()
+  const { currentUser } = useAuth()
+  const canEdit = Boolean(
+    selectedWarehouseId &&
+    hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
+  )
+  const canManage = Boolean(
+    selectedWarehouseId &&
+    hasWarehouseAccess(currentUser, selectedWarehouseId, "MANAGE")
+  )
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const acceptanceId = searchParams.get("acceptanceId")
@@ -139,6 +150,8 @@ export function AcceptancePage() {
           <RepairAcceptanceDossier
             task={selectedTask}
             mode="ACCEPTANCE"
+            canEdit={canEdit}
+            canManage={canManage}
             onDecision={() => navigate(listHref, { replace: true })}
           />
         ) : null}

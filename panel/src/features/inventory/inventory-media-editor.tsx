@@ -180,6 +180,9 @@ export function InventoryMediaEditor({
 
   const uploadMutation = useMutation({
     mutationFn: async (files: File[]) => {
+      if (readOnly) {
+        throw new Error("Для загрузки медиа требуется уровень EDIT")
+      }
       if (!accessToken) throw new Error("Для загрузки требуется авторизация")
       const offset = query.data?.items.length ?? 0
       for (const [index, file] of files.entries()) {
@@ -193,6 +196,9 @@ export function InventoryMediaEditor({
   })
   const rotateMutation = useMutation({
     mutationFn: async (asset: MediaAsset) => {
+      if (readOnly) {
+        throw new Error("Для изменения медиа требуется уровень EDIT")
+      }
       if (!accessToken) throw new Error("Для поворота требуется авторизация")
       const rotationDegrees = ((asset.rotationDegrees + 90) % 360) as
         0 | 90 | 180 | 270

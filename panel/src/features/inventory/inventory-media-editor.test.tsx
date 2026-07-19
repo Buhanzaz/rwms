@@ -76,7 +76,11 @@ const readyAsset = {
   ],
 } as const
 
-function renderEditor(onReadyChange = vi.fn(), onPendingChange = vi.fn()) {
+function renderEditor(
+  onReadyChange = vi.fn(),
+  onPendingChange = vi.fn(),
+  readOnly = false
+) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -88,7 +92,7 @@ function renderEditor(onReadyChange = vi.fn(), onPendingChange = vi.fn()) {
       <InventoryMediaEditor
         accessToken="inventory-token"
         scope={{ ownerId: owner.ownerId, warehouseId: owner.warehouseId }}
-        readOnly={false}
+        readOnly={readOnly}
         onReadyChange={onReadyChange}
         onPendingChange={onPendingChange}
       />
@@ -103,6 +107,21 @@ afterEach(() => {
 })
 
 describe("InventoryMediaEditor", () => {
+  it("keeps media mutations hidden in read-only mode", async () => {
+    media.listOwnerMedia.mockResolvedValue({
+      items: [readyAsset],
+      next: null,
+    })
+    renderEditor(vi.fn(), vi.fn(), true)
+
+    expect(await screen.findByText("Готов")).toBeTruthy()
+    expect(screen.queryByLabelText("Фото и видео")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Повернуть 90°" })).toBeNull()
+    expect(
+      screen.getByRole("button", { name: "Открыть оригинал" })
+    ).toBeTruthy()
+  })
+
   it("uses the fixed inventory owner proof and exposes only READY generations", async () => {
     media.listOwnerMedia.mockResolvedValue({
       items: [

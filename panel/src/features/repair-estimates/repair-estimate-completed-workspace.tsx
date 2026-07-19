@@ -108,9 +108,11 @@ function plansInTaskOrder(
 export function RepairEstimateCompletedWorkspace({
   warehouseId,
   estimate,
+  readOnly = false,
 }: {
   warehouseId: string
   estimate: RepairEstimateDto
+  readOnly?: boolean
 }) {
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState(false)
@@ -138,6 +140,7 @@ export function RepairEstimateCompletedWorkspace({
   })
   const linkedTask = linkedTaskQuery.data ?? null
   const canAmend =
+    !readOnly &&
     linkedTaskQuery.isSuccess &&
     (!linkedTask ||
       (linkedTask.status === "QUEUED" &&
@@ -161,14 +164,19 @@ export function RepairEstimateCompletedWorkspace({
       completionMode: RepairEstimateCompletionMode
       movementRequired: boolean
       taskPlans: RepairEstimateTaskPlanDto[]
-    }) =>
-      amendCompletedRepairEstimate({
+    }) => {
+      if (!canAmend) {
+        throw new Error("Для дополнения сметы нужен доступ EDIT")
+      }
+
+      return amendCompletedRepairEstimate({
         draft,
         warehouseId,
         expectedTaskVersion,
         reason: amendmentReason,
         ...params,
-      }),
+      })
+    },
     onSuccess: (saved) => {
       setCompletionOpen(false)
       setEditing(false)
@@ -221,6 +229,10 @@ export function RepairEstimateCompletedWorkspace({
   }
 
   function beginEditing() {
+    if (readOnly) {
+      return
+    }
+
     setDraft(toEstimateEditorDraft(estimate))
     setExpectedTaskVersion(linkedTask?.version ?? null)
     setAmendmentTaskPlans(plansInTaskOrder(estimate, linkedTask))
@@ -448,7 +460,7 @@ export function RepairEstimateCompletedWorkspace({
       />
 
       <RepairEstimateCompletionDialog
-        open={completionOpen}
+        open={completionOpen && !readOnly}
         draft={draft}
         pending={mutation.isPending}
         error={error}
@@ -457,8 +469,10 @@ export function RepairEstimateCompletedWorkspace({
         initialTaskPlans={amendmentTaskPlans}
         onOpenChange={setCompletionOpen}
         onComplete={(params) => {
-          setError(null)
-          mutation.mutate(params)
+          if (!readOnly) {
+            setError(null)
+            mutation.mutate(params)
+          }
         }}
       />
     </>

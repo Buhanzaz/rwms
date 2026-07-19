@@ -30,6 +30,7 @@ import {
 import { RentalItemsTableView } from "@/features/rental-items/rental-items-table-view"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { useAuth } from "@/features/auth/use-auth"
+import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import {
   buildRentalItemsTableSchema,
   EMPTY_RENTAL_ITEMS_TABLE_SCHEMA,
@@ -204,6 +205,11 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { accessToken, currentUser, status } = useAuth()
+  const canEditRentalItems = hasWarehouseAccess(
+    currentUser,
+    warehouseId,
+    "EDIT"
+  )
 
   const [search, setSearch] = useState(() => getInitialSearch(warehouseId))
   const [page, setPage] = useState(0)
@@ -465,15 +471,17 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
                   </Button>
                 )}
 
-                <Button
-                  size="sm"
-                  className="min-w-0 flex-1 justify-center px-2 text-xs lg:flex-none lg:px-3 lg:text-sm"
-                  disabled={status !== "authenticated" || !accessToken}
-                  onClick={() => setCreateDialogOpen(true)}
-                >
-                  <Plus data-icon="inline-start" />
-                  <span className="truncate">Добавить новую бытовку</span>
-                </Button>
+                {canEditRentalItems ? (
+                  <Button
+                    size="sm"
+                    className="min-w-0 flex-1 justify-center px-2 text-xs lg:flex-none lg:px-3 lg:text-sm"
+                    disabled={status !== "authenticated" || !accessToken}
+                    onClick={() => setCreateDialogOpen(true)}
+                  >
+                    <Plus data-icon="inline-start" />
+                    <span className="truncate">Добавить новую бытовку</span>
+                  </Button>
+                ) : null}
               </PageToolbarActions>
             </PageToolbar>
 
@@ -614,11 +622,13 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
         }}
       />
 
-      <RentalItemCreateDialog
-        open={createDialogOpen}
-        warehouseId={warehouseId}
-        onOpenChange={setCreateDialogOpen}
-      />
+      {canEditRentalItems ? (
+        <RentalItemCreateDialog
+          open={createDialogOpen}
+          warehouseId={warehouseId}
+          onOpenChange={setCreateDialogOpen}
+        />
+      ) : null}
     </div>
   )
 }

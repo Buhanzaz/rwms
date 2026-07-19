@@ -82,7 +82,13 @@ function RepairSnapshotLines({
   )
 }
 
-export function RepairSubtasksEditor({ task }: { task: RepairTaskDto }) {
+export function RepairSubtasksEditor({
+  task,
+  readOnly = false,
+}: {
+  task: RepairTaskDto
+  readOnly?: boolean
+}) {
   const queryClient = useQueryClient()
   const [subtasks, setSubtasks] = useState(() => structuredClone(task.subtasks))
   const [error, setError] = useState<string | null>(null)
@@ -90,15 +96,21 @@ export function RepairSubtasksEditor({ task }: { task: RepairTaskDto }) {
     (subtask, index) => subtask.id !== task.subtasks[index]?.id
   )
   const canReorder =
+    !readOnly &&
     task.status === "QUEUED" &&
     task.startedAt === null &&
     task.subtasks.every((subtask) => subtask.status === "WAITING")
   const mutation = useMutation({
-    mutationFn: () =>
-      updateRepairTaskSubtasks({
+    mutationFn: () => {
+      if (!canReorder) {
+        throw new Error("Для изменения порядка нужен доступ EDIT")
+      }
+
+      return updateRepairTaskSubtasks({
         task,
         orderedSubtaskIds: subtasks.map((subtask) => subtask.id),
-      }),
+      })
+    },
     onSuccess: (saved) => {
       queryClient.setQueryData(
         repairTaskDetailQueryKey(saved.warehouseId, saved.id),
@@ -138,80 +150,80 @@ export function RepairSubtasksEditor({ task }: { task: RepairTaskDto }) {
               ? "Перемещение с ремонта"
               : null
         return (
-        <Card key={subtask.id} size="sm">
-          <CardHeader>
-            <CardTitle className="flex flex-wrap items-center gap-2">
-              <span>{movementTitle ?? `Подзадание ${index + 1}`}</span>
-              <Badge variant="outline">
-                {repairSubtaskStatusLabel(subtask.status)}
-              </Badge>
-            </CardTitle>
-            <CardDescription>
-              {movementTitle
-                ? subtask.kind === "MOVE_TO_REPAIR"
-                  ? "Доставка бытовки к месту ремонта."
-                  : "Возврат бытовки после ремонта."
-                : "Состав работ и материалов."}
-            </CardDescription>
-            {canReorder && subtasks.length > 1 ? (
-              <CardAction>
-                <div className="flex gap-1">
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="outline"
-                    aria-label={`Переместить подзадание ${index + 1} выше`}
-                    disabled={mutation.isPending || index === 0}
-                    onClick={() => moveSubtask(index, -1)}
-                  >
-                    <HugeiconsIcon
-                      icon={ArrowUp01Icon}
-                      data-icon="inline-start"
-                    />
-                  </Button>
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="outline"
-                    aria-label={`Переместить подзадание ${index + 1} ниже`}
-                    disabled={
-                      mutation.isPending || index === subtasks.length - 1
-                    }
-                    onClick={() => moveSubtask(index, 1)}
-                  >
-                    <HugeiconsIcon
-                      icon={ArrowDown01Icon}
-                      data-icon="inline-start"
-                    />
-                  </Button>
+          <Card key={subtask.id} size="sm">
+            <CardHeader>
+              <CardTitle className="flex flex-wrap items-center gap-2">
+                <span>{movementTitle ?? `Подзадание ${index + 1}`}</span>
+                <Badge variant="outline">
+                  {repairSubtaskStatusLabel(subtask.status)}
+                </Badge>
+              </CardTitle>
+              <CardDescription>
+                {movementTitle
+                  ? subtask.kind === "MOVE_TO_REPAIR"
+                    ? "Доставка бытовки к месту ремонта."
+                    : "Возврат бытовки после ремонта."
+                  : "Состав работ и материалов."}
+              </CardDescription>
+              {canReorder && subtasks.length > 1 ? (
+                <CardAction>
+                  <div className="flex gap-1">
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="outline"
+                      aria-label={`Переместить подзадание ${index + 1} выше`}
+                      disabled={mutation.isPending || index === 0}
+                      onClick={() => moveSubtask(index, -1)}
+                    >
+                      <HugeiconsIcon
+                        icon={ArrowUp01Icon}
+                        data-icon="inline-start"
+                      />
+                    </Button>
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="outline"
+                      aria-label={`Переместить подзадание ${index + 1} ниже`}
+                      disabled={
+                        mutation.isPending || index === subtasks.length - 1
+                      }
+                      onClick={() => moveSubtask(index, 1)}
+                    >
+                      <HugeiconsIcon
+                        icon={ArrowDown01Icon}
+                        data-icon="inline-start"
+                      />
+                    </Button>
+                  </div>
+                </CardAction>
+              ) : null}
+            </CardHeader>
+            <CardContent>
+              {movementTitle ? (
+                <p className="text-muted-foreground">
+                  Этап перемещения не содержит строк работ или материалов.
+                </p>
+              ) : (
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <RepairSnapshotLines
+                    title="Работы"
+                    itemLabel="Работа"
+                    emptyLabel="Работ нет."
+                    lines={subtask.workLines}
+                  />
+                  <RepairSnapshotLines
+                    title="Материалы"
+                    itemLabel="Материал"
+                    emptyLabel="Материалов нет."
+                    lines={subtask.materialLines}
+                    includeQuantity
+                  />
                 </div>
-              </CardAction>
-            ) : null}
-          </CardHeader>
-          <CardContent>
-            {movementTitle ? (
-              <p className="text-muted-foreground">
-                Этап перемещения не содержит строк работ или материалов.
-              </p>
-            ) : (
-              <div className="grid gap-3 lg:grid-cols-2">
-              <RepairSnapshotLines
-                title="Работы"
-                itemLabel="Работа"
-                emptyLabel="Работ нет."
-                lines={subtask.workLines}
-              />
-              <RepairSnapshotLines
-                title="Материалы"
-                itemLabel="Материал"
-                emptyLabel="Материалов нет."
-                lines={subtask.materialLines}
-                includeQuantity
-              />
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              )}
+            </CardContent>
+          </Card>
         )
       })}
 

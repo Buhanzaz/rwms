@@ -42,6 +42,7 @@ import { REPAIR_TASKS_QUERY_KEY } from "@/features/repair-tasks/api/repair-tasks
 export type RepairEstimateEditorWorkspaceProps = {
   warehouseId: string
   estimate: RepairEstimateDto | null
+  readOnly?: boolean
   loading?: boolean
   onClose: () => void
   onSaved: (estimate: RepairEstimateDto) => void | Promise<void>
@@ -51,6 +52,7 @@ export type RepairEstimateEditorWorkspaceProps = {
 export function RepairEstimateEditorWorkspace({
   warehouseId,
   estimate,
+  readOnly = false,
   loading = false,
   onClose,
   onSaved,
@@ -74,6 +76,7 @@ export function RepairEstimateEditorWorkspace({
         key={editorKey}
         warehouseId={warehouseId}
         estimate={estimate}
+        readOnly={readOnly}
       />
     )
   }
@@ -83,6 +86,7 @@ export function RepairEstimateEditorWorkspace({
       key={editorKey}
       warehouseId={warehouseId}
       estimate={estimate}
+      readOnly={readOnly}
       onClose={onClose}
       onSaved={onSaved}
       initialRentalItemId={initialRentalItemId}
@@ -93,6 +97,7 @@ export function RepairEstimateEditorWorkspace({
 function RepairEstimateEditorContent({
   warehouseId,
   estimate,
+  readOnly = false,
   onClose,
   onSaved,
   initialRentalItemId,
@@ -110,10 +115,14 @@ function RepairEstimateEditorContent({
     useState<RepairEstimateCatalogPager | null>(null)
   const [completionOpen, setCompletionOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const readOnly = estimate?.status === "COMPLETED"
-
   const saveMutation = useMutation({
-    mutationFn: () => saveRepairEstimateDraft({ draft, warehouseId }),
+    mutationFn: () => {
+      if (readOnly) {
+        throw new Error("Для сохранения сметы нужен доступ EDIT")
+      }
+
+      return saveRepairEstimateDraft({ draft, warehouseId })
+    },
     onSuccess: async (saved) => {
       queryClient.setQueryData(
         repairEstimateDetailQueryKey(warehouseId, saved.id),
@@ -146,12 +155,17 @@ function RepairEstimateEditorContent({
       completionMode: RepairEstimateCompletionMode
       movementRequired: boolean
       taskPlans: RepairEstimateTaskPlanDto[]
-    }) =>
-      completeRepairEstimate({
+    }) => {
+      if (readOnly) {
+        throw new Error("Для завершения сметы нужен доступ EDIT")
+      }
+
+      return completeRepairEstimate({
         draft,
         warehouseId,
         ...params,
-      }),
+      })
+    },
     onSuccess: async (saved) => {
       setCompletionOpen(false)
       queryClient.setQueryData(
@@ -278,7 +292,7 @@ function RepairEstimateEditorContent({
     <div className="flex h-full min-h-0 flex-col gap-3">
       {readOnly ? (
         <p className="text-sm text-muted-foreground">
-          Завершённая смета доступна только для чтения.
+          Смета доступна только для чтения.
         </p>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto pr-1">
@@ -393,14 +407,16 @@ function RepairEstimateEditorContent({
       />
 
       <RepairEstimateCompletionDialog
-        open={completionOpen}
+        open={completionOpen && !readOnly}
         draft={draft}
         pending={completeMutation.isPending}
         error={error}
         onOpenChange={setCompletionOpen}
         onComplete={(params) => {
-          setError(null)
-          completeMutation.mutate(params)
+          if (!readOnly) {
+            setError(null)
+            completeMutation.mutate(params)
+          }
         }}
       />
     </>

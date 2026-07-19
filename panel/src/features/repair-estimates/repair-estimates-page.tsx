@@ -20,6 +20,8 @@ import {
   PageToolbarContent,
 } from "@/components/page-toolbar"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useAuth } from "@/features/auth/use-auth"
+import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import {
   getRepairEstimate,
   listRepairEstimates,
@@ -51,6 +53,11 @@ function estimateStatusLabel(status: RepairEstimateStatus) {
 
 export function RepairEstimatesPage() {
   const { selectedWarehouseId } = useWarehouse()
+  const { currentUser } = useAuth()
+  const canEdit = Boolean(
+    selectedWarehouseId &&
+    hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
+  )
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams] = useSearchParams()
@@ -151,7 +158,16 @@ export function RepairEstimatesPage() {
       ) : null}
 
       {workspaceOpen && selectedWarehouseId ? (
-        returnTaskId ? (
+        createRequested && !canEdit ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Создание сметы недоступно</CardTitle>
+              <CardDescription role="alert">
+                Для создания сметы нужен доступ EDIT к выбранному складу.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        ) : returnTaskId ? (
           <Card>
             <CardHeader>
               <CardTitle>Смета из возврата пока недоступна</CardTitle>
@@ -175,6 +191,7 @@ export function RepairEstimatesPage() {
           <RepairEstimateEditorWorkspace
             warehouseId={selectedWarehouseId}
             estimate={estimateId ? (detailQuery.data ?? null) : null}
+            readOnly={!canEdit}
             loading={Boolean(estimateId && detailQuery.isLoading)}
             onClose={() => closeEditor()}
             onSaved={handleSaved}
@@ -200,16 +217,18 @@ export function RepairEstimatesPage() {
               </Tabs>
             </PageToolbarContent>
 
-            <PageToolbarActions>
-              <Button
-                type="button"
-                disabled={!selectedWarehouseId}
-                onClick={openCreateEditor}
-              >
-                <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-                Создать смету
-              </Button>
-            </PageToolbarActions>
+            {canEdit ? (
+              <PageToolbarActions>
+                <Button
+                  type="button"
+                  disabled={!selectedWarehouseId}
+                  onClick={openCreateEditor}
+                >
+                  <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+                  Создать смету
+                </Button>
+              </PageToolbarActions>
+            ) : null}
           </PageToolbar>
 
           <div className="min-h-0 flex-1 overflow-auto md:flex">

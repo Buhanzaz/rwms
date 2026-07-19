@@ -62,7 +62,7 @@ function finding(
   }
 }
 
-function renderPanel() {
+function renderPanel(canManage = true) {
   const client = new QueryClient({
     defaultOptions: { mutations: { retry: false } },
   })
@@ -79,6 +79,7 @@ function renderPanel() {
           ),
           finding("00000000-0000-4000-8000-000000000722", "BLOCKED", 7),
         ]}
+        canManage={canManage}
         onChanged={onChanged}
       />
     </QueryClientProvider>
@@ -92,6 +93,20 @@ afterEach(() => {
 })
 
 describe("InventoryPublicationPanel", () => {
+  it("keeps publication recovery read-only without MANAGE access", () => {
+    renderPanel(false)
+
+    expect(screen.getByText("Временная ошибка")).toBeTruthy()
+    expect(screen.getByText("Заблокирована")).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: "Повторить передачу" })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Сверить и повторить" })
+    ).toBeNull()
+    expect(screen.queryByRole("button", { name: "Закрыть" })).toBeNull()
+  })
+
   it("keeps one retry key after a transient failure", async () => {
     vi.mocked(retryFindingPublication)
       .mockRejectedValueOnce(new Error("Временная ошибка"))

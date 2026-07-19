@@ -40,6 +40,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useAuth } from "@/features/auth/use-auth"
+import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import type {
   EquipmentDispositionListItemDto,
@@ -336,11 +337,15 @@ function EquipmentDispositionDialog({
 }
 
 export function EquipmentWriteOffsPage() {
-  const { accessToken } = useAuth()
+  const { accessToken, currentUser } = useAuth()
   const { selectedWarehouseId } = useWarehouse()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState("")
   const [dialogOpen, setDialogOpen] = useState(false)
+  const canManage = Boolean(
+    selectedWarehouseId &&
+    hasWarehouseAccess(currentUser, selectedWarehouseId, "MANAGE")
+  )
   const normalizedSearch = search.trim()
   const listQuery = useQuery({
     queryKey: equipmentWriteOffsQueryKey(
@@ -369,7 +374,7 @@ export function EquipmentWriteOffsPage() {
         </PageToolbarContent>
         <PageToolbarActions>
           <Button
-            disabled={!accessToken || !selectedWarehouseId}
+            disabled={!accessToken || !selectedWarehouseId || !canManage}
             onClick={() => setDialogOpen(true)}
           >
             Операция с оборудованием
@@ -462,7 +467,7 @@ export function EquipmentWriteOffsPage() {
         </div>
       )}
 
-      {selectedWarehouseId ? (
+      {selectedWarehouseId && canManage ? (
         <EquipmentDispositionDialog
           key={`${selectedWarehouseId}:${dialogOpen}`}
           accessToken={accessToken}

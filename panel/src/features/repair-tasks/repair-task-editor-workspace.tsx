@@ -49,6 +49,8 @@ import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
 type RepairTaskEditorWorkspaceProps = {
   warehouseId: string
   task: RepairTaskDto | null
+  readOnly?: boolean
+  canManage?: boolean
   sourceTask?: RepairTaskDto | null
   loading?: boolean
   seed?: RepairTaskReworkSeed
@@ -60,6 +62,8 @@ type RepairTaskEditorWorkspaceProps = {
 export function RepairTaskEditorWorkspace({
   warehouseId,
   task,
+  readOnly = false,
+  canManage = false,
   sourceTask,
   loading = false,
   seed,
@@ -84,6 +88,8 @@ export function RepairTaskEditorWorkspace({
       key={editorKey}
       warehouseId={warehouseId}
       task={task}
+      readOnly={readOnly}
+      canManage={canManage}
       sourceTask={sourceTask}
       seed={seed}
       initialRentalItemId={initialRentalItemId}
@@ -96,6 +102,8 @@ export function RepairTaskEditorWorkspace({
 function RepairTaskEditorContent({
   warehouseId,
   task,
+  readOnly = false,
+  canManage = false,
   sourceTask,
   seed,
   initialRentalItemId,
@@ -146,7 +154,13 @@ function RepairTaskEditorContent({
   }
 
   const saveMutation = useMutation({
-    mutationFn: () => saveRepairTaskDraft({ draft, warehouseId }),
+    mutationFn: () => {
+      if (readOnly) {
+        throw new Error("Для сохранения ремонта нужен доступ EDIT")
+      }
+
+      return saveRepairTaskDraft({ draft, warehouseId })
+    },
     onSuccess: handleSuccess,
     onError: (unknownError) =>
       setError(
@@ -156,8 +170,13 @@ function RepairTaskEditorContent({
       ),
   })
   const queueMutation = useMutation({
-    mutationFn: (completion: RepairWorkCompletionResult) =>
-      queueRepairTask({ draft, warehouseId, ...completion }),
+    mutationFn: (completion: RepairWorkCompletionResult) => {
+      if (readOnly) {
+        throw new Error("Для постановки ремонта в очередь нужен доступ EDIT")
+      }
+
+      return queueRepairTask({ draft, warehouseId, ...completion })
+    },
     onSuccess: handleSuccess,
     onError: (unknownError) =>
       setError(
@@ -167,8 +186,12 @@ function RepairTaskEditorContent({
       ),
   })
   const writeOffMutation = useMutation({
-    mutationFn: (writeOffReason: string) =>
-      writeOffRepairDraft({
+    mutationFn: (writeOffReason: string) => {
+      if (readOnly || !canManage) {
+        throw new Error("Для списания бытовки нужен доступ MANAGE")
+      }
+
+      return writeOffRepairDraft({
         warehouseId,
         origin: draft.origin,
         taskId: draft.taskId,
@@ -183,7 +206,8 @@ function RepairTaskEditorContent({
         media: draft.media,
         pendingUploads: draft.pendingUploads,
         writeOffReason,
-      }),
+      })
+    },
     onSuccess: (saved) => {
       setWriteOffOpen(false)
       void queryClient.invalidateQueries({ queryKey: REPAIR_TASKS_QUERY_KEY })
@@ -208,6 +232,7 @@ function RepairTaskEditorContent({
     saveMutation.isPending ||
     queueMutation.isPending ||
     writeOffMutation.isPending
+  const interactionDisabled = readOnly || mutationPending
   const totalAmount = useMemo(() => {
     try {
       return calculateEstimateTotal(draft.lines)
@@ -272,7 +297,8 @@ function RepairTaskEditorContent({
       dispatchDate={draft.dispatchDate}
       comment={draft.comment}
       showComment={false}
-      disabled={mutationPending || Boolean(task)}
+      disabled={interactionDisabled || Boolean(task)}
+      readOnly={readOnly}
       rentalItemDisabled={Boolean(task) || draft.kind === "REWORK"}
       rentalItemInvalid={Boolean(error && !draft.rentalItemId)}
       onRentalItemChange={(rentalItemId) =>
@@ -295,7 +321,7 @@ function RepairTaskEditorContent({
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
         <RepairEstimateLinesEditor
           lines={draft.lines}
-          readOnly={mutationPending}
+          readOnly={interactionDisabled}
           mode="TASK"
           catalogOnly
           onChange={(lines) => setDraft((current) => ({ ...current, lines }))}
@@ -315,7 +341,7 @@ function RepairTaskEditorContent({
       <div className="min-h-0 flex-1 overflow-y-auto pr-1">
         <RepairEstimateCatalogPicker
           lines={draft.lines}
-          readOnly={mutationPending}
+          readOnly={interactionDisabled}
           onChange={(lines) => setDraft((current) => ({ ...current, lines }))}
           onPagerChange={handleCatalogPagerChange}
         />
@@ -328,7 +354,7 @@ function RepairTaskEditorContent({
             variant={catalogPager?.canGoBack ? "default" : "outline"}
             size="icon-sm"
             aria-label="Предыдущая страница каталога"
-            disabled={!catalogPager?.canGoBack || mutationPending}
+            disabled={!catalogPager?.canGoBack || interactionDisabled}
             onClick={() => catalogPager?.goBack()}
           >
             <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
@@ -338,57 +364,67 @@ function RepairTaskEditorContent({
             variant={catalogPager?.canGoForward ? "default" : "outline"}
             size="icon-sm"
             aria-label="Следующая страница каталога"
-            disabled={!catalogPager?.canGoForward || mutationPending}
+            disabled={!catalogPager?.canGoForward || interactionDisabled}
             onClick={() => catalogPager?.goForward()}
           >
             <HugeiconsIcon icon={ArrowRight01Icon} data-icon="inline-start" />
           </Button>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
-          <Button
-            type="button"
-            variant="destructive"
-            disabled={
-              !draft.rentalItemId || mutationPending || draft.kind === "REWORK"
-            }
-            onClick={() => {
-              setWriteOffError(null)
-              setWriteOffOpen(true)
-            }}
-          >
-            Списать
-          </Button>
+          {canManage && !readOnly ? (
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={
+                !draft.rentalItemId ||
+                mutationPending ||
+                draft.kind === "REWORK"
+              }
+              onClick={() => {
+                setWriteOffError(null)
+                setWriteOffOpen(true)
+              }}
+            >
+              Списать
+            </Button>
+          ) : null}
           <Button
             type="button"
             variant="outline"
             disabled={mutationPending}
             onClick={closeEditor}
           >
-            Отмена
+            {readOnly ? "Закрыть" : "Отмена"}
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={mutationPending}
-            onClick={() => {
-              if (validateDraft()) {
-                saveMutation.mutate()
-              }
-            }}
-          >
-            {saveMutation.isPending ? "Сохранение..." : "Сохранить черновик"}
-          </Button>
-          <Button
-            type="button"
-            disabled={mutationPending}
-            onClick={() => {
-              if (validateDraft(true)) {
-                setCompletionOpen(true)
-              }
-            }}
-          >
-            {queueMutation.isPending ? "Завершение..." : "Завершить"}
-          </Button>
+          {!readOnly ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={mutationPending}
+                onClick={() => {
+                  if (validateDraft()) {
+                    saveMutation.mutate()
+                  }
+                }}
+              >
+                {saveMutation.isPending
+                  ? "Сохранение..."
+                  : "Сохранить черновик"}
+              </Button>
+              <Button
+                type="button"
+                disabled={mutationPending}
+                onClick={() => {
+                  if (validateDraft(true)) {
+                    setCompletionOpen(true)
+                  }
+                }}
+              >
+                {queueMutation.isPending ? "Завершение..." : "Завершить"}
+              </Button>
+            </>
+          ) : null}
         </div>
       </div>
     </div>
@@ -430,10 +466,10 @@ function RepairTaskEditorContent({
         information={information}
         estimate={taskLines}
         controls={controls}
-        catalogAction={catalogAction}
+        catalogAction={readOnly ? undefined : catalogAction}
       />
       <RepairWorkCompletionDialog
-        open={completionOpen}
+        open={completionOpen && !readOnly}
         lines={draft.lines}
         pending={queueMutation.isPending}
         error={completionOpen ? error : null}
@@ -468,17 +504,25 @@ function RepairTaskEditorContent({
           setCompletionOpen(open)
           setError(null)
         }}
-        onComplete={(completion) => queueMutation.mutate(completion)}
+        onComplete={(completion) => {
+          if (!readOnly) {
+            queueMutation.mutate(completion)
+          }
+        }}
       />
       <RepairTaskWriteOffDialog
-        open={writeOffOpen}
+        open={writeOffOpen && canManage && !readOnly}
         pending={writeOffMutation.isPending}
         error={writeOffError}
         onOpenChange={(open) => {
           setWriteOffOpen(open)
           if (!open) setWriteOffError(null)
         }}
-        onConfirm={(reason) => writeOffMutation.mutate(reason)}
+        onConfirm={(reason) => {
+          if (canManage && !readOnly) {
+            writeOffMutation.mutate(reason)
+          }
+        }}
       />
     </>
   )

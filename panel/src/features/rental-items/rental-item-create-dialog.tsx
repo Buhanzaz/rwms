@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { useAuth } from "@/features/auth/use-auth"
+import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { cn } from "@/lib/utils"
 import {
   Popover,
@@ -358,7 +359,12 @@ export function RentalItemCreateDialog({
   onOpenChange,
 }: RentalItemCreateDialogProps) {
   const queryClient = useQueryClient()
-  const { accessToken } = useAuth()
+  const { accessToken, currentUser } = useAuth()
+  const canEditRentalItems = hasWarehouseAccess(
+    currentUser,
+    warehouseId,
+    "EDIT"
+  )
   const numberInputId = useId()
   const [form, setForm] = useState<RentalItemCreateFormState>(() =>
     createEmptyForm()
@@ -452,6 +458,10 @@ export function RentalItemCreateDialog({
   }
 
   function handleDialogOpenChange(nextOpen: boolean) {
+    if (nextOpen && !canEditRentalItems) {
+      return
+    }
+
     if (!nextOpen && !createMutation.isPending) {
       setForm(createEmptyForm())
       setSubmitted(false)
@@ -472,6 +482,7 @@ export function RentalItemCreateDialog({
       !hasRequiredFormFields(form) ||
       !type ||
       !finishing ||
+      !canEditRentalItems ||
       createMutation.isPending
     ) {
       return
@@ -491,7 +502,10 @@ export function RentalItemCreateDialog({
 
   return (
     <>
-      <Dialog open={open} onOpenChange={handleDialogOpenChange}>
+      <Dialog
+        open={open && canEditRentalItems}
+        onOpenChange={handleDialogOpenChange}
+      >
         <DialogContent
           className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-3xl"
           onEscapeKeyDown={(event) => {
@@ -705,7 +719,7 @@ export function RentalItemCreateDialog({
               <Button
                 type="submit"
                 className="flex-[1.65]"
-                disabled={createMutation.isPending}
+                disabled={!canEditRentalItems || createMutation.isPending}
               >
                 <HugeiconsIcon icon={CheckIcon} data-icon="inline-start" />
                 {createMutation.isPending ? "Создание..." : "Создать бытовку"}
