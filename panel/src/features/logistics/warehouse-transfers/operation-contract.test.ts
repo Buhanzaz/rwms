@@ -18,14 +18,13 @@ describe("warehouse transfer UI contract mapping", () => {
   })
 
   it("keeps browser orchestration and contents transfer as gaps", () => {
-    expect(TRANSFER_CONTRACT_GAPS).toEqual(
-      expect.arrayContaining([
-        "retrySourceTask",
-        "retryDestinationTask",
-        "cancelSingleLine",
-        "accountingCorrection",
-        "contentsTransferBetweenCabins",
-      ])
-    )
+    expect(TRANSFER_CONTRACT_GAPS).toEqual([
+      "listCandidates",
+      "retrySourceTask",
+      "retryDestinationTask",
+      "cancelSingleLine",
+      "accountingCorrection",
+      "contentsTransferBetweenCabins",
+    ])
   })
 })

@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
@@ -13,6 +16,13 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 class LogisticsContractFoundationTest {
+  private static final String FORBIDDEN_PUBLIC_PATH_PATTERN =
+      ".*(?:compan(?:y|ies)|candidates?|reservations?|"
+          + "contents(?:\\{[^}]+})?transfers?).*";
+  private static final Set<String> HTTP_METHODS =
+      Set.of(
+          "get", "put", "post", "delete", "options", "head", "patch", "trace");
+
   private final ObjectMapper objectMapper = new ObjectMapper();
 
   @Test
@@ -47,6 +57,38 @@ class LogisticsContractFoundationTest {
               assertThat(parameter.get("in")).isEqualTo("header");
               assertThat(parameter.get("required")).isEqualTo(true);
             });
+  }
+
+  @Test
+  void publicOpenApiExposesExactlyTheCanonicalLogisticsOperations() throws Exception {
+    Map<String, Object> paths = child(openApi(), "paths");
+
+    assertThat(publicOperationIds(paths))
+        .containsExactlyInAnyOrder(
+            "listReturns",
+            "createReturn",
+            "getReturn",
+            "registerReturn",
+            "acceptUndamagedReturn",
+            "requestReturnEstimate",
+            "listShipments",
+            "createShipment",
+            "getShipment",
+            "replaceShipmentPlan",
+            "confirmShipmentPreparation",
+            "cancelShipment",
+            "listTransfers",
+            "createTransfer",
+            "getTransfer",
+            "departTransferLine",
+            "arriveTransferLine",
+            "cancelTransfer",
+            "reconcileDocument");
+    assertThat(paths.keySet())
+        .allSatisfy(
+            path ->
+                assertThat(normalizedPath(path))
+                    .doesNotMatch(FORBIDDEN_PUBLIC_PATH_PATTERN));
   }
 
   @Test
@@ -158,6 +200,32 @@ class LogisticsContractFoundationTest {
 
   private static Set<String> fieldNames(JsonNode node) {
     return Set.copyOf(node.propertyNames());
+  }
+
+  @SuppressWarnings("unchecked")
+  private static List<String> publicOperationIds(Map<String, Object> paths) {
+    List<String> operationIds = new ArrayList<>();
+    paths.values().stream()
+        .map(path -> (Map<String, Object>) path)
+        .forEach(
+            path ->
+                path.forEach(
+                    (method, operation) -> {
+                      if (HTTP_METHODS.contains(method)) {
+                        operationIds.add(
+                            (String)
+                                ((Map<String, Object>) operation).get("operationId"));
+                      }
+                    }));
+    return operationIds;
+  }
+
+  private static String normalizedPath(String path) {
+    return path
+        .toLowerCase(Locale.ROOT)
+        .replace("-", "")
+        .replace("_", "")
+        .replace("/", "");
   }
 
   @SuppressWarnings("unchecked")
