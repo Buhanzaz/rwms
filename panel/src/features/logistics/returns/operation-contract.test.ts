@@ -17,15 +17,14 @@ describe("return UI contract mapping", () => {
   })
 
   it("keeps browser-only candidate and transition semantics explicit", () => {
-    expect(RETURN_CONTRACT_GAPS).toEqual(
-      expect.arrayContaining([
-        "listCompanies",
-        "listCandidates",
-        "importRentedCabin",
-        "updateReceiptMembership",
-        "resolveFurnitureDisposition",
-        "returnMediaUpload",
-      ])
-    )
+    expect(RETURN_CONTRACT_GAPS).toEqual([
+      "listCompanies",
+      "listCandidates",
+      "listEditCandidates",
+      "importRentedCabin",
+      "updateReceiptMembership",
+      "resolveFurnitureDisposition",
+      "returnMediaUpload",
+    ])
   })
 })

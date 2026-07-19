@@ -20,15 +20,13 @@ describe("shipment UI contract mapping", () => {
   })
 
   it("does not invent candidate or finalization operations", () => {
-    expect(SHIPMENT_CONTRACT_GAPS).toEqual(
-      expect.arrayContaining([
-        "listCompanies",
-        "listCandidates",
-        "listEquipment",
-        "listSourceCabins",
-        "finalizeShipment",
-      ])
-    )
+    expect(SHIPMENT_CONTRACT_GAPS).toEqual([
+      "listCompanies",
+      "listCandidates",
+      "listEquipment",
+      "listSourceCabins",
+      "finalizeShipment",
+    ])
   })
 
   it("keeps the service CANCELLING transition in the contract and parser", () => {
