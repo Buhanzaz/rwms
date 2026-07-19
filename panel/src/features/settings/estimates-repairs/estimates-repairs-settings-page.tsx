@@ -63,6 +63,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
+import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { cn } from "@/lib/utils"
@@ -2406,7 +2407,7 @@ function EstimateDrilldownView({
 }
 
 export function EstimatesRepairsSettingsPage() {
-  const { accessToken } = useAuth()
+  const { accessToken, currentUser } = useAuth()
   const { selectedWarehouseId } = useWarehouse()
   const queryClient = useQueryClient()
   const [estimateScreen, setEstimateScreen] = useState<EstimateScreen>({
@@ -2417,6 +2418,14 @@ export function EstimatesRepairsSettingsPage() {
   )
   const [commandError, setCommandError] = useState<string | null>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
+  const canEdit = Boolean(
+    selectedWarehouseId &&
+    hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
+  )
+  const canManage = Boolean(
+    selectedWarehouseId &&
+    hasWarehouseAccess(currentUser, selectedWarehouseId, "MANAGE")
+  )
 
   const versionsQuery = useQuery({
     queryKey: [
@@ -2457,6 +2466,11 @@ export function EstimatesRepairsSettingsPage() {
 
   const importMutation = useMutation({
     mutationFn: async (file: File) => {
+      if (!canManage) {
+        throw new Error(
+          "Недостаточно прав для импорта каталога выбранного склада."
+        )
+      }
       if (!accessToken || !selectedWarehouseId) {
         throw new Error("Не выбран склад или отсутствует токен доступа.")
       }
@@ -2483,6 +2497,11 @@ export function EstimatesRepairsSettingsPage() {
 
   const activationMutation = useMutation({
     mutationFn: () => {
+      if (!canManage) {
+        throw new Error(
+          "Недостаточно прав для активации каталога выбранного склада."
+        )
+      }
       if (!catalogRequest || !selectedVersion) {
         throw new Error("Версия каталога не выбрана.")
       }
@@ -2544,8 +2563,13 @@ export function EstimatesRepairsSettingsPage() {
     materialCatalogQuery.isLoading
 
   if (estimateScreen.level !== "root") {
-    if (!catalogRequest || selectedVersion?.lifecycle !== "DRAFT") {
-      return <ErrorBox>Выберите черновую версию каталога.</ErrorBox>
+    if (!canEdit || !catalogRequest || selectedVersion?.lifecycle !== "DRAFT") {
+      return (
+        <ErrorBox>
+          Для изменения каталога выберите черновую версию и склад с правами
+          редактирования.
+        </ErrorBox>
+      )
     }
     return (
       <EstimateDrilldownView
@@ -2617,7 +2641,10 @@ export function EstimatesRepairsSettingsPage() {
             variant="outline"
             onClick={() => importInputRef.current?.click()}
             disabled={
-              !accessToken || !selectedWarehouseId || importMutation.isPending
+              !accessToken ||
+              !selectedWarehouseId ||
+              !canManage ||
+              importMutation.isPending
             }
           >
             Импортировать JSON
@@ -2629,7 +2656,7 @@ export function EstimatesRepairsSettingsPage() {
             className="hidden"
             onChange={(event) => {
               const file = event.target.files?.[0]
-              if (file) importMutation.mutate(file)
+              if (canManage && file) importMutation.mutate(file)
               event.currentTarget.value = ""
             }}
           />
@@ -2637,6 +2664,7 @@ export function EstimatesRepairsSettingsPage() {
             type="button"
             onClick={() => activationMutation.mutate()}
             disabled={
+              !canManage ||
               selectedVersion?.lifecycle !== "DRAFT" ||
               activationMutation.isPending
             }
@@ -2677,9 +2705,11 @@ export function EstimatesRepairsSettingsPage() {
                 key={action.id}
                 action={action}
                 active={false}
-                disabled={selectedVersion?.lifecycle !== "DRAFT"}
+                disabled={!canEdit || selectedVersion?.lifecycle !== "DRAFT"}
                 onClick={(selected) => {
-                  if (selectedVersion?.lifecycle !== "DRAFT") return
+                  if (!canEdit || selectedVersion?.lifecycle !== "DRAFT") {
+                    return
+                  }
                   setEstimateScreen({ level: "action", action: selected })
                 }}
               />

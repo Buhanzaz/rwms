@@ -12,6 +12,9 @@ const returnApi = vi.hoisted(() => ({
   registerReturn: vi.fn(),
   requestReturnEstimate: vi.fn(),
 }))
+const authState = vi.hoisted(() => ({
+  level: "EDIT" as "VIEW" | "EDIT" | "MANAGE",
+}))
 
 vi.mock("@/features/logistics/returns/api", () => ({
   RETURNS_QUERY_KEY: ["logistics", "returns"],
@@ -19,7 +22,26 @@ vi.mock("@/features/logistics/returns/api", () => ({
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({
-  useAuth: () => ({ accessToken: "return-token" }),
+  useAuth: () => ({
+    accessToken: "return-token",
+    currentUser: {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      username: "operator",
+      displayName: "Оператор",
+      firstName: null,
+      lastName: null,
+      email: null,
+      principalType: "USER",
+      globalRole: "WAREHOUSE_MANAGER",
+      warehouseAccessAll: false,
+      warehouseAccesses: [
+        {
+          warehouseId: "11111111-1111-4111-8111-111111111111",
+          level: authState.level,
+        },
+      ],
+    },
+  }),
 }))
 
 vi.mock("@/hooks/use-warehouse", () => ({
@@ -85,6 +107,7 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  authState.level = "EDIT"
   vi.stubGlobal("crypto", { randomUUID: () => IDEMPOTENCY_KEY })
   returnApi.listReturns.mockResolvedValue([
     returnDocument(DRAFT_ID, "DRAFT", 2),
@@ -99,6 +122,23 @@ afterEach(() => {
 })
 
 describe("LogisticsReturnsPage", () => {
+  it("keeps VIEW access read-only while preserving service reads", async () => {
+    authState.level = "VIEW"
+    renderPage()
+
+    await screen.findAllByText("Требуется осмотр")
+    expect(returnApi.listReturns).toHaveBeenCalledWith(
+      "return-token",
+      WAREHOUSE_ID
+    )
+    expect(screen.queryByRole("button", { name: "Создать возврат" })).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Зарегистрировать" })
+    ).toBeNull()
+    expect(screen.queryByRole("button", { name: /Запросить смету/ })).toBeNull()
+    expect(screen.getByRole("button", { name: "Обновить" })).not.toBeNull()
+  })
+
   it("uses service projections and hides unsupported browser-owned controls", async () => {
     const user = userEvent.setup()
     renderPage()

@@ -58,6 +58,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
 import {
   WAREHOUSE_TRANSFERS_QUERY_KEY,
@@ -129,7 +130,7 @@ function commandKey(
 }
 
 export function WarehouseTransfersPage() {
-  const { accessToken } = useAuth()
+  const { accessToken, currentUser } = useAuth()
   const { selectedWarehouseId, warehouses } = useWarehouse()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState("")
@@ -143,6 +144,17 @@ export function WarehouseTransfersPage() {
     useState<TransferDocument | null>(null)
   const [commandError, setCommandError] = useState<string | null>(null)
   const commandKeys = useRef(new Map<string, string>())
+  const canEditSelectedWarehouse =
+    selectedWarehouseId !== null &&
+    hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
+  const canCreateTransfer =
+    canEditSelectedWarehouse &&
+    warehouses.some(
+      (warehouse) =>
+        warehouse.active &&
+        warehouse.id !== selectedWarehouseId &&
+        hasWarehouseAccess(currentUser, warehouse.id, "EDIT")
+    )
 
   const query = useQuery({
     queryKey: [...WAREHOUSE_TRANSFERS_QUERY_KEY, selectedWarehouseId],
@@ -270,6 +282,9 @@ export function WarehouseTransfersPage() {
 
   function actions(document: TransferDocument) {
     const current = currentDocument(document)
+    const canManageDocument =
+      hasWarehouseAccess(currentUser, current.warehouseId, "MANAGE") &&
+      hasWarehouseAccess(currentUser, current.destinationWarehouseId, "MANAGE")
     return (
       <div className="flex flex-wrap gap-2">
         <Button
@@ -283,7 +298,7 @@ export function WarehouseTransfersPage() {
         >
           {expandedId === document.id ? "Скрыть строки" : "Показать строки"}
         </Button>
-        {current.state === "DRAFT" ? (
+        {canManageDocument && current.state === "DRAFT" ? (
           <Button
             size="sm"
             variant="outline"
@@ -293,8 +308,9 @@ export function WarehouseTransfersPage() {
             Отменить документ
           </Button>
         ) : null}
-        {current.state === "CONFLICT" ||
-        current.state === "RECONCILIATION_REQUIRED" ? (
+        {canManageDocument &&
+        (current.state === "CONFLICT" ||
+          current.state === "RECONCILIATION_REQUIRED") ? (
           <Button size="sm" onClick={() => setReconcileTarget(current)}>
             Выполнить сверку
           </Button>
@@ -328,13 +344,12 @@ export function WarehouseTransfersPage() {
           >
             {query.isFetching ? "Обновляется…" : "Обновить"}
           </Button>
-          <Button
-            disabled={!accessToken || !selectedWarehouseId}
-            onClick={() => setCreateOpen(true)}
-          >
-            <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-            Создать перемещение
-          </Button>
+          {canCreateTransfer ? (
+            <Button onClick={() => setCreateOpen(true)}>
+              <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+              Создать перемещение
+            </Button>
+          ) : null}
         </PageToolbarActions>
       </PageToolbar>
 
@@ -391,6 +406,18 @@ export function WarehouseTransfersPage() {
                   ) : null}
                   <TransferLines
                     document={current}
+                    canManage={
+                      hasWarehouseAccess(
+                        currentUser,
+                        current.warehouseId,
+                        "MANAGE"
+                      ) &&
+                      hasWarehouseAccess(
+                        currentUser,
+                        current.destinationWarehouseId,
+                        "MANAGE"
+                      )
+                    }
                     pendingLineId={departMutation.variables?.line.id ?? null}
                     onDepart={(line) =>
                       departMutation.mutate({ document: current, line })
@@ -508,6 +535,18 @@ export function WarehouseTransfersPage() {
                 </p>
                 <TransferLines
                   document={document}
+                  canManage={
+                    hasWarehouseAccess(
+                      currentUser,
+                      document.warehouseId,
+                      "MANAGE"
+                    ) &&
+                    hasWarehouseAccess(
+                      currentUser,
+                      document.destinationWarehouseId,
+                      "MANAGE"
+                    )
+                  }
                   pendingLineId={departMutation.variables?.line.id ?? null}
                   onDepart={(line) => departMutation.mutate({ document, line })}
                 />
@@ -530,15 +569,22 @@ export function WarehouseTransfersPage() {
         </div>
       </div>
 
-      {createOpen && accessToken && selectedWarehouseId ? (
+      {createOpen && accessToken && selectedWarehouseId && canCreateTransfer ? (
         <CreateTransferDialog
           accessToken={accessToken}
+          currentUser={currentUser}
           warehouseId={selectedWarehouseId}
           warehouses={warehouses}
           onOpenChange={setCreateOpen}
         />
       ) : null}
-      {reconcileTarget ? (
+      {reconcileTarget &&
+      hasWarehouseAccess(currentUser, reconcileTarget.warehouseId, "MANAGE") &&
+      hasWarehouseAccess(
+        currentUser,
+        reconcileTarget.destinationWarehouseId,
+        "MANAGE"
+      ) ? (
         <ReconcileTransferDialog
           document={reconcileTarget}
           pending={reconcileMutation.isPending}
@@ -579,10 +625,12 @@ export function WarehouseTransfersPage() {
 
 function TransferLines({
   document,
+  canManage,
   pendingLineId,
   onDepart,
 }: {
   document: TransferDocument
+  canManage: boolean
   pendingLineId: string | null
   onDepart: (line: TransferLine) => void
 }) {
@@ -605,7 +653,8 @@ function TransferLines({
             <span>
               Asset version: {line.assetVersion} · Line version: {line.version}
             </span>
-            {line.state === "PENDING" &&
+            {canManage &&
+            line.state === "PENDING" &&
             (document.state === "DRAFT" || document.state === "DEPARTING") ? (
               <Button
                 className="w-fit"
@@ -641,18 +690,23 @@ function emptyLine(): TransferLineDraft {
 
 function CreateTransferDialog({
   accessToken,
+  currentUser,
   warehouseId,
   warehouses,
   onOpenChange,
 }: {
   accessToken: string
+  currentUser: ReturnType<typeof useAuth>["currentUser"]
   warehouseId: string
   warehouses: WarehouseInfo[]
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
   const destinations = warehouses.filter(
-    (warehouse) => warehouse.active && warehouse.id !== warehouseId
+    (warehouse) =>
+      warehouse.active &&
+      warehouse.id !== warehouseId &&
+      hasWarehouseAccess(currentUser, warehouse.id, "EDIT")
   )
   const [destinationWarehouseId, setDestinationWarehouseId] = useState("")
   const [lines, setLines] = useState<TransferLineDraft[]>(() => [emptyLine()])

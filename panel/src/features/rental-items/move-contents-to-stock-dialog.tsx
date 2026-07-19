@@ -11,6 +11,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { useAuth } from "@/features/auth/use-auth"
+import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import type {
   MoveRentalItemContentToStockPayload,
   PageResponse,
@@ -35,8 +37,19 @@ export function MoveContentsToStockDialog({
   open,
   onOpenChange,
 }: MoveContentsToStockDialogProps) {
+  const { currentUser } = useAuth()
+  const canEditRentalItem =
+    item !== null && hasWarehouseAccess(currentUser, item.warehouseId, "EDIT")
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open && canEditRentalItem}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen || canEditRentalItem) {
+          onOpenChange(nextOpen)
+        }
+      }}
+    >
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>
@@ -45,7 +58,7 @@ export function MoveContentsToStockDialog({
           </DialogTitle>
         </DialogHeader>
 
-        {item ? (
+        {item && canEditRentalItem ? (
           <MoveContentsToStockDialogContent
             key={getDialogStateKey(item, open)}
             item={item}

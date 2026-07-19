@@ -66,6 +66,8 @@ type DossierMode = "ACCEPTANCE" | "WRITE_OFF"
 type RepairAcceptanceDossierProps = {
   task: RepairTaskDto
   mode: DossierMode
+  canEdit: boolean
+  canManage: boolean
   onDecision?: () => void
 }
 
@@ -277,9 +279,13 @@ function SubtaskCard({
 
 function DecisionDialogs({
   task,
+  canEdit,
+  canManage,
   onDecision,
 }: {
   task: RepairTaskDto
+  canEdit: boolean
+  canManage: boolean
   onDecision?: () => void
 }) {
   const queryClient = useQueryClient()
@@ -300,52 +306,71 @@ function DecisionDialogs({
   }
 
   const acceptMutation = useMutation({
-    mutationFn: () => acceptRepairTask({ task, comment: acceptComment }),
+    mutationFn: () => {
+      if (!canEdit) {
+        throw new Error(
+          "Недостаточно прав для решения по приёмке на выбранном складе."
+        )
+      }
+      return acceptRepairTask({ task, comment: acceptComment })
+    },
     onSuccess: handleDecisionSuccess,
   })
   const writeOffMutation = useMutation({
-    mutationFn: () => writeOffRepairTask({ task, reason: writeOffReason }),
+    mutationFn: () => {
+      if (!canManage) {
+        throw new Error(
+          "Недостаточно прав для списания бытовки на выбранном складе."
+        )
+      }
+      return writeOffRepairTask({ task, reason: writeOffReason })
+    },
     onSuccess: handleDecisionSuccess,
   })
 
   function confirmWriteOff() {
     setWriteOffSubmitted(true)
-    if (writeOffReason.trim()) writeOffMutation.mutate()
+    if (canManage && writeOffReason.trim()) writeOffMutation.mutate()
   }
 
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          variant="destructive"
-          size="sm"
-          onClick={() => setWriteOffOpen(true)}
-        >
-          Списать
-        </Button>
-        <div className="ml-auto flex flex-wrap justify-end gap-2">
+        {canManage ? (
           <Button
             type="button"
-            variant="outline"
+            variant="destructive"
             size="sm"
-            onClick={() => setReworkOpen(true)}
+            onClick={() => setWriteOffOpen(true)}
           >
-            Переделать
+            Списать
           </Button>
-          <Button type="button" size="sm" onClick={() => setAcceptOpen(true)}>
-            Принять
-          </Button>
-        </div>
+        ) : null}
+        {canEdit ? (
+          <div className="ml-auto flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setReworkOpen(true)}
+            >
+              Переделать
+            </Button>
+            <Button type="button" size="sm" onClick={() => setAcceptOpen(true)}>
+              Принять
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       <RepairReworkWizardDialog
-        open={reworkOpen}
+        open={reworkOpen && canEdit}
         task={task}
+        canEdit={canEdit}
         onOpenChange={setReworkOpen}
       />
 
-      <Dialog open={acceptOpen} onOpenChange={setAcceptOpen}>
+      <Dialog open={acceptOpen && canEdit} onOpenChange={setAcceptOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Принять бытовку</DialogTitle>
@@ -387,7 +412,11 @@ function DecisionDialogs({
             <Button
               type="button"
               disabled={acceptMutation.isPending}
-              onClick={() => acceptMutation.mutate()}
+              onClick={() => {
+                if (canEdit) {
+                  acceptMutation.mutate()
+                }
+              }}
             >
               Принять
             </Button>
@@ -395,7 +424,7 @@ function DecisionDialogs({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={writeOffOpen} onOpenChange={setWriteOffOpen}>
+      <Dialog open={writeOffOpen && canManage} onOpenChange={setWriteOffOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Списать бытовку</DialogTitle>
@@ -457,6 +486,8 @@ function DecisionDialogs({
 export function RepairAcceptanceDossier({
   task,
   mode,
+  canEdit,
+  canManage,
   onDecision,
 }: RepairAcceptanceDossierProps) {
   const orderedSubtasks = useMemo(
@@ -503,10 +534,15 @@ export function RepairAcceptanceDossier({
           ) : (
             <p className="text-muted-foreground">Этапы ремонта не найдены.</p>
           )}
-          {mode === "ACCEPTANCE" ? (
+          {mode === "ACCEPTANCE" && (canEdit || canManage) ? (
             <div className="sticky bottom-0 mt-auto bg-card py-2">
               <Separator className="mb-2" />
-              <DecisionDialogs task={task} onDecision={onDecision} />
+              <DecisionDialogs
+                task={task}
+                canEdit={canEdit}
+                canManage={canManage}
+                onDecision={onDecision}
+              />
             </div>
           ) : null}
         </div>

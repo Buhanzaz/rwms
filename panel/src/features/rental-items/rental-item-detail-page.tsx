@@ -44,6 +44,7 @@ import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/features/auth/use-auth"
+import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import {
   getRentalItemDossierPage,
   RENTAL_ITEM_DOSSIER_QUERY_KEY,
@@ -143,10 +144,12 @@ function DetailEmpty({
 function DossierActions({
   rentalItem,
   accessToken,
+  canEdit,
   onSaved,
 }: {
   rentalItem: RentalItemDto
   accessToken: string | null
+  canEdit: boolean
   onSaved: (value: RentalItemDto) => void
 }) {
   const [statusOpen, setStatusOpen] = useState(false)
@@ -187,6 +190,10 @@ function DossierActions({
         error instanceof Error ? error.message : "Не удалось изменить статус"
       ),
   })
+
+  if (!canEdit) {
+    return null
+  }
 
   return (
     <>
@@ -278,6 +285,7 @@ export function RentalItemDetailPage() {
     ? searchParams.get("tab")!
     : "overview"
   const warehouseId = selectedWarehouse?.id ?? "none"
+  const canEditRentalItem = hasWarehouseAccess(currentUser, warehouseId, "EDIT")
   const userCacheKey = currentUser?.id ?? "unknown-user"
   const currentRentalItemId = rentalItemId ?? "none"
   const assetQueryKey = [
@@ -466,6 +474,7 @@ export function RentalItemDetailPage() {
             <DossierActions
               rentalItem={rentalItem}
               accessToken={accessToken}
+              canEdit={canEditRentalItem}
               onSaved={setRentalItem}
             />
             <Separator />
@@ -717,7 +726,7 @@ export function RentalItemDetailPage() {
               </CardHeader>
               <CardContent>
                 <FieldGroup>
-                  <Field>
+                  <Field data-disabled={!canEditRentalItem || undefined}>
                     <FieldLabel htmlFor="general-comment">
                       Комментарий
                     </FieldLabel>
@@ -725,6 +734,7 @@ export function RentalItemDetailPage() {
                       id="general-comment"
                       value={generalComment}
                       maxLength={4000}
+                      disabled={!canEditRentalItem}
                       placeholder={rentalItem.comment ?? "Комментарий"}
                       onChange={(event) =>
                         setGeneralCommentDraft({
@@ -737,8 +747,14 @@ export function RentalItemDetailPage() {
                 </FieldGroup>
                 <Button
                   className="mt-4"
-                  disabled={generalCommentMutation.isPending}
-                  onClick={() => generalCommentMutation.mutate()}
+                  disabled={
+                    !canEditRentalItem || generalCommentMutation.isPending
+                  }
+                  onClick={() => {
+                    if (canEditRentalItem) {
+                      generalCommentMutation.mutate()
+                    }
+                  }}
                 >
                   {hasGeneralComment
                     ? "Сохранить изменения"
@@ -755,20 +771,29 @@ export function RentalItemDetailPage() {
               </CardHeader>
               <CardContent>
                 <FieldGroup>
-                  <Field>
+                  <Field data-disabled={!canEditRentalItem || undefined}>
                     <FieldLabel htmlFor="manual-comment">Текст</FieldLabel>
                     <Textarea
                       id="manual-comment"
                       value={manualComment}
                       maxLength={4000}
+                      disabled={!canEditRentalItem}
                       onChange={(event) => setManualComment(event.target.value)}
                     />
                   </Field>
                 </FieldGroup>
                 <Button
                   className="mt-4"
-                  disabled={!manualComment.trim() || commentMutation.isPending}
-                  onClick={() => commentMutation.mutate()}
+                  disabled={
+                    !canEditRentalItem ||
+                    !manualComment.trim() ||
+                    commentMutation.isPending
+                  }
+                  onClick={() => {
+                    if (canEditRentalItem) {
+                      commentMutation.mutate()
+                    }
+                  }}
                 >
                   <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
                   Добавить заметку

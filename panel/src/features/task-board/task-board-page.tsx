@@ -33,6 +33,7 @@ import {
   InputGroupInput,
 } from "@/components/ui/input-group"
 import { Skeleton } from "@/components/ui/skeleton"
+import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
 import {
   completeTaskBoardEntry,
@@ -194,9 +195,12 @@ export function TaskBoardPage() {
   const isMobile = useIsMobile()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { accessToken } = useAuth()
+  const { accessToken, currentUser } = useAuth()
   const { selectedWarehouse } = useWarehouse()
   const warehouseId = selectedWarehouse?.serviceId ?? null
+  const canEdit = Boolean(
+    warehouseId && hasWarehouseAccess(currentUser, warehouseId, "EDIT")
+  )
   const [search, setSearch] = useState("")
   const [showFuture, setShowFuture] = useState(false)
   const [collapsedQueues, setCollapsedQueues] = useState<Set<string>>(
@@ -377,7 +381,7 @@ export function TaskBoardPage() {
       : null
 
   function handleDragStart(event: DragStartEvent) {
-    if (!previewRef.current) return
+    if (!canEdit || !previewRef.current) return
     dragBaselineRef.current = cloneBoard(previewRef.current)
     lastDropTargetRef.current = null
     dragOutcomeRef.current = "Перенос начат."
@@ -493,7 +497,7 @@ export function TaskBoardPage() {
   }
 
   const busy = actionMutation.isPending || dragMutation.isPending
-  const actionsBusy = busy || activeEntryId !== null
+  const actionsBusy = busy || activeEntryId !== null || !canEdit
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
@@ -516,19 +520,22 @@ export function TaskBoardPage() {
 
         <PageToolbarActions className="w-full sm:w-auto">
           <div className="grid w-full grid-cols-2 gap-2 sm:contents">
-            <Button
-              asChild
-              className="w-full sm:w-auto"
-              disabled={!warehouseId}
-            >
-              <Link
-                to="/repairs?create=1"
-                state={workspaceEntryNavigationOptions.state}
-              >
+            {canEdit ? (
+              <Button asChild className="w-full sm:w-auto">
+                <Link
+                  to="/repairs?create=1"
+                  state={workspaceEntryNavigationOptions.state}
+                >
+                  <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+                  Создать задание
+                </Link>
+              </Button>
+            ) : (
+              <Button className="w-full sm:w-auto" disabled>
                 <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
                 Создать задание
-              </Link>
-            </Button>
+              </Button>
+            )}
             <Button
               type="button"
               variant={showFuture ? "default" : "outline"}
@@ -650,9 +657,9 @@ export function TaskBoardPage() {
                   now={now}
                   mobile={isMobile}
                   collapsed={collapsedQueues.has(queue.key)}
-                  dragDisabled={busy || Boolean(normalizedSearch)}
+                  dragDisabled={!canEdit || busy || Boolean(normalizedSearch)}
                   actionPending={actionsBusy}
-                  queueActionsDisabled={Boolean(normalizedSearch)}
+                  queueActionsDisabled={!canEdit || Boolean(normalizedSearch)}
                   onToggleCollapsed={(queueKey) =>
                     setCollapsedQueues((current) => {
                       const next = new Set(current)
@@ -666,16 +673,22 @@ export function TaskBoardPage() {
                     navigate(entry.detailsHref, workspaceEntryNavigationOptions)
                   }
                   onTake={(entry) => {
+                    if (!canEdit) return
                     setTakeEntry(entry)
                     setError(null)
                   }}
-                  onPause={(entry) =>
-                    actionMutation.mutate({ kind: "pause", entry })
-                  }
-                  onResume={(entry) =>
-                    actionMutation.mutate({ kind: "resume", entry })
-                  }
+                  onPause={(entry) => {
+                    if (canEdit) {
+                      actionMutation.mutate({ kind: "pause", entry })
+                    }
+                  }}
+                  onResume={(entry) => {
+                    if (canEdit) {
+                      actionMutation.mutate({ kind: "resume", entry })
+                    }
+                  }}
                   onComplete={(entry) => {
+                    if (!canEdit) return
                     setCompleteEntry(entry)
                     setError(null)
                   }}
@@ -702,7 +715,7 @@ export function TaskBoardPage() {
           }
         }}
         onTake={({ workerGroupId, workerId }) => {
-          if (!takeEntry) return
+          if (!canEdit || !takeEntry) return
           actionMutation.mutate({
             kind: "take",
             entry: takeEntry,
@@ -722,7 +735,7 @@ export function TaskBoardPage() {
           }
         }}
         onComplete={() => {
-          if (!completeEntry) return
+          if (!canEdit || !completeEntry) return
           actionMutation.mutate({ kind: "complete", entry: completeEntry })
         }}
       />

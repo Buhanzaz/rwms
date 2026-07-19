@@ -8,7 +8,13 @@ import { RepairSubtasksEditor } from "@/features/repair-tasks/repair-subtasks-ed
 import { RepairTaskStatusBadge } from "@/features/repair-tasks/repair-task-status-badge"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
 
-export function RepairTaskDetailWorkspace({ task }: { task: RepairTaskDto }) {
+export function RepairTaskDetailWorkspace({
+  task,
+  readOnly = false,
+}: {
+  task: RepairTaskDto
+  readOnly?: boolean
+}) {
   const estimateLink = task.sourceEstimateId ? (
     <Button variant="outline" size="sm" asChild>
       <Link
@@ -48,7 +54,11 @@ export function RepairTaskDetailWorkspace({ task }: { task: RepairTaskDto }) {
       lowerDescription="Этапы ремонта в сохранённом порядке."
       lowerContent={
         task.subtasks.length > 0 ? (
-          <RepairSubtasksEditor key={task.version} task={task} />
+          <RepairSubtasksEditor
+            key={task.version}
+            task={task}
+            readOnly={readOnly}
+          />
         ) : (
           <p className="text-muted-foreground">Подзаданий нет.</p>
         )

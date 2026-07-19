@@ -132,7 +132,12 @@ export function WriteOffsPage() {
             </CardHeader>
           </Card>
         ) : selectedTask ? (
-          <RepairAcceptanceDossier task={selectedTask} mode="WRITE_OFF" />
+          <RepairAcceptanceDossier
+            task={selectedTask}
+            mode="WRITE_OFF"
+            canEdit={false}
+            canManage={false}
+          />
         ) : null}
       </div>
     )

@@ -2,38 +2,37 @@ import type {
   CurrentUser,
   WarehouseAccessLevel,
 } from "@/features/auth/auth-model"
+import {
+  getWarehouseAccessLevel,
+  hasWarehouseAccess,
+} from "@/features/auth/warehouse-access"
 import type {
   InventoryActorSnapshot,
   InventoryPermission,
 } from "@/features/inventory/model/inventory"
 
-const accessRank: Record<WarehouseAccessLevel, number> = {
-  VIEW: 1,
-  EDIT: 2,
-  MANAGE: 3,
-}
+export const INVENTORY_REQUIRED_ACCESS = {
+  VIEW: "VIEW",
+  START: "EDIT",
+  FINDING_MUTATION: "EDIT",
+  MEDIA_MUTATION: "EDIT",
+  COMPLETE: "MANAGE",
+  PUBLICATION: "MANAGE",
+} as const satisfies Record<string, WarehouseAccessLevel>
+
+const permissionsByAccess: Record<WarehouseAccessLevel, InventoryPermission[]> =
+  {
+    VIEW: ["VIEW"],
+    EDIT: ["VIEW", "EDIT"],
+    MANAGE: ["VIEW", "EDIT", "MANAGE"],
+  }
 
 export function hasInventoryWarehouseAccess(
   user: CurrentUser | null,
   warehouseId: string,
   requiredLevel: WarehouseAccessLevel
 ) {
-  if (user === null) {
-    return false
-  }
-
-  if (user.warehouseAccessAll) {
-    return true
-  }
-
-  const access = user.warehouseAccesses.find(
-    (candidate) => candidate.warehouseId === warehouseId
-  )
-
-  return (
-    access !== undefined &&
-    accessRank[access.level] >= accessRank[requiredLevel]
-  )
+  return hasWarehouseAccess(user, warehouseId, requiredLevel)
 }
 
 export function getInventoryActor(
@@ -44,24 +43,16 @@ export function getInventoryActor(
     return null
   }
 
-  const access = user.warehouseAccessAll
-    ? "MANAGE"
-    : user.warehouseAccesses.find(
-        (candidate) => candidate.warehouseId === warehouseId
-      )?.level
+  const access = getWarehouseAccessLevel(user, warehouseId)
 
   if (!access) {
     return null
   }
 
-  const permissions = (
-    ["VIEW", "EDIT", "MANAGE"] as InventoryPermission[]
-  ).filter((permission) => accessRank[permission] <= accessRank[access])
-
   return {
     id: user.id,
     displayName: user.displayName || user.username,
-    permissions,
+    permissions: [...permissionsByAccess[access]],
     authorizedWarehouseIds: user.warehouseAccessAll
       ? null
       : user.warehouseAccesses.map((candidate) => candidate.warehouseId),

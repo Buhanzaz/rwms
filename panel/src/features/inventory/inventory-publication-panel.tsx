@@ -116,10 +116,12 @@ function TransientRetryButton({
 export function InventoryPublicationPanel({
   inventoryId,
   findings,
+  canManage,
   onChanged,
 }: {
   inventoryId: string
   findings: InventoryFinding[]
+  canManage: boolean
   onChanged: () => Promise<void>
 }) {
   const { accessToken } = useAuth()
@@ -135,6 +137,9 @@ export function InventoryPublicationPanel({
   const [precondition, setPrecondition] = useState("")
   const mutation = useMutation({
     mutationFn: () => {
+      if (!canManage) {
+        throw new Error("Для управления публикацией требуется уровень MANAGE")
+      }
       if (!action) throw new Error("Действие публикации не выбрано")
       if (action.kind === "RECONCILE") {
         return retryFindingPublication({
@@ -219,7 +224,7 @@ export function InventoryPublicationPanel({
                   </p>
                 ) : null}
               </CardContent>
-              {publication.state === "TRANSIENT_FAILED" ? (
+              {canManage && publication.state === "TRANSIENT_FAILED" ? (
                 <CardFooter>
                   <TransientRetryButton
                     inventoryId={inventoryId}
@@ -227,7 +232,7 @@ export function InventoryPublicationPanel({
                     onChanged={onChanged}
                   />
                 </CardFooter>
-              ) : publication.state === "BLOCKED" ? (
+              ) : canManage && publication.state === "BLOCKED" ? (
                 <CardFooter className="flex flex-wrap gap-2">
                   <Button
                     type="button"
@@ -250,7 +255,7 @@ export function InventoryPublicationPanel({
         })}
       </div>
       <Dialog
-        open={action !== null}
+        open={canManage && action !== null}
         onOpenChange={(open) => {
           if (!open && !mutation.isPending) setAction(null)
         }}

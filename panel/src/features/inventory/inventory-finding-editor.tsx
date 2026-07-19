@@ -36,12 +36,14 @@ export function InventoryFindingEditor({
   session,
   finding,
   readOnly,
+  mediaReadOnly,
   onClose,
   onSaved,
 }: {
   session: InventorySessionView
   finding: InventoryFinding
   readOnly: boolean
+  mediaReadOnly: boolean
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
@@ -54,8 +56,11 @@ export function InventoryFindingEditor({
   const [catalogLines, setCatalogLines] = useState<RepairEstimateLineDto[]>([])
   const planSelection = buildAutoInventoryPlan(catalogLines)
   const mutation = useMutation({
-    mutationFn: () =>
-      saveInventoryInspection({
+    mutationFn: () => {
+      if (readOnly) {
+        throw new Error("Для изменения результата требуется уровень EDIT")
+      }
+      return saveInventoryInspection({
         accessToken,
         inventoryId: session.id,
         findingId: finding.id,
@@ -64,7 +69,8 @@ export function InventoryFindingEditor({
         inspection,
         media,
         planSelection,
-      }),
+      })
+    },
     onSuccess: async () => {
       await onSaved()
       toast.success("Результат осмотра сохранён сервером")
@@ -185,7 +191,7 @@ export function InventoryFindingEditor({
           <InventoryMediaEditor
             accessToken={accessToken}
             scope={{ ownerId: finding.id, warehouseId: session.warehouseId }}
-            readOnly={readOnly}
+            readOnly={mediaReadOnly}
             onReadyChange={setReadyMedia}
             onPendingChange={setMediaPending}
           />
