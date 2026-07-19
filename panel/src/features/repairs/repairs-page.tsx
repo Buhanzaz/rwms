@@ -13,6 +13,8 @@ import {
 } from "@/components/ui/card"
 import { OperationsListGrid } from "@/components/operations-list-grid"
 import { PageToolbar, PageToolbarActions } from "@/components/page-toolbar"
+import { useAuth } from "@/features/auth/use-auth"
+import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import {
   getRepairTask,
   listRepairTasks,
@@ -80,6 +82,15 @@ function RepairMobileCard({
 
 export function RepairsPage() {
   const { selectedWarehouseId } = useWarehouse()
+  const { currentUser } = useAuth()
+  const canEdit = Boolean(
+    selectedWarehouseId &&
+    hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
+  )
+  const canManage = Boolean(
+    selectedWarehouseId &&
+    hasWarehouseAccess(currentUser, selectedWarehouseId, "MANAGE")
+  )
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams] = useSearchParams()
@@ -152,7 +163,16 @@ export function RepairsPage() {
       ) : null}
 
       {workspaceOpen && selectedWarehouseId ? (
-        repairId && !detailQuery.isLoading && !selectedRepair ? (
+        createRequested && !repairId && !canEdit ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Создание ремонта недоступно</CardTitle>
+              <CardDescription role="alert">
+                Для создания ремонта нужен доступ EDIT к выбранному складу.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        ) : repairId && !detailQuery.isLoading && !selectedRepair ? (
           <Card>
             <CardHeader>
               <CardTitle>Ремонт недоступен</CardTitle>
@@ -181,11 +201,16 @@ export function RepairsPage() {
             </CardHeader>
           </Card>
         ) : selectedRepair && selectedRepair.status !== "DRAFT" ? (
-          <RepairTaskDetailWorkspace task={selectedRepair} />
+          <RepairTaskDetailWorkspace
+            task={selectedRepair}
+            readOnly={!canEdit}
+          />
         ) : (
           <RepairTaskEditorWorkspace
             warehouseId={selectedWarehouseId}
             task={selectedRepair}
+            readOnly={!canEdit}
+            canManage={canManage}
             sourceTask={reworkSourceQuery.data}
             seed={reworkSourceQuery.data ? reworkSeed : undefined}
             initialRentalItemId={
@@ -201,26 +226,28 @@ export function RepairsPage() {
         )
       ) : (
         <>
-          <PageToolbar>
-            <PageToolbarActions>
-              <Button
-                type="button"
-                disabled={!selectedWarehouseId}
-                onClick={() => {
-                  const next = new URLSearchParams(searchParams)
-                  next.delete("repairId")
-                  next.set("create", "1")
-                  navigate(
-                    `/repairs?${next.toString()}`,
-                    workspaceEntryNavigationOptions
-                  )
-                }}
-              >
-                <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-                Создать задание
-              </Button>
-            </PageToolbarActions>
-          </PageToolbar>
+          {canEdit ? (
+            <PageToolbar>
+              <PageToolbarActions>
+                <Button
+                  type="button"
+                  disabled={!selectedWarehouseId}
+                  onClick={() => {
+                    const next = new URLSearchParams(searchParams)
+                    next.delete("repairId")
+                    next.set("create", "1")
+                    navigate(
+                      `/repairs?${next.toString()}`,
+                      workspaceEntryNavigationOptions
+                    )
+                  }}
+                >
+                  <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+                  Создать задание
+                </Button>
+              </PageToolbarActions>
+            </PageToolbar>
+          ) : null}
 
           <div className="min-h-0 flex-1 overflow-y-auto md:flex">
             {listQuery.isLoading ? (

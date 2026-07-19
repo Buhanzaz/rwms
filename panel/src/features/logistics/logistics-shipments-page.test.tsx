@@ -19,6 +19,9 @@ const shipmentApi = vi.hoisted(() => ({
   confirmShipmentPreparation: vi.fn(),
   cancelShipment: vi.fn(),
 }))
+const authState = vi.hoisted(() => ({
+  level: "EDIT" as "VIEW" | "EDIT" | "MANAGE",
+}))
 
 vi.mock("@/features/logistics/shipments/api", () => ({
   SHIPMENTS_QUERY_KEY: ["logistics", "shipments"],
@@ -26,7 +29,26 @@ vi.mock("@/features/logistics/shipments/api", () => ({
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({
-  useAuth: () => ({ accessToken: "shipment-token" }),
+  useAuth: () => ({
+    accessToken: "shipment-token",
+    currentUser: {
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      username: "dispatcher",
+      displayName: "Диспетчер",
+      firstName: null,
+      lastName: null,
+      email: null,
+      principalType: "USER",
+      globalRole: "WAREHOUSE_MANAGER",
+      warehouseAccessAll: false,
+      warehouseAccesses: [
+        {
+          warehouseId: "11111111-1111-4111-8111-111111111111",
+          level: authState.level,
+        },
+      ],
+    },
+  }),
 }))
 
 vi.mock("@/hooks/use-warehouse", () => ({
@@ -95,6 +117,7 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  authState.level = "EDIT"
   shipmentApi.listShipments.mockResolvedValue([
     shipmentDocument(DRAFT_ID, "DRAFT", 0),
     shipmentDocument(AWAITING_ID, "AWAITING_CONFIRMATION", 5),
@@ -108,6 +131,25 @@ afterEach(() => {
 })
 
 describe("LogisticsShipmentsPage", () => {
+  it("keeps VIEW access read-only while preserving service reads", async () => {
+    authState.level = "VIEW"
+    renderPage()
+
+    await screen.findAllByText("Ждёт подтверждения")
+    expect(shipmentApi.listShipments).toHaveBeenCalledWith(
+      "shipment-token",
+      WAREHOUSE_ID
+    )
+    expect(
+      screen.queryByRole("button", { name: "Создать отгрузку" })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Подтвердить подготовку" })
+    ).toBeNull()
+    expect(screen.queryByRole("button", { name: "Отменить" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Обновить" })).not.toBeNull()
+  })
+
   it("uses service projections and hides browser-owned discovery/finalize controls", async () => {
     renderPage()
 

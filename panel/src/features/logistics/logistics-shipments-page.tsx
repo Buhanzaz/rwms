@@ -49,6 +49,7 @@ import {
   FieldSet,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
 import {
   SHIPMENTS_QUERY_KEY,
@@ -100,7 +101,7 @@ function commandIdentity() {
 
 export function LogisticsShipmentsPage() {
   const { selectedWarehouseId } = useWarehouse()
-  const { accessToken } = useAuth()
+  const { accessToken, currentUser } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
@@ -113,6 +114,9 @@ export function LogisticsShipmentsPage() {
   const [commandError, setCommandError] = useState<string | null>(null)
   const commandKeys = useRef(new Map<string, string>())
   const selectedShipmentId = searchParams.get("shipmentId")
+  const canEditSelectedWarehouse =
+    selectedWarehouseId !== null &&
+    hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
 
   const query = useQuery({
     queryKey: [...SHIPMENTS_QUERY_KEY, selectedWarehouseId],
@@ -190,6 +194,11 @@ export function LogisticsShipmentsPage() {
   function actions(shipment: ShipmentDocument) {
     const confirming =
       confirmMutation.isPending && confirmMutation.variables?.id === shipment.id
+    const canEditDocument = hasWarehouseAccess(
+      currentUser,
+      shipment.warehouseId,
+      "EDIT"
+    )
     return (
       <div className="flex flex-wrap gap-2">
         <Button
@@ -203,7 +212,7 @@ export function LogisticsShipmentsPage() {
         >
           {expandedId === shipment.id ? "Скрыть состав" : "Показать состав"}
         </Button>
-        {shipment.state === "DRAFT" ? (
+        {canEditDocument && shipment.state === "DRAFT" ? (
           <Button
             size="sm"
             variant="outline"
@@ -213,7 +222,7 @@ export function LogisticsShipmentsPage() {
             Запустить старый черновик
           </Button>
         ) : null}
-        {shipment.state === "AWAITING_CONFIRMATION" ? (
+        {canEditDocument && shipment.state === "AWAITING_CONFIRMATION" ? (
           <Button
             size="sm"
             disabled={confirming || !accessToken}
@@ -222,7 +231,7 @@ export function LogisticsShipmentsPage() {
             {confirming ? "Подтверждается…" : "Подтвердить подготовку"}
           </Button>
         ) : null}
-        {CANCELLABLE_STATES.has(shipment.state) ? (
+        {canEditDocument && CANCELLABLE_STATES.has(shipment.state) ? (
           <Button
             size="sm"
             variant="destructive"
@@ -266,13 +275,12 @@ export function LogisticsShipmentsPage() {
           >
             {query.isFetching ? "Обновляется…" : "Обновить"}
           </Button>
-          <Button
-            disabled={!accessToken || !selectedWarehouseId}
-            onClick={() => setCreateOpen(true)}
-          >
-            <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-            Создать отгрузку
-          </Button>
+          {canEditSelectedWarehouse ? (
+            <Button onClick={() => setCreateOpen(true)}>
+              <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+              Создать отгрузку
+            </Button>
+          ) : null}
         </PageToolbarActions>
       </PageToolbar>
 
@@ -411,7 +419,10 @@ export function LogisticsShipmentsPage() {
         </div>
       </div>
 
-      {createOpen && selectedWarehouseId && accessToken ? (
+      {createOpen &&
+      selectedWarehouseId &&
+      accessToken &&
+      canEditSelectedWarehouse ? (
         <CreateShipmentDialog
           accessToken={accessToken}
           warehouseId={selectedWarehouseId}

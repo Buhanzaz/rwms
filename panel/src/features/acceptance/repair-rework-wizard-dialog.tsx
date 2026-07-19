@@ -17,17 +17,23 @@ import type {
 type RepairReworkWizardDialogProps = {
   open: boolean
   task: RepairTaskDto
+  canEdit: boolean
   onOpenChange: (open: boolean) => void
 }
 
 export function RepairReworkWizardDialog({
   open,
   task,
+  canEdit,
   onOpenChange,
 }: RepairReworkWizardDialogProps) {
   const navigate = useNavigate()
 
   function openEditor() {
+    if (!canEdit) {
+      return
+    }
+
     const state: RepairsLocationState = {
       workspaceEntry: true,
       reworkSeed: {
@@ -47,7 +53,7 @@ export function RepairReworkWizardDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open && canEdit} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Создать доработку</DialogTitle>

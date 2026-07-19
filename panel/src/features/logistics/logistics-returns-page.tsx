@@ -39,6 +39,7 @@ import {
   FieldSet,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
 import {
   RETURNS_QUERY_KEY,
@@ -93,7 +94,7 @@ function lineSummary(line: ReturnLine) {
 
 export function LogisticsReturnsPage() {
   const { selectedWarehouseId } = useWarehouse()
-  const { accessToken } = useAuth()
+  const { accessToken, currentUser } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
@@ -108,6 +109,9 @@ export function LogisticsReturnsPage() {
   const commandKeys = useRef(new Map<string, string>())
   const selectedDocumentId = searchParams.get("receiptId")
   const selectedLineId = searchParams.get("returnItemId")
+  const canEditSelectedWarehouse =
+    selectedWarehouseId !== null &&
+    hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
 
   const query = useQuery({
     queryKey: [...RETURNS_QUERY_KEY, selectedWarehouseId],
@@ -181,6 +185,11 @@ export function LogisticsReturnsPage() {
     const processingThisDocument =
       registerMutation.isPending &&
       registerMutation.variables?.id === document.id
+    const canEditDocument = hasWarehouseAccess(
+      currentUser,
+      document.warehouseId,
+      "EDIT"
+    )
     return (
       <div className="flex flex-wrap gap-2">
         <Button
@@ -194,7 +203,7 @@ export function LogisticsReturnsPage() {
         >
           {expandedId === document.id ? "Скрыть состав" : "Показать состав"}
         </Button>
-        {document.state === "DRAFT" ? (
+        {canEditDocument && document.state === "DRAFT" ? (
           <Button
             size="sm"
             disabled={processingThisDocument || !accessToken}
@@ -203,7 +212,7 @@ export function LogisticsReturnsPage() {
             {processingThisDocument ? "Регистрируется…" : "Зарегистрировать"}
           </Button>
         ) : null}
-        {document.state === "INSPECTION_REQUIRED" ? (
+        {canEditDocument && document.state === "INSPECTION_REQUIRED" ? (
           <>
             <Button
               size="sm"
@@ -258,13 +267,12 @@ export function LogisticsReturnsPage() {
           >
             {query.isFetching ? "Обновляется…" : "Обновить"}
           </Button>
-          <Button
-            disabled={!accessToken || !selectedWarehouseId}
-            onClick={() => setCreateOpen(true)}
-          >
-            <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-            Создать возврат
-          </Button>
+          {canEditSelectedWarehouse ? (
+            <Button onClick={() => setCreateOpen(true)}>
+              <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+              Создать возврат
+            </Button>
+          ) : null}
         </PageToolbarActions>
       </PageToolbar>
 
@@ -416,14 +424,23 @@ export function LogisticsReturnsPage() {
         </div>
       </div>
 
-      {createOpen && selectedWarehouseId && accessToken ? (
+      {createOpen &&
+      selectedWarehouseId &&
+      accessToken &&
+      canEditSelectedWarehouse ? (
         <CreateReturnDialog
           accessToken={accessToken}
           warehouseId={selectedWarehouseId}
           onOpenChange={setCreateOpen}
         />
       ) : null}
-      {estimateTarget && accessToken ? (
+      {estimateTarget &&
+      accessToken &&
+      hasWarehouseAccess(
+        currentUser,
+        estimateTarget.document.warehouseId,
+        "EDIT"
+      ) ? (
         <RequestEstimateDialog
           accessToken={accessToken}
           target={estimateTarget}
