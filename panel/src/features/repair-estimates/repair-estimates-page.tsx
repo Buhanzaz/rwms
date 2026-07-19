@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { useLocation, useNavigate, useSearchParams } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Add01Icon, ArrowLeft01Icon } from "@hugeicons/core-free-icons"
@@ -33,7 +33,6 @@ import type {
   RepairEstimateStatus,
   RepairEstimateSummaryDto,
 } from "@/features/repair-estimates/model/repair-estimate"
-import type { RentalItemDossierNavigationState } from "@/features/rental-items/dossier/model/rental-item-dossier"
 import { RepairEstimateEditorWorkspace } from "@/features/repair-estimates/repair-estimate-editor-workspace"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import {
@@ -59,19 +58,9 @@ export function RepairEstimatesPage() {
     hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
   )
   const navigate = useNavigate()
-  const location = useLocation()
   const [searchParams] = useSearchParams()
   const estimateId = searchParams.get("estimateId")
   const createRequested = searchParams.get("create") === "1"
-  const dossierNavigationState =
-    location.state as RentalItemDossierNavigationState | null
-  const rentalItemSeed =
-    createRequested &&
-    dossierNavigationState?.rentalItemSeed?.type ===
-      "rental-item-estimate-seed-v1" &&
-    dossierNavigationState.rentalItemSeed.warehouseId === selectedWarehouseId
-      ? dossierNavigationState.rentalItemSeed
-      : undefined
   const returnTaskId = searchParams.get("returnTaskId")
   const [selectedStatus, setSelectedStatus] =
     useState<RepairEstimateStatus>("DRAFT")
@@ -195,9 +184,6 @@ export function RepairEstimatesPage() {
             loading={Boolean(estimateId && detailQuery.isLoading)}
             onClose={() => closeEditor()}
             onSaved={handleSaved}
-            initialRentalItemId={
-              estimateId ? undefined : rentalItemSeed?.rentalItemId
-            }
           />
         )
       ) : (

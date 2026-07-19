@@ -25,7 +25,6 @@ import type {
   RepairTaskDto,
   RepairsLocationState,
 } from "@/features/repair-tasks/model/repair-task"
-import type { RentalItemDossierNavigationState } from "@/features/rental-items/dossier/model/rental-item-dossier"
 import { RepairTaskDetailWorkspace } from "@/features/repair-tasks/repair-task-detail-workspace"
 import { RepairTaskEditorWorkspace } from "@/features/repair-tasks/repair-task-editor-workspace"
 import { RepairTaskStatusBadge } from "@/features/repair-tasks/repair-task-status-badge"
@@ -96,15 +95,8 @@ export function RepairsPage() {
   const [searchParams] = useSearchParams()
   const repairId = searchParams.get("repairId")
   const createRequested = searchParams.get("create") === "1"
-  const locationState = location.state as
-    (RepairsLocationState & RentalItemDossierNavigationState) | null
+  const locationState = location.state as RepairsLocationState | null
   const reworkSeed = createRequested ? locationState?.reworkSeed : undefined
-  const rentalItemSeed =
-    createRequested &&
-    locationState?.rentalItemSeed?.type === "rental-item-repair-seed-v1" &&
-    locationState.rentalItemSeed.warehouseId === selectedWarehouseId
-      ? locationState.rentalItemSeed
-      : undefined
 
   const listSearchParams = new URLSearchParams(searchParams)
   listSearchParams.delete("repairId")
@@ -213,9 +205,6 @@ export function RepairsPage() {
             canManage={canManage}
             sourceTask={reworkSourceQuery.data}
             seed={reworkSourceQuery.data ? reworkSeed : undefined}
-            initialRentalItemId={
-              repairId || reworkSeed ? undefined : rentalItemSeed?.rentalItemId
-            }
             loading={Boolean(
               (repairId && detailQuery.isLoading) ||
               (reworkSeed && reworkSourceQuery.isLoading)
