@@ -66,6 +66,7 @@ import {
   type ShipmentPlanLine,
 } from "@/features/logistics/shipments/model"
 import { useWarehouse } from "@/hooks/use-warehouse"
+import { ApiError } from "@/lib/api-client"
 
 const TERMINAL_STATES = new Set<ShipmentDocumentState>(["SHIPPED", "CANCELLED"])
 const CANCELLABLE_STATES = new Set<ShipmentDocumentState>([
@@ -73,6 +74,8 @@ const CANCELLABLE_STATES = new Set<ShipmentDocumentState>([
   "PREPARING",
   "AWAITING_CONFIRMATION",
 ])
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function formatDateTime(value: string) {
   return new Intl.DateTimeFormat("ru-RU", {
@@ -117,9 +120,10 @@ export function LogisticsShipmentsPage() {
   const canEditSelectedWarehouse =
     selectedWarehouseId !== null &&
     hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
+  const queryKey = [...SHIPMENTS_QUERY_KEY, selectedWarehouseId] as const
 
   const query = useQuery({
-    queryKey: [...SHIPMENTS_QUERY_KEY, selectedWarehouseId],
+    queryKey,
     queryFn: () => listShipments(accessToken!, selectedWarehouseId!),
     enabled: Boolean(accessToken && selectedWarehouseId),
     refetchInterval: 5_000,
@@ -150,6 +154,18 @@ export function LogisticsShipmentsPage() {
     return created
   }
 
+  function applyServerProjection(shipment: ShipmentDocument) {
+    queryClient.setQueryData<ShipmentDocument[]>(queryKey, (current) => {
+      if (!current) return [shipment]
+      const found = current.some((candidate) => candidate.id === shipment.id)
+      return found
+        ? current.map((candidate) =>
+            candidate.id === shipment.id ? shipment : candidate
+          )
+        : [...current, shipment]
+    })
+  }
+
   const confirmMutation = useMutation({
     mutationFn: (shipment: ShipmentDocument) =>
       confirmShipmentPreparation({
@@ -158,13 +174,19 @@ export function LogisticsShipmentsPage() {
         expectedVersion: shipment.version,
         idempotencyKey: keyFor("confirm", shipment),
       }),
-    onSuccess: (_result, shipment) => {
+    onSuccess: (result, shipment) => {
       commandKeys.current.delete(`confirm:${shipment.id}:${shipment.version}`)
+      applyServerProjection(result)
       setCommandError(null)
       void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
     },
-    onError: (cause) =>
-      setCommandError(errorMessage(cause, "Не удалось подтвердить подготовку")),
+    onError: (cause, shipment) => {
+      if (cause instanceof ApiError && cause.status === 409) {
+        commandKeys.current.delete(`confirm:${shipment.id}:${shipment.version}`)
+        void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
+      }
+      setCommandError(errorMessage(cause, "Не удалось подтвердить подготовку"))
+    },
   })
 
   const cancelMutation = useMutation({
@@ -175,14 +197,21 @@ export function LogisticsShipmentsPage() {
         expectedVersion: shipment.version,
         idempotencyKey: keyFor("cancel", shipment),
       }),
-    onSuccess: (_result, shipment) => {
+    onSuccess: (result, shipment) => {
       commandKeys.current.delete(`cancel:${shipment.id}:${shipment.version}`)
+      applyServerProjection(result)
       setCancelTarget(null)
       setCommandError(null)
       void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
     },
-    onError: (cause) =>
-      setCommandError(errorMessage(cause, "Не удалось отменить отгрузку")),
+    onError: (cause, shipment) => {
+      if (cause instanceof ApiError && cause.status === 409) {
+        commandKeys.current.delete(`cancel:${shipment.id}:${shipment.version}`)
+        setCancelTarget(null)
+        void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
+      }
+      setCommandError(errorMessage(cause, "Не удалось отменить отгрузку"))
+    },
   })
 
   function clearSelection() {
@@ -194,6 +223,8 @@ export function LogisticsShipmentsPage() {
   function actions(shipment: ShipmentDocument) {
     const confirming =
       confirmMutation.isPending && confirmMutation.variables?.id === shipment.id
+    const cancelling =
+      cancelMutation.isPending && cancelMutation.variables?.id === shipment.id
     const canEditDocument = hasWarehouseAccess(
       currentUser,
       shipment.warehouseId,
@@ -225,7 +256,7 @@ export function LogisticsShipmentsPage() {
         {canEditDocument && shipment.state === "AWAITING_CONFIRMATION" ? (
           <Button
             size="sm"
-            disabled={confirming || !accessToken}
+            disabled={confirming || cancelling || !accessToken}
             onClick={() => confirmMutation.mutate(shipment)}
           >
             {confirming ? "Подтверждается…" : "Подтвердить подготовку"}
@@ -235,7 +266,7 @@ export function LogisticsShipmentsPage() {
           <Button
             size="sm"
             variant="destructive"
-            disabled={cancelMutation.isPending || !accessToken}
+            disabled={confirming || cancelling || !accessToken}
             onClick={() => setCancelTarget(shipment)}
           >
             Отменить
@@ -569,15 +600,23 @@ function CreateShipmentDialog({
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    const normalizedAssetIds = lines.map((line) => line.assetId.trim())
     const invalidLine = lines.find(
       (line) =>
-        !line.assetId.trim() ||
+        !UUID_PATTERN.test(line.assetId.trim()) ||
         !Number.isSafeInteger(Number(line.assetVersion)) ||
         Number(line.assetVersion) < 0
     )
-    if (!partySnapshot.trim() || !driverSnapshot.trim() || invalidLine) {
+    const duplicateAsset =
+      new Set(normalizedAssetIds).size !== normalizedAssetIds.length
+    if (
+      !partySnapshot.trim() ||
+      !driverSnapshot.trim() ||
+      invalidLine ||
+      duplicateAsset
+    ) {
       setValidationError(
-        "Укажите компанию, водителя и для каждой строки asset UUID с неотрицательной версией."
+        "Укажите компанию, водителя и для каждой строки уникальный asset UUID с неотрицательной версией."
       )
       return
     }
