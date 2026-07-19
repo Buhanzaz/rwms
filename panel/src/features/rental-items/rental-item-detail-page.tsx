@@ -65,8 +65,8 @@ import {
 } from "@/features/rental-items/api/asset-rental-items-api"
 import {
   CharacteristicTags,
-  EmptyDossierRegister,
-} from "@/features/rental-items/rental-item-dossier-registers"
+  UnavailableDossierSection,
+} from "@/features/rental-items/rental-item-detail-support"
 import {
   formatRentalItemContents,
   RENTAL_ITEM_STATUS_LABEL,
@@ -651,52 +651,45 @@ export function RentalItemDetailPage() {
           </Card>
         </TabsContent>
         <TabsContent value="photos">
-          <EmptyDossierRegister
+          <UnavailableDossierSection
             title="Фото"
             description="Действия с фото принадлежат media-service. Dossier показывает только подтверждённые media state references во вкладке «История»."
-            columns={["Источник", "Дата", "Статус"]}
           />
         </TabsContent>
         <TabsContent value="inspections">
-          <EmptyDossierRegister
+          <UnavailableDossierSection
             title="Осмотры"
             description="Dossier не подменяет документы inventory-service. Подтверждённые коды событий доступны во вкладке «История»."
-            columns={["Дата", "Источник", "Результат", "Исполнитель"]}
           />
         </TabsContent>
         <TabsContent value="estimates">
-          <EmptyDossierRegister
+          <UnavailableDossierSection
             title="Сметы"
             description="Dossier не подменяет документы maintenance-service. Подтверждённые коды событий доступны во вкладке «История»."
-            columns={["Дата", "Статус", "Автор", "Сумма"]}
           />
         </TabsContent>
         <TabsContent value="repair">
-          <EmptyDossierRegister
+          <UnavailableDossierSection
             title="Ремонт"
             description="Dossier не подменяет ремонтные документы maintenance-service. Подтверждённые коды событий доступны во вкладке «История»."
-            columns={["Дата", "Статус", "Исполнитель", "Комментарий"]}
           />
         </TabsContent>
         <TabsContent value="reserves">
-          <EmptyDossierRegister
+          <UnavailableDossierSection
             title="Резервы"
             description="Раздел подготовлен и пока не реализован."
-            columns={["Клиент", "Статус", "Создан", "Истекает"]}
           />
         </TabsContent>
         <TabsContent value="shipments">
-          <EmptyDossierRegister
+          <UnavailableDossierSection
             title="Отгрузки"
             description="Покрытие logistics producer facts пока не подтверждено текущим dossier contract vocabulary."
-            columns={["Дата", "Направление", "Контрагент", "Статус"]}
           />
         </TabsContent>
         <TabsContent value="returns">
-          <EmptyDossierRegister
+          <UnavailableDossierSection
             title="Возвраты"
             description="Раздел подготовлен и пока не реализован."
-            columns={["Дата", "От кого", "Статус", "Действия"]}
           />
         </TabsContent>
         <TabsContent value="history">
