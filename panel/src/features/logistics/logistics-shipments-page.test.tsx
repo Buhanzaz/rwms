@@ -11,6 +11,7 @@ import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { ShipmentDocument } from "@/features/logistics/shipments/model"
+import { ApiError } from "@/lib/api-client"
 
 const shipmentApi = vi.hoisted(() => ({
   listShipments: vi.fn(),
@@ -231,19 +232,45 @@ describe("LogisticsShipmentsPage", () => {
     expect(shipmentApi.replaceShipmentPlan.mock.calls[1][0]).toEqual(firstPlan)
   })
 
-  it("confirms and cancels with server versions while the service owns effects", async () => {
-    const identities = [CONFIRM_KEY, CANCEL_KEY]
+  it("rejects duplicate asset IDs before creating a server document", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Создать отгрузку" })
+    )
+    await user.type(screen.getByLabelText("Компания"), "ООО Тест")
+    await user.type(screen.getByLabelText("Водитель"), "Иванов Иван")
+    await user.type(screen.getByLabelText("Asset UUID"), ASSET_ID)
+    await user.click(screen.getByRole("button", { name: "Добавить строку" }))
+    const assetInputs = screen.getAllByLabelText("Asset UUID")
+    await user.type(assetInputs[1]!, ASSET_ID)
+    await user.click(
+      screen.getByRole("button", { name: "Создать и запустить" })
+    )
+
+    expect(
+      await screen.findByText(/для каждой строки уникальный asset UUID/i)
+    ).toBeTruthy()
+    expect(shipmentApi.createShipment).not.toHaveBeenCalled()
+    expect(shipmentApi.replaceShipmentPlan).not.toHaveBeenCalled()
+  })
+
+  it("applies the confirmed server projection before background refetch", async () => {
+    const identities = [CONFIRM_KEY]
     vi.stubGlobal("crypto", {
-      randomUUID: () => identities.shift() ?? CANCEL_KEY,
+      randomUUID: () => identities.shift() ?? CONFIRM_KEY,
     })
     const awaiting = shipmentDocument(AWAITING_ID, "AWAITING_CONFIRMATION", 5)
-    shipmentApi.listShipments.mockResolvedValue([awaiting])
-    shipmentApi.confirmShipmentPreparation.mockResolvedValue(
-      shipmentDocument(AWAITING_ID, "CONFIRMING_PREPARATION", 6)
+    const confirming = shipmentDocument(
+      AWAITING_ID,
+      "CONFIRMING_PREPARATION",
+      6
     )
-    shipmentApi.cancelShipment.mockResolvedValue(
-      shipmentDocument(AWAITING_ID, "CANCELLING", 6)
-    )
+    shipmentApi.listShipments
+      .mockResolvedValueOnce([awaiting])
+      .mockResolvedValue([confirming])
+    shipmentApi.confirmShipmentPreparation.mockResolvedValue(confirming)
     const user = userEvent.setup()
     renderPage()
 
@@ -259,18 +286,103 @@ describe("LogisticsShipmentsPage", () => {
         idempotencyKey: CONFIRM_KEY,
       })
     )
+    await screen.findAllByText("Подтверждается")
+    expect(
+      screen.queryByRole("button", { name: "Подтвердить подготовку" })
+    ).toBeNull()
+    expect(screen.queryByRole("button", { name: "Отменить" })).toBeNull()
+  })
 
-    const cancelButtons = screen.getAllByRole("button", { name: "Отменить" })
-    await user.click(cancelButtons[0]!)
-    const dialog = screen.getByRole("alertdialog")
-    await user.click(within(dialog).getByRole("button", { name: "Отменить" }))
-    await waitFor(() =>
-      expect(shipmentApi.cancelShipment).toHaveBeenCalledWith({
-        accessToken: "shipment-token",
-        documentId: AWAITING_ID,
-        expectedVersion: 5,
-        idempotencyKey: CANCEL_KEY,
+  it("retries a transient cancellation failure with the same version and key", async () => {
+    vi.stubGlobal("crypto", { randomUUID: () => CANCEL_KEY })
+    const preparing = shipmentDocument(DRAFT_ID, "PREPARING", 3)
+    const cancelling = shipmentDocument(DRAFT_ID, "CANCELLING", 4)
+    shipmentApi.listShipments
+      .mockResolvedValueOnce([preparing])
+      .mockResolvedValue([cancelling])
+    shipmentApi.cancelShipment
+      .mockRejectedValueOnce(new Error("Сеть временно недоступна"))
+      .mockResolvedValueOnce(cancelling)
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Отменить" }))[0]!
+    )
+    await user.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "Отменить",
       })
     )
+    expect(await screen.findByText("Сеть временно недоступна")).toBeTruthy()
+    const firstCommand = shipmentApi.cancelShipment.mock.calls[0]![0]
+    expect(firstCommand).toEqual({
+      accessToken: "shipment-token",
+      documentId: DRAFT_ID,
+      expectedVersion: 3,
+      idempotencyKey: CANCEL_KEY,
+    })
+
+    await user.click(screen.getAllByRole("button", { name: "Отменить" })[0]!)
+    await user.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "Отменить",
+      })
+    )
+    await waitFor(() =>
+      expect(shipmentApi.cancelShipment).toHaveBeenCalledTimes(2)
+    )
+    expect(shipmentApi.cancelShipment.mock.calls[1]![0]).toEqual(firstCommand)
+    await screen.findAllByText("Отменяется")
+  })
+
+  it("refreshes a cancellation conflict before allowing a new command", async () => {
+    const nextCancelKey = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    const identities = [CANCEL_KEY, nextCancelKey]
+    vi.stubGlobal("crypto", {
+      randomUUID: () => identities.shift() ?? nextCancelKey,
+    })
+    const preparingV3 = shipmentDocument(DRAFT_ID, "PREPARING", 3)
+    const preparingV4 = shipmentDocument(DRAFT_ID, "PREPARING", 4)
+    const cancelling = shipmentDocument(DRAFT_ID, "CANCELLING", 5)
+    shipmentApi.listShipments
+      .mockResolvedValueOnce([preparingV3])
+      .mockResolvedValue([preparingV4])
+    shipmentApi.cancelShipment
+      .mockRejectedValueOnce(new ApiError("Версия документа устарела", 409))
+      .mockResolvedValueOnce(cancelling)
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Отменить" }))[0]!
+    )
+    await user.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "Отменить",
+      })
+    )
+    expect(await screen.findByText("Версия документа устарела")).toBeTruthy()
+    await waitFor(() =>
+      expect(shipmentApi.listShipments).toHaveBeenCalledTimes(2)
+    )
+
+    await user.click(screen.getAllByRole("button", { name: "Отменить" })[0]!)
+    await user.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "Отменить",
+      })
+    )
+    await waitFor(() =>
+      expect(shipmentApi.cancelShipment).toHaveBeenCalledTimes(2)
+    )
+    expect(shipmentApi.cancelShipment.mock.calls[0]![0]).toMatchObject({
+      expectedVersion: 3,
+      idempotencyKey: CANCEL_KEY,
+    })
+    expect(shipmentApi.cancelShipment.mock.calls[1]![0]).toMatchObject({
+      expectedVersion: 4,
+      idempotencyKey: nextCancelKey,
+    })
   })
 })

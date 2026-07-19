@@ -168,8 +168,41 @@ describe("HttpWarehouseTransferClient", () => {
     )
     expect(url.searchParams.get("expectedVersion")).toBe("7")
     expect(url.searchParams.get("expectedLineVersion")).toBe("5")
+    expect(init.method).toBe("POST")
+    expect(new Headers(init.headers).get("Idempotency-Key")).toBe(
+      IDEMPOTENCY_KEY
+    )
     expect(JSON.parse(init.body as string)).toEqual({
       references: [{ mediaId: MEDIA_ID, generation: 3 }],
+    })
+  })
+
+  it("preserves arrival conflicts as 409 Problem Details", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      json(
+        {
+          status: 409,
+          code: "TRANSFER_LINE_VERSION",
+          detail: "Версия строки устарела",
+        },
+        409
+      )
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      new HttpWarehouseTransferClient().arrive({
+        accessToken: "transfer-token",
+        documentId: DOCUMENT_ID,
+        lineId: LINE_ID,
+        expectedVersion: 7,
+        expectedLineVersion: 5,
+        idempotencyKey: IDEMPOTENCY_KEY,
+        references: [{ mediaId: MEDIA_ID, generation: 3 }],
+      })
+    ).rejects.toMatchObject({
+      status: 409,
+      message: "Версия строки устарела",
     })
   })
 

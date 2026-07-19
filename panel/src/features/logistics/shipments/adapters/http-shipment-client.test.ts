@@ -246,7 +246,7 @@ describe("HttpShipmentClient", () => {
       )
     )
     await expect(
-      client.confirmPreparation({
+      client.cancel({
         accessToken: "shipment-token",
         documentId: DOCUMENT_ID,
         expectedVersion: 4,

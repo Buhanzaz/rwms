@@ -1,5 +1,10 @@
-import { useMemo, useRef, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { type MutableRefObject, useMemo, useRef, useState } from "react"
+import {
+  type QueryClient,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
 import { useSearchParams } from "react-router-dom"
@@ -46,14 +51,16 @@ import {
   createReturn,
   listReturns,
   registerReturn,
-  requestReturnEstimate,
 } from "@/features/logistics/returns/api"
+import { AcceptUndamagedDialog } from "@/features/logistics/returns/accept-undamaged-dialog"
 import {
   RETURN_STATE_LABELS,
+  type CreateReturnLine,
   type ReturnDocument,
   type ReturnDocumentState,
   type ReturnLine,
 } from "@/features/logistics/returns/model"
+import { RequestEstimateDialog } from "@/features/logistics/returns/request-estimate-dialog"
 import { useWarehouse } from "@/hooks/use-warehouse"
 
 const ACTIONABLE_STATES = new Set<ReturnDocumentState>([
@@ -62,6 +69,8 @@ const ACTIONABLE_STATES = new Set<ReturnDocumentState>([
   "CONFLICT",
   "RECONCILIATION_REQUIRED",
 ])
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function formatDateTime(value: string) {
   return new Intl.DateTimeFormat("ru-RU", {
@@ -88,6 +97,67 @@ function commandIdentity() {
   return crypto.randomUUID()
 }
 
+type CommandAttempt = {
+  signature: string
+  idempotencyKey: string
+}
+
+function stableCommandKey(
+  attempt: MutableRefObject<CommandAttempt | null>,
+  signature: string
+) {
+  if (attempt.current?.signature === signature) {
+    return attempt.current.idempotencyKey
+  }
+  const idempotencyKey = commandIdentity()
+  attempt.current = { signature, idempotencyKey }
+  return idempotencyKey
+}
+
+function isUuid(value: string) {
+  return UUID_PATTERN.test(value)
+}
+
+function returnListQueryKey(warehouseId: string) {
+  return [...RETURNS_QUERY_KEY, warehouseId] as const
+}
+
+function storeServiceProjection(
+  queryClient: QueryClient,
+  document: ReturnDocument
+) {
+  queryClient.setQueryData<ReturnDocument[]>(
+    returnListQueryKey(document.warehouseId),
+    (current) => {
+      if (!current) return [document]
+      const exists = current.some((candidate) => candidate.id === document.id)
+      return exists
+        ? current.map((candidate) =>
+            candidate.id === document.id ? document : candidate
+          )
+        : [document, ...current]
+    }
+  )
+}
+
+function refreshServiceProjection(
+  queryClient: QueryClient,
+  warehouseId: string
+) {
+  return queryClient.invalidateQueries({
+    queryKey: returnListQueryKey(warehouseId),
+  })
+}
+
+function isConflict(cause: unknown) {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "status" in cause &&
+    cause.status === 409
+  )
+}
+
 function lineSummary(line: ReturnLine) {
   return line.tenantSnapshot?.trim() || line.assetId
 }
@@ -101,10 +171,10 @@ export function LogisticsReturnsPage() {
   const [showAll, setShowAll] = useState(false)
   const [search, setSearch] = useState("")
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [estimateTarget, setEstimateTarget] = useState<{
-    document: ReturnDocument
-    line: ReturnLine
-  } | null>(null)
+  const [acceptTarget, setAcceptTarget] = useState<ReturnDocument | null>(null)
+  const [estimateTarget, setEstimateTarget] = useState<ReturnDocument | null>(
+    null
+  )
   const [commandError, setCommandError] = useState<string | null>(null)
   const commandKeys = useRef(new Map<string, string>())
   const selectedDocumentId = searchParams.get("receiptId")
@@ -114,7 +184,7 @@ export function LogisticsReturnsPage() {
     hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
 
   const query = useQuery({
-    queryKey: [...RETURNS_QUERY_KEY, selectedWarehouseId],
+    queryKey: returnListQueryKey(selectedWarehouseId ?? "none"),
     queryFn: () => listReturns(accessToken!, selectedWarehouseId!),
     enabled: Boolean(accessToken && selectedWarehouseId),
     refetchInterval: 5_000,
@@ -163,15 +233,20 @@ export function LogisticsReturnsPage() {
         expectedVersion: document.version,
         idempotencyKey: keyFor("register", document),
       }),
-    onSuccess: (_result, document) => {
+    onSuccess: (result, document) => {
       commandKeys.current.delete(`register:${document.id}:${document.version}`)
+      storeServiceProjection(queryClient, result)
       setCommandError(null)
-      void queryClient.invalidateQueries({ queryKey: RETURNS_QUERY_KEY })
+      void refreshServiceProjection(queryClient, result.warehouseId)
     },
-    onError: (cause) =>
+    onError: (cause, document) => {
+      if (isConflict(cause)) {
+        void refreshServiceProjection(queryClient, document.warehouseId)
+      }
       setCommandError(
         errorMessage(cause, "Не удалось зарегистрировать возврат")
-      ),
+      )
+    },
   })
 
   function clearSelection() {
@@ -217,20 +292,22 @@ export function LogisticsReturnsPage() {
             <Button
               size="sm"
               variant="outline"
-              disabled
-              title="Загрузка фотографий возврата ещё не поддерживается публичным media API"
+              onClick={() => {
+                setCommandError(null)
+                setAcceptTarget(document)
+              }}
             >
               Принять без повреждений
             </Button>
-            {document.lines.map((line) => (
-              <Button
-                key={line.id}
-                size="sm"
-                onClick={() => setEstimateTarget({ document, line })}
-              >
-                Запросить смету · строка {line.lineNumber}
-              </Button>
-            ))}
+            <Button
+              size="sm"
+              onClick={() => {
+                setCommandError(null)
+                setEstimateTarget(document)
+              }}
+            >
+              Запросить смету
+            </Button>
           </>
         ) : null}
       </div>
@@ -287,9 +364,10 @@ export function LogisticsReturnsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
-          Принятие без повреждений временно недоступно в панели: публичный media
-          API пока не умеет загружать фотографии с владельцем возврата. Запрос
-          сметы доступен по server-issued line ID и equipment ID.
+          Принятие без повреждений использует только заранее подготовленные
+          READY media references. Публичная загрузка фотографий возврата пока не
+          определена. Запрос сметы доступен по server-issued line ID и
+          подтверждённым equipment ID.
         </CardContent>
       </Card>
 
@@ -436,15 +514,45 @@ export function LogisticsReturnsPage() {
       ) : null}
       {estimateTarget &&
       accessToken &&
-      hasWarehouseAccess(
-        currentUser,
-        estimateTarget.document.warehouseId,
-        "EDIT"
-      ) ? (
+      hasWarehouseAccess(currentUser, estimateTarget.warehouseId, "EDIT") ? (
         <RequestEstimateDialog
           accessToken={accessToken}
-          target={estimateTarget}
+          document={estimateTarget}
           onOpenChange={(open) => !open && setEstimateTarget(null)}
+          onSuccess={(result) => {
+            storeServiceProjection(queryClient, result)
+            void refreshServiceProjection(queryClient, result.warehouseId)
+            setEstimateTarget(null)
+            setCommandError(null)
+          }}
+          onConflict={(cause) => {
+            void refreshServiceProjection(
+              queryClient,
+              estimateTarget.warehouseId
+            )
+            setEstimateTarget(null)
+            setCommandError(errorMessage(cause, "Версия возврата изменилась"))
+          }}
+        />
+      ) : null}
+      {acceptTarget &&
+      accessToken &&
+      hasWarehouseAccess(currentUser, acceptTarget.warehouseId, "EDIT") ? (
+        <AcceptUndamagedDialog
+          accessToken={accessToken}
+          document={acceptTarget}
+          onOpenChange={(open) => !open && setAcceptTarget(null)}
+          onSuccess={(result) => {
+            storeServiceProjection(queryClient, result)
+            void refreshServiceProjection(queryClient, result.warehouseId)
+            setAcceptTarget(null)
+            setCommandError(null)
+          }}
+          onConflict={(cause) => {
+            void refreshServiceProjection(queryClient, acceptTarget.warehouseId)
+            setAcceptTarget(null)
+            setCommandError(errorMessage(cause, "Версия возврата изменилась"))
+          }}
         />
       ) : null}
     </div>
@@ -518,31 +626,35 @@ function CreateReturnDialog({
 }) {
   const queryClient = useQueryClient()
   const [lines, setLines] = useState<ReturnLineDraft[]>(() => [emptyLine()])
-  const [idempotencyKey] = useState(commandIdentity)
+  const commandAttempt = useRef<CommandAttempt | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
   const mutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (command: {
+      lines: CreateReturnLine[]
+      idempotencyKey: string
+    }) =>
       createReturn({
         accessToken,
         warehouseId,
-        idempotencyKey,
-        lines: lines.map((line) => ({
-          assetId: line.assetId.trim(),
-          assetVersion: Number(line.assetVersion),
-          tenantSnapshot: line.tenantSnapshot.trim(),
-        })),
+        ...command,
       }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: RETURNS_QUERY_KEY })
+    onSuccess: (result) => {
+      storeServiceProjection(queryClient, result)
+      void refreshServiceProjection(queryClient, result.warehouseId)
       onOpenChange(false)
     },
   })
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    const commandLines = lines.map((line) => ({
+      assetId: line.assetId.trim(),
+      assetVersion: Number(line.assetVersion),
+      tenantSnapshot: line.tenantSnapshot.trim(),
+    }))
     const invalidLine = lines.find(
       (line) =>
-        !line.assetId.trim() ||
+        !isUuid(line.assetId.trim()) ||
         !line.tenantSnapshot.trim() ||
         !Number.isSafeInteger(Number(line.assetVersion)) ||
         Number(line.assetVersion) < 0
@@ -553,8 +665,19 @@ function CreateReturnDialog({
       )
       return
     }
+    const assetIds = commandLines.map((line) => line.assetId.toLowerCase())
+    if (new Set(assetIds).size !== assetIds.length) {
+      setValidationError(
+        "Каждый asset UUID можно добавить в документ возврата только один раз."
+      )
+      return
+    }
     setValidationError(null)
-    mutation.mutate()
+    const signature = JSON.stringify({ warehouseId, lines: commandLines })
+    mutation.mutate({
+      lines: commandLines,
+      idempotencyKey: stableCommandKey(commandAttempt, signature),
+    })
   }
 
   return (
@@ -594,7 +717,10 @@ function CreateReturnDialog({
                               )
                             }
                           >
-                            <HugeiconsIcon icon={Delete02Icon} />
+                            <HugeiconsIcon
+                              icon={Delete02Icon}
+                              data-icon="inline-start"
+                            />
                           </Button>
                         </CardAction>
                       ) : null}
@@ -703,123 +829,6 @@ function CreateReturnDialog({
             </Button>
             <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending ? "Создаётся…" : "Создать черновик"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function RequestEstimateDialog({
-  accessToken,
-  target,
-  onOpenChange,
-}: {
-  accessToken: string
-  target: { document: ReturnDocument; line: ReturnLine }
-  onOpenChange: (open: boolean) => void
-}) {
-  const queryClient = useQueryClient()
-  const [equipmentId, setEquipmentId] = useState("")
-  const [missingQuantity, setMissingQuantity] = useState("1")
-  const [idempotencyKey] = useState(commandIdentity)
-  const mutation = useMutation({
-    mutationFn: () =>
-      requestReturnEstimate({
-        accessToken,
-        documentId: target.document.id,
-        expectedVersion: target.document.version,
-        idempotencyKey,
-        lines: [
-          {
-            lineId: target.line.id,
-            shortages: [
-              {
-                equipmentId: equipmentId.trim(),
-                missingQuantity: Number(missingQuantity),
-              },
-            ],
-          },
-        ],
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: RETURNS_QUERY_KEY })
-      onOpenChange(false)
-    },
-  })
-  const validQuantity =
-    Number.isSafeInteger(Number(missingQuantity)) && Number(missingQuantity) > 0
-
-  return (
-    <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <form
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (equipmentId.trim() && validQuantity) mutation.mutate()
-          }}
-        >
-          <DialogHeader>
-            <DialogTitle>Запросить смету</DialogTitle>
-            <DialogDescription>
-              Укажите подтверждённый equipment ID и недостающее количество для
-              строки {target.line.lineNumber}. Logistics-service сам выполнит
-              settlement и передаст факт в maintenance-service.
-            </DialogDescription>
-          </DialogHeader>
-          <FieldGroup className="py-4">
-            <Field>
-              <FieldLabel htmlFor="return-shortage-equipment">
-                Equipment UUID
-              </FieldLabel>
-              <Input
-                id="return-shortage-equipment"
-                required
-                value={equipmentId}
-                placeholder="00000000-0000-0000-0000-000000000000"
-                onChange={(event) => setEquipmentId(event.target.value)}
-              />
-              <FieldDescription>
-                Справочник оборудования не входит в публичный return contract.
-              </FieldDescription>
-            </Field>
-            <Field data-invalid={!validQuantity}>
-              <FieldLabel htmlFor="return-shortage-quantity">
-                Недостающее количество
-              </FieldLabel>
-              <Input
-                id="return-shortage-quantity"
-                type="number"
-                min={1}
-                step={1}
-                required
-                aria-invalid={!validQuantity}
-                value={missingQuantity}
-                onChange={(event) => setMissingQuantity(event.target.value)}
-              />
-            </Field>
-            {mutation.error ? (
-              <FieldError>
-                {errorMessage(mutation.error, "Не удалось запросить смету")}
-              </FieldError>
-            ) : null}
-          </FieldGroup>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
-              Отмена
-            </Button>
-            <Button
-              type="submit"
-              disabled={
-                mutation.isPending || !equipmentId.trim() || !validQuantity
-              }
-            >
-              {mutation.isPending ? "Запрашивается…" : "Запросить"}
             </Button>
           </DialogFooter>
         </form>

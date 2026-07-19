@@ -4,11 +4,15 @@ import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { ReturnDocument } from "@/features/logistics/returns/model"
+import type {
+  ReturnDocument,
+  ReturnLine,
+} from "@/features/logistics/returns/model"
 
 const returnApi = vi.hoisted(() => ({
-  listReturns: vi.fn(),
+  acceptUndamagedReturn: vi.fn(),
   createReturn: vi.fn(),
+  listReturns: vi.fn(),
   registerReturn: vi.fn(),
   requestReturnEstimate: vi.fn(),
 }))
@@ -59,11 +63,43 @@ const LINE_ID = "44444444-4444-4444-8444-444444444444"
 const ASSET_ID = "55555555-5555-4555-8555-555555555555"
 const EQUIPMENT_ID = "66666666-6666-4666-8666-666666666666"
 const IDEMPOTENCY_KEY = "77777777-7777-4777-8777-777777777777"
+const MEDIA_ID = "88888888-8888-4888-8888-888888888888"
+const SECOND_LINE_ID = "99999999-9999-4999-8999-999999999999"
+const SECOND_ASSET_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+const SECOND_EQUIPMENT_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+const SECOND_MEDIA_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+const CREATED_RETURN_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+const UI_KEY_ONE = "12121212-1212-4212-8212-121212121212"
+const UI_KEY_TWO = "13131313-1313-4313-8313-131313131313"
+const UNUSED_KEY = "14141414-1414-4414-8414-141414141414"
+
+function returnLine(
+  id: string,
+  assetId: string,
+  lineNumber: number
+): ReturnLine {
+  return {
+    id,
+    version: 1,
+    lineNumber,
+    assetId,
+    assetVersion: 8,
+    state: "PENDING",
+    tenantSnapshot: `ООО Тест ${lineNumber}`,
+  }
+}
+
+const singleLine = returnLine(LINE_ID, ASSET_ID, 1)
+const inspectionLines = [
+  singleLine,
+  returnLine(SECOND_LINE_ID, SECOND_ASSET_ID, 2),
+]
 
 function returnDocument(
   id: string,
   state: ReturnDocument["state"],
-  version: number
+  version: number,
+  lines: ReturnLine[] = [singleLine]
 ): ReturnDocument {
   return {
     id,
@@ -74,20 +110,17 @@ function returnDocument(
     destinationWarehouseId: null,
     partySnapshot: null,
     driverSnapshot: null,
-    lines: [
-      {
-        id: LINE_ID,
-        version: 1,
-        lineNumber: 1,
-        assetId: ASSET_ID,
-        assetVersion: 8,
-        state: "PENDING",
-        tenantSnapshot: "ООО Тест",
-      },
-    ],
+    lines,
     createdAt: "2026-07-18T08:00:00Z",
     updatedAt: "2026-07-18T08:10:00Z",
   }
+}
+
+function listedDocuments() {
+  return [
+    returnDocument(DRAFT_ID, "DRAFT", 2),
+    returnDocument(INSPECTION_ID, "INSPECTION_REQUIRED", 4, inspectionLines),
+  ]
 }
 
 function renderPage() {
@@ -106,13 +139,32 @@ function renderPage() {
   )
 }
 
+async function openAcceptDialog(user: ReturnType<typeof userEvent.setup>) {
+  const buttons = await screen.findAllByRole("button", {
+    name: "Принять без повреждений",
+  })
+  await user.click(buttons[0]!)
+  await screen.findByRole("heading", {
+    name: "Принять возврат без повреждений",
+  })
+}
+
+async function fillAcceptanceReferences(
+  user: ReturnType<typeof userEvent.setup>
+) {
+  const mediaInputs = screen.getAllByLabelText(/^Media UUID ·/)
+  expect(mediaInputs).toHaveLength(2)
+  await user.type(mediaInputs[0]!, MEDIA_ID)
+  await user.type(mediaInputs[1]!, SECOND_MEDIA_ID)
+  const generations = screen.getAllByLabelText(/^Generation ·/)
+  await user.clear(generations[1]!)
+  await user.type(generations[1]!, "2")
+}
+
 beforeEach(() => {
   authState.level = "EDIT"
   vi.stubGlobal("crypto", { randomUUID: () => IDEMPOTENCY_KEY })
-  returnApi.listReturns.mockResolvedValue([
-    returnDocument(DRAFT_ID, "DRAFT", 2),
-    returnDocument(INSPECTION_ID, "INSPECTION_REQUIRED", 4),
-  ])
+  returnApi.listReturns.mockResolvedValue(listedDocuments())
 })
 
 afterEach(() => {
@@ -135,29 +187,31 @@ describe("LogisticsReturnsPage", () => {
     expect(
       screen.queryByRole("button", { name: "Зарегистрировать" })
     ).toBeNull()
-    expect(screen.queryByRole("button", { name: /Запросить смету/ })).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Принять без повреждений" })
+    ).toBeNull()
+    expect(screen.queryByRole("button", { name: "Запросить смету" })).toBeNull()
     expect(screen.getByRole("button", { name: "Обновить" })).not.toBeNull()
   })
 
-  it("uses service projections and hides unsupported browser-owned controls", async () => {
+  it("uses service projections and exposes no superseded browser-owned controls", async () => {
     const user = userEvent.setup()
     renderPage()
 
     await screen.findAllByText("Требуется осмотр")
-    expect(returnApi.listReturns).toHaveBeenCalledWith(
-      "return-token",
-      WAREHOUSE_ID
-    )
     expect(
       screen.queryByRole("button", { name: /Добавить бытовку из аренды/i })
     ).toBeNull()
     expect(screen.queryByRole("button", { name: /Редактировать/i })).toBeNull()
-    for (const button of screen.getAllByRole("button", {
-      name: "Принять без повреждений",
-    })) {
-      expect(button.hasAttribute("disabled")).toBe(true)
-      expect(button.getAttribute("title")).toContain("media API")
-    }
+    expect(document.querySelector('input[type="file"]')).toBeNull()
+
+    await openAcceptDialog(user)
+    expect(screen.getAllByLabelText(/^Media UUID ·/)).toHaveLength(2)
+    expect(
+      screen.getByText(/заранее подтверждённые media-service READY/)
+    ).not.toBeNull()
+    expect(document.querySelector('input[type="file"]')).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Отмена" }))
 
     await user.click(screen.getByRole("button", { name: "Создать возврат" }))
     expect(
@@ -168,13 +222,74 @@ describe("LogisticsReturnsPage", () => {
     expect(screen.getByLabelText("Снимок контрагента")).not.toBeNull()
   })
 
-  it("sends server versions and stable command identities for transitions", async () => {
+  it("creates a return with a stable caller identity and no direct asset mutation", async () => {
+    const user = userEvent.setup()
+    returnApi.createReturn.mockResolvedValue(
+      returnDocument(CREATED_RETURN_ID, "DRAFT", 0)
+    )
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Создать возврат" })
+    )
+    await user.type(screen.getByLabelText("Asset UUID"), ASSET_ID)
+    await user.clear(screen.getByLabelText("Текущая версия asset"))
+    await user.type(screen.getByLabelText("Текущая версия asset"), "8")
+    await user.type(screen.getByLabelText("Снимок контрагента"), "ООО Тест")
+    await user.click(screen.getByRole("button", { name: "Создать черновик" }))
+
+    await waitFor(() =>
+      expect(returnApi.createReturn).toHaveBeenCalledWith({
+        accessToken: "return-token",
+        warehouseId: WAREHOUSE_ID,
+        idempotencyKey: IDEMPOTENCY_KEY,
+        lines: [
+          {
+            assetId: ASSET_ID,
+            assetVersion: 8,
+            tenantSnapshot: "ООО Тест",
+          },
+        ],
+      })
+    )
+  })
+
+  it("rejects duplicate asset IDs before creating a return", async () => {
+    const user = userEvent.setup()
+    const randomUUID = vi
+      .fn()
+      .mockReturnValueOnce(UI_KEY_ONE)
+      .mockReturnValueOnce(UI_KEY_TWO)
+      .mockReturnValue(IDEMPOTENCY_KEY)
+    vi.stubGlobal("crypto", { randomUUID })
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Создать возврат" })
+    )
+    await user.click(screen.getByRole("button", { name: "Добавить строку" }))
+
+    const assetInputs = screen.getAllByLabelText("Asset UUID")
+    const tenantInputs = screen.getAllByLabelText("Снимок контрагента")
+    expect(assetInputs).toHaveLength(2)
+    await user.type(assetInputs[0]!, SECOND_ASSET_ID)
+    await user.type(assetInputs[1]!, SECOND_ASSET_ID.toUpperCase())
+    await user.type(tenantInputs[0]!, "ООО Первый")
+    await user.type(tenantInputs[1]!, "ООО Второй")
+    await user.click(screen.getByRole("button", { name: "Создать черновик" }))
+
+    expect(
+      await screen.findByText(
+        "Каждый asset UUID можно добавить в документ возврата только один раз."
+      )
+    ).not.toBeNull()
+    expect(returnApi.createReturn).not.toHaveBeenCalled()
+  })
+
+  it("registers with the service-issued document version", async () => {
     const user = userEvent.setup()
     returnApi.registerReturn.mockResolvedValue(
       returnDocument(DRAFT_ID, "REGISTERING", 3)
-    )
-    returnApi.requestReturnEstimate.mockResolvedValue(
-      returnDocument(INSPECTION_ID, "ESTIMATE_PENDING", 5)
     )
     renderPage()
 
@@ -182,6 +297,7 @@ describe("LogisticsReturnsPage", () => {
       name: "Зарегистрировать",
     })
     await user.click(registerButtons[0]!)
+
     await waitFor(() =>
       expect(returnApi.registerReturn).toHaveBeenCalledWith({
         accessToken: "return-token",
@@ -190,12 +306,111 @@ describe("LogisticsReturnsPage", () => {
         idempotencyKey: IDEMPOTENCY_KEY,
       })
     )
+  })
 
-    const estimateButtons = screen.getAllByRole("button", {
-      name: "Запросить смету · строка 1",
+  it("accepts every server-issued line and reuses the key for an unchanged retry", async () => {
+    const user = userEvent.setup()
+    const randomUUID = vi
+      .fn()
+      .mockReturnValueOnce(UI_KEY_ONE)
+      .mockReturnValueOnce(UI_KEY_TWO)
+      .mockReturnValueOnce(IDEMPOTENCY_KEY)
+      .mockReturnValue(UNUSED_KEY)
+    vi.stubGlobal("crypto", { randomUUID })
+    returnApi.acceptUndamagedReturn
+      .mockRejectedValueOnce(new Error("Временная ошибка media-service"))
+      .mockResolvedValueOnce(
+        returnDocument(INSPECTION_ID, "ACCEPTING", 5, inspectionLines)
+      )
+    renderPage()
+
+    await openAcceptDialog(user)
+    await fillAcceptanceReferences(user)
+    await user.click(
+      screen.getByRole("button", { name: "Подтвердить приёмку" })
+    )
+    await screen.findByText("Временная ошибка media-service")
+    await user.click(
+      screen.getByRole("button", { name: "Подтвердить приёмку" })
+    )
+
+    const expectedCommand = {
+      accessToken: "return-token",
+      documentId: INSPECTION_ID,
+      expectedVersion: 4,
+      idempotencyKey: IDEMPOTENCY_KEY,
+      lines: [
+        {
+          lineId: LINE_ID,
+          references: [{ mediaId: MEDIA_ID, generation: 1 }],
+        },
+        {
+          lineId: SECOND_LINE_ID,
+          references: [{ mediaId: SECOND_MEDIA_ID, generation: 2 }],
+        },
+      ],
+    }
+    await waitFor(() =>
+      expect(returnApi.acceptUndamagedReturn).toHaveBeenCalledTimes(2)
+    )
+    expect(returnApi.acceptUndamagedReturn.mock.calls[0]?.[0]).toEqual(
+      expectedCommand
+    )
+    expect(returnApi.acceptUndamagedReturn.mock.calls[1]?.[0]).toEqual(
+      expectedCommand
+    )
+    expect(randomUUID).toHaveBeenCalledTimes(3)
+  })
+
+  it("closes a stale accept form, reports 409 and refreshes service state", async () => {
+    const user = userEvent.setup()
+    returnApi.acceptUndamagedReturn.mockRejectedValue(
+      Object.assign(new Error("Версия возврата устарела"), { status: 409 })
+    )
+    renderPage()
+
+    await openAcceptDialog(user)
+    await fillAcceptanceReferences(user)
+    await user.click(
+      screen.getByRole("button", { name: "Подтвердить приёмку" })
+    )
+
+    expect(await screen.findByText("Версия возврата устарела")).not.toBeNull()
+    expect(
+      screen.queryByRole("heading", {
+        name: "Принять возврат без повреждений",
+      })
+    ).toBeNull()
+    await waitFor(() =>
+      expect(returnApi.listReturns.mock.calls.length).toBeGreaterThan(1)
+    )
+    expect(returnApi.acceptUndamagedReturn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        documentId: INSPECTION_ID,
+        expectedVersion: 4,
+        idempotencyKey: IDEMPOTENCY_KEY,
+      })
+    )
+  })
+
+  it("requests an estimate for the exact server-issued line set", async () => {
+    const user = userEvent.setup()
+    returnApi.requestReturnEstimate.mockResolvedValue(
+      returnDocument(INSPECTION_ID, "ESTIMATE_PENDING", 5, inspectionLines)
+    )
+    renderPage()
+
+    const estimateButtons = await screen.findAllByRole("button", {
+      name: "Запросить смету",
     })
     await user.click(estimateButtons[0]!)
-    await user.type(screen.getByLabelText("Equipment UUID"), EQUIPMENT_ID)
+    const equipmentInputs = screen.getAllByLabelText(/^Equipment UUID ·/)
+    expect(equipmentInputs).toHaveLength(2)
+    await user.type(equipmentInputs[0]!, EQUIPMENT_ID)
+    await user.type(equipmentInputs[1]!, SECOND_EQUIPMENT_ID)
+    const quantities = screen.getAllByLabelText(/^Недостающее количество ·/)
+    await user.clear(quantities[1]!)
+    await user.type(quantities[1]!, "2")
     await user.click(screen.getByRole("button", { name: "Запросить" }))
 
     await waitFor(() =>
@@ -208,6 +423,12 @@ describe("LogisticsReturnsPage", () => {
           {
             lineId: LINE_ID,
             shortages: [{ equipmentId: EQUIPMENT_ID, missingQuantity: 1 }],
+          },
+          {
+            lineId: SECOND_LINE_ID,
+            shortages: [
+              { equipmentId: SECOND_EQUIPMENT_ID, missingQuantity: 2 },
+            ],
           },
         ],
       })
