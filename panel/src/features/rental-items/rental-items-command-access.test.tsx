@@ -255,6 +255,11 @@ describe("rental item command access", () => {
       "asset-token",
       RENTAL_ITEM_ID
     )
+    expect(dossierApi.getRentalItemDossierPage).toHaveBeenCalledWith(
+      "asset-token",
+      RENTAL_ITEM_ID,
+      expect.objectContaining({ limit: 25, after: undefined })
+    )
     expect(screen.queryByRole("button", { name: "Изменить статус" })).toBeNull()
 
     const generalComment = screen.getByLabelText("Комментарий")
