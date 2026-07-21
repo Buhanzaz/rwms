@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.auth.service;
 
 import dev.buhanzaz.rwms.auth.api.AdminUserResponse;
+import dev.buhanzaz.rwms.auth.api.ActorDisplayResponse;
 import dev.buhanzaz.rwms.auth.api.CreateUserRequest;
 import dev.buhanzaz.rwms.auth.api.CurrentUserResponse;
 import dev.buhanzaz.rwms.auth.api.EffectiveWarehouseAccessDto;
@@ -26,7 +27,9 @@ import dev.buhanzaz.rwms.auth.repository.AuthSubjectRepository;
 import dev.buhanzaz.rwms.auth.repository.UserWarehouseAccessRepository;
 import dev.buhanzaz.rwms.auth.security.AuthPrincipal;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -42,6 +45,8 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 @RequiredArgsConstructor
 public class UserAdministrationService {
+
+    private static final int MAX_ACTOR_DISPLAY_SUBJECTS = 100;
 
     private final AuthSubjectRepository subjects;
     private final UserWarehouseAccessRepository accesses;
@@ -84,6 +89,23 @@ public class UserAdministrationService {
                 .toList();
         return responseMapper.toCurrent(
                 subject, profile, displayName(profile), accessAll, effectiveAccesses);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ActorDisplayResponse> actorDisplays(List<UUID> subjectIds) {
+        if (subjectIds.size() > MAX_ACTOR_DISPLAY_SUBJECTS) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "За один запрос можно получить не более " + MAX_ACTOR_DISPLAY_SUBJECTS + " авторов");
+        }
+        var requestedIds = new LinkedHashSet<>(subjectIds);
+        Map<UUID, AuthSubject> foundSubjects = subjects.findAllById(requestedIds).stream()
+                .collect(java.util.stream.Collectors.toMap(AuthSubject::getId, subject -> subject));
+        return requestedIds.stream()
+                .map(foundSubjects::get)
+                .filter(Objects::nonNull)
+                .map(subject -> responseMapper.toActorDisplay(subject, profiles.require(subject.getId())))
+                .toList();
     }
 
     @Transactional

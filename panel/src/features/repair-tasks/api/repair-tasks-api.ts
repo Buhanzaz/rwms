@@ -103,7 +103,7 @@ function buildWriteCommand(params: {
 }): RepairTaskWriteCommand {
   if (params.draft.pendingUploads.length > 0 || params.draft.media.length > 0) {
     throw new Error(
-      "Фото для ремонтов временно недоступны: media-service ещё не подтверждает владельца MAINTENANCE_REPAIR."
+      "Локальные вложения старой панели нельзя сохранить. Загрузите фотографии через media-service."
     )
   }
   return {
@@ -121,6 +121,7 @@ function buildWriteCommand(params: {
     dispatchDate: params.draft.dispatchDate,
     comment: "",
     media: [],
+    maintenanceMediaReferences: params.draft.maintenanceMediaReferences,
     subtasks: params.subtasks,
   }
 }
@@ -253,12 +254,14 @@ export function updateRepairTaskSubtasks(params: {
 export function acceptRepairTask(params: {
   task: RepairTaskDto
   comment: string
+  maintenanceMediaReferences?: Array<{ mediaId: string; generation: number }>
 }) {
   return repairTasksClient.accept({
     taskId: params.task.id,
     expectedVersion: params.task.version,
     warehouseId: params.task.warehouseId,
     comment: params.comment,
+    maintenanceMediaReferences: params.maintenanceMediaReferences ?? [],
   })
 }
 
@@ -287,6 +290,7 @@ export async function writeOffRepairDraft(params: {
   comment: string
   lines: RepairEstimateDto["lines"]
   media: RepairEstimateMediaRefDto[]
+  maintenanceMediaReferences: Array<{ mediaId: string; generation: number }>
   pendingUploads: PendingEstimateMediaUpload[]
   writeOffReason: string
 }) {
@@ -310,6 +314,7 @@ export async function writeOffRepairDraft(params: {
     comment: "",
     lines: params.lines,
     media: params.media,
+    maintenanceMediaReferences: params.maintenanceMediaReferences,
     pendingUploads: params.pendingUploads,
   }
   const subtasks = await planSubtasks({

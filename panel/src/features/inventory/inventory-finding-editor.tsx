@@ -148,6 +148,7 @@ export function InventoryFindingEditor({
               <RepairEstimateCatalogPicker
                 lines={catalogLines}
                 readOnly={false}
+                excludeFurniture
                 onChange={(lines) =>
                   setCatalogLines(
                     lines.filter(

@@ -29,6 +29,13 @@ public class TaskBoardProjectionWriter {
   }
 
   @Transactional(propagation = Propagation.MANDATORY)
+  public <T> T persistAndFlush(T value) {
+    entityManager.persist(value);
+    entityManager.flush();
+    return value;
+  }
+
+  @Transactional(propagation = Propagation.MANDATORY)
   public <T> void saveAll(JpaRepository<T, UUID> repository, Iterable<T> values) {
     repository.saveAll(values);
   }

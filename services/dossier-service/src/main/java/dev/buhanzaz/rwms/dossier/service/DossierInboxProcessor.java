@@ -84,8 +84,9 @@ public class DossierInboxProcessor {
     DossierPartitionCheckpoint partition = partition(event, now);
 
     Optional<DossierInbox> existingInbox = inboxes.findById(event.eventId());
+    DossierInbox inbox;
     if (existingInbox.isPresent()) {
-      DossierInbox inbox = existingInbox.orElseThrow();
+      inbox = existingInbox.orElseThrow();
       if (!inbox.hasSamePayload(event.payloadSha256())) {
         deadLetters.processingFailure(
             event, event.aggregateId(), DossierDltFailureCode.EVENT_IDENTITY_CONFLICT);
@@ -94,13 +95,14 @@ public class DossierInboxProcessor {
         partition.advance(event.offset(), now);
         return Outcome.EVENT_IDENTITY_CONFLICT;
       }
-      if (inbox.getDecision() != DossierInboxDecision.RECEIVED) {
+      if (inbox.getDecision() != DossierInboxDecision.RECEIVED
+          && inbox.getDecision() != DossierInboxDecision.DLT) {
         partition.advance(event.offset(), now);
         return Outcome.DUPLICATE;
       }
       inbox.retry();
     } else {
-      inboxes.save(DossierInbox.receive(event.eventId(), event.payloadSha256(), now));
+      inbox = inboxes.save(DossierInbox.receive(event.eventId(), event.payloadSha256(), now));
     }
 
     Optional<DossierSourceFact> offsetFact =
@@ -115,15 +117,47 @@ public class DossierInboxProcessor {
       partition.advance(event.offset(), now);
       return Outcome.EVENT_IDENTITY_CONFLICT;
     }
-    if (sourceFacts.findByEventId(event.eventId()).isEmpty()) {
-      sourceFacts.save(sourceFact(event, producer, now));
+    Optional<DossierSourceFact> persistedFact = sourceFacts.findByEventId(event.eventId());
+    if (persistedFact.isEmpty() && inbox.getDecision() == DossierInboxDecision.RECEIVED) {
+      persistedFact = Optional.of(sourceFacts.save(sourceFact(event, producer, now)));
     }
 
     DossierAggregateCheckpoint aggregate = aggregate(event, producer, now);
     UUID generationId = projections.activeGeneration(now);
+    if (inbox.getDecision() == DossierInboxDecision.DLT) {
+      if (persistedFact.isPresent()
+          && !hasSameSourceIdentity(persistedFact.orElseThrow(), event, producer)) {
+        deadLetters.processingFailure(
+            event, event.aggregateId(), DossierDltFailureCode.EVENT_IDENTITY_CONFLICT);
+        aggregate.blockConflict(DossierAggregateBlockReason.EVENT_IDENTITY_CONFLICT, now);
+        partition.advance(event.offset(), now);
+        return Outcome.EVENT_IDENTITY_CONFLICT;
+      }
+      if (persistedFact.isPresent()
+          && canRetryPublicMediaProcessingFailure(
+              event, producer, aggregate, generationId)) {
+        projections.apply(event, generationId, now);
+        aggregate.recoverProcessingFailure(event.aggregateVersion(), now);
+        unlinked
+            .findBySourceEventIdAndGenerationId(event.eventId(), generationId)
+            .ifPresent(value -> value.resolve(now));
+        inbox.recoverProcessingFailure(now);
+        drainQuarantined(event, producer, aggregate, generationId, now);
+        partition.advance(event.offset(), now);
+        return Outcome.PROCESSED;
+      }
+      partition.advance(event.offset(), now);
+      return Outcome.DUPLICATE;
+    }
+    boolean firstPublicMediaBaseline =
+        isFirstPublicMediaBaseline(event, producer, aggregate);
+    if (!aggregate.isBlocked() && firstPublicMediaBaseline) {
+      aggregate.blockGap(event.aggregateVersion(), now);
+    }
     if (aggregate.isBlocked()) {
       if (aggregate.getBlockedReason() == DossierAggregateBlockReason.MISSING_PREFIX
-          && event.aggregateVersion() == aggregate.getExpectedVersion()) {
+          && (event.aggregateVersion() == aggregate.getExpectedVersion()
+              || firstPublicMediaBaseline)) {
         projections.apply(event, generationId, now);
         aggregate.reconcile(event.aggregateVersion(), now);
         decide(event.eventId(), DossierInboxDecision.PROCESSED, now);
@@ -335,6 +369,7 @@ public class DossierInboxProcessor {
 
   private static DossierSourceFact sourceFact(
       DossierValidatedEvent event, DossierProducer producer, OffsetDateTime now) {
+    UUID subjectCabinId = event.warehouseId() == null ? null : event.cabinId();
     return DossierSourceFact.record(
         event.eventId(),
         producer,
@@ -356,7 +391,7 @@ public class DossierInboxProcessor {
         event.actorProfileRevision(),
         event.correlationId(),
         event.causationId(),
-        event.cabinId(),
+        subjectCabinId,
         event.warehouseId(),
         event.secondaryId(),
         event.activityCode() == null
@@ -372,6 +407,61 @@ public class DossierInboxProcessor {
   private static DossierProducer producer(String producerCode) {
     return DossierProducer.valueOf(
         producerCode.replace('-', '_').toUpperCase(java.util.Locale.ROOT));
+  }
+
+  private static boolean isFirstPublicMediaBaseline(
+      DossierValidatedEvent event,
+      DossierProducer producer,
+      DossierAggregateCheckpoint aggregate) {
+    if (!isPublicMediaBaseline(event, producer, aggregate)) return false;
+    return !aggregate.isBlocked()
+        || (aggregate.getBlockedReason() == DossierAggregateBlockReason.MISSING_PREFIX
+            && Long.valueOf(1L).equals(aggregate.getExpectedVersion())
+            && aggregate.getObservedVersion() != null
+            && aggregate.getObservedVersion() > event.aggregateVersion());
+  }
+
+  private boolean canRetryPublicMediaProcessingFailure(
+      DossierValidatedEvent event,
+      DossierProducer producer,
+      DossierAggregateCheckpoint aggregate,
+      UUID generationId) {
+    if (!aggregate.isBlocked()
+        || aggregate.getBlockedReason() != DossierAggregateBlockReason.PROCESSING_FAILED
+        || !isPublicMediaBaseline(event, producer, aggregate)) {
+      return false;
+    }
+    return unlinked
+        .findBySourceEventIdAndGenerationId(event.eventId(), generationId)
+        .filter(value -> value.getReason() == DossierUnlinkedReason.AGGREGATE_QUARANTINED)
+        .filter(value -> value.getResolvedAt() == null)
+        .isPresent();
+  }
+
+  private static boolean isPublicMediaBaseline(
+      DossierValidatedEvent event,
+      DossierProducer producer,
+      DossierAggregateCheckpoint aggregate) {
+    return producer == DossierProducer.MEDIA
+        && aggregate.getAppliedVersion() == 0
+        && event.aggregateVersion() == 2
+        && "MEDIA".equals(event.aggregateType())
+        && "media.media.uploaded.v1".equals(event.eventType());
+  }
+
+  private static boolean hasSameSourceIdentity(
+      DossierSourceFact fact, DossierValidatedEvent event, DossierProducer producer) {
+    // Kafka coordinates are intentionally excluded: an operator replay is a new record carrying
+    // the exact same canonical domain event.
+    return fact.getEventId().equals(event.eventId())
+        && fact.getProducer() == producer
+        && fact.getSourceTopic().equals(event.topic())
+        && fact.getAggregateType().equals(event.aggregateType())
+        && fact.getAggregateId().equals(event.aggregateId())
+        && fact.getAggregateVersion() == event.aggregateVersion()
+        && fact.getEventType().equals(event.eventType())
+        && fact.getEventVersion() == event.eventVersion()
+        && fact.getPayloadSha256().equals(event.payloadSha256());
   }
 
   private static DossierAggregateBlockReason conflictReason(IllegalStateException exception) {

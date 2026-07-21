@@ -89,6 +89,7 @@ function toEstimateLine(
               : value.catalogSnapshot.nodeType === "OPTION"
                 ? "OPTION"
                 : "MATERIAL",
+          furnitureEquipment: value.catalogSnapshot.furnitureEquipment ?? null,
         }
       : null,
     maintenanceMediaReferences: value.mediaReferences,
@@ -254,6 +255,7 @@ function catalogSnapshot(
     unitPrice: node.unitPrice,
     durationMinutes: node.durationMinutes ?? 0,
     routing,
+    furnitureEquipment: node.furnitureEquipment ?? null,
   }
 }
 

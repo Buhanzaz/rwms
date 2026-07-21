@@ -1,8 +1,6 @@
 package contract
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -12,8 +10,6 @@ import (
 
 	"go.yaml.in/yaml/v3"
 )
-
-const legacyUnionSchemaSHA256 = "560fe9f6d5d8f104a405cb51eab655f75be367b03c3c88ca65f9e61074ce53e0"
 
 func TestEventSchemasAreSeparateStrictContracts(t *testing.T) {
 	events := eventsDirectory(t)
@@ -136,16 +132,19 @@ func TestOpenAPIParsesAndExposesOnlyApprovedRuntimePaths(t *testing.T) {
 	}
 	paths := objectAt(t, document, "paths")
 	approved := map[string]string{
-		"/health/live":  "get",
-		"/health/ready": "get",
+		"/health/live":                        "get",
+		"/health/ready":                       "get",
+		"/api/internal/media/v1/owner-proofs": "post",
 		"/api/internal/media/v1/logistics/references/validate":      "post",
 		"/api/media/v1/upload-sessions":                             "post",
 		"/api/media/v1/upload-sessions/{uploadSessionId}/content":   "put",
 		"/api/media/v1/upload-sessions/{uploadSessionId}/complete":  "post",
 		"/api/media/v1/assets":                                      "get",
+		"/api/media/v1/cabin-covers":                                "post",
 		"/api/media/v1/assets/{mediaId}/original":                   "get",
 		"/api/media/v1/assets/{mediaId}/variants/{variant}/content": "get",
 		"/api/media/v1/assets/{mediaId}/rotation":                   "post",
+		"/api/media/v1/assets/{mediaId}/deletion":                   "post",
 	}
 	if len(paths) != len(approved) {
 		t.Fatalf("OpenAPI paths = %d, want exactly %d", len(paths), len(approved))
@@ -180,12 +179,110 @@ func TestPublicMediaContractUsesOnlySameOriginOpaqueContentPaths(t *testing.T) {
 	if variantProperties["contentPath"] == nil || variantProperties["url"] != nil {
 		t.Fatalf("safe variant properties = %#v", variantProperties)
 	}
+	coverRequest := objectAt(t, schemas, "CabinCoverBatchRequest")
+	coverRequestProperties := objectAt(t, coverRequest, "properties")
+	cabinIDs := objectAt(t, coverRequestProperties, "cabinIds")
+	if cabinIDs["maxItems"] != 200 || cabinIDs["uniqueItems"] != true {
+		t.Fatalf("cabin cover batch bounds = %#v", cabinIDs)
+	}
+	coverProjection := objectAt(t, schemas, "CabinCoverProjection")
+	coverProperties := objectAt(t, coverProjection, "properties")
+	if coverProperties["photoCount"] == nil || coverProperties["cover"] == nil ||
+		coverProperties["previews"] == nil {
+		t.Fatalf("cabin cover projection = %#v", coverProperties)
+	}
+	previews := objectAt(t, coverProperties, "previews")
+	if previews["maxItems"] != 100 || previews["uniqueItems"] != true {
+		t.Fatalf("cabin preview bounds = %#v", previews)
+	}
+	coverVariant := objectAt(t, schemas, "CabinCoverVariant")
+	coverVariantProperties := objectAt(t, coverVariant, "properties")
+	if coverVariantProperties["contentPath"] == nil || coverVariantProperties["mediaId"] == nil ||
+		coverVariantProperties["generation"] == nil || coverVariantProperties["url"] != nil {
+		t.Fatalf("cabin cover variant properties = %#v", coverVariantProperties)
+	}
+	kind := objectAt(t, coverVariantProperties, "kind")
+	if kind["const"] != "SMALL" {
+		t.Fatalf("cabin preview kind = %#v, want SMALL only", kind)
+	}
 	raw := strings.ToLower(string(readContract(t, filepath.Join(root, "contracts", "openapi", "media-service.yaml"))))
 	for _, forbidden := range []string{"signedcapability", "presigned", "minio post policy", "formfields"} {
 		if strings.Contains(raw, forbidden) {
 			t.Fatalf("public media contract contains forbidden %q", forbidden)
 		}
 	}
+}
+
+func TestPublicMediaContractExposesAllCanonicalOwnerScopes(t *testing.T) {
+	root := repositoryRoot(t)
+	var document map[string]any
+	if err := yaml.Unmarshal(readContract(t, filepath.Join(root, "contracts", "openapi", "media-service.yaml")), &document); err != nil {
+		t.Fatalf("decode media-service.yaml: %v", err)
+	}
+	schemas := objectAt(t, objectAt(t, document, "components"), "schemas")
+	ownerType := objectAt(t, schemas, "MediaOwnerType")
+	ownerContext := objectAt(t, schemas, "MediaOwnerContext")
+	if got := stringSliceAt(t, ownerType, "enum"); !equalStrings(got, []string{
+		"INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR",
+		"MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN",
+		"LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER",
+	}) {
+		t.Fatalf("media owner types = %#v", got)
+	}
+	if got := stringSliceAt(t, ownerContext, "enum"); !equalStrings(got, []string{
+		"INSPECTION", "WAREHOUSE", "ESTIMATE", "REPAIR", "ACCEPTANCE", "CATALOG",
+		"RETURN_INSPECTION", "SHIPMENT", "TRANSFER",
+	}) {
+		t.Fatalf("media owner contexts = %#v", got)
+	}
+	upload := objectAt(t, schemas, "CreateUploadSessionRequest")
+	asset := objectAt(t, schemas, "MediaAsset")
+	uploadProperties := objectAt(t, upload, "properties")
+	assetProperties := objectAt(t, asset, "properties")
+	if _, ok := uploadProperties["folderId"]; !ok {
+		t.Fatal("upload contract does not expose optional folderId")
+	}
+	if _, ok := assetProperties["folderId"]; !ok {
+		t.Fatal("media asset contract does not expose folderId")
+	}
+	if strings.Contains(stringSliceJSON(t, upload["required"]), "folderId") {
+		t.Fatal("upload folderId must remain optional for legacy clients")
+	}
+	if !strings.Contains(stringSliceJSON(t, asset["required"]), "folderId") {
+		t.Fatal("media asset folderId must be required")
+	}
+	pairs, ok := upload["oneOf"].([]any)
+	if !ok || len(pairs) != 9 {
+		t.Fatalf("upload owner scope pairs = %#v", upload["oneOf"])
+	}
+	wire, err := json.Marshal(pairs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		`"ownerType":{"const":"INVENTORY_FINDING"}`, `"context":{"const":"INSPECTION"}`,
+		`"ownerType":{"const":"CABIN"}`, `"context":{"const":"WAREHOUSE"}`,
+		`"ownerType":{"const":"MAINTENANCE_ESTIMATE"}`, `"context":{"const":"ESTIMATE"}`,
+		`"ownerType":{"const":"MAINTENANCE_REPAIR"}`, `"context":{"const":"REPAIR"}`,
+		`"ownerType":{"const":"MAINTENANCE_ACCEPTANCE"}`, `"context":{"const":"ACCEPTANCE"}`,
+		`"ownerType":{"const":"MAINTENANCE_CATALOG_NODE"}`, `"context":{"const":"CATALOG"}`,
+		`"ownerType":{"const":"LOGISTICS_RETURN"}`, `"context":{"const":"RETURN_INSPECTION"}`,
+		`"ownerType":{"const":"LOGISTICS_SHIPMENT"}`, `"context":{"const":"SHIPMENT"}`,
+		`"ownerType":{"const":"LOGISTICS_TRANSFER"}`, `"context":{"const":"TRANSFER"}`,
+	} {
+		if !strings.Contains(string(wire), required) {
+			t.Errorf("upload owner scope pairs do not contain %s: %s", required, wire)
+		}
+	}
+}
+
+func stringSliceJSON(t *testing.T, value any) string {
+	t.Helper()
+	wire, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(wire)
 }
 
 func TestLogisticsReferenceValidationContractIsPrivateAndOpaque(t *testing.T) {
@@ -220,11 +317,60 @@ func TestLogisticsReferenceValidationContractIsPrivateAndOpaque(t *testing.T) {
 	}
 }
 
-func TestLegacyUnionSchemaRemainsByteImmutable(t *testing.T) {
+func TestServiceOwnerProofAndDeletionContractsAreClosedAndOpaque(t *testing.T) {
+	root := repositoryRoot(t)
+	var document map[string]any
+	if err := yaml.Unmarshal(readContract(t, filepath.Join(root, "contracts", "openapi", "media-service.yaml")), &document); err != nil {
+		t.Fatalf("decode media-service.yaml: %v", err)
+	}
+	paths := objectAt(t, document, "paths")
+	proofOperation := objectAt(t, objectAt(t, paths, "/api/internal/media/v1/owner-proofs"), "post")
+	if got := stringAt(t, proofOperation, "operationId"); got != "upsertServiceMediaOwnerProof" {
+		t.Fatalf("proof operationId = %q", got)
+	}
+	deleteOperation := objectAt(t, objectAt(t, paths, "/api/media/v1/assets/{mediaId}/deletion"), "post")
+	if got := stringAt(t, deleteOperation, "operationId"); got != "deleteMedia" {
+		t.Fatalf("delete operationId = %q", got)
+	}
+	schemas := objectAt(t, objectAt(t, document, "components"), "schemas")
+	for _, name := range []string{"ServiceOwnerProofRequest", "ServiceOwnerProof"} {
+		schema := objectAt(t, schemas, name)
+		if schema["additionalProperties"] != false {
+			t.Fatalf("%s allows undeclared properties", name)
+		}
+		properties := objectAt(t, schema, "properties")
+		for _, forbidden := range []string{"objectKey", "sourceObjectKey", "url", "contentPath", "fileName"} {
+			if _, found := properties[forbidden]; found {
+				t.Errorf("%s exposes forbidden %q", name, forbidden)
+			}
+		}
+		if pairs, ok := schema["oneOf"].([]any); !ok || len(pairs) != 2 {
+			t.Fatalf("%s identity union = %#v", name, schema["oneOf"])
+		}
+	}
+	requestProperties := objectAt(t, objectAt(t, schemas, "ServiceOwnerProofRequest"), "properties")
+	warehouse := objectAt(t, requestProperties, "warehouseId")
+	if description := stringAt(t, warehouse, "description"); !strings.Contains(description, "destinationWarehouseId") || !strings.Contains(description, "destination/receiving") {
+		t.Fatalf("owner proof warehouse semantics = %q", description)
+	}
+	deleteRequest := objectAt(t, schemas, "DeleteRequest")
+	if deleteRequest["additionalProperties"] != false || objectAt(t,
+		objectAt(t, deleteRequest, "properties"), "expectedVersion")["minimum"] != 1 {
+		t.Fatalf("delete request = %#v", deleteRequest)
+	}
+}
+
+func TestLegacyUnionSchemaCarriesTheExpandedOwnerEnum(t *testing.T) {
 	path := filepath.Join(eventsDirectory(t), "media", "media-events-v1.schema.json")
-	sum := sha256.Sum256(readContract(t, path))
-	if got := hex.EncodeToString(sum[:]); got != legacyUnionSchemaSHA256 {
-		t.Fatalf("legacy media union schema SHA-256 = %s, want immutable %s", got, legacyUnionSchemaSHA256)
+	document := decodeJSONContract(t, readContract(t, path))
+	payload := objectAt(t, objectAt(t, document, "$defs"), "payload")
+	ownerType := objectAt(t, objectAt(t, payload, "properties"), "ownerType")
+	if got := stringSliceAt(t, ownerType, "enum"); !equalStrings(got, []string{
+		"INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR",
+		"MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN",
+		"LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER",
+	}) {
+		t.Fatalf("legacy union media owner types = %#v", got)
 	}
 }
 
@@ -276,6 +422,35 @@ func stringAt(t *testing.T, document map[string]any, name string) string {
 		t.Fatalf("%q is %T, want string", name, document[name])
 	}
 	return value
+}
+
+func stringSliceAt(t *testing.T, document map[string]any, name string) []string {
+	t.Helper()
+	values, ok := document[name].([]any)
+	if !ok {
+		t.Fatalf("%q is %T, want array", name, document[name])
+	}
+	result := make([]string, len(values))
+	for index, value := range values {
+		text, ok := value.(string)
+		if !ok {
+			t.Fatalf("%q[%d] is %T, want string", name, index, value)
+		}
+		result[index] = text
+	}
+	return result
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func assertFalse(t *testing.T, document map[string]any, name string) {

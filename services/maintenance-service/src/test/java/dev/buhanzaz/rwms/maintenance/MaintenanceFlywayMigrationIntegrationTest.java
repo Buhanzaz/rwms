@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -41,7 +42,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTheAuthoritativeMaintenanceSchema() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(7);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -60,7 +61,9 @@ class MaintenanceFlywayMigrationIntegrationTest {
     assertThat(columnCount("maintenance_repair", "dispatch_date")).isOne();
     assertThat(columnCount("repair_stage", "external_queue_entry_id")).isOne();
     assertThat(columns("catalog_node")).contains(
-        "active", "parent_node_id", "unit", "include_in_estimate", "common_item",
+        "active", "parent_node_id", "furniture_category", "furniture_equipment_id",
+        "furniture_equipment_code", "furniture_equipment_name", "unit", "include_in_estimate",
+        "common_item",
         "show_in_main_menu", "photo_required", "routing_queue_id", "routing_queue_code",
         "routing_queue_kind", "opaque_references", "comment", "media_references");
     assertThat(columns("estimate_line")).contains(
@@ -69,6 +72,25 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "routing_queue_id", "routing_queue_code", "routing_queue_kind", "task_deadline");
     assertThat(columns("repair_stage")).contains(
         "routing_queue_id", "routing_queue_code", "routing_queue_kind", "task_deadline");
+    assertThat(columns("integration_reconciliation")).contains(
+        "media_owner_type", "media_owner_id", "media_warehouse_id",
+        "media_owner_revision", "media_aggregate_version", "media_source_id",
+        "media_source_version", "media_proof_event_id", "media_active",
+        "catalog_version_id", "catalog_node_id", "catalog_queue_id",
+        "catalog_external_reference_id");
+    assertThat(constraintDefinition(
+        "integration_reconciliation", "ck_reconciliation_dependency"))
+        .contains("MEDIA");
+    assertThat(constraintDefinition(
+        "integration_reconciliation", "ck_reconciliation_catalog_identity"))
+        .contains(
+            "REGISTER_CATALOG_POSITION",
+            "DELETE_CATALOG_POSITION",
+            "catalog_version_id IS NOT NULL",
+            "catalog_node_id IS NOT NULL",
+            "catalog_queue_id IS NOT NULL");
+    assertThat(indexDefinition("uk_reconciliation_catalog_operation"))
+        .contains("UNIQUE INDEX", "operation_type", "catalog_version_id", "catalog_node_id");
     assertThat(columns("inventory_repair_source")).contains(
         "inventory_id", "finding_id", "source_revision", "catalog_version_id",
         "plan_request_sha256", "plan_fingerprint", "plan_snapshot", "media_snapshot",
@@ -130,7 +152,8 @@ class MaintenanceFlywayMigrationIntegrationTest {
   }
 
   @Test
-  void existingV1SchemaUpgradesInPlaceToV3AndRemainsRepeatSafe(@TempDir Path directory)
+  void existingV1SchemaUpgradesInPlaceToV6AndBackfillsFurnitureMediaAndActiveRouting(
+      @TempDir Path directory)
       throws IOException {
     copyMigration(directory, "V1__maintenance_schema.sql");
     String location = "filesystem:" + directory.toAbsolutePath().toString().replace('\\', '/');
@@ -140,10 +163,345 @@ class MaintenanceFlywayMigrationIntegrationTest {
     assertThat(flyway(location).migrate().migrationsExecuted).isOne();
     copyMigration(directory, "V3__logistics_return_shortage.sql");
     assertThat(flyway(location).migrate().migrationsExecuted).isOne();
+    UUID warehouseId = UUID.randomUUID();
+    UUID catalogId = UUID.randomUUID();
+    UUID furnitureId = UUID.randomUUID();
+    UUID materialRowId = UUID.randomUUID();
+    UUID materialId = UUID.randomUUID();
+    UUID queueId = UUID.randomUUID();
+    insertCatalogVersion(catalogId, warehouseId, "6".repeat(64));
+    jdbc.update("update catalog_version set state='ACTIVE',node_count=2 where id=?", catalogId);
+    jdbc.update("""
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,code,node_type,name,active,duration_minutes,
+          include_in_estimate,common_item,show_in_main_menu,photo_required,
+          opaque_references,media_references)
+        values (?,?,?,'FURNITURE','CATEGORY','Furniture',true,0,false,false,true,false,'[]','[]')
+        """, UUID.randomUUID(), furnitureId, catalogId);
+    jdbc.update("""
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,code,node_type,name,active,parent_node_id,
+          duration_minutes,include_in_estimate,common_item,show_in_main_menu,photo_required,
+          opaque_references,media_references)
+        values (?,?,?,'CHAIR','MATERIAL','Chair',true,?,0,true,false,false,false,'[]','[]')
+        """, materialRowId, materialId, catalogId, furnitureId);
+    UUID estimateId = UUID.randomUUID();
+    insertEstimateWithRevision(estimateId, catalogId, warehouseId);
+    jdbc.update("""
+        insert into estimate_line(
+          row_id,line_id,estimate_id,estimate_revision,line_no,catalog_node_id,line_type,title,
+          quantity,unit_price_minor,duration_minutes,catalog_snapshot,media_references)
+        values (?,?,?,1,0,?,'MATERIAL','Chair',1,10000,0,?::jsonb,'[]')
+        """,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        estimateId,
+        materialId,
+        """
+        {"catalogVersionId":"%s","nodeId":"%s","code":"CHAIR","nodeType":"MATERIAL",
+         "name":"Chair","unit":"piece","unitPrice":"100.00","durationMinutes":0,
+         "routing":null}
+        """.formatted(catalogId, materialId));
+    UUID subjectId = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    jdbc.update("""
+        insert into maintenance_idempotency_record(
+          subject_id,command_scope,idempotency_key,request_sha256,response_status,response_body,
+          created_at,expires_at)
+        values (?, 'estimate.create', ?, ?, 201, ?::jsonb,
+          clock_timestamp(), clock_timestamp() + interval '1 day')
+        """,
+        subjectId,
+        idempotencyKey,
+        "7".repeat(64),
+        """
+        {"revisions":[{"lines":[{"catalogSnapshot":
+          {"catalogVersionId":"%s","nodeId":"%s","code":"CHAIR","nodeType":"MATERIAL",
+           "name":"Chair","unit":"piece","unitPrice":"100.00","durationMinutes":0,
+           "routing":null}}]}]}
+        """.formatted(catalogId, materialId));
+    copyMigration(directory, "V4__catalog_furniture_equipment.sql");
+    assertThat(flyway(location).migrate().migrationsExecuted).isOne();
     assertThat(flyway(location).migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains("inventory_repair_source", "logistics_return_shortage");
     assertThat(constraintDefinition("maintenance_repair", "ck_repair_origin"))
         .contains("INVENTORY");
+    assertThat(jdbc.queryForObject("""
+        select furniture_category from catalog_node
+        where catalog_version_id=? and node_id=?
+        """, Boolean.class, catalogId, furnitureId)).isTrue();
+    assertThat(jdbc.queryForObject("""
+        select jsonb_exists(catalog_snapshot, 'furnitureEquipment')
+          and catalog_snapshot->'furnitureEquipment' = 'null'::jsonb
+        from estimate_line where estimate_id=?
+        """, Boolean.class, estimateId)).isTrue();
+    assertThat(jdbc.queryForObject("""
+        select jsonb_exists(
+          response_body #> '{revisions,0,lines,0,catalogSnapshot}', 'furnitureEquipment')
+          and response_body #> '{revisions,0,lines,0,catalogSnapshot,furnitureEquipment}'
+            = 'null'::jsonb
+        from maintenance_idempotency_record
+        where subject_id=? and command_scope='estimate.create' and idempotency_key=?
+        """, Boolean.class, subjectId, idempotencyKey)).isTrue();
+    assertThatThrownBy(() -> jdbc.update("""
+        update catalog_node set furniture_equipment_id=? where row_id=?
+        """, UUID.randomUUID(), materialRowId))
+        .hasMessageContaining("ck_catalog_node_furniture_equipment");
+
+    copyMigration(directory, "V5__media_owner_proof_reconciliation.sql");
+    assertThat(flyway(location).migrate().migrationsExecuted).isOne();
+    assertThat(flyway(location).migrate().migrationsExecuted).isZero();
+    assertThat(jdbc.queryForObject("""
+        select count(*) from integration_reconciliation
+        where dependency_type='MEDIA'
+          and media_owner_type='MAINTENANCE_CATALOG_NODE'
+          and media_owner_revision=0
+          and media_active
+        """, Integer.class)).isEqualTo(2);
+    assertThat(jdbc.queryForObject("""
+        select count(*) from integration_reconciliation
+        where dependency_type='MEDIA'
+          and media_owner_type='MAINTENANCE_ESTIMATE'
+          and media_owner_id=?
+          and media_aggregate_version=0
+        """, Integer.class, estimateId)).isOne();
+
+    jdbc.update("""
+        update catalog_node
+        set routing_queue_id=?, routing_queue_code='REPAIR', routing_queue_kind='REPAIR'
+        where catalog_version_id=? and node_id=?
+        """, queueId, catalogId, materialId);
+    copyMigration(directory, "V6__catalog_routing_reconciliation.sql");
+    assertThat(flyway(location).migrate().migrationsExecuted).isOne();
+    assertThat(flyway(location).migrate().migrationsExecuted).isZero();
+    assertThat(jdbc.queryForObject("""
+        select count(*) from integration_reconciliation
+        where dependency_type='TASK_BOARD'
+          and operation_type='REGISTER_CATALOG_POSITION'
+          and catalog_version_id=?
+          and catalog_node_id=?
+          and catalog_queue_id=?
+          and catalog_external_reference_id=?
+          and state='PENDING'
+        """, Integer.class, catalogId, materialId, queueId,
+        "catalog:" + catalogId + ":" + materialId)).isOne();
+    assertThat(jdbc.queryForObject("""
+        select response_snapshot->'predecessorKeys' = '[]'::jsonb
+        from integration_reconciliation
+        where catalog_version_id=? and catalog_node_id=?
+        """, Boolean.class, catalogId, materialId)).isTrue();
+  }
+
+  @Test
+  void existingV4CatalogNodeSharedAcrossWarehousesGetsDistinctStableMediaOwnersWithoutDataLoss(
+      @TempDir Path directory)
+      throws IOException {
+    for (String migration : List.of(
+        "V1__maintenance_schema.sql",
+        "V2__inventory_source.sql",
+        "V3__logistics_return_shortage.sql",
+        "V4__catalog_furniture_equipment.sql")) {
+      copyMigration(directory, migration);
+    }
+    String location = "filesystem:" + directory.toAbsolutePath().toString().replace('\\', '/');
+    assertThat(flyway(location).migrate().migrationsExecuted).isEqualTo(4);
+
+    UUID firstWarehouseId = UUID.fromString("10000000-0000-0000-0000-000000000001");
+    UUID secondWarehouseId = UUID.fromString("20000000-0000-0000-0000-000000000002");
+    UUID firstCatalogId = UUID.fromString("30000000-0000-0000-0000-000000000003");
+    UUID secondCatalogId = UUID.fromString("40000000-0000-0000-0000-000000000004");
+    UUID sharedNodeId = UUID.fromString("50000000-0000-0000-0000-000000000005");
+    UUID firstRowId = UUID.fromString("60000000-0000-0000-0000-000000000006");
+    UUID secondRowId = UUID.fromString("70000000-0000-0000-0000-000000000007");
+    UUID legacyMediaId = UUID.fromString("80000000-0000-0000-0000-000000000008");
+    insertCatalogVersion(firstCatalogId, firstWarehouseId, "a".repeat(64));
+    insertCatalogVersion(secondCatalogId, secondWarehouseId, "b".repeat(64));
+    insertCatalogNode(firstRowId, sharedNodeId, firstCatalogId, "SHARED_NODE");
+    insertCatalogNode(secondRowId, sharedNodeId, secondCatalogId, "SHARED_NODE");
+    for (UUID rowId : List.of(firstRowId, secondRowId)) {
+      jdbc.update("""
+          insert into maintenance_media_reference(
+            aggregate_type,aggregate_id,media_id,generation,owner_type,warehouse_id,
+            safe_metadata,attached_at)
+          values ('CATALOG_NODE',?,?,0,'MAINTENANCE_CATALOG_NODE',
+            (select warehouse_id from catalog_version version
+             join catalog_node node on node.catalog_version_id=version.id
+             where node.row_id=?),'{"legacy":true}',clock_timestamp())
+          """, rowId, legacyMediaId, rowId);
+    }
+
+    copyMigration(directory, "V5__media_owner_proof_reconciliation.sql");
+    Flyway upgraded = flyway(location);
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+    assertThat(upgraded.migrate().migrationsExecuted).isZero();
+
+    UUID firstOwnerId = catalogMediaOwnerId(firstWarehouseId, sharedNodeId);
+    UUID secondOwnerId = catalogMediaOwnerId(secondWarehouseId, sharedNodeId);
+    assertThat(firstOwnerId).isNotEqualTo(secondOwnerId);
+    assertThat(jdbc.queryForList("""
+        select media_owner_id from integration_reconciliation
+        where dependency_type='MEDIA'
+          and media_owner_type='MAINTENANCE_CATALOG_NODE'
+          and media_owner_revision=0
+        order by media_warehouse_id
+        """, UUID.class)).containsExactly(firstOwnerId, secondOwnerId);
+    assertThat(jdbc.queryForObject("""
+        select count(*) from integration_reconciliation
+        where dependency_type='MEDIA'
+          and media_owner_type='MAINTENANCE_CATALOG_NODE'
+          and media_active
+          and media_source_id in (?,?)
+        """, Integer.class, firstCatalogId, secondCatalogId)).isEqualTo(2);
+    assertThat(jdbc.queryForObject("select count(*) from catalog_version", Integer.class))
+        .isEqualTo(2);
+    assertThat(jdbc.queryForObject("select count(*) from catalog_node", Integer.class))
+        .isEqualTo(2);
+    assertThat(jdbc.queryForList("""
+        select aggregate_id from maintenance_media_reference
+        where aggregate_type='CATALOG_NODE' and media_id=?
+        """, UUID.class, legacyMediaId))
+        .containsExactlyInAnyOrder(firstRowId, secondRowId);
+  }
+
+  @Test
+  void existingV6CorrectsOnlyInvalidInitialMediaProofsWithoutResumingQuarantine(
+      @TempDir Path directory)
+      throws IOException {
+    for (String migration : List.of(
+        "V1__maintenance_schema.sql",
+        "V2__inventory_source.sql",
+        "V3__logistics_return_shortage.sql",
+        "V4__catalog_furniture_equipment.sql",
+        "V5__media_owner_proof_reconciliation.sql",
+        "V6__catalog_routing_reconciliation.sql")) {
+      copyMigration(directory, migration);
+    }
+    String location = "filesystem:" + directory.toAbsolutePath().toString().replace('\\', '/');
+    assertThat(flyway(location).migrate().migrationsExecuted).isEqualTo(6);
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID quarantinedOwnerId = UUID.randomUUID();
+    UUID quarantinedSourceId = UUID.randomUUID();
+    UUID quarantinedReconciliationId = UUID.randomUUID();
+    UUID rejectedProofEventId = UUID.randomUUID();
+    insertMediaProof(
+        quarantinedReconciliationId,
+        quarantinedOwnerId,
+        warehouseId,
+        quarantinedSourceId,
+        0,
+        7,
+        19,
+        rejectedProofEventId,
+        "QUARANTINED",
+        4,
+        "EVENT_ID_CONFLICT");
+
+    UUID pendingOwnerId = UUID.randomUUID();
+    UUID pendingReconciliationId = UUID.randomUUID();
+    insertMediaProof(
+        pendingReconciliationId,
+        pendingOwnerId,
+        warehouseId,
+        UUID.randomUUID(),
+        0,
+        4,
+        4,
+        UUID.randomUUID(),
+        "PENDING",
+        0,
+        null);
+
+    UUID correctOwnerId = UUID.randomUUID();
+    UUID correctInitialProofEventId = UUID.randomUUID();
+    insertMediaProof(
+        UUID.randomUUID(),
+        correctOwnerId,
+        warehouseId,
+        UUID.randomUUID(),
+        0,
+        0,
+        12,
+        correctInitialProofEventId,
+        "RETRY_PENDING",
+        2,
+        "TEMPORARY_FAILURE");
+    UUID laterProofEventId = UUID.randomUUID();
+    insertMediaProof(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        warehouseId,
+        UUID.randomUUID(),
+        1,
+        12,
+        12,
+        laterProofEventId,
+        "CONFIRMED",
+        1,
+        null);
+
+    UUID correctedQuarantinedProofEventId = UUID.nameUUIDFromBytes((
+        "maintenance-media-proof:MAINTENANCE_REPAIR:" + quarantinedOwnerId + ":0:0")
+        .getBytes(StandardCharsets.UTF_8));
+    UUID correctedPendingProofEventId = UUID.nameUUIDFromBytes((
+        "maintenance-media-proof:MAINTENANCE_REPAIR:" + pendingOwnerId + ":0:0")
+        .getBytes(StandardCharsets.UTF_8));
+
+    copyMigration(directory, "V7__correct_initial_media_owner_proof_version.sql");
+    Flyway upgraded = flyway(location);
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+    assertThat(upgraded.migrate().migrationsExecuted).isZero();
+
+    var quarantined = jdbc.queryForMap("""
+        select media_aggregate_version,media_source_version,media_proof_event_id,
+          idempotency_key,state,attempt_count,last_error_code,
+          response_snapshot->>'aggregateVersion' as payload_aggregate_version,
+          response_snapshot->>'proofEventId' as payload_proof_event_id
+        from integration_reconciliation where id=?
+        """, quarantinedReconciliationId);
+    assertThat(quarantined)
+        .containsEntry("media_aggregate_version", 0L)
+        .containsEntry("media_source_version", 19L)
+        .containsEntry("media_proof_event_id", correctedQuarantinedProofEventId)
+        .containsEntry("idempotency_key", correctedQuarantinedProofEventId)
+        .containsEntry("state", "QUARANTINED")
+        .containsEntry("attempt_count", 4)
+        .containsEntry("last_error_code", "EVENT_ID_CONFLICT")
+        .containsEntry("payload_aggregate_version", "0")
+        .containsEntry("payload_proof_event_id", correctedQuarantinedProofEventId.toString());
+
+    var pending = jdbc.queryForMap("""
+        select media_aggregate_version,media_source_version,media_proof_event_id,
+          idempotency_key,state,response_snapshot->>'aggregateVersion' as payload_version,
+          response_snapshot->>'proofEventId' as payload_event_id
+        from integration_reconciliation where id=?
+        """, pendingReconciliationId);
+    assertThat(pending)
+        .containsEntry("media_aggregate_version", 0L)
+        .containsEntry("media_source_version", 4L)
+        .containsEntry("media_proof_event_id", correctedPendingProofEventId)
+        .containsEntry("idempotency_key", correctedPendingProofEventId)
+        .containsEntry("state", "PENDING")
+        .containsEntry("payload_version", "0")
+        .containsEntry("payload_event_id", correctedPendingProofEventId.toString());
+
+    assertThat(jdbc.queryForObject("""
+        select media_proof_event_id from integration_reconciliation
+        where media_owner_id=? and media_owner_revision=0
+        """, UUID.class, correctOwnerId)).isEqualTo(correctInitialProofEventId);
+    assertThat(jdbc.queryForObject("""
+        select count(*) from integration_reconciliation
+        where media_owner_revision=1 and media_aggregate_version=12 and media_proof_event_id=?
+        """, Integer.class, laterProofEventId)).isOne();
+    assertThat(jdbc.queryForObject(
+        "select count(*) from integration_reconciliation", Integer.class)).isEqualTo(4);
+    assertThat(jdbc.queryForObject("""
+        select count(*) from integration_reconciliation
+        where dependency_type='MEDIA' and operation_type='UPSERT_MEDIA_OWNER_PROOF'
+          and media_owner_revision=0 and media_aggregate_version<>0
+        """, Integer.class)).isZero();
   }
 
   @Test
@@ -549,6 +907,58 @@ class MaintenanceFlywayMigrationIntegrationTest {
         origin,
         kind,
         UUID.randomUUID());
+  }
+
+  private void insertMediaProof(
+      UUID reconciliationId,
+      UUID ownerId,
+      UUID warehouseId,
+      UUID sourceId,
+      long ownerRevision,
+      long aggregateVersion,
+      long sourceVersion,
+      UUID proofEventId,
+      String state,
+      int attemptCount,
+      String lastErrorCode) {
+    jdbc.update(
+        """
+        insert into integration_reconciliation(
+          id,repair_id,dependency_type,operation_type,idempotency_key,state,attempt_count,
+          next_attempt_at,last_error_code,response_snapshot,review_version,created_at,updated_at,
+          media_owner_type,media_owner_id,media_warehouse_id,media_owner_revision,
+          media_aggregate_version,media_source_id,media_source_version,media_proof_event_id,
+          media_active)
+        values (?,null,'MEDIA','UPSERT_MEDIA_OWNER_PROOF',?,?,?,clock_timestamp(),?,
+          jsonb_build_object(
+            'ownerType','MAINTENANCE_REPAIR','ownerId',?::uuid,'warehouseId',?::uuid,
+            'ownerRevision',?::bigint,'aggregateVersion',?::bigint,'proofEventId',?::uuid,
+            'active',true),
+          0,clock_timestamp(),clock_timestamp(),'MAINTENANCE_REPAIR',?,?,?,?,?,?,?,true)
+        """,
+        reconciliationId,
+        proofEventId,
+        state,
+        attemptCount,
+        lastErrorCode,
+        ownerId,
+        warehouseId,
+        ownerRevision,
+        aggregateVersion,
+        proofEventId,
+        ownerId,
+        warehouseId,
+        ownerRevision,
+        aggregateVersion,
+        sourceId,
+        sourceVersion,
+        proofEventId);
+  }
+
+  private static UUID catalogMediaOwnerId(UUID warehouseId, UUID nodeId) {
+    return UUID.nameUUIDFromBytes((
+        "maintenance-catalog-node-owner:" + warehouseId + ":" + nodeId)
+        .getBytes(StandardCharsets.UTF_8));
   }
 
   private UUID insertDomainEvent(UUID aggregateId) {

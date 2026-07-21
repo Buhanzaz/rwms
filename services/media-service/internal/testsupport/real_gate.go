@@ -197,7 +197,7 @@ func PostgresDatabaseURL(baseURL, databaseName string) (string, error) {
 	return databaseURL, nil
 }
 
-// NewMigratedMediaDatabase returns an isolated database at exact current V3.
+// NewMigratedMediaDatabase returns an isolated database at exact current V7.
 // It is used by legacy integration tests that otherwise share mutable outbox
 // and owner-projection state through MEDIA_TEST_DATABASE_URL.
 func NewMigratedMediaDatabase(t testing.TB, baseURL string) string {
@@ -229,6 +229,12 @@ func NewMigratedMediaDatabase(t testing.TB, baseURL string) string {
 		{"media schema", "V1__media_schema.sql", mediamigration.V1},
 		{"media runtime recovery", "V2__media_runtime_recovery.sql", mediamigration.V2},
 		{"inventory owner proof", "V3__inventory_owner_proof.sql", mediamigration.V3},
+		{"cabin owner bindings", "V4__cabin_owner_bindings.sql", mediamigration.V4},
+		{"prepare legacy photo folder backfill", "V4_1__prepare_legacy_photo_folder_backfill.sql", mediamigration.V4_1},
+		{"media photo folders", "V5__media_photo_folders.sql", mediamigration.V5},
+		{"restore runtime source guard", "V5_1__restore_runtime_source_guard.sql", mediamigration.V5_1},
+		{"service owner proofs and soft delete", "V6__service_owner_proofs_and_soft_delete.sql", mediamigration.V6},
+		{"dynamic cabin owner projection", "V7__dynamic_cabin_owner_projection.sql", mediamigration.V7},
 	}
 	for index, migration := range migrations {
 		started := time.Now()
@@ -237,7 +243,8 @@ func NewMigratedMediaDatabase(t testing.TB, baseURL string) string {
 		}
 		if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
 			installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
-		values ($1,$2,$3,'SQL',$4,$5,current_user,$6,true)`, index+1, fmt.Sprint(index+1),
+		values ($1,$2,$3,'SQL',$4,$5,current_user,$6,true)`, index+1,
+			[]string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7"}[index],
 			migration.description, migration.script, realFlywayChecksum(migration.body),
 			int(time.Since(started)/time.Millisecond)); err != nil {
 			t.Fatalf("record isolated media %s: %v", migration.script, err)

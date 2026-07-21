@@ -80,6 +80,8 @@ import {
 } from "@/features/logistics/warehouse-transfers/model/warehouse-transfer"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
+import { logisticsTransferMediaOwner } from "@/features/media/media-service"
+import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
 
 const ACTIONABLE_STATES = new Set<TransferDocumentState>([
   "DRAFT",
@@ -502,10 +504,10 @@ export function WarehouseTransfersPage() {
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
           Публичного списка кандидатов пока нет, поэтому при создании нужны
-          server-issued asset UUID и версия. Приёмка принимает только уже READY
-          media refs: публичная загрузка фотографий для transfer ещё не
-          утверждена. Перенос наполнения между бытовками недоступен до появления
-          server command.
+          server-issued asset UUID и версия. При приёмке фотографии загружаются
+          для строки перемещения на складе назначения и передаются только после
+          статуса READY. Перенос наполнения между бытовками недоступен до
+          появления server command.
         </CardContent>
       </Card>
 
@@ -731,6 +733,7 @@ export function WarehouseTransfersPage() {
           key={`${arrivalTarget.document.id}:${arrivalTarget.document.version}:${arrivalTarget.line.id}:${arrivalTarget.line.version}`}
           document={arrivalTarget.document}
           line={arrivalTarget.line}
+          accessToken={accessToken}
           pending={arriveMutation.isPending}
           error={commandError}
           onSubmit={(references) =>
@@ -866,9 +869,8 @@ function TransferLines({
                   </Button>
                 ) : null}
                 <span className="text-muted-foreground">
-                  Команда принимает только уже READY media refs, привязанные к
-                  этой строке. Загрузить новые transfer-фото из панели пока
-                  нельзя.
+                  Перед приёмкой добавьте фотографии состояния бытовки на складе
+                  назначения.
                 </span>
               </div>
             ) : null}
@@ -879,30 +881,8 @@ function TransferLines({
   )
 }
 
-type TransferMediaReferenceDraft = {
-  key: number
-  mediaId: string
-  generation: string
-}
-
-function emptyMediaReference(key: number): TransferMediaReferenceDraft {
-  return { key, mediaId: "", generation: "1" }
-}
-
-function mediaIdIsUnique(
-  draft: TransferMediaReferenceDraft,
-  references: TransferMediaReferenceDraft[]
-) {
-  const mediaId = draft.mediaId.trim().toLowerCase()
-  return (
-    mediaId.length > 0 &&
-    references.filter(
-      (reference) => reference.mediaId.trim().toLowerCase() === mediaId
-    ).length === 1
-  )
-}
-
 function ArrivalTransferDialog({
+  accessToken,
   document,
   line,
   pending,
@@ -910,6 +890,7 @@ function ArrivalTransferDialog({
   onSubmit,
   onOpenChange,
 }: {
+  accessToken: string | null
   document: TransferDocument
   line: TransferLine
   pending: boolean
@@ -917,39 +898,20 @@ function ArrivalTransferDialog({
   onSubmit: (references: TransferMediaReference[]) => void
   onOpenChange: (open: boolean) => void
 }) {
-  const nextReferenceKey = useRef(1)
-  const [references, setReferences] = useState<TransferMediaReferenceDraft[]>(
-    () => [emptyMediaReference(0)]
-  )
-  const [submitted, setSubmitted] = useState(false)
+  const [references, setReferences] = useState<TransferMediaReference[]>([])
   const [validationError, setValidationError] = useState<string | null>(null)
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setSubmitted(true)
-    const invalidReference = references.some((reference) => {
-      const generation = Number(reference.generation)
-      return (
-        !UUID_PATTERN.test(reference.mediaId.trim()) ||
-        !mediaIdIsUnique(reference, references) ||
-        !Number.isSafeInteger(generation) ||
-        generation < 1
-      )
-    })
-    if (references.length === 0 || references.length > 20 || invalidReference) {
+    if (references.length === 0 || references.length > 20) {
       setValidationError(
-        "Укажите от 1 до 20 уникальных READY media UUID с поколением не меньше 1."
+        "Добавьте хотя бы одну готовую фотографию приёмки строки."
       )
       return
     }
 
     setValidationError(null)
-    onSubmit(
-      references.map((reference) => ({
-        mediaId: reference.mediaId.trim(),
-        generation: Number(reference.generation),
-      }))
-    )
+    onSubmit(references)
   }
 
   return (
@@ -960,144 +922,40 @@ function ArrivalTransferDialog({
             <DialogTitle>Принять строку перемещения</DialogTitle>
             <DialogDescription>
               Logistics-service примет строку {line.lineNumber} документа{" "}
-              {document.id.slice(0, 8)} по её текущим версиям. Укажите только
-              READY media refs, уже привязанные media-service к этой transfer
-              line. Панель пока не создаёт и не загружает такие фото.
+              {document.id.slice(0, 8)} по её текущим версиям. Загрузите
+              фотографии состояния бытовки на складе назначения.
             </DialogDescription>
           </DialogHeader>
 
           <FieldSet className="py-4">
-            <FieldLegend variant="label">READY media refs</FieldLegend>
+            <FieldLegend variant="label">Фотографии приёмки</FieldLegend>
             <FieldDescription>
-              Повтор команды с теми же ссылками использует тот же
-              Idempotency-Key.
+              Media-service создаёт small, medium и large как варианты одной
+              логической фотографии.
             </FieldDescription>
-            <FieldGroup>
-              {references.map((reference, index) => {
-                const mediaInvalid =
-                  submitted &&
-                  (!UUID_PATTERN.test(reference.mediaId.trim()) ||
-                    !mediaIdIsUnique(reference, references))
-                const generation = Number(reference.generation)
-                const generationInvalid =
-                  submitted &&
-                  (!Number.isSafeInteger(generation) || generation < 1)
-
-                return (
-                  <Card key={reference.key} size="sm">
-                    <CardHeader>
-                      <CardTitle>Media ref {index + 1}</CardTitle>
-                      {references.length > 1 ? (
-                        <CardAction>
-                          <Button
-                            type="button"
-                            size="icon-sm"
-                            variant="outline"
-                            aria-label={`Удалить media ref ${index + 1}`}
-                            disabled={pending}
-                            onClick={() =>
-                              setReferences((current) =>
-                                current.filter(
-                                  (item) => item.key !== reference.key
-                                )
-                              )
-                            }
-                          >
-                            <HugeiconsIcon
-                              icon={Delete02Icon}
-                              data-icon="inline-start"
-                            />
-                          </Button>
-                        </CardAction>
-                      ) : null}
-                    </CardHeader>
-                    <CardContent>
-                      <FieldGroup>
-                        <Field data-invalid={mediaInvalid || undefined}>
-                          <FieldLabel
-                            htmlFor={`transfer-media-${reference.key}`}
-                          >
-                            Media UUID
-                          </FieldLabel>
-                          <Input
-                            id={`transfer-media-${reference.key}`}
-                            value={reference.mediaId}
-                            required
-                            disabled={pending}
-                            aria-invalid={mediaInvalid || undefined}
-                            placeholder="00000000-0000-0000-0000-000000000000"
-                            onChange={(event) =>
-                              setReferences((current) =>
-                                current.map((item) =>
-                                  item.key === reference.key
-                                    ? { ...item, mediaId: event.target.value }
-                                    : item
-                                )
-                              )
-                            }
-                          />
-                          {mediaInvalid ? (
-                            <FieldError>
-                              Укажите уникальный READY media UUID.
-                            </FieldError>
-                          ) : null}
-                        </Field>
-                        <Field data-invalid={generationInvalid || undefined}>
-                          <FieldLabel
-                            htmlFor={`transfer-generation-${reference.key}`}
-                          >
-                            Поколение
-                          </FieldLabel>
-                          <Input
-                            id={`transfer-generation-${reference.key}`}
-                            type="number"
-                            min={1}
-                            step={1}
-                            value={reference.generation}
-                            required
-                            disabled={pending}
-                            aria-invalid={generationInvalid || undefined}
-                            onChange={(event) =>
-                              setReferences((current) =>
-                                current.map((item) =>
-                                  item.key === reference.key
-                                    ? {
-                                        ...item,
-                                        generation: event.target.value,
-                                      }
-                                    : item
-                                )
-                              )
-                            }
-                          />
-                          {generationInvalid ? (
-                            <FieldError>
-                              Поколение должно быть целым числом не меньше 1.
-                            </FieldError>
-                          ) : null}
-                        </Field>
-                      </FieldGroup>
-                    </CardContent>
-                  </Card>
+            <ServiceOwnerPhotos
+              accessToken={accessToken}
+              owner={logisticsTransferMediaOwner(
+                document.id,
+                line.id,
+                document.destinationWarehouseId
+              )}
+              readOnly={pending}
+              maxItems={20}
+              title={`Фотографии строки ${line.lineNumber}`}
+              onReadyReferencesChange={(nextReferences) => {
+                setReferences((current) =>
+                  current.length === nextReferences.length &&
+                  current.every(
+                    (reference, index) =>
+                      reference.mediaId === nextReferences[index]?.mediaId &&
+                      reference.generation === nextReferences[index]?.generation
+                  )
+                    ? current
+                    : nextReferences
                 )
-              })}
-            </FieldGroup>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending || references.length >= 20}
-              onClick={() => {
-                const key = nextReferenceKey.current
-                nextReferenceKey.current += 1
-                setReferences((current) => [
-                  ...current,
-                  emptyMediaReference(key),
-                ])
               }}
-            >
-              <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-              Добавить media ref
-            </Button>
+            />
           </FieldSet>
 
           {validationError ? <FieldError>{validationError}</FieldError> : null}

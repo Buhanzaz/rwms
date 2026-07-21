@@ -22,6 +22,7 @@ import {
   repairTasksListQueryKey,
 } from "@/features/repair-tasks/api/repair-tasks-api"
 import type {
+  RentalItemRepairSeed,
   RepairTaskDto,
   RepairsLocationState,
 } from "@/features/repair-tasks/model/repair-task"
@@ -39,6 +40,31 @@ function formatDate(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value))
+}
+
+function resolveRentalItemRepairSeed(
+  value: unknown,
+  selectedWarehouseId: string | null
+): RentalItemRepairSeed | undefined {
+  if (
+    !selectedWarehouseId ||
+    !value ||
+    typeof value !== "object" ||
+    !("type" in value) ||
+    value.type !== "rental-item-repair-seed-v1" ||
+    !("warehouseId" in value) ||
+    value.warehouseId !== selectedWarehouseId ||
+    !("rentalItemId" in value) ||
+    typeof value.rentalItemId !== "string" ||
+    !value.rentalItemId ||
+    !("number" in value) ||
+    typeof value.number !== "string" ||
+    !value.number
+  ) {
+    return undefined
+  }
+
+  return value as RentalItemRepairSeed
 }
 
 function RepairMobileCard({
@@ -81,7 +107,7 @@ function RepairMobileCard({
 
 export function RepairsPage() {
   const { selectedWarehouseId } = useWarehouse()
-  const { currentUser } = useAuth()
+  const { accessToken, currentUser } = useAuth()
   const canEdit = Boolean(
     selectedWarehouseId &&
     hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
@@ -97,6 +123,12 @@ export function RepairsPage() {
   const createRequested = searchParams.get("create") === "1"
   const locationState = location.state as RepairsLocationState | null
   const reworkSeed = createRequested ? locationState?.reworkSeed : undefined
+  const rentalItemSeed = createRequested
+    ? resolveRentalItemRepairSeed(
+        locationState?.rentalItemSeed,
+        selectedWarehouseId
+      )
+    : undefined
 
   const listSearchParams = new URLSearchParams(searchParams)
   listSearchParams.delete("repairId")
@@ -194,17 +226,22 @@ export function RepairsPage() {
           </Card>
         ) : selectedRepair && selectedRepair.status !== "DRAFT" ? (
           <RepairTaskDetailWorkspace
+            accessToken={accessToken}
             task={selectedRepair}
             readOnly={!canEdit}
           />
         ) : (
           <RepairTaskEditorWorkspace
+            accessToken={accessToken}
             warehouseId={selectedWarehouseId}
             task={selectedRepair}
             readOnly={!canEdit}
             canManage={canManage}
             sourceTask={reworkSourceQuery.data}
             seed={reworkSourceQuery.data ? reworkSeed : undefined}
+            initialRentalItemId={
+              repairId || reworkSeed ? undefined : rentalItemSeed?.rentalItemId
+            }
             loading={Boolean(
               (repairId && detailQuery.isLoading) ||
               (reworkSeed && reworkSourceQuery.isLoading)

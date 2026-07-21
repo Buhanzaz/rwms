@@ -85,7 +85,7 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
 
   @Test
   @Transactional
-  void bootMigratesAdoptedVersionFourThroughVersionSixAndValidatesJpa() {
+  void bootMigratesAdoptedVersionFourThroughVersionSevenAndValidatesJpa() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(retainedDigests(jdbc)).containsExactlyInAnyOrderEntriesOf(beforeStartup);
     assertThat(
@@ -100,6 +100,17 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
                     + "where version='6' and type='SQL' and success",
                 Integer.class))
         .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history "
+                    + "where version='7' and type='SQL' and success",
+                Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from board_task where completion_deadline_enforced",
+                Integer.class))
+        .isZero();
     assertThat(taskSyncSources.findAll()).isEmpty();
     assertThat(
             jdbc.queryForObject(
@@ -338,9 +349,16 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
   }
 
   private static String digest(JdbcTemplate jdbc, String table) {
+    String json =
+        "board_task".equals(table)
+            ? "to_jsonb(row_value) - 'completion_deadline_enforced'"
+            : "to_jsonb(row_value)";
     return jdbc.queryForObject(
-        "select md5(coalesce(string_agg(to_jsonb(row_value)::text, '|' "
-            + "order by to_jsonb(row_value)::text), '')) from "
+        "select md5(coalesce(string_agg(("
+            + json
+            + ")::text, '|' order by ("
+            + json
+            + ")::text), '')) from "
             + table
             + " row_value",
         String.class);

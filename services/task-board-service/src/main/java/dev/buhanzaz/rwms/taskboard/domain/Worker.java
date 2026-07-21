@@ -85,7 +85,8 @@ public class Worker extends AbstractVersionedEntity {
     if (lastName != null) parts.add(lastName);
     if (firstName != null) parts.add(firstName);
     if (middleName != null) parts.add(middleName);
-    displayName = parts.isEmpty() ? trim(displayName) : String.join(" ", parts);
+    displayName = trim(displayName);
+    if (displayName == null && !parts.isEmpty()) displayName = String.join(" ", parts);
   }
 
   private String trim(String value) {

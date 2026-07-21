@@ -38,6 +38,7 @@ public class AssetEventingConfiguration {
       Map.entry(AssetEventType.EQUIPMENT_HOLD_COMMITTED, AssetAggregateType.EQUIPMENT_ALLOCATION_HOLD),
       Map.entry(AssetEventType.EQUIPMENT_HOLD_RELEASED, AssetAggregateType.EQUIPMENT_ALLOCATION_HOLD),
       Map.entry(AssetEventType.EQUIPMENT_HOLD_EXPIRED, AssetAggregateType.EQUIPMENT_ALLOCATION_HOLD),
+      Map.entry(AssetEventType.EQUIPMENT_HOLD_EXECUTED, AssetAggregateType.EQUIPMENT_ALLOCATION_HOLD),
       Map.entry(AssetEventType.OPERATION_LEASE_ACQUIRED, AssetAggregateType.OPERATION_LEASE),
       Map.entry(AssetEventType.OPERATION_LEASE_RENEWED, AssetAggregateType.OPERATION_LEASE),
       Map.entry(AssetEventType.OPERATION_LEASE_RELEASED, AssetAggregateType.OPERATION_LEASE),

@@ -119,12 +119,12 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
   }
 
   @Override
-  public NumberResolution resolveNumber(String number) {
+  public NumberResolution resolveNumber(UUID warehouseId, String number) {
     NumberResolution response =
         post(
             assetBase + "/api/internal/asset/v1/inventory/number-resolutions",
             null,
-            new NumberRequest(number),
+            new NumberRequest(warehouseId, number),
             NumberResolution.class,
             ASSET_CLIENT,
             ASSET_SCOPE);
@@ -137,7 +137,8 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
             && (!response
                     .displayCanonicalNumber()
                     .equals(response.asset().displayCanonicalNumber())
-                || !response.identityMatchKey().equals(response.asset().identityMatchKey())))) {
+                || !response.identityMatchKey().equals(response.asset().identityMatchKey())
+                || !warehouseId.equals(response.asset().warehouseId())))) {
       throw malformed("Asset-service returned malformed number resolution truth");
     }
     return response;
@@ -345,7 +346,7 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
     }
   }
 
-  private record NumberRequest(String number) {}
+  private record NumberRequest(UUID warehouseId, String number) {}
 
   private record ValidationRequest(List<UUID> assetIds) {}
 }

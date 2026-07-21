@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -39,6 +40,15 @@ public class TaskBoardService {
   private static final String LOGISTICS_SOURCE_CLIENT_ID = "logistics-service";
   private static final String LOGISTICS_PREPARATION_TITLE = "Logistics preparation";
   private static final String LOGISTICS_PREPARATION_TASK_TEXT = "LOGISTICS_PREPARATION";
+  private static final String LOGISTICS_EQUIPMENT_MOVEMENT_TITLE = "Перемещение мебели";
+  private static final String LOGISTICS_EQUIPMENT_MOVEMENT_CANCEL_REASON =
+      "LOGISTICS_EQUIPMENT_MOVEMENT_CANCELLED";
+  private static final String LOGISTICS_EQUIPMENT_MOVEMENT_FINGERPRINT_SCHEMA =
+      "task-board-logistics-equipment-movement:v1";
+  private static final int MAX_EQUIPMENT_MOVEMENT_OPERATIONS = 10;
+  private static final int EQUIPMENT_MOVEMENT_DISPLAY_NAME_LENGTH = 64;
+  private static final Pattern EQUIPMENT_CODE =
+      Pattern.compile("^[A-Z0-9][A-Z0-9_-]{0,63}$");
   private static final Set<EntryStatus> UNFINISHED =
       Set.of(EntryStatus.WAITING, EntryStatus.IN_PROGRESS, EntryStatus.PAUSED);
   private final BoardTaskRepository tasks;
@@ -129,7 +139,7 @@ public class TaskBoardService {
 
   @Transactional
   public TaskBoardSnapshot createTask(UUID warehouseId, CreateBoardTaskRequest request) {
-    createTask(warehouseId, request, null);
+    createTask(warehouseId, request, null, false);
     return snapshot(warehouseId, true);
   }
 
@@ -145,7 +155,7 @@ public class TaskBoardService {
             request.plannedDurationMinutes(),
             request.deadlineAt(),
             request.route());
-    BoardTask task = createTask(request.warehouseId(), createRequest, sourceClientId);
+    BoardTask task = createTask(request.warehouseId(), createRequest, sourceClientId, true);
     return registrationDto(task);
   }
 
@@ -172,13 +182,60 @@ public class TaskBoardService {
                         UNASSIGNED_CODE,
                         LOGISTICS_PREPARATION_TASK_TEXT,
                         request.plannedDurationMinutes()))),
-            LOGISTICS_SOURCE_CLIENT_ID);
+            LOGISTICS_SOURCE_CLIENT_ID,
+            false);
     return logisticsTaskMapper.toLogisticsTaskSnapshot(task);
   }
 
+  /**
+   * Registers a source-owned task whose generated detail is limited to typed furniture operations.
+   * The persisted flag fences completion at the reservation deadline without changing generic tasks.
+   */
+  @Transactional
+  public LogisticsTaskSnapshot registerLogisticsEquipmentMovementTask(
+      RegisterLogisticsEquipmentMovementTaskRequest request) {
+    NormalizedEquipmentMovementRequest normalized = normalizeEquipmentMovementRequest(request);
+    BoardTask task =
+        createTask(
+            request.warehouseId(),
+            new CreateBoardTaskRequest(
+                request.externalTaskId(),
+                equipmentMovementTitle(normalized.unitNumber()),
+                normalized.unitNumber(),
+                equipmentMovementText(normalized.operations()),
+                request.plannedDurationMinutes(),
+                request.deadlineAt(),
+                List.of(
+                    new RouteStepRequest(
+                        null,
+                        UNASSIGNED_CODE,
+                        equipmentMovementText(normalized.operations()),
+                        request.plannedDurationMinutes()))),
+            LOGISTICS_SOURCE_CLIENT_ID,
+            false,
+            true,
+            equipmentMovementFingerprint(request, normalized));
+    return logisticsTaskMapper.toLogisticsTaskSnapshot(requireEquipmentMovementTask(task));
+  }
+
   private BoardTask createTask(
-      UUID warehouseId, CreateBoardTaskRequest request, String sourceClientId) {
-    String requestFingerprint = fingerprint(warehouseId, request);
+      UUID warehouseId,
+      CreateBoardTaskRequest request,
+      String sourceClientId,
+      boolean allowRepeatedQueues) {
+    return createTask(
+        warehouseId, request, sourceClientId, allowRepeatedQueues, false, null);
+  }
+
+  private BoardTask createTask(
+      UUID warehouseId,
+      CreateBoardTaskRequest request,
+      String sourceClientId,
+      boolean allowRepeatedQueues,
+      boolean completionDeadlineEnforced,
+      String suppliedFingerprint) {
+    String requestFingerprint =
+        suppliedFingerprint == null ? fingerprint(warehouseId, request) : suppliedFingerprint;
     if (request.externalTaskId() != null) {
       lock("external-task:" + request.externalTaskId());
       var existing = tasks.findByExternalTaskId(request.externalTaskId());
@@ -196,7 +253,8 @@ public class TaskBoardService {
       }
     }
     lockQueueMutation(warehouseId);
-    List<ResolvedRouteStep> routeSteps = resolveRoute(warehouseId, request.route());
+    List<ResolvedRouteStep> routeSteps =
+        resolveRoute(warehouseId, request.route(), allowRepeatedQueues);
     lockQueuePositions(warehouseId, routeSteps.stream().map(ResolvedRouteStep::queue).toList());
     var task = new BoardTask();
     task.setWarehouseId(warehouseId);
@@ -206,6 +264,7 @@ public class TaskBoardService {
     task.setDescription(trim(request.description()));
     task.setPlannedDurationMinutes(request.plannedDurationMinutes());
     task.setDeadlineAt(request.deadlineAt());
+    task.setCompletionDeadlineEnforced(completionDeadlineEnforced);
     task.setRequestFingerprint(request.externalTaskId() == null ? null : requestFingerprint);
     try {
       task = projectionWriter.saveAndFlush(tasks, task);
@@ -361,7 +420,13 @@ public class TaskBoardService {
   @Transactional(readOnly = true)
   public LogisticsTaskSnapshot logisticsPreparationTask(UUID externalTaskId) {
     return logisticsTaskMapper.toLogisticsTaskSnapshot(
-        ownedExternalTask(LOGISTICS_SOURCE_CLIENT_ID, externalTaskId));
+        ownedLogisticsPreparationTask(externalTaskId));
+  }
+
+  @Transactional(readOnly = true)
+  public LogisticsTaskSnapshot logisticsEquipmentMovementTask(UUID externalTaskId) {
+    return logisticsTaskMapper.toLogisticsTaskSnapshot(
+        ownedLogisticsEquipmentMovementTask(externalTaskId));
   }
 
   @Transactional
@@ -374,13 +439,26 @@ public class TaskBoardService {
   @Transactional
   public LogisticsTaskSnapshot cancelLogisticsPreparationTask(
       UUID externalTaskId, CancelLogisticsPreparationTaskRequest request) {
-    BoardTask task = ownedExternalTask(LOGISTICS_SOURCE_CLIENT_ID, externalTaskId);
+    BoardTask task = ownedLogisticsPreparationTask(externalTaskId);
     cancelTask(
         task.getWarehouseId(),
         externalTaskId,
         new CancelTaskRequest(request.expectedTaskVersion(), "LOGISTICS_PREPARATION_CANCELLED"));
     return logisticsTaskMapper.toLogisticsTaskSnapshot(
-        ownedExternalTask(LOGISTICS_SOURCE_CLIENT_ID, externalTaskId));
+        ownedLogisticsPreparationTask(externalTaskId));
+  }
+
+  @Transactional
+  public LogisticsTaskSnapshot cancelLogisticsEquipmentMovementTask(
+      UUID externalTaskId, CancelLogisticsEquipmentMovementTaskRequest request) {
+    BoardTask task = ownedLogisticsEquipmentMovementTask(externalTaskId);
+    cancelTask(
+        task.getWarehouseId(),
+        externalTaskId,
+        new CancelTaskRequest(
+            request.expectedTaskVersion(), LOGISTICS_EQUIPMENT_MOVEMENT_CANCEL_REASON));
+    return logisticsTaskMapper.toLogisticsTaskSnapshot(
+        ownedLogisticsEquipmentMovementTask(externalTaskId));
   }
 
   @Transactional
@@ -412,7 +490,7 @@ public class TaskBoardService {
       throw new ConflictException("Маршрут или назначение задачи уже начали выполнять");
     }
 
-    List<ResolvedRouteStep> routeSteps = resolveRoute(warehouseId, request.route());
+    List<ResolvedRouteStep> routeSteps = resolveRoute(warehouseId, request.route(), true);
     Set<WorkQueue> affectedQueues =
         oldEntries.stream()
             .map(QueueEntry::getQueue)
@@ -517,26 +595,146 @@ public class TaskBoardService {
     return task;
   }
 
+  private BoardTask ownedLogisticsPreparationTask(UUID externalTaskId) {
+    BoardTask task = ownedExternalTask(LOGISTICS_SOURCE_CLIENT_ID, externalTaskId);
+    if (task.isCompletionDeadlineEnforced()) {
+      throw new NotFoundException("Задача не найдена");
+    }
+    return task;
+  }
+
+  private BoardTask ownedLogisticsEquipmentMovementTask(UUID externalTaskId) {
+    return requireEquipmentMovementTask(
+        ownedExternalTask(LOGISTICS_SOURCE_CLIENT_ID, externalTaskId));
+  }
+
+  private BoardTask requireEquipmentMovementTask(BoardTask task) {
+    if (!task.isCompletionDeadlineEnforced()) {
+      throw new NotFoundException("Задача не найдена");
+    }
+    return task;
+  }
+
+  private NormalizedEquipmentMovementRequest normalizeEquipmentMovementRequest(
+      RegisterLogisticsEquipmentMovementTaskRequest request) {
+    if (request == null
+        || request.warehouseId() == null
+        || request.externalTaskId() == null
+        || request.deadlineAt() == null) {
+      throw new IllegalArgumentException("Warehouse, external task and deadline are required");
+    }
+    if (request.plannedDurationMinutes() != null && request.plannedDurationMinutes() < 0) {
+      throw new IllegalArgumentException("Planned duration must not be negative");
+    }
+    String unitNumber = trim(request.unitNumber());
+    if (unitNumber != null && unitNumber.length() > 64) {
+      throw new IllegalArgumentException("Unit number is too long");
+    }
+    if (request.operations() == null
+        || request.operations().isEmpty()
+        || request.operations().size() > MAX_EQUIPMENT_MOVEMENT_OPERATIONS) {
+      throw new IllegalArgumentException("Equipment movement must contain from one to ten operations");
+    }
+    List<NormalizedEquipmentMovementOperation> operations =
+        request.operations().stream().map(this::normalizeEquipmentMovementOperation).toList();
+    return new NormalizedEquipmentMovementRequest(unitNumber, operations);
+  }
+
+  private NormalizedEquipmentMovementOperation normalizeEquipmentMovementOperation(
+      EquipmentMovementOperation operation) {
+    if (operation == null || operation.direction() == null || operation.quantity() == null) {
+      throw new IllegalArgumentException("Equipment movement operation is incomplete");
+    }
+    String code = compact(operation.equipmentCode());
+    String name = compact(operation.equipmentName());
+    if (code == null || !EQUIPMENT_CODE.matcher(code).matches()) {
+      throw new IllegalArgumentException("Equipment code must be canonical");
+    }
+    if (name == null || name.length() > 255) {
+      throw new IllegalArgumentException("Equipment name is invalid");
+    }
+    if (operation.quantity() < 1) {
+      throw new IllegalArgumentException("Equipment quantity must be positive");
+    }
+    return new NormalizedEquipmentMovementOperation(
+        operation.direction(), code, name, operation.quantity());
+  }
+
+  private String equipmentMovementTitle(String unitNumber) {
+    return unitNumber == null
+        ? LOGISTICS_EQUIPMENT_MOVEMENT_TITLE
+        : LOGISTICS_EQUIPMENT_MOVEMENT_TITLE + " — бытовка " + unitNumber;
+  }
+
+  private String equipmentMovementText(List<NormalizedEquipmentMovementOperation> operations) {
+    return operations.stream()
+        .map(
+            operation ->
+                movementDirectionLabel(operation.direction())
+                    + ": "
+                    + abbreviated(operation.equipmentName(), EQUIPMENT_MOVEMENT_DISPLAY_NAME_LENGTH)
+                    + " ("
+                    + operation.equipmentCode()
+                    + ") — "
+                    + operation.quantity()
+                    + " шт.")
+        .collect(java.util.stream.Collectors.joining("\n"));
+  }
+
+  private String movementDirectionLabel(EquipmentMovementDirection direction) {
+    return switch (direction) {
+      case BRING_TO_CABIN -> "Занести в бытовку";
+      case TAKE_FROM_CABIN -> "Вынести из бытовки";
+    };
+  }
+
+  private String abbreviated(String value, int maxLength) {
+    if (value.length() <= maxLength) return value;
+    return value.substring(0, maxLength - 1) + "…";
+  }
+
+  private String equipmentMovementFingerprint(
+      RegisterLogisticsEquipmentMovementTaskRequest request,
+      NormalizedEquipmentMovementRequest normalized) {
+    var canonical = new StringBuilder(LOGISTICS_EQUIPMENT_MOVEMENT_FINGERPRINT_SCHEMA);
+    appendFingerprint(canonical, request.warehouseId());
+    appendFingerprint(canonical, request.externalTaskId());
+    appendFingerprint(canonical, normalized.unitNumber());
+    appendFingerprint(canonical, request.plannedDurationMinutes());
+    appendFingerprint(canonical, request.deadlineAt().toInstant().toString());
+    appendFingerprint(canonical, normalized.operations().size());
+    for (NormalizedEquipmentMovementOperation operation : normalized.operations()) {
+      appendFingerprint(canonical, operation.direction());
+      appendFingerprint(canonical, operation.equipmentCode());
+      appendFingerprint(canonical, operation.equipmentName());
+      appendFingerprint(canonical, operation.quantity());
+    }
+    return fingerprintDigest(canonical);
+  }
+
   private String fingerprint(UUID warehouseId, CreateBoardTaskRequest request) {
+    var canonical = new StringBuilder(REQUEST_FINGERPRINT_SCHEMA);
+    appendFingerprint(canonical, warehouseId);
+    appendFingerprint(canonical, request.externalTaskId());
+    appendFingerprint(canonical, request.title().trim());
+    appendFingerprint(canonical, trim(request.unitNumber()));
+    appendFingerprint(canonical, trim(request.description()));
+    appendFingerprint(canonical, request.plannedDurationMinutes());
+    appendFingerprint(
+        canonical,
+        request.deadlineAt() == null ? null : request.deadlineAt().toInstant().toString());
+    appendFingerprint(canonical, request.route().size());
+    for (RouteStepRequest step : request.route()) {
+      appendFingerprint(canonical, step.queueId());
+      appendFingerprint(canonical, step.queueId() == null ? normalizeQueueCode(step.queueCode()) : null);
+      appendFingerprint(canonical, trim(step.taskText()));
+      appendFingerprint(canonical, step.plannedDurationMinutes());
+    }
+    return fingerprintDigest(canonical);
+  }
+
+  private String fingerprintDigest(StringBuilder canonical) {
     try {
-      var canonical = new StringBuilder(REQUEST_FINGERPRINT_SCHEMA);
-      appendFingerprint(canonical, warehouseId);
-      appendFingerprint(canonical, request.externalTaskId());
-      appendFingerprint(canonical, request.title().trim());
-      appendFingerprint(canonical, trim(request.unitNumber()));
-      appendFingerprint(canonical, trim(request.description()));
-      appendFingerprint(canonical, request.plannedDurationMinutes());
-      appendFingerprint(
-          canonical,
-          request.deadlineAt() == null ? null : request.deadlineAt().toInstant().toString());
-      appendFingerprint(canonical, request.route().size());
-      for (RouteStepRequest step : request.route()) {
-        appendFingerprint(canonical, step.queueId());
-        appendFingerprint(
-            canonical, step.queueId() == null ? normalizeQueueCode(step.queueCode()) : null);
-        appendFingerprint(canonical, trim(step.taskText()));
-        appendFingerprint(canonical, step.plannedDurationMinutes());
-      }
       return HexFormat.of()
           .formatHex(
               MessageDigest.getInstance("SHA-256")
@@ -578,7 +776,7 @@ public class TaskBoardService {
   }
 
   private List<ResolvedRouteStep> resolveRoute(
-      UUID warehouseId, List<RouteStepRequest> requestedRoute) {
+      UUID warehouseId, List<RouteStepRequest> requestedRoute, boolean allowRepeatedQueues) {
     Set<UUID> queueIds = new LinkedHashSet<>();
     Set<String> queueCodes = new LinkedHashSet<>();
     List<ResolvedRouteStep> result = new ArrayList<>();
@@ -586,8 +784,10 @@ public class TaskBoardService {
       WorkQueue queue =
           step.queueId() == null ? null : registry.requireQueue(warehouseId, step.queueId());
       String queueCode = queue == null ? normalizeQueueCode(step.queueCode()) : queue.getCode();
-      if ((queue != null && !queueIds.add(queue.getId())) || !queueCodes.add(queueCode))
+      if (!allowRepeatedQueues
+          && ((queue != null && !queueIds.add(queue.getId())) || !queueCodes.add(queueCode))) {
         throw new ConflictException("Маршрут содержит повторяющуюся очередь: " + queueCode);
+      }
       result.add(new ResolvedRouteStep(step, queue, queueCode));
     }
     return result;
@@ -805,6 +1005,7 @@ public class TaskBoardService {
             ? lockTaskAndEntryStreams(entry.getTask(), streamsToLock)
             : lockEntryStreams(streamsToLock);
     OffsetDateTime now = now();
+    ensureCompletionBeforeDeadline(entry.getTask(), now);
     stopTimer(entry, now);
     entry.setStatus(EntryStatus.DONE);
     entry.setDoneAt(now);
@@ -1271,6 +1472,11 @@ public class TaskBoardService {
     return v == null || v.isBlank() ? null : v.trim();
   }
 
+  private String compact(String value) {
+    String trimmed = trim(value);
+    return trimmed == null ? null : trimmed.replaceAll("\\s+", " ");
+  }
+
   private String normalizeQueueCode(String v) {
     String value = trim(v);
     return value == null ? UNASSIGNED_CODE : value.toUpperCase(java.util.Locale.ROOT);
@@ -1278,6 +1484,14 @@ public class TaskBoardService {
 
   private OffsetDateTime now() {
     return OffsetDateTime.now(ZoneOffset.UTC);
+  }
+
+  private void ensureCompletionBeforeDeadline(BoardTask task, OffsetDateTime completionAt) {
+    if (!task.isCompletionDeadlineEnforced()) return;
+    OffsetDateTime deadline = task.getDeadlineAt();
+    if (deadline == null || !completionAt.isBefore(deadline)) {
+      throw new ConflictException("Срок резерва мебели истек: завершение задания недоступно");
+    }
   }
 
   private BoardEntryDto dto(QueueEntry e) {
@@ -1368,4 +1582,14 @@ public class TaskBoardService {
   private record QueueEntryPosition(UUID queueId, int position) {}
 
   private record ResolvedRouteStep(RouteStepRequest request, WorkQueue queue, String queueCode) {}
+
+  private record NormalizedEquipmentMovementRequest(
+      String unitNumber, List<NormalizedEquipmentMovementOperation> operations) {
+    private NormalizedEquipmentMovementRequest {
+      operations = List.copyOf(operations);
+    }
+  }
+
+  private record NormalizedEquipmentMovementOperation(
+      EquipmentMovementDirection direction, String equipmentCode, String equipmentName, long quantity) {}
 }

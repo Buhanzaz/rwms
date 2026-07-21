@@ -20,6 +20,7 @@ import { TaskBoardSettingsPage } from "@/features/settings/task-board/task-board
 import { LogisticsReturnsPage } from "@/features/logistics/logistics-returns-page"
 import { LogisticsShipmentsPage } from "@/features/logistics/logistics-shipments-page"
 import { WarehouseTransfersPage } from "@/features/logistics/warehouse-transfers/warehouse-transfers-page"
+import { OrdersRoutes } from "@/features/orders/orders-routes"
 import {
   InventoryEntryPage,
   InventoryFinishPage,
@@ -217,6 +218,7 @@ function AppLayout() {
               path="/logistics/transfers"
               element={<WarehouseTransfersPage />}
             />
+            <Route path="/orders/*" element={<OrdersRoutes />} />
             <Route path="/write-offs" element={<WriteOffsPage />} />
             <Route
               path="/write-offs/equipment"

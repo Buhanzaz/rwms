@@ -57,6 +57,10 @@ func TestLoadAcceptsCompleteFailClosedConfiguration(t *testing.T) {
 		configuration.InventoryOwnerDLT != "rwms.inventory.session.v1.media-service-inventory-owner-v1.dlt" {
 		t.Fatalf("inventory owner Kafka configuration = %#v", configuration)
 	}
+	if configuration.AssetRentalItemTopic != "rwms.asset.rental-item.v1" ||
+		configuration.CabinOwnerGroup != "media-service-cabin-owner-v1" {
+		t.Fatalf("cabin owner Kafka configuration = %#v", configuration)
+	}
 }
 
 func TestLoadRejectsNonCanonicalInventoryOwnerKafkaConfiguration(t *testing.T) {
@@ -64,6 +68,14 @@ func TestLoadRejectsNonCanonicalInventoryOwnerKafkaConfiguration(t *testing.T) {
 	t.Setenv("MEDIA_KAFKA_INVENTORY_OWNER_GROUP", "shared-consumer")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want non-canonical inventory owner group rejection")
+	}
+}
+
+func TestLoadRejectsNonCanonicalCabinOwnerKafkaConfiguration(t *testing.T) {
+	setCompleteConfiguration(t)
+	t.Setenv("MEDIA_KAFKA_CABIN_OWNER_GROUP", "shared-consumer")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want non-canonical cabin owner group rejection")
 	}
 }
 

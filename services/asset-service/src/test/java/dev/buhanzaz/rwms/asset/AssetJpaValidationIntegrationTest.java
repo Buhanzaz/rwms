@@ -15,6 +15,7 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.Disposition;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.DispositionEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.FencedStatusRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryCaptureRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryNumberResolutionRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventorySourceAssetRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceFencedStatusRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceLeaseOwnerType;
@@ -26,11 +27,13 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.TransferEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateGeneralCommentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdatePassportRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateWarehouseRequest;
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
 import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCatalogItem;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
+import dev.buhanzaz.rwms.asset.domain.InventoryAssetSourceId;
 import dev.buhanzaz.rwms.asset.domain.OperationLease;
 import dev.buhanzaz.rwms.asset.domain.OperationLeaseState;
 import dev.buhanzaz.rwms.asset.domain.RentalItem;
@@ -42,6 +45,7 @@ import dev.buhanzaz.rwms.asset.repository.OperationLeaseRepository;
 import dev.buhanzaz.rwms.asset.repository.RentalItemRepository;
 import dev.buhanzaz.rwms.asset.service.AssetConflictException;
 import dev.buhanzaz.rwms.asset.service.AssetService;
+import dev.buhanzaz.rwms.asset.service.InventoryAssetBoundaryRegistrar;
 import dev.buhanzaz.rwms.asset.service.InventoryAssetService;
 import jakarta.persistence.EntityManager;
 import java.time.OffsetDateTime;
@@ -89,6 +93,7 @@ class AssetJpaValidationIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   @Autowired EntityManager entityManager;
   @Autowired AssetService service;
+  @Autowired InventoryAssetBoundaryRegistrar inventoryAssetRegistrar;
   @Autowired InventoryAssetService inventoryAssetService;
   @Autowired DataSource dataSource;
 
@@ -120,6 +125,112 @@ class AssetJpaValidationIntegrationTest {
     assertThat(rental.getVersion()).isZero();
     assertThat(catalog.getCode()).isEqualTo("CHAIR-01");
     assertThat(catalog.getVersion()).isZero();
+  }
+
+  @Test
+  void rentalNumberIdentityIsWarehouseScopedAndDestinationCollisionIsRejected() {
+    UUID firstWarehouseId = UUID.randomUUID();
+    UUID secondWarehouseId = UUID.randomUUID();
+    UUID absentWarehouseId = UUID.randomUUID();
+    String number = "LOCAL-" + UUID.randomUUID();
+    RentalItemResponse first = service.createRentalItem(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        new CreateRentalItemRequest(
+            firstWarehouseId, number, null, null, null, null, null, null, Map.of(), List.of()))
+        .response();
+    RentalItemResponse second = service.createRentalItem(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        new CreateRentalItemRequest(
+            secondWarehouseId, number, null, null, null, null, null, null, Map.of(), List.of()))
+        .response();
+
+    assertThat(inventoryAssetService.resolveNumber(
+        new InventoryNumberResolutionRequest(firstWarehouseId, number)).asset().assetId())
+        .isEqualTo(first.id());
+    assertThat(inventoryAssetService.resolveNumber(
+        new InventoryNumberResolutionRequest(secondWarehouseId, number)).asset().assetId())
+        .isEqualTo(second.id());
+    assertThat(inventoryAssetService.resolveNumber(
+        new InventoryNumberResolutionRequest(absentWarehouseId, number)).found())
+        .isFalse();
+    assertThatThrownBy(() -> service.createRentalItem(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        new CreateRentalItemRequest(
+            firstWarehouseId, number, null, null, null, null, null, null, Map.of(), List.of())))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("this warehouse");
+    assertThatThrownBy(() -> service.updateWarehouse(
+        first.id(), new UpdateWarehouseRequest(first.version(), secondWarehouseId)))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("destination warehouse");
+  }
+
+  @Test
+  void preV9UnscopedNumberClaimBindsOnlyThroughItsSourceRetry() {
+    InventoryAssetSourceId sourceId =
+        new InventoryAssetSourceId(UUID.randomUUID(), UUID.randomUUID());
+    UUID warehouseId = UUID.randomUUID();
+    String identityMatchKey =
+        "LEGACY" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
+    jdbc.update("""
+        insert into inventory_asset_source_operation(
+          inventory_id,finding_id,version,request_fingerprint,created_at)
+        values (?, ?, 0, ?, clock_timestamp())
+        """, sourceId.getInventoryId(), sourceId.getFindingId(), "c".repeat(64));
+    jdbc.update("""
+        insert into inventory_asset_number_claim(
+          claim_id,warehouse_id,identity_match_key,version,inventory_id,finding_id,created_at)
+        values (?, null, ?, 0, ?, ?, clock_timestamp())
+        """, UUID.randomUUID(), identityMatchKey,
+        sourceId.getInventoryId(), sourceId.getFindingId());
+
+    assertThat(inventoryAssetService.resolveNumber(
+        new InventoryNumberResolutionRequest(warehouseId, identityMatchKey)).found())
+        .isFalse();
+    inventoryAssetRegistrar.claimNumber(warehouseId, identityMatchKey, sourceId);
+
+    assertThat(jdbc.queryForObject("""
+        select warehouse_id from inventory_asset_number_claim
+        where inventory_id=? and finding_id=?
+        """, UUID.class, sourceId.getInventoryId(), sourceId.getFindingId()))
+        .isEqualTo(warehouseId);
+    assertThatThrownBy(() -> inventoryAssetRegistrar.claimNumber(
+        UUID.randomUUID(), identityMatchKey, sourceId))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("another warehouse");
+  }
+
+  @Test
+  void inventorySourceNumberClaimsAreIndependentAcrossWarehouses() {
+    UUID firstWarehouseId = UUID.randomUUID();
+    UUID secondWarehouseId = UUID.randomUUID();
+    String number = "INVLOCAL-" + UUID.randomUUID();
+    InventorySourceAssetRequest firstRequest = new InventorySourceAssetRequest(
+        UUID.randomUUID(), UUID.randomUUID(), firstWarehouseId, number,
+        null, null, null, null, null, null, Map.of(), List.of());
+    InventorySourceAssetRequest secondRequest = new InventorySourceAssetRequest(
+        UUID.randomUUID(), UUID.randomUUID(), secondWarehouseId, number,
+        null, null, null, null, null, null, Map.of(), List.of());
+
+    var first = inventoryAssetService.createSourceAsset(firstRequest);
+    var second = inventoryAssetService.createSourceAsset(secondRequest);
+
+    assertThat(first.response().asset().assetId())
+        .isNotEqualTo(second.response().asset().assetId());
+    assertThat(jdbc.queryForObject("""
+        select count(*) from inventory_asset_number_claim
+        where identity_match_key=? and warehouse_id in (?, ?)
+        """, Integer.class, RentalItem.identityMatchKey(number),
+        firstWarehouseId, secondWarehouseId)).isEqualTo(2);
+    assertThat(inventoryAssetService.resolveNumber(
+        new InventoryNumberResolutionRequest(firstWarehouseId, number)).asset().assetId())
+        .isEqualTo(first.response().asset().assetId());
+    assertThat(inventoryAssetService.resolveNumber(
+        new InventoryNumberResolutionRequest(secondWarehouseId, number)).asset().assetId())
+        .isEqualTo(second.response().asset().assetId());
   }
 
   @Test
@@ -413,7 +524,12 @@ class AssetJpaValidationIntegrationTest {
             "state", "EXPIRED"),
         Map.of("leaseId", leaseId.toString(), "version", 0, "fencingToken", 1, "state", "EXPIRED"));
 
-    assertThat(jdbc.queryForList("select event_type from domain_event order by event_type", String.class))
+    assertThat(jdbc.queryForList("""
+        select event_type from domain_event
+        where (aggregate_type='EQUIPMENT_ALLOCATION_HOLD' and aggregate_id=?)
+           or (aggregate_type='OPERATION_LEASE' and aggregate_id=?)
+        order by event_type
+        """, String.class, holdId.toString(), leaseId.toString()))
         .containsExactly(
             AssetEventType.EQUIPMENT_HOLD_EXPIRED.value(),
             AssetEventType.OPERATION_LEASE_EXPIRED.value());
@@ -617,6 +733,7 @@ class AssetJpaValidationIntegrationTest {
   @Test
   @Transactional
   void canonicalReplayParityAcceptsNumericNodeWidthButRejectsRealLeaseDrift() {
+    int initialAggregateCount = replay.rebuildAndVerify().aggregateCount();
     UUID subjectId = UUID.randomUUID();
     var rental = service.createRentalItem(
         subjectId,
@@ -639,7 +756,7 @@ class AssetJpaValidationIntegrationTest {
         new AcquireOperationLeaseRequest(rental.id(), "MAINTENANCE", "replay-owner", rental.version()))
         .response();
 
-    assertThat(replay.rebuildAndVerify().aggregateCount()).isEqualTo(2);
+    assertThat(replay.rebuildAndVerify().aggregateCount()).isEqualTo(initialAggregateCount + 2);
 
     jdbc.update(
         "update operation_lease set fencing_token=fencing_token+1 where id=?",

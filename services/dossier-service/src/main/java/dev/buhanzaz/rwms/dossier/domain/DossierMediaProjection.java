@@ -41,6 +41,9 @@ public class DossierMediaProjection {
   @Column(name = "media_id", nullable = false)
   private UUID mediaId;
 
+  @Column(name = "folder_id", nullable = false)
+  private UUID folderId;
+
   @Column(name = "inventory_finding_id", nullable = false)
   private UUID inventoryFindingId;
 
@@ -65,6 +68,7 @@ public class DossierMediaProjection {
       UUID cabinId,
       UUID warehouseId,
       UUID mediaId,
+      UUID folderId,
       UUID inventoryFindingId,
       long mediaGeneration,
       long sourceAggregateVersion,
@@ -79,6 +83,7 @@ public class DossierMediaProjection {
     projection.cabinId = DossierSourceFact.require(cabinId, "cabinId");
     projection.warehouseId = DossierSourceFact.require(warehouseId, "warehouseId");
     projection.mediaId = DossierSourceFact.require(mediaId, "mediaId");
+    projection.folderId = DossierSourceFact.require(folderId, "folderId");
     projection.inventoryFindingId = DossierSourceFact.require(inventoryFindingId, "inventoryFindingId");
     projection.mediaGeneration = mediaGeneration;
     projection.sourceAggregateVersion = sourceAggregateVersion;
@@ -89,6 +94,7 @@ public class DossierMediaProjection {
   }
 
   public boolean apply(
+      UUID folderId,
       long generation,
       long sourceAggregateVersion,
       DossierMediaState state,
@@ -98,6 +104,7 @@ public class DossierMediaProjection {
       throw new IllegalArgumentException("Media and source aggregate versions must be non-negative");
     }
     DossierSourceFact.require(state, "state");
+    DossierSourceFact.require(folderId, "folderId");
     DossierSourceFact.require(sourceEventId, "sourceEventId");
     if (sourceAggregateVersion < this.sourceAggregateVersion) {
       return false;
@@ -105,10 +112,14 @@ public class DossierMediaProjection {
     if (sourceAggregateVersion == this.sourceAggregateVersion) {
       if (generation == mediaGeneration
           && this.state == state
+          && this.folderId.equals(folderId)
           && this.sourceEventId.equals(sourceEventId)) {
         return false;
       }
       throw new IllegalStateException("MEDIA_GENERATION_CONFLICT");
+    }
+    if (!this.folderId.equals(folderId)) {
+      throw new IllegalStateException("MEDIA_FOLDER_CONFLICT");
     }
     if (generation < mediaGeneration) {
       throw new IllegalStateException("MEDIA_GENERATION_CONFLICT");

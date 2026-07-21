@@ -56,6 +56,9 @@ public class BoardTask extends AbstractVersionedEntity {
   @Column(name = "deadline_at")
   private OffsetDateTime deadlineAt;
 
+  @Column(name = "completion_deadline_enforced", nullable = false)
+  private boolean completionDeadlineEnforced;
+
   @Column(name = "done_at")
   private OffsetDateTime doneAt;
 
@@ -129,6 +132,14 @@ public class BoardTask extends AbstractVersionedEntity {
 
   public void setDeadlineAt(OffsetDateTime v) {
     deadlineAt = v;
+  }
+
+  public boolean isCompletionDeadlineEnforced() {
+    return completionDeadlineEnforced;
+  }
+
+  public void setCompletionDeadlineEnforced(boolean v) {
+    completionDeadlineEnforced = v;
   }
 
   public OffsetDateTime getDoneAt() {

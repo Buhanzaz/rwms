@@ -39,6 +39,18 @@ public class CatalogNode {
   @Column(name = "parent_node_id")
   private UUID parentNodeId;
 
+  @Column(name = "furniture_category", nullable = false)
+  private boolean furnitureCategory;
+
+  @Column(name = "furniture_equipment_id")
+  private UUID furnitureEquipmentId;
+
+  @Column(name = "furniture_equipment_code", length = 64)
+  private String furnitureEquipmentCode;
+
+  @Column(name = "furniture_equipment_name", length = 255)
+  private String furnitureEquipmentName;
+
   @Column(name = "unit", length = 32)
   private String unit;
 
@@ -90,6 +102,10 @@ public class CatalogNode {
       String name,
       boolean active,
       UUID parentNodeId,
+      boolean furnitureCategory,
+      UUID furnitureEquipmentId,
+      String furnitureEquipmentCode,
+      String furnitureEquipmentName,
       String unit,
       Long priceMinor,
       Integer durationMinutes,
@@ -110,6 +126,24 @@ public class CatalogNode {
     this.name = text(name, "name", 255);
     this.active = active;
     this.parentNodeId = parentNodeId;
+    if (furnitureCategory && !"CATEGORY".equals(nodeType)) {
+      throw new IllegalArgumentException("Only a category can mark a furniture tree");
+    }
+    boolean completeFurnitureEquipment = furnitureEquipmentId != null
+        && furnitureEquipmentCode != null && !furnitureEquipmentCode.isBlank()
+        && furnitureEquipmentName != null && !furnitureEquipmentName.isBlank();
+    boolean emptyFurnitureEquipment = furnitureEquipmentId == null
+        && (furnitureEquipmentCode == null || furnitureEquipmentCode.isBlank())
+        && (furnitureEquipmentName == null || furnitureEquipmentName.isBlank());
+    if ((!completeFurnitureEquipment && !emptyFurnitureEquipment)
+        || (completeFurnitureEquipment && !"MATERIAL".equals(nodeType))) {
+      throw new IllegalArgumentException(
+          "Furniture equipment snapshot must be complete, absent and material-only");
+    }
+    this.furnitureCategory = furnitureCategory;
+    this.furnitureEquipmentId = furnitureEquipmentId;
+    this.furnitureEquipmentCode = optional(furnitureEquipmentCode, 64);
+    this.furnitureEquipmentName = optional(furnitureEquipmentName, 255);
     this.unit = optional(unit, 32);
     if (priceMinor != null && priceMinor < 0) throw new IllegalArgumentException("priceMinor is invalid");
     if (durationMinutes != null && durationMinutes < 0) throw new IllegalArgumentException("durationMinutes is invalid");
@@ -162,6 +196,10 @@ public class CatalogNode {
   public String getName() { return name; }
   public boolean isActive() { return active; }
   public UUID getParentNodeId() { return parentNodeId; }
+  public boolean isFurnitureCategory() { return furnitureCategory; }
+  public UUID getFurnitureEquipmentId() { return furnitureEquipmentId; }
+  public String getFurnitureEquipmentCode() { return furnitureEquipmentCode; }
+  public String getFurnitureEquipmentName() { return furnitureEquipmentName; }
   public String getUnit() { return unit; }
   public Long getPriceMinor() { return priceMinor; }
   public Integer getDurationMinutes() { return durationMinutes; }

@@ -22,6 +22,7 @@ function catalogLine(
       code: `CODE-${id}`,
       name: `${nodeType}-${id}`,
       nodeType,
+      furnitureEquipment: null,
     },
   }
 }

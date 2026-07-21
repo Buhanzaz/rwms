@@ -100,4 +100,12 @@ public class DossierInbox {
     decision = DossierInboxDecision.DLT;
     this.decidedAt = DossierSourceFact.require(decidedAt, "decidedAt");
   }
+
+  public void recoverProcessingFailure(OffsetDateTime decidedAt) {
+    if (decision != DossierInboxDecision.DLT) {
+      throw new IllegalStateException("Only a failed inbox decision can be recovered");
+    }
+    decision = DossierInboxDecision.PROCESSED;
+    this.decidedAt = DossierSourceFact.require(decidedAt, "decidedAt");
+  }
 }

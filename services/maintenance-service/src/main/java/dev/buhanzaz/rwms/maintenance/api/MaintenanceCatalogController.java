@@ -2,9 +2,9 @@ package dev.buhanzaz.rwms.maintenance.api;
 
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
 
+import dev.buhanzaz.rwms.maintenance.domain.CatalogVersionState;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
-import dev.buhanzaz.rwms.maintenance.domain.CatalogVersionState;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -91,13 +91,29 @@ public class MaintenanceCatalogController {
   }
 
   @PostMapping("/imports")
-  public ResponseEntity<CatalogVersionResponse> importCatalog(
+  public ResponseEntity<CatalogVersionResponse> bootstrapCatalog(
       @AuthenticationPrincipal Jwt jwt,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
-      @Valid @RequestBody ImportCatalogRequest request) {
+      @Valid @RequestBody BootstrapCatalogRequest request) {
     access.requireManage(jwt, request.warehouseId());
     MaintenanceApplicationService.CreateResult<CatalogVersionResponse> result =
-        service.importCatalog(access.subjectId(jwt), idempotencyKey, request);
+        service.bootstrapCatalog(access.subjectId(jwt), idempotencyKey, request);
+    ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
+    if (result.replayed()) response.header("Idempotency-Replayed", "true");
+    return response.body(result.response());
+  }
+
+  @PostMapping("/versions/{id}/fork")
+  public ResponseEntity<CatalogVersionResponse> fork(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID id,
+      @RequestParam UUID warehouseId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody VersionCommand request) {
+    access.requireManage(jwt, warehouseId);
+    requireWarehouse(id, warehouseId);
+    MaintenanceApplicationService.CreateResult<CatalogVersionResponse> result =
+        service.forkCatalog(access.subjectId(jwt), idempotencyKey, id, request);
     ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
     if (result.replayed()) response.header("Idempotency-Replayed", "true");
     return response.body(result.response());

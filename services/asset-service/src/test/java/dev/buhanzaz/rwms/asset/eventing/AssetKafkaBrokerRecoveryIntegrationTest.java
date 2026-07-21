@@ -10,6 +10,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Properties;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
@@ -76,6 +77,10 @@ class AssetKafkaBrokerRecoveryIntegrationTest {
 
   @Test
   void brokerOutageRecoveryPreservesOutboxAckDuplicateGapAndSanitizedDltInvariants() throws Exception {
+    jdbc.update("""
+        update outbox_event set next_attempt_at=clock_timestamp()+interval '1 day'
+        where status='PENDING'
+        """);
     UUID subjectId = UUID.randomUUID();
     var created = service.createRentalItem(
         subjectId,
@@ -153,7 +158,7 @@ class AssetKafkaBrokerRecoveryIntegrationTest {
     Properties configuration = new Properties();
     configuration.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers());
     try (AdminClient admin = AdminClient.create(configuration)) {
-      admin.describeCluster().nodes().get();
+      admin.describeCluster().nodes().get(5, TimeUnit.SECONDS);
       return true;
     } catch (Exception exception) {
       return false;

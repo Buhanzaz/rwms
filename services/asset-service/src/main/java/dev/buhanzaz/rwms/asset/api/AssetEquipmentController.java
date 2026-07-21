@@ -81,8 +81,8 @@ public class AssetEquipmentController {
       @AuthenticationPrincipal Jwt jwt,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody TransferEquipmentRequest request) {
-    access.requireManage(jwt, request.sourceWarehouseId());
-    access.requireManage(jwt, request.targetWarehouseId());
+    access.requireEquipmentMovement(jwt, request.sourceWarehouseId());
+    access.requireEquipmentMovement(jwt, request.targetWarehouseId());
     AssetService.CreateResult<MovementResponse> result = service.transfer(access.subjectId(jwt), idempotencyKey, request);
     ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
     if (result.replayed()) response.header("Idempotency-Replayed", "true");
@@ -101,7 +101,7 @@ public class AssetEquipmentController {
       @AuthenticationPrincipal Jwt jwt,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody DispositionEquipmentRequest request) {
-    access.requireManage(jwt, request.warehouseId());
+    access.requireEquipmentMovement(jwt, request.warehouseId());
     AssetService.CreateResult<MovementResponse> result = service.dispose(access.subjectId(jwt), idempotencyKey, request);
     ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
     if (result.replayed()) response.header("Idempotency-Replayed", "true");

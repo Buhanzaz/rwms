@@ -5,6 +5,7 @@ import {
   type PageResponse,
   type RentalItemContentsItemDto,
   type RentalItemDto,
+  type RentalItemPhotoDto,
   type RentalItemStatus,
 } from "@/features/rental-items/model/rental-item"
 
@@ -15,7 +16,7 @@ const MISSING_ACCESS_TOKEN_MESSAGE =
   "Не получен токен доступа к сервису имущества."
 
 const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const RENTAL_ITEM_STATUSES = new Set<RentalItemStatus>([
   "NEW",
@@ -41,6 +42,7 @@ type UnknownRecord = Record<string, unknown>
 type AssetEquipmentContent = {
   equipmentId: string
   equipmentCode: string
+  equipmentName: string
   quantity: number
   locationKind: string
 }
@@ -151,11 +153,14 @@ function parseEquipmentContent(value: unknown): AssetEquipmentContent {
     throw new Error(INVALID_RESPONSE_MESSAGE)
   }
 
-  const { equipmentId, equipmentCode, quantity, locationKind } = value
+  const { equipmentId, equipmentCode, equipmentName, quantity, locationKind } =
+    value
   if (
     !isUuid(equipmentId) ||
     typeof equipmentCode !== "string" ||
     equipmentCode.trim() === "" ||
+    (equipmentName !== undefined &&
+      (typeof equipmentName !== "string" || equipmentName.trim() === "")) ||
     !isNonNegativeSafeInteger(quantity) ||
     typeof locationKind !== "string" ||
     locationKind.trim() === ""
@@ -163,7 +168,14 @@ function parseEquipmentContent(value: unknown): AssetEquipmentContent {
     throw new Error(INVALID_RESPONSE_MESSAGE)
   }
 
-  return { equipmentId, equipmentCode, quantity, locationKind }
+  return {
+    equipmentId,
+    equipmentCode,
+    equipmentName:
+      typeof equipmentName === "string" ? equipmentName : equipmentCode,
+    quantity,
+    locationKind,
+  }
 }
 
 function parseAssetRentalItem(value: unknown): AssetRentalItem {
@@ -243,15 +255,96 @@ function toRentalItemContents(
   return contents.map((content) => ({
     equipmentId: content.equipmentId,
     equipmentCode: content.equipmentCode,
+    equipmentName: content.equipmentName,
     locationKind: content.locationKind,
-    name: content.equipmentCode,
+    name: content.equipmentName,
     quantity: content.quantity,
   }))
+}
+
+function passportString(passport: UnknownRecord, key: string) {
+  const value = passport[key]
+  return typeof value === "string" && value.trim() ? value : null
+}
+
+function passportStringArray(passport: UnknownRecord, key: string) {
+  const value = passport[key]
+  return Array.isArray(value)
+    ? value.filter(
+        (entry): entry is string =>
+          typeof entry === "string" && entry.trim() !== ""
+      )
+    : []
+}
+
+function parseLegacyPhoto(value: unknown): RentalItemPhotoDto | null {
+  if (!isRecord(value)) return null
+  const { id, url, variants, capturedAt, capturedAtKnown } = value
+  if (
+    typeof id !== "string" ||
+    !id.trim() ||
+    typeof url !== "string" ||
+    !url.trim()
+  ) {
+    return null
+  }
+
+  const parsedVariants: RentalItemPhotoDto["variants"] = {}
+  if (isRecord(variants)) {
+    for (const [key, variant] of [
+      ["small", variants.small],
+      ["largeWebp", variants.largeWebp],
+    ] as const) {
+      if (isRecord(variant) && typeof variant.url === "string") {
+        parsedVariants[key] = { url: variant.url }
+      }
+    }
+  }
+
+  return {
+    id,
+    url,
+    ...(Object.keys(parsedVariants).length > 0
+      ? { variants: parsedVariants }
+      : {}),
+    ...(capturedAt === null || typeof capturedAt === "string"
+      ? { capturedAt }
+      : {}),
+    ...(typeof capturedAtKnown === "boolean" ? { capturedAtKnown } : {}),
+  }
+}
+
+function passportLegacyPhotos(passport: UnknownRecord) {
+  const value = passport.legacyPhotos
+  return Array.isArray(value)
+    ? value.flatMap((entry) => {
+        const photo = parseLegacyPhoto(entry)
+        return photo ? [photo] : []
+      })
+    : []
 }
 
 export function mapAssetRentalItem(value: unknown): RentalItemDto {
   const item = parseAssetRentalItem(value)
   const contentsItems = toRentalItemContents(item.contents)
+  const legacyPhotos = passportLegacyPhotos(item.passport)
+  const previewPhotoUrls = passportStringArray(
+    item.passport,
+    "previewPhotoUrls"
+  )
+  const mainPhotoUrl = passportString(item.passport, "mainPhotoUrl")
+  const passportPhotoCount = item.passport.photoCount
+  const photoCount =
+    typeof passportPhotoCount === "number" &&
+    Number.isSafeInteger(passportPhotoCount) &&
+    passportPhotoCount >= 0
+      ? passportPhotoCount
+      : legacyPhotos.length
+  const passportPrice = item.passport.price
+  const price =
+    typeof passportPrice === "number" && Number.isFinite(passportPrice)
+      ? passportPrice
+      : null
 
   return {
     id: item.id,
@@ -266,17 +359,21 @@ export function mapAssetRentalItem(value: unknown): RentalItemDto {
     linoleum: item.linoleum,
     status: item.status,
     comment: item.generalComment,
-    mediaAvailability: "UNAVAILABLE",
-    hasPhotos: false,
-    photoCount: 0,
-    mainPhotoUrl: null,
-    previewPhotoUrls: [],
+    mediaAvailability: "AVAILABLE",
+    hasPhotos: photoCount > 0 || legacyPhotos.length > 0,
+    photoCount: Math.max(photoCount, legacyPhotos.length),
+    mainPhotoUrl: mainPhotoUrl ?? legacyPhotos[0]?.url ?? null,
+    previewPhotoUrls:
+      previewPhotoUrls.length > 0
+        ? previewPhotoUrls
+        : legacyPhotos.slice(0, 4).map((photo) => photo.url),
+    legacyPhotos,
     locationNodeId: null,
     contents: formatRentalItemContents(contentsItems),
     contentsItems,
-    shipmentDate: null,
-    tenant: null,
-    price: null,
+    shipmentDate: passportString(item.passport, "shipmentDate"),
+    tenant: passportString(item.passport, "tenant"),
+    price,
     passport: item.passport,
     tags: item.tags,
     createdAt: item.createdAt,

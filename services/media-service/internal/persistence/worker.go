@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"dev.buhanzaz.rwms/media-service/internal/media"
@@ -54,10 +55,20 @@ type ClaimResult struct {
 	Duplicate bool
 }
 
+type ProcessingConflictDisposition string
+
+const (
+	ProcessingConflictRetryAt          ProcessingConflictDisposition = "RETRY_AT"
+	ProcessingConflictTerminalConflict ProcessingConflictDisposition = "TERMINAL_CONFLICT"
+)
+
+type ProcessingConflictResolution struct {
+	Disposition ProcessingConflictDisposition
+	RetryAt     time.Time
+}
+
 func (repository *Repository) ClaimProcessingJob(ctx context.Context, message ProcessingMessage, owner string, lease time.Duration) (ClaimResult, error) {
-	if message.EventID == uuid.Nil || message.AggregateType != "PROCESSING_JOB" || message.AggregateID == uuid.Nil ||
-		message.AggregateVersion <= 0 || message.RecordKey != message.AggregateID || message.EventType != "media.processing.request.v1" ||
-		message.Topic != ProcessingTopic || !validSHA256(message.BodySHA256) {
+	if !validProcessingMessage(message) {
 		return ClaimResult{}, ErrConflict
 	}
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
@@ -183,6 +194,234 @@ func (repository *Repository) ClaimProcessingJob(ctx context.Context, message Pr
 		return ClaimResult{}, err
 	}
 	return ClaimResult{Job: job}, nil
+}
+
+// ResolveProcessingClaimConflict classifies a valid Kafka record that could
+// not be claimed without conflating a durable retry/lease with an orphan from
+// an earlier database generation. It never acknowledges mutable or ambiguous
+// state. Only a record with no source outbox, job, current generation, inbox,
+// retry, checkpoint, or quarantine evidence is terminalized as a sanitized
+// DLT in the same transaction as its inbox outcome.
+func (repository *Repository) ResolveProcessingClaimConflict(
+	ctx context.Context,
+	message ProcessingMessage,
+) (ProcessingConflictResolution, error) {
+	if !validProcessingMessage(message) {
+		return ProcessingConflictResolution{}, ErrConflict
+	}
+	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return ProcessingConflictResolution{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var databaseNow time.Time
+	if err := tx.QueryRow(ctx, `select clock_timestamp()`).Scan(&databaseNow); err != nil {
+		return ProcessingConflictResolution{}, err
+	}
+
+	var inboxHash, inboxOutcome string
+	err = tx.QueryRow(ctx, `select body_sha256,outcome from media_processing_inbox
+		where consumer_name=$1 and event_id=$2 for update`, processingConsumer,
+		message.EventID).Scan(&inboxHash, &inboxOutcome)
+	if err == nil {
+		if inboxHash != message.BodySHA256 {
+			return ProcessingConflictResolution{}, ErrIdempotencyMismatch
+		}
+		if inboxOutcome != "APPLIED" && inboxOutcome != "DLT" && inboxOutcome != "QUARANTINED" {
+			return ProcessingConflictResolution{}, ErrConflict
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return ProcessingConflictResolution{}, err
+		}
+		return ProcessingConflictResolution{Disposition: ProcessingConflictTerminalConflict}, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return ProcessingConflictResolution{}, err
+	}
+
+	var retryHash string
+	var retryAt time.Time
+	err = tx.QueryRow(ctx, `select body_sha256,available_at from media_retry_schedule
+		where consumer_name=$1 and event_id=$2 for update`, processingConsumer,
+		message.EventID).Scan(&retryHash, &retryAt)
+	if err == nil {
+		if retryHash != message.BodySHA256 {
+			return ProcessingConflictResolution{}, ErrIdempotencyMismatch
+		}
+		return commitProcessingRetryResolution(ctx, tx, retryAt)
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return ProcessingConflictResolution{}, err
+	}
+
+	type sourceState struct {
+		aggregateType, eventType, topic, bodySHA256, status, dependencyStatus string
+		aggregateID, recordKey                                                uuid.UUID
+		aggregateVersion                                                      int64
+		nextAttemptAt                                                         time.Time
+	}
+	var source sourceState
+	err = tx.QueryRow(ctx, `select source.aggregate_type,source.aggregate_id,
+		source.aggregate_version,source.event_type,source.topic,source.record_key,
+		source.envelope_sha256,source.event_status,source.next_attempt_at,
+		coalesce(dependency.event_status,'')
+		from media_transport_outbox source
+		left join media_transport_outbox dependency
+		  on dependency.event_id=source.depends_on_event_id
+		where source.event_id=$1 for update of source`, message.EventID).Scan(
+		&source.aggregateType, &source.aggregateID, &source.aggregateVersion,
+		&source.eventType, &source.topic, &source.recordKey, &source.bodySHA256,
+		&source.status, &source.nextAttemptAt, &source.dependencyStatus)
+	sourceFound := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return ProcessingConflictResolution{}, err
+	}
+	if sourceFound && (source.aggregateType != message.AggregateType ||
+		source.aggregateID != message.AggregateID ||
+		source.aggregateVersion != message.AggregateVersion ||
+		source.eventType != message.EventType || source.topic != message.Topic ||
+		source.recordKey != message.RecordKey || source.bodySHA256 != message.BodySHA256) {
+		return ProcessingConflictResolution{}, ErrIdempotencyMismatch
+	}
+
+	var aggregateOutboxExists bool
+	if err := tx.QueryRow(ctx, `select exists(select 1 from media_transport_outbox
+		where aggregate_type=$1 and aggregate_id=$2 and event_type=$3)`,
+		message.AggregateType, message.AggregateID, message.EventType).Scan(
+		&aggregateOutboxExists); err != nil {
+		return ProcessingConflictResolution{}, err
+	}
+
+	var jobStatus string
+	var jobNextAttemptAt time.Time
+	var leaseUntil *time.Time
+	var exactJobState, available bool
+	err = tx.QueryRow(ctx, `select job.job_status,job.next_attempt_at,job.lease_until,
+		(job.media_id=$2 and asset.warehouse_id=$3 and asset.media_kind=$4
+		 and job.processing_kind=$5 and job.generation=$6
+		 and job.requested_rotation_degrees=$7 and job.source_version_id=$8
+		 and asset.processing_status='PROCESSING' and asset.pending_generation=$6
+		 and asset.pending_rotation_degrees=$7 and asset.source_version_id=$8),
+		media_asset_is_available(asset.media_id)
+		from media_processing_job job
+		join media_asset asset on asset.media_id=job.media_id
+		where job.processing_job_id=$1 for update of job,asset`, message.AggregateID,
+		message.ExpectedMediaID, message.ExpectedWarehouseID, message.ExpectedKind,
+		message.ExpectedProcessingKind, message.ExpectedGeneration,
+		message.ExpectedRotation, message.ExpectedSourceVersionID).Scan(
+		&jobStatus, &jobNextAttemptAt, &leaseUntil, &exactJobState, &available)
+	jobFound := err == nil
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return ProcessingConflictResolution{}, err
+	}
+
+	var currentGenerationExists bool
+	if err := tx.QueryRow(ctx, `select exists(select 1 from media_asset
+		where media_id=$1 and warehouse_id=$2 and media_kind=$3
+		  and source_version_id=$4
+		  and ((processing_status='PROCESSING' and pending_generation=$5
+		        and pending_rotation_degrees=$6)
+		       or current_generation >= $5))`, message.ExpectedMediaID,
+		message.ExpectedWarehouseID, message.ExpectedKind,
+		message.ExpectedSourceVersionID, message.ExpectedGeneration,
+		message.ExpectedRotation).Scan(&currentGenerationExists); err != nil {
+		return ProcessingConflictResolution{}, err
+	}
+
+	var checkpointOrQuarantineExists bool
+	if err := tx.QueryRow(ctx, `select
+		exists(select 1 from media_consumer_aggregate_checkpoint
+		  where consumer_name=$1 and aggregate_type=$2 and aggregate_id=$3)
+		or exists(select 1 from media_quarantined_aggregate
+		  where consumer_name=$1 and aggregate_type=$2 and aggregate_id=$3
+		    and reconciled_at is null)`, processingConsumer, message.AggregateType,
+		message.AggregateID).Scan(&checkpointOrQuarantineExists); err != nil {
+		return ProcessingConflictResolution{}, err
+	}
+
+	if !sourceFound && !aggregateOutboxExists && !jobFound &&
+		!currentGenerationExists && !checkpointOrQuarantineExists {
+		if err := repository.terminalizeOrphanProcessingMessage(ctx, tx, message); err != nil {
+			return ProcessingConflictResolution{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return ProcessingConflictResolution{}, err
+		}
+		return ProcessingConflictResolution{Disposition: ProcessingConflictTerminalConflict}, nil
+	}
+
+	if jobFound && exactJobState && available {
+		switch jobStatus {
+		case "PENDING":
+			if jobNextAttemptAt.After(databaseNow) {
+				return commitProcessingRetryResolution(ctx, tx, jobNextAttemptAt)
+			}
+		case "RUNNING":
+			if leaseUntil != nil && leaseUntil.After(databaseNow) {
+				return commitProcessingRetryResolution(ctx, tx, *leaseUntil)
+			}
+		}
+	}
+	if sourceFound && (source.status == "PENDING" ||
+		(source.status == "PUBLISHING" && source.dependencyStatus != "PUBLISHED")) &&
+		source.nextAttemptAt.After(databaseNow) {
+		return commitProcessingRetryResolution(ctx, tx, source.nextAttemptAt)
+	}
+	return commitProcessingRetryResolution(ctx, tx, databaseNow.Add(time.Second))
+}
+
+func validProcessingMessage(message ProcessingMessage) bool {
+	return message.EventID != uuid.Nil && message.AggregateType == "PROCESSING_JOB" &&
+		message.AggregateID != uuid.Nil && message.AggregateVersion > 0 &&
+		message.RecordKey == message.AggregateID &&
+		message.EventType == "media.processing.request.v1" &&
+		message.Topic == ProcessingTopic && validSHA256(message.BodySHA256) &&
+		message.CorrelationID != uuid.Nil && message.ExpectedMediaID != uuid.Nil &&
+		message.ExpectedWarehouseID != uuid.Nil &&
+		(message.ExpectedKind == media.KindImage || message.ExpectedKind == media.KindVideo) &&
+		(message.ExpectedProcessingKind == media.ProcessingInitial ||
+			message.ExpectedProcessingKind == media.ProcessingRotation) &&
+		message.ExpectedGeneration > 0 &&
+		(message.ExpectedRotation == media.Rotation0 || message.ExpectedRotation == media.Rotation90 ||
+			message.ExpectedRotation == media.Rotation180 || message.ExpectedRotation == media.Rotation270) &&
+		strings.TrimSpace(message.ExpectedSourceVersionID) != "" &&
+		len(message.ExpectedSourceVersionID) <= 255
+}
+
+func commitProcessingRetryResolution(
+	ctx context.Context,
+	tx pgx.Tx,
+	retryAt time.Time,
+) (ProcessingConflictResolution, error) {
+	if err := tx.Commit(ctx); err != nil {
+		return ProcessingConflictResolution{}, err
+	}
+	return ProcessingConflictResolution{
+		Disposition: ProcessingConflictRetryAt,
+		RetryAt:     retryAt,
+	}, nil
+}
+
+func (repository *Repository) terminalizeOrphanProcessingMessage(
+	ctx context.Context,
+	tx pgx.Tx,
+	message ProcessingMessage,
+) error {
+	const failureCode = "VALIDATION_FAILED"
+	if err := finishProcessingMessage(ctx, tx, message, "DLT"); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `insert into media_dead_letter (
+		consumer_name,event_id,aggregate_type,aggregate_id,aggregate_version,
+		body_sha256,failure_code,attempt_count)
+	values ($1,$2,$3,$4,$5,$6,$7,1)`, processingConsumer, message.EventID,
+		message.AggregateType, message.AggregateID, message.AggregateVersion,
+		message.BodySHA256, failureCode)
+	if err != nil {
+		return err
+	}
+	return repository.insertProcessingDLTOutbox(ctx, tx, message, failureCode)
 }
 
 func (repository *Repository) CompleteProcessingJob(ctx context.Context, job WorkerJob, variants []media.ProcessedVariant) error {
@@ -473,7 +712,7 @@ func lockWorkerState(ctx context.Context, tx pgx.Tx, job WorkerJob) (AssetRecord
 		  and a.pending_generation=job.generation and media_asset_is_available(a.media_id)
 		for update of a,job`,
 		job.JobID, job.LeaseToken, job.LeaseFence).Scan(
-		&asset.ID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
+		&asset.ID, &asset.FolderID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
 		&asset.FileName, &asset.ContentType, &asset.SourceObjectKey,
 		&asset.SourceVersionID, &asset.SourceETag, &asset.SourceChecksum,
 		&asset.Status, &asset.Version, &asset.Generation, &asset.Rotation,

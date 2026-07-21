@@ -189,7 +189,7 @@ rwms:
           revision: ${MAINTENANCE_CLIENT_REVISION:1}
           authentication-methods: [client_secret_basic]
           grant-types: [client_credentials]
-          scopes: [asset.maintenance, task-board.task-sync]
+          scopes: [asset.maintenance, task-board.task-sync, queue-registry.write, media.maintenance]
           secret-environment: MAINTENANCE_CLIENT_SECRET
           audiences: [rwms-services]
           access-token-ttl: 5m

@@ -29,4 +29,19 @@ public interface LogisticsExternalAttemptRepository
       @Param("results")
           List<dev.buhanzaz.rwms.logistics.domain.LogisticsExternalAttemptResult> results,
       @Param("now") java.time.OffsetDateTime now);
+
+  @Query(
+      """
+      select distinct attempt.document.id
+      from LogisticsExternalAttempt attempt
+      where attempt.operationType in :operationTypes
+        and attempt.result in :results
+        and (attempt.nextAttemptAt is null or attempt.nextAttemptAt <= :now)
+      order by attempt.document.id
+      """)
+  List<UUID> findDueDocumentIdsByOperationTypes(
+      @Param("operationTypes") List<String> operationTypes,
+      @Param("results")
+          List<dev.buhanzaz.rwms.logistics.domain.LogisticsExternalAttemptResult> results,
+      @Param("now") java.time.OffsetDateTime now);
 }

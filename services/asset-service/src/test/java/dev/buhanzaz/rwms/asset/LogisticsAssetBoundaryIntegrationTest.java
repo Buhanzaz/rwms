@@ -12,9 +12,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireLogisticsEquipmentHoldRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireLogisticsEquipmentMovementReservationRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireLogisticsOperationLeaseRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateRentalItemRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.ExecuteLogisticsEquipmentMovementReservationLine;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.ExecuteLogisticsEquipmentMovementReservationsRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsEquipmentHoldCommandRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsFencedEffectRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsLeaseCommandRequest;
@@ -31,6 +34,8 @@ import dev.buhanzaz.rwms.asset.eventing.AssetReplayVerifier;
 import dev.buhanzaz.rwms.asset.service.AssetConflictException;
 import dev.buhanzaz.rwms.asset.service.AssetService;
 import jakarta.persistence.EntityManager;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -42,7 +47,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
@@ -70,6 +77,7 @@ class LogisticsAssetBoundaryIntegrationTest {
   @Autowired AssetReplayVerifier replay;
   @Autowired JdbcTemplate jdbc;
   @Autowired EntityManager entityManager;
+  @Autowired PlatformTransactionManager transactions;
 
   @DynamicPropertySource
   static void properties(DynamicPropertyRegistry registry) {
@@ -436,6 +444,226 @@ class LogisticsAssetBoundaryIntegrationTest {
     assertThat(released.response().state()).isEqualTo("RELEASED");
     assertThat(releaseReplay.replayed()).isTrue();
     assertThat(releaseReplay.response()).isEqualTo(released.response());
+  }
+
+  @Test
+  @Transactional
+  void movementReservationFencesCabinSourceUntilWorkerExecutionThenWritesLedger() {
+    UUID subject = UUID.randomUUID();
+    UUID warehouse = UUID.randomUUID();
+    RentalItemResponse cabin = rental(subject, warehouse, RentalItemStatus.FREE);
+    UUID equipmentId = service.createEquipment(
+        subject,
+        UUID.randomUUID(),
+        new CreateEquipmentRequest(
+            "MOVE-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
+            "Worker table",
+            EquipmentCategory.FURNITURE,
+            null))
+        .response()
+        .id();
+    seedStockBalance(equipmentId, warehouse, 10);
+    service.transfer(
+        subject,
+        UUID.randomUUID(),
+        new TransferEquipmentRequest(
+            equipmentId,
+            warehouse,
+            null,
+            BalanceLocationKind.STOCK,
+            0L,
+            warehouse,
+            cabin.id(),
+            BalanceLocationKind.CABIN_NON_RENTED,
+            0L,
+            4L));
+    long cabinVersion = jdbc.queryForObject(
+        """
+        select version from equipment_balance
+        where equipment_id=? and warehouse_id=? and rental_item_id=?
+          and location_kind='CABIN_NON_RENTED'
+        """,
+        Long.class,
+        equipmentId,
+        warehouse,
+        cabin.id());
+    UUID movementId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    var reserved = service.acquireLogisticsEquipmentMovementReservation(
+        subject,
+        UUID.randomUUID(),
+        new AcquireLogisticsEquipmentMovementReservationRequest(
+            movementId,
+            lineId,
+            equipmentId,
+            warehouse,
+            cabin.id(),
+            BalanceLocationKind.CABIN_NON_RENTED,
+            cabinVersion,
+            2L,
+            OffsetDateTime.now(ZoneOffset.UTC).plusHours(1)))
+        .response();
+
+    assertThat(reserved.equipmentCode()).startsWith("MOVE-");
+    assertThat(reserved.equipmentName()).isEqualTo("Worker table");
+    assertThat(reserved.sourceRentalItemId()).isEqualTo(cabin.id());
+    assertThat(service.equipmentTotals(equipmentId, warehouse).balances())
+        .filteredOn(balance -> cabin.id().equals(balance.rentalItemId()))
+        .singleElement()
+        .satisfies(
+            balance -> {
+              assertThat(balance.quantity()).isEqualTo(4L);
+              assertThat(balance.activeHeldQuantity()).isEqualTo(2L);
+              assertThat(balance.availableStock()).isEqualTo(2L);
+            });
+    assertThatThrownBy(() -> service.transfer(
+        subject,
+        UUID.randomUUID(),
+        new TransferEquipmentRequest(
+            equipmentId,
+            warehouse,
+            cabin.id(),
+            BalanceLocationKind.CABIN_NON_RENTED,
+            cabinVersion,
+            warehouse,
+            null,
+            BalanceLocationKind.STOCK,
+            1L,
+            3L)))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("reserved");
+
+    UUID executionKey = UUID.randomUUID();
+    ExecuteLogisticsEquipmentMovementReservationsRequest execution =
+        new ExecuteLogisticsEquipmentMovementReservationsRequest(
+            movementId,
+            List.of(new ExecuteLogisticsEquipmentMovementReservationLine(
+                reserved.reservationId(),
+                reserved.version(),
+                lineId,
+                warehouse,
+                null,
+                BalanceLocationKind.STOCK)));
+    var executed = service.executeLogisticsEquipmentMovementReservations(
+        subject, executionKey, execution);
+    var replayed = service.executeLogisticsEquipmentMovementReservations(
+        subject, executionKey, execution);
+
+    assertThat(executed.replayed()).isFalse();
+    assertThat(replayed.replayed()).isTrue();
+    assertThat(replayed.response()).isEqualTo(executed.response());
+    assertThat(executed.response().lines()).singleElement().satisfies(line -> {
+      assertThat(line.reservationId()).isEqualTo(reserved.reservationId());
+      assertThat(line.reservationVersion()).isEqualTo(reserved.version() + 1);
+      assertThat(line.movement().kind()).isEqualTo("CABIN_TO_STOCK");
+      assertThat(line.movement().quantity()).isEqualTo(2L);
+    });
+    assertThat(jdbc.queryForObject(
+        "select state from equipment_allocation_hold where id=?",
+        String.class,
+        reserved.reservationId())).isEqualTo("EXECUTED");
+    assertThat(jdbc.queryForObject(
+        """
+        select quantity from equipment_balance
+        where equipment_id=? and warehouse_id=? and rental_item_id=?
+          and location_kind='CABIN_NON_RENTED'
+        """,
+        Long.class,
+        equipmentId,
+        warehouse,
+        cabin.id())).isEqualTo(2L);
+    assertThat(replay.rebuildAndVerify().aggregateCount()).isGreaterThanOrEqualTo(6);
+  }
+
+  @Test
+  void expiredLineRollsBackTheEntireReservedMovementBatch() {
+    UUID subject = UUID.randomUUID();
+    UUID warehouse = UUID.randomUUID();
+    RentalItemResponse firstTarget = rental(subject, warehouse, RentalItemStatus.FREE);
+    RentalItemResponse secondTarget = rental(subject, warehouse, RentalItemStatus.FREE);
+    UUID equipmentId = service.createEquipment(
+        subject,
+        UUID.randomUUID(),
+        new CreateEquipmentRequest(
+            "BATCH-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
+            "Batch chair",
+            EquipmentCategory.FURNITURE,
+            null))
+        .response()
+        .id();
+    new TransactionTemplate(transactions).executeWithoutResult(
+        ignored -> seedStockBalance(equipmentId, warehouse, 10));
+    UUID movementId = UUID.randomUUID();
+    var first = service.acquireLogisticsEquipmentMovementReservation(
+        subject,
+        UUID.randomUUID(),
+        new AcquireLogisticsEquipmentMovementReservationRequest(
+            movementId,
+            UUID.randomUUID(),
+            equipmentId,
+            warehouse,
+            null,
+            BalanceLocationKind.STOCK,
+            0L,
+            2L,
+            OffsetDateTime.now(ZoneOffset.UTC).plusHours(1)))
+        .response();
+    var second = service.acquireLogisticsEquipmentMovementReservation(
+        subject,
+        UUID.randomUUID(),
+        new AcquireLogisticsEquipmentMovementReservationRequest(
+            movementId,
+            UUID.randomUUID(),
+            equipmentId,
+            warehouse,
+            null,
+            BalanceLocationKind.STOCK,
+            0L,
+            2L,
+            OffsetDateTime.now(ZoneOffset.UTC).plusHours(1)))
+        .response();
+    jdbc.update(
+        "update equipment_allocation_hold set expires_at=clock_timestamp() - interval '1 minute' where id=?",
+        second.reservationId());
+
+    assertThatThrownBy(() -> service.executeLogisticsEquipmentMovementReservations(
+        subject,
+        UUID.randomUUID(),
+        new ExecuteLogisticsEquipmentMovementReservationsRequest(
+            movementId,
+            List.of(
+                new ExecuteLogisticsEquipmentMovementReservationLine(
+                    first.reservationId(),
+                    first.version(),
+                    first.lineId(),
+                    warehouse,
+                    firstTarget.id(),
+                    BalanceLocationKind.CABIN_NON_RENTED),
+                new ExecuteLogisticsEquipmentMovementReservationLine(
+                    second.reservationId(),
+                    second.version(),
+                    second.lineId(),
+                    warehouse,
+                    secondTarget.id(),
+                    BalanceLocationKind.CABIN_NON_RENTED)))))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("changed concurrently");
+
+    assertThat(jdbc.queryForObject(
+        "select quantity from equipment_balance where equipment_id=? and warehouse_id=? and location_kind='STOCK'",
+        Long.class,
+        equipmentId,
+        warehouse)).isEqualTo(10L);
+    assertThat(jdbc.queryForObject(
+        "select count(*) from equipment_movement where equipment_id=?",
+        Integer.class,
+        equipmentId)).isZero();
+    assertThat(jdbc.queryForObject(
+        "select count(*) from equipment_balance where equipment_id=? and rental_item_id in (?, ?)",
+        Integer.class,
+        equipmentId,
+        firstTarget.id(),
+        secondTarget.id())).isZero();
   }
 
   private RentalItemResponse rental(UUID subject, UUID warehouseId, RentalItemStatus status) {

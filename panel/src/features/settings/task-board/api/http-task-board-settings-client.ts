@@ -11,6 +11,7 @@ import type {
   WorkerRequest,
   WorkQueueDto,
   WorkQueueRequest,
+  ReviewedTaskBoardBootstrapResult,
 } from "@/features/settings/task-board/model/task-board-settings"
 import { bearerRequest } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
@@ -26,6 +27,18 @@ function json(method: string, body: unknown): RequestInit {
 }
 
 export class HttpTaskBoardSettingsClient implements TaskBoardSettingsClient {
+  bootstrapReviewedData(
+    token: string,
+    warehouseId: string,
+    idempotencyKey: string
+  ) {
+    return bearerRequest<ReviewedTaskBoardBootstrapResult>(
+      token,
+      `${warehouseEndpoint(warehouseId)}/reviewed-bootstrap`,
+      { method: "POST", headers: { "Idempotency-Key": idempotencyKey } }
+    )
+  }
+
   listQueues(token: string, warehouseId: string) {
     return bearerRequest<WorkQueueDto[]>(
       token,

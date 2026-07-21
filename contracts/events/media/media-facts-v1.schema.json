@@ -45,14 +45,22 @@
       "required": ["mediaId", "ownerType", "ownerId", "warehouseId", "kind", "status", "generation", "rotationDegrees"],
       "properties": {
         "mediaId": {"type": "string", "format": "uuid"},
-        "ownerType": {"const": "INVENTORY_FINDING"},
-        "ownerId": {"type": "string", "format": "uuid"},
+        "folderId": {"type": "string", "format": "uuid"},
+        "ownerType": {"enum": ["INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR", "MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN", "LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER"]},
+        "ownerId": {"type": "string", "maxLength": 128},
         "warehouseId": {"type": "string", "format": "uuid"},
         "kind": {"enum": ["IMAGE", "VIDEO"]},
         "status": {"enum": ["PROCESSING", "READY", "FAILED", "DELETED"]},
         "generation": {"type": "integer", "minimum": 0},
         "rotationDegrees": {"enum": [0, 90, 180, 270]}
-      }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"ownerType": {"enum": ["LOGISTICS_RETURN", "LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER"]}}},
+          "then": {"properties": {"ownerId": {"pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"}}},
+          "else": {"properties": {"ownerId": {"format": "uuid"}}}
+        }
+      ]
     }
   }
 }

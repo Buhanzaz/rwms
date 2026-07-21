@@ -16,6 +16,11 @@ import {
 import { RentalItemCreateDialog } from "@/features/rental-items/rental-item-create-dialog"
 import { RentalItemPhotoDialog } from "@/features/rental-items/rental-item-photo-dialog"
 import { RentalItemsColumnSettingsDialog } from "@/features/rental-items/rental-items-column-settings-dialog"
+import {
+  buildRentalItemsFilterOptions,
+  filterRentalItemsByFilters,
+  pruneRentalItemsFilters,
+} from "@/features/rental-items/rental-items-filtering"
 import { RentalItemsFilters } from "@/features/rental-items/rental-items-filters"
 import { RentalItemsGridView } from "@/features/rental-items/rental-items-grid-view"
 import { RentalItemsGridSettingsDialog } from "@/features/rental-items/rental-items-grid-settings-dialog"
@@ -28,19 +33,19 @@ import {
   useRentalItemsGridViewport,
 } from "@/features/rental-items/rental-items-grid-format"
 import { RentalItemsTableView } from "@/features/rental-items/rental-items-table-view"
+import {
+  loadRentalItemCoverPage,
+  RENTAL_ITEM_COVERS_QUERY_KEY,
+} from "@/features/rental-items/use-rental-item-covers"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { useAuth } from "@/features/auth/use-auth"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import {
   buildRentalItemsTableSchema,
-  EMPTY_RENTAL_ITEMS_TABLE_SCHEMA,
-  getRentalItemFieldLabel,
   getRentalItemSortValue,
-  getVisibleRentalItemFilterDefinitions,
   normalizeRentalItemsColumnConfig,
   type RentalItemDto,
   type RentalItemsColumnConfig,
-  type RentalItemsFilterOptionSet,
   type RentalItemsFiltersState,
   type RentalItemsViewMode,
 } from "@/features/rental-items/model/rental-item"
@@ -121,31 +126,6 @@ function getInitialGridSize(warehouseId: string) {
   }
 }
 
-function pruneFilters(
-  filters: RentalItemsFiltersState,
-  filterOptions: RentalItemsFilterOptionSet[]
-) {
-  const enabledFilterIds = new Set(filterOptions.map((option) => option.id))
-
-  return Object.fromEntries(
-    Object.entries(filters).filter(([key, values]) => {
-      return enabledFilterIds.has(key) && values && values.length > 0
-    })
-  ) as RentalItemsFiltersState
-}
-
-function filterRentalItems(
-  items: RentalItemDto[],
-  filters: RentalItemsFiltersState
-) {
-  return items.filter((item) =>
-    Object.entries(filters).every(([key, values]) => {
-      if (!values || values.length === 0) return true
-      return values.includes(getRentalItemFieldLabel(item, key))
-    })
-  )
-}
-
 function sortRentalItems(
   items: RentalItemDto[],
   sortBy: string | undefined,
@@ -165,21 +145,6 @@ function sortRentalItems(
           })
     return compared * direction
   })
-}
-
-function buildFilterOptions(
-  items: RentalItemDto[],
-  schema: typeof EMPTY_RENTAL_ITEMS_TABLE_SCHEMA,
-  columnsConfig: RentalItemsColumnConfig[]
-): RentalItemsFilterOptionSet[] {
-  return getVisibleRentalItemFilterDefinitions(schema, columnsConfig).map(
-    (filter) => ({
-      ...filter,
-      values: Array.from(
-        new Set(items.map((item) => getRentalItemFieldLabel(item, filter.id)))
-      ).sort((left, right) => left.localeCompare(right, "ru")),
-    })
-  )
 }
 
 export function RentalItemsPage() {
@@ -209,6 +174,11 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
     currentUser,
     warehouseId,
     "EDIT"
+  )
+  const canManageRentalItemContents = hasWarehouseAccess(
+    currentUser,
+    warehouseId,
+    "MANAGE"
   )
 
   const [search, setSearch] = useState(() => getInitialSearch(warehouseId))
@@ -284,13 +254,47 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
         accessToken,
         warehouseId,
         page,
-        size: 50,
+        size: 200,
         search,
       }),
     enabled: status === "authenticated" && Boolean(accessToken),
   })
 
   const loadedItems = rentalItemsQuery.data?.content ?? EMPTY_RENTAL_ITEMS
+  const loadedItemIds = useMemo(
+    () => loadedItems.map((item) => item.id),
+    [loadedItems]
+  )
+  const coverQuery = useQuery({
+    queryKey: [
+      ...RENTAL_ITEM_COVERS_QUERY_KEY,
+      currentUser?.id ?? "unknown-user",
+      warehouseId,
+      loadedItemIds,
+    ],
+    queryFn: () =>
+      loadRentalItemCoverPage(accessToken!, warehouseId, loadedItemIds),
+    retry: false,
+    enabled:
+      status === "authenticated" &&
+      Boolean(accessToken) &&
+      loadedItemIds.length > 0,
+  })
+  const mediaCovers = useMemo(
+    () =>
+      new Map(
+        (coverQuery.data?.items ?? []).map((projection) => [
+          projection.cabinId,
+          projection,
+        ])
+      ),
+    [coverQuery.data?.items]
+  )
+  const coverAvailability = coverQuery.data
+    ? "available"
+    : coverQuery.isError
+      ? "unavailable"
+      : "loading"
   const tableSchema = useMemo(
     () => buildRentalItemsTableSchema(loadedItems),
     [loadedItems]
@@ -304,12 +308,13 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
   }, [savedColumnsConfig, tableSchema.columns])
 
   const filterOptions = useMemo(
-    () => buildFilterOptions(loadedItems, tableSchema, columnsConfig),
+    () =>
+      buildRentalItemsFilterOptions(loadedItems, tableSchema, columnsConfig),
     [columnsConfig, loadedItems, tableSchema]
   )
 
   const effectiveFilters = useMemo(() => {
-    return pruneFilters(filters, filterOptions)
+    return pruneRentalItemsFilters(filters, filterOptions)
   }, [filterOptions, filters])
 
   const sortBy = sorting[0]?.id
@@ -317,7 +322,7 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
   const items = useMemo(
     () =>
       sortRentalItems(
-        filterRentalItems(loadedItems, effectiveFilters),
+        filterRentalItemsByFilters(loadedItems, effectiveFilters),
         sortBy,
         sortDirection
       ),
@@ -539,6 +544,9 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
           onSortingChange={setSorting}
           onOpenPhotos={setPhotoItem}
           onOpenItem={openRentalItem}
+          canManageContents={canManageRentalItemContents}
+          mediaCovers={mediaCovers}
+          coverAvailability={coverAvailability}
         />
       ) : (
         <RentalItemsGridView
@@ -546,6 +554,9 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
           gridFormat={effectiveGridFormat}
           onOpenPhotos={setPhotoItem}
           onOpenItem={openRentalItem}
+          accessToken={accessToken}
+          mediaCovers={mediaCovers}
+          coverAvailability={coverAvailability}
         />
       )}
 

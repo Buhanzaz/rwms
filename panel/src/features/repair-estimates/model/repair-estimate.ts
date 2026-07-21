@@ -1,4 +1,7 @@
-import type { RepairEstimateCatalogRouteQueueKind } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
+import type {
+  RepairEstimateCatalogRouteQueueKind,
+  RepairEstimateFurnitureEquipmentReferenceDto,
+} from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 import type { MediaProcessingStatus } from "@/features/media/model/media"
 
 export type RepairEstimateId = string
@@ -28,6 +31,7 @@ export type RepairEstimateCatalogLineSnapshotDto = {
   code: string
   name: string
   nodeType: "WORK" | "MATERIAL" | "OPTION"
+  furnitureEquipment: RepairEstimateFurnitureEquipmentReferenceDto | null
 }
 
 export type RepairEstimateLineDto = {

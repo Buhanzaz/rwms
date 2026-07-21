@@ -124,14 +124,21 @@ function parseSourceReference(value: unknown): DossierSourceReference {
 function parseMediaProjection(value: unknown): DossierMediaProjection {
   if (
     !isRecord(value) ||
-    !hasOnlyKeys(value, ["mediaId", "findingId", "generation", "state"])
+    !hasOnlyKeys(value, [
+      "mediaId",
+      "folderId",
+      "findingId",
+      "generation",
+      "state",
+    ])
   ) {
     throw new Error(INVALID_RESPONSE_MESSAGE)
   }
 
-  const { mediaId, findingId, generation, state } = value
+  const { mediaId, folderId, findingId, generation, state } = value
   if (
     !isUuid(mediaId) ||
+    !isUuid(folderId) ||
     !isUuid(findingId) ||
     typeof generation !== "number" ||
     !Number.isSafeInteger(generation) ||
@@ -144,6 +151,7 @@ function parseMediaProjection(value: unknown): DossierMediaProjection {
 
   return {
     mediaId,
+    folderId,
     findingId,
     generation,
     state: state as DossierMediaState,

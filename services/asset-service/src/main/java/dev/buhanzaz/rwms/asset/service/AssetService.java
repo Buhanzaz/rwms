@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
 import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCatalogItem;
+import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
 import dev.buhanzaz.rwms.asset.domain.OperationLease;
 import dev.buhanzaz.rwms.asset.domain.OperationLeaseState;
 import dev.buhanzaz.rwms.asset.domain.RentalItem;
@@ -23,14 +24,17 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
@@ -132,6 +136,8 @@ public class AssetService {
     }
 
     lockRentalItemAndLease(request.rentalItemId());
+    assertNoActiveOrderReservation(
+        request.rentalItemId(), "Reserved order unit cannot acquire an operation lease");
     RentalItem item = requireRentalItem(request.rentalItemId());
     assertVersion(item.getVersion(), request.expectedRentalItemVersion());
     expireLeases(request.rentalItemId());
@@ -238,6 +244,7 @@ public class AssetService {
             "Transfer arrival must move the rental item to another warehouse");
       }
       warehouses.requireActive(request.destinationWarehouseId());
+      assertRentalNumberAvailableInWarehouse(item, request.destinationWarehouseId());
     }
 
     item.changeStatusUnderLease(target);
@@ -281,12 +288,12 @@ public class AssetService {
         request.warehouseId(),
         null,
         BalanceLocationKind.STOCK));
-    expireHolds(request.equipmentId(), request.warehouseId());
     BalanceRow stock = requireBalance(
         request.equipmentId(), request.warehouseId(), null, BalanceLocationKind.STOCK);
+    expireHolds(stock);
     assertVersion(stock.version(), request.expectedStockVersion());
     long available = Math.subtractExact(
-        stock.quantity(), activeHeld(request.equipmentId(), request.warehouseId()));
+        stock.quantity(), activeHeld(stock));
     if (available < request.quantity()) {
       throw new AssetConflictException("Active equipment holds reduce available stock");
     }
@@ -294,12 +301,13 @@ public class AssetService {
     OffsetDateTime expiry = now().plus(holdTtl);
     jdbc.update(
         """
-        insert into equipment_allocation_hold(id,version,equipment_id,warehouse_id,owner_type,owner_id,quantity,state,idempotency_key,expires_at,created_at,updated_at)
-        values (?,0,?,?,?,?,?,'ACTIVE',?,?,clock_timestamp(),clock_timestamp())
+        insert into equipment_allocation_hold(id,version,equipment_id,warehouse_id,source_balance_id,owner_type,owner_id,quantity,state,idempotency_key,expires_at,created_at,updated_at)
+        values (?,0,?,?,?,?,?,?,'ACTIVE',?,?,clock_timestamp(),clock_timestamp())
         """,
         id,
         request.equipmentId(),
         request.warehouseId(),
+        stock.id(),
         LogisticsLeaseOwnerType.LOGISTICS_SHIPMENT.name(),
         logisticsOwnerId(request.shipmentId(), request.shipmentLineId()),
         request.quantity(),
@@ -367,7 +375,7 @@ public class AssetService {
       return new CreateResult<>(
           read(replay.get(), LogisticsEquipmentHoldResponse.class), true);
     }
-    expireHolds(current.equipmentId(), current.warehouseId());
+    expireHolds(current);
     current = holdResponse(id);
     assertLogisticsShipmentHoldOwner(current, request.shipmentId(), request.shipmentLineId());
     assertVersion(current.version(), request.expectedVersion());
@@ -410,7 +418,7 @@ public class AssetService {
       return new CreateResult<>(
           read(replay.get(), LogisticsEquipmentHoldResponse.class), true);
     }
-    expireHolds(current.equipmentId(), current.warehouseId());
+    expireHolds(current);
     current = holdResponse(id);
     assertLogisticsShipmentHoldOwner(current, request.shipmentId(), request.shipmentLineId());
     assertVersion(current.version(), request.expectedVersion());
@@ -441,6 +449,381 @@ public class AssetService {
     return new CreateResult<>(safe, false);
   }
 
+  /**
+   * Acquires a task-deadline reservation on one concrete balance. Unlike the
+   * older shipment hold API, this is deliberately able to reserve furniture
+   * already inside a cabin as well as stock.
+   */
+  @Transactional
+  public CreateResult<LogisticsEquipmentMovementReservationResponse>
+      acquireLogisticsEquipmentMovementReservation(
+          UUID subjectId,
+          UUID key,
+          AcquireLogisticsEquipmentMovementReservationRequest request) {
+    String hash = hash(request);
+    Optional<JsonNode> replay = idempotency.replay(
+        subjectId, "logistics.equipment-movement-reservation.acquire", key, hash);
+    if (replay.isPresent()) {
+      return new CreateResult<>(
+          read(replay.get(), LogisticsEquipmentMovementReservationResponse.class), true);
+    }
+    if (!isMovableReservationSource(request.sourceLocationKind())) {
+      throw new IllegalArgumentException(
+          "Equipment movement reservation source must be stock or a cabin balance");
+    }
+    warehouses.requireActive(request.sourceWarehouseId());
+    EquipmentCatalogItem catalog = requireEquipment(request.equipmentId());
+    validateBalanceLocation(
+        request.sourceWarehouseId(),
+        request.sourceRentalItemId(),
+        request.sourceLocationKind());
+    if (request.sourceRentalItemId() != null) {
+      advisoryLock(rentalItemLockKey(request.sourceRentalItemId()));
+      assertNoActiveLease(request.sourceRentalItemId());
+    }
+    advisoryLock(balanceLockKey(
+        request.equipmentId(),
+        request.sourceWarehouseId(),
+        request.sourceRentalItemId(),
+        request.sourceLocationKind()));
+    BalanceRow source = requireBalance(
+        request.equipmentId(),
+        request.sourceWarehouseId(),
+        request.sourceRentalItemId(),
+        request.sourceLocationKind());
+    expireHolds(source);
+    assertVersion(source.version(), request.expectedSourceBalanceVersion());
+    OffsetDateTime acquiredAt = now();
+    if (!request.reservedUntil().isAfter(acquiredAt)) {
+      throw new IllegalArgumentException("reservedUntil must be in the future");
+    }
+    long available = Math.subtractExact(source.quantity(), activeHeld(source));
+    if (available < request.quantity()) {
+      throw new AssetConflictException(
+          "Equipment movement reservation exceeds the unreserved source balance");
+    }
+    assertNoActiveMovementReservation(request.movementId(), request.lineId());
+    UUID reservationId = UUID.randomUUID();
+    try {
+      jdbc.update(
+          """
+          insert into equipment_allocation_hold(
+            id,version,equipment_id,warehouse_id,source_balance_id,owner_type,owner_id,
+            quantity,state,idempotency_key,expires_at,created_at,updated_at)
+          values (?,0,?,?,?,?,?,?,'ACTIVE',?,?,?,?)
+          """,
+          reservationId,
+          request.equipmentId(),
+          request.sourceWarehouseId(),
+          source.id(),
+          LogisticsEquipmentMovementReservationOwnerType
+              .LOGISTICS_EQUIPMENT_MOVEMENT
+              .name(),
+          logisticsOwnerId(request.movementId(), request.lineId()),
+          request.quantity(),
+          key,
+          request.reservedUntil(),
+          acquiredAt,
+          acquiredAt);
+    } catch (DataIntegrityViolationException exception) {
+      throw new AssetConflictException(
+          "Equipment movement line already has an active reservation");
+    }
+    EquipmentHoldResponse reservation = holdResponse(reservationId);
+    events.initialize(
+        AssetAggregateType.EQUIPMENT_ALLOCATION_HOLD,
+        reservationId,
+        0,
+        AssetEventType.EQUIPMENT_HOLD_ACQUIRED,
+        holdFact(reservation),
+        holdSnapshot(reservation));
+    LogisticsEquipmentMovementReservationResponse response =
+        movementReservationResponse(reservation, catalog, source);
+    idempotency.store(
+        subjectId,
+        "logistics.equipment-movement-reservation.acquire",
+        key,
+        hash,
+        201,
+        response);
+    return new CreateResult<>(response, false);
+  }
+
+  @Transactional
+  public CreateResult<LogisticsEquipmentMovementReservationResponse>
+      releaseLogisticsEquipmentMovementReservation(
+          UUID subjectId,
+          UUID key,
+          UUID reservationId,
+          LogisticsEquipmentMovementReservationCommandRequest request) {
+    EquipmentHoldResponse current = holdResponse(reservationId);
+    assertMovementReservationOwner(current, request.movementId(), request.lineId());
+    String hash = hash(new LogisticsEquipmentMovementReservationCommand(reservationId, request));
+    Optional<JsonNode> replay = idempotency.replay(
+        subjectId, "logistics.equipment-movement-reservation.release", key, hash);
+    if (replay.isPresent()) {
+      return new CreateResult<>(
+          read(replay.get(), LogisticsEquipmentMovementReservationResponse.class), true);
+    }
+    expireHolds(current);
+    current = holdResponse(reservationId);
+    assertMovementReservationOwner(current, request.movementId(), request.lineId());
+    assertVersion(current.version(), request.expectedReservationVersion());
+    EquipmentHoldResponse updated = current;
+    if ("ACTIVE".equals(current.state())) {
+      int changed = jdbc.update(
+          """
+          update equipment_allocation_hold
+          set version=version+1,state='RELEASED',released_at=clock_timestamp(),updated_at=clock_timestamp()
+          where id=? and version=? and state='ACTIVE'
+          """,
+          reservationId,
+          request.expectedReservationVersion());
+      if (changed != 1) {
+        throw new AssetConflictException(
+            "Equipment movement reservation changed concurrently during release");
+      }
+      updated = holdResponse(reservationId);
+      events.append(
+          AssetAggregateType.EQUIPMENT_ALLOCATION_HOLD,
+          reservationId,
+          request.expectedReservationVersion(),
+          AssetEventType.EQUIPMENT_HOLD_RELEASED,
+          holdFact(updated),
+          holdSnapshot(updated));
+    }
+    LogisticsEquipmentMovementReservationResponse response =
+        movementReservationResponse(updated);
+    idempotency.store(
+        subjectId,
+        "logistics.equipment-movement-reservation.release",
+        key,
+        hash,
+        200,
+        response);
+    return new CreateResult<>(response, false);
+  }
+
+  /**
+   * Converts a completed worker task into ledger entries and reservation state
+   * changes atomically. No browser or logistics-side balance mutation is part
+   * of this operation.
+   */
+  @Transactional
+  public CreateResult<LogisticsEquipmentMovementExecutionResponse>
+      executeLogisticsEquipmentMovementReservations(
+          UUID subjectId,
+          UUID key,
+          ExecuteLogisticsEquipmentMovementReservationsRequest request) {
+    String hash = hash(request);
+    Optional<JsonNode> replay = idempotency.replay(
+        subjectId, "logistics.equipment-movement-reservation.execute", key, hash);
+    if (replay.isPresent()) {
+      return new CreateResult<>(
+          read(replay.get(), LogisticsEquipmentMovementExecutionResponse.class), true);
+    }
+    validateMovementExecutionRequest(request);
+
+    List<MovementReservationCandidate> candidates = new ArrayList<>();
+    for (ExecuteLogisticsEquipmentMovementReservationLine line : request.lines()) {
+      EquipmentHoldResponse reservation = holdRead(line.reservationId());
+      assertMovementReservationOwner(reservation, request.movementId(), line.lineId());
+      if (reservation.sourceBalanceId() == null) {
+        throw new AssetConflictException(
+            "Equipment movement reservation has no concrete source balance");
+      }
+      BalanceRow source = balanceReadById(reservation.sourceBalanceId());
+      if (!source.equipmentId().equals(reservation.equipmentId())
+          || !source.warehouseId().equals(reservation.warehouseId())) {
+        throw new AssetConflictException(
+            "Equipment movement reservation source no longer matches its balance");
+      }
+      warehouses.requireActive(line.targetWarehouseId());
+      validateBalanceLocation(
+          line.targetWarehouseId(), line.targetRentalItemId(), line.targetLocationKind());
+      candidates.add(new MovementReservationCandidate(reservation, source, line));
+    }
+
+    advisoryLocks(candidates.stream()
+        .flatMap(candidate -> java.util.stream.Stream.of(
+            candidate.source().rentalItemId(),
+            candidate.line().targetRentalItemId()))
+        .filter(java.util.Objects::nonNull)
+        .map(AssetService::rentalItemLockKey)
+        .toList());
+    candidates.stream()
+        .flatMap(candidate -> java.util.stream.Stream.of(
+            candidate.source().rentalItemId(),
+            candidate.line().targetRentalItemId()))
+        .filter(java.util.Objects::nonNull)
+        .distinct()
+        .sorted(Comparator.comparing(UUID::toString))
+        .forEach(this::assertNoActiveLease);
+    for (MovementReservationCandidate candidate : candidates) {
+      validateBalanceLocation(
+          candidate.line().targetWarehouseId(),
+          candidate.line().targetRentalItemId(),
+          candidate.line().targetLocationKind());
+    }
+    advisoryLocks(candidates.stream()
+        .flatMap(candidate -> java.util.stream.Stream.of(
+            balanceLockKey(
+                candidate.source().equipmentId(),
+                candidate.source().warehouseId(),
+                candidate.source().rentalItemId(),
+                candidate.source().kind()),
+            balanceLockKey(
+                candidate.reservation().equipmentId(),
+                candidate.line().targetWarehouseId(),
+                candidate.line().targetRentalItemId(),
+                candidate.line().targetLocationKind())))
+        .toList());
+
+    Map<UUID, BalanceRow> sources = new LinkedHashMap<>();
+    for (MovementReservationCandidate candidate : candidates) {
+      BalanceRow source = requireBalanceById(candidate.source().id());
+      if (!source.equipmentId().equals(candidate.reservation().equipmentId())
+          || !source.warehouseId().equals(candidate.reservation().warehouseId())
+          || !java.util.Objects.equals(
+              source.rentalItemId(), candidate.source().rentalItemId())
+          || source.kind() != candidate.source().kind()) {
+        throw new AssetConflictException(
+            "Equipment movement reservation source changed concurrently");
+      }
+      sources.put(source.id(), source);
+    }
+    for (BalanceRow source : sources.values()) {
+      expireHolds(source);
+    }
+
+    List<MovementReservationExecutionPlan> plans = new ArrayList<>();
+    for (MovementReservationCandidate candidate : candidates) {
+      EquipmentHoldResponse reservation = holdResponse(candidate.line().reservationId());
+      assertMovementReservationOwner(reservation, request.movementId(), candidate.line().lineId());
+      assertVersion(reservation.version(), candidate.line().expectedReservationVersion());
+      if (!"ACTIVE".equals(reservation.state())
+          || !reservation.expiresAt().isAfter(now())) {
+        throw new AssetConflictException("Equipment movement reservation is not active");
+      }
+      BalanceRow source = requireBalanceById(reservation.sourceBalanceId());
+      BalanceRow target = findBalance(
+          reservation.equipmentId(),
+          candidate.line().targetWarehouseId(),
+          candidate.line().targetRentalItemId(),
+          candidate.line().targetLocationKind()).orElseGet(
+              () -> createEmptyBalance(
+                  reservation.equipmentId(),
+                  candidate.line().targetWarehouseId(),
+                  candidate.line().targetRentalItemId(),
+                  candidate.line().targetLocationKind()));
+      if (source.id().equals(target.id())) {
+        throw new AssetConflictException(
+            "Equipment movement reservation source and target must differ");
+      }
+      plans.add(new MovementReservationExecutionPlan(reservation, source, target, candidate.line()));
+    }
+    assertReservedExecutionAvailability(plans);
+    events.lockStreams(plans.stream()
+        .flatMap(plan -> java.util.stream.Stream.of(
+            new AssetEventStore.StreamRef(AssetAggregateType.EQUIPMENT_BALANCE, plan.source().id()),
+            new AssetEventStore.StreamRef(AssetAggregateType.EQUIPMENT_BALANCE, plan.target().id())))
+        .toList());
+
+    List<LogisticsEquipmentMovementExecutionLine> responseLines = new ArrayList<>();
+    for (MovementReservationExecutionPlan plan : plans) {
+      BalanceRow source = requireBalanceById(plan.source().id());
+      BalanceRow target = requireBalanceById(plan.target().id());
+      decrement(source, plan.reservation().quantity(), source.version());
+      increment(target, plan.reservation().quantity(), target.version());
+      BalanceRow sourceAfter = requireBalanceById(source.id());
+      BalanceRow targetAfter = requireBalanceById(target.id());
+      events.append(
+          AssetAggregateType.EQUIPMENT_BALANCE,
+          source.id(),
+          source.version(),
+          AssetEventType.EQUIPMENT_BALANCE_CHANGED,
+          balanceFact(sourceAfter),
+          balanceSnapshot(sourceAfter));
+      events.append(
+          AssetAggregateType.EQUIPMENT_BALANCE,
+          target.id(),
+          target.version(),
+          AssetEventType.EQUIPMENT_BALANCE_CHANGED,
+          balanceFact(targetAfter),
+          balanceSnapshot(targetAfter));
+      UUID movementId = UUID.randomUUID();
+      String kind = movementKind(source.kind(), target.kind());
+      jdbc.update(
+          """
+          insert into equipment_movement(
+            id,version,equipment_id,source_balance_id,target_balance_id,quantity,movement_kind,occurred_at,actor_subject_id)
+          values (?,0,?,?,?,?,?,clock_timestamp(),?)
+          """,
+          movementId,
+          plan.reservation().equipmentId(),
+          source.id(),
+          target.id(),
+          plan.reservation().quantity(),
+          kind,
+          subjectId);
+      jdbc.update(
+          """
+          insert into equipment_movement_ledger(
+            movement_id,line_no,balance_id,quantity_delta,recorded_at)
+          values (?,1,?,-?,clock_timestamp()), (?,2,?,?,clock_timestamp())
+          """,
+          movementId,
+          source.id(),
+          plan.reservation().quantity(),
+          movementId,
+          target.id(),
+          plan.reservation().quantity());
+      MovementResponse movement = movementResponse(movementId);
+      events.initialize(
+          AssetAggregateType.EQUIPMENT_MOVEMENT,
+          movementId,
+          0,
+          movementEventType(kind),
+          movementFact(movement),
+          Map.of("movementId", movementId.toString(), "version", 0));
+      int changed = jdbc.update(
+          """
+          update equipment_allocation_hold
+          set version=version+1,state='EXECUTED',executed_at=clock_timestamp(),updated_at=clock_timestamp()
+          where id=? and version=? and state='ACTIVE' and expires_at>clock_timestamp()
+          """,
+          plan.reservation().id(),
+          plan.reservation().version());
+      if (changed != 1) {
+        throw new AssetConflictException(
+            "Equipment movement reservation changed concurrently during execution");
+      }
+      EquipmentHoldResponse executed = holdResponse(plan.reservation().id());
+      events.append(
+          AssetAggregateType.EQUIPMENT_ALLOCATION_HOLD,
+          executed.id(),
+          plan.reservation().version(),
+          AssetEventType.EQUIPMENT_HOLD_EXECUTED,
+          holdFact(executed),
+          holdSnapshot(executed));
+      responseLines.add(new LogisticsEquipmentMovementExecutionLine(
+          executed.id(),
+          executed.version(),
+          plan.line().lineId(),
+          movement));
+    }
+    LogisticsEquipmentMovementExecutionResponse response =
+        new LogisticsEquipmentMovementExecutionResponse(request.movementId(), List.copyOf(responseLines));
+    idempotency.store(
+        subjectId,
+        "logistics.equipment-movement-reservation.execute",
+        key,
+        hash,
+        201,
+        response);
+    return new CreateResult<>(response, false);
+  }
+
   @Transactional
   public CreateResult<RentalItemResponse> createRentalItem(UUID subjectId, UUID key, CreateRentalItemRequest request) {
     warehouses.requireActive(request.warehouseId());
@@ -449,8 +832,10 @@ public class AssetService {
     if (replay.isPresent()) return new CreateResult<>(read(replay.get(), RentalItemResponse.class), true);
     RentalItem candidate = RentalItem.create(request.warehouseId(), request.number(), request.rentalType(), request.dimensions(),
         request.finishing(), request.category(), request.characteristics(), request.linoleum(), jsonObject(request.passport()), jsonArray(request.tags()));
-    if (rentalItems.existsByIdentityMatchKey(candidate.getIdentityMatchKey())) {
-      throw new AssetConflictException("Rental item number identity is globally unique and cannot be reused");
+    if (rentalItems.existsByWarehouseIdAndIdentityMatchKey(
+        candidate.getWarehouseId(), candidate.getIdentityMatchKey())) {
+      throw new AssetConflictException(
+          "Rental item number identity is already used in this warehouse");
     }
     RentalItem persisted = rentalItems.saveAndFlush(candidate);
     events.initialize(AssetAggregateType.RENTAL_ITEM, persisted.getId(), persisted.getVersion(), AssetEventType.RENTAL_ITEM_CREATED,
@@ -490,10 +875,14 @@ public class AssetService {
     assertNoActiveLease(id);
     RentalItem item = requireRentalItem(id);
     assertVersion(item.getVersion(), request.expectedVersion());
+    if (!item.getWarehouseId().equals(request.warehouseId())) {
+      assertNoActiveOrderReservation(id, "Reserved order unit cannot change warehouse");
+    }
     warehouses.requireActive(request.warehouseId());
     if (!contents(id).isEmpty()) {
       throw new AssetConflictException("Rental item with equipment contents must be moved through equipment transfers first");
     }
+    assertRentalNumberAvailableInWarehouse(item, request.warehouseId());
     if (!item.changeWarehouse(request.warehouseId())) return rentalResponse(item);
     RentalItem saved = rentalItems.saveAndFlush(item);
     events.append(AssetAggregateType.RENTAL_ITEM, saved.getId(), request.expectedVersion(), AssetEventType.RENTAL_ITEM_WAREHOUSE_CHANGED,
@@ -556,6 +945,48 @@ public class AssetService {
   public EquipmentResponse equipment(UUID id) { return equipmentResponse(requireEquipment(id)); }
 
   @Transactional
+  public EquipmentResponse ensureMaintenanceFurnitureEquipment(
+      String rawCode, EnsureMaintenanceFurnitureEquipmentRequest request) {
+    String code = EquipmentCatalogItem.canonicalCode(rawCode);
+    String name = required(request == null ? null : request.equipmentName(), 255);
+    advisoryLock(equipmentCatalogLockKey(code));
+    EquipmentCatalogItem item = equipment.findAllByOrderByCode().stream()
+        .filter(candidate -> code.equals(candidate.getCode()))
+        .findFirst()
+        .orElse(null);
+    if (item == null) {
+      EquipmentCatalogItem created = EquipmentCatalogItem.create(
+          code, name, EquipmentCategory.FURNITURE, null);
+      EquipmentCatalogItem saved = equipment.saveAndFlush(created);
+      events.initialize(
+          AssetAggregateType.EQUIPMENT_CATALOG,
+          saved.getId(),
+          saved.getVersion(),
+          AssetEventType.EQUIPMENT_CATALOG_CREATED,
+          equipmentFact(saved),
+          equipmentSnapshot(saved));
+      return equipmentResponse(saved);
+    }
+    if (item.getCategory() != EquipmentCategory.FURNITURE
+        || !item.getName().equals(name)) {
+      throw new AssetConflictException(
+          "Equipment catalog code already belongs to another category or name");
+    }
+    if (item.isActive()) return equipmentResponse(item);
+    long expectedVersion = item.getVersion();
+    item.change(code, name, EquipmentCategory.FURNITURE, true, item.getComment());
+    EquipmentCatalogItem saved = equipment.saveAndFlush(item);
+    events.append(
+        AssetAggregateType.EQUIPMENT_CATALOG,
+        saved.getId(),
+        expectedVersion,
+        AssetEventType.EQUIPMENT_CATALOG_CHANGED,
+        equipmentFact(saved),
+        equipmentSnapshot(saved));
+    return equipmentResponse(saved);
+  }
+
+  @Transactional
   public CreateResult<EquipmentResponse> createEquipment(UUID subjectId, UUID key, CreateEquipmentRequest request) {
     String hash = hash(request);
     Optional<JsonNode> replay = idempotency.replay(subjectId, "equipment-catalog.create", key, hash);
@@ -592,10 +1023,22 @@ public class AssetService {
     long rented = sum(rows, BalanceLocationKind.CABIN_RENTED);
     long writtenOff = sum(rows, BalanceLocationKind.WRITTEN_OFF);
     long lost = sum(rows, BalanceLocationKind.LOST);
-    long held = activeHeld(equipmentId, warehouseId);
-    List<EquipmentBalanceResponse> values = rows.stream().map(row -> balanceResponse(row, held)).toList();
+    Map<UUID, Long> heldByBalance = new LinkedHashMap<>();
+    long activeHeld = 0;
+    long heldAtStock = 0;
+    for (BalanceRow row : rows) {
+      long held = activeHeld(row);
+      heldByBalance.put(row.id(), held);
+      activeHeld = Math.addExact(activeHeld, held);
+      if (row.rentalItemId() == null && row.kind() == BalanceLocationKind.STOCK) {
+        heldAtStock = held;
+      }
+    }
+    List<EquipmentBalanceResponse> values = rows.stream()
+        .map(row -> balanceResponse(row, heldByBalance.get(row.id())))
+        .toList();
     return new EquipmentTotalsResponse(equipmentId, warehouseId, Math.addExact(Math.addExact(Math.addExact(stock, nonRented), Math.addExact(rented, writtenOff)), lost),
-        stock, nonRented, rented, writtenOff, lost, held, Math.max(0, stock - held), values);
+        stock, nonRented, rented, writtenOff, lost, activeHeld, Math.max(0, stock - heldAtStock), values);
   }
 
   @Transactional(readOnly = true)
@@ -622,6 +1065,14 @@ public class AssetService {
       throw new IllegalArgumentException("Use the disposition command for written-off or lost equipment");
     }
     return move(subjectId, key, "equipment.transfer", request, AssetEventType.EQUIPMENT_TRANSFERRED);
+  }
+
+  /**
+   * Joins an order command to the canonical rental-item/lease lock order before the order service
+   * obtains a row lock. The caller must already own a transaction.
+   */
+  void lockOrderRentalItemForOrder(UUID rentalItemId) {
+    assertNoActiveLease(rentalItemId);
   }
 
   private CreateResult<MovementResponse> move(
@@ -655,9 +1106,9 @@ public class AssetService {
         .orElseGet(() -> createEmptyBalance(request.equipmentId(), request.targetWarehouseId(), request.targetRentalItemId(), request.targetLocationKind()));
     assertVersion(target.version(), request.targetExpectedVersion());
     if (source.quantity() < request.quantity()) throw new AssetConflictException("Equipment balance cannot become negative");
-    if (source.kind() == BalanceLocationKind.STOCK
-        && Math.subtractExact(source.quantity(), request.quantity()) < activeHeld(source.equipmentId(), source.warehouseId())) {
-      throw new AssetConflictException("Equipment transfer would consume stock reserved by active holds");
+    if (Math.subtractExact(source.quantity(), request.quantity()) < activeHeld(source)) {
+      throw new AssetConflictException(
+          "Equipment transfer would consume quantities reserved by an active hold");
     }
     events.lockStreams(List.of(new AssetEventStore.StreamRef(AssetAggregateType.EQUIPMENT_BALANCE, source.id()), new AssetEventStore.StreamRef(AssetAggregateType.EQUIPMENT_BALANCE, target.id())));
     decrement(source, request.quantity(), request.sourceExpectedVersion());
@@ -699,17 +1150,17 @@ public class AssetService {
     warehouses.requireActive(request.warehouseId());
     requireEquipment(request.equipmentId());
     advisoryLock(balanceLockKey(request.equipmentId(), request.warehouseId(), null, BalanceLocationKind.STOCK));
-    expireHolds(request.equipmentId(), request.warehouseId());
     BalanceRow stock = requireBalance(request.equipmentId(), request.warehouseId(), null, BalanceLocationKind.STOCK);
+    expireHolds(stock);
     assertVersion(stock.version(), request.expectedStockVersion());
-    long available = Math.subtractExact(stock.quantity(), activeHeld(request.equipmentId(), request.warehouseId()));
+    long available = Math.subtractExact(stock.quantity(), activeHeld(stock));
     if (available < request.quantity()) throw new AssetConflictException("Active equipment holds reduce available stock");
     UUID id = UUID.randomUUID();
     OffsetDateTime expiry = now().plus(holdTtl);
     jdbc.update("""
-        insert into equipment_allocation_hold(id,version,equipment_id,warehouse_id,owner_type,owner_id,quantity,state,idempotency_key,expires_at,created_at,updated_at)
-        values (?,0,?,?,?,?,?,'ACTIVE',?,?,clock_timestamp(),clock_timestamp())
-        """, id, request.equipmentId(), request.warehouseId(), canonicalOwnerType(request.ownerType()), canonicalOwnerId(request.ownerId()),
+        insert into equipment_allocation_hold(id,version,equipment_id,warehouse_id,source_balance_id,owner_type,owner_id,quantity,state,idempotency_key,expires_at,created_at,updated_at)
+        values (?,0,?,?,?,?,?,?,'ACTIVE',?,?,clock_timestamp(),clock_timestamp())
+        """, id, request.equipmentId(), request.warehouseId(), stock.id(), canonicalOwnerType(request.ownerType()), canonicalOwnerId(request.ownerId()),
         request.quantity(), key, expiry);
     EquipmentHoldResponse response = holdResponse(id);
     events.initialize(AssetAggregateType.EQUIPMENT_ALLOCATION_HOLD, id, 0, AssetEventType.EQUIPMENT_HOLD_ACQUIRED, holdFact(response), holdSnapshot(response));
@@ -746,7 +1197,7 @@ public class AssetService {
     Optional<JsonNode> replay = idempotency.replay(subjectId, "equipment-hold.commit", key, hash);
     if (replay.isPresent()) return new CreateResult<>(read(replay.get(), EquipmentHoldResponse.class), true);
     EquipmentHoldResponse current = holdResponse(id);
-    expireHolds(current.equipmentId(), current.warehouseId());
+    expireHolds(current);
     current = holdResponse(id);
     assertVersion(current.version(), request.expectedVersion());
     if (!"ACTIVE".equals(current.state())) throw new AssetConflictException("Equipment hold is not active");
@@ -770,7 +1221,7 @@ public class AssetService {
     Optional<JsonNode> replay = idempotency.replay(subjectId, "equipment-hold.release", key, hash);
     if (replay.isPresent()) return new CreateResult<>(read(replay.get(), EquipmentHoldResponse.class), true);
     EquipmentHoldResponse current = holdResponse(id);
-    expireHolds(current.equipmentId(), current.warehouseId());
+    expireHolds(current);
     current = holdResponse(id);
     assertVersion(current.version(), request.expectedVersion());
     EquipmentHoldResponse updated = current;
@@ -795,6 +1246,8 @@ public class AssetService {
     if (replay.isPresent()) return new CreateResult<>(read(replay.get(), OperationLeaseResponse.class), true);
 
     lockRentalItemAndLease(request.rentalItemId());
+    assertNoActiveOrderReservation(
+        request.rentalItemId(), "Reserved order unit cannot acquire an operation lease");
     RentalItem item = requireRentalItem(request.rentalItemId());
     assertVersion(item.getVersion(), request.expectedRentalItemVersion());
     expireLeases(request.rentalItemId());
@@ -863,6 +1316,8 @@ public class AssetService {
     // aggregate only after both locks so expectedRentalItemVersion fences a
     // concurrent manual status mutation rather than a stale pre-lock read.
     lockRentalItemAndLease(request.rentalItemId());
+    assertNoActiveOrderReservation(
+        request.rentalItemId(), "Reserved order unit cannot acquire an operation lease");
     RentalItem item = requireRentalItem(request.rentalItemId());
     assertVersion(item.getVersion(), request.expectedRentalItemVersion());
     expireLeases(request.rentalItemId());
@@ -937,6 +1392,7 @@ public class AssetService {
     advisoryLock(rentalItemLockKey(id));
     OperationLease lease = validateLease(id, request.leaseId(), request.fencingToken());
     assertMaintenanceOwner(lease, request.ownerType(), request.ownerId());
+    List<MaintenanceFurnitureLoss> furnitureLosses = maintenanceFurnitureLosses(request);
     String hash = hash(new MaintenanceLeaseCommand<>(id, request));
     Optional<JsonNode> replay = idempotency.replay(
         subjectId, "maintenance.rental-item.fenced-status", key, hash);
@@ -944,16 +1400,191 @@ public class AssetService {
       return new CreateResult<>(read(replay.get(), RentalItemResponse.class), true);
     }
     RentalItem current = requireRentalItem(id);
+    assertVersion(current.getVersion(), request.expectedVersion());
     RentalItemStatus target = MaintenanceAssetTransitionPolicy.target(
         current.getStatus(),
         request.action(),
         request.ownerType(),
         request.ownerId(),
         request.linkedReturnEstimateId());
+    applyMaintenanceFurnitureLosses(subjectId, current, furnitureLosses);
     RentalItemResponse updated = changeStatusLocked(id, request.expectedVersion(), target, true);
     idempotency.store(
         subjectId, "maintenance.rental-item.fenced-status", key, hash, 200, updated);
     return new CreateResult<>(updated, false);
+  }
+
+  private List<MaintenanceFurnitureLoss> maintenanceFurnitureLosses(
+      MaintenanceFencedStatusRequest request) {
+    if (request.furnitureLosses() == null) {
+      throw new IllegalArgumentException("furnitureLosses is required");
+    }
+    Map<UUID, MaintenanceFurnitureLoss> unique = new LinkedHashMap<>();
+    for (MaintenanceFurnitureLoss loss : request.furnitureLosses()) {
+      if (loss == null || loss.equipmentId() == null) {
+        throw new IllegalArgumentException("Furniture loss equipmentId is required");
+      }
+      if (loss.quantity() < 1) {
+        throw new IllegalArgumentException("Furniture loss quantity must be positive");
+      }
+      String canonicalCode = EquipmentCatalogItem.canonicalCode(loss.equipmentCode());
+      if (!canonicalCode.equals(loss.equipmentCode())) {
+        throw new IllegalArgumentException("Furniture loss equipmentCode must be canonical");
+      }
+      if (unique.putIfAbsent(loss.equipmentId(), loss) != null) {
+        throw new IllegalArgumentException("Furniture losses must contain unique equipment items");
+      }
+    }
+    if (!unique.isEmpty()
+        && (request.action() != MaintenanceStatusAction.QUEUE_FOR_REPAIR
+            || request.ownerType() != MaintenanceLeaseOwnerType.MAINTENANCE_ESTIMATE
+            || request.estimateId() == null
+            || !request.estimateId().equals(request.ownerId()))) {
+      throw new AssetConflictException(
+          "Furniture losses require an estimate-owned queue action and matching estimateId");
+    }
+    return unique.values().stream()
+        .sorted(Comparator.comparing(loss -> loss.equipmentId().toString()))
+        .toList();
+  }
+
+  private void applyMaintenanceFurnitureLosses(
+      UUID subjectId, RentalItem rentalItem, List<MaintenanceFurnitureLoss> losses) {
+    if (losses.isEmpty()) return;
+    BalanceLocationKind sourceKind = rentalItem.getStatus() == RentalItemStatus.RENTED
+        ? BalanceLocationKind.CABIN_RENTED
+        : BalanceLocationKind.CABIN_NON_RENTED;
+    advisoryLocks(losses.stream()
+        .flatMap(loss -> java.util.stream.Stream.of(
+            balanceLockKey(
+                loss.equipmentId(),
+                rentalItem.getWarehouseId(),
+                rentalItem.getId(),
+                sourceKind),
+            balanceLockKey(
+                loss.equipmentId(),
+                rentalItem.getWarehouseId(),
+                null,
+                BalanceLocationKind.LOST)))
+        .toList());
+
+    List<FurnitureLossAllocation> allocations = new ArrayList<>();
+    for (MaintenanceFurnitureLoss loss : losses) {
+      EquipmentFurnitureRow catalogItem = requireFurnitureEquipmentForUpdate(loss.equipmentId());
+      if (!catalogItem.active() || catalogItem.category() != EquipmentCategory.FURNITURE) {
+        throw new AssetConflictException(
+            "Furniture loss must reference active FURNITURE equipment");
+      }
+      if (!catalogItem.code().equals(loss.equipmentCode())) {
+        throw new AssetConflictException("Furniture loss equipment code is stale");
+      }
+      BalanceRow source = findBalance(
+          loss.equipmentId(),
+          rentalItem.getWarehouseId(),
+          rentalItem.getId(),
+          sourceKind).orElseThrow(
+              () -> new AssetConflictException(
+                  "Rental item does not contain requested furniture equipment"));
+      if (source.quantity() < loss.quantity()) {
+        throw new AssetConflictException("Rental item has insufficient furniture equipment");
+      }
+      if (Math.subtractExact(source.quantity(), loss.quantity()) < activeHeld(source)) {
+        throw new AssetConflictException(
+            "Furniture loss would consume quantities reserved by an active hold");
+      }
+      BalanceRow target = findBalance(
+          loss.equipmentId(),
+          rentalItem.getWarehouseId(),
+          null,
+          BalanceLocationKind.LOST).orElseGet(
+              () -> createEmptyBalance(
+                  loss.equipmentId(),
+                  rentalItem.getWarehouseId(),
+                  null,
+                  BalanceLocationKind.LOST));
+      allocations.add(new FurnitureLossAllocation(loss, source, target));
+    }
+
+    events.lockStreams(allocations.stream()
+        .flatMap(allocation -> java.util.stream.Stream.of(
+            new AssetEventStore.StreamRef(
+                AssetAggregateType.EQUIPMENT_BALANCE, allocation.source().id()),
+            new AssetEventStore.StreamRef(
+                AssetAggregateType.EQUIPMENT_BALANCE, allocation.target().id())))
+        .toList());
+    for (FurnitureLossAllocation allocation : allocations) {
+      recordMaintenanceFurnitureLoss(subjectId, allocation);
+    }
+  }
+
+  private EquipmentFurnitureRow requireFurnitureEquipmentForUpdate(UUID equipmentId) {
+    return jdbc.query(
+        "select id,code,category,active from equipment_catalog_item where id=? for update",
+        (rs, row) -> new EquipmentFurnitureRow(
+            rs.getObject("id", UUID.class),
+            rs.getString("code"),
+            EquipmentCategory.valueOf(rs.getString("category")),
+            rs.getBoolean("active")),
+        equipmentId).stream().findFirst().orElseThrow(
+            () -> new AssetConflictException("Furniture equipment reference was not found"));
+  }
+
+  private void recordMaintenanceFurnitureLoss(
+      UUID subjectId, FurnitureLossAllocation allocation) {
+    MaintenanceFurnitureLoss loss = allocation.loss();
+    BalanceRow source = allocation.source();
+    BalanceRow target = allocation.target();
+    decrement(source, loss.quantity(), source.version());
+    increment(target, loss.quantity(), target.version());
+    BalanceRow sourceAfter = requireBalanceById(source.id());
+    BalanceRow targetAfter = requireBalanceById(target.id());
+    events.append(
+        AssetAggregateType.EQUIPMENT_BALANCE,
+        source.id(),
+        source.version(),
+        AssetEventType.EQUIPMENT_BALANCE_CHANGED,
+        balanceFact(sourceAfter),
+        balanceSnapshot(sourceAfter));
+    events.append(
+        AssetAggregateType.EQUIPMENT_BALANCE,
+        target.id(),
+        target.version(),
+        AssetEventType.EQUIPMENT_BALANCE_CHANGED,
+        balanceFact(targetAfter),
+        balanceSnapshot(targetAfter));
+    UUID movementId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into equipment_movement(
+          id,version,equipment_id,source_balance_id,target_balance_id,quantity,movement_kind,occurred_at,actor_subject_id)
+        values (?,0,?,?,?,?,'LOSS',clock_timestamp(),?)
+        """,
+        movementId,
+        loss.equipmentId(),
+        source.id(),
+        target.id(),
+        loss.quantity(),
+        subjectId);
+    jdbc.update(
+        """
+        insert into equipment_movement_ledger(
+          movement_id,line_no,balance_id,quantity_delta,recorded_at)
+        values (?,1,?,-?,clock_timestamp()), (?,2,?,?,clock_timestamp())
+        """,
+        movementId,
+        source.id(),
+        loss.quantity(),
+        movementId,
+        target.id(),
+        loss.quantity());
+    MovementResponse movement = movementResponse(movementId);
+    events.initialize(
+        AssetAggregateType.EQUIPMENT_MOVEMENT,
+        movementId,
+        0,
+        AssetEventType.EQUIPMENT_LOST,
+        movementFact(movement),
+        Map.of("movementId", movementId.toString(), "version", 0));
   }
 
   private OperationLeaseResponse renewLeaseState(UUID id, Long expectedVersion, long fencingToken) {
@@ -1019,7 +1650,15 @@ public class AssetService {
 
   private RentalItemResponse changeStatus(UUID id, Long expectedVersion, RentalItemStatus status, boolean fenced) {
     advisoryLock(rentalItemLockKey(id));
-    if (!fenced) assertNoActiveLease(id);
+    if (!fenced) {
+      assertNoActiveLease(id);
+      if (status != null
+          && status != RentalItemStatus.FREE
+          && status != RentalItemStatus.WAREHOUSE) {
+        assertNoActiveOrderReservation(
+            id, "Reserved order unit cannot change to an incompatible status");
+      }
+    }
     return changeStatusLocked(id, expectedVersion, status, fenced);
   }
 
@@ -1038,6 +1677,14 @@ public class AssetService {
   }
 
   private RentalItem requireRentalItem(UUID id) { return rentalItems.findById(id).orElseThrow(() -> new AssetNotFoundException("Rental item was not found")); }
+  private void assertRentalNumberAvailableInWarehouse(
+      RentalItem item, UUID warehouseId) {
+    if (rentalItems.existsByWarehouseIdAndIdentityMatchKeyAndIdNot(
+        warehouseId, item.getIdentityMatchKey(), item.getId())) {
+      throw new AssetConflictException(
+          "Rental item number identity is already used in the destination warehouse");
+    }
+  }
   private EquipmentCatalogItem requireEquipment(UUID id) { return equipment.findById(id).orElseThrow(() -> new AssetNotFoundException("Equipment catalog item was not found")); }
   private void assertVersion(long actual, Long expected) {
     if (expected == null || expected < 0) throw new IllegalArgumentException("expectedVersion is required");
@@ -1067,11 +1714,15 @@ public class AssetService {
   }
   private List<EquipmentContentResponse> contents(UUID rentalItemId) {
     return jdbc.query("""
-        select b.equipment_id,c.code,b.quantity,b.location_kind from equipment_balance b
+        select b.equipment_id,c.code,c.name,b.quantity,b.location_kind from equipment_balance b
         join equipment_catalog_item c on c.id=b.equipment_id
         where b.rental_item_id=? and b.location_kind in ('CABIN_NON_RENTED','CABIN_RENTED') and b.quantity>0 order by c.code
-        """, (rs, row) -> new EquipmentContentResponse(rs.getObject("equipment_id", UUID.class), rs.getString("code"), rs.getLong("quantity"),
-        BalanceLocationKind.valueOf(rs.getString("location_kind"))), rentalItemId);
+        """, (rs, row) -> new EquipmentContentResponse(
+            rs.getObject("equipment_id", UUID.class),
+            rs.getString("code"),
+            rs.getString("name"),
+            rs.getLong("quantity"),
+            BalanceLocationKind.valueOf(rs.getString("location_kind"))), rentalItemId);
   }
 
   private List<BalanceRow> balances(UUID equipmentId, UUID warehouseId) {
@@ -1087,6 +1738,10 @@ public class AssetService {
   }
   private BalanceRow requireBalanceById(UUID id) {
     return jdbc.query("select id,version,equipment_id,warehouse_id,rental_item_id,location_kind,quantity from equipment_balance where id=? for update",
+        (rs, row) -> balanceRow(rs), id).stream().findFirst().orElseThrow(() -> new AssetNotFoundException("Equipment balance was not found"));
+  }
+  private BalanceRow balanceReadById(UUID id) {
+    return jdbc.query("select id,version,equipment_id,warehouse_id,rental_item_id,location_kind,quantity from equipment_balance where id=?",
         (rs, row) -> balanceRow(rs), id).stream().findFirst().orElseThrow(() -> new AssetNotFoundException("Equipment balance was not found"));
   }
   private BalanceRow createEmptyBalance(UUID equipmentId, UUID warehouseId, UUID rentalItemId, BalanceLocationKind kind) {
@@ -1110,17 +1765,41 @@ public class AssetService {
     if (changed != 1) throw new AssetConflictException("Target equipment balance changed concurrently");
   }
   private static long sum(List<BalanceRow> values, BalanceLocationKind kind) { return values.stream().filter(row -> row.kind() == kind).mapToLong(BalanceRow::quantity).sum(); }
-  private long activeHeld(UUID equipmentId, UUID warehouseId) {
-    Long value = jdbc.queryForObject("""
-        select coalesce(sum(quantity),0) from equipment_allocation_hold
-        where equipment_id=? and warehouse_id=?
-          and (state='COMMITTED' or (state='ACTIVE' and expires_at>clock_timestamp()))
-        """, Long.class, equipmentId, warehouseId);
-    return value == null ? 0 : value;
+  /**
+   * A hold belongs to a physical source balance. Legacy rows without the new
+   * source reference remain stock holds so an upgrade cannot make old shipment
+   * reservations spendable.
+   */
+  private long activeHeld(BalanceRow source) {
+    return activeHeldExcluding(source, Set.of());
   }
-  private EquipmentBalanceResponse balanceResponse(BalanceRow row, long allHolds) {
+  private long activeHeldExcluding(BalanceRow source, Set<UUID> excludedReservationIds) {
+    List<HoldQuantity> holds = jdbc.query("""
+        select id,quantity from equipment_allocation_hold
+        where (
+          source_balance_id=?
+          or (
+            source_balance_id is null
+            and ?
+            and equipment_id=?
+            and warehouse_id=?
+          )
+        )
+          and (state='COMMITTED' or (state='ACTIVE' and expires_at>clock_timestamp()))
+        """,
+        (rs, row) -> new HoldQuantity(rs.getObject("id", UUID.class), rs.getLong("quantity")),
+        source.id(),
+        source.kind() == BalanceLocationKind.STOCK,
+        source.equipmentId(),
+        source.warehouseId());
+    return holds.stream()
+        .filter(hold -> !excludedReservationIds.contains(hold.id()))
+        .mapToLong(HoldQuantity::quantity)
+        .sum();
+  }
+  private EquipmentBalanceResponse balanceResponse(BalanceRow row, long held) {
     return new EquipmentBalanceResponse(row.id(), row.version(), row.equipmentId(), row.warehouseId(), row.rentalItemId(), row.kind(), row.quantity(),
-        row.kind() == BalanceLocationKind.STOCK ? allHolds : 0, row.kind() == BalanceLocationKind.STOCK ? Math.max(0, row.quantity() - allHolds) : row.quantity());
+        held, Math.max(0, row.quantity() - held));
   }
   private void validateBalanceLocation(UUID warehouseId, UUID rentalItemId, BalanceLocationKind kind) {
     boolean cabin = kind == BalanceLocationKind.CABIN_NON_RENTED || kind == BalanceLocationKind.CABIN_RENTED;
@@ -1142,6 +1821,13 @@ public class AssetService {
     if ((source == BalanceLocationKind.CABIN_NON_RENTED || source == BalanceLocationKind.CABIN_RENTED) && target == BalanceLocationKind.STOCK) return "CABIN_TO_STOCK";
     if ((source == BalanceLocationKind.CABIN_NON_RENTED || source == BalanceLocationKind.CABIN_RENTED) && (target == BalanceLocationKind.CABIN_NON_RENTED || target == BalanceLocationKind.CABIN_RENTED)) return "CABIN_TO_CABIN";
     return "WAREHOUSE_TO_WAREHOUSE";
+  }
+  private static AssetEventType movementEventType(String kind) {
+    return switch (kind) {
+      case "WRITE_OFF" -> AssetEventType.EQUIPMENT_WRITTEN_OFF;
+      case "LOSS" -> AssetEventType.EQUIPMENT_LOST;
+      default -> AssetEventType.EQUIPMENT_TRANSFERRED;
+    };
   }
   private MovementResponse movementResponse(UUID id) {
     return jdbc.query("select id,version,equipment_id,source_balance_id,target_balance_id,quantity,movement_kind,occurred_at from equipment_movement where id=?",
@@ -1225,6 +1911,10 @@ public class AssetService {
         throw new AssetConflictException(
             "Cabin balance changed concurrently during transfer arrival");
       }
+      if (activeHeld(source) > 0) {
+        throw new AssetConflictException(
+            "Cabin relocation would consume quantities reserved by an active hold");
+      }
       BalanceRow target = findBalance(
           source.equipmentId(),
           destinationWarehouseId,
@@ -1296,29 +1986,115 @@ public class AssetService {
     }
   }
 
-  private void expireHolds(UUID equipmentId, UUID warehouseId) {
+  private void expireHolds(BalanceRow source) {
+    expireHolds(
+        source.id(),
+        source.equipmentId(),
+        source.warehouseId(),
+        source.kind() == BalanceLocationKind.STOCK);
+  }
+  private void expireHolds(EquipmentHoldResponse hold) {
+    expireHolds(
+        hold.sourceBalanceId(),
+        hold.equipmentId(),
+        hold.warehouseId(),
+        hold.sourceBalanceId() == null);
+  }
+  private void expireHolds(
+      UUID sourceBalanceId,
+      UUID equipmentId,
+      UUID warehouseId,
+      boolean includeLegacyStockHolds) {
     List<EquipmentHoldResponse> expired = jdbc.query("""
-        select id,version,equipment_id,warehouse_id,owner_type,owner_id,quantity,state,expires_at,committed_at
+        select id,version,equipment_id,warehouse_id,source_balance_id,owner_type,owner_id,
+          quantity,state,expires_at,committed_at,executed_at
         from equipment_allocation_hold
-        where equipment_id=? and warehouse_id=? and state='ACTIVE' and expires_at<=clock_timestamp()
+        where state='ACTIVE' and expires_at<=clock_timestamp()
+          and (
+            source_balance_id=?
+            or (
+              source_balance_id is null
+              and ?
+              and equipment_id=?
+              and warehouse_id=?
+            )
+          )
         for update
-        """, (rs, row) -> new EquipmentHoldResponse(rs.getObject("id", UUID.class), rs.getLong("version"),
-        rs.getObject("equipment_id", UUID.class), rs.getObject("warehouse_id", UUID.class), rs.getString("owner_type"),
-        rs.getString("owner_id"), rs.getLong("quantity"), rs.getString("state"), rs.getObject("expires_at", OffsetDateTime.class),
-        rs.getObject("committed_at", OffsetDateTime.class)), equipmentId, warehouseId);
-    for (EquipmentHoldResponse current : expired) {
-      int changed = jdbc.update("update equipment_allocation_hold set state='EXPIRED',released_at=clock_timestamp(),version=version+1,updated_at=clock_timestamp() where id=? and version=? and state='ACTIVE'", current.id(), current.version());
-      if (changed != 1) throw new AssetConflictException("Equipment hold changed concurrently during expiry");
-      EquipmentHoldResponse updated = holdResponse(current.id());
-      events.append(AssetAggregateType.EQUIPMENT_ALLOCATION_HOLD, current.id(), current.version(), AssetEventType.EQUIPMENT_HOLD_EXPIRED,
-          holdFact(updated), holdSnapshot(updated));
+        """,
+        (rs, row) -> equipmentHoldRow(rs),
+        sourceBalanceId,
+        includeLegacyStockHolds,
+        equipmentId,
+        warehouseId);
+    expired.forEach(this::expireHold);
+  }
+  private void expireHold(EquipmentHoldResponse current) {
+    int changed = jdbc.update(
+        """
+        update equipment_allocation_hold
+        set state='EXPIRED',released_at=clock_timestamp(),version=version+1,updated_at=clock_timestamp()
+        where id=? and version=? and state='ACTIVE'
+        """,
+        current.id(),
+        current.version());
+    if (changed != 1) {
+      throw new AssetConflictException("Equipment hold changed concurrently during expiry");
     }
+    EquipmentHoldResponse updated = holdResponse(current.id());
+    events.append(
+        AssetAggregateType.EQUIPMENT_ALLOCATION_HOLD,
+        current.id(),
+        current.version(),
+        AssetEventType.EQUIPMENT_HOLD_EXPIRED,
+        holdFact(updated),
+        holdSnapshot(updated));
+  }
+  /** Expiry immediately stops availability blocking; this sweep persists the visible state/event. */
+  @Scheduled(fixedDelayString = "${rwms.asset.equipment-hold.expiration-sweep-delay:PT30S}")
+  @Transactional
+  public void expireDueEquipmentHolds() {
+    List<EquipmentHoldResponse> expired = jdbc.query("""
+        select id,version,equipment_id,warehouse_id,source_balance_id,owner_type,owner_id,
+          quantity,state,expires_at,committed_at,executed_at
+        from equipment_allocation_hold
+        where state='ACTIVE' and expires_at<=clock_timestamp()
+        order by expires_at,id
+        for update skip locked
+        limit 200
+        """, (rs, row) -> equipmentHoldRow(rs));
+    expired.forEach(this::expireHold);
+  }
+  private EquipmentHoldResponse holdRead(UUID id) {
+    return jdbc.query("""
+        select id,version,equipment_id,warehouse_id,source_balance_id,owner_type,owner_id,
+          quantity,state,expires_at,committed_at,executed_at
+        from equipment_allocation_hold where id=?
+        """, (rs, row) -> equipmentHoldRow(rs), id).stream().findFirst()
+        .orElseThrow(() -> new AssetNotFoundException("Equipment hold was not found"));
   }
   private EquipmentHoldResponse holdResponse(UUID id) {
-    return jdbc.query("select id,version,equipment_id,warehouse_id,owner_type,owner_id,quantity,state,expires_at,committed_at from equipment_allocation_hold where id=? for update",
-        (rs, row) -> new EquipmentHoldResponse(rs.getObject("id", UUID.class), rs.getLong("version"), rs.getObject("equipment_id", UUID.class),
-            rs.getObject("warehouse_id", UUID.class), rs.getString("owner_type"), rs.getString("owner_id"), rs.getLong("quantity"), rs.getString("state"),
-            rs.getObject("expires_at", OffsetDateTime.class), rs.getObject("committed_at", OffsetDateTime.class)), id).stream().findFirst().orElseThrow(() -> new AssetNotFoundException("Equipment hold was not found"));
+    return jdbc.query("""
+        select id,version,equipment_id,warehouse_id,source_balance_id,owner_type,owner_id,
+          quantity,state,expires_at,committed_at,executed_at
+        from equipment_allocation_hold where id=? for update
+        """, (rs, row) -> equipmentHoldRow(rs), id).stream().findFirst()
+        .orElseThrow(() -> new AssetNotFoundException("Equipment hold was not found"));
+  }
+  private static EquipmentHoldResponse equipmentHoldRow(java.sql.ResultSet rs)
+      throws java.sql.SQLException {
+    return new EquipmentHoldResponse(
+        rs.getObject("id", UUID.class),
+        rs.getLong("version"),
+        rs.getObject("equipment_id", UUID.class),
+        rs.getObject("warehouse_id", UUID.class),
+        rs.getString("owner_type"),
+        rs.getString("owner_id"),
+        rs.getObject("source_balance_id", UUID.class),
+        rs.getLong("quantity"),
+        rs.getString("state"),
+        rs.getObject("expires_at", OffsetDateTime.class),
+        rs.getObject("committed_at", OffsetDateTime.class),
+        rs.getObject("executed_at", OffsetDateTime.class));
   }
   private void expireLeases(UUID itemId) {
     OffsetDateTime expiredAt = now();
@@ -1383,6 +2159,137 @@ public class AssetService {
           "Equipment hold belongs to another logistics shipment line");
     }
   }
+  private void assertNoActiveMovementReservation(UUID movementId, UUID lineId) {
+    String ownerId = logisticsOwnerId(movementId, lineId);
+    Boolean active = jdbc.queryForObject(
+        """
+        select exists(
+          select 1 from equipment_allocation_hold
+          where owner_type=? and owner_id=? and state='ACTIVE'
+        )
+        """,
+        Boolean.class,
+        LogisticsEquipmentMovementReservationOwnerType
+            .LOGISTICS_EQUIPMENT_MOVEMENT
+            .name(),
+        ownerId);
+    if (Boolean.TRUE.equals(active)) {
+      throw new AssetConflictException(
+          "Equipment movement line already has an active reservation");
+    }
+  }
+  private void assertMovementReservationOwner(
+      EquipmentHoldResponse reservation, UUID movementId, UUID lineId) {
+    if (reservation == null
+        || !LogisticsEquipmentMovementReservationOwnerType
+            .LOGISTICS_EQUIPMENT_MOVEMENT
+            .name()
+            .equals(reservation.ownerType())
+        || !logisticsOwnerId(movementId, lineId).equals(reservation.ownerId())) {
+      throw new AssetConflictException(
+          "Equipment movement reservation belongs to another logistics movement line");
+    }
+  }
+  private static boolean isMovableReservationSource(BalanceLocationKind kind) {
+    return kind == BalanceLocationKind.STOCK
+        || kind == BalanceLocationKind.CABIN_NON_RENTED
+        || kind == BalanceLocationKind.CABIN_RENTED;
+  }
+  private LogisticsEquipmentMovementReservationResponse movementReservationResponse(
+      EquipmentHoldResponse reservation) {
+    EquipmentCatalogItem catalog = requireEquipment(reservation.equipmentId());
+    if (reservation.sourceBalanceId() == null) {
+      throw new AssetConflictException(
+          "Equipment movement reservation has no concrete source balance");
+    }
+    return movementReservationResponse(
+        reservation, catalog, balanceReadById(reservation.sourceBalanceId()));
+  }
+  private static LogisticsEquipmentMovementReservationResponse movementReservationResponse(
+      EquipmentHoldResponse reservation,
+      EquipmentCatalogItem catalog,
+      BalanceRow source) {
+    return new LogisticsEquipmentMovementReservationResponse(
+        reservation.id(),
+        reservation.version(),
+        LogisticsEquipmentMovementReservationOwnerType
+            .LOGISTICS_EQUIPMENT_MOVEMENT,
+        ownerDocumentId(reservation.ownerId()),
+        ownerLineId(reservation.ownerId()),
+        reservation.equipmentId(),
+        catalog.getCode(),
+        catalog.getName(),
+        source.id(),
+        source.warehouseId(),
+        source.rentalItemId(),
+        source.kind(),
+        reservation.quantity(),
+        reservation.state(),
+        reservation.expiresAt(),
+        reservation.executedAt());
+  }
+  private void validateMovementExecutionRequest(
+      ExecuteLogisticsEquipmentMovementReservationsRequest request) {
+    if (request == null || request.movementId() == null || request.lines() == null
+        || request.lines().isEmpty()) {
+      throw new IllegalArgumentException("Equipment movement execution requires a movement and lines");
+    }
+    Set<UUID> reservationIds = new HashSet<>();
+    Set<UUID> lineIds = new HashSet<>();
+    for (ExecuteLogisticsEquipmentMovementReservationLine line : request.lines()) {
+      if (line == null
+          || line.reservationId() == null
+          || line.expectedReservationVersion() == null
+          || line.expectedReservationVersion() < 0
+          || line.lineId() == null
+          || line.targetWarehouseId() == null
+          || line.targetLocationKind() == null) {
+        throw new IllegalArgumentException("Equipment movement execution line is incomplete");
+      }
+      if (!reservationIds.add(line.reservationId()) || !lineIds.add(line.lineId())) {
+        throw new IllegalArgumentException(
+            "Equipment movement execution cannot repeat a reservation or line");
+      }
+    }
+  }
+  private void assertReservedExecutionAvailability(
+      List<MovementReservationExecutionPlan> plans) {
+    Map<UUID, List<MovementReservationExecutionPlan>> bySource = new LinkedHashMap<>();
+    for (MovementReservationExecutionPlan plan : plans) {
+      bySource.computeIfAbsent(plan.source().id(), ignored -> new ArrayList<>()).add(plan);
+    }
+    for (List<MovementReservationExecutionPlan> values : bySource.values()) {
+      BalanceRow source = values.getFirst().source();
+      long consumed = values.stream()
+          .mapToLong(value -> value.reservation().quantity())
+          .sum();
+      Set<UUID> ownReservationIds = values.stream()
+          .map(value -> value.reservation().id())
+          .collect(java.util.stream.Collectors.toSet());
+      long heldByOthers = activeHeldExcluding(source, ownReservationIds);
+      if (Math.subtractExact(source.quantity(), consumed) < heldByOthers) {
+        throw new AssetConflictException(
+            "Equipment movement execution would consume quantities reserved by another hold");
+      }
+    }
+  }
+  private static UUID ownerDocumentId(String ownerId) {
+    return ownerIdPart(ownerId, 0);
+  }
+  private static UUID ownerLineId(String ownerId) {
+    return ownerIdPart(ownerId, 1);
+  }
+  private static UUID ownerIdPart(String ownerId, int index) {
+    String[] parts = ownerId == null ? new String[0] : ownerId.split(":", -1);
+    if (parts.length != 2) {
+      throw new AssetConflictException("Equipment movement reservation owner is malformed");
+    }
+    try {
+      return UUID.fromString(parts[index]);
+    } catch (IllegalArgumentException exception) {
+      throw new AssetConflictException("Equipment movement reservation owner is malformed");
+    }
+  }
   private void assertFencing(OperationLease lease, long token, OffsetDateTime instant) {
     if (!lease.isActiveAt(instant) || lease.getFencingToken() != token) {
       throw new AssetConflictException("Operation lease is stale or fenced");
@@ -1393,6 +2300,20 @@ public class AssetService {
     expireLeases(rentalItemId);
     if (!activeLeasesForUpdate(rentalItemId).isEmpty()) {
       throw new AssetConflictException("Rental item has an active operation lease; use a fenced internal command");
+    }
+  }
+  private void assertNoActiveOrderReservation(UUID rentalItemId, String message) {
+    Boolean active = jdbc.queryForObject(
+        """
+        select exists(
+          select 1 from order_unit_reservation
+          where rental_item_id=? and state='ACTIVE'
+        )
+        """,
+        Boolean.class,
+        rentalItemId);
+    if (Boolean.TRUE.equals(active)) {
+      throw new AssetConflictException(message);
     }
   }
   private OperationLease requireLeaseForUpdate(UUID id) {
@@ -1416,6 +2337,9 @@ public class AssetService {
   }
   private static String rentalItemLockKey(UUID rentalItemId) { return "asset-rental-item:" + rentalItemId; }
   private static String leaseLockKey(UUID rentalItemId) { return "lease:" + rentalItemId; }
+  private static String equipmentCatalogLockKey(String equipmentCode) {
+    return "asset-equipment-catalog:" + equipmentCode;
+  }
   private static String balanceLockKey(UUID equipmentId, UUID warehouseId, UUID rentalItemId, BalanceLocationKind kind) {
     return "asset-balance:" + equipmentId + ':' + warehouseId + ':' + (rentalItemId == null ? "-" : rentalItemId) + ':' + kind.name();
   }
@@ -1511,7 +2435,15 @@ public class AssetService {
         "targetBalanceId", value.targetBalanceId().toString(), "quantity", value.quantity(), "movementKind", value.kind());
   }
   private Map<String, ?> holdFact(EquipmentHoldResponse value) {
-    return Map.of("holdId", value.id().toString(), "equipmentId", value.equipmentId().toString(), "warehouseId", value.warehouseId().toString(), "quantity", value.quantity(), "state", value.state());
+    // Facts must stay compatible with holds emitted before V7.  The concrete
+    // source balance is durable reservation state and belongs in the snapshot,
+    // not in the immutable projection fact used by replay verification.
+    return Map.of(
+        "holdId", value.id().toString(),
+        "equipmentId", value.equipmentId().toString(),
+        "warehouseId", value.warehouseId().toString(),
+        "quantity", value.quantity(),
+        "state", value.state());
   }
   private Map<String, ?> holdSnapshot(EquipmentHoldResponse value) {
     Map<String, Object> snapshot = new LinkedHashMap<>();
@@ -1521,10 +2453,14 @@ public class AssetService {
     snapshot.put("warehouseId", value.warehouseId().toString());
     snapshot.put("ownerType", value.ownerType());
     snapshot.put("ownerId", value.ownerId());
+    snapshot.put(
+        "sourceBalanceId",
+        value.sourceBalanceId() == null ? null : value.sourceBalanceId().toString());
     snapshot.put("quantity", value.quantity());
     snapshot.put("state", value.state());
     snapshot.put("expiresAt", value.expiresAt().toString());
     snapshot.put("committedAt", value.committedAt() == null ? null : value.committedAt().toString());
+    snapshot.put("executedAt", value.executedAt() == null ? null : value.executedAt().toString());
     return snapshot;
   }
   private Map<String, ?> leaseFact(OperationLeaseResponse value) {
@@ -1581,9 +2517,26 @@ public class AssetService {
   }
 
   private record BalanceRow(UUID id, long version, UUID equipmentId, UUID warehouseId, UUID rentalItemId, BalanceLocationKind kind, long quantity) {}
+  private record EquipmentFurnitureRow(
+      UUID id, String code, EquipmentCategory category, boolean active) {}
+  private record FurnitureLossAllocation(
+      MaintenanceFurnitureLoss loss, BalanceRow source, BalanceRow target) {}
+  private record HoldQuantity(UUID id, long quantity) {}
+  private record MovementReservationCandidate(
+      EquipmentHoldResponse reservation,
+      BalanceRow source,
+      ExecuteLogisticsEquipmentMovementReservationLine line) {}
+  private record MovementReservationExecutionPlan(
+      EquipmentHoldResponse reservation,
+      BalanceRow source,
+      BalanceRow target,
+      ExecuteLogisticsEquipmentMovementReservationLine line) {}
   private record MaintenanceLeaseCommand<T>(UUID resourceId, T request) {}
   private record LogisticsLeaseCommand(UUID resourceId, LogisticsLeaseCommandRequest request) {}
   private record LogisticsEffectCommand(UUID resourceId, LogisticsFencedEffectRequest request) {}
   private record LogisticsHoldCommand(UUID resourceId, LogisticsEquipmentHoldCommandRequest request) {}
+  private record LogisticsEquipmentMovementReservationCommand(
+      UUID resourceId,
+      LogisticsEquipmentMovementReservationCommandRequest request) {}
   public record CreateResult<T>(T response, boolean replayed) {}
 }

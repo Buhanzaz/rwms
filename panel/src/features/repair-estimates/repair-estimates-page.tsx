@@ -52,7 +52,7 @@ function estimateStatusLabel(status: RepairEstimateStatus) {
 
 export function RepairEstimatesPage() {
   const { selectedWarehouseId } = useWarehouse()
-  const { currentUser } = useAuth()
+  const { accessToken, currentUser } = useAuth()
   const canEdit = Boolean(
     selectedWarehouseId &&
     hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
@@ -178,6 +178,7 @@ export function RepairEstimatesPage() {
           </Card>
         ) : (
           <RepairEstimateEditorWorkspace
+            accessToken={accessToken}
             warehouseId={selectedWarehouseId}
             estimate={estimateId ? (detailQuery.data ?? null) : null}
             readOnly={!canEdit}

@@ -196,9 +196,14 @@ describe("maintenance lifecycle HTTP client", () => {
       plan: [stage],
       mediaReferences: [],
     })
-    await replaceMaintenanceRepairPlan("token", warehouseId, repairId, 2, [
-      stage,
-    ])
+    await replaceMaintenanceRepairPlan(
+      "token",
+      warehouseId,
+      repairId,
+      2,
+      [stage],
+      [{ mediaId: rentalItemId, generation: 7 }]
+    )
     await queueMaintenanceRepair(
       "token",
       warehouseId,
@@ -224,6 +229,7 @@ describe("maintenance lifecycle HTTP client", () => {
       repairId,
       5,
       "Принято",
+      [],
       idempotencyKey
     )
     await writeOffMaintenanceRepair(
@@ -240,6 +246,7 @@ describe("maintenance lifecycle HTTP client", () => {
     expect(JSON.parse(String(requestAt(fetchMock, 1)[1].body))).toEqual({
       expectedVersion: 2,
       stages: [stage],
+      mediaReferences: [{ mediaId: rentalItemId, generation: 7 }],
     })
     expect(JSON.parse(String(requestAt(fetchMock, 2)[1].body))).toEqual({
       expectedVersion: 3,
@@ -252,6 +259,7 @@ describe("maintenance lifecycle HTTP client", () => {
     expect(JSON.parse(String(requestAt(fetchMock, 4)[1].body))).toEqual({
       expectedVersion: 5,
       comment: "Принято",
+      mediaReferences: [],
     })
     expect(JSON.parse(String(requestAt(fetchMock, 5)[1].body))).toEqual({
       expectedVersion: 6,

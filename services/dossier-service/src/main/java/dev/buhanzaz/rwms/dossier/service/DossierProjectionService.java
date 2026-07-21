@@ -27,6 +27,7 @@ import dev.buhanzaz.rwms.dossier.repository.DossierUnlinkedFactRepository;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -137,6 +138,12 @@ public class DossierProjectionService {
           publish);
     }
     if (relinkDeferred
+        && producer == DossierProducer.ASSET
+        && event.cabinId() != null
+        && event.warehouseId() != null) {
+      projectDeferredCabinMedia(event.cabinId(), generationId, now, publish);
+    }
+    if (relinkDeferred
         && producer == DossierProducer.INVENTORY
         && "FINDING".equals(event.aggregateType())) {
       projectDeferredFacts(event.secondaryId(), generationId, now, publish);
@@ -149,6 +156,14 @@ public class DossierProjectionService {
       UUID generationId,
       DossierProducer producer,
       OffsetDateTime now) {
+    if (producer == DossierProducer.MEDIA && event.cabinId() != null) {
+      return findOwned(
+          generationId,
+          DossierProducer.ASSET,
+          "RENTAL_ITEM",
+          event.cabinId(),
+          event.warehouseId());
+    }
     if (event.cabinId() != null && event.warehouseId() != null) {
       String sourceType =
           producer == DossierProducer.INVENTORY ? "FINDING" : event.aggregateType();
@@ -159,7 +174,14 @@ public class DossierProjectionService {
     }
 
     if (producer == DossierProducer.ASSET) {
-      return find(generationId, DossierProducer.ASSET, "RENTAL_ITEM", event.aggregateId());
+      ResolvedSubject subject =
+          find(generationId, DossierProducer.ASSET, "RENTAL_ITEM", event.aggregateId());
+      if (subject == null
+          || event.cabinId() == null
+          || !subject.cabinId().equals(event.cabinId())) {
+        throw new IllegalStateException("EVENT_IDENTITY_CONFLICT");
+      }
+      return subject;
     }
     if (producer == DossierProducer.INVENTORY) {
       return "PUBLICATION".equals(event.aggregateType())
@@ -237,16 +259,21 @@ public class DossierProjectionService {
       UUID generationId,
       ResolvedSubject subject,
       OffsetDateTime now) {
-    long mediaGeneration = event.payload().required("generation").longValue();
-    DossierMediaState state =
-        DossierMediaState.valueOf(event.payload().required("status").stringValue());
     Optional<DossierMediaProjection> current =
         media.findForUpdateByCabinIdAndMediaIdAndGenerationId(
             subject.cabinId(), event.aggregateId(), generationId);
+    UUID folderId =
+        event.payload().has("folderId")
+            ? UUID.fromString(event.payload().required("folderId").stringValue())
+            : current.map(DossierMediaProjection::getFolderId).orElse(event.aggregateId());
+    long mediaGeneration = event.payload().required("generation").longValue();
+    DossierMediaState state =
+        DossierMediaState.valueOf(event.payload().required("status").stringValue());
     if (current.isPresent()) {
       current
           .orElseThrow()
           .apply(
+              folderId,
               mediaGeneration,
               event.aggregateVersion(),
               state,
@@ -259,6 +286,7 @@ public class DossierProjectionService {
               subject.cabinId(),
               subject.warehouseId(),
               event.aggregateId(),
+              folderId,
               event.secondaryId(),
               mediaGeneration,
               event.aggregateVersion(),
@@ -282,6 +310,7 @@ public class DossierProjectionService {
     }
     UUID activityId = DossierStableIdentity.activity(event.eventId(), subject.cabinId());
     DossierActivityCode code = DossierActivityCode.valueOf(event.activityCode());
+    ActivityActor activityActor = activityActor(event, producer);
     DossierActivity activity =
         DossierActivity.project(
             activityId,
@@ -296,9 +325,9 @@ public class DossierProjectionService {
             event.secondaryId(),
             offset(event.occurredAt()),
             offset(event.recordedAt()),
-            event.actorSubjectId(),
-            event.actorPrincipalType(),
-            event.actorProfileRevision(),
+            activityActor.subjectId(),
+            activityActor.principalType(),
+            activityActor.profileRevision(),
             event.correlationId(),
             event.causationId(),
             now);
@@ -349,9 +378,9 @@ public class DossierProjectionService {
     envelope.put("correlation", correlation);
     envelope.put(
         "actorRef",
-        source.actorSubjectId() == null
+        activity.getActorSubjectId() == null
             ? null
-            : actor(source));
+            : actor(activity));
     envelope.put("payload", payload);
     String canonical = canonical(envelope);
     outboundSchemas.activity(canonical);
@@ -385,6 +414,56 @@ public class DossierProjectionService {
         generationId,
         now,
         publish);
+  }
+
+  private void projectDeferredCabinMedia(
+      UUID cabinId, UUID generationId, OffsetDateTime now, boolean publish) {
+    for (var fact :
+        sourceFacts
+            .findAllByProducerAndSubjectSecondaryIdOrderByRecordedAtAscEventIdAsc(
+                DossierProducer.MEDIA, cabinId)
+            .stream()
+            .filter(value -> "MEDIA".equals(value.getAggregateType()))
+            .sorted(
+                Comparator.comparingLong(
+                        dev.buhanzaz.rwms.dossier.domain.DossierSourceFact::getAggregateVersion)
+                    .thenComparing(
+                        dev.buhanzaz.rwms.dossier.domain.DossierSourceFact::getEventId))
+            .toList()) {
+      if (inboxes
+              .findById(fact.getEventId())
+              .map(
+                  value ->
+                      value.getDecision()
+                          != dev.buhanzaz.rwms.dossier.domain.DossierInboxDecision.PROCESSED)
+              .orElse(true)) {
+        continue;
+      }
+      DossierValidatedEvent deferred =
+          validator.validate(
+              fact.getSourceTopic(),
+              fact.getSourcePartition(),
+              fact.getSourceOffset(),
+              fact.getAggregateId().toString(),
+              fact.getCanonicalEnvelope().getBytes(StandardCharsets.UTF_8));
+      if (!cabinId.equals(deferred.cabinId())) {
+        continue;
+      }
+      ResolvedSubject subject =
+          find(generationId, DossierProducer.ASSET, "RENTAL_ITEM", cabinId);
+      if (subject == null) {
+        continue;
+      }
+      if (!subject.warehouseId().equals(deferred.warehouseId())) {
+        deferredConflicts.identityConflict(deferred, generationId, now);
+        continue;
+      }
+      applyMedia(deferred, generationId, subject, now);
+      createActivity(deferred, generationId, DossierProducer.MEDIA, subject, now, publish);
+      unlinked
+          .findBySourceEventIdAndGenerationId(deferred.eventId(), generationId)
+          .ifPresent(value -> value.resolve(now));
+    }
   }
 
   private void projectDeferredDirect(
@@ -447,7 +526,7 @@ public class DossierProjectionService {
               fact.getSourceOffset(),
               fact.getAggregateId().toString(),
               fact.getCanonicalEnvelope().getBytes(StandardCharsets.UTF_8));
-      if (findingId.equals(deferred.secondaryId())) {
+      if (deferred.cabinId() == null && findingId.equals(deferred.secondaryId())) {
         ResolvedSubject subject =
             find(generationId, DossierProducer.INVENTORY, "FINDING", findingId);
         if (subject != null) {
@@ -495,11 +574,51 @@ public class DossierProjectionService {
         .writeValueAsString(value);
   }
 
-  private static Map<String, Object> actor(DossierValidatedEvent source) {
+  private ActivityActor activityActor(DossierValidatedEvent event, DossierProducer producer) {
+    if (event.actorSubjectId() != null) {
+      return new ActivityActor(
+          event.actorSubjectId(), event.actorPrincipalType(), event.actorProfileRevision());
+    }
+    if (producer != DossierProducer.MEDIA
+        || !"media.media.ready.v1".equals(event.eventType())) {
+      return ActivityActor.NONE;
+    }
+    return sourceFacts
+        .findAllByProducerAndAggregateTypeAndAggregateIdOrderByAggregateVersionAscEventIdAsc(
+            DossierProducer.MEDIA, event.aggregateType(), event.aggregateId())
+        .stream()
+        .filter(fact -> fact.getAggregateVersion() < event.aggregateVersion())
+        .filter(fact -> "media.media.uploaded.v1".equals(fact.getEventType()))
+        .filter(fact -> event.correlationId().equals(fact.getCorrelationId()))
+        .filter(fact -> fact.getActorSubjectId() != null)
+        .filter(
+            fact ->
+                inboxes
+                    .findById(fact.getEventId())
+                    .map(
+                        inbox ->
+                            inbox.getDecision()
+                                == dev.buhanzaz.rwms.dossier.domain.DossierInboxDecision.PROCESSED)
+                    .orElse(false))
+        .max(
+            Comparator.comparingLong(
+                    dev.buhanzaz.rwms.dossier.domain.DossierSourceFact::getAggregateVersion)
+                .thenComparing(
+                    dev.buhanzaz.rwms.dossier.domain.DossierSourceFact::getEventId))
+        .map(
+            fact ->
+                new ActivityActor(
+                    fact.getActorSubjectId(),
+                    fact.getActorPrincipalType(),
+                    fact.getActorProfileRevision()))
+        .orElse(ActivityActor.NONE);
+  }
+
+  private static Map<String, Object> actor(DossierActivity activity) {
     Map<String, Object> value = new LinkedHashMap<>();
-    value.put("subjectId", source.actorSubjectId().toString());
-    value.put("principalType", source.actorPrincipalType());
-    value.put("profileRevision", source.actorProfileRevision());
+    value.put("subjectId", activity.getActorSubjectId().toString());
+    value.put("principalType", activity.getActorPrincipalType());
+    value.put("profileRevision", activity.getActorProfileRevision());
     return value;
   }
 
@@ -513,6 +632,10 @@ public class DossierProjectionService {
   }
 
   private record ResolvedSubject(UUID cabinId, UUID warehouseId) {}
+
+  private record ActivityActor(UUID subjectId, String principalType, String profileRevision) {
+    private static final ActivityActor NONE = new ActivityActor(null, null, null);
+  }
 
   public enum ProjectionOutcome { PROJECTED, JOURNALED, UNLINKED, DEFERRED }
 }

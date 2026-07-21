@@ -32,6 +32,10 @@ import { useWarehouse } from "@/hooks/use-warehouse"
 import { isGlobalAdministrator } from "@/features/auth/auth-model"
 import { useAuth } from "@/features/auth/use-auth"
 import {
+  getOrdersListNavigationLabel,
+  ORDERS_NAVIGATION,
+} from "@/features/orders/permissions/orders-permissions"
+import {
   INVENTORY_QUERY_KEY,
   getActiveInventory,
   inventoryActiveQueryKey,
@@ -448,6 +452,83 @@ function WriteOffsSidebarMenu({
   )
 }
 
+function OrdersSidebarMenu({
+  currentPath,
+  listLabel,
+  onOpen,
+  onNavigate,
+}: {
+  currentPath: string
+  listLabel: string
+  onOpen: () => void
+  onNavigate: () => void
+}) {
+  const isOrdersActive = isActiveUrl(currentPath, ORDERS_NAVIGATION.listPath)
+  const [menuOpen, setMenuOpen] = useState(isOrdersActive)
+  const listActive =
+    currentPath === ORDERS_NAVIGATION.listPath ||
+    (currentPath.startsWith(`${ORDERS_NAVIGATION.listPath}/`) &&
+      currentPath !== ORDERS_NAVIGATION.createPath)
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        type="button"
+        isActive={menuOpen || isOrdersActive}
+        aria-controls="orders-submenu"
+        aria-expanded={menuOpen}
+        onClick={() => {
+          const next = !menuOpen
+          if (next) onOpen()
+          setMenuOpen(next)
+        }}
+        className="h-10 py-1"
+      >
+        <span className="flex size-8 shrink-0 items-center justify-center">
+          <HugeiconsIcon icon={ClipboardListIcon} strokeWidth={2} />
+        </span>
+        <span>{ORDERS_NAVIGATION.rootLabel}</span>
+        <HugeiconsIcon
+          icon={menuOpen ? ArrowDown01Icon : ArrowRight01Icon}
+          strokeWidth={2}
+          className="ml-auto transition-transform"
+        />
+      </SidebarMenuButton>
+
+      {menuOpen ? (
+        <SidebarMenuSub id="orders-submenu">
+          <SidebarMenuSubItem>
+            <SidebarMenuSubButton
+              asChild
+              size="md"
+              isActive={listActive}
+              className="h-8"
+            >
+              <Link to={ORDERS_NAVIGATION.listPath} onClick={onNavigate}>
+                <HugeiconsIcon icon={ClipboardListIcon} strokeWidth={2} />
+                <span>{listLabel}</span>
+              </Link>
+            </SidebarMenuSubButton>
+          </SidebarMenuSubItem>
+          <SidebarMenuSubItem>
+            <SidebarMenuSubButton
+              asChild
+              size="md"
+              isActive={currentPath === ORDERS_NAVIGATION.createPath}
+              className="h-8"
+            >
+              <Link to={ORDERS_NAVIGATION.createPath} onClick={onNavigate}>
+                <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+                <span>{ORDERS_NAVIGATION.createLabel}</span>
+              </Link>
+            </SidebarMenuSubButton>
+          </SidebarMenuSubItem>
+        </SidebarMenuSub>
+      ) : null}
+    </SidebarMenuItem>
+  )
+}
+
 export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
   const location = useLocation()
   const { selectedWarehouse } = useWarehouse()
@@ -458,6 +539,7 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(isSettingsActive)
   const [writeOffsResetKey, setWriteOffsResetKey] = useState(0)
   const [inventoryResetKey, setInventoryResetKey] = useState(0)
+  const [ordersResetKey, setOrdersResetKey] = useState(0)
   const selectedWarehouseCode = selectedWarehouse?.code ?? "Склад"
   const visibleSettingsNavItems = settingsNavItems.filter((item) => {
     if (item.url === "/settings/warehouses") {
@@ -485,6 +567,7 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
 
   function handleNavigationClick() {
     setSettingsMenuOpen(false)
+    setOrdersResetKey((current) => current + 1)
     closeSidebarAfterNavigation()
   }
 
@@ -498,6 +581,7 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
     if (next) {
       setWriteOffsResetKey((current) => current + 1)
       setInventoryResetKey((current) => current + 1)
+      setOrdersResetKey((current) => current + 1)
     }
 
     setSettingsMenuOpen(next)
@@ -528,6 +612,24 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
 
       <SidebarContent>
         <WarehouseSelector />
+
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <OrdersSidebarMenu
+                key={`${location.pathname}:${ordersResetKey}`}
+                currentPath={location.pathname}
+                listLabel={getOrdersListNavigationLabel(currentUser)}
+                onOpen={() => {
+                  setSettingsMenuOpen(false)
+                  setWriteOffsResetKey((current) => current + 1)
+                  setInventoryResetKey((current) => current + 1)
+                }}
+                onNavigate={closeSidebarAfterNavigation}
+              />
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
 
         {navGroups.map((group) => (
           <SidebarGroup key={group.title}>
@@ -569,6 +671,7 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
                       onOpen={() => {
                         setSettingsMenuOpen(false)
                         setWriteOffsResetKey((current) => current + 1)
+                        setOrdersResetKey((current) => current + 1)
                       }}
                       onNavigate={closeSidebarAfterNavigation}
                     />
@@ -578,6 +681,7 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
                       onOpen={() => {
                         setSettingsMenuOpen(false)
                         setInventoryResetKey((current) => current + 1)
+                        setOrdersResetKey((current) => current + 1)
                       }}
                       onNavigate={closeSidebarAfterNavigation}
                     />

@@ -308,6 +308,7 @@ public class DossierReplayTransactions {
                         Map.entry("cabinId", value.getCabinId()),
                         Map.entry("warehouseId", value.getWarehouseId()),
                         Map.entry("mediaId", value.getMediaId()),
+                        Map.entry("folderId", value.getFolderId()),
                         Map.entry("findingId", value.getInventoryFindingId()),
                         Map.entry("generation", value.getMediaGeneration()),
                         Map.entry("state", value.getState()),

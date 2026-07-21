@@ -13,6 +13,7 @@ import {
   type MaintenanceAcceptanceProjection,
   type MaintenancePlanStageInput,
   type MaintenanceRepair,
+  type MaintenanceRepairCommandResult,
   type MaintenanceRepairStage,
   type MaintenanceRoutingSnapshot,
   type MaintenanceWriteOffProjection,
@@ -22,6 +23,7 @@ import {
   type MaintenanceAccessTokenProvider,
 } from "@/features/repair-estimates/api/maintenance-auth"
 import type {
+  RepairTaskAcceptCommand,
   RepairTaskDto,
   RepairTaskSubtaskDto,
   RepairTaskWriteCommand,
@@ -204,11 +206,14 @@ function routeForSubtask(
   queues: WorkQueueDto[]
 ): MaintenanceRoutingSnapshot {
   const active = queues.filter((queue) => queue.active && !queue.hidden)
-  const exact = subtask.queueId
+  const exactById = subtask.queueId
     ? active.find((queue) => queue.id === subtask.queueId)
-    : subtask.queueCode
+    : null
+  const exactByCode =
+    !exactById && subtask.queueCode
       ? active.find((queue) => queue.code === subtask.queueCode)
       : null
+  const exact = exactById ?? exactByCode
   if (exact) {
     return {
       queueId: exact.id,
@@ -239,7 +244,7 @@ async function planForCommand(
 ) {
   if (command.media.length > 0) {
     throw new Error(
-      "Фото для ремонтов пока недоступны: media-service не подтвердил владельца MAINTENANCE_REPAIR."
+      "Локальные вложения старой панели нельзя отправить в maintenance-service."
     )
   }
   const queues = await taskBoardSettingsClient.listQueues(
@@ -266,16 +271,52 @@ async function planForCommand(
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
+const QUEUE_CONFIRMATION_BACKOFF_MS = [100, 200, 400, 800, 1_000] as const
+
+type QueueConfirmationWait = (delayMs: number) => Promise<void>
+
+function waitForQueueConfirmation(delayMs: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, delayMs))
+}
+
+function hasPermanentQueueFailure(result: MaintenanceRepairCommandResult) {
+  return (
+    result.delivery.state === "QUARANTINED" ||
+    result.repair.plan.stages.some(
+      (stage) =>
+        stage.taskSync.generationState === "FAILED" ||
+        stage.taskSync.delivery.state === "QUARANTINED"
+    )
+  )
+}
+
+function hasPermanentRepairFailure(repair: MaintenanceRepair) {
+  return repair.plan.stages.some(
+    (stage) =>
+      stage.taskSync.generationState === "FAILED" ||
+      stage.taskSync.delivery.state === "QUARANTINED"
+  )
+}
+
+function permanentQueueFailure(repairId: string) {
+  return new Error(
+    `Ремонт ${repairId} не поставлен в очередь: maintenance-service зафиксировал необратимую ошибку формирования или доставки этапов.`
+  )
+}
+
 export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
   private readonly rentalItemsClient: RepairTaskRentalItemsClient
   private readonly tokenProvider: MaintenanceAccessTokenProvider
+  private readonly queueConfirmationWait: QueueConfirmationWait
 
   constructor(
     rentalItemsClient: RepairTaskRentalItemsClient,
-    tokenProvider: MaintenanceAccessTokenProvider = currentMaintenanceAccessToken
+    tokenProvider: MaintenanceAccessTokenProvider = currentMaintenanceAccessToken,
+    queueConfirmationWait: QueueConfirmationWait = waitForQueueConfirmation
   ) {
     this.rentalItemsClient = rentalItemsClient
     this.tokenProvider = tokenProvider
+    this.queueConfirmationWait = queueConfirmationWait
   }
 
   private async board(accessToken: string, warehouseId: string) {
@@ -420,7 +461,8 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
         command.warehouseId,
         command.taskId,
         command.expectedVersion,
-        plan
+        plan,
+        command.maintenanceMediaReferences
       )
     }
     if (command.kind === "REWORK") {
@@ -440,7 +482,7 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
           expectedVersion: command.sourceRepairTaskVersion,
           reason: command.reason.trim(),
           plan,
-          mediaReferences: [],
+          mediaReferences: command.maintenanceMediaReferences,
         }
       )
     }
@@ -453,8 +495,49 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
         dispatchDate: requireDate(command.dispatchDate),
         sourceParty: command.reason.trim() || null,
         plan,
-        mediaReferences: [],
+        mediaReferences: command.maintenanceMediaReferences,
       }
+    )
+  }
+
+  private async awaitQueueConfirmation(
+    accessToken: string,
+    warehouseId: string,
+    result: MaintenanceRepairCommandResult
+  ) {
+    if (hasPermanentQueueFailure(result)) {
+      throw permanentQueueFailure(result.repair.id)
+    }
+    if (result.repair.executionState !== "DRAFT") {
+      return result.repair
+    }
+
+    let lastReadError: unknown
+    for (const delayMs of QUEUE_CONFIRMATION_BACKOFF_MS) {
+      await this.queueConfirmationWait(delayMs)
+      let repair: MaintenanceRepair
+      try {
+        repair = await getMaintenanceRepair(
+          accessToken,
+          warehouseId,
+          result.repair.id
+        )
+        lastReadError = undefined
+      } catch (error) {
+        lastReadError = error
+        continue
+      }
+      if (hasPermanentRepairFailure(repair)) {
+        throw permanentQueueFailure(repair.id)
+      }
+      if (repair.executionState !== "DRAFT") {
+        return repair
+      }
+    }
+
+    throw new Error(
+      `Ремонт ${result.repair.id} сохранён, но его состояние в maintenance-service всё ещё ожидает подтверждения постановки в очередь.`,
+      lastReadError === undefined ? undefined : { cause: lastReadError }
     )
   }
 
@@ -471,18 +554,14 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
   async queue(command: RepairTaskWriteCommand) {
     const accessToken = await this.tokenProvider()
     const draft = await this.saveWithToken(accessToken, command)
+    let result: MaintenanceRepairCommandResult
     try {
-      const result = await queueMaintenanceRepair(
+      result = await queueMaintenanceRepair(
         accessToken,
         command.warehouseId,
         draft.id,
         draft.version,
         createMaintenanceIdempotencyKey()
-      )
-      return toTask(
-        result.repair,
-        this.rentalItemsClient,
-        await this.board(accessToken, command.warehouseId)
       )
     } catch (error) {
       throw new Error(
@@ -490,6 +569,16 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
         { cause: error }
       )
     }
+    const repair = await this.awaitQueueConfirmation(
+      accessToken,
+      command.warehouseId,
+      result
+    )
+    return toTask(
+      repair,
+      this.rentalItemsClient,
+      await this.board(accessToken, command.warehouseId)
+    )
   }
 
   async updateSubtasks(command: {
@@ -526,7 +615,8 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
       command.warehouseId,
       command.taskId,
       command.expectedVersion,
-      stages
+      stages,
+      repair.mediaReferences
     )
     return toTask(
       saved,
@@ -535,12 +625,7 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
     )
   }
 
-  async accept(command: {
-    taskId: string
-    expectedVersion: number
-    warehouseId: string
-    comment: string
-  }) {
+  async accept(command: RepairTaskAcceptCommand) {
     const accessToken = await this.tokenProvider()
     const result = await acceptMaintenanceRepair(
       accessToken,
@@ -548,6 +633,7 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
       command.taskId,
       command.expectedVersion,
       command.comment.trim() || null,
+      command.maintenanceMediaReferences,
       createMaintenanceIdempotencyKey()
     )
     return toTask(

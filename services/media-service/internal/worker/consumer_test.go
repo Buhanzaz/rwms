@@ -1,10 +1,15 @@
 package worker
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -150,6 +155,171 @@ func TestInvalidMessageIsDeterministicAndSanitized(t *testing.T) {
 	if changed.EventID == first.EventID || changed.BodySHA256 == first.BodySHA256 {
 		t.Fatal("different invalid bodies collapsed to one sanitized identity")
 	}
+}
+
+func TestProcessingConsumerKeepsRuntimeAliveAndCommitsOnlyPersistedTerminalOutcome(t *testing.T) {
+	first := newProcessingRecord(t).record
+	first.Partition, first.Offset = 0, 9
+	second := newProcessingRecord(t).record
+	second.Partition, second.Offset = 0, 10
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := &processingKafkaClientStub{
+		fetches: processingFetches(first, second), commitFailures: map[int64]int{9: 2},
+		cancel: cancel,
+	}
+	dependencyFailure := errors.New("processing dependency unavailable")
+	firstFailure := make(chan struct{})
+	releaseRetry := make(chan struct{})
+	var firstFailureOnce, firstSleepOnce sync.Once
+	var handledOffsets []int64
+	terminalPersisted := false
+	orderingViolation := false
+	firstCalls := 0
+	consumer := &Consumer{
+		client: client,
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		handleRecord: func(_ context.Context, record *kgo.Record) error {
+			handledOffsets = append(handledOffsets, record.Offset)
+			switch record.Offset {
+			case 9:
+				firstCalls++
+				if firstCalls <= 4 {
+					firstFailureOnce.Do(func() { close(firstFailure) })
+					return dependencyFailure
+				}
+				terminalPersisted = true
+				return nil
+			case 10:
+				if !terminalPersisted {
+					orderingViolation = true
+				}
+				return nil
+			default:
+				return errors.New("unexpected processing offset")
+			}
+		},
+		sleep: func(ctx context.Context, _ time.Duration) error {
+			var waitErr error
+			firstSleepOnce.Do(func() {
+				select {
+				case <-ctx.Done():
+					waitErr = ctx.Err()
+				case <-releaseRetry:
+				}
+			})
+			return waitErr
+		},
+	}
+	done := make(chan error, 1)
+	go func() { done <- consumer.Run(ctx) }()
+
+	select {
+	case <-firstFailure:
+	case <-time.After(time.Second):
+		t.Fatal("processing consumer did not observe dependency failure")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("processing consumer exited on dependency failure: %v", err)
+	default:
+	}
+	close(releaseRetry)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("processing consumer shutdown error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("processing consumer did not complete ordered terminal handling")
+	}
+
+	if orderingViolation || !terminalPersisted {
+		t.Fatalf("terminal/order state = persisted:%v violation:%v", terminalPersisted, orderingViolation)
+	}
+	wantHandled := []int64{9, 9, 9, 9, 9, 10}
+	if !equalOffsets(handledOffsets, wantHandled) {
+		t.Fatalf("handled offsets = %v, want %v", handledOffsets, wantHandled)
+	}
+	if !equalOffsets(client.committed, []int64{9, 10}) {
+		t.Fatalf("committed offsets = %v, want [9 10]", client.committed)
+	}
+	if !equalOffsets(client.commitAttempts, []int64{9, 9, 9, 10}) {
+		t.Fatalf("commit attempts = %v, want [9 9 9 10]", client.commitAttempts)
+	}
+	if client.allowRebalanceCalls == 0 {
+		t.Fatal("consumer never released the blocked rebalance after ordered batch")
+	}
+}
+
+type processingKafkaClientStub struct {
+	mu                  sync.Mutex
+	fetches             kgo.Fetches
+	polled              bool
+	commitFailures      map[int64]int
+	commitAttempts      []int64
+	committed           []int64
+	allowRebalanceCalls int
+	cancel              context.CancelFunc
+}
+
+func (client *processingKafkaClientStub) PollFetches(ctx context.Context) kgo.Fetches {
+	client.mu.Lock()
+	if !client.polled {
+		client.polled = true
+		fetches := client.fetches
+		client.mu.Unlock()
+		return fetches
+	}
+	client.mu.Unlock()
+	<-ctx.Done()
+	return nil
+}
+
+func (client *processingKafkaClientStub) CommitRecords(_ context.Context, records ...*kgo.Record) error {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if len(records) != 1 {
+		return errors.New("processing commit must contain one ordered record")
+	}
+	offset := records[0].Offset
+	client.commitAttempts = append(client.commitAttempts, offset)
+	if client.commitFailures[offset] > 0 {
+		client.commitFailures[offset]--
+		return errors.New("broker commit unavailable")
+	}
+	client.committed = append(client.committed, offset)
+	if offset == 10 {
+		client.cancel()
+	}
+	return nil
+}
+
+func (client *processingKafkaClientStub) AllowRebalance() {
+	client.mu.Lock()
+	client.allowRebalanceCalls++
+	client.mu.Unlock()
+}
+
+func (client *processingKafkaClientStub) Close() {}
+
+func processingFetches(records ...*kgo.Record) kgo.Fetches {
+	return kgo.Fetches{{Topics: []kgo.FetchTopic{{
+		Topic:      persistence.ProcessingTopic,
+		Partitions: []kgo.FetchPartition{{Partition: 0, Records: records}},
+	}}}}
+}
+
+func equalOffsets(actual, wanted []int64) bool {
+	if len(actual) != len(wanted) {
+		return false
+	}
+	for index := range wanted {
+		if actual[index] != wanted[index] {
+			return false
+		}
+	}
+	return true
 }
 
 type processingRecordFixture struct {

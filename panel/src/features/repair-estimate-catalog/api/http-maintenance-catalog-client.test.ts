@@ -2,16 +2,19 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   activateMaintenanceCatalog,
-  importMaintenanceCatalog,
+  bootstrapMaintenanceCatalog,
+  forkMaintenanceCatalog,
+  listMaintenanceCatalogNodes,
   listMaintenanceCatalogVersions,
   replaceMaintenanceCatalogNodes,
-  type MaintenanceCatalogImportRequest,
+  type MaintenanceCatalogBootstrapRequest,
 } from "@/features/repair-estimate-catalog/api/http-maintenance-catalog-client"
 import type { ApiError } from "@/lib/api-client"
 
 const warehouseId = "00000000-0000-4000-8000-000000000001"
 const versionId = "00000000-0000-4000-8000-000000000002"
 const commandId = "00000000-0000-4000-8000-000000000003"
+const mediaOwnerId = "00000000-0000-4000-8000-000000000004"
 
 const version = {
   id: versionId,
@@ -65,6 +68,47 @@ describe("maintenance catalog HTTP client", () => {
     )
   })
 
+  it("keeps the server-issued media owner separate from the catalog node id", async () => {
+    const node = {
+      id: commandId,
+      catalogVersionId: versionId,
+      mediaOwnerId,
+      code: "WINDOW",
+      nodeType: "WORK",
+      name: "Окно",
+      active: true,
+      parentNodeId: null,
+      unit: "шт.",
+      unitPrice: "100.00",
+      durationMinutes: 30,
+      includeInEstimate: true,
+      commonItem: false,
+      showInMainMenu: true,
+      photoRequired: false,
+      furnitureCategory: false,
+      furnitureEquipment: null,
+      routing: null,
+      references: [],
+      comment: null,
+      mediaReferences: [],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(json([node]))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const result = await listMaintenanceCatalogNodes(
+      "catalog-token",
+      warehouseId,
+      versionId
+    )
+
+    expect(result[0]).toMatchObject({ id: commandId, mediaOwnerId })
+    const endpoint = new URL(String(fetchMock.mock.calls[0]![0]))
+    expect(endpoint.pathname).toBe(
+      `/api/maintenance/v1/catalog/versions/${versionId}/nodes`
+    )
+    expect(endpoint.searchParams.get("warehouseId")).toBe(warehouseId)
+  })
+
   it("sends CAS and idempotency headers for catalog commands", async () => {
     const fetchMock = vi.fn().mockImplementation(async () => json(version))
     vi.stubGlobal("fetch", fetchMock)
@@ -77,12 +121,10 @@ describe("maintenance catalog HTTP client", () => {
       5,
       commandId
     )
-    await importMaintenanceCatalog("token", commandId, {
+    await bootstrapMaintenanceCatalog("token", commandId, {
       warehouseId,
-      sourceSha256: "a".repeat(64),
-      nodes: [],
-      links: [],
-    } satisfies MaintenanceCatalogImportRequest)
+    } satisfies MaintenanceCatalogBootstrapRequest)
+    await forkMaintenanceCatalog("token", warehouseId, versionId, 6, commandId)
 
     expect(JSON.parse(String(fetchMock.mock.calls[0]![1]?.body))).toEqual({
       expectedVersion: 4,
@@ -96,6 +138,26 @@ describe("maintenance catalog HTTP client", () => {
     ).toBe(commandId)
     expect(
       new Headers(fetchMock.mock.calls[2]![1]?.headers).get("Idempotency-Key")
+    ).toBe(commandId)
+    expect(new URL(String(fetchMock.mock.calls[2]![0])).pathname).toBe(
+      "/api/maintenance/v1/catalog/imports"
+    )
+    expect(JSON.parse(String(fetchMock.mock.calls[2]![1]?.body))).toEqual({
+      warehouseId,
+    })
+
+    const forkEndpoint = new URL(String(fetchMock.mock.calls[3]![0]))
+    expect(forkEndpoint.pathname).toBe(
+      `/api/maintenance/v1/catalog/versions/${versionId}/fork`
+    )
+    expect(Object.fromEntries(forkEndpoint.searchParams)).toEqual({
+      warehouseId,
+    })
+    expect(JSON.parse(String(fetchMock.mock.calls[3]![1]?.body))).toEqual({
+      expectedVersion: 6,
+    })
+    expect(
+      new Headers(fetchMock.mock.calls[3]![1]?.headers).get("Idempotency-Key")
     ).toBe(commandId)
   })
 

@@ -1,5 +1,6 @@
 plugins {
     id("rwms.spring-service")
+    id("rwms.mapstruct")
 }
 
 description = "RWMS append-only cabin activity dossier projection"

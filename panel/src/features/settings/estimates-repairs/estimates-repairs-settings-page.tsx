@@ -3,13 +3,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Add01Icon,
+  AlertCircleIcon,
   ArrowLeft01Icon,
   ArrowRight01Icon,
   CanvasIcon,
+  DatabaseAddIcon,
   Delete01Icon,
   PackageIcon,
   PencilEdit01Icon,
   Refresh01Icon,
+  Sofa01Icon,
   WorkIcon,
 } from "@hugeicons/core-free-icons"
 
@@ -20,6 +23,12 @@ import {
   saveRepairEstimateCatalogCanvasLink,
   saveRepairEstimateCatalogCanvasNode,
 } from "@/features/settings/estimates-repairs/api/repair-estimate-catalog-canvas-settings-api"
+import {
+  deleteRepairEstimateFurnitureCatalogItem,
+  getRepairEstimateFurnitureCatalog,
+  getRepairEstimateFurnitureCatalogSettings,
+  saveRepairEstimateFurnitureCatalogItem,
+} from "@/features/settings/estimates-repairs/api/repair-estimate-furniture-catalog-settings-api"
 import {
   deleteRepairEstimateMaterialCatalogItem,
   getRepairEstimateMaterialCatalog,
@@ -34,15 +43,23 @@ import {
 } from "@/features/settings/estimates-repairs/api/repair-estimate-work-catalog-settings-api"
 import {
   activateRepairEstimateCatalog,
+  bootstrapRepairEstimateCatalog,
+  forkRepairEstimateCatalog,
   getItemsForCategory,
   getRepairEstimateCatalogSectionItems,
-  importRepairEstimateCatalog,
   listRepairEstimateCatalogVersions,
   moveRepairEstimateCatalogCanvasNode,
 } from "@/features/settings/estimates-repairs/api/repair-estimate-catalog-store"
 import { REPAIR_ESTIMATE_CATALOG_QUERY_KEY } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
@@ -79,6 +96,11 @@ import type {
   RepairEstimateCatalogRequest,
   RepairEstimateCatalogSectionDto,
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
+import {
+  maintenanceCatalogNodeMediaOwner,
+  type ReadyMediaReference,
+} from "@/features/media/media-service"
+import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
 import {
   repairEstimateCatalogLinkTypeLabel,
   repairEstimateCatalogNodeTypeLabel,
@@ -124,7 +146,11 @@ type NodeDialogState = {
   submitLabel: string
   allowTypeSelect: boolean
   value: RepairEstimateCatalogNodeMutation
-  save: (input: RepairEstimateCatalogNodeMutation) => Promise<unknown>
+  save: (
+    input: RepairEstimateCatalogNodeMutation
+  ) => Promise<RepairEstimateCatalogNodeDto>
+  request: RepairEstimateCatalogRequest
+  furnitureTree: boolean
 }
 
 const CATALOG_TABLE_SORT_STORAGE_PREFIX =
@@ -141,6 +167,8 @@ function getEstimateActionIcon(id: EstimateCatalogSettingsActionDto["id"]) {
       return WorkIcon
     case "repair-estimate-catalog-materials":
       return PackageIcon
+    case "repair-estimate-catalog-furniture":
+      return Sofa01Icon
   }
 }
 
@@ -150,6 +178,8 @@ function getSectionKind(action: EstimateCatalogSettingsActionDto) {
       return "works"
     case "repair-estimate-catalog-materials":
       return "materials"
+    case "repair-estimate-catalog-furniture":
+      return "furniture"
     case "repair-estimate-catalog-canvas":
       return null
   }
@@ -166,6 +196,8 @@ async function getEstimateActionData(
       return getRepairEstimateWorkCatalog(request)
     case "repair-estimate-catalog-materials":
       return getRepairEstimateMaterialCatalog(request)
+    case "repair-estimate-catalog-furniture":
+      return getRepairEstimateFurnitureCatalog(request)
   }
 }
 
@@ -177,13 +209,9 @@ function isSectionData(
 
 function SettingsActionButton({
   action,
-  active,
-  disabled = false,
   onClick,
 }: {
   action: SettingsAction
-  active: boolean
-  disabled?: boolean
   onClick: (action: SettingsAction) => void
 }) {
   const Icon = getEstimateActionIcon(action.id)
@@ -191,27 +219,74 @@ function SettingsActionButton({
   return (
     <Button
       type="button"
-      variant={active ? "secondary" : "outline"}
-      disabled={disabled}
-      className="h-auto min-h-14 w-full justify-between gap-3 px-3 py-3 text-left"
+      variant="outline"
+      className="h-auto min-h-16 w-full justify-between gap-3 px-3 py-3 text-left"
       onClick={() => onClick(action)}
     >
       <span className="flex min-w-0 items-center gap-3">
         <HugeiconsIcon icon={Icon} data-icon="inline-start" />
-        <span className="min-w-0 truncate">{action.title}</span>
+        <span className="flex min-w-0 flex-col items-start gap-0.5">
+          <span className="max-w-full truncate">{action.title}</span>
+          <span
+            aria-hidden="true"
+            className="text-xs font-normal text-muted-foreground"
+          >
+            Открыть раздел
+          </span>
+        </span>
       </span>
       <HugeiconsIcon icon={ArrowRight01Icon} data-icon="inline-end" />
     </Button>
   )
 }
 
-function SectionSkeleton() {
+function SectionSkeleton({
+  label = "Загружаем данные каталога…",
+}: {
+  label?: string
+}) {
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      {Array.from({ length: 4 }).map((_, index) => (
-        <Skeleton key={index} className="h-14 rounded-md" />
-      ))}
+    <div role="status" aria-live="polite" className="flex flex-col gap-3">
+      <p className="text-sm text-muted-foreground">{label}</p>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, index) => (
+          <Skeleton key={index} className="h-16 rounded-md" />
+        ))}
+      </div>
     </div>
+  )
+}
+
+function CatalogNavigationState({
+  kind,
+  title,
+  description,
+  children,
+}: {
+  kind: "empty" | "error"
+  title: string
+  description: ReactNode
+  children?: ReactNode
+}) {
+  const Icon = kind === "error" ? AlertCircleIcon : DatabaseAddIcon
+
+  return (
+    <Card
+      size="sm"
+      role={kind === "error" ? "alert" : "status"}
+      className="mx-auto w-full max-w-2xl"
+    >
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <HugeiconsIcon icon={Icon} />
+          {title}
+        </CardTitle>
+        <CardDescription>{description}</CardDescription>
+      </CardHeader>
+      {children && (
+        <CardFooter className="flex-wrap gap-2">{children}</CardFooter>
+      )}
+    </Card>
   )
 }
 
@@ -245,6 +320,7 @@ function NativeSelect({
   children,
   disabled = false,
   className,
+  ariaInvalid,
 }: {
   id?: string
   value: string
@@ -252,6 +328,7 @@ function NativeSelect({
   children: ReactNode
   disabled?: boolean
   className?: string
+  ariaInvalid?: boolean
 }) {
   return (
     <select
@@ -262,6 +339,7 @@ function NativeSelect({
       )}
       value={value}
       disabled={disabled}
+      aria-invalid={ariaInvalid || undefined}
       onChange={(event) => onChange(event.target.value)}
     >
       {children}
@@ -466,6 +544,7 @@ function createNodeMutation(
 ): RepairEstimateCatalogNodeMutation {
   return {
     id: node.id,
+    mediaOwnerId: node.mediaOwnerId,
     code: node.code,
     name: node.name,
     nodeType: node.nodeType,
@@ -482,6 +561,8 @@ function createNodeMutation(
     photoRequired: node.photoRequired,
     includeInEstimate: node.includeInEstimate,
     commonItem: node.commonItem,
+    furnitureCategory: node.furnitureCategory,
+    furnitureEquipment: node.furnitureEquipment,
     comment: node.comment,
   }
 }
@@ -509,6 +590,8 @@ function createBlankNodeMutation({
     photoRequired: false,
     includeInEstimate: priced,
     commonItem: false,
+    furnitureCategory: false,
+    furnitureEquipment: null,
     comment: null,
   }
 }
@@ -575,16 +658,67 @@ function NodeEditorDialogContent({
   onSaved: () => void
 }) {
   const fieldIdPrefix = useId()
+  const queryClient = useQueryClient()
   const [draft, setDraft] = useState(state.value)
   const [error, setError] = useState<string | null>(null)
   const priced = draft.nodeType === "WORK" || draft.nodeType === "MATERIAL"
+  const furnitureMaterial = state.furnitureTree && draft.nodeType === "MATERIAL"
   const commentLength = (draft.comment ?? "").length
   const commentTooLong = commentLength > CATALOG_COMMENT_MAX_LENGTH
+  const mediaOwner = draft.mediaOwnerId
+    ? maintenanceCatalogNodeMediaOwner(
+        draft.mediaOwnerId,
+        state.request.warehouseId
+      )
+    : null
+
+  function updateReadyMediaReferences(references: ReadyMediaReference[]) {
+    setDraft((current) => {
+      const previous = current.mediaReferences ?? []
+      const unchanged =
+        previous.length === references.length &&
+        previous.every(
+          (reference, index) =>
+            reference.mediaId === references[index]?.mediaId &&
+            reference.generation === references[index]?.generation
+        )
+      return unchanged ? current : { ...current, mediaReferences: references }
+    })
+  }
+
+  function notifySaved() {
+    if (furnitureMaterial) {
+      void queryClient.invalidateQueries({ queryKey: ["equipment-items"] })
+    }
+    onSaved()
+  }
+
+  async function ensureMediaOwner() {
+    if (draft.id) {
+      if (!draft.mediaOwnerId) {
+        throw new Error("Сервис не вернул идентификатор владельца фотографий.")
+      }
+      return maintenanceCatalogNodeMediaOwner(
+        draft.mediaOwnerId,
+        state.request.warehouseId
+      )
+    }
+    if (commentTooLong) {
+      throw new Error("Исправьте ошибки записи перед добавлением фотографии.")
+    }
+    const saved = await state.save({ ...draft, mediaReferences: [] })
+    setDraft(createNodeMutation(saved))
+    notifySaved()
+    return maintenanceCatalogNodeMediaOwner(
+      saved.mediaOwnerId,
+      state.request.warehouseId
+    )
+  }
 
   const mutation = useMutation({
     mutationFn: state.save,
     onSuccess: () => {
-      onSaved()
+      notifySaved()
       onClose()
     },
     onError: (mutationError) => {
@@ -638,6 +772,10 @@ function NodeEditorDialogContent({
                           : null,
                       photoRequired:
                         value === "WORK" ? current.photoRequired : false,
+                      furnitureEquipment:
+                        value === "MATERIAL"
+                          ? current.furnitureEquipment
+                          : null,
                     }))
                   }
                 >
@@ -658,21 +796,40 @@ function NodeEditorDialogContent({
               </Field>
             )}
 
-            <Field>
-              <FieldLabel htmlFor={`${fieldIdPrefix}-name`}>
-                Название
-              </FieldLabel>
-              <Input
-                id={`${fieldIdPrefix}-name`}
-                value={draft.name}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    name: event.target.value,
-                  }))
-                }
-              />
-            </Field>
+            <div className="grid gap-3 md:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor={`${fieldIdPrefix}-code`}>Код</FieldLabel>
+                <Input
+                  id={`${fieldIdPrefix}-code`}
+                  value={draft.code}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      code: event.target.value,
+                    }))
+                  }
+                />
+                <FieldDescription>
+                  Латиница, цифры, «_» или «-».
+                </FieldDescription>
+              </Field>
+
+              <Field>
+                <FieldLabel htmlFor={`${fieldIdPrefix}-name`}>
+                  Название
+                </FieldLabel>
+                <Input
+                  id={`${fieldIdPrefix}-name`}
+                  value={draft.name}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      name: event.target.value,
+                    }))
+                  }
+                />
+              </Field>
+            </div>
 
             <div className="grid gap-3 md:grid-cols-2">
               <Field>
@@ -714,6 +871,29 @@ function NodeEditorDialogContent({
                 />
               </Field>
             </div>
+
+            {furnitureMaterial && (
+              <Field>
+                <FieldLabel>Дополнительное оборудование</FieldLabel>
+                {draft.furnitureEquipment ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="secondary">Связано автоматически</Badge>
+                    <span className="text-sm">
+                      {draft.furnitureEquipment.equipmentCode} ·{" "}
+                      {draft.furnitureEquipment.equipmentName}
+                    </span>
+                  </div>
+                ) : (
+                  <Badge variant="outline">Будет создано автоматически</Badge>
+                )}
+                <FieldDescription>
+                  После сохранения код и название мебели автоматически создадут
+                  и привяжут строку в «Доп. оборудовании» настроек склада. При
+                  завершении сметы количество будет снято с дополнительного
+                  оборудования бытовки.
+                </FieldDescription>
+              </Field>
+            )}
 
             <div className="grid gap-3 md:grid-cols-2">
               {draft.nodeType === "WORK" && (
@@ -783,6 +963,18 @@ function NodeEditorDialogContent({
                   }
                 />
               )}
+              {draft.nodeType === "CATEGORY" && (
+                <BooleanField
+                  title="Мебельная категория"
+                  checked={draft.furnitureCategory}
+                  onCheckedChange={(checked) =>
+                    setDraft((current) => ({
+                      ...current,
+                      furnitureCategory: checked,
+                    }))
+                  }
+                />
+              )}
             </FieldGroup>
 
             <Field data-invalid={commentTooLong || undefined}>
@@ -810,6 +1002,21 @@ function NodeEditorDialogContent({
                   символов. Сократите текст перед сохранением.
                 </FieldError>
               )}
+            </Field>
+
+            <Field>
+              <FieldLabel>Фотографии</FieldLabel>
+              <ServiceOwnerPhotos
+                accessToken={state.request.accessToken}
+                owner={mediaOwner}
+                ensureOwner={ensureMediaOwner}
+                readOnly={mutation.isPending}
+                title={`Фотографии: ${draft.name || "новая запись"}`}
+                onReadyReferencesChange={updateReadyMediaReferences}
+              />
+              <FieldDescription>
+                Превью использует medium, полноэкранный просмотр — large.
+              </FieldDescription>
             </Field>
 
             {error !== null && <ErrorBox>{error}</ErrorBox>}
@@ -875,10 +1082,12 @@ function EstimateActionCategoryMenu({
   request,
   action,
   onOpenCategory,
+  readOnly,
 }: {
   request: RepairEstimateCatalogRequest
   action: EstimateCatalogSettingsActionDto
   onOpenCategory: (categoryId: string) => void
+  readOnly: boolean
 }) {
   const queryClient = useQueryClient()
   const [dialogState, setDialogState] = useState<NodeDialogState | null>(null)
@@ -911,7 +1120,8 @@ function EstimateActionCategoryMenu({
     return null
   }
 
-  const canCreateCategory = action.id === "repair-estimate-catalog-canvas"
+  const canCreateCategory =
+    !readOnly && action.id === "repair-estimate-catalog-canvas"
   const nodeCount = isSectionData(dataQuery.data)
     ? getRepairEstimateCatalogSectionItems(dataQuery.data).length
     : dataQuery.data.nodes.length
@@ -930,6 +1140,8 @@ function EstimateActionCategoryMenu({
                 description: "Категория верхнего уровня каталога смет.",
                 submitLabel: "Создать",
                 allowTypeSelect: false,
+                request,
+                furnitureTree: false,
                 value: createBlankNodeMutation({
                   nodeType: "CATEGORY",
                   parentId: null,
@@ -1709,9 +1921,11 @@ function CatalogCanvas({
 function CatalogCanvasCategoryEditor({
   request,
   categoryId,
+  readOnly,
 }: {
   request: RepairEstimateCatalogRequest
   categoryId: string
+  readOnly: boolean
 }) {
   const queryClient = useQueryClient()
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -1860,11 +2074,14 @@ function CatalogCanvasCategoryEditor({
   }
 
   const openNodeEditor = (node: RepairEstimateCatalogNodeDto) => {
+    if (readOnly) return
     setNodeDialogState({
       title: "Редактировать блок",
       description: node.name,
       submitLabel: "Сохранить",
       allowTypeSelect: node.nodeType !== "CATEGORY",
+      request,
+      furnitureTree: category?.furnitureCategory ?? false,
       value: createNodeMutation(node),
       save: (input) => saveRepairEstimateCatalogCanvasNode(request, input),
     })
@@ -1880,59 +2097,67 @@ function CatalogCanvasCategoryEditor({
         <div className="min-w-0">
           <h2 className="truncate text-lg font-semibold">{category.name}</h2>
         </div>
-        <div className="grid gap-2 sm:grid-cols-[repeat(auto-fit,minmax(13rem,13rem))]">
-          <Button
-            type="button"
-            className="h-9 w-52 justify-start md:h-9"
-            onClick={() =>
-              setNodeDialogState({
-                title: "Добавить блок",
-                description: category.name,
-                submitLabel: "Сохранить",
-                allowTypeSelect: true,
-                value: createBlankNodeMutation({
-                  nodeType: "WORK",
-                  parentId: category.id,
-                }),
-                save: (input) =>
-                  saveRepairEstimateCatalogCanvasNode(request, input),
-              })
-            }
-          >
-            <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-            Блок
-          </Button>
-          <div className="w-52">
-            <NativeSelect
-              className="h-9 md:h-9"
-              value={draftLinkType}
-              onChange={(value) =>
-                setDraftLinkType(value as RepairEstimateCatalogLinkType)
-              }
-            >
-              {(
-                [
-                  "FOLLOW_UP",
-                  "DEPENDENCY",
-                ] satisfies RepairEstimateCatalogLinkType[]
-              ).map((type) => (
-                <option key={type} value={type}>
-                  {repairEstimateCatalogLinkTypeLabel(type)}
-                </option>
-              ))}
-            </NativeSelect>
-          </div>
-          {draftLinkStart !== null && (
+        {readOnly ? (
+          <p className="text-sm text-muted-foreground">
+            Опубликованная версия открыта только для просмотра.
+          </p>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-[repeat(auto-fit,minmax(13rem,13rem))]">
             <Button
               type="button"
-              variant="outline"
               className="h-9 w-52 justify-start md:h-9"
-              onClick={() => setDraftLinkStart(null)}
+              onClick={() =>
+                setNodeDialogState({
+                  title: "Добавить блок",
+                  description: category.name,
+                  submitLabel: "Сохранить",
+                  allowTypeSelect: true,
+                  request,
+                  furnitureTree: category.furnitureCategory,
+                  value: createBlankNodeMutation({
+                    nodeType: "WORK",
+                    parentId: category.id,
+                  }),
+                  save: (input) =>
+                    saveRepairEstimateCatalogCanvasNode(request, input),
+                })
+              }
             >
-              Отменить точку
+              <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+              Блок
             </Button>
-          )}
-        </div>
+            <div className="w-52">
+              <NativeSelect
+                className="h-9 md:h-9"
+                value={draftLinkType}
+                onChange={(value) =>
+                  setDraftLinkType(value as RepairEstimateCatalogLinkType)
+                }
+              >
+                {(
+                  [
+                    "FOLLOW_UP",
+                    "DEPENDENCY",
+                  ] satisfies RepairEstimateCatalogLinkType[]
+                ).map((type) => (
+                  <option key={type} value={type}>
+                    {repairEstimateCatalogLinkTypeLabel(type)}
+                  </option>
+                ))}
+              </NativeSelect>
+            </div>
+            {draftLinkStart !== null && (
+              <Button
+                type="button"
+                variant="outline"
+                className="h-9 w-52 justify-start md:h-9"
+                onClick={() => setDraftLinkStart(null)}
+              >
+                Отменить точку
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="min-h-[28rem] flex-1 overflow-auto rounded-lg border bg-background">
@@ -1954,17 +2179,22 @@ function CatalogCanvasCategoryEditor({
             setDraftLinkStart(null)
           }}
           onBeginLink={(start) => {
+            if (readOnly) return
             setError(null)
             setSelectedNodeId(start.nodeId)
             setSelectedLinkId(null)
             setDraftLinkStart(start)
           }}
-          onCompleteLink={createLinkFromAnchors}
+          onCompleteLink={(target, anchor) => {
+            if (!readOnly) createLinkFromAnchors(target, anchor)
+          }}
           onMoveNode={(node, position) =>
-            moveNodeMutation.mutate({ nodeId: node.id, position })
+            !readOnly && moveNodeMutation.mutate({ nodeId: node.id, position })
           }
           onEditNode={openNodeEditor}
-          onDeleteLink={(link) => deleteLinkMutation.mutate(link.id)}
+          onDeleteLink={(link) => {
+            if (!readOnly) deleteLinkMutation.mutate(link.id)
+          }}
         />
       </div>
 
@@ -1988,12 +2218,14 @@ function CatalogItemsTable({
   items,
   onEdit,
   onDelete,
+  readOnly,
 }: {
   section: RepairEstimateCatalogSectionDto
   categoryId: string
   items: RepairEstimateCatalogNodeDto[]
   onEdit: (node: RepairEstimateCatalogNodeDto) => void
   onDelete: (node: RepairEstimateCatalogNodeDto) => void
+  readOnly: boolean
 }) {
   const storageKey = `${CATALOG_TABLE_SORT_STORAGE_PREFIX}${section.kind}:${categoryId}`
   const [sortState, setSortState] = useState<CatalogTableSortState | null>(() =>
@@ -2082,9 +2314,16 @@ function CatalogItemsTable({
           {renderSortableHeader("unitPrice", "Цена")}
           {section.sectionType === "WORK" &&
             renderSortableHeader("durationMinutes", "Мин.")}
+          {section.kind === "furniture" && (
+            <th className="px-3 py-2 text-left font-medium">
+              Доп. оборудование
+            </th>
+          )}
           {renderSortableHeader("includeInEstimate", "Смета")}
           {renderSortableHeader("commonItem", "Общий")}
-          <th className="px-3 py-2 text-right font-medium">Действия</th>
+          {!readOnly && (
+            <th className="px-3 py-2 text-right font-medium">Действия</th>
+          )}
         </tr>
       </thead>
       <tbody>
@@ -2103,9 +2342,18 @@ function CatalogItemsTable({
             {section.sectionType === "WORK" && (
               <td className="px-3 py-2">{item.durationMinutes ?? ""}</td>
             )}
-            <td className="px-3 py-2">
-              {item.includeInEstimate ? "Да" : "Нет"}
-            </td>
+            {section.kind === "furniture" && (
+              <td className="px-3 py-2">
+                {item.furnitureEquipment
+                  ? `${item.furnitureEquipment.equipmentCode} · ${item.furnitureEquipment.equipmentName}`
+                  : "Не привязано"}
+              </td>
+            )}
+            {!readOnly && (
+              <td className="px-3 py-2">
+                {item.includeInEstimate ? "Да" : "Нет"}
+              </td>
+            )}
             <td className="px-3 py-2">{item.commonItem ? "Да" : "Нет"}</td>
             <td className="px-3 py-2">
               <div className="flex justify-end gap-1">
@@ -2140,10 +2388,12 @@ function CatalogSectionCategoryEditor({
   request,
   action,
   categoryId,
+  readOnly,
 }: {
   request: RepairEstimateCatalogRequest
   action: EstimateCatalogSettingsActionDto
   categoryId: string
+  readOnly: boolean
 }) {
   const kind = getSectionKind(action)
   const queryClient = useQueryClient()
@@ -2178,6 +2428,8 @@ function CatalogSectionCategoryEditor({
           return deleteRepairEstimateWorkCatalogItem(request, id)
         case "materials":
           return deleteRepairEstimateMaterialCatalogItem(request, id)
+        case "furniture":
+          return deleteRepairEstimateFurnitureCatalogItem(request, id)
         case null:
           return deleteRepairEstimateWorkCatalogItem(request, id)
       }
@@ -2227,6 +2479,8 @@ function CatalogSectionCategoryEditor({
         return saveRepairEstimateWorkCatalogItem(request, input)
       case "materials":
         return saveRepairEstimateMaterialCatalogItem(request, input)
+      case "furniture":
+        return saveRepairEstimateFurnitureCatalogItem(request, input)
       case null:
         return saveRepairEstimateWorkCatalogItem(request, input)
     }
@@ -2238,25 +2492,31 @@ function CatalogSectionCategoryEditor({
         <div className="min-w-0">
           <h2 className="truncate text-lg font-semibold">{category.name}</h2>
         </div>
-        <Button
-          type="button"
-          onClick={() =>
-            setDialogState({
-              title: `Добавить: ${section.title}`,
-              description: category.name,
-              submitLabel: "Сохранить",
-              allowTypeSelect: false,
-              value: createBlankNodeMutation({
-                nodeType: section.sectionType,
-                parentId: category.id,
-              }),
-              save,
-            })
-          }
-        >
-          <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-          Добавить
-        </Button>
+        {!readOnly ? (
+          <Button
+            type="button"
+            onClick={() =>
+              setDialogState({
+                title: `Добавить: ${section.title}`,
+                description: category.name,
+                submitLabel: "Сохранить",
+                allowTypeSelect: false,
+                request,
+                furnitureTree: kind === "furniture",
+                value: createBlankNodeMutation({
+                  nodeType: section.sectionType,
+                  parentId: category.id,
+                }),
+                save,
+              })
+            }
+          >
+            <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+            Добавить
+          </Button>
+        ) : (
+          <span className="text-sm text-muted-foreground">Только просмотр</span>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border">
@@ -2271,11 +2531,14 @@ function CatalogSectionCategoryEditor({
               description: node.name,
               submitLabel: "Сохранить",
               allowTypeSelect: false,
+              request,
+              furnitureTree: kind === "furniture",
               value: createNodeMutation(node),
               save,
             })
           }
           onDelete={(node) => deleteMutation.mutate(node.id)}
+          readOnly={readOnly}
         />
       </div>
 
@@ -2297,14 +2560,20 @@ function EstimateCategoryEditor({
   request,
   action,
   categoryId,
+  readOnly,
 }: {
   request: RepairEstimateCatalogRequest
   action: EstimateCatalogSettingsActionDto
   categoryId: string
+  readOnly: boolean
 }) {
   if (action.id === "repair-estimate-catalog-canvas") {
     return (
-      <CatalogCanvasCategoryEditor request={request} categoryId={categoryId} />
+      <CatalogCanvasCategoryEditor
+        request={request}
+        categoryId={categoryId}
+        readOnly={readOnly}
+      />
     )
   }
 
@@ -2313,6 +2582,7 @@ function EstimateCategoryEditor({
       request={request}
       action={action}
       categoryId={categoryId}
+      readOnly={readOnly}
     />
   )
 }
@@ -2344,11 +2614,13 @@ function EstimateDrilldownView({
   screen,
   onBack,
   onOpenCategory,
+  readOnly,
 }: {
   request: RepairEstimateCatalogRequest
   screen: Exclude<EstimateScreen, { level: "root" }>
   onBack: () => void
   onOpenCategory: (categoryId: string) => void
+  readOnly: boolean
 }) {
   const categoryNameQuery = useQuery({
     queryKey: [
@@ -2393,12 +2665,14 @@ function EstimateDrilldownView({
             request={request}
             action={screen.action}
             onOpenCategory={onOpenCategory}
+            readOnly={readOnly}
           />
         ) : (
           <EstimateCategoryEditor
             request={request}
             action={screen.action}
             categoryId={screen.categoryId}
+            readOnly={readOnly}
           />
         )}
       </div>
@@ -2417,7 +2691,15 @@ export function EstimatesRepairsSettingsPage() {
     null
   )
   const [commandError, setCommandError] = useState<string | null>(null)
-  const importInputRef = useRef<HTMLInputElement>(null)
+  const commandIdempotencyKeys = useRef(new Map<string, string>())
+
+  function commandIdempotencyKey(signature: string) {
+    const existing = commandIdempotencyKeys.current.get(signature)
+    if (existing) return existing
+    const created = crypto.randomUUID()
+    commandIdempotencyKeys.current.set(signature, created)
+    return created
+  }
   const canEdit = Boolean(
     selectedWarehouseId &&
     hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
@@ -2464,23 +2746,28 @@ export function EstimatesRepairsSettingsPage() {
     })
   }
 
-  const importMutation = useMutation({
-    mutationFn: async (file: File) => {
+  const bootstrapMutation = useMutation({
+    mutationFn: () => {
+      if (!accessToken) {
+        throw new Error("Не получен токен доступа к maintenance-service.")
+      }
+      if (!selectedWarehouseId) {
+        throw new Error("Выберите склад для создания базового каталога.")
+      }
       if (!canManage) {
         throw new Error(
-          "Недостаточно прав для импорта каталога выбранного склада."
+          "Недостаточно прав для создания базового каталога выбранного склада."
         )
       }
-      if (!accessToken || !selectedWarehouseId) {
-        throw new Error("Не выбран склад или отсутствует токен доступа.")
-      }
-      return importRepairEstimateCatalog(
+      const signature = `bootstrap:${selectedWarehouseId}`
+      return bootstrapRepairEstimateCatalog(
         accessToken,
         selectedWarehouseId,
-        await file.text()
-      )
+        commandIdempotencyKey(signature)
+      ).then((version) => ({ version, signature }))
     },
-    onSuccess: (version) => {
+    onSuccess: ({ version, signature }) => {
+      commandIdempotencyKeys.current.delete(signature)
       setCommandError(null)
       setSelectedVersionId(version.id)
       setEstimateScreen({ level: "root" })
@@ -2490,13 +2777,66 @@ export function EstimatesRepairsSettingsPage() {
       setCommandError(
         error instanceof Error
           ? error.message
-          : "Не удалось импортировать каталог."
+          : "Не удалось создать базовый каталог."
+      )
+    },
+  })
+
+  const forkMutation = useMutation({
+    mutationFn: () => {
+      if (!accessToken) {
+        throw new Error("Не получен токен доступа к maintenance-service.")
+      }
+      if (!selectedWarehouseId) {
+        throw new Error("Выберите склад для создания черновика каталога.")
+      }
+      if (!canManage) {
+        throw new Error(
+          "Недостаточно прав для создания черновика выбранного склада."
+        )
+      }
+      if (!catalogRequest || !selectedVersion) {
+        throw new Error("Версия каталога не выбрана.")
+      }
+      if (
+        selectedVersion.lifecycle !== "ACTIVE" &&
+        selectedVersion.lifecycle !== "SUPERSEDED"
+      ) {
+        throw new Error(
+          "Черновик можно создать только из активной или заменённой версии."
+        )
+      }
+      const signature = `fork:${selectedVersion.id}:${selectedVersion.version}`
+      return forkRepairEstimateCatalog(
+        catalogRequest,
+        selectedVersion.version,
+        commandIdempotencyKey(signature)
+      ).then((version) => ({ version, signature }))
+    },
+    onSuccess: ({ version, signature }) => {
+      commandIdempotencyKeys.current.delete(signature)
+      setCommandError(null)
+      setSelectedVersionId(version.id)
+      setEstimateScreen({ level: "root" })
+      refreshCatalog()
+    },
+    onError: (error) => {
+      setCommandError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось создать черновик каталога."
       )
     },
   })
 
   const activationMutation = useMutation({
     mutationFn: () => {
+      if (!accessToken) {
+        throw new Error("Не получен токен доступа к maintenance-service.")
+      }
+      if (!selectedWarehouseId) {
+        throw new Error("Выберите склад для активации каталога.")
+      }
       if (!canManage) {
         throw new Error(
           "Недостаточно прав для активации каталога выбранного склада."
@@ -2505,12 +2845,15 @@ export function EstimatesRepairsSettingsPage() {
       if (!catalogRequest || !selectedVersion) {
         throw new Error("Версия каталога не выбрана.")
       }
+      const signature = `activate:${selectedVersion.id}:${selectedVersion.version}`
       return activateRepairEstimateCatalog(
         catalogRequest,
-        selectedVersion.version
-      )
+        selectedVersion.version,
+        commandIdempotencyKey(signature)
+      ).then((version) => ({ version, signature }))
     },
-    onSuccess: (version) => {
+    onSuccess: ({ version, signature }) => {
+      commandIdempotencyKeys.current.delete(signature)
       setCommandError(null)
       setSelectedVersionId(version.id)
       setEstimateScreen({ level: "root" })
@@ -2540,11 +2883,17 @@ export function EstimatesRepairsSettingsPage() {
     queryFn: getRepairEstimateMaterialCatalogSettings,
   })
 
+  const furnitureCatalogQuery = useQuery({
+    queryKey: ["estimate-settings", "repair-estimate-catalog-furniture"],
+    queryFn: getRepairEstimateFurnitureCatalogSettings,
+  })
+
   const estimateActions = useMemo(() => {
     return [
       catalogCanvasQuery.data,
       workCatalogQuery.data,
       materialCatalogQuery.data,
+      furnitureCatalogQuery.data,
     ]
       .filter((action): action is EstimateCatalogSettingsActionDto =>
         Boolean(action)
@@ -2553,6 +2902,7 @@ export function EstimatesRepairsSettingsPage() {
       .map((action) => ({ ...action, group: "estimate" as const }))
   }, [
     catalogCanvasQuery.data,
+    furnitureCatalogQuery.data,
     materialCatalogQuery.data,
     workCatalogQuery.data,
   ])
@@ -2560,14 +2910,28 @@ export function EstimatesRepairsSettingsPage() {
   const estimateLoading =
     catalogCanvasQuery.isLoading ||
     workCatalogQuery.isLoading ||
-    materialCatalogQuery.isLoading
+    materialCatalogQuery.isLoading ||
+    furnitureCatalogQuery.isLoading
+  const estimateError =
+    catalogCanvasQuery.error ??
+    workCatalogQuery.error ??
+    materialCatalogQuery.error ??
+    furnitureCatalogQuery.error
+  const estimateRefreshing =
+    catalogCanvasQuery.isFetching ||
+    workCatalogQuery.isFetching ||
+    materialCatalogQuery.isFetching ||
+    furnitureCatalogQuery.isFetching
+
+  const refreshEstimateActions = () => {
+    void queryClient.invalidateQueries({ queryKey: ["estimate-settings"] })
+  }
 
   if (estimateScreen.level !== "root") {
-    if (!canEdit || !catalogRequest || selectedVersion?.lifecycle !== "DRAFT") {
+    if (!catalogRequest || !selectedVersion) {
       return (
         <ErrorBox>
-          Для изменения каталога выберите черновую версию и склад с правами
-          редактирования.
+          Выберите версию каталога и склад, доступный для просмотра.
         </ErrorBox>
       )
     }
@@ -2575,6 +2939,7 @@ export function EstimatesRepairsSettingsPage() {
       <EstimateDrilldownView
         request={catalogRequest}
         screen={estimateScreen}
+        readOnly={!canEdit || selectedVersion.lifecycle !== "DRAFT"}
         onBack={() => {
           if (estimateScreen.level === "category") {
             setEstimateScreen({
@@ -2616,7 +2981,13 @@ export function EstimatesRepairsSettingsPage() {
               }}
             >
               {!versionsQuery.data?.length && (
-                <option value="">Версий пока нет</option>
+                <option value="">
+                  {versionsQuery.isLoading
+                    ? "Загрузка версий…"
+                    : versionsQuery.error
+                      ? "Версии недоступны"
+                      : "Версий пока нет"}
+                </option>
               )}
               {(versionsQuery.data ?? []).map((version) => (
                 <option key={version.id} value={version.id}>
@@ -2639,33 +3010,45 @@ export function EstimatesRepairsSettingsPage() {
           <Button
             type="button"
             variant="outline"
-            onClick={() => importInputRef.current?.click()}
+            onClick={() => bootstrapMutation.mutate()}
             disabled={
               !accessToken ||
               !selectedWarehouseId ||
               !canManage ||
-              importMutation.isPending
+              bootstrapMutation.isPending ||
+              forkMutation.isPending ||
+              activationMutation.isPending
             }
           >
-            Импортировать JSON
+            Создать базовый каталог
           </Button>
-          <input
-            ref={importInputRef}
-            type="file"
-            accept="application/json,.json"
-            className="hidden"
-            onChange={(event) => {
-              const file = event.target.files?.[0]
-              if (canManage && file) importMutation.mutate(file)
-              event.currentTarget.value = ""
-            }}
-          />
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => forkMutation.mutate()}
+            disabled={
+              !accessToken ||
+              !selectedWarehouseId ||
+              !canManage ||
+              (selectedVersion?.lifecycle !== "ACTIVE" &&
+                selectedVersion?.lifecycle !== "SUPERSEDED") ||
+              bootstrapMutation.isPending ||
+              forkMutation.isPending ||
+              activationMutation.isPending
+            }
+          >
+            Создать черновик
+          </Button>
           <Button
             type="button"
             onClick={() => activationMutation.mutate()}
             disabled={
+              !accessToken ||
+              !selectedWarehouseId ||
               !canManage ||
               selectedVersion?.lifecycle !== "DRAFT" ||
+              bootstrapMutation.isPending ||
+              forkMutation.isPending ||
               activationMutation.isPending
             }
           >
@@ -2673,10 +3056,11 @@ export function EstimatesRepairsSettingsPage() {
           </Button>
         </div>
 
-        {selectedVersion?.lifecycle === "ACTIVE" && (
+        {(selectedVersion?.lifecycle === "ACTIVE" ||
+          selectedVersion?.lifecycle === "SUPERSEDED") && (
           <p className="mt-3 text-sm text-muted-foreground">
-            Активная версия доступна рабочим экранам только для чтения. Для
-            изменений импортируйте или выберите черновик.
+            Опубликованная версия доступна только для чтения. Для изменений
+            создайте из неё новый черновик.
           </p>
         )}
         {!accessToken && (
@@ -2685,33 +3069,110 @@ export function EstimatesRepairsSettingsPage() {
         {accessToken && !selectedWarehouseId && (
           <ErrorBox>Выберите склад для каталога ремонта.</ErrorBox>
         )}
-        {versionsQuery.error && (
-          <ErrorBox>
-            {versionsQuery.error instanceof Error
-              ? versionsQuery.error.message
-              : "Не удалось загрузить версии каталога."}
-          </ErrorBox>
-        )}
         {commandError && <ErrorBox>{commandError}</ErrorBox>}
       </section>
 
-      <SettingsSection title="Настройка смет" count={estimateActions.length}>
-        {estimateLoading ? (
-          <SectionSkeleton />
+      <SettingsSection title="Настройка смет" count={4}>
+        {!accessToken || !selectedWarehouseId ? (
+          <CatalogNavigationState
+            kind="error"
+            title="Разделы каталога недоступны"
+            description={
+              !accessToken
+                ? "Не получен токен доступа к maintenance-service."
+                : "Выберите склад, чтобы загрузить его каталог смет."
+            }
+          />
+        ) : versionsQuery.isLoading ? (
+          <SectionSkeleton label="Загружаем доступную версию каталога смет…" />
+        ) : versionsQuery.error ? (
+          <CatalogNavigationState
+            kind="error"
+            title="Не удалось загрузить каталог смет"
+            description={
+              versionsQuery.error instanceof Error
+                ? `Причина: ${versionsQuery.error.message}`
+                : "Сервис версий каталога временно недоступен."
+            }
+          >
+            <Button
+              type="button"
+              variant="outline"
+              disabled={versionsQuery.isFetching}
+              onClick={() => void versionsQuery.refetch()}
+            >
+              <HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" />
+              Повторить загрузку
+            </Button>
+          </CatalogNavigationState>
+        ) : !catalogRequest || !selectedVersion ? (
+          <CatalogNavigationState
+            kind="empty"
+            title="Каталог смет ещё не создан"
+            description={
+              canManage
+                ? "Создайте базовый каталог для выбранного склада — после этого откроются конструктор, работы, материалы и мебель."
+                : "Для выбранного склада нет доступной версии каталога. Обратитесь к пользователю с правом управления или проверьте снова."
+            }
+          >
+            {canManage && (
+              <Button
+                type="button"
+                disabled={
+                  bootstrapMutation.isPending ||
+                  forkMutation.isPending ||
+                  activationMutation.isPending
+                }
+                onClick={() => bootstrapMutation.mutate()}
+              >
+                <HugeiconsIcon
+                  icon={DatabaseAddIcon}
+                  data-icon="inline-start"
+                />
+                Создать первый каталог
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              disabled={versionsQuery.isFetching}
+              onClick={() => refreshCatalog()}
+            >
+              <HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" />
+              Проверить снова
+            </Button>
+          </CatalogNavigationState>
+        ) : estimateLoading ? (
+          <SectionSkeleton label="Подготавливаем разделы каталога смет…" />
+        ) : estimateError || estimateActions.length !== 4 ? (
+          <CatalogNavigationState
+            kind="error"
+            title="Не удалось загрузить разделы каталога"
+            description={
+              estimateError instanceof Error
+                ? `Причина: ${estimateError.message}`
+                : "Не все разделы каталога доступны. Повторите загрузку."
+            }
+          >
+            <Button
+              type="button"
+              variant="outline"
+              disabled={estimateRefreshing}
+              onClick={refreshEstimateActions}
+            >
+              <HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" />
+              Повторить загрузку
+            </Button>
+          </CatalogNavigationState>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {estimateActions.map((action) => (
               <SettingsActionButton
                 key={action.id}
                 action={action}
-                active={false}
-                disabled={!canEdit || selectedVersion?.lifecycle !== "DRAFT"}
-                onClick={(selected) => {
-                  if (!canEdit || selectedVersion?.lifecycle !== "DRAFT") {
-                    return
-                  }
+                onClick={(selected) =>
                   setEstimateScreen({ level: "action", action: selected })
-                }}
+                }
               />
             ))}
           </div>

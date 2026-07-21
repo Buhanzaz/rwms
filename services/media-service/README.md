@@ -23,12 +23,18 @@ rotation. An unproved video dimension remains SQL `NULL`.
 Flyway is external to this process. Apply
 `db/migration/V1__media_schema.sql` and
 `db/migration/V2__media_runtime_recovery.sql`, then
-`db/migration/V3__inventory_owner_proof.sql` with Flyway before starting the
+`db/migration/V3__inventory_owner_proof.sql` and
+`db/migration/V4__cabin_owner_bindings.sql`, then the additive
+`V4_1__prepare_legacy_photo_folder_backfill.sql`,
+`db/migration/V5__media_photo_folders.sql` and
+`V5_1__restore_runtime_source_guard.sql`, then
+`db/migration/V6__service_owner_proofs_and_soft_delete.sql`, then
+`db/migration/V7__dynamic_cabin_owner_projection.sql` before starting the
 service. The Go application never migrates, baselines, repairs or silently
 adopts a database.
 
-- New local/test databases migrate through V1, V2 and V3.
-- A database already at the exact V2 history is upgraded by applying V3.
+- New local/test databases migrate through V1 to V7.
+- A database already at the exact V6 history is upgraded by applying V7.
 - `baselineOnMigrate` must remain `false`; a non-empty unversioned database is
   rejected.
 - Startup verifies both successful Flyway history rows, their versions,
@@ -69,6 +75,8 @@ absent.
 | `MEDIA_KAFKA_INVENTORY_TOPIC` | Canonical inventory fact topic |
 | `MEDIA_KAFKA_INVENTORY_OWNER_GROUP` | Dedicated media owner-proof consumer group |
 | `MEDIA_KAFKA_INVENTORY_OWNER_DLT_TOPIC` | Media-owned inventory owner consumer DLT |
+| `MEDIA_KAFKA_ASSET_RENTAL_ITEM_TOPIC` | Canonical asset rental-item fact topic |
+| `MEDIA_KAFKA_CABIN_OWNER_GROUP` | Dedicated dynamic CABIN owner consumer group |
 | `MEDIA_INSTANCE_ID` | Unique safe ASCII lease/fence owner ID |
 
 When a video MIME type is allowed, `MEDIA_MAX_VIDEO_DURATION` and the
@@ -84,6 +92,8 @@ hash-only record to
 The inventory owner consumer settings are likewise fixed to
 `rwms.inventory.session.v1`, `media-service-inventory-owner-v1` and
 `rwms.inventory.session.v1.media-service-inventory-owner-v1.dlt`.
+The CABIN owner consumer settings are fixed to
+`rwms.asset.rental-item.v1` and `media-service-cabin-owner-v1`.
 
 `production` requires HTTPS issuer/JWKS URLs and TLS MinIO. Plain HTTP and
 `MEDIA_MINIO_USE_SSL=false` are accepted only under the explicit `local-test`
@@ -99,14 +109,28 @@ the caller. Finalization verifies and pins the exact object version, ETag,
 length, content type, checksum and content sniff; derived writes are
 version-pinned as well. Public reads stream the pinned version through the media
 API with private/no-store headers. The runtime has no unversioned download path
-and no delete, retention or orphan-cleanup behavior.
+and no physical object delete, retention or orphan-cleanup behavior. The
+owner-scoped deletion command is a PostgreSQL soft-delete only: it preserves all
+MinIO versions and variant provenance while emitting one DELETED fact.
 
 Public access is restricted to a `USER` JWT with a UUID subject, exact RWMS
-scope and warehouse grant. The only Stage 7 owner shape is
-`INVENTORY_FINDING` with `INSPECTION` context. It is authorized from the local
-owner-proof projection, never from caller-supplied owner/warehouse values.
-There is no proof TTL: activity is determined by the consumed proof,
-checkpoint and quarantine state.
+scope and warehouse grant. Canonical owner/context pairs cover inventory,
+cabins, maintenance estimates/repairs/acceptance/catalog nodes and logistics
+returns/shipments/transfers. All are authorized from local owner bindings,
+never from caller-supplied owner/warehouse values. Logistics browser requests
+send only `documentId` and `lineId`; the composite persistence identity is
+derived inside media-service. The V4 CABIN bindings retain the 195 deterministic
+old-panel cabins as migration evidence. The required asset rental-item consumer
+registers every server-created UUID from its version-0 create fact and then owns
+the live warehouse, revision and active state. There is no proof TTL: activity
+is determined by the binding checkpoint and quarantine state.
+
+`POST /api/media/v1/cabin-covers` returns a bounded warehouse batch. Its
+`photoCount` counts logical non-deleted IMAGE assets. `previews` contains at
+most 100 READY images in canonical asset order, with exactly one `SMALL`
+variant per logical image; `cover` is the first preview for compatibility.
+MEDIUM, LARGE, ORIGINAL and object-store locations are never returned by this
+projection.
 
 Task 1B consumes only canonical FINDING markers and owner-proof facts. A stream
 must begin with `inventory.finding.added.v1` version 0; later facts are
@@ -120,6 +144,27 @@ public registration or administrative bypass:
 ```bash
 MEDIA_DATABASE_URL=... media-service reconcile-inventory-owner reviewed-batch.json
 ```
+
+The CABIN stream must start with `asset.rental-item.created.v1` version 0.
+Passport, status, warehouse and logistics-effect facts carry the complete
+sanitized owner proof; comment and manual-note facts are ordering markers.
+`WRITTEN_OFF` is terminal and deactivates the binding. Exact duplicates are
+idempotent; gaps, regressions, identity/revision conflicts and attempted
+terminal reactivation quarantine the rental item and make every public CABIN
+media path fail closed. Reviewed contiguous recovery uses the separate
+operator command:
+
+```bash
+MEDIA_DATABASE_URL=... media-service reconcile-cabin-owner reviewed-batch.json
+```
+
+Maintenance and logistics services establish their own scopes through
+`POST /api/internal/media/v1/owner-proofs` with exact service identity/scope.
+Receipts and aggregate checkpoints require a version-0 bootstrap followed by
+contiguous aggregate versions. Owner revisions are monotonic; changed equal
+revisions, gaps, regressions and event-ID conflicts quarantine the owner. For
+returns the proof warehouse is the receiving destination. For transfer-line
+acceptance it is `destinationWarehouseId`, never the source warehouse.
 
 The PostgreSQL transport outbox publishes only exact stored bytes. Broker
 outages return rows to `PENDING` with bounded DB backoff and never exhaust into
@@ -138,12 +183,12 @@ an opaque owner ID from `documentId:lineId`, permits only
 `LOGISTICS_RETURN`, `LOGISTICS_SHIPMENT` and `LOGISTICS_TRANSFER`, and validates
 one to twenty unique `{mediaId,generation}` values for the matching warehouse.
 
-The query succeeds only for current `READY` generations and returns only the
+The query succeeds only for a current logistics owner proof and current `READY`
+generations, and returns only the
 validated opaque IDs/generations. It never exposes a URL, object key,
 filename, MIME type, processing state or retention policy. It is read-only:
-no upload, owner binding, migration, event, outbox, Kafka consumer or object
-storage call is made. In particular, it does not depend on the Stage 7
-inventory owner-proof projection.
+no upload, owner binding mutation, event, outbox, Kafka consumer or object
+storage call is made.
 
 ## Local verification
 

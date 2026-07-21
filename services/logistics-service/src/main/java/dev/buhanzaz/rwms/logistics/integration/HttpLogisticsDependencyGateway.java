@@ -4,12 +4,14 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.oauth2.client.OAuth2AuthorizeRequest;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.util.UriComponentsBuilder;
 
 /**
  * Direct client-credentials transport for only the approved Stage 8 private
@@ -34,6 +36,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   private final String maintenanceBase;
   private final String mediaBase;
   private final String taskBoardBase;
+  private final String taskBoardEquipmentMovementBase;
 
   HttpLogisticsDependencyGateway(
       RestClient client,
@@ -46,10 +49,13 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         strip(properties.warehouseBaseUrl().toString()) + "/api/internal/warehouse/v1/warehouses/logistics";
     maintenanceBase =
         strip(properties.maintenanceBaseUrl().toString()) + "/api/internal/maintenance/v1/logistics/returns";
-    mediaBase = strip(properties.mediaBaseUrl().toString()) + "/api/internal/media/v1/logistics";
+    mediaBase = strip(properties.mediaBaseUrl().toString()) + "/api/internal/media/v1";
     taskBoardBase =
         strip(properties.taskBoardBaseUrl().toString())
             + "/api/internal/task-board/v1/logistics/preparation-tasks";
+    taskBoardEquipmentMovementBase =
+        strip(properties.taskBoardBaseUrl().toString())
+            + "/api/internal/task-board/v1/logistics/equipment-movement-tasks";
   }
 
   @Override
@@ -247,7 +253,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       List<MediaReference> references) {
     MediaValidationResponse response =
         postWithoutIdempotency(
-            mediaBase + "/references/validate",
+            mediaBase + "/logistics/references/validate",
             new MediaValidationRequest(
                 ownerType.name(),
                 documentId,
@@ -274,6 +280,65 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       throw malformed("Media-service returned mismatched logistics references");
     }
     return new MediaValidation(ownerType, documentId, lineId, warehouseId, validated);
+  }
+
+  @Override
+  public MediaOwnerProof upsertMediaOwnerProof(
+      LogisticsOwnerType ownerType,
+      UUID documentId,
+      UUID lineId,
+      UUID warehouseId,
+      long ownerRevision,
+      long aggregateVersion,
+      UUID proofEventId,
+      boolean active) {
+    if (ownerType == null
+        || ownerType == LogisticsOwnerType.LOGISTICS_SHIPMENT
+        || documentId == null
+        || lineId == null
+        || warehouseId == null
+        || ownerRevision < 0
+        || aggregateVersion < 0
+        || proofEventId == null) {
+      throw malformed("Logistics media owner proof is invalid");
+    }
+    MediaOwnerProofResponse response =
+        postWithoutIdempotency(
+            mediaBase + "/owner-proofs",
+            new MediaOwnerProofRequest(
+                ownerType.name(),
+                documentId,
+                lineId,
+                warehouseId,
+                ownerRevision,
+                aggregateVersion,
+                proofEventId,
+                active),
+            MediaOwnerProofResponse.class,
+            MEDIA_CLIENT,
+            MEDIA_SCOPE);
+    if (!ownerType.name().equals(response.ownerType())
+        || !documentId.equals(response.documentId())
+        || !lineId.equals(response.lineId())
+        || !warehouseId.equals(response.warehouseId())
+        || response.ownerRevision() == null
+        || response.aggregateVersion() == null
+        || response.active() == null
+        || ownerRevision != response.ownerRevision()
+        || aggregateVersion != response.aggregateVersion()
+        || !proofEventId.equals(response.proofEventId())
+        || active != response.active()) {
+      throw malformed("Media-service returned a mismatched logistics owner proof");
+    }
+    return new MediaOwnerProof(
+        ownerType,
+        documentId,
+        lineId,
+        warehouseId,
+        ownerRevision,
+        aggregateVersion,
+        proofEventId,
+        active);
   }
 
   @Override
@@ -396,6 +461,263 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     return task(response);
   }
 
+  @Override
+  public EquipmentMovementReservation acquireEquipmentMovementReservation(
+      UUID idempotencyKey,
+      UUID movementId,
+      UUID lineId,
+      UUID equipmentId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      String sourceLocationKind,
+      long expectedSourceBalanceVersion,
+      long quantity,
+      OffsetDateTime reservedUntil) {
+    EquipmentMovementReservationResponse response =
+        post(
+            assetBase + "/equipment-movement-reservations",
+            idempotencyKey,
+            new AcquireEquipmentMovementReservationRequest(
+                movementId,
+                lineId,
+                equipmentId,
+                sourceWarehouseId,
+                sourceRentalItemId,
+                sourceLocationKind,
+                expectedSourceBalanceVersion,
+                quantity,
+                reservedUntil),
+            EquipmentMovementReservationResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE);
+    return movementReservation(response);
+  }
+
+  @Override
+  public EquipmentMovementReservation releaseEquipmentMovementReservation(
+      UUID idempotencyKey,
+      UUID reservationId,
+      long expectedReservationVersion,
+      UUID movementId,
+      UUID lineId) {
+    EquipmentMovementReservationResponse response =
+        put(
+            assetBase + "/equipment-movement-reservations/" + reservationId + "/release",
+            idempotencyKey,
+            new ReleaseEquipmentMovementReservationRequest(
+                expectedReservationVersion, movementId, lineId),
+            EquipmentMovementReservationResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE);
+    return movementReservation(response);
+  }
+
+  @Override
+  public EquipmentMovementExecution executeEquipmentMovement(
+      UUID idempotencyKey, UUID movementId, List<EquipmentMovementExecutionRequestLine> lines) {
+    EquipmentMovementExecutionResponse response =
+        post(
+            assetBase + "/equipment-movement-reservations/execute",
+            idempotencyKey,
+            new ExecuteEquipmentMovementRequest(
+                movementId,
+                lines.stream()
+                    .map(
+                        line ->
+                            new ExecuteEquipmentMovementLineRequest(
+                                line.reservationId(),
+                                line.expectedReservationVersion(),
+                                line.lineId(),
+                                line.targetWarehouseId(),
+                                line.targetRentalItemId(),
+                                line.targetLocationKind()))
+                    .toList()),
+            EquipmentMovementExecutionResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE);
+    return movementExecution(response);
+  }
+
+  @Override
+  public EquipmentMovementBoardTask registerEquipmentMovementTask(
+      UUID warehouseId,
+      UUID externalTaskId,
+      String unitNumber,
+      Integer plannedDurationMinutes,
+      OffsetDateTime deadlineAt,
+      List<EquipmentMovementOperation> operations) {
+    EquipmentMovementBoardTaskResponse response =
+        postWithoutIdempotency(
+            taskBoardEquipmentMovementBase,
+            new RegisterEquipmentMovementTaskRequest(
+                warehouseId,
+                externalTaskId,
+                unitNumber,
+                plannedDurationMinutes,
+                deadlineAt,
+                operations.stream()
+                    .map(
+                        operation ->
+                            new EquipmentMovementOperationRequest(
+                                operation.direction(),
+                                operation.equipmentCode(),
+                                operation.equipmentName(),
+                                operation.quantity()))
+                    .toList()),
+            EquipmentMovementBoardTaskResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE);
+    return movementBoardTask(response);
+  }
+
+  @Override
+  public EquipmentMovementBoardTask readEquipmentMovementTask(UUID externalTaskId) {
+    EquipmentMovementBoardTaskResponse response =
+        get(
+            taskBoardEquipmentMovementBase + "/" + externalTaskId,
+            EquipmentMovementBoardTaskResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE);
+    return movementBoardTask(response);
+  }
+
+  @Override
+  public EquipmentMovementBoardTask cancelEquipmentMovementTask(
+      UUID externalTaskId, long expectedTaskVersion) {
+    EquipmentMovementBoardTaskResponse response =
+        postWithoutIdempotency(
+            taskBoardEquipmentMovementBase + "/" + externalTaskId + "/cancel",
+            new CancelEquipmentMovementTaskRequest(expectedTaskVersion),
+            EquipmentMovementBoardTaskResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE);
+    return movementBoardTask(response);
+  }
+
+  @Override
+  public OrderUnitCandidatePage readOrderUnitCandidates(
+      UUID orderId, UUID warehouseId, int page, int size, String search) {
+    String uri =
+        UriComponentsBuilder.fromUriString(assetBase + "/orders/{orderId}/unit-candidates")
+            .queryParam("warehouseId", warehouseId)
+            .queryParam("page", page)
+            .queryParam("size", size)
+            .queryParam("search", search == null ? "" : search)
+            .buildAndExpand(orderId)
+            .encode()
+            .toUriString();
+    OrderUnitCandidatePageResponse response =
+        get(uri, OrderUnitCandidatePageResponse.class, ASSET_CLIENT, ASSET_SCOPE);
+    if (response.content() == null) {
+      throw malformed("Asset-service returned an invalid order-unit page");
+    }
+    return new OrderUnitCandidatePage(
+        response.content().stream()
+            .map(
+                candidate ->
+                    new OrderUnitCandidate(
+                        candidate.reservationId(),
+                        candidate.added(),
+                        orderRentalItem(candidate.unit())))
+            .toList(),
+        response.page(),
+        response.size(),
+        response.totalElements(),
+        response.totalPages());
+  }
+
+  @Override
+  public List<OrderUnitReservation> readOrderUnits(UUID orderId) {
+    return getOrderList(assetBase + "/orders/" + orderId + "/units").stream()
+        .map(HttpLogisticsDependencyGateway::orderReservation)
+        .toList();
+  }
+
+  @Override
+  public OrderUnitReservation reserveOrderUnit(
+      UUID idempotencyKey,
+      UUID orderId,
+      UUID warehouseId,
+      UUID unitId,
+      UUID actorSubjectId,
+      String actorRole) {
+    return orderReservation(
+        postOrder(
+            assetBase + "/orders/" + orderId + "/units",
+            idempotencyKey,
+            new ReserveOrderUnitRequest(
+                warehouseId, unitId, actorSubjectId, actorRole),
+            OrderUnitReservationResponse.class));
+  }
+
+  @Override
+  public OrderUnitReservation releaseOrderUnit(
+      UUID idempotencyKey,
+      UUID orderId,
+      UUID unitId,
+      UUID actorSubjectId,
+      String actorRole) {
+    return orderReservation(
+        postOrder(
+            assetBase + "/orders/" + orderId + "/units/" + unitId + "/release",
+            idempotencyKey,
+            new OrderActorRequest(actorSubjectId, actorRole),
+            OrderUnitReservationResponse.class));
+  }
+
+  @Override
+  public List<OrderUnitReservation> releaseAllOrderUnits(
+      UUID idempotencyKey, UUID orderId, UUID actorSubjectId, String actorRole) {
+    return postOrderList(
+            assetBase + "/orders/" + orderId + "/units/release-all",
+            idempotencyKey,
+            new OrderActorRequest(actorSubjectId, actorRole))
+        .stream()
+        .map(HttpLogisticsDependencyGateway::orderReservation)
+        .toList();
+  }
+
+  @Override
+  public OrderEquipmentAdjustment adjustOrderEquipment(
+      UUID idempotencyKey,
+      UUID orderId,
+      UUID unitId,
+      UUID equipmentId,
+      UUID actorSubjectId,
+      String actorRole,
+      long expectedCurrentQuantity,
+      long requiredQuantity) {
+    OrderEquipmentAdjustmentResponse response =
+        putOrder(
+            assetBase
+                + "/orders/"
+                + orderId
+                + "/units/"
+                + unitId
+                + "/equipment/"
+                + equipmentId,
+            idempotencyKey,
+            new AdjustOrderEquipmentRequest(
+                actorSubjectId,
+                actorRole,
+                expectedCurrentQuantity,
+                requiredQuantity),
+            OrderEquipmentAdjustmentResponse.class);
+    if (response.unit() == null) {
+      throw malformed("Asset-service returned an invalid order equipment adjustment");
+    }
+    return new OrderEquipmentAdjustment(
+        response.orderId(),
+        response.rentalItemId(),
+        response.equipmentId(),
+        response.previousQuantity(),
+        response.requiredQuantity(),
+        response.delta(),
+        response.availableStock(),
+        orderMovement(response.movement()),
+        orderRentalItem(response.unit()));
+  }
+
   private <T> T get(String uri, Class<T> type, String registration, String scope) {
     try {
       T response =
@@ -409,6 +731,77 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       return response;
     } catch (RuntimeException exception) {
       throw dependencyFailure(exception);
+    }
+  }
+
+  private List<OrderUnitReservationResponse> getOrderList(String uri) {
+    try {
+      List<OrderUnitReservationResponse> response =
+          client
+              .get()
+              .uri(uri)
+              .header(HttpHeaders.AUTHORIZATION, bearer(ASSET_CLIENT, ASSET_SCOPE))
+              .retrieve()
+              .body(new ParameterizedTypeReference<>() {});
+      if (response == null) throw malformed("Asset-service returned an empty response");
+      return response;
+    } catch (RuntimeException exception) {
+      throw orderDependencyFailure(exception);
+    }
+  }
+
+  private <T> T postOrder(String uri, UUID key, Object body, Class<T> type) {
+    try {
+      T response =
+          client
+              .post()
+              .uri(uri)
+              .header("Idempotency-Key", key.toString())
+              .header(HttpHeaders.AUTHORIZATION, bearer(ASSET_CLIENT, ASSET_SCOPE))
+              .body(body)
+              .retrieve()
+              .body(type);
+      if (response == null) throw malformed("Asset-service returned an empty response");
+      return response;
+    } catch (RuntimeException exception) {
+      throw orderDependencyFailure(exception);
+    }
+  }
+
+  private List<OrderUnitReservationResponse> postOrderList(
+      String uri, UUID key, Object body) {
+    try {
+      List<OrderUnitReservationResponse> response =
+          client
+              .post()
+              .uri(uri)
+              .header("Idempotency-Key", key.toString())
+              .header(HttpHeaders.AUTHORIZATION, bearer(ASSET_CLIENT, ASSET_SCOPE))
+              .body(body)
+              .retrieve()
+              .body(new ParameterizedTypeReference<>() {});
+      if (response == null) throw malformed("Asset-service returned an empty response");
+      return response;
+    } catch (RuntimeException exception) {
+      throw orderDependencyFailure(exception);
+    }
+  }
+
+  private <T> T putOrder(String uri, UUID key, Object body, Class<T> type) {
+    try {
+      T response =
+          client
+              .put()
+              .uri(uri)
+              .header("Idempotency-Key", key.toString())
+              .header(HttpHeaders.AUTHORIZATION, bearer(ASSET_CLIENT, ASSET_SCOPE))
+              .body(body)
+              .retrieve()
+              .body(type);
+      if (response == null) throw malformed("Asset-service returned an empty response");
+      return response;
+    } catch (RuntimeException exception) {
+      throw orderDependencyFailure(exception);
     }
   }
 
@@ -546,6 +939,176 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         response.doneAt());
   }
 
+  private static EquipmentMovementReservation movementReservation(
+      EquipmentMovementReservationResponse response) {
+    if (response == null
+        || response.reservationId() == null
+        || response.version() < 0
+        || !"LOGISTICS_EQUIPMENT_MOVEMENT".equals(response.ownerType())
+        || response.movementId() == null
+        || response.lineId() == null
+        || response.equipmentId() == null
+        || response.equipmentCode() == null
+        || response.equipmentCode().isBlank()
+        || response.equipmentName() == null
+        || response.equipmentName().isBlank()
+        || response.sourceBalanceId() == null
+        || response.sourceWarehouseId() == null
+        || response.sourceLocationKind() == null
+        || response.quantity() < 1
+        || response.state() == null
+        || response.reservedUntil() == null) {
+      throw malformed("Asset-service returned an invalid equipment movement reservation");
+    }
+    return new EquipmentMovementReservation(
+        response.reservationId(),
+        response.version(),
+        response.ownerType(),
+        response.movementId(),
+        response.lineId(),
+        response.equipmentId(),
+        response.equipmentCode(),
+        response.equipmentName(),
+        response.sourceBalanceId(),
+        response.sourceWarehouseId(),
+        response.sourceRentalItemId(),
+        response.sourceLocationKind(),
+        response.quantity(),
+        response.state(),
+        response.reservedUntil(),
+        response.executedAt());
+  }
+
+  private static EquipmentMovementExecution movementExecution(
+      EquipmentMovementExecutionResponse response) {
+    if (response == null || response.movementId() == null || response.lines() == null) {
+      throw malformed("Asset-service returned an invalid equipment movement execution");
+    }
+    List<EquipmentMovementExecutionLine> lines =
+        response.lines().stream()
+            .map(
+                line -> {
+                  if (line == null
+                      || line.reservationId() == null
+                      || line.reservationVersion() < 0
+                      || line.lineId() == null
+                      || line.movement() == null) {
+                    throw malformed("Asset-service returned an invalid equipment movement execution line");
+                  }
+                  EquipmentMovementEventResponse movement = line.movement();
+                  if (movement.id() == null
+                      || movement.version() < 0
+                      || movement.equipmentId() == null
+                      || movement.sourceBalanceId() == null
+                      || movement.targetBalanceId() == null
+                      || movement.quantity() < 1
+                      || movement.kind() == null
+                      || movement.occurredAt() == null) {
+                    throw malformed("Asset-service returned an invalid equipment movement event");
+                  }
+                  return new EquipmentMovementExecutionLine(
+                      line.reservationId(),
+                      line.reservationVersion(),
+                      line.lineId(),
+                      new EquipmentMovementEvent(
+                          movement.id(),
+                          movement.version(),
+                          movement.equipmentId(),
+                          movement.sourceBalanceId(),
+                          movement.targetBalanceId(),
+                          movement.quantity(),
+                          movement.kind(),
+                          movement.occurredAt()));
+                })
+            .toList();
+    return new EquipmentMovementExecution(response.movementId(), lines);
+  }
+
+  private static EquipmentMovementBoardTask movementBoardTask(
+      EquipmentMovementBoardTaskResponse response) {
+    if (response == null
+        || response.taskId() == null
+        || response.taskVersion() < 0
+        || response.warehouseId() == null
+        || response.externalTaskId() == null
+        || response.status() == null) {
+      throw malformed("Task-board returned an invalid equipment movement task");
+    }
+    return new EquipmentMovementBoardTask(
+        response.taskId(),
+        response.taskVersion(),
+        response.warehouseId(),
+        response.externalTaskId(),
+        response.status(),
+        response.doneAt());
+  }
+
+  private static OrderUnitReservation orderReservation(
+      OrderUnitReservationResponse response) {
+    if (response == null || response.unit() == null) {
+      throw malformed("Asset-service returned an invalid order-unit reservation");
+    }
+    return new OrderUnitReservation(
+        response.reservationId(),
+        response.reservationVersion(),
+        response.orderId(),
+        response.rentalItemId(),
+        response.warehouseId(),
+        response.state(),
+        response.addedBySubjectId(),
+        response.addedByRole(),
+        response.createdAt(),
+        response.releasedAt(),
+        response.replayed(),
+        orderRentalItem(response.unit()));
+  }
+
+  private static OrderRentalItem orderRentalItem(OrderRentalItemResponse response) {
+    if (response == null || response.contents() == null || response.tags() == null) {
+      throw malformed("Asset-service returned an invalid order rental item");
+    }
+    return new OrderRentalItem(
+        response.id(),
+        response.version(),
+        response.warehouseId(),
+        response.number(),
+        response.status(),
+        response.rentalType(),
+        response.dimensions(),
+        response.finishing(),
+        response.category(),
+        response.characteristics(),
+        response.linoleum(),
+        List.copyOf(response.tags()),
+        response.contents().stream()
+            .map(
+                content ->
+                    new OrderEquipmentContent(
+                        content.equipmentId(),
+                        content.equipmentCode(),
+                        content.equipmentName(),
+                        content.quantity(),
+                        content.locationKind()))
+            .toList(),
+        response.createdAt(),
+        response.updatedAt());
+  }
+
+  private static OrderEquipmentMovement orderMovement(
+      OrderEquipmentMovementResponse response) {
+    return response == null
+        ? null
+        : new OrderEquipmentMovement(
+            response.id(),
+            response.version(),
+            response.equipmentId(),
+            response.sourceBalanceId(),
+            response.targetBalanceId(),
+            response.quantity(),
+            response.kind(),
+            response.occurredAt());
+  }
+
   private static LogisticsDependencyException dependencyFailure(RuntimeException exception) {
     if (exception instanceof LogisticsDependencyException known) return known;
     if (exception instanceof RestClientResponseException response) {
@@ -563,6 +1126,43 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         LogisticsDependencyException.FailureKind.TRANSIENT,
         "Dependency outcome is unknown",
         exception);
+  }
+
+  private static LogisticsDependencyException orderDependencyFailure(
+      RuntimeException exception) {
+    if (exception instanceof LogisticsDependencyException known) return known;
+    if (exception instanceof RestClientResponseException response) {
+      HttpStatus status = HttpStatus.resolve(response.getStatusCode().value());
+      if (status != null
+          && status.is4xxClientError()
+          && status != HttpStatus.TOO_MANY_REQUESTS) {
+        return new LogisticsDependencyException(
+            LogisticsDependencyException.FailureKind.PERMANENT_REJECTION,
+            safeOrderDependencyCode(response.getResponseBodyAsString()),
+            "Asset-service rejected the order command",
+            exception);
+      }
+    }
+    return new LogisticsDependencyException(
+        LogisticsDependencyException.FailureKind.TRANSIENT,
+        "Asset-service order command outcome is unknown",
+        exception);
+  }
+
+  private static String safeOrderDependencyCode(String body) {
+    if (body == null) return null;
+    for (String code :
+        List.of(
+            "UNIT_ALREADY_RESERVED",
+            "UNIT_WAREHOUSE_MISMATCH",
+            "UNIT_NOT_AVAILABLE",
+            "UNIT_NOT_EDITABLE",
+            "EQUIPMENT_QUANTITY_CONFLICT",
+            "INSUFFICIENT_STOCK",
+            "ASSET_NOT_FOUND")) {
+      if (body.contains("\"code\":\"" + code + "\"")) return code;
+    }
+    return null;
   }
 
   private static LogisticsDependencyException malformed(String message) {
@@ -633,6 +1233,26 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID warehouseId,
       List<MediaReferenceRequest> references) {}
 
+  private record MediaOwnerProofRequest(
+      String ownerType,
+      UUID documentId,
+      UUID lineId,
+      UUID warehouseId,
+      long ownerRevision,
+      long aggregateVersion,
+      UUID proofEventId,
+      boolean active) {}
+
+  private record MediaOwnerProofResponse(
+      String ownerType,
+      UUID documentId,
+      UUID lineId,
+      UUID warehouseId,
+      Long ownerRevision,
+      Long aggregateVersion,
+      UUID proofEventId,
+      Boolean active) {}
+
   private record EquipmentShortageRequest(UUID equipmentId, long missingQuantity) {}
 
   private record UpsertReturnShortageRequest(
@@ -685,4 +1305,170 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID externalTaskId,
       String status,
       OffsetDateTime doneAt) {}
+
+  private record AcquireEquipmentMovementReservationRequest(
+      UUID movementId,
+      UUID lineId,
+      UUID equipmentId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      String sourceLocationKind,
+      long expectedSourceBalanceVersion,
+      long quantity,
+      OffsetDateTime reservedUntil) {}
+
+  private record ReleaseEquipmentMovementReservationRequest(
+      long expectedReservationVersion, UUID movementId, UUID lineId) {}
+
+  private record EquipmentMovementReservationResponse(
+      UUID reservationId,
+      long version,
+      String ownerType,
+      UUID movementId,
+      UUID lineId,
+      UUID equipmentId,
+      String equipmentCode,
+      String equipmentName,
+      UUID sourceBalanceId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      String sourceLocationKind,
+      long quantity,
+      String state,
+      OffsetDateTime reservedUntil,
+      OffsetDateTime executedAt) {}
+
+  private record ExecuteEquipmentMovementLineRequest(
+      UUID reservationId,
+      long expectedReservationVersion,
+      UUID lineId,
+      UUID targetWarehouseId,
+      UUID targetRentalItemId,
+      String targetLocationKind) {}
+
+  private record ExecuteEquipmentMovementRequest(
+      UUID movementId, List<ExecuteEquipmentMovementLineRequest> lines) {}
+
+  private record EquipmentMovementEventResponse(
+      UUID id,
+      long version,
+      UUID equipmentId,
+      UUID sourceBalanceId,
+      UUID targetBalanceId,
+      long quantity,
+      String kind,
+      OffsetDateTime occurredAt) {}
+
+  private record EquipmentMovementExecutionLineResponse(
+      UUID reservationId,
+      long reservationVersion,
+      UUID lineId,
+      EquipmentMovementEventResponse movement) {}
+
+  private record EquipmentMovementExecutionResponse(
+      UUID movementId, List<EquipmentMovementExecutionLineResponse> lines) {}
+
+  private record EquipmentMovementOperationRequest(
+      String direction, String equipmentCode, String equipmentName, long quantity) {}
+
+  private record RegisterEquipmentMovementTaskRequest(
+      UUID warehouseId,
+      UUID externalTaskId,
+      String unitNumber,
+      Integer plannedDurationMinutes,
+      OffsetDateTime deadlineAt,
+      List<EquipmentMovementOperationRequest> operations) {}
+
+  private record CancelEquipmentMovementTaskRequest(long expectedTaskVersion) {}
+
+  private record EquipmentMovementBoardTaskResponse(
+      UUID taskId,
+      long taskVersion,
+      UUID warehouseId,
+      UUID externalTaskId,
+      String status,
+      OffsetDateTime doneAt) {}
+
+  private record ReserveOrderUnitRequest(
+      UUID warehouseId,
+      UUID rentalItemId,
+      UUID actorSubjectId,
+      String actorRole) {}
+
+  private record OrderActorRequest(UUID actorSubjectId, String actorRole) {}
+
+  private record AdjustOrderEquipmentRequest(
+      UUID actorSubjectId,
+      String actorRole,
+      long expectedCurrentQuantity,
+      long requiredQuantity) {}
+
+  private record OrderEquipmentContentResponse(
+      UUID equipmentId,
+      String equipmentCode,
+      String equipmentName,
+      long quantity,
+      String locationKind) {}
+
+  private record OrderRentalItemResponse(
+      UUID id,
+      long version,
+      UUID warehouseId,
+      String number,
+      String status,
+      String rentalType,
+      String dimensions,
+      String finishing,
+      String category,
+      String characteristics,
+      Boolean linoleum,
+      List<String> tags,
+      List<OrderEquipmentContentResponse> contents,
+      OffsetDateTime createdAt,
+      OffsetDateTime updatedAt) {}
+
+  private record OrderUnitReservationResponse(
+      UUID reservationId,
+      long reservationVersion,
+      UUID orderId,
+      UUID rentalItemId,
+      UUID warehouseId,
+      String state,
+      UUID addedBySubjectId,
+      String addedByRole,
+      OffsetDateTime createdAt,
+      OffsetDateTime releasedAt,
+      boolean replayed,
+      OrderRentalItemResponse unit) {}
+
+  private record OrderUnitCandidateResponse(
+      UUID reservationId, boolean added, OrderRentalItemResponse unit) {}
+
+  private record OrderUnitCandidatePageResponse(
+      List<OrderUnitCandidateResponse> content,
+      long page,
+      long size,
+      long totalElements,
+      long totalPages) {}
+
+  private record OrderEquipmentMovementResponse(
+      UUID id,
+      long version,
+      UUID equipmentId,
+      UUID sourceBalanceId,
+      UUID targetBalanceId,
+      long quantity,
+      String kind,
+      OffsetDateTime occurredAt) {}
+
+  private record OrderEquipmentAdjustmentResponse(
+      UUID orderId,
+      UUID rentalItemId,
+      UUID equipmentId,
+      long previousQuantity,
+      long requiredQuantity,
+      long delta,
+      long availableStock,
+      OrderEquipmentMovementResponse movement,
+      OrderRentalItemResponse unit) {}
 }

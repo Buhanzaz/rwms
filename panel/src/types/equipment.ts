@@ -19,8 +19,8 @@ export type EquipmentBalanceDto = {
 
 /**
  * Asset-service equipment and its immutable-ledger totals for one warehouse.
- * `usages` deliberately remains empty: the public API does not expose a
- * per-cabin usage read model, so the panel must not reconstruct one locally.
+ * Feature read models may populate `usages` by joining these canonical balance
+ * UUIDs with the public asset-service rental-item projection.
  */
 export type EquipmentItemDto = {
   id: string
@@ -47,12 +47,18 @@ export type EquipmentItemDto = {
 
 export type EquipmentRentalUsageDto = {
   id: string
+  balanceVersion: number
   rentalItemId: string
   rentalItemNumber: string
   rentalItemType: string
   rentalItemStatus: RentalItemStatus
   warehouseId: string
+  locationKind: Extract<
+    EquipmentBalanceLocationKind,
+    "CABIN_NON_RENTED" | "CABIN_RENTED"
+  >
   quantity: number
+  availableQuantity: number
 }
 
 export type EquipmentItemsQueryParams = {
@@ -93,68 +99,17 @@ export type DisposeEquipmentInput = {
   disposition: "WRITE_OFF" | "LOSS"
 }
 
-/** The types below are retained only for explicit fail-closed transition stubs. */
-export type ReturnEquipmentDispositionStatus =
-  "ACTION_REQUIRED" | "PARTIALLY_RESOLVED" | "RESOLVED"
-
-export type ReturnEquipmentDispositionAction =
-  "RETURN_TO_STOCK" | "WRITE_OFF" | "TRANSFER_TO_CABIN"
-
-export type ReturnEquipmentDispositionResolutionDto = {
-  id: string
-  idempotencyKey: string
-  action: ReturnEquipmentDispositionAction
-  quantity: number
+export type TransferEquipmentInput = {
+  equipmentId: string
+  sourceWarehouseId: string
+  sourceRentalItemId: string | null
+  sourceLocationKind: EquipmentBalanceLocationKind
+  sourceExpectedVersion: number
+  targetWarehouseId: string
   targetRentalItemId: string | null
-  targetCabinNumber: string | null
-  reason: string | null
-  createdAt: string
-  createdBy: string
-}
-
-export type ReturnEquipmentDispositionCaseDto = {
-  id: string
-  version: number
-  warehouseId: string
-  returnReceiptId: string
-  returnItemId: string
-  sourceRentalItemId: string
-  sourceCabinNumber: string
-  equipmentMasterItemId: string | null
-  equipmentName: string
-  normalizedEquipmentKey: string
-  receivedQuantity: number
-  remainingQuantity: number
-  receivedAt: string
-  status: ReturnEquipmentDispositionStatus
-  resolutions: ReturnEquipmentDispositionResolutionDto[]
+  targetLocationKind: EquipmentBalanceLocationKind
+  targetExpectedVersion: number
+  quantity: number
 }
 
 export type EquipmentDispositionListItemDto = EquipmentDispositionDto
-
-export type RegisterReturnEquipmentDispositionInput = {
-  warehouseId: string
-  returnReceiptId: string
-  returnItemId: string
-  sourceRentalItemId: string
-  sourceCabinNumber: string
-  receivedAt: string
-  contents: Array<{ name: string; quantity: number }>
-}
-
-export type ResolveReturnEquipmentDispositionInput = {
-  caseId: string
-  expectedVersion: number
-  idempotencyKey: string
-  action: ReturnEquipmentDispositionAction
-  quantity: number
-  targetRentalItemId?: string | null
-  reason?: string | null
-  createdBy: string
-  confirmCreateMasterItem?: boolean
-}
-
-export type UpdateEquipmentUsagePayload = {
-  usageId: string
-  quantity: number
-}

@@ -14,7 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Field, FieldLabel } from "@/components/ui/field"
+import { Field, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -28,11 +28,15 @@ import { Textarea } from "@/components/ui/textarea"
 import {
   REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
   createRepairEstimateCatalogIndex,
+  filterRepairEstimateCatalogNodesForUsage,
   getOperationalRepairEstimateCatalog,
 } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import type { RepairEstimateCatalogNodeDto } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 import { repairEstimateCatalogNodeTypeLabel } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
-import { applyCatalogNodesToEstimateLines } from "@/features/repair-estimates/domain/repair-estimate-domain"
+import {
+  applyCatalogNodesToEstimateLines,
+  getRepairEstimateCatalogQuantityError,
+} from "@/features/repair-estimates/domain/repair-estimate-domain"
 import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
 
 type CatalogMode = "LINKED_SET" | "WORKS_ONLY" | "MATERIALS_ONLY"
@@ -55,6 +59,7 @@ type RepairEstimateCatalogPickerProps = {
   readOnly: boolean
   onChange: (lines: RepairEstimateLineDto[]) => void
   onPagerChange?: (pager: RepairEstimateCatalogPager | null) => void
+  excludeFurniture?: boolean
 }
 
 export type RepairEstimateCatalogPager = {
@@ -75,6 +80,7 @@ export function RepairEstimateCatalogPicker({
   readOnly,
   onChange,
   onPagerChange,
+  excludeFurniture = false,
 }: RepairEstimateCatalogPickerProps) {
   const catalogQuery = useQuery({
     queryKey: REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
@@ -98,6 +104,18 @@ export function RepairEstimateCatalogPicker({
   const [message, setMessage] = useState<string | null>(null)
   const [page, setPage] = useState(0)
 
+  const filterForUsage = useCallback(
+    (nodes: readonly RepairEstimateCatalogNodeDto[]) =>
+      catalog
+        ? filterRepairEstimateCatalogNodesForUsage(
+            nodes,
+            catalog,
+            excludeFurniture
+          )
+        : [],
+    [catalog, excludeFurniture]
+  )
+
   const currentNode =
     path.length > 0 && catalog ? catalog.nodesById.get(path.at(-1)!) : null
 
@@ -108,7 +126,7 @@ export function RepairEstimateCatalogPicker({
 
     const searchValue = search.trim().toLocaleLowerCase("ru")
     if (searchValue) {
-      return catalog.operationalEstimateNodes
+      return filterForUsage(catalog.operationalEstimateNodes)
         .filter((node) =>
           node.name.toLocaleLowerCase("ru").includes(searchValue)
         )
@@ -124,17 +142,19 @@ export function RepairEstimateCatalogPicker({
     }
 
     if (pendingMaterial) {
-      return uniqueNodes([
-        ...catalog.getChildren(pendingMaterial.id),
-        ...catalog.getFollowUpNodes(pendingMaterial.id),
-        ...catalog.getDependencyNodes(pendingMaterial.id),
-      ]).filter((node) => node.nodeType === "LOCATION")
+      return filterForUsage(
+        uniqueNodes([
+          ...catalog.getChildren(pendingMaterial.id),
+          ...catalog.getFollowUpNodes(pendingMaterial.id),
+          ...catalog.getDependencyNodes(pendingMaterial.id),
+        ])
+      ).filter((node) => node.nodeType === "LOCATION")
     }
 
     if (pendingWork) {
-      return catalog
-        .getDependencyRelatedNodes(pendingWork.id)
-        .filter((node) => node.nodeType === "MATERIAL" && node.active)
+      return filterForUsage(
+        catalog.getDependencyRelatedNodes(pendingWork.id)
+      ).filter((node) => node.nodeType === "MATERIAL" && node.active)
     }
 
     const candidates = currentNode
@@ -145,7 +165,7 @@ export function RepairEstimateCatalogPicker({
         ])
       : [...catalog.operationalMenuNodes]
 
-    return candidates.filter((node) => {
+    return filterForUsage(candidates).filter((node) => {
       if (mode === "WORKS_ONLY") {
         return node.nodeType !== "MATERIAL"
       }
@@ -159,7 +179,15 @@ export function RepairEstimateCatalogPicker({
       }
       return true
     })
-  }, [catalog, currentNode, mode, pendingMaterial, pendingWork, search])
+  }, [
+    catalog,
+    currentNode,
+    filterForUsage,
+    mode,
+    pendingMaterial,
+    pendingWork,
+    search,
+  ])
 
   const breadcrumbs: CatalogBreadcrumb[] = [
     {
@@ -245,9 +273,13 @@ export function RepairEstimateCatalogPicker({
       return false
     }
     return (
-      catalog.getChildren(node.id).length > 0 ||
-      catalog.getDependencyNodes(node.id).length > 0 ||
-      catalog.getFollowUpNodes(node.id).length > 0
+      filterForUsage(
+        uniqueNodes([
+          ...catalog.getChildren(node.id),
+          ...catalog.getDependencyNodes(node.id),
+          ...catalog.getFollowUpNodes(node.id),
+        ])
+      ).length > 0
     )
   }
 
@@ -260,6 +292,10 @@ export function RepairEstimateCatalogPicker({
 
   function selectNode(node: RepairEstimateCatalogNodeDto) {
     if (!catalog) {
+      return
+    }
+    if (excludeFurniture && catalog.isFurnitureNode(node.id)) {
+      setMessage("Мебель добавляется только через смету")
       return
     }
 
@@ -295,9 +331,9 @@ export function RepairEstimateCatalogPicker({
     }
 
     if (node.nodeType === "WORK") {
-      const materials = catalog
-        .getDependencyRelatedNodes(node.id)
-        .filter((related) => related.nodeType === "MATERIAL" && related.active)
+      const materials = filterForUsage(
+        catalog.getDependencyRelatedNodes(node.id)
+      ).filter((related) => related.nodeType === "MATERIAL" && related.active)
       if (mode === "MATERIALS_ONLY") {
         if (materials.length === 0) {
           setMessage("Для этой работы не настроены материалы")
@@ -331,11 +367,9 @@ export function RepairEstimateCatalogPicker({
 
       const linkedWorks =
         mode === "LINKED_SET"
-          ? catalog
-              .getDependencyRelatedNodes(node.id)
-              .filter(
-                (related) => related.nodeType === "WORK" && related.active
-              )
+          ? filterForUsage(catalog.getDependencyRelatedNodes(node.id)).filter(
+              (related) => related.nodeType === "WORK" && related.active
+            )
           : []
       openAdd([...linkedWorks, node], node, node)
       return
@@ -354,6 +388,14 @@ export function RepairEstimateCatalogPicker({
       setMessage("Выбранная позиция не настроена для включения в смету")
       return
     }
+    const quantityError = getRepairEstimateCatalogQuantityError(
+      addContext.quantityNode,
+      quantity
+    )
+    if (quantityError) {
+      setMessage(quantityError)
+      return
+    }
 
     onChange(
       applyCatalogNodesToEstimateLines({
@@ -364,7 +406,9 @@ export function RepairEstimateCatalogPicker({
         locationTitle: addContext.locationTitle,
       })
     )
-    const followUps = catalog.getFollowUpNodes(addContext.continuationNode.id)
+    const followUps = filterForUsage(
+      catalog.getFollowUpNodes(addContext.continuationNode.id)
+    )
     setAddContext(null)
     setPendingWork(null)
     setPendingMaterial(null)
@@ -576,6 +620,10 @@ function CatalogAddDialog({
 }) {
   const [quantity, setQuantity] = useState(1)
   const [comment, setComment] = useState("")
+  const quantityError = context
+    ? getRepairEstimateCatalogQuantityError(context.quantityNode, quantity)
+    : null
+  const quantityInvalid = quantityError !== null
   return (
     <Dialog open={context !== null} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -591,7 +639,7 @@ function CatalogAddDialog({
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
-          <Field>
+          <Field data-invalid={quantityInvalid || undefined}>
             <FieldLabel htmlFor="catalog-add-quantity">Количество</FieldLabel>
             <Input
               id="catalog-add-quantity"
@@ -600,10 +648,12 @@ function CatalogAddDialog({
               min={1}
               step={1}
               value={quantity}
+              aria-invalid={quantityInvalid || undefined}
               onChange={(event) =>
                 setQuantity(Math.max(1, Number(event.target.value) || 1))
               }
             />
+            {quantityError && <FieldError>{quantityError}</FieldError>}
           </Field>
           <Field>
             <FieldLabel htmlFor="catalog-add-comment">Комментарий</FieldLabel>
@@ -624,7 +674,11 @@ function CatalogAddDialog({
           >
             Отмена
           </Button>
-          <Button type="button" onClick={() => onConfirm(quantity, comment)}>
+          <Button
+            type="button"
+            disabled={quantityInvalid}
+            onClick={() => onConfirm(quantity, comment)}
+          >
             Добавить
           </Button>
         </DialogFooter>

@@ -1,0 +1,220 @@
+package dev.buhanzaz.rwms.logistics.order.api;
+
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AddOrderUnitRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AdjustOrderEquipmentRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ClientPageResponse;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ClientResponse;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateClientRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDetailResponse;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderHistoryEventResponse;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderPageResponse;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderUnitPageResponse;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SelectWarehouseRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.UpdateOrderRequest;
+import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
+import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
+import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
+import dev.buhanzaz.rwms.logistics.order.service.OrderAuditService;
+import dev.buhanzaz.rwms.logistics.order.service.OrderClientService;
+import dev.buhanzaz.rwms.logistics.order.service.OrderUnitConflictException;
+import dev.buhanzaz.rwms.logistics.order.service.RentalOrderService;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import java.util.List;
+import java.util.UUID;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@Validated
+@RequestMapping("/api/logistics/v1")
+@RequiredArgsConstructor
+public class OrderController {
+  private final RentalOrderService orders;
+  private final OrderClientService clients;
+  private final OrderAuthorizer access;
+  private final OrderAuditService audit;
+
+  @GetMapping("/orders")
+  public OrderPageResponse list(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestParam(defaultValue = "0") @Min(0) int page,
+      @RequestParam(defaultValue = "25") @Min(1) @Max(100) int size,
+      @RequestParam(defaultValue = "") String search,
+      @RequestParam(defaultValue = "updatedAt") String sort,
+      @RequestParam(defaultValue = "DESC") String direction) {
+    return orders.list(access.readActor(jwt), page, size, search, sort, direction);
+  }
+
+  @PostMapping("/orders")
+  public ResponseEntity<OrderDetailResponse> create(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody CreateOrderRequest request) {
+    RentalOrderService.CreateResult result =
+        orders.create(access.writeActor(jwt), idempotencyKey, request);
+    return response(
+        result.response(),
+        result.replayed(),
+        result.replayed() ? HttpStatus.OK : HttpStatus.CREATED);
+  }
+
+  @GetMapping("/orders/{orderId}")
+  public OrderDetailResponse get(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId) {
+    return orders.get(access.readActor(jwt), orderId);
+  }
+
+  @PutMapping("/orders/{orderId}")
+  public ResponseEntity<OrderDetailResponse> update(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID orderId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody UpdateOrderRequest request) {
+    RentalOrderService.MutationResult result =
+        orders.update(access.writeActor(jwt), orderId, idempotencyKey, request);
+    return response(result.response(), result.replayed(), HttpStatus.OK);
+  }
+
+  @DeleteMapping("/orders/{orderId}")
+  public ResponseEntity<OrderDetailResponse> cancel(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID orderId,
+      @RequestParam @Min(0) long expectedVersion,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey) {
+    RentalOrderService.MutationResult result =
+        orders.cancel(access.writeActor(jwt), orderId, expectedVersion, idempotencyKey);
+    return response(result.response(), result.replayed(), HttpStatus.OK);
+  }
+
+  @PutMapping("/orders/{orderId}/warehouse")
+  public ResponseEntity<OrderDetailResponse> selectWarehouse(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID orderId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody SelectWarehouseRequest request) {
+    RentalOrderService.MutationResult result =
+        orders.selectWarehouse(
+            access.writeActor(jwt), orderId, idempotencyKey, request);
+    return response(result.response(), result.replayed(), HttpStatus.OK);
+  }
+
+  @GetMapping("/orders/{orderId}/available-units")
+  public OrderUnitPageResponse availableUnits(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID orderId,
+      @RequestParam(defaultValue = "0") @Min(0) int page,
+      @RequestParam(defaultValue = "50") @Min(1) @Max(100) int size,
+      @RequestParam(defaultValue = "") String search) {
+    return orders.availableUnits(access.readActor(jwt), orderId, page, size, search);
+  }
+
+  @PostMapping("/orders/{orderId}/units")
+  public ResponseEntity<OrderDetailResponse> addUnit(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID orderId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody AddOrderUnitRequest request) {
+    OrderActor actor = access.writeActor(jwt);
+    try {
+      RentalOrderService.MutationResult result =
+          orders.addUnit(actor, orderId, idempotencyKey, request);
+      return response(
+          result.response(),
+          result.replayed(),
+          result.replayed() ? HttpStatus.OK : HttpStatus.CREATED);
+    } catch (OrderUnitConflictException exception) {
+      // The service transaction (and its order row lock) has ended before this append.
+      audit.appendUnitConflict(
+          exception.orderId(), exception.unitId(), actor, exception.code());
+      throw exception;
+    }
+  }
+
+  @DeleteMapping("/orders/{orderId}/units/{unitId}")
+  public ResponseEntity<OrderDetailResponse> removeUnit(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID orderId,
+      @PathVariable UUID unitId,
+      @RequestParam @Min(0) long expectedVersion,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey) {
+    RentalOrderService.MutationResult result =
+        orders.removeUnit(
+            access.writeActor(jwt), orderId, unitId, expectedVersion, idempotencyKey);
+    return response(result.response(), result.replayed(), HttpStatus.OK);
+  }
+
+  @PutMapping("/orders/{orderId}/units/{unitId}/equipment/{equipmentId}")
+  public ResponseEntity<OrderDetailResponse> adjustEquipment(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID orderId,
+      @PathVariable UUID unitId,
+      @PathVariable UUID equipmentId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody AdjustOrderEquipmentRequest request) {
+    RentalOrderService.EquipmentResult result =
+        orders.adjustEquipment(
+            access.writeActor(jwt),
+            orderId,
+            unitId,
+            equipmentId,
+            idempotencyKey,
+            request);
+    return response(result.response(), result.replayed(), HttpStatus.OK);
+  }
+
+  @GetMapping("/orders/{orderId}/history")
+  public List<OrderHistoryEventResponse> history(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID orderId) {
+    return orders.history(access.readActor(jwt), orderId);
+  }
+
+  @GetMapping("/clients")
+  public ClientPageResponse clients(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestParam(required = false) ClientType type,
+      @RequestParam(defaultValue = "") String search,
+      @RequestParam(defaultValue = "0") @Min(0) int page,
+      @RequestParam(defaultValue = "25") @Min(1) @Max(100) int size) {
+    access.readActor(jwt);
+    return clients.search(type, search, page, size);
+  }
+
+  @PostMapping("/clients")
+  public ResponseEntity<ClientResponse> createClient(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody CreateClientRequest request) {
+    OrderClientService.CreateResult result =
+        clients.create(access.writeActor(jwt), idempotencyKey, request);
+    ResponseEntity.BodyBuilder response =
+        ResponseEntity.status(result.replayed() ? HttpStatus.OK : HttpStatus.CREATED)
+            .eTag(Long.toString(result.response().version()));
+    if (result.replayed()) response.header("Idempotency-Replayed", "true");
+    return response.body(result.response());
+  }
+
+  private static ResponseEntity<OrderDetailResponse> response(
+      OrderDetailResponse body, boolean replayed, HttpStatus status) {
+    ResponseEntity.BodyBuilder response =
+        ResponseEntity.status(status).eTag(Long.toString(body.version()));
+    if (replayed) response.header("Idempotency-Replayed", "true");
+    return response.body(body);
+  }
+}

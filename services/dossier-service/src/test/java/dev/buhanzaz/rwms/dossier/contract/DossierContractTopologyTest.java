@@ -131,6 +131,12 @@ class DossierContractTopologyTest {
         .containsExactlyInAnyOrder(
             "asset-service", "maintenance-service", "inventory-service", "media-service");
 
+    Map<String, Object> mediaProjection = map(schemas, "MediaProjection");
+    assertThat(strings(mediaProjection, "required"))
+        .containsExactly("mediaId", "folderId", "findingId", "generation", "state");
+    assertThat(map(mediaProjection, "properties").keySet())
+        .containsExactlyInAnyOrder("mediaId", "folderId", "findingId", "generation", "state");
+
     String raw = Files.readString(OPENAPI);
     assertThat(raw)
         .doesNotContain("sourceEventId")

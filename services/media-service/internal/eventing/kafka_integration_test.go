@@ -179,12 +179,12 @@ func seedKafkaProcessingState(
 ) {
 	t.Helper()
 	_, err := pool.Exec(ctx, `insert into media_asset (
-		media_id,owner_type,owner_id,warehouse_id,media_kind,original_file_name,
+		media_id,folder_id,owner_type,owner_id,warehouse_id,media_kind,original_file_name,
 		original_content_type,source_object_key,processing_status,rotation_degrees,
 		current_generation,pending_generation,pending_rotation_degrees,sort_order,size_bytes,
 		version,created_at,updated_at,next_generation,source_version_id,source_etag,
 		source_checksum_sha256,finalized_content_type,finalized_size_bytes)
-	values ($1,'INVENTORY_FINDING',$2,$3,'IMAGE','ack-race.jpg','image/jpeg',$4,
+	values ($1,$1,'INVENTORY_FINDING',$2,$3,'IMAGE','ack-race.jpg','image/jpeg',$4,
 		'PROCESSING',0,0,1,0,0,1024,1,$5,$5,2,$6,'ack-race-etag',$7,'image/jpeg',1024)`,
 		mediaID, ownerID.String(), warehouseID, sourceKey, recordedAt, sourceVersionID, sourceChecksum)
 	if err != nil {
