@@ -183,6 +183,9 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         select idempotency_key from integration_reconciliation
         where repair_id=? and dependency_type='ASSET' and operation_type='QUEUE_REPAIR'
         """, UUID.class, created.repairId());
+    when(dependencies.getRentalItemSnapshot(rentalItemId))
+        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
+            rentalItemId, 7, warehouseId, "FREE"));
     when(dependencies.acquireLease(
         any(), eq(rentalItemId), eq(7L), eq("MAINTENANCE_REPAIR"),
         eq(created.repairId().toString())))
@@ -207,6 +210,9 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         """, created.repairId());
     org.mockito.Mockito.reset(dependencies);
     UUID leaseId = UUID.randomUUID();
+    when(dependencies.getRentalItemSnapshot(rentalItemId))
+        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
+            rentalItemId, 7, warehouseId, "FREE"));
     when(dependencies.acquireLease(
         eq(dependencyIdentity.getValue()), eq(rentalItemId), eq(7L),
         eq("MAINTENANCE_REPAIR"), eq(created.repairId().toString())))
@@ -312,6 +318,8 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         inventory.upsert(inventoryId, findingId, upsert);
     assertThat(retried.replayed()).isFalse();
     assertThat(inventoryReconciliations.findAll())
+        .filteredOn(value -> "ASSET".equals(value.getDependencyType()))
+        .filteredOn(value -> "QUEUE_REPAIR".equals(value.getOperationType()))
         .singleElement()
         .extracting(MaintenanceReconciliation::getRepairId)
         .isEqualTo(retried.repairId());
@@ -425,6 +433,17 @@ class MaintenanceInventoryBoundaryIntegrationTest {
       assertThat(stage.catalogNodeId()).isEqualTo(workNodeId);
       assertThat(stage.kind()).isEqualTo(RepairStageKind.REPAIR_WORK);
     });
+
+    UUID furnitureMaterial = insertFurnitureMaterial();
+    FreezeInventoryPlanRequest furnitureOutsideEstimate = new FreezeInventoryPlanRequest(
+        warehouseId, UUID.randomUUID(), UUID.randomUUID(), 1L, InventoryPlanMode.MANUAL,
+        List.of(catalogLine(furnitureMaterial, "1", null, List.of())),
+        List.of(new InventoryPlanStageSelection(
+            workNodeId, RepairStageKind.REPAIR_WORK, 0)),
+        List.of());
+    assertThatThrownBy(() -> inventory.freeze(furnitureOutsideEstimate))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .hasMessageContaining("Furniture materials can only be used through an estimate");
 
     UUID unroutedWork = insertCatalogNode("WORK", false);
     FreezeInventoryPlanRequest unrouted = new FreezeInventoryPlanRequest(
@@ -588,5 +607,27 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         ("NODE_" + nodeId.toString().substring(0, 8)).toUpperCase(Locale.ROOT),
         nodeType, queueId, queueCode, queueKind);
     return nodeId;
+  }
+
+  private UUID insertFurnitureMaterial() {
+    UUID categoryId = UUID.randomUUID();
+    UUID materialId = UUID.randomUUID();
+    jdbc.update("""
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,code,node_type,name,active,furniture_category,
+          duration_minutes,include_in_estimate,common_item,show_in_main_menu,photo_required,
+          opaque_references,media_references)
+        values (?,?,?,'FURNITURE','CATEGORY','Furniture',true,true,
+          0,false,false,true,false,'[]','[]')
+        """, UUID.randomUUID(), categoryId, catalogId);
+    jdbc.update("""
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,code,node_type,name,active,parent_node_id,unit,
+          price_minor,duration_minutes,include_in_estimate,common_item,show_in_main_menu,
+          photo_required,opaque_references,media_references)
+        values (?,?,?,'FURNITURE_CHAIR','MATERIAL','Furniture chair',true,?,'pcs',12500,
+          0,true,false,false,false,'[]','[]')
+        """, UUID.randomUUID(), materialId, catalogId, categoryId);
+    return materialId;
   }
 }

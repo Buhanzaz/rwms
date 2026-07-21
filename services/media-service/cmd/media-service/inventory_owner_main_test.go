@@ -31,7 +31,7 @@ func TestInventoryOwnerRuntimeIsRequiredAndTerminalExitStopsAllProcesses(t *test
 		}
 		err := superviseMediaRuntime(context.Background(), time.Second, processes,
 			func(context.Context) error { return nil })
-		if err == nil || !strings.Contains(err.Error(), "all four supervised processes") {
+		if err == nil || !strings.Contains(err.Error(), "all five supervised processes") {
 			t.Fatalf("missing owner consumer error = %v", err)
 		}
 		if ran.Load() {
@@ -62,6 +62,7 @@ func TestInventoryOwnerRuntimeIsRequiredAndTerminalExitStopsAllProcesses(t *test
 					return terminalError
 				}
 			}},
+			{name: "cabin-owner-consumer", run: peer},
 			{name: "http-server", run: peer},
 		}
 		shutdownCalled := make(chan struct{}, 1)
@@ -87,8 +88,8 @@ func TestInventoryOwnerRuntimeIsRequiredAndTerminalExitStopsAllProcesses(t *test
 		case <-time.After(5 * time.Second):
 			t.Fatal("supervisor did not stop after owner terminal error")
 		}
-		if peersCancelled.Load() != 3 {
-			t.Fatalf("cancelled peers = %d, want 3", peersCancelled.Load())
+		if peersCancelled.Load() != 4 {
+			t.Fatalf("cancelled peers = %d, want 4", peersCancelled.Load())
 		}
 		select {
 		case <-shutdownCalled:
@@ -120,7 +121,7 @@ func TestInventoryOwnerReconcileCommandRequiresV3AndRejectsUnsafeFilesWithoutMut
 
 	t.Setenv("MEDIA_DATABASE_URL", databaseURL)
 	// These deliberately invalid runtime variables prove the operator command
-	// returns through the early V3-only branch without starting HTTP/MinIO/Kafka.
+	// returns through the early migration-only branch without starting HTTP/MinIO/Kafka.
 	t.Setenv("MEDIA_HTTP_ADDRESS", "not-a-listen-address")
 	t.Setenv("MEDIA_MINIO_ENDPOINT", "")
 	t.Setenv("MEDIA_KAFKA_BROKERS", "")
@@ -157,8 +158,8 @@ func TestInventoryOwnerReconcileCommandRequiresV3AndRejectsUnsafeFilesWithoutMut
 		})
 	}
 
-	if _, err := pool.Exec(ctx, `update flyway_schema_history set checksum=checksum+1 where version='3'`); err != nil {
-		t.Fatalf("seed command V3 checksum drift: %v", err)
+	if _, err := pool.Exec(ctx, `update flyway_schema_history set checksum=checksum+1 where version='4'`); err != nil {
+		t.Fatalf("seed command V4 checksum drift: %v", err)
 	}
 	path := t.TempDir() + "/malformed-after-drift.json"
 	if err := os.WriteFile(path, []byte(`{"aggregateId":`), 0o600); err != nil {
@@ -192,7 +193,14 @@ func installMainResidualMigrations(t testing.TB, ctx context.Context, pool *pgxp
 		{"media schema", "V1__media_schema.sql", mediamigration.V1},
 		{"media runtime recovery", "V2__media_runtime_recovery.sql", mediamigration.V2},
 		{"inventory owner proof", "V3__inventory_owner_proof.sql", mediamigration.V3},
+		{"cabin owner bindings", "V4__cabin_owner_bindings.sql", mediamigration.V4},
+		{"prepare legacy photo folder backfill", "V4_1__prepare_legacy_photo_folder_backfill.sql", mediamigration.V4_1},
+		{"media photo folders", "V5__media_photo_folders.sql", mediamigration.V5},
+		{"restore runtime source guard", "V5_1__restore_runtime_source_guard.sql", mediamigration.V5_1},
+		{"service owner proofs and soft delete", "V6__service_owner_proofs_and_soft_delete.sql", mediamigration.V6},
+		{"dynamic cabin owner projection", "V7__dynamic_cabin_owner_projection.sql", mediamigration.V7},
 	}
+	versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7"}
 	for index, migration := range migrations {
 		if _, err := pool.Exec(ctx, string(migration.body)); err != nil {
 			t.Fatalf("apply command %s: %v", migration.script, err)
@@ -200,7 +208,7 @@ func installMainResidualMigrations(t testing.TB, ctx context.Context, pool *pgxp
 		if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
 			installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
 		values ($1,$2,$3,'SQL',$4,$5,current_user,0,true)`, index+1,
-			string(rune('1'+index)), migration.description, migration.script,
+			versions[index], migration.description, migration.script,
 			mainResidualFlywayChecksum(migration.body)); err != nil {
 			t.Fatalf("record command %s: %v", migration.script, err)
 		}

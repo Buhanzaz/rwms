@@ -31,6 +31,24 @@ class AssetAuthorizerTest {
   }
 
   @Test
+  void genericEquipmentMovementRejectsRentalManagerAndViewerDespiteManageGrant() {
+    AssetAuthorizer authorizer = new AssetAuthorizer(new MockEnvironment(), false);
+
+    assertThatThrownBy(
+            () ->
+                authorizer.requireEquipmentMovement(
+                    user("rwms.read rwms.write", "RENTAL_MANAGER", "MANAGE"), warehouseId))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(
+            () ->
+                authorizer.requireEquipmentMovement(
+                    user("rwms.read rwms.write", "VIEWER", "MANAGE"), warehouseId))
+        .isInstanceOf(AccessDeniedException.class);
+    authorizer.requireEquipmentMovement(
+        user("rwms.read rwms.write", "WAREHOUSE_MANAGER", "MANAGE"), warehouseId);
+  }
+
+  @Test
   void requiresAServiceCredentialWithExactlyAssetInternal() {
     AssetAuthorizer authorizer = new AssetAuthorizer(new MockEnvironment(), false);
 

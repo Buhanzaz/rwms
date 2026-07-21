@@ -1,10 +1,12 @@
 export class ApiError extends Error {
   readonly status: number
+  readonly code: string | null
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code: string | null = null) {
     super(message)
     this.name = "ApiError"
     this.status = status
+    this.code = code
   }
 }
 
@@ -12,6 +14,7 @@ type ErrorEnvelope = {
   message?: unknown
   detail?: unknown
   error?: unknown
+  code?: unknown
 }
 
 function getEnvelopeMessage(body: ErrorEnvelope) {
@@ -19,7 +22,7 @@ function getEnvelopeMessage(body: ErrorEnvelope) {
   return typeof candidate === "string" && candidate.trim() ? candidate : null
 }
 
-async function readErrorMessage(response: Response) {
+async function readErrorDetails(response: Response) {
   const fallback = `Запрос завершился с ошибкой ${response.status}`
   const contentType = response.headers.get("content-type") ?? ""
 
@@ -28,16 +31,22 @@ async function readErrorMessage(response: Response) {
     if (text.startsWith("{")) {
       try {
         const parsed = JSON.parse(text) as ErrorEnvelope
-        return getEnvelopeMessage(parsed) ?? text
+        return {
+          message: getEnvelopeMessage(parsed) ?? text,
+          code: typeof parsed.code === "string" ? parsed.code : null,
+        }
       } catch {
         // Preserve a non-JSON upstream error body verbatim.
       }
     }
-    return text || fallback
+    return { message: text || fallback, code: null }
   }
 
   const body = (await response.json()) as ErrorEnvelope
-  return getEnvelopeMessage(body) ?? fallback
+  return {
+    message: getEnvelopeMessage(body) ?? fallback,
+    code: typeof body.code === "string" && body.code.trim() ? body.code : null,
+  }
 }
 
 export async function bearerRequest<T>(
@@ -60,7 +69,8 @@ export async function bearerRequest<T>(
   const response = await fetch(input, { ...init, headers })
 
   if (!response.ok) {
-    throw new ApiError(await readErrorMessage(response), response.status)
+    const error = await readErrorDetails(response)
+    throw new ApiError(error.message, response.status, error.code)
   }
 
   if (response.status === 204) {

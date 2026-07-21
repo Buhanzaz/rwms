@@ -86,12 +86,12 @@ class MaintenanceOpenApiParityTest {
   private static final List<OperationSpec> OPERATIONS = canonicalOperations();
 
   @Test
-  void allTwentyOnePathsAndTwentyEightOperationsExactlyMatchTheApprovedAcceptanceMatrix()
+  void allTwentyTwoPathsAndTwentyNineOperationsExactlyMatchTheApprovedAcceptanceMatrix()
       throws Exception {
     Map<String, Object> document = openApi();
-    assertThat(child(document, "paths")).hasSize(21);
-    assertThat(openApiOperationCount(document)).isEqualTo(28);
-    assertThat(controllerOperations()).hasSize(28);
+    assertThat(child(document, "paths")).hasSize(22);
+    assertThat(openApiOperationCount(document)).isEqualTo(29);
+    assertThat(controllerOperations()).hasSize(29);
 
     for (OperationSpec expected : OPERATIONS) {
       assertOpenApiOperation(document, expected);
@@ -400,7 +400,7 @@ class MaintenanceOpenApiParityTest {
     result.add(op("PUT", "/api/maintenance/v1/catalog/versions/{id}/nodes", "replaceDraftCatalogNodes",
         MaintenanceCatalogController.class, "replaceNodes", catalogId,
         ReplaceCatalogNodesRequest.class, "ReplaceCatalogNodesRequest", "200", "CatalogVersion", false,
-        "400", "401", "403", "404", "409", "422"));
+        "400", "401", "403", "404", "409", "422", "503"));
     result.add(op("GET", "/api/maintenance/v1/catalog/versions/{id}/links", "listCatalogLinks",
         MaintenanceCatalogController.class, "links", catalogId,
         null, null, "200", "[CatalogLink]", false, "401", "403", "404"));
@@ -408,14 +408,18 @@ class MaintenanceOpenApiParityTest {
         MaintenanceCatalogController.class, "replaceLinks", catalogId,
         ReplaceCatalogLinksRequest.class, "ReplaceCatalogLinksRequest", "200", "CatalogVersion", false,
         "400", "401", "403", "404", "409", "422"));
-    result.add(op("POST", "/api/maintenance/v1/catalog/imports", "importCatalogVersion",
-        MaintenanceCatalogController.class, "importCatalog", idempotency,
-        ImportCatalogRequest.class, "CatalogImportRequest", "201", "CatalogVersion", true,
-        "400", "401", "403", "409", "422"));
+    result.add(op("POST", "/api/maintenance/v1/catalog/imports", "bootstrapReviewedCatalogVersion",
+        MaintenanceCatalogController.class, "bootstrapCatalog", idempotency,
+        BootstrapCatalogRequest.class, "CatalogBootstrapRequest", "201", "CatalogVersion", true,
+        "400", "401", "403", "409", "422", "503"));
+    result.add(op("POST", "/api/maintenance/v1/catalog/versions/{id}/fork", "forkCatalogVersion",
+        MaintenanceCatalogController.class, "fork", append(catalogId, requiredHeader("Idempotency-Key")),
+        VersionCommand.class, "ExpectedVersionRequest", "201", "CatalogVersion", true,
+        "400", "401", "403", "404", "409", "422"));
     result.add(op("POST", "/api/maintenance/v1/catalog/versions/{id}/activate", "activateCatalogVersion",
         MaintenanceCatalogController.class, "activate", append(catalogId, requiredHeader("Idempotency-Key")),
         VersionCommand.class, "ExpectedVersionRequest", "200", "CatalogVersion", true,
-        "400", "401", "403", "404", "409", "422"));
+        "400", "401", "403", "404", "409", "422", "503"));
 
     result.add(op("POST", "/api/internal/maintenance/v1/inventory/plans",
         "freezeInventoryRepairPlan", MaintenanceInventoryController.class, "freezePlan",
@@ -854,7 +858,8 @@ class MaintenanceOpenApiParityTest {
           sample(CatalogVersionResponse.class, "catalogVersion");
       case "catalogNodes" -> List.of(sample(CatalogNodeResponse.class, "catalogNode"));
       case "catalogLinks" -> List.of(sample(CatalogLinkResponse.class, "catalogLink"));
-      case "importCatalog", "activateCatalog" -> createResult(CatalogVersionResponse.class);
+      case "bootstrapCatalog", "forkCatalog", "activateCatalog" ->
+          createResult(CatalogVersionResponse.class);
       case "estimates" -> List.of(sample(EstimateResponse.class, "estimate"));
       case "estimate", "updateEstimate" -> sample(EstimateResponse.class, "estimate");
       case "createEstimate" -> createResult(EstimateResponse.class);
@@ -997,7 +1002,7 @@ class MaintenanceOpenApiParityTest {
     values.put(CatalogLinkResponse.class, "CatalogLink");
     values.put(ReplaceCatalogNodesRequest.class, "ReplaceCatalogNodesRequest");
     values.put(ReplaceCatalogLinksRequest.class, "ReplaceCatalogLinksRequest");
-    values.put(ImportCatalogRequest.class, "CatalogImportRequest");
+    values.put(BootstrapCatalogRequest.class, "CatalogBootstrapRequest");
     values.put(VersionCommand.class, "ExpectedVersionRequest");
     values.put(CompleteEstimateRequest.class, "ExpectedVersionRequest");
     values.put(CatalogNodeSnapshot.class, "CatalogNodeSnapshot");
@@ -1053,7 +1058,7 @@ class MaintenanceOpenApiParityTest {
     values.put(OpaqueCatalogReference.class, "OpaqueCatalogReference");
     values.put(CatalogNodeInput.class, "CatalogNodeInput");
     values.put(CatalogLinkInput.class, "CatalogLinkInput");
-    values.put(ImportCatalogRequest.class, "CatalogImportRequest");
+    values.put(BootstrapCatalogRequest.class, "CatalogBootstrapRequest");
     values.put(ReplaceCatalogNodesRequest.class, "ReplaceCatalogNodesRequest");
     values.put(ReplaceCatalogLinksRequest.class, "ReplaceCatalogLinksRequest");
     values.put(VersionCommand.class, "ExpectedVersionRequest");

@@ -164,15 +164,13 @@ Spring, Kafka or business-domain model. Canonical transport schemas live under
 - Remove RabbitMQ compatibility runtime/config/tests when its directed Kafka
   or combined media replacement is complete; do not keep a parallel path.
 
-## Agent Policy: One By Default, Up To Four For Parallel Waves
+## Agent Policy: One By Default, Additional Agents For Parallel Waves
 
 Use one primary agent by default.
 
-For a genuinely parallel implementation wave, the primary agent may start up
-to three additional coding agents, so no more than four agents are active in
-normal development. Additional agents must not create their own subagents.
-More than four active agents requires an explicit user request. Four is a cap,
-not a target: do not fill slots when the work is sequential or shares files.
+For a genuinely parallel implementation wave, the primary agent may start
+additional coding agents. Additional agents must not create their own
+subagents. Do not add agents when the work is sequential or shares files.
 
 Start each additional agent only when all of the following are true:
 
@@ -211,10 +209,10 @@ Safe parallel lanes after Wave 0 include:
 - maintenance catalog, provided its files do not overlap the selected first
   media consumer.
 
-These four lanes may run in one wave when their prerequisites and exclusive
+These lanes may run in one wave when their prerequisites and exclusive
 ownership are already fixed. In the next wave, inventory and maintenance
-lifecycle may run together; the remaining slots are used only for another
-dependency-ready vertical or primary-agent integration work.
+lifecycle may run together, along with any other dependency-ready vertical or
+primary-agent integration work.
 
 Logistics decomposition and contract ownership remain sequential. After its
 code is split and the OpenAPI is frozen, returns, shipments and transfers may

@@ -9,10 +9,17 @@ export type RepairEstimateCatalogRouteQueueKind =
 /** Exact decimal serialized by the catalog service boundary. */
 export type RepairEstimateCatalogMoneyDecimal = string
 
+export type RepairEstimateFurnitureEquipmentReferenceDto = {
+  equipmentId: string
+  equipmentCode: string
+  equipmentName: string
+}
+
 /** Operational panel projection of a maintenance-service catalog node. */
 export type RepairEstimateCatalogNodeDto = {
   id: string
   catalogVersionId: string
+  mediaOwnerId: string
   code: string
   name: string
   nodeType: RepairEstimateCatalogNodeType
@@ -29,6 +36,8 @@ export type RepairEstimateCatalogNodeDto = {
   photoRequired: boolean
   includeInEstimate: boolean
   commonItem: boolean
+  furnitureCategory: boolean
+  furnitureEquipment: RepairEstimateFurnitureEquipmentReferenceDto | null
   comment: string | null
 }
 

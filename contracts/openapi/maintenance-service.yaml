@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Maintenance Service API
-  version: 1.1.0
+  version: 1.4.0
   x-rwms-owner: maintenance-service
   x-rwms-stability: approved-stage-7-maintenance-v2
   description: >-
@@ -58,7 +58,11 @@ paths:
     put:
       tags: [Catalog]
       operationId: replaceDraftCatalogNodes
-      description: Requires USER, rwms.write and warehouse EDIT access. Only a DRAFT version may change.
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT access. Only a DRAFT version may change.
+        A MATERIAL below a furnitureCategory may omit furnitureEquipment: maintenance-service then
+        idempotently ensures the same code and name in asset-service additional equipment and stores
+        the returned immutable identity. Dependency failure or conflict commits no catalog change.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceCatalogNodesRequest' } } } }
       responses:
         '200': { description: Changed draft version., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersion' } } } }
@@ -68,6 +72,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
   /api/maintenance/v1/catalog/versions/{id}/links:
     parameters:
       - { $ref: '#/components/parameters/CatalogVersionId' }
@@ -100,19 +105,45 @@ paths:
   /api/maintenance/v1/catalog/imports:
     post:
       tags: [Catalog]
-      operationId: importCatalogVersion
+      operationId: bootstrapReviewedCatalogVersion
       description: >-
-        Requires USER, rwms.write and warehouse MANAGE access. A valid reviewed
-        source snapshot creates one complete DRAFT version. The same source
-        SHA-256 replays its original response; invalid rows commit nothing.
+        Requires USER, rwms.write and warehouse MANAGE access. Validates the packaged reviewed
+        manifest, artifact hashes, exact 232-node/254-link/91-material distribution and reviewed
+        routing bound to the manifest warehouse before creating one complete DRAFT version.
+        A matching existing version is returned with Idempotency-Replayed; a mismatched source
+        binding conflicts and an unreviewed warehouse fails closed. No catalog rows are accepted
+        from the browser.
       parameters:
         - { $ref: '#/components/parameters/IdempotencyKey' }
-      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogImportRequest' } } } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogBootstrapRequest' } } } }
       responses:
-        '201': { description: Imported DRAFT catalog version., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersion' } } } }
+        '201': { description: Created or reused reviewed catalog version., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersion' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/maintenance/v1/catalog/versions/{id}/fork:
+    parameters:
+      - { $ref: '#/components/parameters/CatalogVersionId' }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      tags: [Catalog]
+      operationId: forkCatalogVersion
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE access. Copies an exact immutable snapshot
+        of a reviewed ACTIVE or SUPERSEDED version into a new DRAFT using optimistic source
+        expectedVersion. The copied source must still contain exactly 232 nodes, 254 links and 91
+        materials with the reviewed identities and routing; published source rows remain immutable.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExpectedVersionRequest' } } } }
+      responses:
+        '201': { description: Created or replayed DRAFT fork., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersion' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationFailure' }
   /api/maintenance/v1/catalog/versions/{id}/activate:
@@ -123,7 +154,12 @@ paths:
     post:
       tags: [Catalog]
       operationId: activateCatalogVersion
-      description: Requires USER, rwms.write and warehouse MANAGE access. Activation is CAS and supersedes the previous active version atomically.
+      description: >-
+        Requires USER, rwms.write and warehouse MANAGE access. Before any local mutation,
+        maintenance-service verifies the six reviewed queue ID/code/type snapshots through the
+        private task-board preflight. Activation is CAS, supersedes the previous active version
+        atomically and stores durable CATALOG_POSITION registration/cleanup intents in that same
+        transaction. Cleanup of superseded references waits for all replacement registrations.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ExpectedVersionRequest' } } } }
       responses:
         '200': { description: Active catalog version., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersion' } } } }
@@ -133,6 +169,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
   /api/internal/maintenance/v1/inventory/plans:
     post:
       tags: [Inventory Integration]
@@ -373,7 +410,11 @@ paths:
     put:
       tags: [Repairs]
       operationId: replaceDraftRepairPlan
-      description: Requires USER, rwms.write and warehouse EDIT access. Replaces only an unqueued DRAFT plan using CAS.
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT access. Replaces the ordered
+        plan and opaque MAINTENANCE_REPAIR media references only for an unqueued
+        DRAFT repair using CAS. Media owner proof delivery is a server-side durable
+        reconciliation and is never a browser saga.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceRepairPlanRequest' } } } }
       responses:
         '200': { description: Changed DRAFT repair., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/Repair' } } } }
@@ -432,7 +473,10 @@ paths:
     post:
       tags: [Decisions]
       operationId: acceptRepair
-      description: Requires USER, rwms.write and warehouse EDIT access. Fences the cabin to FREE and cascades ACCEPTED through the source repair chain.
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT access. Validates and stores
+        the supplied opaque media references under MAINTENANCE_ACCEPTANCE, fences
+        the cabin to FREE and cascades ACCEPTED through the source repair chain.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RepairDecisionRequest' } } } }
       responses:
         '200': { description: Accepted repair and lease reconciliation truth., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairCommandResult' } } } }
@@ -682,10 +726,26 @@ components:
         errorCount: { type: integer, minimum: 0 }
         warningCount: { type: integer, minimum: 0 }
         reportSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+    CatalogRoutingSync:
+      description: >-
+        Durable maintenance-owned delivery truth for task-board CATALOG_POSITION references.
+        Cleanup is not attempted until every registration predecessor for the replacement and
+        superseded versions is confirmed.
+      type: object
+      additionalProperties: false
+      required: [state, registrationsRequired, registrationsConfirmed, cleanupRequired, cleanupConfirmed, attempts, updatedAt]
+      properties:
+        state: { $ref: '#/components/schemas/DeliveryState' }
+        registrationsRequired: { type: integer, minimum: 0 }
+        registrationsConfirmed: { type: integer, minimum: 0 }
+        cleanupRequired: { type: integer, minimum: 0 }
+        cleanupConfirmed: { type: integer, minimum: 0 }
+        attempts: { type: integer, minimum: 0 }
+        updatedAt: { type: string, format: date-time }
     CatalogVersion:
       type: object
       additionalProperties: false
-      required: [id, warehouseId, version, lifecycle, sourceSha256, counts, validation, createdAt]
+      required: [id, warehouseId, version, lifecycle, sourceSha256, counts, validation, createdAt, routingSync]
       properties:
         id: { type: string, format: uuid }
         warehouseId: { type: string, format: uuid }
@@ -697,6 +757,10 @@ components:
         createdAt: { type: string, format: date-time }
         activatedAt:
           oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+        routingSync:
+          oneOf:
+            - $ref: '#/components/schemas/CatalogRoutingSync'
+            - type: 'null'
     CatalogVersionPage:
       type: object
       additionalProperties: false
@@ -721,6 +785,17 @@ components:
       properties:
         referenceId: { type: string, minLength: 1, maxLength: 128 }
         code: { type: string, minLength: 1, maxLength: 64 }
+    FurnitureEquipmentReference:
+      description: >-
+        Immutable snapshot of the asset-service additional-equipment master item. This is never a
+        cross-database foreign key; asset-service validates the live item before applying a loss.
+      type: object
+      additionalProperties: false
+      required: [equipmentId, equipmentCode, equipmentName]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        equipmentCode: { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{0,63}$' }
+        equipmentName: { type: string, minLength: 1, maxLength: 255 }
     CatalogNodeInput:
       type: object
       additionalProperties: false
@@ -733,6 +808,12 @@ components:
         active: { type: boolean }
         parentNodeId:
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        furnitureCategory:
+          type: boolean
+          default: false
+          description: Marks this category and its descendants as the Furniture material view.
+        furnitureEquipment:
+          oneOf: [ { $ref: '#/components/schemas/FurnitureEquipmentReference' }, { type: 'null' } ]
         unit:
           oneOf: [ { type: string, minLength: 1, maxLength: 32 }, { type: 'null' } ]
         unitPrice:
@@ -758,16 +839,23 @@ components:
     CatalogNode:
       type: object
       additionalProperties: false
-      required: [id, catalogVersionId, code, nodeType, name, active, durationMinutes, unitPrice, includeInEstimate, commonItem, showInMainMenu, photoRequired, routing, references, mediaReferences]
+      required: [id, catalogVersionId, mediaOwnerId, code, nodeType, name, active, furnitureCategory, furnitureEquipment, durationMinutes, unitPrice, includeInEstimate, commonItem, showInMainMenu, photoRequired, routing, references, mediaReferences]
       properties:
         id: { type: string, format: uuid }
         catalogVersionId: { type: string, format: uuid }
+        mediaOwnerId:
+          type: string
+          format: uuid
+          description: Server-issued warehouse-scoped owner identifier for catalog node media.
         code: { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{0,63}$' }
         nodeType: { $ref: '#/components/schemas/CatalogNodeType' }
         name: { type: string, minLength: 1, maxLength: 255 }
         active: { type: boolean }
         parentNodeId:
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        furnitureCategory: { type: boolean }
+        furnitureEquipment:
+          oneOf: [ { $ref: '#/components/schemas/FurnitureEquipmentReference' }, { type: 'null' } ]
         unit:
           oneOf: [ { type: string, minLength: 1, maxLength: 32 }, { type: 'null' } ]
         unitPrice:
@@ -825,19 +913,16 @@ components:
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         links: { type: array, maxItems: 20000, items: { $ref: '#/components/schemas/CatalogLinkInput' } }
-    CatalogImportRequest:
+    CatalogBootstrapRequest:
       type: object
       additionalProperties: false
-      required: [warehouseId, sourceSha256, nodes, links]
+      required: [warehouseId]
       properties:
         warehouseId: { type: string, format: uuid }
-        sourceSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
-        nodes: { type: array, maxItems: 10000, items: { $ref: '#/components/schemas/CatalogNodeInput' } }
-        links: { type: array, maxItems: 20000, items: { $ref: '#/components/schemas/CatalogLinkInput' } }
     CatalogNodeSnapshot:
       type: object
       additionalProperties: false
-      required: [catalogVersionId, nodeId, code, nodeType, name, unit, unitPrice, durationMinutes, routing]
+      required: [catalogVersionId, nodeId, code, nodeType, name, unit, unitPrice, durationMinutes, routing, furnitureEquipment]
       properties:
         catalogVersionId: { type: string, format: uuid }
         nodeId: { type: string, format: uuid }
@@ -851,6 +936,8 @@ components:
         durationMinutes: { type: integer, minimum: 0 }
         routing:
           oneOf: [ { $ref: '#/components/schemas/RoutingSnapshot' }, { type: 'null' } ]
+        furnitureEquipment:
+          oneOf: [ { $ref: '#/components/schemas/FurnitureEquipmentReference' }, { type: 'null' } ]
     EstimateLineInput:
       type: object
       additionalProperties: false
@@ -1314,10 +1401,11 @@ components:
     ReplaceRepairPlanRequest:
       type: object
       additionalProperties: false
-      required: [expectedVersion, stages]
+      required: [expectedVersion, stages, mediaReferences]
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         stages: { type: array, minItems: 1, maxItems: 1000, items: { $ref: '#/components/schemas/PlanStageInput' } }
+        mediaReferences: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
     CreateReworkRequest:
       type: object
       additionalProperties: false
@@ -1334,12 +1422,16 @@ components:
     RepairDecisionRequest:
       type: object
       additionalProperties: false
-      required: [expectedVersion]
+      required: [expectedVersion, mediaReferences]
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         comment:
           description: Service-local decision text; never published to Kafka.
           oneOf: [ { type: string, maxLength: 2000 }, { type: 'null' } ]
+        mediaReferences:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/MediaReference' }
     WriteOffRepairRequest:
       type: object
       additionalProperties: false

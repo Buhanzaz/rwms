@@ -49,6 +49,12 @@ import type {
   RepairTaskSubtaskDto,
 } from "@/features/repair-tasks/model/repair-task"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
+import {
+  maintenanceAcceptanceMediaOwner,
+  maintenanceRepairMediaOwner,
+  type ReadyMediaReference,
+} from "@/features/media/media-service"
+import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
 
 import {
   formatAcceptanceDateTime,
@@ -64,6 +70,7 @@ import { RepairReworkWizardDialog } from "./repair-rework-wizard-dialog"
 type DossierMode = "ACCEPTANCE" | "WRITE_OFF"
 
 type RepairAcceptanceDossierProps = {
+  accessToken?: string | null
   task: RepairTaskDto
   mode: DossierMode
   canEdit: boolean
@@ -279,11 +286,13 @@ function SubtaskCard({
 
 function DecisionDialogs({
   task,
+  acceptanceMediaReferences,
   canEdit,
   canManage,
   onDecision,
 }: {
   task: RepairTaskDto
+  acceptanceMediaReferences: ReadyMediaReference[]
   canEdit: boolean
   canManage: boolean
   onDecision?: () => void
@@ -312,7 +321,11 @@ function DecisionDialogs({
           "Недостаточно прав для решения по приёмке на выбранном складе."
         )
       }
-      return acceptRepairTask({ task, comment: acceptComment })
+      return acceptRepairTask({
+        task,
+        comment: acceptComment,
+        maintenanceMediaReferences: acceptanceMediaReferences,
+      })
     },
     onSuccess: handleDecisionSuccess,
   })
@@ -484,12 +497,16 @@ function DecisionDialogs({
 }
 
 export function RepairAcceptanceDossier({
+  accessToken = null,
   task,
   mode,
   canEdit,
   canManage,
   onDecision,
 }: RepairAcceptanceDossierProps) {
+  const [acceptanceMediaReferences, setAcceptanceMediaReferences] = useState<
+    ReadyMediaReference[]
+  >([])
   const orderedSubtasks = useMemo(
     () =>
       task.subtasks
@@ -504,10 +521,32 @@ export function RepairAcceptanceDossier({
       ariaLabel={`${mode === "WRITE_OFF" ? "Списание" : "Приёмка"} бытовки ${task.cabinNumber}`}
       mobileContentFlow
       photos={
-        <p className="text-sm text-muted-foreground">
-          Фото для ремонта и приёмки временно недоступны: media-service ещё не
-          подтверждает владельцев MAINTENANCE_REPAIR и MAINTENANCE_ACCEPTANCE.
-        </p>
+        <div className="flex h-full min-h-0 flex-col gap-5 overflow-y-auto">
+          <div className="flex min-h-72 flex-col gap-2">
+            <h3 className="text-sm font-medium">Фото ремонта</h3>
+            <ServiceOwnerPhotos
+              accessToken={accessToken}
+              owner={maintenanceRepairMediaOwner(task.id, task.warehouseId)}
+              readOnly
+              title="Фотографии ремонта"
+            />
+          </div>
+          {mode === "ACCEPTANCE" ? (
+            <div className="flex min-h-72 flex-col gap-2">
+              <h3 className="text-sm font-medium">Фото приёмки</h3>
+              <ServiceOwnerPhotos
+                accessToken={accessToken}
+                owner={maintenanceAcceptanceMediaOwner(
+                  task.id,
+                  task.warehouseId
+                )}
+                readOnly={!canEdit}
+                title="Фотографии приёмки"
+                onReadyReferencesChange={setAcceptanceMediaReferences}
+              />
+            </div>
+          ) : null}
+        </div>
       }
       information={<TaskInformation task={task} mode={mode} />}
       informationDescription={
@@ -539,6 +578,7 @@ export function RepairAcceptanceDossier({
               <Separator className="mb-2" />
               <DecisionDialogs
                 task={task}
+                acceptanceMediaReferences={acceptanceMediaReferences}
                 canEdit={canEdit}
                 canManage={canManage}
                 onDecision={onDecision}

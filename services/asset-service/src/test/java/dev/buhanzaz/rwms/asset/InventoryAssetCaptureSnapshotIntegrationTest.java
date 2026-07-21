@@ -130,7 +130,10 @@ class InventoryAssetCaptureSnapshotIntegrationTest {
           new InventoryCaptureRequest(UUID.randomUUID(), 1L, "8".repeat(64), warehouseId)));
       assertThat(snapshotOpened.await(30, TimeUnit.SECONDS)).isTrue();
       var balanceUpdate = mutationExecutor.submit(() -> jdbc.update(
-          "update equipment_balance set quantity=2 where equipment_id=? and rental_item_id=?",
+          """
+          update equipment_balance set quantity=2
+          where equipment_id=? and rental_item_id=? and location_kind='CABIN_NON_RENTED'
+          """,
           catalog.getId(), rentalItem.getId()));
       var balanceInsert = mutationExecutor.submit(() -> jdbc.update("""
           insert into equipment_balance(
@@ -152,6 +155,7 @@ class InventoryAssetCaptureSnapshotIntegrationTest {
         assertThat(member.contentsSnapshot()).singleElement().satisfies(content -> {
           assertThat(content.quantity()).isOne();
           assertThat(content.equipmentCode()).isEqualTo(catalog.getCode());
+          assertThat(content.equipmentName()).isEqualTo(catalog.getName());
         });
       });
     } finally {

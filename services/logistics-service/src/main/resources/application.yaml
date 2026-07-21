@@ -124,6 +124,14 @@ rwms:
       relay-enabled: ${LOGISTICS_TRANSFER_RELAY_ENABLED:true}
       relay-delay: ${LOGISTICS_TRANSFER_RELAY_DELAY:1s}
       relay-initial-delay: ${LOGISTICS_TRANSFER_RELAY_INITIAL_DELAY:1s}
+    owner-proof:
+      relay-enabled: ${LOGISTICS_OWNER_PROOF_RELAY_ENABLED:true}
+      relay-delay: ${LOGISTICS_OWNER_PROOF_RELAY_DELAY:1s}
+      relay-initial-delay: ${LOGISTICS_OWNER_PROOF_RELAY_INITIAL_DELAY:1s}
+    equipment-movement:
+      relay-enabled: ${LOGISTICS_EQUIPMENT_MOVEMENT_RELAY_ENABLED:true}
+      relay-delay: ${LOGISTICS_EQUIPMENT_MOVEMENT_RELAY_DELAY:1s}
+      relay-initial-delay: ${LOGISTICS_EQUIPMENT_MOVEMENT_RELAY_INITIAL_DELAY:1s}
     eventing:
       outbox:
         relay-delay: ${LOGISTICS_KAFKA_OUTBOX_RELAY_DELAY:1s}

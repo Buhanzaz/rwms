@@ -22,7 +22,12 @@ import org.hibernate.type.SqlTypes;
 public class MaintenanceReconciliation {
   private static final OffsetDateTime REVIEW_REQUIRED_NEXT_ATTEMPT =
       OffsetDateTime.parse("9999-12-31T23:59:59Z");
-  private static final Set<String> DEPENDENCIES = Set.of("ASSET", "TASK_BOARD");
+  private static final Set<String> DEPENDENCIES = Set.of("ASSET", "TASK_BOARD", "MEDIA");
+  private static final Set<String> MEDIA_OWNER_TYPES = Set.of(
+      "MAINTENANCE_ESTIMATE",
+      "MAINTENANCE_REPAIR",
+      "MAINTENANCE_ACCEPTANCE",
+      "MAINTENANCE_CATALOG_NODE");
   private static final Set<String> CLAIMABLE_STATES =
       Set.of("PENDING", "RETRY_PENDING", "RECONCILIATION_REQUIRED");
 
@@ -57,6 +62,45 @@ public class MaintenanceReconciliation {
   @Column(name = "response_snapshot", columnDefinition = "jsonb")
   @JdbcTypeCode(SqlTypes.JSON)
   private String responseSnapshot;
+
+  @Column(name = "media_owner_type", length = 64)
+  private String mediaOwnerType;
+
+  @Column(name = "media_owner_id")
+  private UUID mediaOwnerId;
+
+  @Column(name = "media_warehouse_id")
+  private UUID mediaWarehouseId;
+
+  @Column(name = "media_owner_revision")
+  private Long mediaOwnerRevision;
+
+  @Column(name = "media_aggregate_version")
+  private Long mediaAggregateVersion;
+
+  @Column(name = "media_source_id")
+  private UUID mediaSourceId;
+
+  @Column(name = "media_source_version")
+  private Long mediaSourceVersion;
+
+  @Column(name = "media_proof_event_id")
+  private UUID mediaProofEventId;
+
+  @Column(name = "media_active")
+  private Boolean mediaActive;
+
+  @Column(name = "catalog_version_id")
+  private UUID catalogVersionId;
+
+  @Column(name = "catalog_node_id")
+  private UUID catalogNodeId;
+
+  @Column(name = "catalog_queue_id")
+  private UUID catalogQueueId;
+
+  @Column(name = "catalog_external_reference_id", length = 128)
+  private String catalogExternalReferenceId;
 
   @Column(name = "review_version", nullable = false)
   private long reviewVersion;
@@ -112,6 +156,85 @@ public class MaintenanceReconciliation {
         responseSnapshot,
         now,
         REVIEW_REQUIRED_NEXT_ATTEMPT);
+  }
+
+  public static MaintenanceReconciliation mediaOwnerProof(
+      String ownerType,
+      UUID ownerId,
+      UUID warehouseId,
+      long ownerRevision,
+      long aggregateVersion,
+      UUID sourceId,
+      long sourceVersion,
+      UUID proofEventId,
+      boolean active,
+      String requestSnapshot,
+      OffsetDateTime now) {
+    if (!MEDIA_OWNER_TYPES.contains(ownerType)
+        || ownerId == null
+        || warehouseId == null
+        || ownerRevision < 0
+        || aggregateVersion < 0
+        || sourceId == null
+        || sourceVersion < 0
+        || proofEventId == null) {
+      throw new IllegalArgumentException("Media owner proof identity is required");
+    }
+    MaintenanceReconciliation value = create(
+        null,
+        "MEDIA",
+        "UPSERT_MEDIA_OWNER_PROOF",
+        proofEventId,
+        "PENDING",
+        requestSnapshot,
+        now,
+        now);
+    value.mediaOwnerType = ownerType;
+    value.mediaOwnerId = ownerId;
+    value.mediaWarehouseId = warehouseId;
+    value.mediaOwnerRevision = ownerRevision;
+    value.mediaAggregateVersion = aggregateVersion;
+    value.mediaSourceId = sourceId;
+    value.mediaSourceVersion = sourceVersion;
+    value.mediaProofEventId = proofEventId;
+    value.mediaActive = active;
+    return value;
+  }
+
+  public static MaintenanceReconciliation catalogPosition(
+      String operationType,
+      UUID idempotencyKey,
+      UUID catalogVersionId,
+      UUID catalogNodeId,
+      UUID queueId,
+      String externalReferenceId,
+      String requestSnapshot,
+      OffsetDateTime now) {
+    if (!("REGISTER_CATALOG_POSITION".equals(operationType)
+            || "DELETE_CATALOG_POSITION".equals(operationType))
+        || catalogVersionId == null
+        || catalogNodeId == null
+        || queueId == null
+        || externalReferenceId == null
+        || externalReferenceId.isBlank()
+        || externalReferenceId.length() > 128) {
+      throw new IllegalArgumentException("Catalog-position reconciliation identity is required");
+    }
+    MaintenanceReconciliation value =
+        create(
+            null,
+            "TASK_BOARD",
+            operationType,
+            idempotencyKey,
+            "PENDING",
+            requestSnapshot,
+            now,
+            now);
+    value.catalogVersionId = catalogVersionId;
+    value.catalogNodeId = catalogNodeId;
+    value.catalogQueueId = queueId;
+    value.catalogExternalReferenceId = externalReferenceId.trim();
+    return value;
   }
 
   private static MaintenanceReconciliation create(
@@ -184,6 +307,16 @@ public class MaintenanceReconciliation {
     return quarantined;
   }
 
+  public void defer(
+      int expectedAttemptCount, OffsetDateTime nextAttemptAt, OffsetDateTime now) {
+    requireClaim(expectedAttemptCount);
+    if (nextAttemptAt == null || now == null || !nextAttemptAt.isAfter(now)) {
+      throw new IllegalArgumentException("Deferred reconciliation time is invalid");
+    }
+    this.nextAttemptAt = nextAttemptAt;
+    updatedAt = now;
+  }
+
   public void resume(
       long expectedReviewVersion,
       UUID reviewSubjectId,
@@ -216,6 +349,42 @@ public class MaintenanceReconciliation {
   public void requireStableIdentity(UUID repairId) {
     if (!java.util.Objects.equals(this.repairId, repairId)) {
       throw new IllegalArgumentException("STABLE_IDENTITY");
+    }
+  }
+
+  public void requireStableMediaSource(
+      String ownerType,
+      UUID ownerId,
+      UUID warehouseId,
+      UUID sourceId,
+      long sourceVersion,
+      boolean active) {
+    if (!"MEDIA".equals(dependencyType)
+        || !java.util.Objects.equals(mediaOwnerType, ownerType)
+        || !java.util.Objects.equals(mediaOwnerId, ownerId)
+        || !java.util.Objects.equals(mediaWarehouseId, warehouseId)
+        || !java.util.Objects.equals(mediaSourceId, sourceId)
+        || !java.util.Objects.equals(mediaSourceVersion, sourceVersion)
+        || !java.util.Objects.equals(mediaActive, active)
+        || responseSnapshot == null) {
+      throw new IllegalArgumentException("STABLE_MEDIA_SOURCE");
+    }
+  }
+
+  public void requireStableCatalogPosition(
+      String operationType,
+      UUID catalogVersionId,
+      UUID catalogNodeId,
+      UUID queueId,
+      String externalReferenceId) {
+    if (!"TASK_BOARD".equals(dependencyType)
+        || !java.util.Objects.equals(this.operationType, operationType)
+        || !java.util.Objects.equals(this.catalogVersionId, catalogVersionId)
+        || !java.util.Objects.equals(this.catalogNodeId, catalogNodeId)
+        || !java.util.Objects.equals(this.catalogQueueId, queueId)
+        || !java.util.Objects.equals(this.catalogExternalReferenceId, externalReferenceId)
+        || responseSnapshot == null) {
+      throw new IllegalArgumentException("STABLE_CATALOG_POSITION");
     }
   }
 
@@ -261,6 +430,58 @@ public class MaintenanceReconciliation {
     return responseSnapshot;
   }
 
+  public String getMediaOwnerType() {
+    return mediaOwnerType;
+  }
+
+  public UUID getMediaOwnerId() {
+    return mediaOwnerId;
+  }
+
+  public UUID getMediaWarehouseId() {
+    return mediaWarehouseId;
+  }
+
+  public Long getMediaOwnerRevision() {
+    return mediaOwnerRevision;
+  }
+
+  public Long getMediaAggregateVersion() {
+    return mediaAggregateVersion;
+  }
+
+  public UUID getMediaSourceId() {
+    return mediaSourceId;
+  }
+
+  public Long getMediaSourceVersion() {
+    return mediaSourceVersion;
+  }
+
+  public UUID getMediaProofEventId() {
+    return mediaProofEventId;
+  }
+
+  public Boolean getMediaActive() {
+    return mediaActive;
+  }
+
+  public UUID getCatalogVersionId() {
+    return catalogVersionId;
+  }
+
+  public UUID getCatalogNodeId() {
+    return catalogNodeId;
+  }
+
+  public UUID getCatalogQueueId() {
+    return catalogQueueId;
+  }
+
+  public String getCatalogExternalReferenceId() {
+    return catalogExternalReferenceId;
+  }
+
   public long getReviewVersion() {
     return reviewVersion;
   }
@@ -275,5 +496,9 @@ public class MaintenanceReconciliation {
 
   public OffsetDateTime getReviewedAt() {
     return reviewedAt;
+  }
+
+  public OffsetDateTime getUpdatedAt() {
+    return updatedAt;
   }
 }

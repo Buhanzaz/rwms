@@ -39,8 +39,10 @@ class AuthMaintenanceServiceClientIntegrationTest {
     void mintsSeparateExactScopeServiceTokensAndRejectsCombinedOrImplicitScopes() throws Exception {
         assertExactToken("asset.maintenance");
         assertExactToken("task-board.task-sync");
+        assertExactToken("queue-registry.write");
+        assertExactToken("media.maintenance");
 
-        tokenRequest("asset.maintenance task-board.task-sync")
+        tokenRequest("task-board.task-sync queue-registry.write")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("invalid_scope"));
         tokenRequest(null)

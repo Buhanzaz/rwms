@@ -19,6 +19,17 @@ type Database struct {
 	Pool *pgxpool.Pool
 }
 
+type migrationHistoryRow struct {
+	version, description, migrationType, script string
+	checksum                                    *int32
+	success                                     bool
+}
+
+type approvedMigration struct {
+	version, description, script string
+	contents                     []byte
+}
+
 func Open(ctx context.Context, databaseURL string) (*Database, error) {
 	configuration, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
@@ -68,14 +79,9 @@ func (database *Database) VerifyMigrations(ctx context.Context) error {
 		return fmt.Errorf("read Flyway history: %w", err)
 	}
 	defer rows.Close()
-	type row struct {
-		version, description, migrationType, script string
-		checksum                                    *int32
-		success                                     bool
-	}
-	var history []row
+	var history []migrationHistoryRow
 	for rows.Next() {
-		var item row
+		var item migrationHistoryRow
 		if err := rows.Scan(&item.version, &item.description, &item.migrationType, &item.script, &item.checksum, &item.success); err != nil {
 			return fmt.Errorf("scan Flyway history: %w", err)
 		}
@@ -84,21 +90,40 @@ func (database *Database) VerifyMigrations(ctx context.Context) error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("read Flyway history: %w", err)
 	}
-	expected := []struct {
-		version, description, script string
-		contents                     []byte
-	}{
+	return verifyMigrationHistory(history)
+}
+
+func verifyMigrationHistory(history []migrationHistoryRow) error {
+	expected := []approvedMigration{
 		{"1", "media schema", "V1__media_schema.sql", mediamigration.V1},
 		{"2", "media runtime recovery", "V2__media_runtime_recovery.sql", mediamigration.V2},
 		{"3", "inventory owner proof", "V3__inventory_owner_proof.sql", mediamigration.V3},
+		{"4", "cabin owner bindings", "V4__cabin_owner_bindings.sql", mediamigration.V4},
+		{"4.1", "prepare legacy photo folder backfill", "V4_1__prepare_legacy_photo_folder_backfill.sql", mediamigration.V4_1},
+		{"5", "media photo folders", "V5__media_photo_folders.sql", mediamigration.V5},
+		{"5.1", "restore runtime source guard", "V5_1__restore_runtime_source_guard.sql", mediamigration.V5_1},
+		{"6", "service owner proofs and soft delete", "V6__service_owner_proofs_and_soft_delete.sql", mediamigration.V6},
+		{"7", "dynamic cabin owner projection", "V7__dynamic_cabin_owner_projection.sql", mediamigration.V7},
 	}
 	if len(history) != len(expected) {
-		return fmt.Errorf("%w: expected exactly V1, V2 and V3, found %d versioned rows", ErrSchemaNotReady, len(history))
+		return fmt.Errorf("%w: expected the exact approved V1 through V7 history, found %d versioned rows", ErrSchemaNotReady, len(history))
 	}
-	for index, wanted := range expected {
-		actual := history[index]
+	expectedByVersion := make(map[string]approvedMigration, len(expected))
+	for _, migration := range expected {
+		expectedByVersion[migration.version] = migration
+	}
+	seen := make(map[string]struct{}, len(history))
+	for _, actual := range history {
+		wanted, approved := expectedByVersion[actual.version]
+		if !approved {
+			return fmt.Errorf("%w: unexpected migration version %q", ErrSchemaNotReady, actual.version)
+		}
+		if _, duplicate := seen[actual.version]; duplicate {
+			return fmt.Errorf("%w: duplicate migration version V%s", ErrSchemaNotReady, actual.version)
+		}
+		seen[actual.version] = struct{}{}
 		checksum := flywayChecksum(wanted.contents)
-		if actual.version != wanted.version || actual.description != wanted.description || actual.script != wanted.script || actual.migrationType != "SQL" || !actual.success || actual.checksum == nil || *actual.checksum != checksum {
+		if actual.description != wanted.description || actual.script != wanted.script || actual.migrationType != "SQL" || !actual.success || actual.checksum == nil || *actual.checksum != checksum {
 			return fmt.Errorf("%w: V%s metadata or checksum mismatch", ErrSchemaNotReady, wanted.version)
 		}
 	}

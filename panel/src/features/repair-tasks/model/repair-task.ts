@@ -1,6 +1,7 @@
 import type { RepairEstimateCatalogRouteQueueKind } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 import type {
   PendingEstimateMediaUpload,
+  MaintenanceMediaReferenceDto,
   RepairEstimateLineDto,
   RepairEstimateMediaRefDto,
 } from "@/features/repair-estimates/model/repair-estimate"
@@ -107,6 +108,7 @@ export type RepairTaskEditorDraft = {
   comment: string
   lines: RepairEstimateLineDto[]
   media: RepairEstimateMediaRefDto[]
+  maintenanceMediaReferences: MaintenanceMediaReferenceDto[]
   pendingUploads: PendingEstimateMediaUpload[]
 }
 
@@ -125,6 +127,7 @@ export type RepairTaskWriteCommand = {
   dispatchDate: string | null
   comment: string
   media: RepairEstimateMediaRefDto[]
+  maintenanceMediaReferences: MaintenanceMediaReferenceDto[]
   subtasks: RepairTaskSubtaskDto[]
 }
 
@@ -140,9 +143,17 @@ export type RepairTaskReworkSeed = {
   lines: RepairEstimateLineDto[]
 }
 
+export type RentalItemRepairSeed = {
+  type: "rental-item-repair-seed-v1"
+  warehouseId: string
+  rentalItemId: string
+  number: string
+}
+
 export type RepairsLocationState = {
   workspaceEntry?: true
   reworkSeed?: RepairTaskReworkSeed
+  rentalItemSeed?: RentalItemRepairSeed
 }
 
 export type RepairTaskSubtasksCommand = {
@@ -157,6 +168,7 @@ export type RepairTaskAcceptCommand = {
   expectedVersion: number
   warehouseId: string
   comment: string
+  maintenanceMediaReferences: MaintenanceMediaReferenceDto[]
 }
 
 export type RepairTaskWriteOffCommand = {

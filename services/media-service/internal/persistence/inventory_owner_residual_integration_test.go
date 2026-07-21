@@ -42,17 +42,17 @@ func TestInventoryOwnerResidualPostgresDatabaseURLTargetsRequestedDatabase(t *te
 func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 	environment := testsupport.RequireRealEnvironment(t, testsupport.PostgreSQL)
 
-	t.Run("clean V1 V2 V3 repeat and checksum drift", func(t *testing.T) {
+	t.Run("clean V1 through V7 repeat and checksum drift", func(t *testing.T) {
 		databaseURL := testsupport.NewIsolatedPostgresDatabase(t, environment.DatabaseURL)
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		pool := openResidualPool(t, ctx, databaseURL)
-		installResidualMigrations(t, ctx, pool, 3)
+		installResidualMigrations(t, ctx, pool, 9)
 		pool.Close()
 
 		first, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open clean V1+V2+V3 database: %v", err)
+			t.Fatalf("open clean V1 through V7 database: %v", err)
 		}
 		first.Close()
 		second, err := Open(ctx, databaseURL)
@@ -60,9 +60,9 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			t.Fatalf("repeat schema verification: %v", err)
 		}
 		if _, err := second.Pool.Exec(ctx, `update flyway_schema_history
-			set checksum=checksum+1 where version='3'`); err != nil {
+			set checksum=checksum+1 where version='5'`); err != nil {
 			second.Close()
-			t.Fatalf("seed V3 checksum drift: %v", err)
+			t.Fatalf("seed V5 checksum drift: %v", err)
 		}
 		second.Close()
 		drifted, err := Open(ctx, databaseURL)
@@ -91,12 +91,24 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			pool.Close()
 			t.Fatalf("seed V2 owner binding: %v", err)
 		}
-		applyResidualMigration(t, ctx, pool, 3, "inventory owner proof",
+		applyResidualMigration(t, ctx, pool, 3, "3", "inventory owner proof",
 			"V3__inventory_owner_proof.sql", mediamigration.V3)
+		applyResidualMigration(t, ctx, pool, 4, "4", "cabin owner bindings",
+			"V4__cabin_owner_bindings.sql", mediamigration.V4)
+		applyResidualMigration(t, ctx, pool, 5, "4.1", "prepare legacy photo folder backfill",
+			"V4_1__prepare_legacy_photo_folder_backfill.sql", mediamigration.V4_1)
+		applyResidualMigration(t, ctx, pool, 6, "5", "media photo folders",
+			"V5__media_photo_folders.sql", mediamigration.V5)
+		applyResidualMigration(t, ctx, pool, 7, "5.1", "restore runtime source guard",
+			"V5_1__restore_runtime_source_guard.sql", mediamigration.V5_1)
+		applyResidualMigration(t, ctx, pool, 8, "6", "service owner proofs and soft delete",
+			"V6__service_owner_proofs_and_soft_delete.sql", mediamigration.V6)
+		applyResidualMigration(t, ctx, pool, 9, "7", "dynamic cabin owner projection",
+			"V7__dynamic_cabin_owner_projection.sql", mediamigration.V7)
 		pool.Close()
 		database, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open upgraded V3 database: %v", err)
+			t.Fatalf("open upgraded V7 database: %v", err)
 		}
 		defer database.Close()
 		var active bool
@@ -169,7 +181,7 @@ func TestInventoryOwnerResidualStreamAndReconciliationGateReal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	pool := openResidualPool(t, ctx, databaseURL)
-	installResidualMigrations(t, ctx, pool, 3)
+	installResidualMigrations(t, ctx, pool, 9)
 	pool.Close()
 	database, err := Open(ctx, databaseURL)
 	if err != nil {
@@ -438,16 +450,23 @@ func installResidualMigrations(t testing.TB, ctx context.Context, pool *pgxpool.
 		{"media schema", "V1__media_schema.sql", mediamigration.V1},
 		{"media runtime recovery", "V2__media_runtime_recovery.sql", mediamigration.V2},
 		{"inventory owner proof", "V3__inventory_owner_proof.sql", mediamigration.V3},
+		{"cabin owner bindings", "V4__cabin_owner_bindings.sql", mediamigration.V4},
+		{"prepare legacy photo folder backfill", "V4_1__prepare_legacy_photo_folder_backfill.sql", mediamigration.V4_1},
+		{"media photo folders", "V5__media_photo_folders.sql", mediamigration.V5},
+		{"restore runtime source guard", "V5_1__restore_runtime_source_guard.sql", mediamigration.V5_1},
+		{"service owner proofs and soft delete", "V6__service_owner_proofs_and_soft_delete.sql", mediamigration.V6},
+		{"dynamic cabin owner projection", "V7__dynamic_cabin_owner_projection.sql", mediamigration.V7},
 	}
 	for index := 0; index < through; index++ {
 		migration := migrations[index]
-		applyResidualMigration(t, ctx, pool, index+1, migration.description,
+		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7"}
+		applyResidualMigration(t, ctx, pool, index+1, versions[index], migration.description,
 			migration.script, migration.body)
 	}
 }
 
 func applyResidualMigration(t testing.TB, ctx context.Context, pool *pgxpool.Pool,
-	version int, description, script string, body []byte) {
+	installedRank int, version, description, script string, body []byte) {
 	t.Helper()
 	started := time.Now()
 	if _, err := pool.Exec(ctx, string(body)); err != nil {
@@ -455,7 +474,7 @@ func applyResidualMigration(t testing.TB, ctx context.Context, pool *pgxpool.Poo
 	}
 	if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
 		installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
-	values ($1,$2,$3,'SQL',$4,$5,current_user,$6,true)`, version, fmt.Sprint(version),
+	values ($1,$2,$3,'SQL',$4,$5,current_user,$6,true)`, installedRank, version,
 		description, script, flywayChecksum(body), int(time.Since(started)/time.Millisecond)); err != nil {
 		t.Fatalf("record %s history: %v", script, err)
 	}

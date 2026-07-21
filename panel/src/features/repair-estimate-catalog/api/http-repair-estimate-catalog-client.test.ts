@@ -21,6 +21,7 @@ const warehouseId = "00000000-0000-4000-8000-000000000001"
 const versionId = "00000000-0000-4000-8000-000000000002"
 const nodeId = "00000000-0000-4000-8000-000000000003"
 const linkId = "00000000-0000-4000-8000-000000000004"
+const mediaOwnerId = "00000000-0000-4000-8000-000000000005"
 
 describe("operational maintenance catalog adapter", () => {
   beforeEach(() => {
@@ -46,6 +47,7 @@ describe("operational maintenance catalog adapter", () => {
       {
         id: nodeId,
         catalogVersionId: versionId,
+        mediaOwnerId,
         code: "WORK",
         name: "Работа",
         nodeType: "WORK",
@@ -59,6 +61,8 @@ describe("operational maintenance catalog adapter", () => {
         photoRequired: false,
         includeInEstimate: true,
         commonItem: false,
+        furnitureCategory: false,
+        furnitureEquipment: null,
         comment: null,
       },
     ])
@@ -86,7 +90,10 @@ describe("operational maintenance catalog adapter", () => {
     expect(snapshot.nodes[0]).toMatchObject({
       id: nodeId,
       catalogVersionId: versionId,
+      mediaOwnerId,
       nodeType: "WORK",
+      furnitureCategory: false,
+      furnitureEquipment: null,
     })
     expect(snapshot).not.toHaveProperty("seedMeta")
     expect(snapshot.nodes[0]).not.toHaveProperty("defaultQuantity")

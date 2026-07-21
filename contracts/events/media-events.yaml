@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: RWMS Media Events
-  version: 1.2.0
+  version: 1.3.0
   description: >-
     PostgreSQL is the replay authority. Facts and processing requests use
     separate schemas and aggregate families. Delivery is at-least-once.
@@ -13,7 +13,11 @@ servers:
 channels:
   mediaFacts:
     address: rwms.media.media.v1
-    description: Keyed by mediaId; aggregate versions preserve per-media order.
+    description: >-
+      Keyed by mediaId; aggregate versions preserve per-media order. Owner types
+      cover inventory, cabin, maintenance and logistics scopes. Logistics facts
+      retain the server-derived documentId:lineId identity; browsers never
+      construct or submit that composite value.
     messages:
       mediaFactV1: { $ref: '#/components/messages/MediaFactV1' }
   processingRequests:

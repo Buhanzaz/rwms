@@ -5,10 +5,12 @@ import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.PlanStageIn
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.RoutingSnapshot;
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.VersionCommand;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.maintenance.domain.RentalItemFactProjection;
@@ -156,6 +158,124 @@ class MaintenanceTaskCorrelationRecoveryIntegrationTest {
         .isOne();
   }
 
+  @Test
+  void partialRentalItemEventAdvancesProjectionAndRepairQueuesAgainstTheLatestVersion() {
+    UUID rentalItemId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    stageAndProcess(
+        inbox,
+        rentalItemState(
+            rentalItemId, warehouseId, "NEW", 0, "asset.rental-item.created.v1"));
+    stageAndProcess(
+        inbox,
+        rentalItemState(
+            rentalItemId, warehouseId, "FREE", 1, "asset.rental-item.status-changed.v1"));
+    stageAndProcess(inbox, rentalItemComment(rentalItemId, 2));
+
+    RentalItemFactProjection fact = rentalItemFacts.findById(rentalItemId).orElseThrow();
+    assertThat(fact.getAggregateVersion()).isEqualTo(2);
+    assertThat(fact.getWarehouseId()).isEqualTo(warehouseId);
+    assertThat(fact.getAssetStatus()).isEqualTo("FREE");
+
+    var created =
+        service.createDirectRepair(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            new CreateDirectRepairRequest(
+                warehouseId,
+                rentalItemId,
+                LocalDate.of(2026, 7, 19),
+                null,
+                List.of(
+                    new PlanStageInput(
+                        UUID.randomUUID(),
+                        RepairStageKind.REPAIR_WORK,
+                        0,
+                        new RoutingSnapshot(UUID.randomUUID(), "REPAIR", "REPAIR"),
+                        null)),
+                List.of()));
+    UUID repairId = created.response().id();
+    assertThat(repairs.findById(repairId).orElseThrow().getRentalItemVersionSnapshot())
+        .isEqualTo(2);
+
+    UUID leaseId = UUID.randomUUID();
+    when(dependencies.getRentalItemSnapshot(rentalItemId))
+        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
+            rentalItemId, 2, warehouseId, "FREE"));
+    when(
+            dependencies.acquireLease(
+                any(), eq(rentalItemId), eq(2L), eq("MAINTENANCE_REPAIR"), eq(repairId.toString())))
+        .thenReturn(
+            new MaintenanceDependencyGateway.LeaseSnapshot(
+                leaseId,
+                0,
+                rentalItemId,
+                "MAINTENANCE_REPAIR",
+                repairId,
+                21,
+                OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15)));
+    when(
+            dependencies.fencedStatus(
+                any(),
+                eq(rentalItemId),
+                eq(warehouseId),
+                eq(2L),
+                eq(leaseId),
+                eq(21L),
+                eq("MAINTENANCE_REPAIR"),
+                eq(repairId.toString()),
+                eq("QUEUE_TO_REPAIR"),
+                eq(false)))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                rentalItemId, 3, warehouseId, "REPAIR"));
+
+    service.queueRepair(
+        UUID.randomUUID(), UUID.randomUUID(), repairId, new VersionCommand(0L));
+    assertThat(service.reconcileOneTask()).isTrue();
+
+    assertThat(repairs.findById(repairId).orElseThrow().getExecutionState())
+        .isEqualTo(RepairExecutionState.QUEUED);
+    verify(dependencies)
+        .acquireLease(
+            any(), eq(rentalItemId), eq(2L), eq("MAINTENANCE_REPAIR"), eq(repairId.toString()));
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select state from integration_reconciliation
+                where repair_id=? and operation_type='QUEUE_REPAIR'
+                """,
+                String.class,
+                repairId))
+        .isEqualTo("CONFIRMED");
+  }
+
+  @Test
+  void partialRentalItemEventWithoutExistingProjectionFailsClosed() {
+    UUID rentalItemId = UUID.randomUUID();
+    var event = rentalItemComment(rentalItemId, 0);
+    staging.stage(event);
+
+    assertThatThrownBy(() -> inbox.process(event))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("Partial rental-item fact cannot initialize the maintenance projection");
+
+    assertThat(rentalItemFacts.findById(rentalItemId)).isEmpty();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from inbox_message where event_id=?", Integer.class, event.eventId()))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from consumer_aggregate_checkpoint
+                where aggregate_type='RENTAL_ITEM' and aggregate_id=?
+                """,
+                Integer.class,
+                rentalItemId.toString()))
+        .isZero();
+  }
+
   private RepairFixture createRegisteredRepair(int stageCount) {
     UUID warehouseId = UUID.randomUUID();
     UUID rentalItemId = UUID.randomUUID();
@@ -185,6 +305,9 @@ class MaintenanceTaskCorrelationRecoveryIntegrationTest {
     UUID repairId = created.response().id();
     UUID externalTaskId = created.response().plan().stages().getFirst().taskSync().externalTaskId();
     UUID leaseId = UUID.randomUUID();
+    when(dependencies.getRentalItemSnapshot(rentalItemId))
+        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
+            rentalItemId, 7, warehouseId, "FREE"));
     when(
             dependencies.acquireLease(
                 any(),
@@ -317,6 +440,62 @@ class MaintenanceTaskCorrelationRecoveryIntegrationTest {
     return validator.validate(
         MaintenanceTransportTopics.QUEUE_ENTRY,
         queueEntryId.toString().getBytes(StandardCharsets.UTF_8),
+        raw);
+  }
+
+  private MaintenanceInboundEnvelopeValidator.ValidatedInboundEvent rentalItemState(
+      UUID rentalItemId,
+      UUID warehouseId,
+      String status,
+      long version,
+      String eventType) {
+    byte[] raw =
+        json(
+            """
+            {
+              "envelopeVersion":2,"eventId":"%s","eventType":"%s","eventVersion":1,
+              "occurredAt":"2026-07-19T00:00:00Z","recordedAt":"2026-07-19T00:00:00Z",
+              "producer":"asset-service","aggregateType":"RENTAL_ITEM","aggregateId":"%s",
+              "aggregateVersion":%d,"correlation":{"correlationId":"%s","causationId":null},
+              "actorRef":null,"payload":{"rentalItemId":"%s","warehouseId":"%s",
+              "status":"%s","numberSha256":"%s"}
+            }
+            """
+                .formatted(
+                    UUID.randomUUID(),
+                    eventType,
+                    rentalItemId,
+                    version,
+                    UUID.randomUUID(),
+                    rentalItemId,
+                    warehouseId,
+                    status,
+                    "0".repeat(64)));
+    return validator.validate(
+        MaintenanceTransportTopics.RENTAL_ITEM,
+        rentalItemId.toString().getBytes(StandardCharsets.UTF_8),
+        raw);
+  }
+
+  private MaintenanceInboundEnvelopeValidator.ValidatedInboundEvent rentalItemComment(
+      UUID rentalItemId, long version) {
+    byte[] raw =
+        json(
+            """
+            {
+              "envelopeVersion":2,"eventId":"%s",
+              "eventType":"asset.rental-item.general-comment-changed.v1","eventVersion":1,
+              "occurredAt":"2026-07-19T00:00:00Z","recordedAt":"2026-07-19T00:00:00Z",
+              "producer":"asset-service","aggregateType":"RENTAL_ITEM","aggregateId":"%s",
+              "aggregateVersion":%d,"correlation":{"correlationId":"%s","causationId":null},
+              "actorRef":null,"payload":{"rentalItemId":"%s","commentRevision":1}
+            }
+            """
+                .formatted(
+                    UUID.randomUUID(), rentalItemId, version, UUID.randomUUID(), rentalItemId));
+    return validator.validate(
+        MaintenanceTransportTopics.RENTAL_ITEM,
+        rentalItemId.toString().getBytes(StandardCharsets.UTF_8),
         raw);
   }
 

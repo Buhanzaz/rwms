@@ -1,6 +1,8 @@
 package dev.buhanzaz.rwms.auth.config;
 
+import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.KeyUse;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
 import com.nimbusds.jose.jwk.source.JWKSource;
@@ -94,7 +96,11 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 public class AuthorizationServerConfiguration {
     private static final String MAINTENANCE_CLIENT_ID = "maintenance-service";
     private static final Set<String> MAINTENANCE_DOWNSTREAM_SCOPES =
-            Set.of("asset.maintenance", "task-board.task-sync");
+            Set.of(
+                    "asset.maintenance",
+                    "task-board.task-sync",
+                    "queue-registry.write",
+                    "media.maintenance");
 
     @Bean
     PasswordEncoder passwordEncoder() {
@@ -271,6 +277,8 @@ public class AuthorizationServerConfiguration {
         http.securityMatcher("/api/**")
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/users/actor-displays")
+                        .hasRole("USER")
                         .requestMatchers("/api/internal/worker-credentials/**")
                         .access((authentication, context) -> {
                             Set<String> authorities = authentication.get().getAuthorities().stream()
@@ -351,6 +359,7 @@ public class AuthorizationServerConfiguration {
     JwtAuthenticationConverter jwtAuthenticationConverter() {
         var scopeConverter = new JwtGrantedAuthoritiesConverter();
         var converter = new JwtAuthenticationConverter();
+        converter.setPrincipalClaimName("preferred_username");
         converter.setJwtGrantedAuthoritiesConverter(jwt -> {
             List<GrantedAuthority> authorities = new ArrayList<>(scopeConverter.convert(jwt));
             String role = jwt.getClaimAsString("global_role");
@@ -419,6 +428,7 @@ public class AuthorizationServerConfiguration {
             }
             validateClientPrincipal(
                     clientId, subject.getPrincipalType(), oauthClients);
+            context.getClaims().subject(subject.getId().toString());
             context.getClaims().claim("preferred_username", profile.username());
             context.getClaims().claim("principal_type", subject.getPrincipalType().name());
             if (subject.getPrincipalType() == PrincipalType.USER) {
@@ -507,6 +517,8 @@ public class AuthorizationServerConfiguration {
             var certificate = keyStore.getCertificate(properties.signingKeyAlias());
             return new RSAKey.Builder((RSAPublicKey) certificate.getPublicKey())
                     .privateKey((RSAPrivateKey) privateKey)
+                    .keyUse(KeyUse.SIGNATURE)
+                    .algorithm(JWSAlgorithm.RS256)
                     .keyID(properties.signingKeyAlias())
                     .build();
         } catch (Exception exception) {
@@ -521,6 +533,8 @@ public class AuthorizationServerConfiguration {
             KeyPair keyPair = generator.generateKeyPair();
             return new RSAKey.Builder((RSAPublicKey) keyPair.getPublic())
                     .privateKey((RSAPrivateKey) keyPair.getPrivate())
+                    .keyUse(KeyUse.SIGNATURE)
+                    .algorithm(JWSAlgorithm.RS256)
                     .keyID(UUID.randomUUID().toString())
                     .build();
         } catch (Exception exception) {

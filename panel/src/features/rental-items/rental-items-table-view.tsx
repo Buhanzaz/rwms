@@ -1,5 +1,5 @@
 /* eslint-disable react-hooks/incompatible-library -- TanStack Table returns imperative helpers that React Compiler intentionally skips. */
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, type ReactNode } from "react"
 import {
   flexRender,
   getCoreRowModel,
@@ -14,7 +14,11 @@ import {
   type VisibilityState,
 } from "@tanstack/react-table"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Image01Icon } from "@hugeicons/core-free-icons"
+import {
+  Exchange01Icon,
+  Image01Icon,
+  WarehouseIcon,
+} from "@hugeicons/core-free-icons"
 
 import {
   GRID_CELL_CLASS,
@@ -28,7 +32,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import { Button } from "@/components/ui/button"
+import type { CabinCoverProjection } from "@/features/media/media-service"
+import { AddContentsDialog } from "@/features/rental-items/add-contents-dialog"
+import { MoveContentsToRentalItemDialog } from "@/features/rental-items/move-contents-to-rental-item-dialog"
+import { MoveContentsToStockDialog } from "@/features/rental-items/move-contents-to-stock-dialog"
 import { RentalItemStatusBadge } from "@/features/rental-items/rental-item-status-badge"
+import type { RentalItemCoverAvailability } from "@/features/rental-items/use-rental-item-covers"
 import {
   formatRentalItemContents,
   formatRentalItemFieldValue,
@@ -48,6 +58,10 @@ type RentalItemsTableViewProps = {
   loading?: boolean
   isLoading?: boolean
   columnsConfig: RentalItemsColumnConfig[]
+  canManageContents?: boolean
+  mediaCovers: ReadonlyMap<string, CabinCoverProjection>
+  coverAvailability?: RentalItemCoverAvailability
+  renderItemActions?: (item: RentalItemDto) => ReactNode
 }
 
 type PersistedRentalItemsTableState = {
@@ -214,7 +228,17 @@ export function ExpandableTextCell({
   )
 }
 
-function ContentsPopoverBody({ item }: { item: RentalItemDto }) {
+function ContentsPopoverBody({
+  item,
+  canManageContents,
+  onMoveToRentalItem,
+  onMoveToStock,
+}: {
+  item: RentalItemDto
+  canManageContents: boolean
+  onMoveToRentalItem?: () => void
+  onMoveToStock?: () => void
+}) {
   return (
     <div className="flex max-h-[380px] flex-col">
       <div className="border-b px-3 py-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
@@ -238,23 +262,71 @@ function ContentsPopoverBody({ item }: { item: RentalItemDto }) {
         ))}
       </div>
 
-      <div className="border-t bg-background px-3 py-2 text-xs text-muted-foreground">
-        Изменение наполнения будет доступно после появления публичной операции
-        asset-service.
-      </div>
+      {canManageContents && onMoveToRentalItem && onMoveToStock ? (
+        <div className="grid gap-2 border-t bg-background p-2 sm:grid-cols-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 justify-center whitespace-nowrap"
+            onClick={onMoveToRentalItem}
+          >
+            <HugeiconsIcon icon={Exchange01Icon} data-icon="inline-start" />
+            Переместить
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 justify-center whitespace-nowrap"
+            onClick={onMoveToStock}
+          >
+            <HugeiconsIcon icon={WarehouseIcon} data-icon="inline-start" />
+            Переместить на склад
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }
 
-export function ContentsCell({ item }: { item: RentalItemDto }) {
+export function ContentsCell({
+  item,
+  open,
+  canManageContents = false,
+  onOpenChange,
+  onAddContents,
+  onMoveToRentalItem,
+  onMoveToStock,
+}: {
+  item: RentalItemDto
+  open?: boolean
+  canManageContents?: boolean
+  onOpenChange?: (open: boolean) => void
+  onAddContents?: () => void
+  onMoveToRentalItem?: () => void
+  onMoveToStock?: () => void
+}) {
   const hasRows = item.contentsItems.length > 0
 
   if (!hasRows) {
-    return <span className="text-muted-foreground">Не указано</span>
+    return canManageContents && onAddContents ? (
+      <Button
+        size="sm"
+        variant="secondary"
+        className="h-8"
+        onClick={(event) => {
+          event.stopPropagation()
+          onAddContents()
+        }}
+      >
+        Добавить
+      </Button>
+    ) : (
+      <span className="text-muted-foreground">Не указано</span>
+    )
   }
 
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -274,7 +346,12 @@ export function ContentsCell({ item }: { item: RentalItemDto }) {
           event.stopPropagation()
         }}
       >
-        <ContentsPopoverBody item={item} />
+        <ContentsPopoverBody
+          item={item}
+          canManageContents={canManageContents}
+          onMoveToRentalItem={onMoveToRentalItem}
+          onMoveToStock={onMoveToStock}
+        />
       </PopoverContent>
     </Popover>
   )
@@ -290,6 +367,10 @@ export function RentalItemsTableView({
   loading,
   isLoading,
   columnsConfig,
+  canManageContents = false,
+  mediaCovers,
+  coverAvailability = "available",
+  renderItemActions,
 }: RentalItemsTableViewProps) {
   const persistedTableState = useMemo(() => readPersistedTableState(), [])
 
@@ -321,6 +402,16 @@ export function RentalItemsTableView({
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(
     persistedTableState.columnSizing ?? {}
   )
+  const [openedContentsItemId, setOpenedContentsItemId] = useState<
+    string | null
+  >(null)
+  const [addContentsItem, setAddContentsItem] = useState<RentalItemDto | null>(
+    null
+  )
+  const [moveContentsToStockItem, setMoveContentsToStockItem] =
+    useState<RentalItemDto | null>(null)
+  const [moveContentsToRentalItem, setMoveContentsToRentalItem] =
+    useState<RentalItemDto | null>(null)
 
   const effectiveColumnSizing = useMemo<ColumnSizingState>(() => {
     return {
@@ -335,9 +426,9 @@ export function RentalItemsTableView({
     })
   }, [columnSizing])
 
-  const columns = useMemo<ColumnDef<RentalItemDto>[]>(
-    () =>
-      activeColumnsConfig.map((columnConfig) => ({
+  const columns = useMemo<ColumnDef<RentalItemDto>[]>(() => {
+    const dataColumns = activeColumnsConfig.map<ColumnDef<RentalItemDto>>(
+      (columnConfig) => ({
         id: columnConfig.id,
         accessorFn: (row) => getRentalItemSortValue(row, columnConfig.id),
         size: getColumnSize(columnConfig),
@@ -369,12 +460,28 @@ export function RentalItemsTableView({
           }
 
           if (columnConfig.id === "hasPhotos") {
-            if (item.mediaAvailability === "UNAVAILABLE") {
-              return <span className="text-muted-foreground">Недоступно</span>
-            }
-
-            if (!item.hasPhotos) {
-              return <span className="text-muted-foreground">Нет</span>
+            const photoCount =
+              item.photoCount + (mediaCovers.get(item.id)?.photoCount ?? 0)
+            if (photoCount === 0) {
+              const emptyLabel =
+                coverAvailability === "unavailable"
+                  ? "Сервис фото недоступен"
+                  : coverAvailability === "loading"
+                    ? "Загрузка фото..."
+                    : "Нет фото"
+              return (
+                <button
+                  type="button"
+                  className="text-muted-foreground hover:text-primary hover:underline"
+                  aria-label={`Открыть фото бытовки ${item.number}`}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onOpenPhotos(item)
+                  }}
+                >
+                  {emptyLabel}
+                </button>
+              )
             }
 
             return (
@@ -388,15 +495,34 @@ export function RentalItemsTableView({
               >
                 <HugeiconsIcon icon={Image01Icon} data-icon="inline-start" />
                 Да
-                <span className="text-muted-foreground">
-                  ({item.photoCount})
-                </span>
+                <span className="text-muted-foreground">({photoCount})</span>
               </button>
             )
           }
 
           if (columnConfig.id === "contents") {
-            return <ContentsCell item={item} />
+            return (
+              <ContentsCell
+                item={item}
+                open={openedContentsItemId === item.id}
+                canManageContents={canManageContents}
+                onOpenChange={(open) =>
+                  setOpenedContentsItemId(open ? item.id : null)
+                }
+                onAddContents={() => {
+                  setOpenedContentsItemId(null)
+                  setAddContentsItem(item)
+                }}
+                onMoveToRentalItem={() => {
+                  setOpenedContentsItemId(null)
+                  setMoveContentsToRentalItem(item)
+                }}
+                onMoveToStock={() => {
+                  setOpenedContentsItemId(null)
+                  setMoveContentsToStockItem(item)
+                }}
+              />
+            )
           }
 
           if (columnConfig.dataType === "boolean") {
@@ -442,9 +568,42 @@ export function RentalItemsTableView({
             <div className="truncate">{value}</div>
           )
         },
-      })),
-    [activeColumnsConfig, onOpenItem, onOpenPhotos]
-  )
+      })
+    )
+
+    if (!renderItemActions) return dataColumns
+
+    return [
+      ...dataColumns,
+      {
+        id: "actions",
+        header: "Действия",
+        size: 176,
+        minSize: 136,
+        maxSize: 240,
+        enableSorting: false,
+        enableResizing: false,
+        cell: ({ row }) => (
+          <div
+            className="flex items-center justify-end gap-1"
+            onClick={(event) => event.stopPropagation()}
+            onDoubleClick={(event) => event.stopPropagation()}
+          >
+            {renderItemActions(row.original)}
+          </div>
+        ),
+      },
+    ]
+  }, [
+    activeColumnsConfig,
+    canManageContents,
+    onOpenItem,
+    onOpenPhotos,
+    openedContentsItemId,
+    coverAvailability,
+    mediaCovers,
+    renderItemActions,
+  ])
 
   const table = useReactTable({
     data: items,
@@ -584,6 +743,31 @@ export function RentalItemsTableView({
           </table>
         </div>
       </div>
+      {canManageContents ? (
+        <>
+          <AddContentsDialog
+            item={addContentsItem}
+            open={addContentsItem !== null}
+            onOpenChange={(open) => {
+              if (!open) setAddContentsItem(null)
+            }}
+          />
+          <MoveContentsToRentalItemDialog
+            item={moveContentsToRentalItem}
+            open={moveContentsToRentalItem !== null}
+            onOpenChange={(open) => {
+              if (!open) setMoveContentsToRentalItem(null)
+            }}
+          />
+          <MoveContentsToStockDialog
+            item={moveContentsToStockItem}
+            open={moveContentsToStockItem !== null}
+            onOpenChange={(open) => {
+              if (!open) setMoveContentsToStockItem(null)
+            }}
+          />
+        </>
+      ) : null}
     </>
   )
 }

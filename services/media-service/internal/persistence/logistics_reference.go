@@ -42,9 +42,8 @@ func LogisticsOwnerID(documentID, lineID uuid.UUID) string {
 }
 
 // ValidateLogisticsReferences is a read-only receiver boundary. It deliberately
-// reads media_asset directly and does not use the Stage 7 inventory owner-proof
-// projection: logistics has its own opaque owner types and this call neither
-// creates an owner binding nor changes an asset, object, event or outbox row.
+// shares the same logistics owner-proof projection as the public media paths;
+// it never creates a binding or changes an asset, object, event or outbox row.
 func (repository *Repository) ValidateLogisticsReferences(
 	ctx context.Context,
 	command ValidateLogisticsReferencesCommand,
@@ -83,7 +82,20 @@ func (repository *Repository) ValidateLogisticsReferences(
 		 and asset.processing_status = 'READY'
 		 and asset.current_generation = requested.generation
 		 and asset.current_generation > 0
-		 and asset.deleted_at is null`,
+		 and asset.deleted_at is null
+		join media_owner_binding binding
+		  on binding.owner_type=asset.owner_type and binding.owner_id=asset.owner_id
+		 and binding.warehouse_id=asset.warehouse_id and binding.active
+		join media_consumer_aggregate_checkpoint checkpoint
+		  on checkpoint.consumer_name=binding.proof_consumer_name
+		 and checkpoint.aggregate_type=binding.proof_aggregate_type
+		 and checkpoint.aggregate_id=binding.proof_aggregate_id
+		 and checkpoint.aggregate_version>=binding.proof_aggregate_version
+		where not exists (select 1 from media_quarantined_aggregate quarantine
+			where quarantine.consumer_name=binding.proof_consumer_name
+			  and quarantine.aggregate_type=binding.proof_aggregate_type
+			  and quarantine.aggregate_id=binding.proof_aggregate_id
+			  and quarantine.reconciled_at is null)`,
 		mediaIDs, generations, command.OwnerType, command.OwnerID, command.WarehouseID,
 	).Scan(&matched)
 	if err != nil {

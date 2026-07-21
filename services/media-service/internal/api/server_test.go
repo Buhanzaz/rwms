@@ -97,12 +97,12 @@ func TestCreateUploadReturnsOnlySameOriginContentPath(t *testing.T) {
 		}
 	}
 	if repository.createCalls != 1 || repository.createCommand.OwnerID != ownerID.String() ||
-		repository.createCommand.WarehouseID != warehouseID {
+		repository.createCommand.WarehouseID != warehouseID ||
+		repository.createCommand.FolderID != repository.createCommand.MediaID {
 		t.Fatalf("create command = %#v, calls=%d", repository.createCommand, repository.createCalls)
 	}
 
 	invalidBody := strings.Replace(body, `"INVENTORY_FINDING"`, `"MAINTENANCE_ESTIMATE"`, 1)
-	invalidBody = strings.Replace(invalidBody, `"INSPECTION"`, `"ESTIMATE"`, 1)
 	invalidRequest := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(invalidBody))
 	invalidRequest.Header.Set("Authorization", "Bearer test")
 	invalidRequest.Header.Set("Idempotency-Key", uuid.NewString())
@@ -110,6 +110,210 @@ func TestCreateUploadReturnsOnlySameOriginContentPath(t *testing.T) {
 	server.Handler().ServeHTTP(invalidResponse, invalidRequest)
 	if invalidResponse.Code != http.StatusBadRequest || repository.createCalls != 1 {
 		t.Fatalf("unproved owner response = %d %s; create calls=%d", invalidResponse.Code, invalidResponse.Body.String(), repository.createCalls)
+	}
+}
+
+func TestCabinUploadUsesTheWarehouseOwnerScope(t *testing.T) {
+	warehouseID, cabinID, subjectID := uuid.New(), uuid.New(), uuid.New()
+	folderID := uuid.New()
+	repository := &repositoryStub{createAsset: persistence.AssetRecord{
+		ID: uuid.New(), UploadSessionID: uuid.New(), UploadExpiresAt: time.Now().Add(time.Minute),
+	}}
+	principal := auth.Principal{
+		SubjectID: subjectID, Scopes: map[string]struct{}{"rwms.write": {}},
+		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.Edit}},
+	}
+	server := newTestServer(t, repository, validatorStub{principal: principal}, &storeStub{})
+	body := fmt.Sprintf(`{"ownerType":"CABIN","ownerId":"%s","warehouseId":"%s","context":"WAREHOUSE","folderId":"%s","fileName":"cabin.jpg","contentType":"image/jpeg","contentLength":128,"checksumSha256":"%s","sortOrder":0}`,
+		cabinID, warehouseID, folderID, strings.Repeat("a", 64))
+	request := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer test")
+	request.Header.Set("Idempotency-Key", uuid.NewString())
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("cabin upload response = %d %s", response.Code, response.Body.String())
+	}
+	if repository.createCalls != 1 || repository.createCommand.OwnerType != persistence.OwnerTypeCabin ||
+		repository.createCommand.OwnerID != cabinID.String() || repository.createCommand.WarehouseID != warehouseID ||
+		repository.createCommand.FolderID != folderID {
+		t.Fatalf("cabin create command = %#v, calls=%d", repository.createCommand, repository.createCalls)
+	}
+}
+
+func TestLogisticsTransferUploadDerivesOwnerAndRequiresDestinationWarehouse(t *testing.T) {
+	destinationWarehouseID, sourceWarehouseID := uuid.New(), uuid.New()
+	documentID, lineID, subjectID := uuid.New(), uuid.New(), uuid.New()
+	repository := &repositoryStub{createAsset: persistence.AssetRecord{
+		ID: uuid.New(), UploadSessionID: uuid.New(), UploadExpiresAt: time.Now().Add(time.Minute),
+	}}
+	principal := auth.Principal{
+		SubjectID: subjectID, Scopes: map[string]struct{}{"rwms.write": {}},
+		Grants: []auth.WarehouseGrant{{WarehouseID: destinationWarehouseID, Level: auth.Edit}},
+	}
+	server := newTestServer(t, repository, validatorStub{principal: principal}, &storeStub{})
+	body := fmt.Sprintf(`{"ownerType":"LOGISTICS_TRANSFER","documentId":"%s","lineId":"%s","warehouseId":"%s","context":"TRANSFER","fileName":"arrival.jpg","contentType":"image/jpeg","contentLength":128,"checksumSha256":"%s"}`,
+		documentID, lineID, destinationWarehouseID, strings.Repeat("a", 64))
+	request := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer test")
+	request.Header.Set("Idempotency-Key", uuid.NewString())
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("destination upload response = %d %s", response.Code, response.Body.String())
+	}
+	if repository.createCalls != 1 || repository.createCommand.OwnerType != persistence.OwnerTypeLogisticsTransfer ||
+		repository.createCommand.OwnerID != persistence.LogisticsOwnerID(documentID, lineID) ||
+		repository.createCommand.WarehouseID != destinationWarehouseID {
+		t.Fatalf("logistics destination command = %#v, calls=%d", repository.createCommand, repository.createCalls)
+	}
+
+	wrongWarehouseBody := strings.Replace(body, destinationWarehouseID.String(), sourceWarehouseID.String(), 1)
+	wrongRequest := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(wrongWarehouseBody))
+	wrongRequest.Header.Set("Authorization", "Bearer test")
+	wrongRequest.Header.Set("Idempotency-Key", uuid.NewString())
+	wrongResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(wrongResponse, wrongRequest)
+	if wrongResponse.Code != http.StatusForbidden || repository.createCalls != 1 {
+		t.Fatalf("source warehouse response = %d %s; create calls=%d", wrongResponse.Code,
+			wrongResponse.Body.String(), repository.createCalls)
+	}
+
+	compositeBody := strings.Replace(body, `"documentId":"`+documentID.String()+`","lineId":"`+lineID.String()+`"`,
+		`"ownerId":"`+persistence.LogisticsOwnerID(documentID, lineID)+`"`, 1)
+	compositeRequest := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(compositeBody))
+	compositeRequest.Header.Set("Authorization", "Bearer test")
+	compositeRequest.Header.Set("Idempotency-Key", uuid.NewString())
+	compositeResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(compositeResponse, compositeRequest)
+	if compositeResponse.Code != http.StatusBadRequest || repository.createCalls != 1 {
+		t.Fatalf("browser composite response = %d %s; create calls=%d", compositeResponse.Code,
+			compositeResponse.Body.String(), repository.createCalls)
+	}
+}
+
+func TestPublicOwnerScopeRequiresCanonicalOwnerContextPair(t *testing.T) {
+	for _, testCase := range []struct {
+		ownerType string
+		context   string
+		valid     bool
+	}{
+		{ownerType: persistence.OwnerTypeInventoryFinding, context: persistence.ViewerContextInspection, valid: true},
+		{ownerType: persistence.OwnerTypeCabin, context: persistence.ViewerContextWarehouse, valid: true},
+		{ownerType: persistence.OwnerTypeMaintenanceEstimate, context: persistence.ViewerContextEstimate, valid: true},
+		{ownerType: persistence.OwnerTypeMaintenanceRepair, context: persistence.ViewerContextRepair, valid: true},
+		{ownerType: persistence.OwnerTypeMaintenanceAcceptance, context: persistence.ViewerContextAcceptance, valid: true},
+		{ownerType: persistence.OwnerTypeMaintenanceCatalogNode, context: persistence.ViewerContextCatalog, valid: true},
+		{ownerType: persistence.OwnerTypeLogisticsReturn, context: persistence.ViewerContextReturnInspection, valid: true},
+		{ownerType: persistence.OwnerTypeLogisticsShipment, context: persistence.ViewerContextShipment, valid: true},
+		{ownerType: persistence.OwnerTypeLogisticsTransfer, context: persistence.ViewerContextTransfer, valid: true},
+		{ownerType: persistence.OwnerTypeInventoryFinding, context: persistence.ViewerContextWarehouse},
+		{ownerType: persistence.OwnerTypeCabin, context: persistence.ViewerContextInspection},
+		{ownerType: persistence.OwnerTypeMaintenanceEstimate, context: persistence.ViewerContextRepair},
+	} {
+		if got := validPublicOwnerScope(testCase.ownerType, testCase.context); got != testCase.valid {
+			t.Errorf("validPublicOwnerScope(%q, %q) = %v, want %v", testCase.ownerType, testCase.context, got, testCase.valid)
+		}
+	}
+}
+
+func TestCabinCoverBatchIsBoundedWarehouseScopedAndCountsAssets(t *testing.T) {
+	warehouseID, foreignWarehouseID := uuid.New(), uuid.New()
+	firstCabinID, secondCabinID := uuid.New(), uuid.New()
+	firstMediaID, secondMediaID := uuid.New(), uuid.New()
+	width, height := 360, 240
+	firstVariant := persistence.VariantRecord{
+		Variant: media.VariantSmall, ObjectVersionID: "small-version-1", ContentType: "image/webp",
+		SizeBytes: 32, Width: &width, Height: &height, Checksum: strings.Repeat("a", 64),
+	}
+	secondVariant := persistence.VariantRecord{
+		Variant: media.VariantSmall, ObjectVersionID: "small-version-2", ContentType: "image/webp",
+		SizeBytes: 48, Width: &width, Height: &height, Checksum: strings.Repeat("b", 64),
+	}
+	repository := &repositoryStub{cabinCoverRecords: []persistence.CabinCoverRecord{
+		{
+			CabinID: firstCabinID, PhotoCount: 3,
+			Previews: []persistence.CabinPreviewRecord{
+				{MediaID: firstMediaID, Generation: 3, Variant: firstVariant},
+				{MediaID: secondMediaID, Generation: 1, Variant: secondVariant},
+			},
+		},
+		{CabinID: secondCabinID, PhotoCount: 1},
+	}}
+	principal := auth.Principal{
+		SubjectID: uuid.New(), Scopes: map[string]struct{}{"rwms.read": {}},
+		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.View}},
+	}
+	server := newTestServer(t, repository, validatorStub{principal: principal}, &storeStub{})
+	body := fmt.Sprintf(`{"warehouseId":"%s","cabinIds":["%s","%s"]}`,
+		warehouseID, firstCabinID, secondCabinID)
+	request := httptest.NewRequest(http.MethodPost, "/api/media/v1/cabin-covers", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer test")
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("cabin covers response = %d %s", response.Code, response.Body.String())
+	}
+	if repository.cabinCoverCalls != 1 || repository.cabinCoverWarehouseID != warehouseID ||
+		len(repository.cabinCoverIDs) != 2 || repository.cabinCoverIDs[0] != firstCabinID ||
+		repository.cabinCoverIDs[1] != secondCabinID {
+		t.Fatalf("cabin cover repository call = %d %s %#v", repository.cabinCoverCalls,
+			repository.cabinCoverWarehouseID, repository.cabinCoverIDs)
+	}
+	var payload struct {
+		Items []struct {
+			CabinID    uuid.UUID        `json:"cabinId"`
+			PhotoCount int64            `json:"photoCount"`
+			Cover      map[string]any   `json:"cover"`
+			Previews   []map[string]any `json:"previews"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode cabin covers: %v", err)
+	}
+	if len(payload.Items) != 2 || payload.Items[0].CabinID != firstCabinID ||
+		payload.Items[0].PhotoCount != 3 || payload.Items[0].Cover["kind"] != "SMALL" ||
+		len(payload.Items[0].Previews) != 2 ||
+		payload.Items[0].Previews[0]["mediaId"] != firstMediaID.String() ||
+		payload.Items[0].Previews[1]["mediaId"] != secondMediaID.String() ||
+		payload.Items[1].CabinID != secondCabinID || payload.Items[1].PhotoCount != 1 ||
+		payload.Items[1].Cover != nil || len(payload.Items[1].Previews) != 0 {
+		t.Fatalf("cabin cover payload = %#v", payload.Items)
+	}
+	path, _ := payload.Items[0].Cover["contentPath"].(string)
+	if !strings.Contains(path, "/api/media/v1/assets/"+firstMediaID.String()+"/variants/SMALL/content?") ||
+		!strings.Contains(path, "ownerId="+firstCabinID.String()) || strings.Contains(path, "ORIGINAL") {
+		t.Fatalf("cabin cover content path = %q", path)
+	}
+	if payload.Items[0].Cover["contentPath"] != payload.Items[0].Previews[0]["contentPath"] {
+		t.Fatalf("cover is not first preview: %#v", payload.Items[0])
+	}
+
+	forbiddenBody := fmt.Sprintf(`{"warehouseId":"%s","cabinIds":["%s"]}`,
+		foreignWarehouseID, firstCabinID)
+	forbiddenRequest := httptest.NewRequest(http.MethodPost, "/api/media/v1/cabin-covers", strings.NewReader(forbiddenBody))
+	forbiddenRequest.Header.Set("Authorization", "Bearer test")
+	forbiddenResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(forbiddenResponse, forbiddenRequest)
+	if forbiddenResponse.Code != http.StatusForbidden || repository.cabinCoverCalls != 1 {
+		t.Fatalf("foreign warehouse cover response = %d %s; calls=%d", forbiddenResponse.Code,
+			forbiddenResponse.Body.String(), repository.cabinCoverCalls)
+	}
+
+	duplicateRequest := httptest.NewRequest(http.MethodPost, "/api/media/v1/cabin-covers",
+		strings.NewReader(fmt.Sprintf(`{"warehouseId":"%s","cabinIds":["%s","%s"]}`,
+			warehouseID, firstCabinID, firstCabinID)))
+	duplicateRequest.Header.Set("Authorization", "Bearer test")
+	duplicateResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(duplicateResponse, duplicateRequest)
+	if duplicateResponse.Code != http.StatusBadRequest || repository.cabinCoverCalls != 1 {
+		t.Fatalf("duplicate cover response = %d %s; calls=%d", duplicateResponse.Code,
+			duplicateResponse.Body.String(), repository.cabinCoverCalls)
 	}
 }
 
@@ -230,6 +434,89 @@ func TestUploadContentStreamsFinalizesAndReplaysExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestUploadContentAcceptsChunkedBodyOnlyWhenExact(t *testing.T) {
+	warehouseID, subjectID := uuid.New(), uuid.New()
+	exactBody := []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01}
+	exactSum := sha256.Sum256(exactBody)
+	exactChecksum := hex.EncodeToString(exactSum[:])
+	principal := auth.Principal{
+		SubjectID: subjectID, Scopes: map[string]struct{}{"rwms.write": {}},
+		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.Edit}},
+	}
+	tests := []struct {
+		name             string
+		body             []byte
+		expectedChecksum string
+		contentLength    int64
+		wantStatus       int
+		wantPutCalls     int
+		wantFinalize     int
+	}{
+		{name: "chunked exact", body: exactBody, expectedChecksum: exactChecksum, contentLength: -1,
+			wantStatus: http.StatusCreated, wantPutCalls: 1, wantFinalize: 1},
+		{name: "chunked short", body: exactBody[:len(exactBody)-1], expectedChecksum: exactChecksum, contentLength: -1,
+			wantStatus: http.StatusConflict, wantPutCalls: 1},
+		{name: "chunked long", body: append(append([]byte{}, exactBody...), 0xff), expectedChecksum: exactChecksum, contentLength: -1,
+			wantStatus: http.StatusConflict, wantPutCalls: 1},
+		{name: "chunked checksum mismatch", body: exactBody, expectedChecksum: strings.Repeat("0", 64), contentLength: -1,
+			wantStatus: http.StatusConflict, wantPutCalls: 1},
+		{name: "known mismatched length", body: exactBody, expectedChecksum: exactChecksum, contentLength: int64(len(exactBody) + 1),
+			wantStatus: http.StatusConflict},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			sessionID, mediaID := uuid.New(), uuid.New()
+			asset := persistence.AssetRecord{
+				ID: mediaID, WarehouseID: warehouseID, SourceObjectKey: "private/ingress/chunked.jpg",
+				ContentType: "image/jpeg", ExpectedLength: int64(len(exactBody)), ExpectedChecksum: testCase.expectedChecksum,
+				UploadSessionID: sessionID, UploadExpiresAt: time.Now().Add(time.Minute),
+			}
+			metadata := media.ObjectMetadata{
+				SizeBytes: int64(len(exactBody)), ContentType: "image/jpeg", ETag: "etag-chunked", VersionID: "version-chunked",
+				UserMetadata: map[string]string{"sha256": testCase.expectedChecksum},
+			}
+			finalized := asset
+			finalized.SourceVersionID = metadata.VersionID
+			finalized.SourceETag = metadata.ETag
+			finalized.SourceChecksum = testCase.expectedChecksum
+			store := &storeStub{putMetadata: metadata, statMetadata: metadata, objectBody: testCase.body}
+			repository := &repositoryStub{sessionAsset: asset, finalizeAsset: finalized}
+			server := newTestServer(t, repository, validatorStub{principal: principal}, store)
+
+			request := httptest.NewRequest(http.MethodPut,
+				"/api/media/v1/upload-sessions/"+sessionID.String()+"/content", bytes.NewReader(testCase.body))
+			request.ContentLength = testCase.contentLength
+			if testCase.contentLength == -1 {
+				request.TransferEncoding = []string{"chunked"}
+			}
+			request.Header.Set("Authorization", "Bearer test")
+			request.Header.Set("Idempotency-Key", uuid.NewString())
+			request.Header.Set("Content-Type", "image/jpeg")
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+
+			if response.Code != testCase.wantStatus {
+				t.Fatalf("response = %d %s, want %d", response.Code, response.Body.String(), testCase.wantStatus)
+			}
+			if testCase.wantStatus == http.StatusConflict && !strings.Contains(response.Body.String(), `"code":"MEDIA_OBJECT_MISMATCH"`) {
+				t.Fatalf("conflict response = %s", response.Body.String())
+			}
+			if store.putCalls != testCase.wantPutCalls || repository.finalizeCalls != testCase.wantFinalize {
+				t.Fatalf("put calls = %d, finalize calls = %d; want %d, %d", store.putCalls, repository.finalizeCalls, testCase.wantPutCalls, testCase.wantFinalize)
+			}
+			if len(store.putBody) > len(exactBody) {
+				t.Fatalf("streamed %d bytes, authorized %d", len(store.putBody), len(exactBody))
+			}
+			if testCase.wantStatus == http.StatusCreated && (store.statCalls != 1 || store.getCalls != 1) {
+				t.Fatalf("immutable verification calls stat=%d get=%d", store.statCalls, store.getCalls)
+			}
+			if testCase.wantStatus != http.StatusCreated && (store.statCalls != 0 || store.getCalls != 0) {
+				t.Fatalf("failed upload reached immutable verification: stat=%d get=%d", store.statCalls, store.getCalls)
+			}
+		})
+	}
+}
+
 func TestUploadContentFailsClosedBeforeStorage(t *testing.T) {
 	warehouseID, subjectID, sessionID := uuid.New(), uuid.New(), uuid.New()
 	asset := persistence.AssetRecord{
@@ -277,8 +564,9 @@ func TestUploadContentFailsClosedBeforeStorage(t *testing.T) {
 
 func TestOwnerMediaListReturnsOnlyRelativeAuthorizedContentPaths(t *testing.T) {
 	warehouseID, ownerID, mediaID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	folderID := uuid.New()
 	asset := persistence.AssetRecord{
-		ID: mediaID, OwnerType: persistence.OwnerTypeInventoryFinding, OwnerID: ownerID.String(),
+		ID: mediaID, FolderID: folderID, OwnerType: persistence.OwnerTypeInventoryFinding, OwnerID: ownerID.String(),
 		WarehouseID: warehouseID, FileName: "finding.jpg", ContentType: "image/jpeg",
 		Kind: media.KindImage, Status: media.StatusReady, Version: 3, Generation: 2,
 		CreatedAt: time.Now(),
@@ -308,10 +596,145 @@ func TestOwnerMediaListReturnsOnlyRelativeAuthorizedContentPaths(t *testing.T) {
 	if !strings.Contains(response.Body.String(), wantPrefix) || !strings.Contains(response.Body.String(), `generation=2`) {
 		t.Fatalf("relative content path missing: %s", response.Body.String())
 	}
+	if !strings.Contains(response.Body.String(), `"folderId":"`+folderID.String()+`"`) {
+		t.Fatalf("logical folder missing: %s", response.Body.String())
+	}
 	for _, forbidden := range []string{"private/minio-secret-key", "secret-version", "http://", "https://", `"url"`} {
 		if strings.Contains(strings.ToLower(response.Body.String()), strings.ToLower(forbidden)) {
 			t.Fatalf("list response leaked %q: %s", forbidden, response.Body.String())
 		}
+	}
+}
+
+func TestSafeVariantContentPathKeepsTheCanonicalOwnerContext(t *testing.T) {
+	warehouseID, ownerID := uuid.New(), uuid.New()
+	for _, testCase := range []struct {
+		ownerType string
+		context   string
+	}{
+		{ownerType: persistence.OwnerTypeInventoryFinding, context: persistence.ViewerContextInspection},
+		{ownerType: persistence.OwnerTypeCabin, context: persistence.ViewerContextWarehouse},
+	} {
+		record := persistence.AssetWithVariants{
+			Asset: persistence.AssetRecord{ID: uuid.New(), Status: media.StatusReady, Generation: 1},
+			Variants: []persistence.VariantRecord{{
+				Variant: media.VariantSmall, ObjectVersionID: "version-1", ContentType: "image/webp",
+			}},
+		}
+		variants := safeVariants(record, testCase.ownerType, ownerID.String(), warehouseID)
+		if len(variants) != 1 {
+			t.Fatalf("%s variants = %#v", testCase.ownerType, variants)
+		}
+		contentPath, ok := variants[0].(map[string]any)["contentPath"].(string)
+		if !ok || !strings.Contains(contentPath, "ownerType="+testCase.ownerType) ||
+			!strings.Contains(contentPath, "context="+testCase.context) {
+			t.Errorf("%s content path = %q", testCase.ownerType, contentPath)
+		}
+	}
+}
+
+func TestLogisticsVariantContentPathUsesStructuredIdentityOnly(t *testing.T) {
+	documentID, lineID, warehouseID := uuid.New(), uuid.New(), uuid.New()
+	record := persistence.AssetWithVariants{
+		Asset: persistence.AssetRecord{ID: uuid.New(), Status: media.StatusReady, Generation: 2},
+		Variants: []persistence.VariantRecord{{
+			Variant: media.VariantMedium, ObjectVersionID: "version-2", ContentType: "image/webp",
+		}},
+	}
+	variants := safeVariants(record, persistence.OwnerTypeLogisticsTransfer,
+		persistence.LogisticsOwnerID(documentID, lineID), warehouseID)
+	if len(variants) != 1 {
+		t.Fatalf("logistics variants = %#v", variants)
+	}
+	contentPath, _ := variants[0].(map[string]any)["contentPath"].(string)
+	for _, required := range []string{
+		"ownerType=LOGISTICS_TRANSFER", "documentId=" + documentID.String(),
+		"lineId=" + lineID.String(), "context=TRANSFER",
+	} {
+		if !strings.Contains(contentPath, required) {
+			t.Errorf("structured content path %q does not contain %q", contentPath, required)
+		}
+	}
+	if strings.Contains(contentPath, "ownerId=") || strings.Contains(contentPath,
+		persistence.LogisticsOwnerID(documentID, lineID)) {
+		t.Fatalf("structured content path exposed composite identity: %q", contentPath)
+	}
+}
+
+func TestCabinRotationUsesTheBoundWarehouseScope(t *testing.T) {
+	warehouseID, cabinID, mediaID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	repository := &repositoryStub{
+		scopedAsset: persistence.AssetRecord{
+			ID: mediaID, OwnerType: persistence.OwnerTypeCabin, OwnerID: cabinID.String(),
+			WarehouseID: warehouseID, Status: media.StatusReady, Version: 4, Generation: 1,
+		},
+		rotateAsset: persistence.AssetRecord{
+			ID: mediaID, Status: media.StatusProcessing, Version: 5, Generation: 1,
+		},
+	}
+	principal := auth.Principal{
+		SubjectID: subjectID, Scopes: map[string]struct{}{"rwms.write": {}},
+		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.Edit}},
+	}
+	server := newTestServer(t, repository, validatorStub{principal: principal}, &storeStub{})
+	path := "/api/media/v1/assets/" + mediaID.String() + "/rotation?ownerType=CABIN&ownerId=" +
+		cabinID.String() + "&warehouseId=" + warehouseID.String() + "&context=WAREHOUSE"
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"rotationDegrees":90,"expectedVersion":4}`))
+	request.Header.Set("Authorization", "Bearer test")
+	request.Header.Set("Idempotency-Key", uuid.NewString())
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("cabin rotation response = %d %s", response.Code, response.Body.String())
+	}
+	if repository.scopedCalls != 1 || repository.scopedOwnerType != persistence.OwnerTypeCabin ||
+		repository.scopedOwnerID != cabinID.String() || repository.scopedWarehouseID != warehouseID {
+		t.Fatalf("scoped lookup = type:%s owner:%s warehouse:%s calls:%d",
+			repository.scopedOwnerType, repository.scopedOwnerID, repository.scopedWarehouseID,
+			repository.scopedCalls)
+	}
+	if repository.rotateCalls != 1 || repository.rotateCommand.MediaID != mediaID ||
+		repository.rotateCommand.ExpectedVersion != 4 || repository.rotateCommand.Rotation != media.Rotation90 {
+		t.Fatalf("rotation command = %#v, calls=%d", repository.rotateCommand, repository.rotateCalls)
+	}
+}
+
+func TestOwnerScopedDeletionUsesExpectedVersionAndNeverTouchesStorage(t *testing.T) {
+	warehouseID, ownerID, mediaID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	repository := &repositoryStub{deleteAsset: persistence.AssetRecord{
+		ID: mediaID, FolderID: mediaID, OwnerType: persistence.OwnerTypeMaintenanceEstimate,
+		OwnerID: ownerID.String(), WarehouseID: warehouseID, FileName: "estimate.jpg",
+		ContentType: "image/jpeg", Kind: media.KindImage, Status: media.StatusDeleted,
+		Version: 6, CreatedAt: time.Now(),
+	}}
+	principal := auth.Principal{
+		SubjectID: subjectID, Scopes: map[string]struct{}{"rwms.write": {}},
+		Grants: []auth.WarehouseGrant{{WarehouseID: warehouseID, Level: auth.Edit}},
+	}
+	store := &storeStub{}
+	server := newTestServer(t, repository, validatorStub{principal: principal}, store)
+	path := fmt.Sprintf("/api/media/v1/assets/%s/deletion?ownerType=MAINTENANCE_ESTIMATE&ownerId=%s&warehouseId=%s&context=ESTIMATE",
+		mediaID, ownerID, warehouseID)
+	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"expectedVersion":5}`))
+	request.Header.Set("Authorization", "Bearer test")
+	request.Header.Set("Idempotency-Key", uuid.NewString())
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"status":"DELETED"`) {
+		t.Fatalf("deletion response = %d %s", response.Code, response.Body.String())
+	}
+	if repository.deleteCalls != 1 || repository.deleteCommand.MediaID != mediaID ||
+		repository.deleteCommand.OwnerType != persistence.OwnerTypeMaintenanceEstimate ||
+		repository.deleteCommand.OwnerID != ownerID.String() ||
+		repository.deleteCommand.ExpectedVersion != 5 || repository.scopedCalls != 0 {
+		t.Fatalf("delete command = %#v; delete=%d scoped=%d", repository.deleteCommand,
+			repository.deleteCalls, repository.scopedCalls)
+	}
+	if store.putCalls != 0 || store.statCalls != 0 || store.getCalls != 0 {
+		t.Fatalf("deletion touched storage: put=%d stat=%d get=%d", store.putCalls, store.statCalls, store.getCalls)
 	}
 }
 
@@ -478,6 +901,88 @@ func TestFinalizeSeparatesObjectMismatchFromStorageFailure(t *testing.T) {
 				t.Fatalf("FinalizeUpload calls = %d, want 0", repository.finalizeCalls)
 			}
 		})
+	}
+}
+
+func TestServiceOwnerProofEnforcesExactClientAndStructuredLogisticsIdentity(t *testing.T) {
+	documentID, lineID, destinationWarehouseID, proofEventID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	repository := &repositoryStub{ownerProofRecord: persistence.ServiceOwnerProofRecord{
+		SourceService: persistence.LogisticsOwnerProofService,
+		OwnerType:     persistence.OwnerTypeLogisticsTransfer, DocumentID: documentID, LineID: lineID,
+		WarehouseID: destinationWarehouseID, OwnerRevision: 4, AggregateVersion: 7,
+		ProofEventID: proofEventID, Active: true,
+	}}
+	server := newTestServer(t, repository, logisticsValidatorStub(), &storeStub{})
+	body := fmt.Sprintf(`{"ownerType":"LOGISTICS_TRANSFER","documentId":"%s","lineId":"%s","warehouseId":"%s","ownerRevision":4,"aggregateVersion":7,"proofEventId":"%s","active":true}`,
+		documentID, lineID, destinationWarehouseID, proofEventID)
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/media/v1/owner-proofs", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer test")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("owner proof response = %d %s", response.Code, response.Body.String())
+	}
+	if repository.ownerProofCalls != 1 || repository.ownerProofCommand.OwnerID != uuid.Nil ||
+		repository.ownerProofCommand.DocumentID != documentID || repository.ownerProofCommand.LineID != lineID ||
+		repository.ownerProofCommand.WarehouseID != destinationWarehouseID ||
+		repository.ownerProofCommand.SourceService != persistence.LogisticsOwnerProofService {
+		t.Fatalf("owner proof command = %#v, calls=%d", repository.ownerProofCommand, repository.ownerProofCalls)
+	}
+	for _, forbidden := range []string{"ownerId", "objectKey", "contentPath", "url", "minio"} {
+		if strings.Contains(strings.ToLower(response.Body.String()), strings.ToLower(`"`+forbidden+`"`)) {
+			t.Fatalf("owner proof response leaked %q: %s", forbidden, response.Body.String())
+		}
+	}
+
+	wrongClient := validatorStub{servicePrincipal: auth.ServicePrincipal{
+		Subject: "maintenance-service", ClientID: "maintenance-service",
+		Scopes: map[string]struct{}{persistence.MaintenanceOwnerProofScope: {}},
+	}}
+	wrongServer := newTestServer(t, &repositoryStub{}, wrongClient, &storeStub{})
+	wrongRequest := httptest.NewRequest(http.MethodPost, "/api/internal/media/v1/owner-proofs", strings.NewReader(body))
+	wrongRequest.Header.Set("Authorization", "Bearer test")
+	wrongResponse := httptest.NewRecorder()
+	wrongServer.Handler().ServeHTTP(wrongResponse, wrongRequest)
+	if wrongResponse.Code != http.StatusForbidden || !strings.Contains(wrongResponse.Body.String(), `"code":"MEDIA_FORBIDDEN"`) {
+		t.Fatalf("wrong owner proof client response = %d %s", wrongResponse.Code, wrongResponse.Body.String())
+	}
+}
+
+func TestMaintenanceOwnerProofUsesUUIDOwnerAndNeverAcceptsLogisticsShape(t *testing.T) {
+	ownerID, warehouseID, proofEventID := uuid.New(), uuid.New(), uuid.New()
+	repository := &repositoryStub{ownerProofRecord: persistence.ServiceOwnerProofRecord{
+		SourceService: persistence.MaintenanceOwnerProofService,
+		OwnerType:     persistence.OwnerTypeMaintenanceRepair, OwnerID: ownerID,
+		WarehouseID: warehouseID, OwnerRevision: 0, AggregateVersion: 0,
+		ProofEventID: proofEventID, Active: true,
+	}}
+	validator := validatorStub{servicePrincipal: auth.ServicePrincipal{
+		Subject: persistence.MaintenanceOwnerProofService, ClientID: persistence.MaintenanceOwnerProofService,
+		Scopes: map[string]struct{}{persistence.MaintenanceOwnerProofScope: {}},
+	}}
+	server := newTestServer(t, repository, validator, &storeStub{})
+	body := fmt.Sprintf(`{"ownerType":"MAINTENANCE_REPAIR","ownerId":"%s","warehouseId":"%s","ownerRevision":0,"aggregateVersion":0,"proofEventId":"%s","active":true}`,
+		ownerID, warehouseID, proofEventID)
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/media/v1/owner-proofs", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer test")
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || repository.ownerProofCalls != 1 ||
+		repository.ownerProofCommand.OwnerID != ownerID || repository.ownerProofCommand.DocumentID != uuid.Nil {
+		t.Fatalf("maintenance proof response = %d %s; command=%#v", response.Code,
+			response.Body.String(), repository.ownerProofCommand)
+	}
+
+	invalidBody := strings.Replace(body, `"ownerId":"`+ownerID.String()+`"`,
+		`"documentId":"`+uuid.NewString()+`","lineId":"`+uuid.NewString()+`"`, 1)
+	invalidRequest := httptest.NewRequest(http.MethodPost, "/api/internal/media/v1/owner-proofs", strings.NewReader(invalidBody))
+	invalidRequest.Header.Set("Authorization", "Bearer test")
+	invalidResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(invalidResponse, invalidRequest)
+	if invalidResponse.Code != http.StatusBadRequest || repository.ownerProofCalls != 1 {
+		t.Fatalf("maintenance structured proof response = %d %s; calls=%d", invalidResponse.Code,
+			invalidResponse.Body.String(), repository.ownerProofCalls)
 	}
 }
 
@@ -679,33 +1184,59 @@ func (stub validatorStub) ValidateService(context.Context, string) (auth.Service
 }
 
 type repositoryStub struct {
-	mutex             sync.Mutex
-	contentMutex      sync.Mutex
-	contentLockErr    error
-	createAsset       persistence.AssetRecord
-	createReplay      bool
-	createErr         error
-	createCalls       int
-	createCommand     persistence.CreateUploadCommand
-	sessionAsset      persistence.AssetRecord
-	sessionErr        error
-	finalizeAsset     persistence.AssetRecord
-	finalizeReplay    bool
-	finalizeErr       error
-	finalizeFunc      func(persistence.FinalizeCommand) (persistence.AssetRecord, bool, error)
-	finalizeCalls     int
-	finalizeCommands  []persistence.FinalizeCommand
-	ownerRecords      []persistence.AssetWithVariants
-	ownerReadErr      error
-	originalAsset     persistence.AssetRecord
-	originalVariant   *persistence.VariantRecord
-	originalReadErr   error
-	currentAsset      persistence.AssetRecord
-	currentVariant    *persistence.VariantRecord
-	currentReadErr    error
-	validationCalls   int
-	validationCommand persistence.ValidateLogisticsReferencesCommand
-	validationErr     error
+	mutex                 sync.Mutex
+	contentMutex          sync.Mutex
+	contentLockErr        error
+	createAsset           persistence.AssetRecord
+	createReplay          bool
+	createErr             error
+	createCalls           int
+	createCommand         persistence.CreateUploadCommand
+	sessionAsset          persistence.AssetRecord
+	sessionErr            error
+	finalizeAsset         persistence.AssetRecord
+	finalizeReplay        bool
+	finalizeErr           error
+	finalizeFunc          func(persistence.FinalizeCommand) (persistence.AssetRecord, bool, error)
+	finalizeCalls         int
+	finalizeCommands      []persistence.FinalizeCommand
+	ownerRecords          []persistence.AssetWithVariants
+	ownerReadErr          error
+	cabinCoverRecords     []persistence.CabinCoverRecord
+	cabinCoverErr         error
+	cabinCoverCalls       int
+	cabinCoverWarehouseID uuid.UUID
+	cabinCoverIDs         []uuid.UUID
+	originalAsset         persistence.AssetRecord
+	originalVariant       *persistence.VariantRecord
+	originalReadErr       error
+	currentAsset          persistence.AssetRecord
+	currentVariant        *persistence.VariantRecord
+	currentReadErr        error
+	scopedAsset           persistence.AssetRecord
+	scopedErr             error
+	scopedCalls           int
+	scopedOwnerType       string
+	scopedOwnerID         string
+	scopedWarehouseID     uuid.UUID
+	rotateAsset           persistence.AssetRecord
+	rotateReplay          bool
+	rotateErr             error
+	rotateCalls           int
+	rotateCommand         persistence.RotateCommand
+	validationCalls       int
+	validationCommand     persistence.ValidateLogisticsReferencesCommand
+	validationErr         error
+	ownerProofRecord      persistence.ServiceOwnerProofRecord
+	ownerProofReplay      bool
+	ownerProofErr         error
+	ownerProofCalls       int
+	ownerProofCommand     persistence.ServiceOwnerProofCommand
+	deleteAsset           persistence.AssetRecord
+	deleteReplay          bool
+	deleteErr             error
+	deleteCalls           int
+	deleteCommand         persistence.DeleteCommand
 }
 
 func (stub *repositoryStub) CreateUpload(_ context.Context, command persistence.CreateUploadCommand) (persistence.AssetRecord, bool, error) {
@@ -762,6 +1293,21 @@ func (stub *repositoryStub) ReadOwnerAssets(_ context.Context, _, _ string, _ uu
 	return consume(stub.ownerRecords)
 }
 
+func (stub *repositoryStub) ReadCabinCovers(_ context.Context, warehouseID uuid.UUID, cabinIDs []uuid.UUID,
+	consume func([]persistence.CabinCoverRecord) error,
+) error {
+	stub.cabinCoverCalls++
+	stub.cabinCoverWarehouseID = warehouseID
+	stub.cabinCoverIDs = append([]uuid.UUID(nil), cabinIDs...)
+	if stub.cabinCoverErr != nil {
+		return stub.cabinCoverErr
+	}
+	if stub.cabinCoverRecords == nil {
+		return errors.New("unexpected ReadCabinCovers")
+	}
+	return consume(stub.cabinCoverRecords)
+}
+
 func (stub *repositoryStub) ReadOriginal(_ context.Context, _ uuid.UUID, _, _ string, _ uuid.UUID,
 	consume func(persistence.AssetRecord, *persistence.VariantRecord) error,
 ) error {
@@ -786,8 +1332,16 @@ func (stub *repositoryStub) ReadCurrentVariant(_ context.Context, _ uuid.UUID, _
 	return consume(stub.currentAsset, stub.currentVariant)
 }
 
-func (stub *repositoryStub) GetAssetScoped(context.Context, uuid.UUID, string, string, uuid.UUID) (persistence.AssetRecord, error) {
-	return persistence.AssetRecord{}, errors.New("unexpected GetAssetScoped")
+func (stub *repositoryStub) GetAssetScoped(_ context.Context, _ uuid.UUID, ownerType, ownerID string, warehouseID uuid.UUID) (persistence.AssetRecord, error) {
+	stub.scopedCalls++
+	stub.scopedOwnerType, stub.scopedOwnerID, stub.scopedWarehouseID = ownerType, ownerID, warehouseID
+	if stub.scopedErr != nil {
+		return persistence.AssetRecord{}, stub.scopedErr
+	}
+	if stub.scopedAsset.ID == uuid.Nil {
+		return persistence.AssetRecord{}, errors.New("unexpected GetAssetScoped")
+	}
+	return stub.scopedAsset, nil
 }
 
 func (stub *repositoryStub) ValidateLogisticsReferences(_ context.Context, command persistence.ValidateLogisticsReferencesCommand) error {
@@ -798,14 +1352,46 @@ func (stub *repositoryStub) ValidateLogisticsReferences(_ context.Context, comma
 	return stub.validationErr
 }
 
+func (stub *repositoryStub) UpsertServiceOwnerProof(_ context.Context, command persistence.ServiceOwnerProofCommand) (persistence.ServiceOwnerProofRecord, bool, error) {
+	stub.ownerProofCalls++
+	stub.ownerProofCommand = command
+	if stub.ownerProofErr != nil {
+		return persistence.ServiceOwnerProofRecord{}, false, stub.ownerProofErr
+	}
+	if stub.ownerProofRecord.ProofEventID == uuid.Nil {
+		return persistence.ServiceOwnerProofRecord{}, false, errors.New("unexpected UpsertServiceOwnerProof")
+	}
+	return stub.ownerProofRecord, stub.ownerProofReplay, nil
+}
+
 func (stub *repositoryStub) validationSnapshot() (int, persistence.ValidateLogisticsReferencesCommand) {
 	stub.mutex.Lock()
 	defer stub.mutex.Unlock()
 	return stub.validationCalls, stub.validationCommand
 }
 
-func (stub *repositoryStub) Rotate(context.Context, persistence.RotateCommand) (persistence.AssetRecord, bool, error) {
-	return persistence.AssetRecord{}, false, errors.New("unexpected Rotate")
+func (stub *repositoryStub) Rotate(_ context.Context, command persistence.RotateCommand) (persistence.AssetRecord, bool, error) {
+	stub.rotateCalls++
+	stub.rotateCommand = command
+	if stub.rotateErr != nil {
+		return persistence.AssetRecord{}, false, stub.rotateErr
+	}
+	if stub.rotateAsset.ID == uuid.Nil {
+		return persistence.AssetRecord{}, false, errors.New("unexpected Rotate")
+	}
+	return stub.rotateAsset, stub.rotateReplay, nil
+}
+
+func (stub *repositoryStub) Delete(_ context.Context, command persistence.DeleteCommand) (persistence.AssetRecord, bool, error) {
+	stub.deleteCalls++
+	stub.deleteCommand = command
+	if stub.deleteErr != nil {
+		return persistence.AssetRecord{}, false, stub.deleteErr
+	}
+	if stub.deleteAsset.ID == uuid.Nil {
+		return persistence.AssetRecord{}, false, errors.New("unexpected Delete")
+	}
+	return stub.deleteAsset, stub.deleteReplay, nil
 }
 
 type storeStub struct {

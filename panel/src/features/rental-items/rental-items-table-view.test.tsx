@@ -5,8 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   ContentsCell,
   ExpandableTextCell,
+  RentalItemsTableView,
 } from "@/features/rental-items/rental-items-table-view"
-import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
+import type {
+  RentalItemDto,
+  RentalItemsColumnConfig,
+  RentalItemsTableSchema,
+} from "@/features/rental-items/model/rental-item"
 
 afterEach(cleanup)
 
@@ -36,6 +41,36 @@ function rentalItem(
     tenant: null,
     price: null,
   }
+}
+
+const numberColumn: RentalItemsColumnConfig = {
+  id: "number",
+  label: "Номер",
+  visible: true,
+  locked: true,
+  searchable: true,
+  dataType: "text",
+}
+
+const tableSchema: RentalItemsTableSchema = {
+  columns: [numberColumn],
+  filters: [],
+  searchableFieldIds: ["number"],
+}
+
+const photosColumn: RentalItemsColumnConfig = {
+  id: "hasPhotos",
+  label: "Фото",
+  visible: true,
+  locked: false,
+  searchable: false,
+  dataType: "photos",
+}
+
+const photosTableSchema: RentalItemsTableSchema = {
+  columns: [photosColumn],
+  filters: [],
+  searchableFieldIds: [],
 }
 
 describe("rental items table cells", () => {
@@ -81,21 +116,124 @@ describe("rental items table cells", () => {
     expect(screen.queryByRole("button")).toBeNull()
   })
 
-  it("renders empty contents without a browser-backed add control", () => {
+  it("keeps empty contents read-only when the user cannot manage balances", () => {
     render(<ContentsCell item={rentalItem([])} />)
 
     expect(screen.getByText("Не указано")).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Добавить" })).toBeNull()
   })
 
-  it("shows contents read-only without browser-backed move actions", async () => {
+  it("shows contents read-only when the user cannot manage balances", async () => {
     const user = userEvent.setup()
 
     render(<ContentsCell item={rentalItem([{ name: "Стол", quantity: 2 }])} />)
 
     await user.click(screen.getByRole("button", { name: "Стол 2 шт." }))
 
-    expect(screen.getByText(/Изменение наполнения будет доступно/)).toBeTruthy()
+    expect(screen.queryByText(/Изменение наполнения будет доступно/)).toBeNull()
     expect(screen.queryByRole("button", { name: /^Переместить/ })).toBeNull()
+  })
+
+  it("opens the transferred add and move actions for MANAGE access", async () => {
+    const user = userEvent.setup()
+    const onAddContents = vi.fn()
+    const onMoveToRentalItem = vi.fn()
+    const onMoveToStock = vi.fn()
+    const { rerender } = render(
+      <ContentsCell
+        item={rentalItem([])}
+        canManageContents
+        onAddContents={onAddContents}
+      />
+    )
+
+    await user.click(screen.getByRole("button", { name: "Добавить" }))
+    expect(onAddContents).toHaveBeenCalledOnce()
+
+    rerender(
+      <ContentsCell
+        item={rentalItem([{ name: "Стол", quantity: 2 }])}
+        canManageContents
+        onMoveToRentalItem={onMoveToRentalItem}
+        onMoveToStock={onMoveToStock}
+      />
+    )
+    await user.click(screen.getByRole("button", { name: "Стол 2 шт." }))
+    await user.click(
+      screen.getByRole("button", { name: "Переместить на склад" })
+    )
+    expect(onMoveToStock).toHaveBeenCalledOnce()
+  })
+})
+
+describe("rental items table actions", () => {
+  it("distinguishes an unavailable photo service from an empty archive", () => {
+    const commonProps = {
+      schema: photosTableSchema,
+      items: [rentalItem([])],
+      sorting: [],
+      onSortingChange: vi.fn(),
+      onOpenPhotos: vi.fn(),
+      onOpenItem: vi.fn(),
+      columnsConfig: [photosColumn],
+      mediaCovers: new Map(),
+    }
+    const view = render(
+      <RentalItemsTableView {...commonProps} coverAvailability="unavailable" />
+    )
+
+    expect(screen.getByText("Сервис фото недоступен")).toBeTruthy()
+
+    view.rerender(
+      <RentalItemsTableView {...commonProps} coverAvailability="available" />
+    )
+    expect(screen.getByText("Нет фото")).toBeTruthy()
+  })
+
+  it("keeps the warehouse table unchanged when no item actions are provided", () => {
+    render(
+      <RentalItemsTableView
+        schema={tableSchema}
+        items={[rentalItem([])]}
+        sorting={[]}
+        onSortingChange={vi.fn()}
+        onOpenPhotos={vi.fn()}
+        onOpenItem={vi.fn()}
+        columnsConfig={[numberColumn]}
+        mediaCovers={new Map()}
+      />
+    )
+
+    expect(screen.getByRole("columnheader", { name: "Номер" })).toBeTruthy()
+    expect(screen.queryByRole("columnheader", { name: "Действия" })).toBeNull()
+  })
+
+  it("renders optional row actions without opening the warehouse item", async () => {
+    const user = userEvent.setup()
+    const onOpenItem = vi.fn()
+
+    render(
+      <RentalItemsTableView
+        schema={tableSchema}
+        items={[rentalItem([])]}
+        sorting={[]}
+        onSortingChange={vi.fn()}
+        onOpenPhotos={vi.fn()}
+        onOpenItem={onOpenItem}
+        columnsConfig={[numberColumn]}
+        mediaCovers={new Map()}
+        renderItemActions={(item) => (
+          <button type="button">Добавить {item.number}</button>
+        )}
+      />
+    )
+
+    expect(screen.getByRole("columnheader", { name: "Действия" })).toBeTruthy()
+
+    await user.dblClick(
+      screen.getByRole("button", { name: "Добавить БЫТ-001" })
+    )
+
+    expect(onOpenItem).not.toHaveBeenCalled()
   })
 })

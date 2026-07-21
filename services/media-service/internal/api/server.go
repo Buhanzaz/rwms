@@ -47,13 +47,17 @@ type repository interface {
 	FinalizeUpload(context.Context, persistence.FinalizeCommand) (persistence.AssetRecord, bool, error)
 	ReadOwnerAssets(context.Context, string, string, uuid.UUID, int, *uuid.UUID,
 		func([]persistence.AssetWithVariants) error) error
+	ReadCabinCovers(context.Context, uuid.UUID, []uuid.UUID,
+		func([]persistence.CabinCoverRecord) error) error
 	ReadOriginal(context.Context, uuid.UUID, string, string, uuid.UUID,
 		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
 	ReadCurrentVariant(context.Context, uuid.UUID, string, string, uuid.UUID, int, media.Variant,
 		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
 	GetAssetScoped(context.Context, uuid.UUID, string, string, uuid.UUID) (persistence.AssetRecord, error)
+	UpsertServiceOwnerProof(context.Context, persistence.ServiceOwnerProofCommand) (persistence.ServiceOwnerProofRecord, bool, error)
 	ValidateLogisticsReferences(context.Context, persistence.ValidateLogisticsReferencesCommand) error
 	Rotate(context.Context, persistence.RotateCommand) (persistence.AssetRecord, bool, error)
+	Delete(context.Context, persistence.DeleteCommand) (persistence.AssetRecord, bool, error)
 }
 
 type tokenValidator interface {
@@ -70,10 +74,36 @@ type objectStore interface {
 
 var (
 	errObjectMismatch    = errors.New("uploaded object mismatch")
+	errUploadBodyLength  = errors.New("upload body length mismatch")
 	errStorageDependency = errors.New("storage dependency unavailable")
 	errMediaNotReady     = errors.New("media is not ready")
 	errOriginalMissing   = errors.New("original media is unavailable")
 )
+
+type boundedUploadReader struct {
+	source    io.Reader
+	remaining int64
+	underflow bool
+}
+
+func (reader *boundedUploadReader) Read(buffer []byte) (int, error) {
+	if len(buffer) == 0 {
+		return 0, nil
+	}
+	if reader.remaining == 0 {
+		return 0, io.EOF
+	}
+	if int64(len(buffer)) > reader.remaining {
+		buffer = buffer[:reader.remaining]
+	}
+	read, err := reader.source.Read(buffer)
+	reader.remaining -= int64(read)
+	if errors.Is(err, io.EOF) && reader.remaining > 0 {
+		reader.underflow = true
+		return read, errUploadBodyLength
+	}
+	return read, err
+}
 
 type Server struct {
 	repository repository
@@ -108,9 +138,12 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("PUT /api/media/v1/upload-sessions/{uploadSessionId}/content", server.uploadSessionContent)
 	server.mux.HandleFunc("POST /api/media/v1/upload-sessions/{uploadSessionId}/complete", server.finalizeUpload)
 	server.mux.HandleFunc("GET /api/media/v1/assets", server.listOwner)
+	server.mux.HandleFunc("POST /api/media/v1/cabin-covers", server.listCabinCovers)
 	server.mux.HandleFunc("GET /api/media/v1/assets/{mediaId}/original", server.getOriginal)
 	server.mux.HandleFunc("GET /api/media/v1/assets/{mediaId}/variants/{variant}/content", server.getVariantContent)
 	server.mux.HandleFunc("POST /api/media/v1/assets/{mediaId}/rotation", server.rotate)
+	server.mux.HandleFunc("POST /api/media/v1/assets/{mediaId}/deletion", server.deleteAsset)
+	server.mux.HandleFunc("POST /api/internal/media/v1/owner-proofs", server.upsertOwnerProof)
 	server.mux.HandleFunc("POST /api/internal/media/v1/logistics/references/validate", server.validateLogisticsReferences)
 	server.mux.HandleFunc("/health/live", server.methodNotAllowed)
 	server.mux.HandleFunc("/health/ready", server.methodNotAllowed)
@@ -118,9 +151,12 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("/api/media/v1/upload-sessions/{uploadSessionId}/content", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/upload-sessions/{uploadSessionId}/complete", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/assets", server.methodNotAllowed)
+	server.mux.HandleFunc("/api/media/v1/cabin-covers", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/assets/{mediaId}/original", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/assets/{mediaId}/variants/{variant}/content", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/assets/{mediaId}/rotation", server.methodNotAllowed)
+	server.mux.HandleFunc("/api/media/v1/assets/{mediaId}/deletion", server.methodNotAllowed)
+	server.mux.HandleFunc("/api/internal/media/v1/owner-proofs", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/internal/media/v1/logistics/references/validate", server.methodNotAllowed)
 	server.mux.HandleFunc("/", server.notFound)
 }
@@ -149,6 +185,88 @@ func (server *Server) ready(response http.ResponseWriter, request *http.Request)
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]string{"status": "UP"})
+}
+
+type serviceOwnerProofRequest struct {
+	OwnerType        string `json:"ownerType"`
+	OwnerID          string `json:"ownerId"`
+	DocumentID       string `json:"documentId"`
+	LineID           string `json:"lineId"`
+	WarehouseID      string `json:"warehouseId"`
+	OwnerRevision    *int64 `json:"ownerRevision"`
+	AggregateVersion *int64 `json:"aggregateVersion"`
+	ProofEventID     string `json:"proofEventId"`
+	Active           *bool  `json:"active"`
+}
+
+func (server *Server) upsertOwnerProof(response http.ResponseWriter, request *http.Request) {
+	principal, ok := server.servicePrincipal(response, request)
+	if !ok {
+		return
+	}
+	var body serviceOwnerProofRequest
+	if !server.decode(response, request, &body) {
+		return
+	}
+	definition, validType := persistence.ServiceOwnerScope(body.OwnerType)
+	if !validType || principal.RequireExact(definition.SourceService, definition.ServiceScope) != nil {
+		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+		return
+	}
+	warehouseID, warehouseErr := uuid.Parse(body.WarehouseID)
+	proofEventID, eventErr := uuid.Parse(body.ProofEventID)
+	if warehouseErr != nil || eventErr != nil || warehouseID == uuid.Nil || proofEventID == uuid.Nil ||
+		body.OwnerRevision == nil || *body.OwnerRevision < 0 || body.AggregateVersion == nil ||
+		*body.AggregateVersion < 0 || body.Active == nil {
+		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_OWNER_PROOF", "Invalid owner proof")
+		return
+	}
+	command := persistence.ServiceOwnerProofCommand{
+		SourceService: definition.SourceService, OwnerType: body.OwnerType,
+		WarehouseID: warehouseID, OwnerRevision: *body.OwnerRevision,
+		AggregateVersion: *body.AggregateVersion, ProofEventID: proofEventID,
+		Active: *body.Active,
+	}
+	if definition.Structured {
+		documentID, documentErr := uuid.Parse(body.DocumentID)
+		lineID, lineErr := uuid.Parse(body.LineID)
+		if body.OwnerID != "" || documentErr != nil || lineErr != nil ||
+			documentID == uuid.Nil || lineID == uuid.Nil {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_OWNER_PROOF", "Invalid owner proof")
+			return
+		}
+		command.DocumentID = documentID
+		command.LineID = lineID
+	} else {
+		ownerID, ownerErr := uuid.Parse(body.OwnerID)
+		if body.DocumentID != "" || body.LineID != "" || ownerErr != nil || ownerID == uuid.Nil {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_OWNER_PROOF", "Invalid owner proof")
+			return
+		}
+		command.OwnerID = ownerID
+	}
+	record, replayed, err := server.repository.UpsertServiceOwnerProof(request.Context(), command)
+	if err != nil {
+		server.repositoryProblem(response, request, err)
+		return
+	}
+	result := map[string]any{
+		"ownerType": record.OwnerType, "warehouseId": record.WarehouseID,
+		"ownerRevision": record.OwnerRevision, "aggregateVersion": record.AggregateVersion,
+		"proofEventId": record.ProofEventID, "active": record.Active,
+	}
+	if definition.Structured {
+		result["documentId"] = record.DocumentID
+		result["lineId"] = record.LineID
+	} else {
+		result["ownerId"] = record.OwnerID
+	}
+	status := http.StatusCreated
+	if replayed {
+		status = http.StatusOK
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	writeJSON(response, status, result)
 }
 
 type logisticsMediaReferenceRequest struct {
@@ -235,8 +353,11 @@ func (server *Server) validateLogisticsReferences(response http.ResponseWriter, 
 type createUploadRequest struct {
 	OwnerType      string `json:"ownerType"`
 	OwnerID        string `json:"ownerId"`
+	DocumentID     string `json:"documentId"`
+	LineID         string `json:"lineId"`
 	WarehouseID    string `json:"warehouseId"`
 	Context        string `json:"context"`
+	FolderID       string `json:"folderId"`
 	FileName       string `json:"fileName"`
 	ContentType    string `json:"contentType"`
 	ContentLength  int64  `json:"contentLength"`
@@ -262,12 +383,17 @@ func (server *Server) createUpload(response http.ResponseWriter, request *http.R
 		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid upload request")
 		return
 	}
-	ownerID, err := uuid.Parse(body.OwnerID)
-	if err != nil {
+	ownerID, ok := resolvePublicOwnerID(body.OwnerType, body.OwnerID, body.DocumentID, body.LineID)
+	if !ok {
 		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_OWNER", "Invalid upload owner")
 		return
 	}
-	body.OwnerID = ownerID.String()
+	if persistence.IsLogisticsOwnerType(body.OwnerType) {
+		documentID, lineID, _ := persistence.LogisticsOwnerParts(ownerID)
+		body.DocumentID, body.LineID = documentID.String(), lineID.String()
+	} else {
+		body.OwnerID = ownerID
+	}
 	if !validFileName(body.FileName) {
 		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_FILE_NAME", "Invalid file name")
 		return
@@ -292,19 +418,29 @@ func (server *Server) createUpload(response http.ResponseWriter, request *http.R
 	}
 	fileName := strings.TrimSpace(body.FileName)
 	mediaID := uuid.New()
+	folderID := mediaID
+	if body.FolderID != "" {
+		folderID, err = uuid.Parse(body.FolderID)
+		if err != nil {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid photo folder")
+			return
+		}
+		body.FolderID = folderID.String()
+	}
 	sessionID := uuid.New()
 	extension := extensionForContentType(contentType)
 	objectKey := media.IngressObjectKey(mediaID.String(), extension)
 	fingerprint := requestFingerprint(map[string]any{
-		"ownerType": body.OwnerType, "ownerId": body.OwnerID, "warehouseId": warehouseID,
-		"context":  body.Context,
+		"ownerType": body.OwnerType, "ownerId": body.OwnerID, "documentId": body.DocumentID,
+		"lineId": body.LineID, "warehouseId": warehouseID,
+		"context": body.Context, "folderId": body.FolderID,
 		"fileName": fileName, "contentType": contentType, "contentLength": body.ContentLength,
 		"checksumSha256": body.ChecksumSHA256, "sortOrder": body.SortOrder,
 	})
 	asset, replayed, err := server.repository.CreateUpload(request.Context(), persistence.CreateUploadCommand{
-		MediaID: mediaID, UploadSessionID: sessionID, SubjectID: principal.SubjectID,
+		MediaID: mediaID, FolderID: folderID, UploadSessionID: sessionID, SubjectID: principal.SubjectID,
 		IdempotencyKey: idempotencyKey, RequestSHA256: fingerprint, OwnerType: body.OwnerType,
-		OwnerID: body.OwnerID, WarehouseID: warehouseID, Kind: kind, FileName: fileName,
+		OwnerID: ownerID, WarehouseID: warehouseID, Kind: kind, FileName: fileName,
 		ContentType: contentType, ContentLength: body.ContentLength, ChecksumSHA256: body.ChecksumSHA256,
 		SortOrder: body.SortOrder, SourceObjectKey: objectKey,
 		UploadExpiresAt: time.Now().UTC().Add(server.config.UploadExpiry), CorrelationID: correlationID(request.Context()),
@@ -381,18 +517,25 @@ func (server *Server) uploadSessionContent(response http.ResponseWriter, request
 		return
 	}
 	contentType := normalizeContentType(request.Header.Get("Content-Type"))
-	if contentType != asset.ContentType || request.ContentLength != asset.ExpectedLength || request.ContentLength <= 0 || request.ContentLength > server.config.MaxUploadBytes {
+	knownLengthMismatch := request.ContentLength != -1 &&
+		(request.ContentLength <= 0 || request.ContentLength != asset.ExpectedLength || request.ContentLength > server.config.MaxUploadBytes)
+	if contentType != asset.ContentType || asset.ExpectedLength <= 0 || asset.ExpectedLength > server.config.MaxUploadBytes || knownLengthMismatch {
 		server.problem(response, request, http.StatusConflict, "MEDIA_OBJECT_MISMATCH", "Uploaded object does not match the authorized request")
 		return
 	}
 
 	hash := sha256.New()
-	source := io.TeeReader(io.LimitReader(request.Body, asset.ExpectedLength), hash)
+	bounded := &boundedUploadReader{source: request.Body, remaining: asset.ExpectedLength}
+	source := io.TeeReader(bounded, hash)
 	metadata, err := server.store.PutIngressVersion(
 		request.Context(), asset.SourceObjectKey, source, asset.ExpectedLength,
 		asset.ContentType, asset.ExpectedChecksum,
 	)
 	if err != nil {
+		if bounded.underflow || errors.Is(err, errUploadBodyLength) {
+			server.problem(response, request, http.StatusConflict, "MEDIA_OBJECT_MISMATCH", "Uploaded object does not match the authorized request")
+			return
+		}
 		server.logger.Error("stream immutable ingress object", "correlationId", correlationID(request.Context()), "error", safeError(err))
 		server.problem(response, request, http.StatusServiceUnavailable, "MEDIA_STORAGE_UNAVAILABLE", "Storage is unavailable")
 		return
@@ -404,7 +547,7 @@ func (server *Server) uploadSessionContent(response http.ResponseWriter, request
 		return
 	}
 	checksum := hex.EncodeToString(hash.Sum(nil))
-	if trailingBytes != 0 || checksum != asset.ExpectedChecksum || metadata.SizeBytes != asset.ExpectedLength ||
+	if bounded.remaining != 0 || trailingBytes != 0 || checksum != asset.ExpectedChecksum || metadata.SizeBytes != asset.ExpectedLength ||
 		normalizeContentType(metadata.ContentType) != asset.ContentType || metadata.VersionID == "" || normalizeETag(metadata.ETag) == "" {
 		server.problem(response, request, http.StatusConflict, "MEDIA_OBJECT_MISMATCH", "Uploaded object does not match the authorized request")
 		return
@@ -639,18 +782,8 @@ func (server *Server) listOwner(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	query := request.URL.Query()
-	if !validPublicOwnerScope(query.Get("ownerType"), query.Get("context")) {
-		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_CONTEXT", "Invalid owner context")
-		return
-	}
-	ownerID, err := uuid.Parse(query.Get("ownerId"))
-	if err != nil {
-		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_OWNER", "Invalid upload owner")
-		return
-	}
-	warehouseID, err := uuid.Parse(query.Get("warehouseId"))
-	if err != nil {
-		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid warehouse")
+	ownerType, ownerID, warehouseID, ok := server.ownerScope(response, request)
+	if !ok {
 		return
 	}
 	if err := principal.Require("rwms.read", warehouseID, auth.View); err != nil {
@@ -658,6 +791,7 @@ func (server *Server) listOwner(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	limit := 50
+	var err error
 	if raw := query.Get("limit"); raw != "" {
 		limit, err = strconv.Atoi(raw)
 		if err != nil || limit < 1 || limit > 100 {
@@ -676,13 +810,13 @@ func (server *Server) listOwner(response http.ResponseWriter, request *http.Requ
 	}
 	var assets []persistence.AssetRecord
 	items := make([]any, 0, limit)
-	err = server.repository.ReadOwnerAssets(request.Context(), query.Get("ownerType"),
-		ownerID.String(), warehouseID, limit, after,
+	err = server.repository.ReadOwnerAssets(request.Context(), ownerType,
+		ownerID, warehouseID, limit, after,
 		func(records []persistence.AssetWithVariants) error {
 			assets = make([]persistence.AssetRecord, len(records))
 			for index := range records {
 				assets[index] = records[index].Asset
-				variants := safeVariants(records[index], query.Get("ownerType"), ownerID.String(), warehouseID)
+				variants := safeVariants(records[index], ownerType, ownerID, warehouseID)
 				items = append(items, assetResponse(records[index].Asset, variants))
 			}
 			return nil
@@ -697,6 +831,73 @@ func (server *Server) listOwner(response http.ResponseWriter, request *http.Requ
 	}
 	response.Header().Set("Cache-Control", "no-store")
 	writeJSON(response, http.StatusOK, map[string]any{"items": items, "next": next})
+}
+
+type cabinCoversRequest struct {
+	WarehouseID string   `json:"warehouseId"`
+	CabinIDs    []string `json:"cabinIds"`
+}
+
+func (server *Server) listCabinCovers(response http.ResponseWriter, request *http.Request) {
+	principal, ok := server.principal(response, request)
+	if !ok {
+		return
+	}
+	var body cabinCoversRequest
+	if !server.decode(response, request, &body) {
+		return
+	}
+	warehouseID, err := uuid.Parse(body.WarehouseID)
+	if err != nil || len(body.CabinIDs) < 1 || len(body.CabinIDs) > 200 {
+		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid cabin cover request")
+		return
+	}
+	if err := principal.Require("rwms.read", warehouseID, auth.View); err != nil {
+		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+		return
+	}
+	cabinIDs := make([]uuid.UUID, 0, len(body.CabinIDs))
+	seen := make(map[uuid.UUID]struct{}, len(body.CabinIDs))
+	for _, value := range body.CabinIDs {
+		cabinID, parseErr := uuid.Parse(value)
+		if parseErr != nil || cabinID == uuid.Nil {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid cabin cover request")
+			return
+		}
+		if _, duplicate := seen[cabinID]; duplicate {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid cabin cover request")
+			return
+		}
+		seen[cabinID] = struct{}{}
+		cabinIDs = append(cabinIDs, cabinID)
+	}
+	items := make([]any, 0, len(cabinIDs))
+	err = server.repository.ReadCabinCovers(request.Context(), warehouseID, cabinIDs,
+		func(records []persistence.CabinCoverRecord) error {
+			for _, record := range records {
+				previews := make([]any, 0, len(record.Previews))
+				for _, preview := range record.Previews {
+					previews = append(previews, publicVariantResponse(preview.MediaID,
+						preview.Generation, preview.Variant, persistence.OwnerTypeCabin,
+						record.CabinID.String(), warehouseID))
+				}
+				var cover any
+				if len(previews) > 0 {
+					cover = previews[0]
+				}
+				items = append(items, map[string]any{
+					"cabinId": record.CabinID, "photoCount": record.PhotoCount,
+					"cover": cover, "previews": previews,
+				})
+			}
+			return nil
+		})
+	if err != nil {
+		server.repositoryProblem(response, request, err)
+		return
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
 }
 
 func (server *Server) getOriginal(response http.ResponseWriter, request *http.Request) {
@@ -860,6 +1061,57 @@ func (server *Server) rotate(response http.ResponseWriter, request *http.Request
 	writeJSON(response, status, assetResponse(asset, nil))
 }
 
+type deletionRequest struct {
+	ExpectedVersion *int64 `json:"expectedVersion"`
+}
+
+func (server *Server) deleteAsset(response http.ResponseWriter, request *http.Request) {
+	principal, ok := server.principal(response, request)
+	if !ok {
+		return
+	}
+	ownerType, ownerID, warehouseID, ok := server.ownerScope(response, request)
+	if !ok {
+		return
+	}
+	if err := principal.Require("rwms.write", warehouseID, auth.Edit); err != nil {
+		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+		return
+	}
+	mediaID, err := uuid.Parse(request.PathValue("mediaId"))
+	if err != nil || mediaID == uuid.Nil {
+		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid media ID")
+		return
+	}
+	idempotencyKey, ok := requireUUIDHeader(response, request, "Idempotency-Key", server)
+	if !ok {
+		return
+	}
+	var body deletionRequest
+	if !server.decode(response, request, &body) {
+		return
+	}
+	if body.ExpectedVersion == nil || *body.ExpectedVersion <= 0 {
+		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid deletion request")
+		return
+	}
+	asset, _, err := server.repository.Delete(request.Context(), persistence.DeleteCommand{
+		MediaID: mediaID, OwnerType: ownerType, OwnerID: ownerID, WarehouseID: warehouseID,
+		SubjectID: principal.SubjectID, IdempotencyKey: idempotencyKey,
+		RequestSHA256: requestFingerprint(map[string]any{
+			"mediaId": mediaID, "ownerType": ownerType, "ownerId": ownerID,
+			"warehouseId": warehouseID, "expectedVersion": *body.ExpectedVersion,
+		}),
+		ExpectedVersion: *body.ExpectedVersion, CorrelationID: correlationID(request.Context()),
+	})
+	if err != nil {
+		server.repositoryProblem(response, request, err)
+		return
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	writeJSON(response, http.StatusOK, assetResponse(asset, nil))
+}
+
 func safeVariants(record persistence.AssetWithVariants, ownerType, ownerID string, warehouseID uuid.UUID) []any {
 	if record.Asset.Status != media.StatusReady || record.Asset.Generation <= 0 {
 		return []any{}
@@ -869,18 +1121,50 @@ func safeVariants(record persistence.AssetWithVariants, ownerType, ownerID strin
 		if variant.Variant == media.VariantOriginal || variant.ObjectVersionID == "" {
 			continue
 		}
-		query := make(url.Values)
-		query.Set("ownerType", ownerType)
-		query.Set("ownerId", ownerID)
-		query.Set("warehouseId", warehouseID.String())
-		query.Set("context", persistence.ViewerContextInspection)
-		query.Set("generation", strconv.Itoa(record.Asset.Generation))
-		contentPath := "/api/media/v1/assets/" + record.Asset.ID.String() + "/variants/" +
-			string(variant.Variant) + "/content?" + query.Encode()
-		result = append(result, map[string]any{"kind": variant.Variant, "contentType": variant.ContentType,
-			"contentPath": contentPath, "width": variant.Width, "height": variant.Height})
+		contentPath := publicVariantContentPath(record.Asset.ID, record.Asset.Generation, variant,
+			ownerType, ownerID, warehouseID)
+		if contentPath == "" {
+			continue
+		}
+		result = append(result, map[string]any{
+			"kind": variant.Variant, "contentType": variant.ContentType,
+			"contentPath": contentPath,
+			"width":       variant.Width, "height": variant.Height,
+		})
 	}
 	return result
+}
+
+func publicVariantResponse(mediaID uuid.UUID, generation int, variant persistence.VariantRecord,
+	ownerType, ownerID string, warehouseID uuid.UUID,
+) map[string]any {
+	return map[string]any{"mediaId": mediaID, "generation": generation, "kind": variant.Variant,
+		"contentType": variant.ContentType,
+		"contentPath": publicVariantContentPath(mediaID, generation, variant, ownerType, ownerID, warehouseID),
+		"width":       variant.Width, "height": variant.Height}
+}
+
+func publicVariantContentPath(mediaID uuid.UUID, generation int, variant persistence.VariantRecord,
+	ownerType, ownerID string, warehouseID uuid.UUID,
+) string {
+	query := make(url.Values)
+	query.Set("ownerType", ownerType)
+	if persistence.IsLogisticsOwnerType(ownerType) {
+		documentID, lineID, valid := persistence.LogisticsOwnerParts(ownerID)
+		if !valid {
+			return ""
+		}
+		query.Set("documentId", documentID.String())
+		query.Set("lineId", lineID.String())
+	} else {
+		query.Set("ownerId", ownerID)
+	}
+	query.Set("warehouseId", warehouseID.String())
+	query.Set("context", viewerContextForOwner(ownerType))
+	query.Set("generation", strconv.Itoa(generation))
+	contentPath := "/api/media/v1/assets/" + mediaID.String() + "/variants/" +
+		string(variant.Variant) + "/content?" + query.Encode()
+	return contentPath
 }
 
 func (server *Server) streamVariant(
@@ -948,7 +1232,7 @@ func assetResponse(asset persistence.AssetRecord, variants []any) map[string]any
 		variants = []any{}
 	}
 	return map[string]any{
-		"id": asset.ID, "fileName": asset.FileName, "contentType": asset.ContentType,
+		"id": asset.ID, "folderId": asset.FolderID, "fileName": asset.FileName, "contentType": asset.ContentType,
 		"kind": asset.Kind, "status": asset.Status, "version": asset.Version,
 		"generation": asset.Generation, "rotationDegrees": asset.Rotation,
 		"sortOrder": asset.SortOrder, "sizeBytes": asset.SizeBytes, "createdAt": asset.CreatedAt,
@@ -971,20 +1255,30 @@ func (server *Server) principal(response http.ResponseWriter, request *http.Requ
 }
 
 func (server *Server) logisticsPrincipal(response http.ResponseWriter, request *http.Request) bool {
-	principal, err := server.auth.ValidateService(request.Context(), request.Header.Get("Authorization"))
-	if err == nil {
-		err = principal.RequireExact("logistics-service", "media.logistics")
+	principal, ok := server.servicePrincipal(response, request)
+	if !ok {
+		return false
 	}
+	err := principal.RequireExact("logistics-service", "media.logistics")
 	if err == nil {
 		return true
 	}
-	status := http.StatusUnauthorized
-	code := "MEDIA_UNAUTHORIZED"
-	if errors.Is(err, auth.ErrForbidden) {
-		status, code = http.StatusForbidden, "MEDIA_FORBIDDEN"
-	}
-	server.problem(response, request, status, code, "Access is denied")
+	server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 	return false
+}
+
+func (server *Server) servicePrincipal(response http.ResponseWriter, request *http.Request) (auth.ServicePrincipal, bool) {
+	principal, err := server.auth.ValidateService(request.Context(), request.Header.Get("Authorization"))
+	if err != nil {
+		status := http.StatusUnauthorized
+		code := "MEDIA_UNAUTHORIZED"
+		if errors.Is(err, auth.ErrForbidden) {
+			status, code = http.StatusForbidden, "MEDIA_FORBIDDEN"
+		}
+		server.problem(response, request, status, code, "Access is denied")
+		return auth.ServicePrincipal{}, false
+	}
+	return principal, true
 }
 
 func (server *Server) decode(response http.ResponseWriter, request *http.Request, target any) bool {
@@ -1108,18 +1402,52 @@ func writeJSON(response http.ResponseWriter, status int, value any) {
 
 func (server *Server) ownerScope(response http.ResponseWriter, request *http.Request) (string, string, uuid.UUID, bool) {
 	query := request.URL.Query()
-	ownerType, ownerID := query.Get("ownerType"), query.Get("ownerId")
+	ownerType := query.Get("ownerType")
 	warehouseID, warehouseErr := uuid.Parse(query.Get("warehouseId"))
-	parsedOwnerID, ownerErr := uuid.Parse(ownerID)
-	if !validPublicOwnerScope(ownerType, query.Get("context")) || ownerErr != nil || warehouseErr != nil {
+	ownerID, ownerOK := resolvePublicOwnerID(ownerType, query.Get("ownerId"),
+		query.Get("documentId"), query.Get("lineId"))
+	if !validPublicOwnerScope(ownerType, query.Get("context")) || !ownerOK ||
+		warehouseErr != nil || warehouseID == uuid.Nil {
 		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_CONTEXT", "Invalid owner context")
 		return "", "", uuid.Nil, false
 	}
-	return ownerType, parsedOwnerID.String(), warehouseID, true
+	return ownerType, ownerID, warehouseID, true
 }
 
 func validPublicOwnerScope(ownerType, context string) bool {
-	return ownerType == persistence.OwnerTypeInventoryFinding && context == persistence.ViewerContextInspection
+	_, valid := persistence.PublicOwnerScope(ownerType, context)
+	return valid
+}
+
+func viewerContextForOwner(ownerType string) string {
+	viewerContext, _ := persistence.ViewerContextForOwner(ownerType)
+	return viewerContext
+}
+
+func resolvePublicOwnerID(ownerType, ownerID, documentID, lineID string) (string, bool) {
+	definition, found := persistence.PublicOwnerScope(ownerType, viewerContextForOwner(ownerType))
+	if !found {
+		return "", false
+	}
+	if definition.Structured {
+		if ownerID != "" {
+			return "", false
+		}
+		parsedDocumentID, documentErr := uuid.Parse(documentID)
+		parsedLineID, lineErr := uuid.Parse(lineID)
+		if documentErr != nil || lineErr != nil || parsedDocumentID == uuid.Nil || parsedLineID == uuid.Nil {
+			return "", false
+		}
+		return persistence.LogisticsOwnerID(parsedDocumentID, parsedLineID), true
+	}
+	if documentID != "" || lineID != "" {
+		return "", false
+	}
+	parsedOwnerID, err := uuid.Parse(ownerID)
+	if err != nil || parsedOwnerID == uuid.Nil {
+		return "", false
+	}
+	return parsedOwnerID.String(), true
 }
 
 func validFileName(value string) bool {

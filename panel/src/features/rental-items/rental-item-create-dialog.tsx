@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type FormEvent } from "react"
+import { useId, useMemo, useRef, useState, type FormEvent } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -14,6 +14,17 @@ import {
   createAssetRentalItem,
   createIdempotencyKey,
 } from "@/features/rental-items/api/asset-rental-items-api"
+import {
+  cabinMediaOwner,
+  createHttpMediaClient,
+  type MediaAsset,
+} from "@/features/media/media-service"
+import {
+  disposeStagedRentalItemPhotos,
+  RentalItemCreationPhotoUploader,
+  type StagedRentalItemPhoto,
+} from "@/features/rental-items/rental-item-creation-photo-uploader"
+import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -38,6 +49,7 @@ import { Input } from "@/components/ui/input"
 import { useAuth } from "@/features/auth/use-auth"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { cn } from "@/lib/utils"
+import { ApiError } from "@/lib/api-client"
 import {
   Popover,
   PopoverContent,
@@ -81,6 +93,7 @@ type RentalItemCreateFormState = {
   finishing: RentalItemFinishing | ""
   selectedCharacteristics: RentalItemCharacteristic[]
   sanblockSettings: SanblockSettings
+  photos: StagedRentalItemPhoto[]
   linoleum: LinoleumValue
 }
 
@@ -112,8 +125,60 @@ function createEmptyForm(): RentalItemCreateFormState {
     finishing: "",
     selectedCharacteristics: getDefaultRentalItemCharacteristics([]),
     sanblockSettings: DEFAULT_SANBLOCK_SETTINGS,
+    photos: [],
     linoleum: "no",
   }
+}
+
+const rentalItemCreationMediaClient = createHttpMediaClient()
+
+function isRetryableOwnerMediaError(error: unknown) {
+  return (
+    error instanceof ApiError &&
+    (error.status === 409 ||
+      error.status === 503 ||
+      (error.status === 403 && error.code === "MEDIA_OWNER_PROOF_REQUIRED"))
+  )
+}
+
+async function retryOwnerMediaCommand<T>(command: () => Promise<T>) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await command()
+    } catch (error) {
+      if (attempt >= 6 || !isRetryableOwnerMediaError(error)) throw error
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(250 * 2 ** attempt, 2_000))
+      )
+    }
+  }
+}
+
+async function waitForReadyCreationAsset({
+  accessToken,
+  owner,
+  mediaId,
+}: {
+  accessToken: string
+  owner: ReturnType<typeof cabinMediaOwner>
+  mediaId: string
+}): Promise<MediaAsset> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const page = await retryOwnerMediaCommand(() =>
+      rentalItemCreationMediaClient.listOwnerMedia(accessToken, owner, {
+        limit: 100,
+      })
+    )
+    const asset = page.items.find((candidate) => candidate.id === mediaId)
+    if (asset?.status === "READY") return asset
+    if (asset?.status === "FAILED" || asset?.status === "DELETED") {
+      throw new Error("Media-service не смог обработать фотографию.")
+    }
+    await new Promise((resolve) => setTimeout(resolve, 750))
+  }
+  throw new Error(
+    "Фотография создана, но обработка ещё не завершена. Повторите загрузку позже."
+  )
 }
 
 function hasRequiredFormFields(form: RentalItemCreateFormState) {
@@ -371,6 +436,10 @@ export function RentalItemCreateDialog({
   )
   const [submitted, setSubmitted] = useState(false)
   const [characteristicsOpen, setCharacteristicsOpen] = useState(false)
+  const [createdItem, setCreatedItem] = useState<RentalItemDto | null>(null)
+  const [photoUploadPending, setPhotoUploadPending] = useState(false)
+  const [photoUploadError, setPhotoUploadError] = useState<string | null>(null)
+  const photoFolderId = useRef(crypto.randomUUID())
 
   const dimensionsOptions = useMemo(() => {
     return getRentalItemDimensionsForType(form.type)
@@ -392,6 +461,91 @@ export function RentalItemCreateDialog({
     })
   }, [form.sanblockSettings, form.type, selectedCharacteristicOptions])
 
+  function refreshRentalItemQueries(item: RentalItemDto) {
+    queryClient.setQueryData(["rental-item", item.id], item)
+    void queryClient.invalidateQueries({ queryKey: ["rental-items"] })
+    void queryClient.invalidateQueries({
+      queryKey: ["rental-items-table-schema", warehouseId],
+    })
+    void queryClient.invalidateQueries({
+      queryKey: ["rental-item-filter-options", warehouseId],
+    })
+  }
+
+  function resetDialogState(photos = form.photos) {
+    disposeStagedRentalItemPhotos(photos)
+    setForm(createEmptyForm())
+    setSubmitted(false)
+    setCharacteristicsOpen(false)
+    setCreatedItem(null)
+    setPhotoUploadError(null)
+    setPhotoUploadPending(false)
+    photoFolderId.current = crypto.randomUUID()
+  }
+
+  async function uploadCreatedPhotos(
+    item: RentalItemDto,
+    photos: StagedRentalItemPhoto[]
+  ) {
+    if (!accessToken) {
+      setPhotoUploadError(
+        "Бытовка создана, но для загрузки фото не получен токен доступа."
+      )
+      return
+    }
+
+    setPhotoUploadPending(true)
+    setPhotoUploadError(null)
+    const owner = cabinMediaOwner(item.id, item.warehouseId)
+    try {
+      for (const [index, photo] of photos.entries()) {
+        const result = await retryOwnerMediaCommand(() =>
+          rentalItemCreationMediaClient.uploadFile(
+            accessToken,
+            owner,
+            photo.file,
+            index,
+            photoFolderId.current,
+            photo.commandKeys
+          )
+        )
+        if (photo.rotationDegrees !== 0) {
+          const readyAsset = await waitForReadyCreationAsset({
+            accessToken,
+            owner,
+            mediaId: result.asset.id,
+          })
+          await retryOwnerMediaCommand(() =>
+            rentalItemCreationMediaClient.rotate(
+              accessToken,
+              owner,
+              readyAsset.id,
+              photo.rotationDegrees,
+              readyAsset.version,
+              photo.rotateKey
+            )
+          )
+        }
+      }
+      await queryClient.invalidateQueries({
+        queryKey: ["rental-item-media"],
+      })
+      await queryClient.invalidateQueries({
+        queryKey: ["rental-item-media-covers"],
+      })
+      resetDialogState(photos)
+      onOpenChange(false)
+    } catch (error) {
+      setPhotoUploadError(
+        `Бытовка ${item.number} создана, но фото не загружены: ${
+          error instanceof Error ? error.message : "сервис фото недоступен"
+        }`
+      )
+    } finally {
+      setPhotoUploadPending(false)
+    }
+  }
+
   const createMutation = useMutation({
     mutationFn: (input: {
       idempotencyKey: string
@@ -402,6 +556,7 @@ export function RentalItemCreateDialog({
       category: string
       characteristics: string
       linoleum: boolean
+      photos: StagedRentalItemPhoto[]
     }) =>
       createAssetRentalItem({
         accessToken,
@@ -417,17 +572,15 @@ export function RentalItemCreateDialog({
           linoleum: input.linoleum,
         },
       }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["rental-items"] })
-      queryClient.invalidateQueries({
-        queryKey: ["rental-items-table-schema", warehouseId],
-      })
-      queryClient.invalidateQueries({
-        queryKey: ["rental-item-filter-options", warehouseId],
-      })
-      setForm(createEmptyForm())
-      setSubmitted(false)
-      onOpenChange(false)
+    onSuccess: (item, input) => {
+      refreshRentalItemQueries(item)
+      if (input.photos.length === 0) {
+        resetDialogState([])
+        onOpenChange(false)
+        return
+      }
+      setCreatedItem(item)
+      void uploadCreatedPhotos(item, input.photos)
     },
   })
 
@@ -462,10 +615,12 @@ export function RentalItemCreateDialog({
       return
     }
 
-    if (!nextOpen && !createMutation.isPending) {
-      setForm(createEmptyForm())
-      setSubmitted(false)
-      setCharacteristicsOpen(false)
+    if (!nextOpen && (createMutation.isPending || photoUploadPending)) {
+      return
+    }
+
+    if (!nextOpen) {
+      resetDialogState()
     }
 
     onOpenChange(nextOpen)
@@ -483,6 +638,7 @@ export function RentalItemCreateDialog({
       !type ||
       !finishing ||
       !canEditRentalItems ||
+      createdItem !== null ||
       createMutation.isPending
     ) {
       return
@@ -497,6 +653,7 @@ export function RentalItemCreateDialog({
       category: NEW_RENTAL_ITEM_CATEGORY,
       characteristics: selectedCharacteristics.join(", "),
       linoleum: form.linoleum === "yes",
+      photos: form.photos,
     })
   }
 
@@ -524,177 +681,194 @@ export function RentalItemCreateDialog({
           </DialogHeader>
 
           <form className="flex flex-col gap-5" onSubmit={submitForm}>
-            <FieldGroup>
-              <Field
-                data-invalid={submitted && form.number.trim().length === 0}
-              >
-                <FieldLabel htmlFor={numberInputId}>Номер бытовки</FieldLabel>
-                <Input
-                  id={numberInputId}
-                  value={form.number}
-                  maxLength={128}
-                  aria-invalid={submitted && form.number.trim().length === 0}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      number: event.target.value,
-                    }))
-                  }
-                  placeholder="Например, БЫТ-121"
-                />
-                {submitted && form.number.trim().length === 0 ? (
-                  <FieldError>Укажите номер бытовки.</FieldError>
-                ) : null}
-              </Field>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <Field data-invalid={submitted && form.type === ""}>
-                  <FieldLabel>Тип бытовки</FieldLabel>
-                  <FormDropdown
-                    value={form.type}
-                    placeholder="Выберите тип"
-                    options={toDropdownOptions(RENTAL_ITEM_TYPE_OPTIONS)}
-                    invalid={submitted && form.type === ""}
-                    onValueChange={handleTypeChange}
-                  />
-                  {submitted && form.type === "" ? (
-                    <FieldError>Выберите тип бытовки.</FieldError>
-                  ) : null}
-                </Field>
-
-                <Field data-invalid={submitted && form.dimensions === ""}>
-                  <FieldLabel>Габариты</FieldLabel>
-                  <FormDropdown
-                    value={form.dimensions}
-                    disabled={!form.type || dimensionsOptions.length <= 1}
-                    placeholder={
-                      form.type ? "Выберите габариты" : "Сначала выберите тип"
-                    }
-                    options={toDropdownOptions(dimensionsOptions)}
-                    invalid={submitted && form.dimensions === ""}
-                    onValueChange={(value) =>
-                      setForm((current) => ({
-                        ...current,
-                        dimensions: value,
-                      }))
-                    }
-                  />
-                  {submitted && form.dimensions === "" ? (
-                    <FieldError>Выберите габариты.</FieldError>
-                  ) : null}
-                </Field>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <Field data-invalid={submitted && form.finishing === ""}>
-                  <FieldLabel>Отделка</FieldLabel>
-                  <FormDropdown
-                    value={form.finishing}
-                    disabled={isSanblockRentalItemType(form.type)}
-                    placeholder="Выберите отделку"
-                    options={toDropdownOptions(RENTAL_ITEM_FINISHING_OPTIONS)}
-                    invalid={submitted && form.finishing === ""}
-                    onValueChange={(value) =>
-                      setForm((current) => ({
-                        ...current,
-                        finishing: value,
-                      }))
-                    }
-                  />
-                  {isSanblockRentalItemType(form.type) ? (
-                    <FieldDescription>
-                      Для БК-Санблок отделка автоматически ПВХ.
-                    </FieldDescription>
-                  ) : null}
-                  {submitted && form.finishing === "" ? (
-                    <FieldError>Выберите отделку.</FieldError>
-                  ) : null}
-                </Field>
-
-                <Field>
-                  <FieldLabel>Линолеум</FieldLabel>
-                  <FormDropdown
-                    value={form.linoleum}
-                    disabled={isSanblockRentalItemType(form.type)}
-                    placeholder="Нет"
-                    options={LINOLEUM_OPTIONS}
-                    onValueChange={(value) =>
-                      setForm((current) => ({
-                        ...current,
-                        linoleum: value,
-                      }))
-                    }
-                  />
-                  {isSanblockRentalItemType(form.type) ? (
-                    <FieldDescription>
-                      Для БК-Санблок линолеум автоматически Есть.
-                    </FieldDescription>
-                  ) : null}
-                </Field>
-              </div>
-            </FieldGroup>
-
-            {isSanblockRentalItemType(form.type) ? (
-              <FieldSet>
-                <FieldLegend>Настройки санблока</FieldLegend>
-                <FieldGroup className="grid gap-3 md:grid-cols-3">
-                  <CounterControl
-                    label="Туалеты"
-                    value={form.sanblockSettings.toilets}
-                    onChange={(value) =>
-                      updateSanblockSettings("toilets", value)
-                    }
-                  />
-                  <CounterControl
-                    label="Раковины"
-                    value={form.sanblockSettings.sinks}
-                    onChange={(value) => updateSanblockSettings("sinks", value)}
-                  />
-                  <CounterControl
-                    label="Душевые"
-                    value={form.sanblockSettings.showers}
-                    onChange={(value) =>
-                      updateSanblockSettings("showers", value)
-                    }
-                  />
-                </FieldGroup>
-              </FieldSet>
-            ) : null}
-
-            <FieldSet>
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <FieldLegend>Характеристики</FieldLegend>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className={formSectionActionButtonClassName}
-                  onClick={() => setCharacteristicsOpen(true)}
+            <fieldset
+              disabled={
+                createMutation.isPending ||
+                photoUploadPending ||
+                createdItem !== null
+              }
+              className="contents"
+            >
+              <FieldGroup>
+                <Field
+                  data-invalid={submitted && form.number.trim().length === 0}
                 >
-                  <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-                  Добавить характеристики
-                </Button>
-              </div>
+                  <FieldLabel htmlFor={numberInputId}>Номер бытовки</FieldLabel>
+                  <Input
+                    id={numberInputId}
+                    value={form.number}
+                    maxLength={128}
+                    aria-invalid={submitted && form.number.trim().length === 0}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        number: event.target.value,
+                      }))
+                    }
+                    placeholder="Например, БЫТ-121"
+                  />
+                  {submitted && form.number.trim().length === 0 ? (
+                    <FieldError>Укажите номер бытовки.</FieldError>
+                  ) : null}
+                </Field>
 
-              {selectedCharacteristics.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {selectedCharacteristics.map((characteristic) => (
-                    <Badge key={characteristic} variant="secondary">
-                      {characteristic}
-                    </Badge>
-                  ))}
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field data-invalid={submitted && form.type === ""}>
+                    <FieldLabel>Тип бытовки</FieldLabel>
+                    <FormDropdown
+                      value={form.type}
+                      placeholder="Выберите тип"
+                      options={toDropdownOptions(RENTAL_ITEM_TYPE_OPTIONS)}
+                      invalid={submitted && form.type === ""}
+                      onValueChange={handleTypeChange}
+                    />
+                    {submitted && form.type === "" ? (
+                      <FieldError>Выберите тип бытовки.</FieldError>
+                    ) : null}
+                  </Field>
+
+                  <Field data-invalid={submitted && form.dimensions === ""}>
+                    <FieldLabel>Габариты</FieldLabel>
+                    <FormDropdown
+                      value={form.dimensions}
+                      disabled={!form.type || dimensionsOptions.length <= 1}
+                      placeholder={
+                        form.type ? "Выберите габариты" : "Сначала выберите тип"
+                      }
+                      options={toDropdownOptions(dimensionsOptions)}
+                      invalid={submitted && form.dimensions === ""}
+                      onValueChange={(value) =>
+                        setForm((current) => ({
+                          ...current,
+                          dimensions: value,
+                        }))
+                      }
+                    />
+                    {submitted && form.dimensions === "" ? (
+                      <FieldError>Выберите габариты.</FieldError>
+                    ) : null}
+                  </Field>
                 </div>
-              ) : (
-                <FieldDescription>Характеристики не выбраны.</FieldDescription>
-              )}
-            </FieldSet>
 
-            <FieldSet>
-              <FieldLegend>Фото</FieldLegend>
-              <FieldDescription>
-                Фотографии пока недоступны: asset-service не предоставляет
-                публичный media API для бытовок.
-              </FieldDescription>
-            </FieldSet>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field data-invalid={submitted && form.finishing === ""}>
+                    <FieldLabel>Отделка</FieldLabel>
+                    <FormDropdown
+                      value={form.finishing}
+                      disabled={isSanblockRentalItemType(form.type)}
+                      placeholder="Выберите отделку"
+                      options={toDropdownOptions(RENTAL_ITEM_FINISHING_OPTIONS)}
+                      invalid={submitted && form.finishing === ""}
+                      onValueChange={(value) =>
+                        setForm((current) => ({
+                          ...current,
+                          finishing: value,
+                        }))
+                      }
+                    />
+                    {isSanblockRentalItemType(form.type) ? (
+                      <FieldDescription>
+                        Для БК-Санблок отделка автоматически ПВХ.
+                      </FieldDescription>
+                    ) : null}
+                    {submitted && form.finishing === "" ? (
+                      <FieldError>Выберите отделку.</FieldError>
+                    ) : null}
+                  </Field>
+
+                  <Field>
+                    <FieldLabel>Линолеум</FieldLabel>
+                    <FormDropdown
+                      value={form.linoleum}
+                      disabled={isSanblockRentalItemType(form.type)}
+                      placeholder="Нет"
+                      options={LINOLEUM_OPTIONS}
+                      onValueChange={(value) =>
+                        setForm((current) => ({
+                          ...current,
+                          linoleum: value,
+                        }))
+                      }
+                    />
+                    {isSanblockRentalItemType(form.type) ? (
+                      <FieldDescription>
+                        Для БК-Санблок линолеум автоматически Есть.
+                      </FieldDescription>
+                    ) : null}
+                  </Field>
+                </div>
+              </FieldGroup>
+
+              {isSanblockRentalItemType(form.type) ? (
+                <FieldSet>
+                  <FieldLegend>Настройки санблока</FieldLegend>
+                  <FieldGroup className="grid gap-3 md:grid-cols-3">
+                    <CounterControl
+                      label="Туалеты"
+                      value={form.sanblockSettings.toilets}
+                      onChange={(value) =>
+                        updateSanblockSettings("toilets", value)
+                      }
+                    />
+                    <CounterControl
+                      label="Раковины"
+                      value={form.sanblockSettings.sinks}
+                      onChange={(value) =>
+                        updateSanblockSettings("sinks", value)
+                      }
+                    />
+                    <CounterControl
+                      label="Душевые"
+                      value={form.sanblockSettings.showers}
+                      onChange={(value) =>
+                        updateSanblockSettings("showers", value)
+                      }
+                    />
+                  </FieldGroup>
+                </FieldSet>
+              ) : null}
+
+              <FieldSet>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <FieldLegend>Характеристики</FieldLegend>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={formSectionActionButtonClassName}
+                    onClick={() => setCharacteristicsOpen(true)}
+                  >
+                    <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+                    Добавить характеристики
+                  </Button>
+                </div>
+
+                {selectedCharacteristics.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {selectedCharacteristics.map((characteristic) => (
+                      <Badge key={characteristic} variant="secondary">
+                        {characteristic}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <FieldDescription>
+                    Характеристики не выбраны.
+                  </FieldDescription>
+                )}
+              </FieldSet>
+
+              <RentalItemCreationPhotoUploader
+                photos={form.photos}
+                disabled={
+                  createMutation.isPending ||
+                  photoUploadPending ||
+                  createdItem !== null
+                }
+                onChange={(photos) =>
+                  setForm((current) => ({ ...current, photos }))
+                }
+              />
+            </fieldset>
 
             {createMutation.isError ? (
               <FieldError>
@@ -706,24 +880,44 @@ export function RentalItemCreateDialog({
               </FieldError>
             ) : null}
 
+            {photoUploadError ? (
+              <FieldError role="alert">{photoUploadError}</FieldError>
+            ) : null}
+
             <DialogFooter className={formFooterClassName}>
               <Button
                 type="button"
                 variant="outline"
                 className="flex-1"
-                disabled={createMutation.isPending}
+                disabled={createMutation.isPending || photoUploadPending}
                 onClick={() => handleDialogOpenChange(false)}
               >
-                Отмена
+                {createdItem ? "Закрыть" : "Отмена"}
               </Button>
-              <Button
-                type="submit"
-                className="flex-[1.65]"
-                disabled={!canEditRentalItems || createMutation.isPending}
-              >
-                <HugeiconsIcon icon={CheckIcon} data-icon="inline-start" />
-                {createMutation.isPending ? "Создание..." : "Создать бытовку"}
-              </Button>
+              {createdItem ? (
+                <Button
+                  type="button"
+                  className="flex-[1.65]"
+                  disabled={photoUploadPending}
+                  onClick={() =>
+                    void uploadCreatedPhotos(createdItem, form.photos)
+                  }
+                >
+                  <HugeiconsIcon icon={CheckIcon} data-icon="inline-start" />
+                  {photoUploadPending
+                    ? "Загрузка фото..."
+                    : "Повторить загрузку фото"}
+                </Button>
+              ) : (
+                <Button
+                  type="submit"
+                  className="flex-[1.65]"
+                  disabled={!canEditRentalItems || createMutation.isPending}
+                >
+                  <HugeiconsIcon icon={CheckIcon} data-icon="inline-start" />
+                  {createMutation.isPending ? "Создание..." : "Создать бытовку"}
+                </Button>
+              )}
             </DialogFooter>
           </form>
 

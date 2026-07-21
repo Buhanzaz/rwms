@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.dossier.domain.DossierActivity;
 import dev.buhanzaz.rwms.dossier.domain.DossierActivityCode;
 import dev.buhanzaz.rwms.dossier.domain.DossierMediaProjection;
 import dev.buhanzaz.rwms.dossier.domain.DossierProducer;
+import dev.buhanzaz.rwms.dossier.mapper.DossierMediaProjectionMapper;
 import dev.buhanzaz.rwms.dossier.repository.DossierActiveGenerationRepository;
 import dev.buhanzaz.rwms.dossier.repository.DossierActivityRepository;
 import dev.buhanzaz.rwms.dossier.repository.DossierMediaProjectionRepository;
@@ -39,6 +40,7 @@ public class DossierQueryService {
   private final DossierSanitizedDeadLetterRepository deadLetters;
   private final DossierAuthorizer authorizer;
   private final DossierCursorCodec cursors;
+  private final DossierMediaProjectionMapper mediaMapper;
 
   public DossierQueryService(
       DossierActiveGenerationRepository activeGenerations,
@@ -47,7 +49,8 @@ public class DossierQueryService {
       DossierUnlinkedFactRepository unlinked,
       DossierSanitizedDeadLetterRepository deadLetters,
       DossierAuthorizer authorizer,
-      DossierCursorCodec cursors) {
+      DossierCursorCodec cursors,
+      DossierMediaProjectionMapper mediaMapper) {
     this.activeGenerations = activeGenerations;
     this.activities = activities;
     this.media = media;
@@ -55,6 +58,7 @@ public class DossierQueryService {
     this.deadLetters = deadLetters;
     this.authorizer = authorizer;
     this.cursors = cursors;
+    this.mediaMapper = mediaMapper;
   }
 
   @Transactional(readOnly = true)
@@ -185,7 +189,7 @@ public class DossierQueryService {
     return (root, query, builder) -> root.get("warehouseId").in(scope.warehouseIds());
   }
 
-  private static DossierApiModels.Activity map(
+  private DossierApiModels.Activity map(
       DossierActivity value, List<DossierMediaProjection> mediaRows) {
     List<DossierApiModels.MediaProjection> attached =
         mediaRows.stream()
@@ -194,13 +198,7 @@ public class DossierQueryService {
                     item.getInventoryFindingId().equals(value.getSourceSecondaryId())
                         || item.getMediaId().equals(value.getSourceAggregateId()))
             .sorted(Comparator.comparing(DossierMediaProjection::getMediaId))
-            .map(
-                item ->
-                    new DossierApiModels.MediaProjection(
-                        item.getMediaId(),
-                        item.getInventoryFindingId(),
-                        item.getMediaGeneration(),
-                        item.getState().name()))
+            .map(mediaMapper::toResponse)
             .toList();
     DossierApiModels.ActorReference actor =
         value.getActorSubjectId() == null

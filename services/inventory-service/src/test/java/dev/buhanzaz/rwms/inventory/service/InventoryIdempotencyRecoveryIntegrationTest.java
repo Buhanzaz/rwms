@@ -101,7 +101,7 @@ class InventoryIdempotencyRecoveryIntegrationTest {
     seedSession(inventoryId, warehouseId);
     UUID idempotencyKey = UUID.randomUUID();
     var request = new dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ResolveNumberRequest(0, "AA-01");
-    when(dependencies.resolveNumber("AA-01"))
+    when(dependencies.resolveNumber(warehouseId, "AA-01"))
         .thenReturn(
             new InventoryDependencyGateway.NumberResolution(
                 "AA-01",
@@ -160,7 +160,7 @@ class InventoryIdempotencyRecoveryIntegrationTest {
     JsonNode originalJson = mapper.valueToTree(original);
     JsonNode replayJson = mapper.valueToTree(replay);
     assertThat(replayJson).isEqualTo(originalJson);
-    verify(dependencies, times(1)).resolveNumber("AA-01");
+    verify(dependencies, times(1)).resolveNumber(warehouseId, "AA-01");
   }
 
   @Test

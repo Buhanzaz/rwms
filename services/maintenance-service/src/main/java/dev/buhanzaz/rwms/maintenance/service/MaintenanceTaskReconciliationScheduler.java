@@ -16,5 +16,6 @@ public class MaintenanceTaskReconciliationScheduler {
       initialDelayString = "${rwms.maintenance.task-reconciliation.initial-delay:2s}")
   public void reconcile() {
     service.reconcileOneTask();
+    service.reconcileOneMediaOwnerProof();
   }
 }

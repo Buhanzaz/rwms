@@ -26,6 +26,7 @@ import {
 } from "@/features/repair-tasks/api/repair-tasks-api"
 import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
 import { useWarehouse } from "@/hooks/use-warehouse"
+import { useAuth } from "@/features/auth/use-auth"
 import {
   useWorkspaceBack,
   workspaceEntryNavigationOptions,
@@ -72,6 +73,7 @@ function WriteOffMobileCard({
 
 export function WriteOffsPage() {
   const { selectedWarehouseId } = useWarehouse()
+  const { accessToken } = useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const writeOffId = searchParams.get("writeOffId")
@@ -133,6 +135,7 @@ export function WriteOffsPage() {
           </Card>
         ) : selectedTask ? (
           <RepairAcceptanceDossier
+            accessToken={accessToken}
             task={selectedTask}
             mode="WRITE_OFF"
             canEdit={false}

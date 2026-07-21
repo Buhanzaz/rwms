@@ -14,7 +14,7 @@ public interface InventoryDependencyGateway {
 
   void releaseCapture(UUID captureId);
 
-  NumberResolution resolveNumber(String number);
+  NumberResolution resolveNumber(UUID warehouseId, String number);
 
   SourceAsset createSourceAsset(UUID idempotencyKey, JsonNode request);
 

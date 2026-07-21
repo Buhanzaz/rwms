@@ -65,7 +65,7 @@ class DossierFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndPassesJpaValidation() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isOne();
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -91,6 +91,15 @@ class DossierFlywayMigrationIntegrationTest {
     assertThat(toRegclass("rental_item")).isNull();
     assertThat(
             jdbc.queryForObject(
+                """
+                select is_nullable from information_schema.columns
+                where table_schema='public' and table_name='dossier_media_projection'
+                  and column_name='folder_id'
+                """,
+                String.class))
+        .isEqualTo("NO");
+    assertThat(
+            jdbc.queryForObject(
                 "select generation_id from dossier_active_generation where pointer_name='DOSSIER'",
                 UUID.class))
         .isEqualTo(UUID.fromString("00000000-0000-0000-0000-000000000901"));
@@ -100,6 +109,49 @@ class DossierFlywayMigrationIntegrationTest {
                 String.class))
         .isEqualTo("ACTIVE");
     assertJpaValidationStarts();
+  }
+
+  @Test
+  void v2BackfillsExistingMediaAsDistinctOnePhotoFolders() {
+    Flyway beforeFolderGrouping =
+        Flyway.configure()
+            .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+            .locations(MIGRATIONS)
+            .target("1")
+            .baselineOnMigrate(false)
+            .validateOnMigrate(true)
+            .validateMigrationNaming(true)
+            .cleanDisabled(true)
+            .outOfOrder(false)
+            .load();
+    assertThat(beforeFolderGrouping.migrate().migrationsExecuted).isOne();
+
+    UUID cabinId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID firstMediaId = UUID.randomUUID();
+    UUID secondMediaId = UUID.randomUUID();
+    insertLegacyMediaProjection(cabinId, warehouseId, firstMediaId, 0);
+    insertLegacyMediaProjection(cabinId, warehouseId, secondMediaId, 1);
+
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select folder_id from dossier_media_projection where media_id=?",
+                UUID.class,
+                firstMediaId))
+        .isEqualTo(firstMediaId);
+    assertThat(
+            jdbc.queryForObject(
+                "select folder_id from dossier_media_projection where media_id=?",
+                UUID.class,
+                secondMediaId))
+        .isEqualTo(secondMediaId);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(distinct folder_id) from dossier_media_projection where cabin_id=?",
+                Long.class,
+                cabinId))
+        .isEqualTo(2L);
   }
 
   @Test
@@ -275,6 +327,45 @@ class DossierFlywayMigrationIntegrationTest {
         .cleanDisabled(true)
         .outOfOrder(false)
         .load();
+  }
+
+  private void insertLegacyMediaProjection(
+      UUID cabinId, UUID warehouseId, UUID mediaId, int sourceOffset) {
+    UUID eventId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into dossier_source_fact(
+          id,event_id,producer,source_topic,source_partition,source_offset,kafka_key,
+          aggregate_type,aggregate_id,aggregate_version,event_type,event_version,payload_sha256,
+          canonical_envelope,recorded_at,correlation_id,subject_cabin_id,
+          subject_warehouse_id,subject_secondary_id,ingested_at)
+        values (?,?,'MEDIA','rwms.media.media.v1',0,?,?,'MEDIA',?,1,
+          'media.media.ready.v1',1,?,cast(? as jsonb),clock_timestamp(),?,?,?, ?,clock_timestamp())
+        """,
+        UUID.randomUUID(),
+        eventId,
+        sourceOffset,
+        mediaId,
+        mediaId,
+        "a".repeat(64),
+        "{}",
+        UUID.randomUUID(),
+        cabinId,
+        warehouseId,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into dossier_media_projection(
+          id,generation_id,cabin_id,warehouse_id,media_id,inventory_finding_id,
+          media_generation,source_aggregate_version,state,source_event_id,updated_at)
+        values (?,'00000000-0000-0000-0000-000000000901',?,?,?,?,0,1,'READY',?,clock_timestamp())
+        """,
+        UUID.randomUUID(),
+        cabinId,
+        warehouseId,
+        mediaId,
+        UUID.randomUUID(),
+        eventId);
   }
 
   private List<String> tableNames() {

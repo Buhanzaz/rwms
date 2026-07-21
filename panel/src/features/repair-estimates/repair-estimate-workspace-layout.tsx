@@ -106,7 +106,7 @@ export function RepairEstimateWorkspaceLayout({
           description={catalogDescription}
           action={catalogAction}
           className="order-4 xl:col-start-2 xl:row-start-2"
-          contentClassName="overflow-hidden"
+          contentClassName="overflow-y-auto"
         >
           {controls}
         </WorkspacePanel>

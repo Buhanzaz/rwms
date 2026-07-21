@@ -447,7 +447,7 @@ public class InventoryApplicationService {
     authorizer.requireEdit(jwt, session.getWarehouseId());
     expectRevision(session.getRevision(), request.expectedSessionRevision());
     InventoryDependencyGateway.NumberResolution resolved =
-        dependencies.resolveNumber(request.submittedNumber());
+        dependencies.resolveNumber(session.getWarehouseId(), request.submittedNumber());
     InventoryFinding existing =
         findings
             .findByInventoryIdAndIdentityMatchKey(inventoryId, resolved.identityMatchKey())

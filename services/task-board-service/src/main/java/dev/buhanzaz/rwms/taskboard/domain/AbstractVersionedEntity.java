@@ -1,8 +1,6 @@
 package dev.buhanzaz.rwms.taskboard.domain;
 
 import jakarta.persistence.Column;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.MappedSuperclass;
 import jakarta.persistence.Version;
@@ -13,7 +11,7 @@ import org.hibernate.proxy.HibernateProxy;
 @MappedSuperclass
 public abstract class AbstractVersionedEntity {
   @Id
-  @GeneratedValue(strategy = GenerationType.UUID)
+  @AssignedOrGeneratedUuid
   @Column(name = "id", nullable = false)
   private UUID id;
 
@@ -27,6 +25,13 @@ public abstract class AbstractVersionedEntity {
 
   public long getVersion() {
     return version;
+  }
+
+  public final void assignReviewedId(UUID reviewedId) {
+    if (id != null) {
+      throw new IllegalStateException("Entity identity is already assigned");
+    }
+    id = Objects.requireNonNull(reviewedId, "reviewedId");
   }
 
   @Override

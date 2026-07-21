@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 
@@ -83,6 +83,8 @@ export function TaskBoardSettingsPage() {
   const [passwordWorker, setPasswordWorker] = useState<WorkerDto | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [bootstrapSummary, setBootstrapSummary] = useState<string | null>(null)
+  const bootstrapIdempotencyKey = useRef<string | null>(null)
 
   const explicitAccess = currentUser?.warehouseAccesses.find(
     (access) => access.warehouseId === warehouseId
@@ -162,6 +164,42 @@ export function TaskBoardSettingsPage() {
         setActionError(text)
       }
 
+      toast.error(text)
+      await invalidateSettings()
+    },
+  })
+  const bootstrapMutation = useMutation({
+    mutationFn: () => {
+      if (!accessToken || !warehouseId || !canManage) {
+        throw new Error(
+          "Для загрузки данных старой панели нужен MANAGE выбранного склада."
+        )
+      }
+      const idempotencyKey =
+        bootstrapIdempotencyKey.current ?? crypto.randomUUID()
+      bootstrapIdempotencyKey.current = idempotencyKey
+      return taskBoardSettingsClient.bootstrapReviewedData(
+        accessToken,
+        warehouseId,
+        idempotencyKey
+      )
+    },
+    onSuccess: async (result) => {
+      bootstrapIdempotencyKey.current = null
+      setActionError(null)
+      setBootstrapSummary(
+        `Очереди: ${result.counts.workQueues}, классы: ${result.counts.workerClasses}, рабочие: ${result.counts.workers}, бригады: ${result.counts.workerGroups}.`
+      )
+      await invalidateSettings()
+      toast.success(
+        result.created > 0
+          ? "Проверенные данные старой панели загружены."
+          : "Проверенные данные уже были загружены; дубли не созданы."
+      )
+    },
+    onError: async (error) => {
+      const text = message(error)
+      setActionError(text)
       toast.error(text)
       await invalidateSettings()
     },
@@ -305,6 +343,33 @@ export function TaskBoardSettingsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
+      <Card size="sm">
+        <CardContent className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="font-medium">Проверенные данные старой панели</p>
+            <p className="text-sm text-muted-foreground">
+              Загружает очереди, классы, рабочих, квалификации и бригады в
+              task-board PostgreSQL. Повторный запуск не создаёт дубли.
+            </p>
+            {bootstrapSummary ? (
+              <p role="status" className="mt-1 text-sm text-muted-foreground">
+                {bootstrapSummary}
+              </p>
+            ) : null}
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={bootstrapMutation.isPending}
+            onClick={() => bootstrapMutation.mutate()}
+          >
+            {bootstrapMutation.isPending
+              ? "Загрузка…"
+              : "Загрузить данные старой панели"}
+          </Button>
+        </CardContent>
+      </Card>
+
       <Tabs defaultValue="queues" className="flex min-h-0 flex-1 flex-col">
         <TabsList
           className="w-full justify-start overflow-x-auto"

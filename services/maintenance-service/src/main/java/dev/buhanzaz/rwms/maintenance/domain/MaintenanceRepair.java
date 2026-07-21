@@ -255,6 +255,14 @@ public class MaintenanceRepair {
     this.taskBoardVersion = taskVersion;
   }
 
+  public void markTaskDeliveryFailed(boolean quarantined) {
+    deliveryAttempts = Math.addExact(deliveryAttempts, 1);
+    reconciliationState = "RECONCILIATION_REQUIRED";
+    deliveryState = quarantined ? "QUARANTINED" : "RETRY_PENDING";
+    taskGenerationState = quarantined ? "FAILED" : "PENDING_GENERATION";
+    deliveryUpdatedAt = MaintenanceTime.now();
+  }
+
   public void touchPlan() {
     if (executionState != RepairExecutionState.DRAFT) {
       throw new IllegalStateException("Only a draft repair plan can be changed");

@@ -47,8 +47,21 @@ export type RentalItemContentsItemDto = {
   equipmentId?: string
   /** The public cabin response exposes a code, not an equipment display name. */
   equipmentCode?: string
+  /** Human-readable equipment name from the asset catalog. */
+  equipmentName?: string
   /** Asset-service ledger location kind for this cabin content row. */
   locationKind?: string
+}
+
+export type RentalItemPhotoDto = {
+  id: string
+  url: string
+  variants?: {
+    small?: { url: string }
+    largeWebp?: { url: string }
+  }
+  capturedAt?: string | null
+  capturedAtKnown?: boolean
 }
 
 type RentalItemCoreDto = {
@@ -72,8 +85,9 @@ type RentalItemCoreDto = {
   photoCount: number
   mainPhotoUrl: string | null
   previewPhotoUrls?: string[]
-  /** The current asset HTTP boundary exposes no cabin-media read endpoint. */
-  mediaAvailability?: "UNAVAILABLE"
+  /** Legacy photo references imported into the asset passport from old-panel. */
+  legacyPhotos?: RentalItemPhotoDto[]
+  mediaAvailability?: "AVAILABLE"
   locationNodeId: string | null
   contents: string | null
   contentsItems: RentalItemContentsItemDto[]
@@ -189,6 +203,7 @@ const INTERNAL_RENTAL_ITEM_FIELD_IDS = new Set([
   "locationNodeId",
   "mainPhotoUrl",
   "previewPhotoUrls",
+  "legacyPhotos",
   "mediaAvailability",
   "photoCount",
   "contentsItems",

@@ -22,5 +22,9 @@ rwms:
       relay-enabled: false
     transfer:
       relay-enabled: false
+    owner-proof:
+      relay-enabled: false
+    equipment-movement:
+      relay-enabled: false
     security:
       dev-auth-bypass: false

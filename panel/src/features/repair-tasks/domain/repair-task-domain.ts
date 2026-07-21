@@ -243,6 +243,7 @@ export function createNewRepairTaskDraft(
     comment: "",
     lines: seed?.lines.map(cloneLine) ?? [],
     media: [],
+    maintenanceMediaReferences: [],
     pendingUploads: [],
   }
 }
@@ -268,6 +269,7 @@ export function toRepairTaskEditorDraft(
       ...subtask.materialLines.map(cloneLine),
     ]),
     media: [],
+    maintenanceMediaReferences: task.maintenanceMediaReferences ?? [],
     pendingUploads: [],
   }
 }

@@ -10,29 +10,9 @@ import type {
   EquipmentMovementDto,
   EquipmentWriteOffSummaryDto,
   DisposeEquipmentInput,
-  RegisterReturnEquipmentDispositionInput,
-  ResolveReturnEquipmentDispositionInput,
-  ReturnEquipmentDispositionCaseDto,
-  UpdateEquipmentUsagePayload,
+  TransferEquipmentInput,
 } from "@/types/equipment"
-import type {
-  MoveRentalItemContentToStockPayload,
-  RentalItemDto,
-} from "@/features/rental-items/model/rental-item"
 import type { WarehouseInventoryStockItemDto } from "@/types/warehouse-location"
-
-/**
- * Compatibility names for callers that have not yet been moved off their
- * browser-only workflow. This module never reads or writes these keys.
- */
-export const EQUIPMENT_MOCK_STORAGE_KEY =
-  "rwms:unsupported-equipment-transition"
-export const EQUIPMENT_MOCK_UPDATED_EVENT =
-  "rwms:unsupported-equipment-transition-updated"
-export const EQUIPMENT_DISPOSITIONS_STORAGE_KEY =
-  "rwms:unsupported-equipment-dispositions-transition"
-export const EQUIPMENT_DISPOSITIONS_UPDATED_EVENT =
-  "rwms:unsupported-equipment-dispositions-transition-updated"
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -71,22 +51,6 @@ type AssetEquipmentTotalsDto = {
   activeHeldQuantity: number
   availableStock: number
   balances: EquipmentBalanceDto[]
-}
-
-class UnsupportedEquipmentTransitionError extends Error {
-  constructor() {
-    super(
-      "Этот переход оборудования не поддержан asset-service и отключён до отдельного server-side cutover."
-    )
-    this.name = "UnsupportedEquipmentTransitionError"
-  }
-}
-
-export { UnsupportedEquipmentTransitionError }
-
-function unsupported(...argumentsToIgnore: unknown[]): never {
-  void argumentsToIgnore
-  throw new UnsupportedEquipmentTransitionError()
 }
 
 function assetApiBaseUrl() {
@@ -411,6 +375,62 @@ export async function disposeEquipment(
   return parseMovement(response)
 }
 
+export async function transferEquipment(
+  accessToken: string | null,
+  idempotencyKey: string,
+  input: TransferEquipmentInput
+): Promise<EquipmentMovementDto> {
+  if (!UUID_PATTERN.test(idempotencyKey)) {
+    throw new Error("Для перемещения нужен UUID Idempotency-Key.")
+  }
+
+  if (
+    !Number.isSafeInteger(input.sourceExpectedVersion) ||
+    input.sourceExpectedVersion < 0 ||
+    !Number.isSafeInteger(input.targetExpectedVersion) ||
+    input.targetExpectedVersion < 0
+  ) {
+    throw new Error(
+      "Для перемещения нужны актуальные версии исходного и целевого остатков."
+    )
+  }
+
+  if (!Number.isSafeInteger(input.quantity) || input.quantity < 1) {
+    throw new Error("Количество перемещения должно быть целым и больше нуля.")
+  }
+
+  const request = {
+    equipmentId: uuid(input.equipmentId),
+    sourceWarehouseId: uuid(input.sourceWarehouseId),
+    sourceRentalItemId: nullableUuid(input.sourceRentalItemId),
+    sourceLocationKind: enumValue(
+      input.sourceLocationKind,
+      BALANCE_LOCATION_KINDS
+    ),
+    sourceExpectedVersion: input.sourceExpectedVersion,
+    targetWarehouseId: uuid(input.targetWarehouseId),
+    targetRentalItemId: nullableUuid(input.targetRentalItemId),
+    targetLocationKind: enumValue(
+      input.targetLocationKind,
+      BALANCE_LOCATION_KINDS
+    ),
+    targetExpectedVersion: input.targetExpectedVersion,
+    quantity: input.quantity,
+  }
+
+  const response = await bearerRequest<unknown>(
+    requireAccessToken(accessToken),
+    `${assetApiBaseUrl()}/equipment/transfers`,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(request),
+    }
+  )
+
+  return parseMovement(response)
+}
+
 export function listEquipmentDispositionItems(params: {
   warehouseId: string
   search?: string
@@ -481,134 +501,4 @@ export async function listEquipmentWriteOffs(
       name: item.name,
       writtenOffQuantity: item.writtenOffQuantity,
     }))
-}
-
-/** Explicit transition stubs for browser-only callers outside this cutover. */
-export async function getEquipmentItem(
-  _id: string
-): Promise<EquipmentItemDto | null> {
-  return unsupported(_id)
-}
-
-export async function updateEquipmentUsages(
-  _equipmentItemId: string,
-  _payload: UpdateEquipmentUsagePayload[]
-): Promise<EquipmentItemDto | null> {
-  return unsupported(_equipmentItemId, _payload)
-}
-
-export async function moveEquipmentUsageToStock(
-  _equipmentItemId: string,
-  _usageId: string
-): Promise<EquipmentItemDto | null> {
-  return unsupported(_equipmentItemId, _usageId)
-}
-
-export async function moveRentalItemEquipmentToStock(
-  _rentalItemId: string,
-  _payload: MoveRentalItemContentToStockPayload[]
-): Promise<RentalItemDto | null> {
-  return unsupported(_rentalItemId, _payload)
-}
-
-export async function decreaseEquipmentStock(_params: {
-  warehouseId: string
-  items: Array<{ name: string; quantity: number }>
-}): Promise<void> {
-  return unsupported(_params)
-}
-
-export async function recordEquipmentLossFromReturn(_params: {
-  warehouseId: string
-  items: Array<{ name: string; quantity: number }>
-}): Promise<void> {
-  return unsupported(_params)
-}
-
-export function prepareReturnFurnitureEquipmentAllocation(_input: {
-  warehouseId: string
-  name: string
-  quantity: number
-  action: "RETURN_TO_STOCK" | "WRITE_OFF"
-}): { commit: () => void; rollback: () => void } {
-  return unsupported(_input)
-}
-
-export function applyReturnFurnitureEquipmentAllocation(_input: {
-  idempotencyKey: string
-  warehouseId: string
-  name: string
-  quantity: number
-  action: "RETURN_TO_STOCK" | "WRITE_OFF" | "LOST"
-}): void {
-  unsupported(_input)
-}
-
-export type PreparedReturnEquipmentDispositionReconciliation = {
-  cases: ReturnEquipmentDispositionCaseDto[]
-  commit: () => void
-  rollback: () => void
-}
-
-export function prepareReturnEquipmentDispositionReconciliation(_input: {
-  upserts: RegisterReturnEquipmentDispositionInput[]
-  removeReturnItemIds?: string[]
-}): PreparedReturnEquipmentDispositionReconciliation {
-  return unsupported(_input)
-}
-
-export async function reconcileReturnEquipmentDispositionCases(
-  _input: RegisterReturnEquipmentDispositionInput
-): Promise<ReturnEquipmentDispositionCaseDto[]> {
-  return unsupported(_input)
-}
-
-export async function removeUnresolvedReturnEquipmentDispositionCases(
-  _returnItemId: string
-): Promise<void> {
-  return unsupported(_returnItemId)
-}
-
-export async function getUnresolvedReturnEquipmentDispositionCases(_params: {
-  warehouseId?: string
-  returnItemId?: string
-  sourceRentalItemId?: string
-}): Promise<ReturnEquipmentDispositionCaseDto[]> {
-  return unsupported(_params)
-}
-
-/** Fail closed while the browser return-disposition workflow is removed. */
-export function hasUnresolvedReturnEquipmentDispositionForRentalItem(
-  _rentalItemId: string
-) {
-  void _rentalItemId
-  return true
-}
-
-/** Fail closed while the browser return-disposition workflow is removed. */
-export function hasReturnEquipmentDispositionHistoryForReturnItem(
-  _returnItemId: string
-) {
-  void _returnItemId
-  return true
-}
-
-export function getUnresolvedReturnEquipmentDispositionSnapshot(_params: {
-  returnItemId?: string
-  sourceRentalItemId?: string
-}): ReturnEquipmentDispositionCaseDto[] {
-  return unsupported(_params)
-}
-
-export async function listEquipmentDispositionTransferTargets(_params: {
-  warehouseId: string
-  sourceRentalItemId: string
-}): Promise<Array<{ id: string; number: string }>> {
-  return unsupported(_params)
-}
-
-export async function resolveReturnEquipmentDisposition(
-  _input: ResolveReturnEquipmentDispositionInput
-): Promise<ReturnEquipmentDispositionCaseDto> {
-  return unsupported(_input)
 }

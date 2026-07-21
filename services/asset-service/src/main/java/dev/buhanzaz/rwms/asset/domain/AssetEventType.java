@@ -19,6 +19,7 @@ public enum AssetEventType {
   EQUIPMENT_HOLD_COMMITTED("asset.equipment-allocation-hold.committed.v1"),
   EQUIPMENT_HOLD_RELEASED("asset.equipment-allocation-hold.released.v1"),
   EQUIPMENT_HOLD_EXPIRED("asset.equipment-allocation-hold.expired.v1"),
+  EQUIPMENT_HOLD_EXECUTED("asset.equipment-allocation-hold.executed.v1"),
   OPERATION_LEASE_ACQUIRED("asset.operation-lease.acquired.v1"),
   OPERATION_LEASE_RENEWED("asset.operation-lease.renewed.v1"),
   OPERATION_LEASE_RELEASED("asset.operation-lease.released.v1"),

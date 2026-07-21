@@ -68,7 +68,11 @@ class AuthServicePostgresIntegrationTest {
                     assertThat(row.get("client_authentication_methods")).isEqualTo("client_secret_basic");
                     assertThat(row.get("authorization_grant_types")).isEqualTo("client_credentials");
                     assertThat(String.valueOf(row.get("scopes")))
-                            .contains("asset.maintenance", "task-board.task-sync")
+                            .contains(
+                                    "asset.maintenance",
+                                    "task-board.task-sync",
+                                    "queue-registry.write",
+                                    "media.maintenance")
                             .doesNotContain("asset.internal", "rwms.write", "warehouse.read");
                     assertThat(String.valueOf(row.get("client_settings")))
                             .contains("\"rwms.client.enabled\":false");

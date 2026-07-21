@@ -19,6 +19,7 @@ import {
 
 const RENTAL_ITEM_ID = "4b87e123-1f2a-4a38-ae57-c0d0e2a05c01"
 const WAREHOUSE_ID = "69d4ca7e-d4d6-48d3-a5b4-0f60e43680f3"
+const CANONICAL_SEEDED_WAREHOUSE_ID = "00000000-0000-0000-0000-000000000001"
 const EQUIPMENT_ID = "f9d50892-25ae-4c08-a5a9-108e9a93dc1e"
 const IDEMPOTENCY_KEY = "662e3540-4148-4c9f-a5a0-4e50f319a0e4"
 const MANUAL_NOTE_ID = "73eaad90-e67d-4b59-b34e-0af48ce4f731"
@@ -43,6 +44,7 @@ function rentalItemResponse(overrides: Record<string, unknown> = {}) {
       {
         equipmentId: EQUIPMENT_ID,
         equipmentCode: "CHAIR-01",
+        equipmentName: "Стул",
         quantity: 4,
         locationKind: "CABIN_NON_RENTED",
       },
@@ -72,10 +74,32 @@ describe("asset rental-items HTTP adapter", () => {
     vi.unstubAllGlobals()
   })
 
-  it("maps only fields proved by the public asset response", async () => {
+  it("maps imported warehouse fields and catalog names from the public asset response", async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({
-        content: [rentalItemResponse()],
+        content: [
+          rentalItemResponse({
+            passport: {
+              shipmentDate: "2026-05-02",
+              tenant: "ООО СтройПроект",
+              price: 31_500,
+              photoCount: 1,
+              mainPhotoUrl: "https://images.example.test/cabin.jpg",
+              previewPhotoUrls: ["https://images.example.test/cabin-small.jpg"],
+              legacyPhotos: [
+                {
+                  id: "spb-42-photo-1",
+                  url: "https://images.example.test/cabin.jpg",
+                  variants: {
+                    small: {
+                      url: "https://images.example.test/cabin-small.jpg",
+                    },
+                  },
+                },
+              ],
+            },
+          }),
+        ],
         page: 0,
         size: 200,
         totalElements: 1,
@@ -100,19 +124,45 @@ describe("asset rental-items HTTP adapter", () => {
       warehouseId: WAREHOUSE_ID,
       type: "БК-2",
       comment: "Проверить перед выдачей",
-      mediaAvailability: "UNAVAILABLE",
-      hasPhotos: false,
-      shipmentDate: null,
-      tenant: null,
-      price: null,
+      mediaAvailability: "AVAILABLE",
+      hasPhotos: true,
+      photoCount: 1,
+      mainPhotoUrl: "https://images.example.test/cabin.jpg",
+      shipmentDate: "2026-05-02",
+      tenant: "ООО СтройПроект",
+      price: 31_500,
       contentsItems: [
         {
           equipmentId: EQUIPMENT_ID,
           equipmentCode: "CHAIR-01",
-          name: "CHAIR-01",
+          equipmentName: "Стул",
+          name: "Стул",
           quantity: 4,
         },
       ],
+    })
+  })
+
+  it("accepts the canonical seeded warehouse UUID used by the services", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        content: [
+          rentalItemResponse({ warehouseId: CANONICAL_SEEDED_WAREHOUSE_ID }),
+        ],
+        page: 0,
+        size: 200,
+        totalElements: 1,
+        totalPages: 1,
+      })
+    )
+
+    await expect(
+      listAssetRentalItems({
+        accessToken: "access-token",
+        warehouseId: CANONICAL_SEEDED_WAREHOUSE_ID,
+      })
+    ).resolves.toMatchObject({
+      content: [{ warehouseId: CANONICAL_SEEDED_WAREHOUSE_ID }],
     })
   })
 

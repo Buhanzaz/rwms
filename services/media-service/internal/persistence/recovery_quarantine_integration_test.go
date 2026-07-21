@@ -101,6 +101,18 @@ func TestV1UpgradeQuarantinedAssetsAreRuntimeInvisibleAndDoNotConsumeQuota(t *te
 	if _, err := runtimePool.Exec(ctx, string(mediamigration.V3)); err != nil {
 		t.Fatalf("upgrade isolated schema from V2 to V3: %v", err)
 	}
+	if _, err := runtimePool.Exec(ctx, string(mediamigration.V4)); err != nil {
+		t.Fatalf("upgrade isolated schema from V3 to V4: %v", err)
+	}
+	if _, err := runtimePool.Exec(ctx, string(mediamigration.V4_1)); err != nil {
+		t.Fatalf("prepare isolated V4 schema for V5 folder backfill: %v", err)
+	}
+	if _, err := runtimePool.Exec(ctx, string(mediamigration.V5)); err != nil {
+		t.Fatalf("upgrade isolated schema from V4 to V5: %v", err)
+	}
+	if _, err := runtimePool.Exec(ctx, string(mediamigration.V5_1)); err != nil {
+		t.Fatalf("restore isolated V5 runtime source guard: %v", err)
+	}
 
 	var quarantinedCount int
 	if err := runtimePool.QueryRow(ctx, `select count(*) from media_recovery_quarantine
@@ -109,6 +121,15 @@ func TestV1UpgradeQuarantinedAssetsAreRuntimeInvisibleAndDoNotConsumeQuota(t *te
 	}
 	if quarantinedCount != len(quarantinedIDs) {
 		t.Fatalf("migrated media-asset quarantine records = %d, want %d", quarantinedCount, len(quarantinedIDs))
+	}
+	var oneItemFolders, distinctFolders int
+	if err := runtimePool.QueryRow(ctx, `select count(*) filter (where folder_id=media_id),
+		count(distinct folder_id) from media_asset`).Scan(&oneItemFolders, &distinctFolders); err != nil {
+		t.Fatalf("read V5 legacy folder backfill: %v", err)
+	}
+	if oneItemFolders != len(quarantinedIDs) || distinctFolders != len(quarantinedIDs) {
+		t.Fatalf("legacy folder backfill = matching:%d distinct:%d, want %d one-item folders",
+			oneItemFolders, distinctFolders, len(quarantinedIDs))
 	}
 
 	repository := NewRepository(runtimePool)

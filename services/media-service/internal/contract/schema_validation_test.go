@@ -13,6 +13,24 @@ func TestMediaFactSchemaValidatesStrictFixtures(t *testing.T) {
 	schema := compileActualSchema(t, "media-facts-v1.schema.json")
 	valid := validFactFixture()
 	assertSchemaAccepts(t, schema, valid)
+	grouped := cloneFixture(t, valid)
+	grouped["payload"].(map[string]any)["folderId"] = "dd344d67-9502-4716-865d-592e61131b9c"
+	assertSchemaAccepts(t, schema, grouped)
+	cabin := cloneFixture(t, valid)
+	cabin["payload"].(map[string]any)["ownerType"] = "CABIN"
+	assertSchemaAccepts(t, schema, cabin)
+	maintenance := cloneFixture(t, valid)
+	maintenance["payload"].(map[string]any)["ownerType"] = "MAINTENANCE_REPAIR"
+	assertSchemaAccepts(t, schema, maintenance)
+	logistics := cloneFixture(t, valid)
+	logistics["payload"].(map[string]any)["ownerType"] = "LOGISTICS_TRANSFER"
+	logistics["payload"].(map[string]any)["ownerId"] =
+		"d96d49c9-9e30-4d7c-b298-1687acb06a08:11bbb7f0-cf00-47cf-822e-21b362a5b206"
+	assertSchemaAccepts(t, schema, logistics)
+	deleted := cloneFixture(t, valid)
+	deleted["eventType"] = "media.media.deleted.v1"
+	deleted["payload"].(map[string]any)["status"] = "DELETED"
+	assertSchemaAccepts(t, schema, deleted)
 
 	tests := map[string]func(map[string]any){
 		"unknown root property": func(value map[string]any) { value["credential"] = "forbidden" },
@@ -26,6 +44,17 @@ func TestMediaFactSchemaValidatesStrictFixtures(t *testing.T) {
 		},
 		"unapproved owner type": func(value map[string]any) {
 			value["payload"].(map[string]any)["ownerType"] = "INSPECTION"
+		},
+		"logistics UUID instead of structured owner": func(value map[string]any) {
+			value["payload"].(map[string]any)["ownerType"] = "LOGISTICS_RETURN"
+		},
+		"maintenance composite owner": func(value map[string]any) {
+			value["payload"].(map[string]any)["ownerType"] = "MAINTENANCE_ESTIMATE"
+			value["payload"].(map[string]any)["ownerId"] =
+				"d96d49c9-9e30-4d7c-b298-1687acb06a08:11bbb7f0-cf00-47cf-822e-21b362a5b206"
+		},
+		"malformed optional folder": func(value map[string]any) {
+			value["payload"].(map[string]any)["folderId"] = "not-a-uuid"
 		},
 		"object provenance leakage": func(value map[string]any) {
 			value["payload"].(map[string]any)["sourceObjectKey"] = "media/private/source.jpg"

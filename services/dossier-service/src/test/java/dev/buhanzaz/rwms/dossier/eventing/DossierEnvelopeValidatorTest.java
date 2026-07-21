@@ -102,6 +102,78 @@ class DossierEnvelopeValidatorTest {
   }
 
   @Test
+  void validatesDirectCabinMediaAsACabinSubject() {
+    UUID mediaId = UUID.fromString("40000000-0000-0000-0000-000000000003");
+    UUID folderId = UUID.fromString("40000000-0000-0000-0000-000000000004");
+    String fact =
+        envelope(
+            "media.media.ready.v1",
+            "media-service",
+            "MEDIA",
+            mediaId,
+            """
+            {"mediaId":"%s","folderId":"%s","ownerType":"CABIN","ownerId":"%s","warehouseId":"%s","kind":"IMAGE","status":"READY","generation":1,"rotationDegrees":0}
+            """
+                .formatted(mediaId, folderId, CABIN_ID, WAREHOUSE_ID));
+    fact = fact.replace("\"aggregateVersion\":0", "\"aggregateVersion\":1");
+
+    DossierValidatedEvent event =
+        validator.validate(
+            "rwms.media.media.v1",
+            0,
+            3,
+            mediaId.toString(),
+            fact.getBytes(StandardCharsets.UTF_8));
+
+    assertThat(event.cabinId()).isEqualTo(CABIN_ID);
+    assertThat(event.warehouseId()).isEqualTo(WAREHOUSE_ID);
+    assertThat(event.secondaryId()).isEqualTo(CABIN_ID);
+    assertThat(event.activityCode()).isEqualTo("MEDIA_READY");
+    assertThat(event.payload().required("folderId").stringValue()).isEqualTo(folderId.toString());
+  }
+
+  @Test
+  void acceptsCanonicalUploadedVersionTwoWithFolderAndActor() {
+    UUID mediaId = UUID.fromString("40000000-0000-0000-0000-000000000005");
+    UUID folderId = UUID.fromString("40000000-0000-0000-0000-000000000006");
+    UUID actorId = UUID.fromString("60000000-0000-0000-0000-000000000001");
+    String fact =
+        envelope(
+                "media.media.uploaded.v1",
+                "media-service",
+                "MEDIA",
+                mediaId,
+                """
+                {"mediaId":"%s","folderId":"%s","ownerType":"CABIN","ownerId":"%s","warehouseId":"%s","kind":"IMAGE","status":"PROCESSING","generation":1,"rotationDegrees":0}
+                """
+                    .formatted(mediaId, folderId, CABIN_ID, WAREHOUSE_ID))
+            .replace("\"aggregateVersion\":0", "\"aggregateVersion\":2")
+            .replace(
+                "\"actorRef\":null",
+                "\"actorRef\":{\"subjectId\":\"%s\",\"principalType\":\"USER\",\"profileRevision\":\"70000000-0000-0000-0000-000000000001\"}"
+                    .formatted(actorId));
+
+    DossierValidatedEvent event =
+        validator.validate(
+            "rwms.media.media.v1",
+            2,
+            11,
+            mediaId.toString(),
+            fact.getBytes(StandardCharsets.UTF_8));
+
+    assertThat(event.aggregateVersion()).isEqualTo(2);
+    assertThat(event.cabinId()).isEqualTo(CABIN_ID);
+    assertThat(event.warehouseId()).isEqualTo(WAREHOUSE_ID);
+    assertThat(event.secondaryId()).isEqualTo(CABIN_ID);
+    assertThat(event.activityCode()).isNull();
+    assertThat(event.payload().required("folderId").stringValue()).isEqualTo(folderId.toString());
+    assertThat(event.actorSubjectId()).isEqualTo(actorId);
+    assertThat(event.actorPrincipalType()).isEqualTo("USER");
+    assertThat(event.actorProfileRevision())
+        .isEqualTo("70000000-0000-0000-0000-000000000001");
+  }
+
+  @Test
   void hashesCanonicalValidatedEnvelopeRatherThanWireWhitespaceOrPropertyOrder() {
     String reordered =
         assetFact()

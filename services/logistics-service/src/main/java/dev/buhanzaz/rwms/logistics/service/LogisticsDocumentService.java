@@ -75,6 +75,7 @@ public class LogisticsDocumentService {
   private static final String CANCEL_TRANSFER = "CANCEL_TRANSFER";
   private static final String RECONCILE_DOCUMENT = "RECONCILE_DOCUMENT";
   static final String RETURN_WAREHOUSE_IDENTITY = "RETURN_WAREHOUSE_IDENTITY";
+  static final String RETURN_MEDIA_OWNER_PROOF_REGISTER = "RETURN_MEDIA_OWNER_PROOF_REGISTER";
   static final String RETURN_MEDIA_VALIDATE = "RETURN_MEDIA_VALIDATE";
   static final String RETURN_ASSET_SETTLE_FREE = "RETURN_ASSET_SETTLE_FREE";
   static final String RETURN_ASSET_SETTLE_SHORTAGE = "RETURN_ASSET_SETTLE_SHORTAGE";
@@ -102,6 +103,10 @@ public class LogisticsDocumentService {
   static final String TRANSFER_ASSET_ARRIVAL_SNAPSHOT = "TRANSFER_ASSET_ARRIVAL_SNAPSHOT";
   static final String TRANSFER_ASSET_ARRIVE = "TRANSFER_ASSET_ARRIVE";
   static final String TRANSFER_ASSET_LEASE_RELEASE = "TRANSFER_ASSET_LEASE_RELEASE";
+  static final String TRANSFER_MEDIA_OWNER_PROOF_REGISTER =
+      "TRANSFER_MEDIA_OWNER_PROOF_REGISTER";
+  static final String TRANSFER_MEDIA_OWNER_PROOF_DEACTIVATE =
+      "TRANSFER_MEDIA_OWNER_PROOF_DEACTIVATE";
 
   private final LogisticsDocumentRepository documentRepository;
   private final LogisticsDocumentLineRepository lineRepository;
@@ -134,6 +139,23 @@ public class LogisticsDocumentService {
             LogisticsDocument.createReturn(request.warehouseId(), subjectId, correlationId));
     List<LogisticsDocumentLine> lines =
         lineRepository.saveAllAndFlush(returnLines(document, request.lines()));
+    OffsetDateTime proofCreatedAt = now();
+    for (LogisticsDocumentLine line : lines) {
+      createLineAttempt(
+          document,
+          line,
+          LogisticsTargetService.MEDIA,
+          RETURN_MEDIA_OWNER_PROOF_REGISTER,
+          ownerProofDigest(
+              RETURN_MEDIA_OWNER_PROOF_REGISTER,
+              document,
+              line,
+              document.getWarehouseId(),
+              0,
+              0,
+              true),
+          proofCreatedAt);
+    }
     eventStore.initialize(document, lines.size(), correlationId, subjectId);
     remember(subjectId, idempotencyKey, CREATE_RETURN, checksum, document);
     return new CreateResult(toView(document), false);
@@ -184,6 +206,23 @@ public class LogisticsDocumentService {
                 request.warehouseId(), request.destinationWarehouseId(), subjectId, correlationId));
     List<LogisticsDocumentLine> lines =
         lineRepository.saveAllAndFlush(transferLines(document, request.lines()));
+    OffsetDateTime proofCreatedAt = now();
+    for (LogisticsDocumentLine line : lines) {
+      createLineAttempt(
+          document,
+          line,
+          LogisticsTargetService.MEDIA,
+          TRANSFER_MEDIA_OWNER_PROOF_REGISTER,
+          ownerProofDigest(
+              TRANSFER_MEDIA_OWNER_PROOF_REGISTER,
+              document,
+              line,
+              transferDestination(document),
+              0,
+              0,
+              true),
+          proofCreatedAt);
+    }
     eventStore.initialize(document, lines.size(), correlationId, subjectId);
     remember(subjectId, idempotencyKey, CREATE_TRANSFER, checksum, document);
     return new CreateResult(toView(document), false);
@@ -818,6 +857,23 @@ public class LogisticsDocumentService {
     documentRepository.saveAndFlush(document);
     for (LogisticsDocumentLine line : lines) line.cancel();
     lineRepository.saveAllAndFlush(lines);
+    OffsetDateTime proofUpdatedAt = now();
+    for (LogisticsDocumentLine line : lines) {
+      createLineAttempt(
+          document,
+          line,
+          LogisticsTargetService.MEDIA,
+          TRANSFER_MEDIA_OWNER_PROOF_DEACTIVATE,
+          ownerProofDigest(
+              TRANSFER_MEDIA_OWNER_PROOF_DEACTIVATE,
+              document,
+              line,
+              transferDestination(document),
+              1,
+              1,
+              false),
+          proofUpdatedAt);
+    }
     eventStore.append(
         document,
         lines.size(),
@@ -1274,6 +1330,26 @@ public class LogisticsDocumentService {
               values.add(Long.toString(reference.getGeneration()));
             });
     return LogisticsCommandChecksum.sha256(TRANSFER_MEDIA_VALIDATE, values);
+  }
+
+  private static String ownerProofDigest(
+      String operation,
+      LogisticsDocument document,
+      LogisticsDocumentLine line,
+      UUID warehouseId,
+      long ownerRevision,
+      long aggregateVersion,
+      boolean active) {
+    return LogisticsCommandChecksum.sha256(
+        operation,
+        List.of(
+            document.getDocumentType().name(),
+            document.getId().toString(),
+            line.getId().toString(),
+            warehouseId.toString(),
+            Long.toString(ownerRevision),
+            Long.toString(aggregateVersion),
+            Boolean.toString(active)));
   }
 
   private static ObjectNode shortagesSnapshot(

@@ -83,11 +83,10 @@ public class MaintenanceInboundDomainEffects implements MaintenanceInboundEffect
     JsonNode payload = event.payload();
     JsonNode warehouse = payload.get("warehouseId");
     JsonNode status = payload.get("status");
-    if (warehouse == null || status == null) return;
     service.applyInboundRentalItemFact(
         UUID.fromString(event.aggregateId()),
-        UUID.fromString(warehouse.stringValue()),
-        status.stringValue(),
+        warehouse == null ? null : UUID.fromString(warehouse.stringValue()),
+        status == null ? null : status.stringValue(),
         event.aggregateVersion());
   }
 

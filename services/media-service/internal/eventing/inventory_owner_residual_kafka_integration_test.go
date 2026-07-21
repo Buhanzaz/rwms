@@ -332,7 +332,15 @@ func newResidualKafkaFixture(t *testing.T,
 	if _, err := pool.Exec(ctx, `create extension if not exists pgcrypto`); err != nil {
 		t.Fatalf("enable isolated Kafka pgcrypto: %v", err)
 	}
-	for _, migration := range [][]byte{mediamigration.V1, mediamigration.V2, mediamigration.V3} {
+	for _, migration := range [][]byte{
+		mediamigration.V1,
+		mediamigration.V2,
+		mediamigration.V3,
+		mediamigration.V4,
+		mediamigration.V4_1,
+		mediamigration.V5,
+		mediamigration.V5_1,
+	} {
 		if _, err := pool.Exec(ctx, string(migration)); err != nil {
 			t.Fatalf("apply isolated Kafka migration: %v", err)
 		}

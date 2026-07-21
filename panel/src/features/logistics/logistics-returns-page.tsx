@@ -364,10 +364,9 @@ export function LogisticsReturnsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
-          Принятие без повреждений использует только заранее подготовленные
-          READY media references. Публичная загрузка фотографий возврата пока не
-          определена. Запрос сметы доступен по server-issued line ID и
-          подтверждённым equipment ID.
+          Фотографии осмотра загружаются в media-service для каждой
+          server-issued строки и передаются в команду только после статуса
+          READY. Запрос сметы доступен по line ID и подтверждённым equipment ID.
         </CardContent>
       </Card>
 

@@ -1,66 +1,61 @@
-import { useState } from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { CheckSquare, Minus, Plus, Square } from "lucide-react"
+import { useMemo, useRef, useState } from "react"
+import { WarehouseIcon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { toast } from "sonner"
 
-import { moveRentalItemEquipmentToStock } from "@/api/equipment-api"
+import { getEquipmentItems } from "@/api/equipment-api"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { FieldError } from "@/components/ui/field"
 import { useAuth } from "@/features/auth/use-auth"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
-import type {
-  MoveRentalItemContentToStockPayload,
-  PageResponse,
-  RentalItemDto,
-} from "@/features/rental-items/model/rental-item"
+import { RentalItemContentsQuantityRows } from "@/features/rental-items/rental-item-contents-quantity-rows"
+import {
+  canTransferRentalItemContents,
+  createRentalItemContentsTransferInput,
+  executeRentalItemContentsTransferBatch,
+  formatRentalItemContentsSourceSummary,
+  formatRentalItemContentsTransferError,
+  invalidateRentalItemContentsQueries,
+  rentalItemContentsTransferLineKey,
+  rentalItemContentsTransferRows,
+  RENTAL_ITEM_CONTENTS_EQUIPMENT_QUERY_KEY,
+  type RentalItemContentsTransferRow,
+} from "@/features/rental-items/rental-item-contents-transfer-support"
+import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 
-type MoveContentsToStockDialogProps = {
+type Props = {
   item: RentalItemDto | null
   open: boolean
   onOpenChange: (open: boolean) => void
 }
+type Draft = { quantity: number; selected: boolean }
 
-type DraftMoveRow = {
-  name: string
-  maxQuantity: number
-  quantity: number
-  selected: boolean
-}
-
-export function MoveContentsToStockDialog({
-  item,
-  open,
-  onOpenChange,
-}: MoveContentsToStockDialogProps) {
-  const { currentUser } = useAuth()
-  const canEditRentalItem =
-    item !== null && hasWarehouseAccess(currentUser, item.warehouseId, "EDIT")
-
+export function MoveContentsToStockDialog({ item, open, onOpenChange }: Props) {
   return (
-    <Dialog
-      open={open && canEditRentalItem}
-      onOpenChange={(nextOpen) => {
-        if (!nextOpen || canEditRentalItem) {
-          onOpenChange(nextOpen)
-        }
-      }}
-    >
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>
             Переместить наполнение на склад
             {item ? ` — ${item.number}` : ""}
           </DialogTitle>
+          <DialogDescription>
+            Выберите фактическое оборудование бытовки. Остатки на складе
+            обновятся сразу после перемещения.
+          </DialogDescription>
         </DialogHeader>
-
-        {item && canEditRentalItem ? (
-          <MoveContentsToStockDialogContent
-            key={getDialogStateKey(item, open)}
+        {item && open ? (
+          <Content
+            key={`${item.id}:open`}
             item={item}
             onClose={() => onOpenChange(false)}
           />
@@ -70,31 +65,7 @@ export function MoveContentsToStockDialog({
   )
 }
 
-function getDialogStateKey(item: RentalItemDto, open: boolean) {
-  const contentsKey = item.contentsItems
-    .map((contentItem) => `${contentItem.name}:${contentItem.quantity}`)
-    .join("|")
-
-  return `${item.id}:${open ? "open" : "closed"}:${contentsKey}`
-}
-
-function updateRentalItemsPageCache(
-  oldData: PageResponse<RentalItemDto> | undefined,
-  updatedItem: RentalItemDto
-) {
-  if (!oldData) {
-    return oldData
-  }
-
-  return {
-    ...oldData,
-    content: oldData.content.map((item) => {
-      return item.id === updatedItem.id ? updatedItem : item
-    }),
-  }
-}
-
-function MoveContentsToStockDialogContent({
+function Content({
   item,
   onClose,
 }: {
@@ -102,229 +73,213 @@ function MoveContentsToStockDialogContent({
   onClose: () => void
 }) {
   const queryClient = useQueryClient()
+  const { accessToken, currentUser } = useAuth()
+  const canManage = hasWarehouseAccess(currentUser, item.warehouseId, "MANAGE")
+  const eligible = canTransferRentalItemContents(item)
+  const [draft, setDraft] = useState<Record<string, Draft>>({})
+  const [errorText, setErrorText] = useState<string | null>(null)
+  const idempotencyKeys = useRef(new Map<string, string>())
+  const completedLines = useRef(new Set<string>())
 
-  const [draftRows, setDraftRows] = useState<DraftMoveRow[]>(() =>
-    item.contentsItems.map((contentItem) => ({
-      name: contentItem.name,
-      maxQuantity: contentItem.quantity,
-      quantity: contentItem.quantity,
-      selected: false,
-    }))
+  const equipmentQuery = useQuery({
+    queryKey: [...RENTAL_ITEM_CONTENTS_EQUIPMENT_QUERY_KEY, item.warehouseId],
+    queryFn: () =>
+      getEquipmentItems(accessToken, { warehouseId: item.warehouseId }),
+    enabled: canManage && Boolean(accessToken),
+    refetchInterval: 2_000,
+  })
+  const sourceRows = useMemo(
+    () => rentalItemContentsTransferRows(equipmentQuery.data ?? [], item.id),
+    [equipmentQuery.data, item.id]
   )
+  const rows = useMemo(
+    () =>
+      sourceRows.map((row) => ({
+        ...row,
+        quantity: Math.min(
+          row.availableQuantity,
+          draft[row.equipmentId]?.quantity ?? row.availableQuantity
+        ),
+        selected: draft[row.equipmentId]?.selected ?? false,
+      })),
+    [draft, sourceRows]
+  )
+  const selectedRows = rows.filter((row) => row.selected && row.quantity > 0)
+  const allSelected = rows.length > 0 && rows.every((row) => row.selected)
 
-  const selectedPayload: MoveRentalItemContentToStockPayload[] = draftRows
-    .filter((row) => {
-      return row.selected && row.quantity > 0
+  function line(row: RentalItemContentsTransferRow & { quantity: number }) {
+    const input = createRentalItemContentsTransferInput({
+      row,
+      targetWarehouseId: item.warehouseId,
+      targetRentalItemId: null,
+      targetLocationKind: "STOCK",
+      quantity: row.quantity,
     })
-    .map((row) => ({
-      name: row.name,
-      quantity: Math.min(row.quantity, row.maxQuantity),
-    }))
+    return { lineKey: rentalItemContentsTransferLineKey(input), input }
+  }
 
-  const allSelected =
-    draftRows.length > 0 &&
-    draftRows.every((row) => {
-      return row.selected
-    })
+  function clearCompleted(row: RentalItemContentsTransferRow) {
+    completedLines.current.delete(line({ ...row, quantity: 1 }).lineKey)
+  }
 
-  const moveMutation = useMutation({
+  async function refresh() {
+    await invalidateRentalItemContentsQueries(queryClient)
+  }
+
+  const mutation = useMutation({
     mutationFn: () => {
-      return moveRentalItemEquipmentToStock(item.id, selectedPayload)
-    },
-    onSuccess: (updatedItem) => {
-      if (!updatedItem) {
-        return
+      if (!accessToken) throw new Error("Сессия завершена.")
+      if (!canManage) {
+        throw new Error(
+          "Для управления наполнением нужен доступ MANAGE к складу."
+        )
       }
-
-      queryClient.setQueryData(["rental-item", item.id], updatedItem)
-
-      queryClient.setQueriesData<PageResponse<RentalItemDto>>(
-        {
-          queryKey: ["rental-items"],
-        },
-        (oldData) => updateRentalItemsPageCache(oldData, updatedItem)
-      )
-
-      queryClient.invalidateQueries({
-        queryKey: ["equipment-items"],
+      if (!eligible) {
+        throw new Error("Перемещение недоступно для текущего статуса бытовки.")
+      }
+      return executeRentalItemContentsTransferBatch({
+        accessToken,
+        lines: selectedRows.map(line),
+        idempotencyKeys: idempotencyKeys.current,
+        completedLineKeys: completedLines.current,
+        onLineCompleted: (completed) =>
+          setDraft((current) => ({
+            ...current,
+            [completed.input.equipmentId]: { quantity: 0, selected: false },
+          })),
       })
-
-      queryClient.invalidateQueries({
-        queryKey: ["rental-items"],
-      })
-
-      queryClient.invalidateQueries({
-        queryKey: ["rental-item", item.id],
-      })
-
-      queryClient.invalidateQueries({
-        queryKey: ["rental-item"],
-      })
-
+    },
+    onSuccess: async () => {
+      await refresh()
+      toast.success("Оборудование возвращено на склад.")
       onClose()
+    },
+    onError: (error) => {
+      setErrorText(formatRentalItemContentsTransferError(error))
+      void refresh()
     },
   })
 
-  function toggleRow(name: string, selected: boolean) {
-    setDraftRows((currentRows) =>
-      currentRows.map((row) => {
-        if (row.name !== name) {
-          return row
-        }
+  function toggleRow(equipmentId: string, selected: boolean) {
+    const row = rows.find((candidate) => candidate.equipmentId === equipmentId)
+    if (!row) return
+    clearCompleted(row)
+    setErrorText(null)
+    setDraft((current) => ({
+      ...current,
+      [equipmentId]: {
+        selected,
+        quantity:
+          selected && row.quantity === 0 ? row.availableQuantity : row.quantity,
+      },
+    }))
+  }
 
-        return {
-          ...row,
-          selected,
-          quantity:
-            selected && row.quantity === 0 ? row.maxQuantity : row.quantity,
-        }
-      })
+  function changeQuantity(equipmentId: string, delta: number) {
+    const row = rows.find((candidate) => candidate.equipmentId === equipmentId)
+    if (!row) return
+    clearCompleted(row)
+    const quantity = Math.min(
+      row.availableQuantity,
+      Math.max(0, row.quantity + delta)
     )
+    setErrorText(null)
+    setDraft((current) => ({
+      ...current,
+      [equipmentId]: { quantity, selected: quantity > 0 },
+    }))
   }
 
   function toggleAll() {
-    setDraftRows((currentRows) =>
-      currentRows.map((row) => ({
-        ...row,
-        selected: !allSelected,
-        quantity:
-          !allSelected && row.quantity === 0 ? row.maxQuantity : row.quantity,
-      }))
-    )
+    const selected = !allSelected
+    rows.forEach(clearCompleted)
+    setErrorText(null)
+    setDraft((current) => ({
+      ...current,
+      ...Object.fromEntries(
+        rows.map((row) => [
+          row.equipmentId,
+          {
+            selected,
+            quantity:
+              selected && row.quantity === 0
+                ? row.availableQuantity
+                : row.quantity,
+          },
+        ])
+      ),
+    }))
   }
 
-  function decreaseQuantity(name: string) {
-    setDraftRows((currentRows) =>
-      currentRows.map((row) => {
-        if (row.name !== name) {
-          return row
-        }
-
-        const nextQuantity = Math.max(0, row.quantity - 1)
-
-        return {
-          ...row,
-          quantity: nextQuantity,
-          selected: nextQuantity > 0 ? row.selected : false,
-        }
-      })
-    )
-  }
-
-  function increaseQuantity(name: string) {
-    setDraftRows((currentRows) =>
-      currentRows.map((row) => {
-        if (row.name !== name) {
-          return row
-        }
-
-        const nextQuantity = Math.min(row.maxQuantity, row.quantity + 1)
-
-        return {
-          ...row,
-          quantity: nextQuantity,
-          selected: nextQuantity > 0,
-        }
-      })
-    )
-  }
-
-  if (draftRows.length === 0) {
+  if (!canManage || !eligible) {
     return (
-      <div className="grid gap-4">
-        <div className="rounded-md border bg-muted/30 p-4 text-sm text-muted-foreground">
-          В бытовке нет наполнения для перемещения.
-        </div>
-
-        <div className="flex justify-end">
-          <Button variant="outline" onClick={onClose}>
-            Закрыть
-          </Button>
-        </div>
-      </div>
+      <DialogFooter>
+        <FieldError className="mr-auto">
+          {!canManage
+            ? "Для управления наполнением нужен доступ MANAGE к складу."
+            : "Перемещение недоступно для текущего статуса бытовки."}
+        </FieldError>
+        <Button variant="outline" onClick={onClose}>
+          Закрыть
+        </Button>
+      </DialogFooter>
     )
   }
 
   return (
-    <div className="grid gap-4">
-      <Button
-        type="button"
-        variant="outline"
-        className="w-fit"
-        onClick={toggleAll}
-      >
-        {allSelected ? (
-          <CheckSquare className="mr-2 size-4" />
-        ) : (
-          <Square className="mr-2 size-4" />
-        )}
-        Выбрать всё
-      </Button>
-
-      <div className="max-h-[360px] overflow-auto rounded-md border">
-        {draftRows.map((row) => (
-          <div
-            key={row.name}
-            className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 border-b px-3 py-2 text-sm last:border-b-0"
+    <div className="flex max-h-[75vh] flex-col gap-4 overflow-auto pr-1">
+      {!equipmentQuery.isLoading && !equipmentQuery.isError ? (
+        <p
+          className="text-sm"
+          title={formatRentalItemContentsSourceSummary(item.number, sourceRows)}
+        >
+          {formatRentalItemContentsSourceSummary(item.number, sourceRows)}
+        </p>
+      ) : null}
+      {equipmentQuery.isLoading ? (
+        <p className="text-sm text-muted-foreground">Загрузка наполнения…</p>
+      ) : equipmentQuery.isError ? (
+        <FieldError>
+          {equipmentQuery.error instanceof Error
+            ? equipmentQuery.error.message
+            : "Не удалось загрузить остатки оборудования."}
+        </FieldError>
+      ) : rows.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          В бытовке нет доступного наполнения для перемещения.
+        </p>
+      ) : (
+        <>
+          <Button
+            type="button"
+            variant="outline"
+            className="w-fit"
+            onClick={toggleAll}
           >
-            <Checkbox
-              checked={row.selected}
-              onCheckedChange={(value) => toggleRow(row.name, value === true)}
-            />
-
-            <div className="min-w-0">
-              <div className="truncate font-medium">{row.name}</div>
-              <div className="text-xs text-muted-foreground">
-                В бытовке: {row.maxQuantity} шт.
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 whitespace-nowrap">
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className="size-7"
-                disabled={row.quantity <= 0}
-                onClick={() => decreaseQuantity(row.name)}
-              >
-                <Minus className="size-3.5" />
-              </Button>
-
-              <div className="min-w-12 text-center text-muted-foreground">
-                <span className="font-semibold text-foreground">
-                  {row.quantity}
-                </span>{" "}
-                шт.
-              </div>
-
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className="size-7"
-                disabled={row.quantity >= row.maxQuantity}
-                onClick={() => increaseQuantity(row.name)}
-              >
-                <Plus className="size-3.5" />
-              </Button>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="flex justify-end gap-2">
+            {allSelected ? "Снять выбор" : "Выбрать всё"}
+          </Button>
+          <RentalItemContentsQuantityRows
+            idPrefix="move-to-stock"
+            legend="Оборудование для возврата на склад"
+            rows={rows}
+            onToggle={toggleRow}
+            onChangeQuantity={changeQuantity}
+          />
+        </>
+      )}
+      {errorText ? <FieldError>{errorText}</FieldError> : null}
+      <DialogFooter>
         <Button variant="outline" onClick={onClose}>
           Отмена
         </Button>
-
         <Button
-          disabled={selectedPayload.length === 0 || moveMutation.isPending}
-          onClick={() => moveMutation.mutate()}
+          disabled={selectedRows.length === 0 || mutation.isPending}
+          onClick={() => mutation.mutate()}
         >
-          Переместить
+          <HugeiconsIcon icon={WarehouseIcon} data-icon="inline-start" />
+          {mutation.isPending ? "Перемещение…" : "Переместить на склад"}
         </Button>
-      </div>
+      </DialogFooter>
     </div>
   )
 }

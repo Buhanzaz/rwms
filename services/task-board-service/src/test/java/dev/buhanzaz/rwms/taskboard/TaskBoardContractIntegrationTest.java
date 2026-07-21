@@ -274,7 +274,18 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             "/warehouses/{warehouseId}/task-board/tasks/by-external-id/{externalTaskId}/cancel",
             "/internal/task-board/v1/tasks",
             "/internal/task-board/v1/tasks/{externalTaskId}",
-            "/internal/task-board/v1/tasks/{externalTaskId}/cancel");
+            "/internal/task-board/v1/tasks/{externalTaskId}/cancel",
+            "/internal/task-board/v1/logistics/equipment-movement-tasks",
+            "/internal/task-board/v1/logistics/equipment-movement-tasks/{externalTaskId}",
+            "/internal/task-board/v1/logistics/equipment-movement-tasks/{externalTaskId}/cancel");
+    Map<String, Object> schemas = child(child(contract, "components"), "schemas");
+    Map<String, Object> movementRequest =
+        child(schemas, "RegisterLogisticsEquipmentMovementTaskRequest");
+    assertThat(movementRequest.get("required"))
+        .isEqualTo(List.of("warehouseId", "externalTaskId", "deadlineAt", "operations"));
+    assertThat(child(movementRequest, "properties")).containsKeys("deadlineAt", "operations");
+    assertThat(child(schemas, "EquipmentMovementOperation").get("required"))
+        .isEqualTo(List.of("direction", "equipmentCode", "equipmentName", "quantity"));
     assertAllLocalReferencesResolve(contract, contract);
   }
 

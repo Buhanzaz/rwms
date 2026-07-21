@@ -49,6 +49,11 @@ import {
 } from "@/features/repair-tasks/api/repair-tasks-api"
 import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
+import {
+  maintenanceEstimateMediaOwner,
+  type ReadyMediaReference,
+} from "@/features/media/media-service"
+import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
 
 function plansInTaskOrder(
   estimate: RepairEstimateDto,
@@ -106,10 +111,12 @@ function plansInTaskOrder(
 }
 
 export function RepairEstimateCompletedWorkspace({
+  accessToken,
   warehouseId,
   estimate,
   readOnly = false,
 }: {
+  accessToken: string | null
   warehouseId: string
   estimate: RepairEstimateDto
   readOnly?: boolean
@@ -133,6 +140,7 @@ export function RepairEstimateCompletedWorkspace({
   const [amendmentMovementRequired, setAmendmentMovementRequired] = useState(
     estimate.movementRequired ?? false
   )
+  const mediaOwner = maintenanceEstimateMediaOwner(estimate.id, warehouseId)
   const pendingUploadsRef = useRef(draft.pendingUploads)
   const linkedTaskQuery = useQuery({
     queryKey: repairTaskBySourceEstimateQueryKey(warehouseId, estimate.id),
@@ -265,6 +273,22 @@ export function RepairEstimateCompletedWorkspace({
     }
   }
 
+  function updateReadyMediaReferences(references: ReadyMediaReference[]) {
+    setDraft((current) => {
+      const previous = current.maintenanceMediaReferences ?? []
+      const unchanged =
+        previous.length === references.length &&
+        previous.every(
+          (reference, index) =>
+            reference.mediaId === references[index]?.mediaId &&
+            reference.generation === references[index]?.generation
+        )
+      return unchanged
+        ? current
+        : { ...current, maintenanceMediaReferences: references }
+    })
+  }
+
   if (!editing) {
     const taskLink = linkedTask ? (
       <Button variant="outline" size="sm" asChild>
@@ -281,10 +305,12 @@ export function RepairEstimateCompletedWorkspace({
       <RepairWorkDetailWorkspaceLayout
         ariaLabel={`Завершённая смета бытовки ${estimate.cabinNumber}`}
         photos={
-          <p className="text-sm text-muted-foreground">
-            Фото для смет временно недоступны: media-service ещё не подтверждает
-            владельца MAINTENANCE_ESTIMATE.
-          </p>
+          <ServiceOwnerPhotos
+            accessToken={accessToken}
+            owner={mediaOwner}
+            readOnly
+            title="Фотографии сметы"
+          />
         }
         information={
           <RepairWorkInformationSnapshot
@@ -448,10 +474,13 @@ export function RepairEstimateCompletedWorkspace({
           ) : null
         }
         photos={
-          <p className="text-sm text-muted-foreground">
-            Фото для смет временно недоступны: media-service ещё не подтверждает
-            владельца MAINTENANCE_ESTIMATE.
-          </p>
+          <ServiceOwnerPhotos
+            accessToken={accessToken}
+            owner={mediaOwner}
+            readOnly={mutationPending}
+            title="Фотографии сметы"
+            onReadyReferencesChange={updateReadyMediaReferences}
+          />
         }
         information={information}
         estimate={estimateLines}

@@ -167,7 +167,7 @@ rwms:
         lease-duration: ${TASK_BOARD_KAFKA_OUTBOX_LEASE_DURATION:30s}
         instance-id: ${TASK_BOARD_KAFKA_INSTANCE_ID:task-board-service}
   security:
-    queue-registry-client-ids: ${TASK_BOARD_QUEUE_REGISTRY_CLIENT_IDS:}
+    queue-registry-client-ids: ${TASK_BOARD_QUEUE_REGISTRY_CLIENT_IDS:maintenance-service}
   auth:
     worker-credentials-url: ${AUTH_WORKER_CREDENTIALS_URL}
     connect-timeout: ${AUTH_CONNECT_TIMEOUT:2s}

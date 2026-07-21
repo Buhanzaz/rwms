@@ -2,10 +2,12 @@ export type EstimateCatalogSettingsActionId =
   | "repair-estimate-catalog-canvas"
   | "repair-estimate-catalog-works"
   | "repair-estimate-catalog-materials"
+  | "repair-estimate-catalog-furniture"
 
 export type EstimateCatalogSectionType = "CANVAS" | "WORK" | "MATERIAL"
 
-export type EstimateCatalogCategoryScope = "ALL" | "NON_FURNITURE"
+export type EstimateCatalogCategoryScope =
+  "ALL" | "NON_FURNITURE" | "FURNITURE_ONLY"
 
 export type EstimateCatalogSettingsActionDto = {
   id: EstimateCatalogSettingsActionId

@@ -164,9 +164,13 @@ public class AssetReplayVerifier {
     });
     jdbc.query("select id,equipment_id,warehouse_id,quantity,state from equipment_allocation_hold", rs -> {
       UUID id = rs.getObject("id", UUID.class);
-      result.put(new StreamKey(AssetAggregateType.EQUIPMENT_ALLOCATION_HOLD, id), node(Map.of(
-          "holdId", id.toString(), "equipmentId", rs.getObject("equipment_id", UUID.class).toString(),
-          "warehouseId", rs.getObject("warehouse_id", UUID.class).toString(), "quantity", rs.getLong("quantity"), "state", rs.getString("state"))));
+      Map<String, Object> value = new LinkedHashMap<>();
+      value.put("holdId", id.toString());
+      value.put("equipmentId", rs.getObject("equipment_id", UUID.class).toString());
+      value.put("warehouseId", rs.getObject("warehouse_id", UUID.class).toString());
+      value.put("quantity", rs.getLong("quantity"));
+      value.put("state", rs.getString("state"));
+      result.put(new StreamKey(AssetAggregateType.EQUIPMENT_ALLOCATION_HOLD, id), node(value));
     });
     operationLeases.findAll().forEach(lease -> {
       UUID id = lease.getId();

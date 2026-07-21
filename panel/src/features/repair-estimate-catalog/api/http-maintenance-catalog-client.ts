@@ -22,6 +22,12 @@ export type MaintenanceCatalogMediaReference = {
   generation: number
 }
 
+export type MaintenanceFurnitureEquipmentReference = {
+  equipmentId: string
+  equipmentCode: string
+  equipmentName: string
+}
+
 export type MaintenanceCatalogNodeInput = {
   id: string
   code: string
@@ -36,6 +42,8 @@ export type MaintenanceCatalogNodeInput = {
   commonItem: boolean
   showInMainMenu: boolean
   photoRequired: boolean
+  furnitureCategory: boolean
+  furnitureEquipment: MaintenanceFurnitureEquipmentReference | null
   routing: MaintenanceCatalogRouting | null
   references: MaintenanceCatalogReference[]
   comment: string | null
@@ -44,6 +52,7 @@ export type MaintenanceCatalogNodeInput = {
 
 export type MaintenanceCatalogNode = MaintenanceCatalogNodeInput & {
   catalogVersionId: string
+  mediaOwnerId: string
 }
 
 export type MaintenanceCatalogLinkInput = {
@@ -82,11 +91,8 @@ export type MaintenanceCatalogVersionPage = {
   totalElements: number
 }
 
-export type MaintenanceCatalogImportRequest = {
+export type MaintenanceCatalogBootstrapRequest = {
   warehouseId: string
-  sourceSha256: string
-  nodes: MaintenanceCatalogNodeInput[]
-  links: MaintenanceCatalogLinkInput[]
 }
 
 const CATALOG_API = `${getGatewayRuntimeConfig().maintenanceApiBaseUrl}/v1/catalog`
@@ -173,15 +179,31 @@ export function replaceMaintenanceCatalogLinks(
   )
 }
 
-export function importMaintenanceCatalog(
+export function bootstrapMaintenanceCatalog(
   accessToken: string,
   idempotencyKey: string,
-  request: MaintenanceCatalogImportRequest
+  request: MaintenanceCatalogBootstrapRequest
 ) {
   return bearerRequest<MaintenanceCatalogVersion>(
     accessToken,
     `${CATALOG_API}/imports`,
     json("POST", request, { "Idempotency-Key": idempotencyKey })
+  )
+}
+
+export function forkMaintenanceCatalog(
+  accessToken: string,
+  warehouseId: string,
+  catalogVersionId: string,
+  expectedVersion: number,
+  idempotencyKey: string
+) {
+  const endpoint = catalogVersionEndpoint(warehouseId, catalogVersionId)
+  endpoint.pathname += "/fork"
+  return bearerRequest<MaintenanceCatalogVersion>(
+    accessToken,
+    endpoint,
+    json("POST", { expectedVersion }, { "Idempotency-Key": idempotencyKey })
   )
 }
 
