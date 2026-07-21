@@ -29,6 +29,8 @@ import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventFactFactory;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceActorReferenceProvider;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceProjectionSnapshotFactory;
 import dev.buhanzaz.rwms.maintenance.integration.MaintenanceDependencyGateway;
+import dev.buhanzaz.rwms.maintenance.mapper.CatalogFurnitureReferenceMapper;
+import dev.buhanzaz.rwms.maintenance.mapper.CatalogNodeResponseMapper;
 import dev.buhanzaz.rwms.maintenance.repository.CatalogLinkRepository;
 import dev.buhanzaz.rwms.maintenance.repository.CatalogNodeRepository;
 import dev.buhanzaz.rwms.maintenance.repository.CatalogVersionRepository;
@@ -43,6 +45,7 @@ import dev.buhanzaz.rwms.maintenance.repository.MediaFactProjectionRepository;
 import dev.buhanzaz.rwms.maintenance.repository.OperationLeaseFactProjectionRepository;
 import dev.buhanzaz.rwms.maintenance.repository.RepairStageRepository;
 import dev.buhanzaz.rwms.maintenance.repository.RentalItemFactProjectionRepository;
+import dev.buhanzaz.rwms.platform.contracts.FieldViolation;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
@@ -51,6 +54,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -73,6 +77,29 @@ import tools.jackson.databind.ObjectMapper;
 @Service
 public class MaintenanceApplicationService {
   private static final Duration LEASE_RENEWAL_GUARD = Duration.ofMinutes(5);
+  private static final Set<String> REPAIR_QUEUE_SOURCE_STATUSES = Set.of(
+      "FREE",
+      "WAREHOUSE",
+      "OWN_NEEDS",
+      "AFTER_RENT",
+      "WAITING_ESTIMATE_CONFIRMATION");
+  private static final List<String> CATALOG_SOURCE_ATTESTATION_FIELDS = List.of(
+      "manifestSha256",
+      "artifactSha256",
+      "sourceEvidenceSha256",
+      "nodeEvidenceSha256",
+      "linkEvidenceSha256",
+      "queueEvidenceSha256",
+      "mappingSha256",
+      "nodeTypes",
+      "linkTypes",
+      "sourceCatalogVersionId",
+      "sourceCatalogVersion",
+      "sourceCatalogLifecycle",
+      "sourceSnapshotSha256",
+      "sourceNodeCount",
+      "sourceLinkCount",
+      "sourceMaterialCount");
 
   private final CatalogVersionRepository catalogVersions;
   private final CatalogNodeRepository catalogNodes;
@@ -95,6 +122,8 @@ public class MaintenanceApplicationService {
   private final MaintenanceIdempotencyStore idempotency;
   private final MaintenanceReconciliationStore reconciliations;
   private final ReviewedLegacyCatalogManifest reviewedLegacyCatalog;
+  private final CatalogFurnitureReferenceMapper catalogFurnitureMapper;
+  private final CatalogNodeResponseMapper catalogNodeResponseMapper;
   private final MaintenanceDependencyGateway dependencies;
   private final JdbcTemplate jdbc;
   private final ObjectMapper mapper;
@@ -122,6 +151,8 @@ public class MaintenanceApplicationService {
       MaintenanceIdempotencyStore idempotency,
       MaintenanceReconciliationStore reconciliations,
       ReviewedLegacyCatalogManifest reviewedLegacyCatalog,
+      CatalogFurnitureReferenceMapper catalogFurnitureMapper,
+      CatalogNodeResponseMapper catalogNodeResponseMapper,
       MaintenanceDependencyGateway dependencies,
       JdbcTemplate jdbc,
       ObjectMapper mapper,
@@ -147,6 +178,8 @@ public class MaintenanceApplicationService {
     this.idempotency = idempotency;
     this.reconciliations = reconciliations;
     this.reviewedLegacyCatalog = reviewedLegacyCatalog;
+    this.catalogFurnitureMapper = catalogFurnitureMapper;
+    this.catalogNodeResponseMapper = catalogNodeResponseMapper;
     this.dependencies = dependencies;
     this.jdbc = jdbc;
     this.mapper = mapper;
@@ -169,8 +202,10 @@ public class MaintenanceApplicationService {
 
   @Transactional(readOnly = true)
   public List<CatalogNodeResponse> catalogNodes(UUID id) {
-    requireCatalog(id);
-    return catalogNodes.findAllByCatalogVersionIdOrderByCode(id).stream().map(this::catalogNodeResponse).toList();
+    CatalogVersion catalog = requireCatalog(id);
+    return catalogNodes.findAllByCatalogVersionIdOrderByCode(id).stream()
+        .map(node -> catalogNodeResponse(node, catalog.getWarehouseId()))
+        .toList();
   }
 
   @Transactional(readOnly = true)
@@ -181,49 +216,61 @@ public class MaintenanceApplicationService {
         .toList();
   }
 
-  @Transactional
-  public CreateResult<CatalogVersionResponse> importCatalog(
-      UUID subjectId, UUID key, ImportCatalogRequest request) {
+  public CreateResult<CatalogVersionResponse> bootstrapCatalog(
+      UUID subjectId, UUID key, BootstrapCatalogRequest request) {
     String requestHash = hash(request);
-    Optional<JsonNode> replay = idempotency.replay(subjectId, "catalog.import", key, requestHash);
+    Optional<JsonNode> replay = transactions.execute(
+        status -> idempotency.replay(subjectId, "catalog.bootstrap", key, requestHash));
     if (replay.isPresent()) {
       return new CreateResult<>(read(replay.get(), CatalogVersionResponse.class), true);
     }
-    ReviewedLegacyCatalogManifest.Review review = reviewedLegacyCatalog.validate(request);
-    CatalogValidation validation = validateCatalog(request.nodes(), request.links());
+    ImportCatalogRequest approved = reviewedLegacyCatalog.approvedRequest(request.warehouseId());
+    ReviewedLegacyCatalogManifest.Review review = reviewedLegacyCatalog.validate(approved);
+    CatalogValidation validation = validateCatalog(approved.nodes(), approved.links());
+    requireReviewedRoutingReady(request.warehouseId());
+    CreateResult<CatalogVersionResponse> result = transactions.execute(status ->
+        bootstrapCatalogAfterPreflight(
+            subjectId, key, requestHash, request, approved, review, validation));
+    if (result == null) throw new IllegalStateException("Catalog bootstrap transaction was empty");
+    return result;
+  }
+
+  private CreateResult<CatalogVersionResponse> bootstrapCatalogAfterPreflight(
+      UUID subjectId,
+      UUID key,
+      String requestHash,
+      BootstrapCatalogRequest request,
+      ImportCatalogRequest approved,
+      ReviewedLegacyCatalogManifest.Review review,
+      CatalogValidation validation) {
+    Optional<JsonNode> replay =
+        idempotency.replay(subjectId, "catalog.bootstrap", key, requestHash);
+    if (replay.isPresent()) {
+      return new CreateResult<>(read(replay.get(), CatalogVersionResponse.class), true);
+    }
+    advisoryLock("maintenance:catalog-bootstrap:" + request.warehouseId());
     Optional<CatalogVersion> existing = catalogVersions.findByWarehouseIdAndSourceSha256(
-        request.warehouseId(), request.sourceSha256());
+        request.warehouseId(), approved.sourceSha256());
     if (existing.isPresent()) {
-      Map<String, Object> report = jsonMap(existing.get().getValidationReport());
-      if (!requestHash.equals(report.get("contentSha256"))) {
-        throw new MaintenanceConflictException(
-            "MAINTENANCE_IDEMPOTENCY_CONFLICT",
-            "Catalog source hash is already bound to different validated content");
-      }
+      requireMatchingReviewedCatalog(existing.get());
       CatalogVersionResponse response = catalogResponse(existing.get());
-      idempotency.store(subjectId, "catalog.import", key, requestHash, 201, response);
+      idempotency.store(subjectId, "catalog.bootstrap", key, requestHash, 201, response);
       return new CreateResult<>(response, true);
     }
-    Map<String, Object> report = new LinkedHashMap<>();
-    report.put("valid", true);
-    report.put("errorCount", 0);
-    report.put("warningCount", 0);
-    report.put("contentSha256", requestHash);
-    report.put("nodeCount", request.nodes().size());
-    report.put("linkCount", request.links().size());
-    report.put("dependencyAcyclic", validation.dependencyAcyclic());
-    report.put("sourceEvidenceSha256", review.sourceEvidenceSha256());
-    report.put("nodeEvidenceSha256", review.nodeEvidenceSha256());
-    report.put("linkEvidenceSha256", review.linkEvidenceSha256());
-    report.put("queueEvidenceSha256", review.queueEvidenceSha256());
-    report.put("mappingSha256", review.mappingSha256());
-    report.put("nodeTypes", review.nodeTypes());
-    report.put("linkTypes", review.linkTypes());
-    report.put("reportSha256", hash(report));
+    Map<String, Object> report = reviewedCatalogReport(approved, validation, review);
     CatalogVersion version = catalogVersions.saveAndFlush(
         CatalogVersion.draft(
-            request.warehouseId(), request.sourceSha256(), request.nodes().size(), request.links().size(), write(report)));
-    saveCatalog(version.getId(), version.getWarehouseId(), request.nodes(), request.links());
+            request.warehouseId(),
+            approved.sourceSha256(),
+            approved.nodes().size(),
+            approved.links().size(),
+            write(report)));
+    saveCatalog(
+        version.getId(),
+        version.getVersion(),
+        version.getWarehouseId(),
+        approved.nodes(),
+        approved.links());
     events.initialize(
         MaintenanceAggregateType.CATALOG_VERSION,
         version.getId(),
@@ -233,16 +280,33 @@ public class MaintenanceApplicationService {
         catalogFact(MaintenanceEventType.CATALOG_IMPORTED, version),
         catalogSnapshot(version));
     CatalogVersionResponse response = catalogResponse(version);
-    idempotency.store(subjectId, "catalog.import", key, requestHash, 201, response);
+    idempotency.store(subjectId, "catalog.bootstrap", key, requestHash, 201, response);
     return new CreateResult<>(response, false);
   }
 
-  @Transactional
   public CatalogVersionResponse changeCatalog(UUID id, ChangeCatalogRequest request) {
-    CatalogVersion version = requireCatalog(id);
-    assertVersion(version.getVersion(), request.expectedVersion());
-    CatalogValidation validation = validateCatalog(request.nodes(), request.links());
-    catalogNodes.findAllByCatalogVersionIdOrderByCode(id).forEach(node ->
+    validateCatalog(request.nodes(), request.links());
+    transactions.executeWithoutResult(
+        status -> requireMutableCatalog(id, request.expectedVersion(), false));
+    List<CatalogNodeInput> resolvedNodes = resolveFurnitureEquipment(request.nodes());
+    CatalogValidation validation = validateCatalog(resolvedNodes, request.links());
+    CatalogVersionResponse result = transactions.execute(status -> changeCatalogAfterResolution(
+        id,
+        new ChangeCatalogRequest(request.expectedVersion(), resolvedNodes, request.links()),
+        validation));
+    if (result == null) throw new IllegalStateException("Catalog change transaction was empty");
+    return result;
+  }
+
+  private CatalogVersionResponse changeCatalogAfterResolution(
+      UUID id, ChangeCatalogRequest request, CatalogValidation validation) {
+    CatalogVersion version = requireMutableCatalog(id, request.expectedVersion(), true);
+    String contentSha256 = hash(new CatalogContent(request.nodes(), request.links()));
+    if (contentSha256.equals(jsonMap(version.getValidationReport()).get("contentSha256"))) {
+      return catalogResponse(version);
+    }
+    List<CatalogNode> previousNodes = catalogNodes.findAllByCatalogVersionIdOrderByCode(id);
+    previousNodes.forEach(node ->
         mediaReferences.deleteAllByAggregateTypeAndAggregateId("CATALOG_NODE", node.getRowId()));
     mediaReferences.flush();
     catalogLinks.deleteAllByCatalogVersionId(id);
@@ -253,14 +317,32 @@ public class MaintenanceApplicationService {
     report.put("valid", true);
     report.put("errorCount", 0);
     report.put("warningCount", 0);
-    report.put("contentSha256", hash(Map.of("nodes", request.nodes(), "links", request.links())));
+    report.put("contentSha256", contentSha256);
     report.put("nodeCount", request.nodes().size());
     report.put("linkCount", request.links().size());
+    report.put("materialCount", materialCount(request.nodes()));
     report.put("dependencyAcyclic", validation.dependencyAcyclic());
+    copyCatalogSourceAttestation(jsonMap(version.getValidationReport()), report);
     report.put("reportSha256", hash(report));
     version.replaceDraft(request.nodes().size(), request.links().size(), write(report));
     CatalogVersion saved = catalogVersions.saveAndFlush(version);
-    saveCatalog(id, version.getWarehouseId(), request.nodes(), request.links());
+    saveCatalog(
+        id, saved.getVersion(), saved.getWarehouseId(), request.nodes(), request.links());
+    Set<UUID> currentNodeIds = request.nodes().stream()
+        .map(CatalogNodeInput::id)
+        .collect(java.util.stream.Collectors.toSet());
+    previousNodes.stream()
+        .map(CatalogNode::getId)
+        .filter(nodeId -> !currentNodeIds.contains(nodeId))
+        .distinct()
+        .filter(nodeId -> !catalogNodeExistsInWarehouse(saved.getWarehouseId(), nodeId))
+        .forEach(nodeId -> enqueueMediaOwnerProof(
+            "MAINTENANCE_CATALOG_NODE",
+            MaintenanceMediaOwnerId.catalogNode(saved.getWarehouseId(), nodeId),
+            saved.getWarehouseId(),
+            saved.getId(),
+            saved.getVersion(),
+            false));
     events.append(
         MaintenanceAggregateType.CATALOG_VERSION,
         id,
@@ -272,27 +354,112 @@ public class MaintenanceApplicationService {
     return catalogResponse(saved);
   }
 
-  @Transactional
   public CatalogVersionResponse replaceCatalogNodes(UUID id, ReplaceCatalogNodesRequest request) {
-    List<CatalogLinkInput> links = catalogLinks(id).stream().map(value -> new CatalogLinkInput(
-        value.id(), value.fromNodeId(), value.toNodeId(), value.linkType(), value.sortOrder())).toList();
+    List<CatalogLinkInput> links = transactions.execute(status -> {
+      requireCatalog(id);
+      return catalogLinkInputs(id);
+    });
+    if (links == null) throw new IllegalStateException("Catalog link read transaction was empty");
     return changeCatalog(id, new ChangeCatalogRequest(request.expectedVersion(), request.nodes(), links));
   }
 
-  @Transactional
   public CatalogVersionResponse replaceCatalogLinks(UUID id, ReplaceCatalogLinksRequest request) {
-    List<CatalogNodeInput> nodes = catalogNodes(id).stream().map(value -> new CatalogNodeInput(
-        value.id(), value.code(), value.nodeType(), value.name(), value.active(), value.parentNodeId(),
-        value.unit(), value.unitPrice(), value.durationMinutes(), value.includeInEstimate(),
-        value.commonItem(), value.showInMainMenu(), value.photoRequired(), value.routing(),
-        value.references(), value.comment(), value.mediaReferences())).toList();
+    List<CatalogNodeInput> nodes = transactions.execute(status -> {
+      requireCatalog(id);
+      return catalogNodeInputs(id);
+    });
+    if (nodes == null) throw new IllegalStateException("Catalog node read transaction was empty");
     return changeCatalog(id, new ChangeCatalogRequest(request.expectedVersion(), nodes, request.links()));
   }
 
   @Transactional
+  public CreateResult<CatalogVersionResponse> forkCatalog(
+      UUID subjectId, UUID key, UUID id, VersionCommand request) {
+    String requestHash = hash(request);
+    String scope = "catalog.fork:" + id;
+    Optional<JsonNode> replay = idempotency.replay(subjectId, scope, key, requestHash);
+    if (replay.isPresent()) {
+      return new CreateResult<>(read(replay.get(), CatalogVersionResponse.class), true);
+    }
+    advisoryLock("maintenance:catalog-fork:" + id);
+    CatalogVersion source = catalogVersions.findByIdForUpdate(id)
+        .orElseThrow(() -> new MaintenanceNotFoundException("Catalog version not found"));
+    assertVersion(source.getVersion(), request.expectedVersion());
+    if (source.getState() != CatalogVersionState.ACTIVE
+        && source.getState() != CatalogVersionState.SUPERSEDED) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Only an active or superseded catalog version can be forked");
+    }
+    List<CatalogNodeInput> nodes = catalogNodeInputs(id);
+    List<CatalogLinkInput> links = catalogLinkInputs(id);
+    ReviewedLegacyCatalogManifest.Review review =
+        requireMatchingReviewedSnapshot(source, nodes, links);
+    CatalogValidation validation = validateCatalog(nodes, links);
+    CatalogForkSnapshot sourceSnapshot = new CatalogForkSnapshot(
+        source.getId(), source.getVersion(), source.getState(), nodes, links);
+    String sourceSnapshotSha256 = hash(sourceSnapshot);
+    Optional<CatalogVersion> existing = catalogVersions.findByWarehouseIdAndSourceSha256(
+        source.getWarehouseId(), sourceSnapshotSha256);
+    if (existing.isPresent()) {
+      requireMatchingFork(existing.get(), sourceSnapshot, sourceSnapshotSha256);
+      CatalogVersionResponse response = catalogResponse(existing.get());
+      idempotency.store(subjectId, scope, key, requestHash, 201, response);
+      return new CreateResult<>(response, true);
+    }
+    Map<String, Object> report = forkCatalogReport(
+        source, sourceSnapshotSha256, nodes, links, validation, review);
+    CatalogVersion fork = catalogVersions.saveAndFlush(CatalogVersion.draft(
+        source.getWarehouseId(), sourceSnapshotSha256, nodes.size(), links.size(), write(report)));
+    saveCatalog(
+        fork.getId(), fork.getVersion(), fork.getWarehouseId(), nodes, links);
+    events.initialize(
+        MaintenanceAggregateType.CATALOG_VERSION,
+        fork.getId(),
+        fork.getVersion(),
+        MaintenanceEventType.CATALOG_IMPORTED,
+        catalogLocal(fork),
+        catalogFact(MaintenanceEventType.CATALOG_IMPORTED, fork),
+        catalogSnapshot(fork));
+    CatalogVersionResponse response = catalogResponse(fork);
+    idempotency.store(subjectId, scope, key, requestHash, 201, response);
+    return new CreateResult<>(response, false);
+  }
+
   public CreateResult<CatalogVersionResponse> activateCatalog(
       UUID subjectId, UUID key, UUID id, VersionCommand request) {
     String requestHash = hash(request);
+    Optional<JsonNode> replay = transactions.execute(status -> idempotency.replay(
+        subjectId, "catalog.activate:" + id, key, requestHash));
+    if (replay.isPresent()) {
+      return new CreateResult<>(read(replay.get(), CatalogVersionResponse.class), true);
+    }
+    UUID preflightWarehouseId = transactions.execute(
+        status -> activationPreflightWarehouse(id, request.expectedVersion()));
+    if (preflightWarehouseId == null) {
+      throw new IllegalStateException("Catalog activation preflight transaction was empty");
+    }
+    requireReviewedRoutingReady(preflightWarehouseId);
+    CreateResult<CatalogVersionResponse> result = transactions.execute(
+        status -> activateCatalogAfterPreflight(subjectId, key, id, request, requestHash));
+    if (result == null) throw new IllegalStateException("Catalog activation transaction was empty");
+    return result;
+  }
+
+  private UUID activationPreflightWarehouse(UUID id, long expectedVersion) {
+    CatalogVersion selected = requireCatalog(id);
+    assertVersion(selected.getVersion(), expectedVersion);
+    if (selected.getState() != CatalogVersionState.DRAFT) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT", "Only a draft catalog version can be activated");
+    }
+    validateFurnitureCatalogForActivation(id);
+    requireReviewedRoutingSnapshots(id);
+    return selected.getWarehouseId();
+  }
+
+  private CreateResult<CatalogVersionResponse> activateCatalogAfterPreflight(
+      UUID subjectId, UUID key, UUID id, VersionCommand request, String requestHash) {
     Optional<JsonNode> replay = idempotency.replay(
         subjectId, "catalog.activate:" + id, key, requestHash);
     if (replay.isPresent()) {
@@ -311,10 +478,13 @@ public class MaintenanceApplicationService {
           "MAINTENANCE_STATE_CONFLICT", "Catalog warehouse changed during activation");
     }
     assertVersion(selected.getVersion(), request.expectedVersion());
+    validateFurnitureCatalogForActivation(id);
+    requireReviewedRoutingSnapshots(id);
     CatalogVersion active = catalogVersions.findAllByWarehouseIdForUpdate(warehouseId).stream()
         .filter(value -> value.getState() == CatalogVersionState.ACTIVE)
         .findFirst()
         .orElse(null);
+    CatalogVersion superseded = null;
     List<MaintenanceEventStore.StreamRef> streams = new ArrayList<>();
     streams.add(new MaintenanceEventStore.StreamRef(MaintenanceAggregateType.CATALOG_VERSION, id));
     if (active != null && !active.getId().equals(id)) {
@@ -327,7 +497,7 @@ public class MaintenanceApplicationService {
     if (active != null && !active.getId().equals(id)) {
       long previousVersion = active.getVersion();
       active.supersede();
-      CatalogVersion superseded = catalogVersions.saveAndFlush(active);
+      superseded = catalogVersions.saveAndFlush(active);
       events.append(
           MaintenanceAggregateType.CATALOG_VERSION,
           superseded.getId(),
@@ -347,6 +517,7 @@ public class MaintenanceApplicationService {
         catalogLocal(saved),
         catalogFact(MaintenanceEventType.CATALOG_ACTIVATED, saved),
         catalogSnapshot(saved));
+    enqueueCatalogRouting(saved, superseded);
     CatalogVersionResponse response = catalogResponse(saved);
     idempotency.store(subjectId, "catalog.activate:" + id, key, requestHash, 200, response);
     return new CreateResult<>(response, false);
@@ -393,6 +564,13 @@ public class MaintenanceApplicationService {
         estimateLocal(estimate),
         estimateFact(MaintenanceEventType.ESTIMATE_CREATED, estimate),
         estimateSnapshot(estimate));
+    enqueueMediaOwnerProof(
+        "MAINTENANCE_ESTIMATE",
+        estimate.getId(),
+        estimate.getWarehouseId(),
+        estimate.getId(),
+        estimate.getVersion(),
+        true);
     EstimateResponse response = estimateResponse(estimate);
     idempotency.store(subjectId, "estimate.create", key, requestHash, 201, response);
     return new CreateResult<>(response, false);
@@ -417,6 +595,13 @@ public class MaintenanceApplicationService {
         estimateLocal(saved),
         estimateFact(MaintenanceEventType.ESTIMATE_DRAFT_CHANGED, saved),
         estimateSnapshot(saved));
+    enqueueMediaOwnerProof(
+        "MAINTENANCE_ESTIMATE",
+        saved.getId(),
+        saved.getWarehouseId(),
+        saved.getId(),
+        saved.getVersion(),
+        true);
     return estimateResponse(saved);
   }
 
@@ -475,6 +660,12 @@ public class MaintenanceApplicationService {
     assertVersion(estimate.getVersion(), request.expectedVersion());
     validateEstimatePlan(request.lines(), request.plan());
     MaintenanceRepair repair = estimate.getRepairId() == null ? null : requireRepair(estimate.getRepairId());
+    if (repair != null
+        && !furnitureLosses(estimate).equals(furnitureLosses(estimate, request.lines()))) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Furniture quantities cannot change after an estimate has created its repair");
+    }
     List<MaintenanceEventStore.StreamRef> streams = new ArrayList<>();
     streams.add(new MaintenanceEventStore.StreamRef(MaintenanceAggregateType.ESTIMATE, id));
     MaintenanceRepair linkedRepair = repair;
@@ -549,6 +740,13 @@ public class MaintenanceApplicationService {
         estimateLocal(saved),
         estimateFact(MaintenanceEventType.ESTIMATE_AMENDED, saved),
         estimateSnapshot(saved));
+    enqueueMediaOwnerProof(
+        "MAINTENANCE_ESTIMATE",
+        saved.getId(),
+        saved.getWarehouseId(),
+        saved.getId(),
+        saved.getVersion(),
+        true);
     MaintenanceRepair linked = saved.getRepairId() == null ? null : requireRepair(saved.getRepairId());
     EstimateCommandResult response = new EstimateCommandResult(
         estimateResponse(saved), linked == null ? null : repairResponse(linked),
@@ -600,6 +798,13 @@ public class MaintenanceApplicationService {
         repairLocal(repair),
         repairFact(MaintenanceEventType.REPAIR_CREATED, repair),
         repairSnapshot(repair));
+    enqueueMediaOwnerProof(
+        "MAINTENANCE_REPAIR",
+        repair.getId(),
+        repair.getWarehouseId(),
+        repair.getId(),
+        repair.getVersion(),
+        true);
     RepairResponse response = repairResponse(repair);
     idempotency.store(subjectId, "repair.direct", key, requestHash, 201, response);
     return new CreateResult<>(response, false);
@@ -611,6 +816,12 @@ public class MaintenanceApplicationService {
     assertVersion(repair.getVersion(), request.expectedVersion());
     repair.touchPlan();
     replaceRepairStages(repair, request.stages());
+    replaceMedia(
+        "REPAIR",
+        "MAINTENANCE_REPAIR",
+        repair.getId(),
+        repair.getWarehouseId(),
+        request.mediaReferences());
     MaintenanceRepair saved = repairs.saveAndFlush(repair);
     events.append(
         MaintenanceAggregateType.REPAIR,
@@ -620,6 +831,13 @@ public class MaintenanceApplicationService {
         repairLocal(saved),
         repairFact(MaintenanceEventType.REPAIR_PLAN_CHANGED, saved),
         repairSnapshot(saved));
+    enqueueMediaOwnerProof(
+        "MAINTENANCE_REPAIR",
+        saved.getId(),
+        saved.getWarehouseId(),
+        saved.getId(),
+        saved.getVersion(),
+        true);
     return repairResponse(saved);
   }
 
@@ -734,6 +952,13 @@ public class MaintenanceApplicationService {
         repairLocal(child),
         repairFact(MaintenanceEventType.REPAIR_REWORK_CREATED, child),
         repairSnapshot(child));
+    enqueueMediaOwnerProof(
+        "MAINTENANCE_REPAIR",
+        child.getId(),
+        child.getWarehouseId(),
+        child.getId(),
+        child.getVersion(),
+        true);
     RepairResponse response = repairResponse(child);
     idempotency.store(subjectId, "repair.rework:" + sourceId, key, requestHash, 201, response);
     return new CreateResult<>(response, false);
@@ -755,6 +980,12 @@ public class MaintenanceApplicationService {
     List<MaintenanceRepair> sourceChain = lockedChain.sources();
     requireNoActiveRework(repair);
     requireLease(repair);
+    replaceMedia(
+        "ACCEPTANCE",
+        "MAINTENANCE_ACCEPTANCE",
+        repair.getId(),
+        repair.getWarehouseId(),
+        request.mediaReferences());
     repair.accept(request.comment(), actorJson());
     repair.markLeaseReconciliationRequired();
     MaintenanceRepair saved = repairs.saveAndFlush(repair);
@@ -766,6 +997,13 @@ public class MaintenanceApplicationService {
         decisionLocal(id, request.comment()),
         repairFact(MaintenanceEventType.REPAIR_ACCEPTED, saved),
         repairSnapshot(saved));
+    enqueueMediaOwnerProof(
+        "MAINTENANCE_ACCEPTANCE",
+        saved.getId(),
+        saved.getWarehouseId(),
+        saved.getId(),
+        saved.getVersion(),
+        true);
     cascadeTerminal(saved, sourceChain, true);
     enqueueTerminalAsset(saved, "ACCEPT_TO_FREE", stableOperationKey(
         "accept-asset", saved.getId(), saved.getVersion()));
@@ -867,10 +1105,18 @@ public class MaintenanceApplicationService {
       UUID warehouseId,
       String status,
       long aggregateVersion) {
-    RentalItemFactProjection fact = rentalItemFacts.findById(rentalItemId).orElseGet(() ->
+    Optional<RentalItemFactProjection> current = rentalItemFacts.findById(rentalItemId);
+    if (current.isEmpty() && (warehouseId == null || status == null)) {
+      throw new IllegalStateException(
+          "Partial rental-item fact cannot initialize the maintenance projection");
+    }
+    RentalItemFactProjection fact = current.orElseGet(() ->
         RentalItemFactProjection.create(rentalItemId, warehouseId, status, aggregateVersion));
     if (fact.getAggregateVersion() < aggregateVersion) {
-      fact.apply(warehouseId, status, aggregateVersion);
+      fact.apply(
+          warehouseId == null ? fact.getWarehouseId() : warehouseId,
+          status == null ? fact.getAssetStatus() : status,
+          aggregateVersion);
     }
     rentalItemFacts.save(fact);
   }
@@ -996,6 +1242,15 @@ public class MaintenanceApplicationService {
         repairLocal(saved),
         repairFact(maintenanceEvent, saved),
         repairSnapshot(saved));
+    if (maintenanceEvent == MaintenanceEventType.REPAIR_PENDING_ACCEPTANCE) {
+      enqueueMediaOwnerProof(
+          "MAINTENANCE_ACCEPTANCE",
+          saved.getId(),
+          saved.getWarehouseId(),
+          saved.getId(),
+          saved.getVersion(),
+          true);
+    }
   }
 
   private LockedTaskOutcome lockTaskOutcome(MaintenanceRepair initial) {
@@ -1029,6 +1284,13 @@ public class MaintenanceApplicationService {
         repairLocal(saved),
         repairFact(MaintenanceEventType.REPAIR_PENDING_ACCEPTANCE, saved),
         repairSnapshot(saved));
+    enqueueMediaOwnerProof(
+        "MAINTENANCE_ACCEPTANCE",
+        saved.getId(),
+        saved.getWarehouseId(),
+        saved.getId(),
+        saved.getVersion(),
+        true);
   }
 
   public boolean reconcileOneTask() {
@@ -1044,13 +1306,16 @@ public class MaintenanceApplicationService {
           case "COMPLETE_EMPTY_ESTIMATE" -> reconcileEmptyEstimate(work);
           case "REGISTER_TASK" -> reconcileTask(work, false);
           case "UPDATE_TASK" -> reconcileTask(work, true);
+          case "REGISTER_CATALOG_POSITION" -> reconcileCatalogPositionRegistration(work);
+          case "DELETE_CATALOG_POSITION" ->
+              catalogCleanupReady(work) ? reconcileCatalogPositionDeletion(work) : null;
           case "ACCEPT_TO_FREE", "WRITE_OFF", "PENDING_ACCEPTANCE" ->
               reconcileAssetTransition(work);
           case "RENEW_LEASE" -> reconcileLeaseRenewal(work);
           default -> throw new IllegalStateException(
               "Unsupported maintenance reconciliation operation " + work.operation());
         };
-        reconciliations.confirmed(work, response);
+        if (response != null) reconciliations.confirmed(work, response);
         return true;
       });
       return Boolean.TRUE.equals(processed);
@@ -1061,6 +1326,55 @@ public class MaintenanceApplicationService {
         boolean quarantined = reconciliations.failed(work, exception);
         recordReconciliationFailure(work, quarantined);
       });
+      return true;
+    }
+  }
+
+  public boolean reconcileOneMediaOwnerProof() {
+    MaintenanceReconciliationStore.WorkItem[] attempted =
+        new MaintenanceReconciliationStore.WorkItem[1];
+    try {
+      Boolean processed = transactions.execute(status -> {
+        Optional<MaintenanceReconciliationStore.WorkItem> candidate =
+            reconciliations.lockNextDueMedia();
+        if (candidate.isEmpty()) return false;
+        MaintenanceReconciliationStore.WorkItem work = candidate.get();
+        attempted[0] = work;
+        if (!"MEDIA".equals(work.dependency())
+            || !"UPSERT_MEDIA_OWNER_PROOF".equals(work.operation())
+            || work.mediaOwnerType() == null
+            || work.mediaOwnerId() == null
+            || work.mediaWarehouseId() == null
+            || work.mediaOwnerRevision() == null
+            || work.mediaAggregateVersion() == null
+            || work.mediaProofEventId() == null
+            || work.mediaActive() == null) {
+          throw new IllegalStateException("Stored media owner proof is incomplete");
+        }
+        MaintenanceDependencyGateway.MediaOwnerProof proof =
+            new MaintenanceDependencyGateway.MediaOwnerProof(
+                work.mediaOwnerType(),
+                work.mediaOwnerId(),
+                work.mediaWarehouseId(),
+                work.mediaOwnerRevision(),
+                work.mediaAggregateVersion(),
+                work.mediaProofEventId(),
+                work.mediaActive());
+        MaintenanceDependencyGateway.MediaOwnerProof response =
+            dependencies.upsertMediaOwnerProof(proof);
+        if (!proof.equals(response)) {
+          throw new MaintenanceDependencyException(
+              org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+              "Media-service returned mismatched owner proof truth");
+        }
+        reconciliations.confirmed(work, response);
+        return true;
+      });
+      return Boolean.TRUE.equals(processed);
+    } catch (RuntimeException exception) {
+      MaintenanceReconciliationStore.WorkItem work = attempted[0];
+      if (work == null) throw exception;
+      transactions.executeWithoutResult(status -> reconciliations.failed(work, exception));
       return true;
     }
   }
@@ -1091,6 +1405,13 @@ public class MaintenanceApplicationService {
         repairLocal(repair),
         repairFact(MaintenanceEventType.REPAIR_CREATED, repair),
         repairSnapshot(repair));
+    enqueueMediaOwnerProof(
+        "MAINTENANCE_REPAIR",
+        repair.getId(),
+        repair.getWarehouseId(),
+        repair.getId(),
+        repair.getVersion(),
+        true);
     return repair;
   }
 
@@ -1111,18 +1432,29 @@ public class MaintenanceApplicationService {
     for (int index = 0; index < lineInputs.size(); index++) {
       EstimateLineInput input = lineInputs.get(index);
       if (!lineIds.add(input.id())) throw invalid("Estimate line IDs must be unique inside a revision");
+      CatalogNodeSnapshot catalogSnapshot = canonicalCatalogSnapshot(
+          estimate, input.catalogSnapshot());
+      BigDecimal quantity = new BigDecimal(input.quantity());
+      if (catalogSnapshot != null
+          && catalogSnapshot.furnitureEquipment() != null
+          && quantity.signum() > 0
+          && quantity.stripTrailingZeros().scale() > 0) {
+        throw invalid("Furniture quantity must be a whole number");
+      }
       validateMediaReferences(
           "MAINTENANCE_ESTIMATE", estimate.getId(), estimate.getWarehouseId(), input.mediaReferences());
       lines.add(new EstimateLine(
           input.id(), estimate.getId(), revision, index,
-          input.catalogSnapshot() == null ? null : input.catalogSnapshot().nodeId(),
-          input.catalogSnapshot() != null && input.catalogSnapshot().nodeType() == CatalogNodeType.MATERIAL
+          catalogSnapshot == null ? null : catalogSnapshot.nodeId(),
+          catalogSnapshot != null
+                  && (catalogSnapshot.nodeType() == CatalogNodeType.MATERIAL
+                      || catalogSnapshot.nodeType() == CatalogNodeType.OPTION)
               ? "MATERIAL" : "WORK",
-          input.description(), new BigDecimal(input.quantity()), moneyToMinor(input.unitPrice()),
-          input.catalogSnapshot() == null ? null : input.catalogSnapshot().durationMinutes(),
-          input.catalogSnapshot() == null || input.catalogSnapshot().routing() == null
-              ? null : input.catalogSnapshot().routing().queueId().toString(),
-          input.catalogSnapshot() == null ? null : write(input.catalogSnapshot()),
+          input.description(), quantity, moneyToMinor(input.unitPrice()),
+          catalogSnapshot == null ? null : catalogSnapshot.durationMinutes(),
+          catalogSnapshot == null || catalogSnapshot.routing() == null
+              ? null : catalogSnapshot.routing().queueId().toString(),
+          catalogSnapshot == null ? null : write(catalogSnapshot),
           input.comment(), write(input.mediaReferences())));
     }
     List<EstimatePlanStage> plan = new ArrayList<>();
@@ -1157,6 +1489,134 @@ public class MaintenanceApplicationService {
       estimateRevisions.saveAndFlush(revisionHeader);
     }
   }
+
+  private CatalogNodeSnapshot canonicalCatalogSnapshot(
+      MaintenanceEstimate estimate, CatalogNodeSnapshot submitted) {
+    if (submitted == null) return null;
+    if (!estimate.getCatalogVersionId().equals(submitted.catalogVersionId())) {
+      throw invalid("Estimate line must use the catalog version captured by the estimate");
+    }
+    CatalogVersion version = catalogVersions.findByIdAndWarehouseId(
+            submitted.catalogVersionId(), estimate.getWarehouseId())
+        .orElseThrow(() -> invalid("Estimate catalog version is unavailable"));
+    if (version.getState() == CatalogVersionState.DRAFT) {
+      throw invalid("Estimate lines cannot use a draft catalog version");
+    }
+    CatalogNode node = catalogNodes.findByCatalogVersionIdAndId(
+            submitted.catalogVersionId(), submitted.nodeId())
+        .orElseThrow(() -> invalid("Estimate catalog node is unavailable"));
+    if (!node.isActive() || !node.isIncludeInEstimate()) {
+      throw invalid("Estimate catalog node is not active for estimates");
+    }
+    CatalogNodeType type = CatalogNodeType.valueOf(node.getNodeType());
+    if (type != CatalogNodeType.WORK
+        && type != CatalogNodeType.MATERIAL
+        && type != CatalogNodeType.OPTION) {
+      throw invalid("Catalog node type cannot be added to an estimate");
+    }
+    if (type == CatalogNodeType.MATERIAL && node.getFurnitureEquipmentId() == null) {
+      List<CatalogNode> versionNodes =
+          catalogNodes.findAllByCatalogVersionIdOrderByCode(node.getCatalogVersionId());
+      Map<UUID, CatalogNode> nodesById = versionNodes.stream().collect(
+          java.util.stream.Collectors.toMap(CatalogNode::getId, value -> value));
+      if (belongsToFurnitureTree(node, nodesById)) {
+        throw invalid(
+            "Furniture material must be linked to additional equipment before use in an estimate");
+      }
+    }
+    return new CatalogNodeSnapshot(
+        node.getCatalogVersionId(),
+        node.getId(),
+        node.getCode(),
+        type,
+        node.getName(),
+        node.getUnit(),
+        money(node.getPriceMinor()),
+        node.getDurationMinutes(),
+        node.getRoutingQueueId() == null
+            ? null
+            : new RoutingSnapshot(
+                node.getRoutingQueueId(),
+                node.getRoutingQueueCode(),
+                node.getRoutingQueueKind()),
+        node.getFurnitureEquipmentId() == null
+            ? null
+            : catalogFurnitureMapper.toReference(node));
+  }
+
+  private FurnitureLossCommand furnitureLosses(MaintenanceRepair repair) {
+    if (repair.getEstimateId() == null) {
+      return new FurnitureLossCommand(null, List.of());
+    }
+    MaintenanceEstimate estimate = requireEstimate(repair.getEstimateId());
+    return new FurnitureLossCommand(estimate.getId(), furnitureLosses(estimate));
+  }
+
+  private List<MaintenanceDependencyGateway.FurnitureLoss> furnitureLosses(
+      MaintenanceEstimate estimate) {
+    Map<UUID, MaintenanceDependencyGateway.FurnitureLoss> losses = new HashMap<>();
+    for (EstimateLine line : currentLines(estimate)) {
+      if (line.getCatalogSnapshot() == null) continue;
+      CatalogNodeSnapshot storedSnapshot = read(
+          line.getCatalogSnapshot(), CatalogNodeSnapshot.class);
+      CatalogNodeSnapshot canonicalSnapshot = canonicalCatalogSnapshot(estimate, storedSnapshot);
+      addFurnitureLoss(losses, canonicalSnapshot, line.getQuantity());
+    }
+    return orderedFurnitureLosses(losses);
+  }
+
+  private List<MaintenanceDependencyGateway.FurnitureLoss> furnitureLosses(
+      MaintenanceEstimate estimate, List<EstimateLineInput> inputs) {
+    Map<UUID, MaintenanceDependencyGateway.FurnitureLoss> losses = new HashMap<>();
+    for (EstimateLineInput input : inputs) {
+      CatalogNodeSnapshot snapshot = canonicalCatalogSnapshot(
+          estimate, input.catalogSnapshot());
+      addFurnitureLoss(losses, snapshot, new BigDecimal(input.quantity()));
+    }
+    return orderedFurnitureLosses(losses);
+  }
+
+  private static void addFurnitureLoss(
+      Map<UUID, MaintenanceDependencyGateway.FurnitureLoss> losses,
+      CatalogNodeSnapshot snapshot,
+      BigDecimal quantity) {
+    if (snapshot == null || snapshot.furnitureEquipment() == null || quantity.signum() == 0) {
+      return;
+    }
+    final long wholeQuantity;
+    try {
+      wholeQuantity = quantity.longValueExact();
+    } catch (ArithmeticException exception) {
+      throw invalid("Furniture quantity must be a whole number within the supported range");
+    }
+    FurnitureEquipmentReference equipment = snapshot.furnitureEquipment();
+    MaintenanceDependencyGateway.FurnitureLoss previous = losses.get(equipment.equipmentId());
+    if (previous != null && !previous.equipmentCode().equals(equipment.equipmentCode())) {
+      throw invalid("Furniture equipment snapshot is inconsistent inside the estimate");
+    }
+    final long aggregateQuantity;
+    try {
+      aggregateQuantity = Math.addExact(previous == null ? 0 : previous.quantity(), wholeQuantity);
+    } catch (ArithmeticException exception) {
+      throw invalid("Furniture quantity must be a whole number within the supported range");
+    }
+    losses.put(
+        equipment.equipmentId(),
+        new MaintenanceDependencyGateway.FurnitureLoss(
+            equipment.equipmentId(),
+            equipment.equipmentCode(),
+            aggregateQuantity));
+  }
+
+  private static List<MaintenanceDependencyGateway.FurnitureLoss> orderedFurnitureLosses(
+      Map<UUID, MaintenanceDependencyGateway.FurnitureLoss> losses) {
+    return losses.values().stream()
+        .sorted(Comparator.comparing(value -> value.equipmentId().toString()))
+        .toList();
+  }
+
+  private record FurnitureLossCommand(
+      UUID estimateId, List<MaintenanceDependencyGateway.FurnitureLoss> losses) {}
 
   private void replaceRepairStages(MaintenanceRepair repair, List<PlanStageInput> inputs) {
     validatePlan(inputs, false);
@@ -1229,16 +1689,127 @@ public class MaintenanceApplicationService {
     }
   }
 
+  private CatalogVersion requireMutableCatalog(UUID id, long expectedVersion, boolean lock) {
+    CatalogVersion version = lock
+        ? catalogVersions.findByIdForUpdate(id)
+            .orElseThrow(() -> new MaintenanceNotFoundException("Catalog version not found"))
+        : requireCatalog(id);
+    assertVersion(version.getVersion(), expectedVersion);
+    if (version.getState() != CatalogVersionState.DRAFT) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT", "Published catalog versions are immutable");
+    }
+    return version;
+  }
+
+  private List<CatalogNodeInput> resolveFurnitureEquipment(List<CatalogNodeInput> nodes) {
+    Map<UUID, CatalogNodeInput> nodesById = nodes.stream().collect(
+        java.util.stream.Collectors.toMap(CatalogNodeInput::id, value -> value));
+    Set<UUID> furnitureRoots = nodes.stream()
+        .filter(MaintenanceApplicationService::marksFurnitureTree)
+        .map(CatalogNodeInput::id)
+        .collect(java.util.stream.Collectors.toSet());
+    List<CatalogNodeInput> missing = nodes.stream()
+        .filter(node -> node.nodeType() == CatalogNodeType.MATERIAL)
+        .filter(node -> node.furnitureEquipment() == null)
+        .filter(node -> belongsToFurnitureTree(node.id(), furnitureRoots, nodesById))
+        .sorted(Comparator.comparing(MaintenanceApplicationService::canonicalFurnitureCode))
+        .toList();
+    if (missing.isEmpty()) return nodes;
+
+    Map<UUID, FurnitureEquipmentReference> equipmentById = new HashMap<>();
+    nodes.stream()
+        .map(CatalogNodeInput::furnitureEquipment)
+        .filter(java.util.Objects::nonNull)
+        .forEach(reference -> equipmentById.put(reference.equipmentId(), reference));
+    Map<UUID, FurnitureEquipmentReference> resolvedByNodeId = new HashMap<>();
+    for (CatalogNodeInput node : missing) {
+      String code = canonicalFurnitureCode(node);
+      String name = node.name().trim();
+      MaintenanceDependencyGateway.FurnitureEquipmentSnapshot snapshot =
+          dependencies.ensureFurnitureEquipment(code, name);
+      if (snapshot == null
+          || !code.equals(snapshot.equipmentCode())
+          || !name.equals(snapshot.equipmentName())) {
+        throw new MaintenanceDependencyException(
+            org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+            "Asset-service returned mismatched furniture equipment truth");
+      }
+      FurnitureEquipmentReference reference = new FurnitureEquipmentReference(
+          snapshot.equipmentId(), snapshot.equipmentCode(), snapshot.equipmentName());
+      FurnitureEquipmentReference previous = equipmentById.putIfAbsent(
+          reference.equipmentId(), reference);
+      if (previous != null && !previous.equals(reference)) {
+        throw new MaintenanceDependencyException(
+            org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+            "Asset-service returned conflicting furniture equipment truth");
+      }
+      resolvedByNodeId.put(node.id(), reference);
+    }
+    return nodes.stream()
+        .map(node -> resolvedByNodeId.containsKey(node.id())
+            ? withFurnitureEquipment(node, resolvedByNodeId.get(node.id()))
+            : node)
+        .toList();
+  }
+
+  private static String canonicalFurnitureCode(CatalogNodeInput node) {
+    return node.code().trim().toUpperCase(java.util.Locale.ROOT);
+  }
+
+  private static CatalogNodeInput withFurnitureEquipment(
+      CatalogNodeInput node, FurnitureEquipmentReference furnitureEquipment) {
+    return new CatalogNodeInput(
+        node.id(),
+        node.code(),
+        node.nodeType(),
+        node.name(),
+        node.active(),
+        node.parentNodeId(),
+        node.furnitureCategory(),
+        furnitureEquipment,
+        node.unit(),
+        node.unitPrice(),
+        node.durationMinutes(),
+        node.includeInEstimate(),
+        node.commonItem(),
+        node.showInMainMenu(),
+        node.photoRequired(),
+        node.routing(),
+        node.references(),
+        node.comment(),
+        node.mediaReferences());
+  }
+
   private CatalogValidation validateCatalog(
       List<CatalogNodeInput> nodes, List<CatalogLinkInput> links) {
     if (nodes == null || links == null) throw new IllegalArgumentException("Catalog arrays are required");
     Set<UUID> ids = new HashSet<>();
     Set<String> codes = new HashSet<>();
+    Map<UUID, CatalogNodeInput> nodesById = new HashMap<>();
+    Map<UUID, FurnitureEquipmentReference> equipmentSnapshots = new HashMap<>();
     Map<UUID, List<UUID>> parents = new HashMap<>();
     for (CatalogNodeInput node : nodes) {
       if (!ids.add(node.id())) throw invalid("Duplicate catalog node ID");
+      nodesById.put(node.id(), node);
       if (!codes.add(node.code().trim().toUpperCase(java.util.Locale.ROOT))) {
         throw invalid("Duplicate catalog node code");
+      }
+      if (Boolean.TRUE.equals(node.furnitureCategory())
+          && node.nodeType() != CatalogNodeType.CATEGORY) {
+        throw invalid("Only a catalog category can mark a furniture tree");
+      }
+      if (node.furnitureEquipment() != null && node.nodeType() != CatalogNodeType.MATERIAL) {
+        throw invalid("Only a material can reference furniture equipment");
+      }
+      if (node.furnitureEquipment() != null) {
+        FurnitureEquipmentReference previous = equipmentSnapshots.putIfAbsent(
+            node.furnitureEquipment().equipmentId(), node.furnitureEquipment());
+        if (previous != null
+            && (!previous.equipmentCode().equals(node.furnitureEquipment().equipmentCode())
+                || !previous.equipmentName().equals(node.furnitureEquipment().equipmentName()))) {
+          throw invalid("One furniture equipment ID must use one canonical code and name");
+        }
       }
     }
     for (CatalogNodeInput node : nodes) {
@@ -1248,6 +1819,16 @@ public class MaintenanceApplicationService {
       parents.computeIfAbsent(node.id(), ignored -> new ArrayList<>()).add(node.parentNodeId());
     }
     if (containsCycle(ids, parents)) throw invalid("Catalog parent hierarchy contains a cycle");
+    Set<UUID> furnitureRoots = nodes.stream()
+        .filter(MaintenanceApplicationService::marksFurnitureTree)
+        .map(CatalogNodeInput::id)
+        .collect(java.util.stream.Collectors.toSet());
+    for (CatalogNodeInput node : nodes) {
+      if (node.furnitureEquipment() != null
+          && !belongsToFurnitureTree(node.id(), furnitureRoots, nodesById)) {
+        throw invalid("Furniture equipment can only be linked inside a furniture category");
+      }
+    }
     Set<UUID> linkIds = new HashSet<>();
     Set<String> typedEdges = new HashSet<>();
     Map<UUID, List<UUID>> dependency = new HashMap<>();
@@ -1265,6 +1846,190 @@ public class MaintenanceApplicationService {
     }
     if (containsCycle(ids, dependency)) throw invalid("Catalog dependency graph contains a cycle");
     return new CatalogValidation(true);
+  }
+
+  private void validateFurnitureCatalogForActivation(UUID catalogVersionId) {
+    List<CatalogNode> nodes = catalogNodes.findAllByCatalogVersionIdOrderByCode(catalogVersionId);
+    Map<UUID, CatalogNode> nodesById = nodes.stream().collect(
+        java.util.stream.Collectors.toMap(CatalogNode::getId, value -> value));
+    boolean missingEquipment = nodes.stream().anyMatch(node ->
+        node.isActive()
+            && node.isIncludeInEstimate()
+            && "MATERIAL".equals(node.getNodeType())
+            && belongsToFurnitureTree(node, nodesById)
+            && node.getFurnitureEquipmentId() == null);
+    if (missingEquipment) {
+      throw new MaintenanceValidationException(
+          "MAINTENANCE_VALIDATION_FAILED",
+          "Every active furniture material must be linked to additional equipment before activation");
+    }
+    Map<UUID, CatalogNode> equipmentSnapshots = new HashMap<>();
+    for (CatalogNode node : nodes) {
+      if (node.getFurnitureEquipmentId() == null) continue;
+      CatalogNode previous = equipmentSnapshots.putIfAbsent(node.getFurnitureEquipmentId(), node);
+      if (previous != null
+          && (!previous.getFurnitureEquipmentCode().equals(node.getFurnitureEquipmentCode())
+              || !previous.getFurnitureEquipmentName().equals(node.getFurnitureEquipmentName()))) {
+        throw new MaintenanceValidationException(
+            "MAINTENANCE_VALIDATION_FAILED",
+            "One furniture equipment ID must use one canonical code and name");
+      }
+    }
+  }
+
+  private void requireReviewedRoutingReady(UUID warehouseId) {
+    List<MaintenanceDependencyGateway.RoutingQueueRequirement> requirements =
+        reviewedLegacyCatalog.routingSnapshots().stream()
+            .map(
+                routing ->
+                    new MaintenanceDependencyGateway.RoutingQueueRequirement(
+                        routing.queueId(), routing.queueCode(), routing.queueKind()))
+            .toList();
+    MaintenanceDependencyGateway.RoutingPreflight preflight =
+        dependencies.preflightMaintenanceRouting(warehouseId, requirements);
+    if (preflight.ready()) return;
+    Map<UUID, MaintenanceDependencyGateway.RoutingQueueRequirement> byId =
+        requirements.stream()
+            .collect(
+                java.util.stream.Collectors.toMap(
+                    MaintenanceDependencyGateway.RoutingQueueRequirement::queueId,
+                    value -> value));
+    List<FieldViolation> violations = new ArrayList<>();
+    for (UUID missingQueueId : preflight.missingQueueIds()) {
+      MaintenanceDependencyGateway.RoutingQueueRequirement missing = byId.get(missingQueueId);
+      String code = missing == null ? missingQueueId.toString() : missing.code();
+      violations.add(
+          new FieldViolation(
+              "routing." + code,
+              "MAINTENANCE_ROUTING_QUEUE_MISSING",
+              "Required task-board queue " + code + " is missing"));
+    }
+    for (MaintenanceDependencyGateway.RoutingMismatch mismatch : preflight.mismatches()) {
+      MaintenanceDependencyGateway.RoutingQueueRequirement expected = byId.get(mismatch.queueId());
+      String code = expected == null ? mismatch.queueId().toString() : expected.code();
+      violations.add(
+          new FieldViolation(
+              "routing." + code,
+              "MAINTENANCE_ROUTING_QUEUE_MISMATCH",
+              "Task-board queue " + code + " differs in "
+                  + String.join(", ", mismatch.fields())));
+    }
+    if (violations.isEmpty()) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Task-board returned an unexplained routing preflight failure");
+    }
+    throw new MaintenanceCatalogImportValidationException(violations);
+  }
+
+  private void requireReviewedRoutingSnapshots(UUID catalogVersionId) {
+    Map<UUID, RoutingSnapshot> reviewed =
+        reviewedLegacyCatalog.routingSnapshots().stream()
+            .collect(java.util.stream.Collectors.toMap(RoutingSnapshot::queueId, value -> value));
+    List<FieldViolation> violations =
+        catalogNodes.findAllByCatalogVersionIdOrderByCode(catalogVersionId).stream()
+            .filter(node -> node.getRoutingQueueId() != null)
+            .filter(
+                node -> {
+                  RoutingSnapshot expected = reviewed.get(node.getRoutingQueueId());
+                  return expected == null
+                      || !expected.queueCode().equals(node.getRoutingQueueCode())
+                      || !expected.queueKind().equals(node.getRoutingQueueKind());
+                })
+            .map(
+                node ->
+                    new FieldViolation(
+                        "nodes." + node.getCode() + ".routing",
+                        "MAINTENANCE_ROUTING_SNAPSHOT_UNREVIEWED",
+                        "Catalog routing must use one exact reviewed task-board queue snapshot"))
+            .toList();
+    if (!violations.isEmpty()) {
+      throw new MaintenanceCatalogImportValidationException(violations);
+    }
+  }
+
+  private void enqueueCatalogRouting(
+      CatalogVersion active, CatalogVersion superseded) {
+    List<CatalogNode> activeRouted = routedCatalogNodes(active.getId());
+    List<UUID> registrationKeys = new ArrayList<>();
+    for (CatalogNode node : activeRouted) {
+      UUID registrationKey = catalogRegistrationKey(active.getId(), node);
+      registrationKeys.add(registrationKey);
+      reconciliations.enqueueCatalogPosition(
+          "REGISTER_CATALOG_POSITION",
+          registrationKey,
+          active.getId(),
+          node.getId(),
+          node.getRoutingQueueId(),
+          catalogExternalReference(active.getId(), node.getId()),
+          List.of());
+    }
+    if (superseded == null) return;
+    List<UUID> cleanupPredecessors = new ArrayList<>(registrationKeys);
+    cleanupPredecessors.addAll(reconciliations.catalogRegistrationKeys(superseded.getId()));
+    cleanupPredecessors = cleanupPredecessors.stream().distinct().toList();
+    for (CatalogNode node : routedCatalogNodes(superseded.getId())) {
+      reconciliations.enqueueCatalogPosition(
+          "DELETE_CATALOG_POSITION",
+          stableOperationKey(
+              "delete-catalog-position:" + node.getId() + ":" + active.getId(),
+              superseded.getId(),
+              0),
+          superseded.getId(),
+          node.getId(),
+          node.getRoutingQueueId(),
+          catalogExternalReference(superseded.getId(), node.getId()),
+          cleanupPredecessors);
+    }
+  }
+
+  private List<CatalogNode> routedCatalogNodes(UUID catalogVersionId) {
+    return catalogNodes.findAllByCatalogVersionIdOrderByCode(catalogVersionId).stream()
+        .filter(node -> node.getRoutingQueueId() != null)
+        .toList();
+  }
+
+  private static UUID catalogRegistrationKey(UUID catalogVersionId, CatalogNode node) {
+    return stableOperationKey(
+        "register-catalog-position:" + node.getId() + ":" + node.getRoutingQueueId(),
+        catalogVersionId,
+        0);
+  }
+
+  private static String catalogExternalReference(UUID catalogVersionId, UUID catalogNodeId) {
+    return "catalog:" + catalogVersionId + ":" + catalogNodeId;
+  }
+
+  private static boolean marksFurnitureTree(CatalogNodeInput node) {
+    return node.nodeType() == CatalogNodeType.CATEGORY
+        && (Boolean.TRUE.equals(node.furnitureCategory())
+            || (node.parentNodeId() == null && "FURNITURE".equals(node.code())));
+  }
+
+  private static boolean belongsToFurnitureTree(
+      UUID nodeId,
+      Set<UUID> furnitureRoots,
+      Map<UUID, CatalogNodeInput> nodesById) {
+    Set<UUID> visited = new HashSet<>();
+    CatalogNodeInput current = nodesById.get(nodeId);
+    while (current != null && visited.add(current.id())) {
+      if (furnitureRoots.contains(current.id())) return true;
+      current = current.parentNodeId() == null ? null : nodesById.get(current.parentNodeId());
+    }
+    return false;
+  }
+
+  private static boolean belongsToFurnitureTree(
+      CatalogNode node, Map<UUID, CatalogNode> nodesById) {
+    Set<UUID> visited = new HashSet<>();
+    CatalogNode current = node;
+    while (current != null && visited.add(current.getId())) {
+      if (current.isFurnitureCategory()) return true;
+      current = current.getParentNodeId() == null
+          ? null
+          : nodesById.get(current.getParentNodeId());
+    }
+    return false;
   }
 
   private static boolean containsCycle(Set<UUID> ids, Map<UUID, List<UUID>> edges) {
@@ -1325,14 +2090,211 @@ public class MaintenanceApplicationService {
     }
   }
 
+  private Map<String, Object> reviewedCatalogReport(
+      ImportCatalogRequest approved,
+      CatalogValidation validation,
+      ReviewedLegacyCatalogManifest.Review review) {
+    Map<String, Object> report = baseCatalogReport(approved.nodes(), approved.links(), validation);
+    putReviewedAttestation(report, review);
+    report.put("routedNodeCount", review.routedNodeCount());
+    report.put("routingSnapshotCount", review.routingSnapshotCount());
+    report.put("reportSha256", hash(report));
+    return report;
+  }
+
+  private Map<String, Object> forkCatalogReport(
+      CatalogVersion source,
+      String sourceSnapshotSha256,
+      List<CatalogNodeInput> nodes,
+      List<CatalogLinkInput> links,
+      CatalogValidation validation,
+      ReviewedLegacyCatalogManifest.Review review) {
+    Map<String, Object> report = baseCatalogReport(nodes, links, validation);
+    putReviewedAttestation(report, review);
+    report.put("sourceCatalogVersionId", source.getId().toString());
+    report.put("sourceCatalogVersion", source.getVersion());
+    report.put("sourceCatalogLifecycle", source.getState().name());
+    report.put("sourceSnapshotSha256", sourceSnapshotSha256);
+    report.put("sourceNodeCount", nodes.size());
+    report.put("sourceLinkCount", links.size());
+    report.put("sourceMaterialCount", materialCount(nodes));
+    report.put("reportSha256", hash(report));
+    return report;
+  }
+
+  private Map<String, Object> baseCatalogReport(
+      List<CatalogNodeInput> nodes,
+      List<CatalogLinkInput> links,
+      CatalogValidation validation) {
+    Map<String, Object> report = new LinkedHashMap<>();
+    report.put("valid", true);
+    report.put("errorCount", 0);
+    report.put("warningCount", 0);
+    report.put("contentSha256", hash(new CatalogContent(nodes, links)));
+    report.put("nodeCount", nodes.size());
+    report.put("linkCount", links.size());
+    report.put("materialCount", materialCount(nodes));
+    report.put("dependencyAcyclic", validation.dependencyAcyclic());
+    return report;
+  }
+
+  private static void putReviewedAttestation(
+      Map<String, Object> report, ReviewedLegacyCatalogManifest.Review review) {
+    report.put("manifestSha256", review.manifestSha256());
+    report.put("artifactSha256", review.artifactSha256());
+    report.put("sourceEvidenceSha256", review.sourceEvidenceSha256());
+    report.put("nodeEvidenceSha256", review.nodeEvidenceSha256());
+    report.put("linkEvidenceSha256", review.linkEvidenceSha256());
+    report.put("queueEvidenceSha256", review.queueEvidenceSha256());
+    report.put("mappingSha256", review.mappingSha256());
+    report.put("nodeTypes", review.nodeTypes());
+    report.put("linkTypes", review.linkTypes());
+  }
+
+  private static void copyCatalogSourceAttestation(
+      Map<String, Object> source, Map<String, Object> target) {
+    CATALOG_SOURCE_ATTESTATION_FIELDS.forEach(
+        key -> {
+          if (source.containsKey(key)) target.put(key, source.get(key));
+        });
+  }
+
+  private void requireMatchingReviewedCatalog(CatalogVersion existing) {
+    if (!ReviewedLegacyCatalogManifest.SOURCE_SHA256.equals(existing.getSourceSha256())) {
+      throw catalogSourceConflict();
+    }
+    requireMatchingReviewedSnapshot(
+        existing, catalogNodeInputs(existing.getId()), catalogLinkInputs(existing.getId()));
+  }
+
+  private ReviewedLegacyCatalogManifest.Review requireMatchingReviewedSnapshot(
+      CatalogVersion version,
+      List<CatalogNodeInput> nodes,
+      List<CatalogLinkInput> links) {
+    if (version.getNodeCount() != nodes.size()
+        || version.getLinkCount() != links.size()
+        || materialCount(nodes) != 91) {
+      throw catalogSourceConflict();
+    }
+    try {
+      return reviewedLegacyCatalog.validatePersistedSnapshot(
+          version.getWarehouseId(), nodes, links);
+    } catch (MaintenanceCatalogImportValidationException exception) {
+      throw catalogSourceConflict();
+    }
+  }
+
+  private void requireMatchingFork(
+      CatalogVersion existing,
+      CatalogForkSnapshot sourceSnapshot,
+      String sourceSnapshotSha256) {
+    if (existing.getState() != CatalogVersionState.DRAFT) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "The source snapshot is already bound to a published catalog version");
+    }
+    List<CatalogNodeInput> nodes = catalogNodeInputs(existing.getId());
+    List<CatalogLinkInput> links = catalogLinkInputs(existing.getId());
+    if (existing.getNodeCount() != nodes.size()
+        || existing.getLinkCount() != links.size()
+        || materialCount(nodes) != 91) {
+      throw catalogSourceConflict();
+    }
+    CatalogForkSnapshot actual = new CatalogForkSnapshot(
+        sourceSnapshot.sourceCatalogVersionId(),
+        sourceSnapshot.sourceCatalogVersion(),
+        sourceSnapshot.sourceLifecycle(),
+        nodes,
+        links);
+    Map<String, Object> report = jsonMap(existing.getValidationReport());
+    if (!sourceSnapshotSha256.equals(existing.getSourceSha256())
+        || !sourceSnapshotSha256.equals(hash(actual))
+        || !sourceSnapshotSha256.equals(report.get("sourceSnapshotSha256"))
+        || !sourceSnapshot.sourceCatalogVersionId().toString()
+            .equals(report.get("sourceCatalogVersionId"))
+        || !numberEquals(report.get("sourceCatalogVersion"), sourceSnapshot.sourceCatalogVersion())
+        || !sourceSnapshot.sourceLifecycle().name().equals(report.get("sourceCatalogLifecycle"))) {
+      throw catalogSourceConflict();
+    }
+  }
+
+  private static boolean numberEquals(Object value, long expected) {
+    return value instanceof Number number && number.longValue() == expected;
+  }
+
+  private static int materialCount(List<CatalogNodeInput> nodes) {
+    return Math.toIntExact(
+        nodes.stream()
+            .filter(node -> node.nodeType() == CatalogNodeType.MATERIAL)
+            .count());
+  }
+
+  private static MaintenanceConflictException catalogSourceConflict() {
+    return new MaintenanceConflictException(
+        "MAINTENANCE_STATE_CONFLICT",
+        "Existing catalog source does not match the reviewed packaged snapshot");
+  }
+
+  private List<CatalogNodeInput> catalogNodeInputs(UUID catalogVersionId) {
+    return catalogNodes.findAllByCatalogVersionIdOrderByCode(catalogVersionId).stream()
+        .map(this::catalogNodeInput)
+        .toList();
+  }
+
+  private CatalogNodeInput catalogNodeInput(CatalogNode value) {
+    return new CatalogNodeInput(
+        value.getId(),
+        value.getCode(),
+        CatalogNodeType.valueOf(value.getNodeType()),
+        value.getName(),
+        value.isActive(),
+        value.getParentNodeId(),
+        value.isFurnitureCategory(),
+        value.getFurnitureEquipmentId() == null
+            ? null
+            : catalogFurnitureMapper.toReference(value),
+        value.getUnit(),
+        money(value.getPriceMinor()),
+        value.getDurationMinutes(),
+        value.isIncludeInEstimate(),
+        value.isCommonItem(),
+        value.isShowInMainMenu(),
+        value.isPhotoRequired(),
+        value.getRoutingQueueId() == null
+            ? null
+            : new RoutingSnapshot(
+                value.getRoutingQueueId(),
+                value.getRoutingQueueCode(),
+                value.getRoutingQueueKind()),
+        readList(value.getOpaqueReferences(), OpaqueCatalogReference.class),
+        value.getComment(),
+        readList(value.getMediaReferences(), MediaReferenceInput.class));
+  }
+
+  private List<CatalogLinkInput> catalogLinkInputs(UUID catalogVersionId) {
+    return catalogLinks.findAllByCatalogVersionIdOrderBySortOrderAscIdAsc(catalogVersionId).stream()
+        .map(link -> new CatalogLinkInput(
+            link.getId(),
+            link.getSourceNodeId(),
+            link.getTargetNodeId(),
+            CatalogLinkType.valueOf(link.getLinkType()),
+            link.getSortOrder()))
+        .toList();
+  }
+
   private void saveCatalog(
       UUID versionId,
+      long version,
       UUID warehouseId,
       List<CatalogNodeInput> nodes,
       List<CatalogLinkInput> links) {
     List<CatalogNode> savedNodes = catalogNodes.saveAllAndFlush(nodes.stream().map(node -> new CatalogNode(
         node.id(), versionId, node.code(), node.nodeType().name(), node.name(),
-        node.active(), node.parentNodeId(), node.unit(),
+        node.active(), node.parentNodeId(), marksFurnitureTree(node),
+        node.furnitureEquipment() == null ? null : node.furnitureEquipment().equipmentId(),
+        node.furnitureEquipment() == null ? null : node.furnitureEquipment().equipmentCode(),
+        node.furnitureEquipment() == null ? null : node.furnitureEquipment().equipmentName(),
+        node.unit(),
         node.unitPrice() == null ? null : moneyToMinor(node.unitPrice()), node.durationMinutes(),
         node.includeInEstimate(), node.commonItem(), node.showInMainMenu(), node.photoRequired(),
         node.routing() == null ? null : node.routing().queueId(),
@@ -1343,12 +2305,32 @@ public class MaintenanceApplicationService {
         java.util.stream.Collectors.toMap(CatalogNodeInput::id, value -> value));
     savedNodes.forEach(node -> {
       CatalogNodeInput input = inputsById.get(node.getId());
+      UUID mediaOwnerId = MaintenanceMediaOwnerId.catalogNode(warehouseId, node.getId());
       replaceMedia(
-          "CATALOG_NODE", node.getRowId(), "MAINTENANCE_CATALOG_NODE", node.getId(),
+          "CATALOG_NODE", node.getRowId(), "MAINTENANCE_CATALOG_NODE", mediaOwnerId,
           warehouseId, input.mediaReferences());
+      enqueueMediaOwnerProof(
+          "MAINTENANCE_CATALOG_NODE",
+          mediaOwnerId,
+          warehouseId,
+          versionId,
+          version,
+          true);
     });
     catalogLinks.saveAllAndFlush(links.stream().map(link -> new CatalogLink(
         link.id(), versionId, link.fromNodeId(), link.toNodeId(), link.linkType().name(), link.sortOrder())).toList());
+  }
+
+  private boolean catalogNodeExistsInWarehouse(UUID warehouseId, UUID nodeId) {
+    Boolean exists = jdbc.queryForObject("""
+        select exists (
+          select 1
+          from catalog_node node
+          join catalog_version version on version.id=node.catalog_version_id
+          where version.warehouse_id=? and node.node_id=?
+        )
+        """, Boolean.class, warehouseId, nodeId);
+    return Boolean.TRUE.equals(exists);
   }
 
   private void requireNoActiveRework(MaintenanceRepair repair) {
@@ -1556,6 +2538,17 @@ public class MaintenanceApplicationService {
             "transition", transition));
   }
 
+  private void enqueueMediaOwnerProof(
+      String ownerType,
+      UUID ownerId,
+      UUID warehouseId,
+      UUID sourceId,
+      long sourceVersion,
+      boolean active) {
+    reconciliations.enqueueMediaOwnerProof(
+        ownerType, ownerId, warehouseId, sourceId, sourceVersion, active);
+  }
+
   private void confirmTaskRegistration(
       UUID repairId, MaintenanceDependencyGateway.TaskSnapshot task) {
     List<RepairStage> stages = repairStages.findAllByRepairIdOrderByStageNo(repairId);
@@ -1600,11 +2593,14 @@ public class MaintenanceApplicationService {
     }
     List<RepairStage> stages = repairStages.findAllByRepairIdOrderByStageNo(repair.getId());
     if (stages.isEmpty()) throw invalid("Repair needs at least one planned stage before queueing");
+    FurnitureLossCommand furniture = furnitureLosses(repair);
     String ownerType = ownerType(repair);
     String ownerId = ownerId(repair);
+    MaintenanceDependencyGateway.AssetSnapshot liveAsset = requireQueueAssetSnapshot(repair);
+    long rentalItemExpectedVersion = liveAsset.version();
     MaintenanceDependencyGateway.LeaseSnapshot lease = dependencies.acquireLease(
         derived(work.idempotencyKey(), "acquire"), repair.getRentalItemId(),
-        repair.getRentalItemVersionSnapshot(), ownerType, ownerId);
+        rentalItemExpectedVersion, ownerType, ownerId);
     validateLeaseTruth(repair, lease, ownerType, ownerId);
     if (!leaseIsFresh(lease.expiresAt())) {
       lease = dependencies.renewLease(
@@ -1613,11 +2609,24 @@ public class MaintenanceApplicationService {
       validateLeaseTruth(repair, lease, ownerType, ownerId);
     }
     requireFreshDependencyLease(lease);
-    MaintenanceDependencyGateway.AssetSnapshot asset = dependencies.fencedStatus(
-        derived(work.idempotencyKey(), "status"), repair.getRentalItemId(), repair.getWarehouseId(),
-        repair.getRentalItemVersionSnapshot(), lease.leaseId(), lease.fencingToken(), ownerType,
-        ownerId, "QUEUE_TO_REPAIR", work.payload().path("linkedReturn").asBoolean(false));
-    validateAssetTruth(repair, asset);
+    UUID statusKey = derived(work.idempotencyKey(), "status");
+    boolean linkedReturn = work.payload().path("linkedReturn").asBoolean(false);
+    MaintenanceDependencyGateway.AssetSnapshot asset = furniture.losses().isEmpty()
+        ? dependencies.fencedStatus(
+            statusKey, repair.getRentalItemId(), repair.getWarehouseId(),
+            rentalItemExpectedVersion, lease.leaseId(), lease.fencingToken(), ownerType,
+            ownerId, "QUEUE_TO_REPAIR", linkedReturn)
+        : dependencies.fencedStatus(
+            statusKey, repair.getRentalItemId(), repair.getWarehouseId(),
+            rentalItemExpectedVersion, lease.leaseId(), lease.fencingToken(), ownerType,
+            ownerId, "QUEUE_TO_REPAIR", linkedReturn,
+            furniture.estimateId(), furniture.losses());
+    validateAssetTruth(repair, asset, rentalItemExpectedVersion);
+    if (!"REPAIR".equals(asset.status())) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Asset-service did not confirm the repair status");
+    }
     stages.forEach(RepairStage::queued);
     repairStages.saveAllAndFlush(stages);
     repair.confirmRentalItemVersion(asset.version());
@@ -1715,6 +2724,67 @@ public class MaintenanceApplicationService {
         "repairId", saved.getId().toString(),
         "externalTaskId", task.externalTaskId().toString(),
         "taskBoardVersion", task.version());
+  }
+
+  private Object reconcileCatalogPositionRegistration(
+      MaintenanceReconciliationStore.WorkItem work) {
+    requireCatalogPositionWork(work, "REGISTER_CATALOG_POSITION");
+    MaintenanceDependencyGateway.CatalogPositionReference reference =
+        dependencies.registerCatalogPosition(
+            work.catalogQueueId(), work.catalogExternalReferenceId());
+    return Map.of(
+        "catalogVersionId", work.catalogVersionId().toString(),
+        "catalogNodeId", work.catalogNodeId().toString(),
+        "queueId", reference.queueId().toString(),
+        "externalReferenceId", reference.externalReferenceId(),
+        "referenceId", reference.id().toString(),
+        "referenceVersion", reference.version());
+  }
+
+  private boolean catalogCleanupReady(MaintenanceReconciliationStore.WorkItem work) {
+    requireCatalogPositionWork(work, "DELETE_CATALOG_POSITION");
+    List<UUID> predecessorKeys = uuidListField(work.payload(), "predecessorKeys");
+    if (reconciliations.allConfirmed(
+        "TASK_BOARD", "REGISTER_CATALOG_POSITION", predecessorKeys)) {
+      return true;
+    }
+    reconciliations.defer(work, Duration.ofSeconds(5));
+    return false;
+  }
+
+  private Object reconcileCatalogPositionDeletion(
+      MaintenanceReconciliationStore.WorkItem work) {
+    requireCatalogPositionWork(work, "DELETE_CATALOG_POSITION");
+    MaintenanceDependencyGateway.CatalogPositionReference current =
+        dependencies.registerCatalogPosition(
+            work.catalogQueueId(), work.catalogExternalReferenceId());
+    dependencies.deleteCatalogPosition(
+        work.catalogExternalReferenceId(), current.version());
+    return Map.of(
+        "catalogVersionId", work.catalogVersionId().toString(),
+        "catalogNodeId", work.catalogNodeId().toString(),
+        "queueId", work.catalogQueueId().toString(),
+        "externalReferenceId", work.catalogExternalReferenceId(),
+        "deletedReferenceVersion", current.version());
+  }
+
+  private static void requireCatalogPositionWork(
+      MaintenanceReconciliationStore.WorkItem work, String operation) {
+    if (work.repairId() != null
+        || !"TASK_BOARD".equals(work.dependency())
+        || !operation.equals(work.operation())
+        || work.catalogVersionId() == null
+        || work.catalogNodeId() == null
+        || work.catalogQueueId() == null
+        || work.catalogExternalReferenceId() == null
+        || work.catalogExternalReferenceId().isBlank()
+        || !work.catalogVersionId().equals(uuidField(work.payload(), "catalogVersionId"))
+        || !work.catalogNodeId().equals(uuidField(work.payload(), "catalogNodeId"))
+        || !work.catalogQueueId().equals(uuidField(work.payload(), "queueId"))
+        || !work.catalogExternalReferenceId().equals(
+            stringField(work.payload(), "externalReferenceId"))) {
+      throw new IllegalStateException("Stored catalog-position reconciliation is incomplete");
+    }
   }
 
   private Object reconcileAssetTransition(MaintenanceReconciliationStore.WorkItem work) {
@@ -1818,14 +2888,17 @@ public class MaintenanceApplicationService {
     MaintenanceRepair repair = requireRepair(work.repairId());
     long expectedVersion = events.lockCurrentVersion(MaintenanceAggregateType.REPAIR, repair.getId());
     assertVersion(repair.getVersion(), expectedVersion);
-    boolean changed = quarantined
-        ? repair.markReconciliationQuarantined()
-        : repair.markReconciliationRequired();
-    if (work.dependency().equals("TASK_BOARD")) {
+    boolean changed;
+    if ("TASK_BOARD".equals(work.dependency())) {
+      repair.markTaskDeliveryFailed(quarantined);
       List<RepairStage> stages = repairStages.findAllByRepairIdOrderByStageNo(repair.getId());
       stages.forEach(stage -> stage.markTaskDeliveryFailed(quarantined));
       repairStages.saveAllAndFlush(stages);
       changed = true;
+    } else {
+      changed = quarantined
+          ? repair.markReconciliationQuarantined()
+          : repair.markReconciliationRequired();
     }
     if (!changed) return;
     MaintenanceRepair saved = repairs.saveAndFlush(repair);
@@ -1978,13 +3051,47 @@ public class MaintenanceApplicationService {
 
   private static void validateAssetTruth(
       MaintenanceRepair repair, MaintenanceDependencyGateway.AssetSnapshot asset) {
+    validateAssetTruth(repair, asset, repair.getRentalItemVersionSnapshot());
+  }
+
+  private static void validateAssetTruth(
+      MaintenanceRepair repair,
+      MaintenanceDependencyGateway.AssetSnapshot asset,
+      long expectedVersion) {
     if (asset == null || !repair.getRentalItemId().equals(asset.rentalItemId())
         || !repair.getWarehouseId().equals(asset.warehouseId())
-        || asset.version() <= repair.getRentalItemVersionSnapshot()) {
+        || asset.version() <= expectedVersion) {
       throw new MaintenanceDependencyException(
           org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
           "Asset-service fenced truth does not advance the expected rental item");
     }
+  }
+
+  private MaintenanceDependencyGateway.AssetSnapshot requireQueueAssetSnapshot(
+      MaintenanceRepair repair) {
+    MaintenanceDependencyGateway.AssetSnapshot snapshot =
+        dependencies.getRentalItemSnapshot(repair.getRentalItemId());
+    if (snapshot == null
+        || !repair.getRentalItemId().equals(snapshot.rentalItemId())
+        || !repair.getWarehouseId().equals(snapshot.warehouseId())
+        || snapshot.version() < 0
+        || snapshot.status() == null
+        || !REPAIR_QUEUE_SOURCE_STATUSES.contains(snapshot.status())) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Canonical rental-item snapshot is not safe for repair queueing");
+    }
+    RentalItemFactProjection projection = requireRentalItemFact(
+        repair.getRentalItemId(), repair.getWarehouseId());
+    if (snapshot.version() < repair.getRentalItemVersionSnapshot()
+        || snapshot.version() < projection.getAggregateVersion()
+        || (snapshot.version() == projection.getAggregateVersion()
+            && !snapshot.status().equals(projection.getAssetStatus()))) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Canonical rental-item snapshot is older than maintenance truth");
+    }
+    return snapshot;
   }
 
   private static void validateAssetTruth(
@@ -2021,6 +3128,39 @@ public class MaintenanceApplicationService {
     } catch (IllegalArgumentException exception) {
       throw new IllegalStateException("Reconciliation payload has invalid " + field, exception);
     }
+  }
+
+  private static String stringField(JsonNode payload, String field) {
+    JsonNode value = payload.get(field);
+    if (value == null || !value.isTextual() || value.stringValue().isBlank()) {
+      throw new IllegalStateException("Reconciliation payload is missing " + field);
+    }
+    return value.stringValue();
+  }
+
+  private static List<UUID> uuidListField(JsonNode payload, String field) {
+    JsonNode value = payload.get(field);
+    if (value == null || !value.isArray()) {
+      throw new IllegalStateException("Reconciliation payload is missing " + field);
+    }
+    List<UUID> result = new ArrayList<>();
+    value.forEach(
+        item -> {
+          if (!item.isTextual()) {
+            throw new IllegalStateException(
+                "Reconciliation payload has invalid " + field);
+          }
+          try {
+            result.add(UUID.fromString(item.stringValue()));
+          } catch (IllegalArgumentException exception) {
+            throw new IllegalStateException(
+                "Reconciliation payload has invalid " + field, exception);
+          }
+        });
+    if (result.size() != new HashSet<>(result).size()) {
+      throw new IllegalStateException("Reconciliation payload has duplicate " + field);
+    }
+    return List.copyOf(result);
   }
 
   private List<EstimateLine> currentLines(MaintenanceEstimate estimate) {
@@ -2068,25 +3208,39 @@ public class MaintenanceApplicationService {
 
   private CatalogVersionResponse catalogResponse(CatalogVersion value) {
     Map<String, Object> validation = jsonMap(value.getValidationReport());
+    CatalogRoutingSyncSnapshot routingSync = reconciliations.catalogRoutingTruth(value.getId())
+        .map(truth -> new CatalogRoutingSyncSnapshot(
+            DeliveryState.valueOf(truth.state()),
+            truth.registrationsRequired(),
+            truth.registrationsConfirmed(),
+            truth.cleanupRequired(),
+            truth.cleanupConfirmed(),
+            truth.attempts(),
+            truth.updatedAt()))
+        .orElse(null);
     return new CatalogVersionResponse(
         value.getId(), value.getWarehouseId(), value.getVersion(), value.getState(),
         value.getSourceSha256(), new CatalogCounts(value.getNodeCount(), value.getLinkCount()),
         new CatalogValidationReport(
             booleanValue(validation, "valid"), intValue(validation, "errorCount"),
             intValue(validation, "warningCount"), stringValue(validation, "reportSha256")),
-        value.getCreatedAt(), value.getActivatedAt());
+        value.getCreatedAt(), value.getActivatedAt(), routingSync);
   }
 
-  private CatalogNodeResponse catalogNodeResponse(CatalogNode value) {
-    return new CatalogNodeResponse(
-        value.getId(), value.getCatalogVersionId(), value.getCode(),
-        CatalogNodeType.valueOf(value.getNodeType()), value.getName(),
-        value.isActive(), value.getParentNodeId(), value.getUnit(), money(value.getPriceMinor()),
-        value.getDurationMinutes(), value.isIncludeInEstimate(), value.isCommonItem(),
-        value.isShowInMainMenu(), value.isPhotoRequired(),
-        value.getRoutingQueueId() == null ? null : new RoutingSnapshot(
-            value.getRoutingQueueId(), value.getRoutingQueueCode(), value.getRoutingQueueKind()),
-        readList(value.getOpaqueReferences(), OpaqueCatalogReference.class), value.getComment(),
+  private CatalogNodeResponse catalogNodeResponse(CatalogNode value, UUID warehouseId) {
+    return catalogNodeResponseMapper.toResponse(
+        value,
+        MaintenanceMediaOwnerId.catalogNode(warehouseId, value.getId()),
+        CatalogNodeType.valueOf(value.getNodeType()),
+        value.getFurnitureEquipmentId() == null
+            ? null
+            : catalogFurnitureMapper.toReference(value),
+        money(value.getPriceMinor()),
+        value.getRoutingQueueId() == null
+            ? null
+            : new RoutingSnapshot(
+                value.getRoutingQueueId(), value.getRoutingQueueCode(), value.getRoutingQueueKind()),
+        readList(value.getOpaqueReferences(), OpaqueCatalogReference.class),
         readList(value.getMediaReferences(), MediaReferenceInput.class));
   }
 
@@ -2415,6 +3569,14 @@ public class MaintenanceApplicationService {
 
   public record CreateResult<T>(T response, boolean replayed) {}
   private record CatalogValidation(boolean dependencyAcyclic) {}
+  private record CatalogContent(
+      List<CatalogNodeInput> nodes, List<CatalogLinkInput> links) {}
+  private record CatalogForkSnapshot(
+      UUID sourceCatalogVersionId,
+      long sourceCatalogVersion,
+      CatalogVersionState sourceLifecycle,
+      List<CatalogNodeInput> nodes,
+      List<CatalogLinkInput> links) {}
   private record LockedRepairChain(
       MaintenanceRepair repair,
       List<MaintenanceRepair> sources,

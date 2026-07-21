@@ -1,15 +1,17 @@
 import { ApiError } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
-import type {
-  DisposableMediaObjectUrl,
-  InventoryFindingMediaOwner,
-  MediaAsset,
-  MediaPage,
-  MediaRotationDegrees,
-  MediaUploadResult,
-  MediaVariant,
-  UploadedObject,
-  UploadSession,
+import {
+  cabinMediaOwner,
+  type CabinCoverPage,
+  type DisposableMediaObjectUrl,
+  type MediaAsset,
+  type MediaPage,
+  type MediaRotationDegrees,
+  type MediaUploadResult,
+  type MediaVariant,
+  type ServiceMediaOwner,
+  type UploadedObject,
+  type UploadSession,
 } from "@/features/media/model/service-media"
 
 type FetchFunction = (
@@ -31,6 +33,7 @@ export type HttpMediaClientOptions = Readonly<{
 }>
 
 export type CreateUploadSessionInput = Readonly<{
+  folderId?: string
   fileName: string
   contentType: string
   contentLength: number
@@ -43,10 +46,15 @@ export type ListOwnerMediaOptions = Readonly<{
   cursor?: string
 }>
 
-export interface InventoryFindingMediaClient {
+export type MediaUploadCommandKeys = Readonly<{
+  createSession: string
+  uploadAndFinalize: string
+}>
+
+export interface MediaClient {
   createUploadSession(
     accessToken: string,
-    owner: InventoryFindingMediaOwner,
+    owner: ServiceMediaOwner,
     input: CreateUploadSessionInput,
     idempotencyKey: string
   ): Promise<UploadSession>
@@ -64,34 +72,50 @@ export interface InventoryFindingMediaClient {
   ): Promise<MediaAsset>
   uploadFile(
     accessToken: string,
-    owner: InventoryFindingMediaOwner,
+    owner: ServiceMediaOwner,
     file: File,
-    sortOrder?: number
+    sortOrder?: number,
+    folderId?: string,
+    commandKeys?: MediaUploadCommandKeys
   ): Promise<MediaUploadResult>
   listOwnerMedia(
     accessToken: string,
-    owner: InventoryFindingMediaOwner,
+    owner: ServiceMediaOwner,
     options?: ListOwnerMediaOptions
   ): Promise<MediaPage>
+  listCabinCovers(
+    accessToken: string,
+    warehouseId: string,
+    cabinIds: readonly string[]
+  ): Promise<CabinCoverPage>
   createOriginalObjectUrl(
     accessToken: string,
-    owner: InventoryFindingMediaOwner,
+    owner: ServiceMediaOwner,
     mediaId: string
   ): Promise<DisposableMediaObjectUrl>
   createVariantObjectUrl(
     accessToken: string,
-    owner: InventoryFindingMediaOwner,
+    owner: ServiceMediaOwner,
     variant: MediaVariant
   ): Promise<DisposableMediaObjectUrl>
   rotate(
     accessToken: string,
-    owner: InventoryFindingMediaOwner,
+    owner: ServiceMediaOwner,
     mediaId: string,
     rotationDegrees: MediaRotationDegrees,
     expectedVersion: number,
     idempotencyKey: string
   ): Promise<MediaAsset>
+  deleteAsset(
+    accessToken: string,
+    owner: ServiceMediaOwner,
+    mediaId: string,
+    expectedVersion: number,
+    idempotencyKey: string
+  ): Promise<MediaAsset>
 }
+
+export type InventoryFindingMediaClient = MediaClient
 
 const UUID_PATH_PART = "[0-9a-fA-F-]{36}"
 const UPLOAD_CONTENT_PATH = new RegExp(
@@ -101,8 +125,11 @@ const VARIANT_CONTENT_PATH = new RegExp(
   `^/api/media/v1/assets/${UUID_PATH_PART}/variants/(SMALL|MEDIUM|LARGE)/content$`
 )
 const SHA256 = /^[0-9a-f]{64}$/
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+// Service-owned IDs include deterministic UUID-shaped identifiers imported
+// from the old panel (for example, warehouse IDs with zero version bits).
+// Match the canonical UUID text form here and leave UUID generation rules to
+// the owning service.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const MEDIA_CONTENT_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -121,7 +148,7 @@ const MEDIA_STATUSES = new Set([
 const DERIVED_VARIANTS = new Set(["SMALL", "MEDIUM", "LARGE"])
 const ROTATIONS = new Set([0, 90, 180, 270])
 
-export class HttpMediaClient implements InventoryFindingMediaClient {
+export class HttpMediaClient implements MediaClient {
   readonly #baseUrl: URL
   readonly #fetch: FetchFunction
   readonly #randomUUID: () => string
@@ -145,7 +172,7 @@ export class HttpMediaClient implements InventoryFindingMediaClient {
 
   async createUploadSession(
     accessToken: string,
-    owner: InventoryFindingMediaOwner,
+    owner: ServiceMediaOwner,
     input: CreateUploadSessionInput,
     idempotencyKey: string
   ) {
@@ -218,9 +245,11 @@ export class HttpMediaClient implements InventoryFindingMediaClient {
 
   async uploadFile(
     accessToken: string,
-    owner: InventoryFindingMediaOwner,
+    owner: ServiceMediaOwner,
     file: File,
-    sortOrder = 0
+    sortOrder = 0,
+    folderId?: string,
+    commandKeys?: MediaUploadCommandKeys
   ): Promise<MediaUploadResult> {
     if (
       !file.name.trim() ||
@@ -228,6 +257,9 @@ export class HttpMediaClient implements InventoryFindingMediaClient {
       !MEDIA_CONTENT_TYPES.has(file.type)
     ) {
       throw new Error("Media file metadata is invalid")
+    }
+    if (folderId !== undefined && !UUID.test(folderId)) {
+      throw new Error("Media folder ID is invalid")
     }
     const checksumSha256 = await this.#sha256(file)
     if (!SHA256.test(checksumSha256)) {
@@ -237,15 +269,16 @@ export class HttpMediaClient implements InventoryFindingMediaClient {
       accessToken,
       owner,
       {
+        folderId,
         fileName: file.name,
         contentType: file.type,
         contentLength: file.size,
         checksumSha256,
         sortOrder,
       },
-      this.#randomUUID()
+      commandKeys?.createSession ?? this.#randomUUID()
     )
-    const finalizeKey = this.#randomUUID()
+    const finalizeKey = commandKeys?.uploadAndFinalize ?? this.#randomUUID()
     const uploadedObject = await this.uploadSessionContent(
       accessToken,
       session,
@@ -266,7 +299,7 @@ export class HttpMediaClient implements InventoryFindingMediaClient {
 
   async listOwnerMedia(
     accessToken: string,
-    owner: InventoryFindingMediaOwner,
+    owner: ServiceMediaOwner,
     options: ListOwnerMediaOptions = {}
   ) {
     const url = this.#apiUrl("v1/assets")
@@ -281,9 +314,37 @@ export class HttpMediaClient implements InventoryFindingMediaClient {
     )
   }
 
+  async listCabinCovers(
+    accessToken: string,
+    warehouseId: string,
+    cabinIds: readonly string[]
+  ) {
+    if (
+      !UUID.test(warehouseId) ||
+      cabinIds.length < 1 ||
+      cabinIds.length > 200 ||
+      new Set(cabinIds).size !== cabinIds.length ||
+      cabinIds.some((cabinId) => !UUID.test(cabinId))
+    ) {
+      throw new Error("Invalid cabin cover request")
+    }
+    return parseCabinCoverPage(
+      await this.#requestJson<unknown>(
+        accessToken,
+        this.#apiUrl("v1/cabin-covers"),
+        {
+          method: "POST",
+          body: JSON.stringify({ warehouseId, cabinIds }),
+        }
+      ),
+      this.#baseUrl.origin,
+      warehouseId
+    )
+  }
+
   async createOriginalObjectUrl(
     accessToken: string,
-    owner: InventoryFindingMediaOwner,
+    owner: ServiceMediaOwner,
     mediaId: string
   ) {
     const url = this.#apiUrl(
@@ -295,7 +356,7 @@ export class HttpMediaClient implements InventoryFindingMediaClient {
 
   async createVariantObjectUrl(
     accessToken: string,
-    owner: InventoryFindingMediaOwner,
+    owner: ServiceMediaOwner,
     variant: MediaVariant
   ) {
     const url = requireSameOriginPath(
@@ -310,7 +371,7 @@ export class HttpMediaClient implements InventoryFindingMediaClient {
 
   async rotate(
     accessToken: string,
-    owner: InventoryFindingMediaOwner,
+    owner: ServiceMediaOwner,
     mediaId: string,
     rotationDegrees: MediaRotationDegrees,
     expectedVersion: number,
@@ -325,6 +386,27 @@ export class HttpMediaClient implements InventoryFindingMediaClient {
         method: "POST",
         headers: { "Idempotency-Key": idempotencyKey },
         body: JSON.stringify({ rotationDegrees, expectedVersion }),
+      }),
+      this.#baseUrl.origin
+    )
+  }
+
+  async deleteAsset(
+    accessToken: string,
+    owner: ServiceMediaOwner,
+    mediaId: string,
+    expectedVersion: number,
+    idempotencyKey: string
+  ) {
+    const url = this.#apiUrl(
+      `v1/assets/${encodeURIComponent(mediaId)}/deletion`
+    )
+    setOwnerQuery(url, owner)
+    return parseMediaAsset(
+      await this.#requestJson<unknown>(accessToken, url, {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify({ expectedVersion }),
       }),
       this.#baseUrl.origin
     )
@@ -437,20 +519,14 @@ function normalizeBaseUrl(value: string) {
   return url
 }
 
-function setOwnerQuery(url: URL, owner: InventoryFindingMediaOwner) {
-  url.searchParams.set("ownerType", owner.ownerType)
-  url.searchParams.set("ownerId", owner.ownerId)
-  url.searchParams.set("warehouseId", owner.warehouseId)
-  url.searchParams.set("context", owner.context)
+function setOwnerQuery(url: URL, owner: ServiceMediaOwner) {
+  for (const [name, value] of ownerQueryEntries(owner)) {
+    url.searchParams.set(name, value)
+  }
 }
 
-function requireExactOwnerQuery(url: URL, owner: InventoryFindingMediaOwner) {
-  const expected = new Map<string, string>([
-    ["ownerType", owner.ownerType],
-    ["ownerId", owner.ownerId],
-    ["warehouseId", owner.warehouseId],
-    ["context", owner.context],
-  ])
+function requireExactOwnerQuery(url: URL, owner: ServiceMediaOwner) {
+  const expected = new Map<string, string>(ownerQueryEntries(owner))
   for (const [name, value] of expected) {
     if (
       url.searchParams.get(name) !== value ||
@@ -472,6 +548,19 @@ function requireExactOwnerQuery(url: URL, owner: InventoryFindingMediaOwner) {
       throw new Error("Media content path has an unexpected query parameter")
     }
   }
+}
+
+function ownerQueryEntries(owner: ServiceMediaOwner) {
+  return [
+    ["ownerType", owner.ownerType],
+    [
+      "ownerId" in owner ? "ownerId" : "documentId",
+      "ownerId" in owner ? owner.ownerId : owner.documentId,
+    ],
+    ...("ownerId" in owner ? [] : [["lineId", owner.lineId]]),
+    ["warehouseId", owner.warehouseId],
+    ["context", owner.context],
+  ] as Array<[string, string]>
 }
 
 function requireSameOriginPath(
@@ -540,7 +629,7 @@ function parseUploadedObject(value: unknown): UploadedObject {
 function parseMediaPage(
   value: unknown,
   origin: string,
-  owner: InventoryFindingMediaOwner
+  owner: ServiceMediaOwner
 ): MediaPage {
   const record = requireRecord(value, "media page")
   if (!Array.isArray(record.items) || record.items.length > 100) {
@@ -558,10 +647,106 @@ function parseMediaPage(
   }
 }
 
+function parseCabinCoverPage(
+  value: unknown,
+  origin: string,
+  warehouseId: string
+): CabinCoverPage {
+  const record = requireRecord(value, "cabin cover page")
+  if (!Array.isArray(record.items) || record.items.length > 200) {
+    throw new Error("Invalid cabin cover page items")
+  }
+  const cabinIds = new Set<string>()
+  return {
+    items: record.items.map((value) => {
+      const item = requireRecord(value, "cabin cover")
+      const cabinId = requireUUID(item.cabinId, "cabinId")
+      if (cabinIds.has(cabinId)) {
+        throw new Error("Duplicate cabin cover projection")
+      }
+      cabinIds.add(cabinId)
+      const photoCount = requirePositiveInteger(item.photoCount, "photoCount")
+      if (photoCount > 100) throw new Error("Invalid cabin photo count")
+      const owner = cabinMediaOwner(cabinId, warehouseId)
+      if (!Array.isArray(item.previews) || item.previews.length > 100) {
+        throw new Error("Invalid cabin preview list")
+      }
+      const mediaIds = new Set<string>()
+      const parsePreview = (preview: unknown) => {
+        const previewRecord = requireRecord(preview, "cabin cover variant")
+        const mediaId = requireUUID(previewRecord.mediaId, "mediaId")
+        if (mediaIds.has(mediaId)) {
+          throw new Error("Duplicate cabin preview")
+        }
+        mediaIds.add(mediaId)
+        const generation = requirePositiveInteger(
+          previewRecord.generation,
+          "generation"
+        )
+        const variant = parseMediaVariant(previewRecord, origin, owner, mediaId)
+        if (variant.kind !== "SMALL") {
+          throw new Error("Cabin preview is not SMALL")
+        }
+        return { mediaId, generation, ...variant }
+      }
+      const previews = item.previews.map(parsePreview)
+      if (previews.length > photoCount) {
+        throw new Error("Cabin preview count exceeds photo count")
+      }
+      if (item.cover === null) {
+        if (previews.length > 0) {
+          throw new Error("Cabin cover does not match previews")
+        }
+        return { cabinId, photoCount, cover: null, previews }
+      }
+
+      const coverRecord = requireRecord(item.cover, "cabin cover variant")
+      const coverMediaId = requireUUID(coverRecord.mediaId, "mediaId")
+      const coverGeneration = requirePositiveInteger(
+        coverRecord.generation,
+        "generation"
+      )
+      const coverVariant = parseMediaVariant(
+        coverRecord,
+        origin,
+        owner,
+        coverMediaId
+      )
+      if (coverVariant.kind !== "SMALL") {
+        throw new Error("Cabin cover is not SMALL")
+      }
+      const cover = {
+        mediaId: coverMediaId,
+        generation: coverGeneration,
+        ...coverVariant,
+      }
+      const first = previews[0]
+      if (
+        !first ||
+        first.mediaId !== cover.mediaId ||
+        first.generation !== cover.generation ||
+        first.kind !== cover.kind ||
+        first.contentType !== cover.contentType ||
+        first.contentPath !== cover.contentPath ||
+        first.width !== cover.width ||
+        first.height !== cover.height
+      ) {
+        throw new Error("Cabin cover does not match previews")
+      }
+      return {
+        cabinId,
+        photoCount,
+        cover,
+        previews,
+      }
+    }),
+  }
+}
+
 function parseMediaAsset(
   value: unknown,
   origin: string,
-  owner?: InventoryFindingMediaOwner
+  owner?: ServiceMediaOwner
 ): MediaAsset {
   const record = requireRecord(value, "media asset")
   if (!Array.isArray(record.variants)) throw new Error("Invalid media variants")
@@ -582,6 +767,7 @@ function parseMediaAsset(
   }
   return {
     id: requireUUID(record.id, "id"),
+    folderId: requireUUID(record.folderId, "folderId"),
     fileName: requireBoundedString(record.fileName, "fileName", 512),
     contentType: requireMediaContentType(record.contentType, "contentType"),
     kind: kind as MediaAsset["kind"],
@@ -610,7 +796,7 @@ function parseMediaAsset(
 function parseMediaVariant(
   value: unknown,
   origin: string,
-  owner: InventoryFindingMediaOwner,
+  owner: ServiceMediaOwner,
   mediaId: string
 ): MediaVariant {
   const record = requireRecord(value, "media variant")

@@ -38,8 +38,14 @@ import { RepairEstimateLinesEditor } from "@/features/repair-estimates/repair-es
 import { RepairEstimateWorkspaceLayout } from "@/features/repair-estimates/repair-estimate-workspace-layout"
 import { RepairWorkInformationFields } from "@/features/repair-estimates/repair-work-information-fields"
 import { REPAIR_TASKS_QUERY_KEY } from "@/features/repair-tasks/api/repair-tasks-api"
+import {
+  maintenanceEstimateMediaOwner,
+  type ReadyMediaReference,
+} from "@/features/media/media-service"
+import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
 
 export type RepairEstimateEditorWorkspaceProps = {
+  accessToken: string | null
   warehouseId: string
   estimate: RepairEstimateDto | null
   readOnly?: boolean
@@ -50,6 +56,7 @@ export type RepairEstimateEditorWorkspaceProps = {
 }
 
 export function RepairEstimateEditorWorkspace({
+  accessToken,
   warehouseId,
   estimate,
   readOnly = false,
@@ -74,6 +81,7 @@ export function RepairEstimateEditorWorkspace({
     return (
       <RepairEstimateCompletedWorkspace
         key={editorKey}
+        accessToken={accessToken}
         warehouseId={warehouseId}
         estimate={estimate}
         readOnly={readOnly}
@@ -84,6 +92,7 @@ export function RepairEstimateEditorWorkspace({
   return (
     <RepairEstimateEditorContent
       key={editorKey}
+      accessToken={accessToken}
       warehouseId={warehouseId}
       estimate={estimate}
       readOnly={readOnly}
@@ -95,6 +104,7 @@ export function RepairEstimateEditorWorkspace({
 }
 
 function RepairEstimateEditorContent({
+  accessToken,
   warehouseId,
   estimate,
   readOnly = false,
@@ -115,6 +125,48 @@ function RepairEstimateEditorContent({
     useState<RepairEstimateCatalogPager | null>(null)
   const [completionOpen, setCompletionOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const mediaOwner = draft.estimateId
+    ? maintenanceEstimateMediaOwner(draft.estimateId, warehouseId)
+    : null
+
+  function updateReadyMediaReferences(references: ReadyMediaReference[]) {
+    setDraft((current) => {
+      const previous = current.maintenanceMediaReferences ?? []
+      const unchanged =
+        previous.length === references.length &&
+        previous.every(
+          (reference, index) =>
+            reference.mediaId === references[index]?.mediaId &&
+            reference.generation === references[index]?.generation
+        )
+      return unchanged
+        ? current
+        : { ...current, maintenanceMediaReferences: references }
+    })
+  }
+
+  async function ensureMediaOwner() {
+    if (draft.estimateId) {
+      return maintenanceEstimateMediaOwner(draft.estimateId, warehouseId)
+    }
+    if (readOnly) {
+      throw new Error("Для добавления фотографий нужен доступ EDIT")
+    }
+    if (!validateDraft()) {
+      throw new Error("Сначала заполните обязательные поля сметы")
+    }
+
+    const saved = await saveRepairEstimateDraft({ draft, warehouseId })
+    queryClient.setQueryData(
+      repairEstimateDetailQueryKey(warehouseId, saved.id),
+      saved
+    )
+    setDraft(toEstimateEditorDraft(saved))
+    void queryClient.invalidateQueries({
+      queryKey: [...REPAIR_ESTIMATES_QUERY_KEY, "list"],
+    })
+    return maintenanceEstimateMediaOwner(saved.id, warehouseId)
+  }
   const saveMutation = useMutation({
     mutationFn: () => {
       if (readOnly) {
@@ -395,10 +447,14 @@ function RepairEstimateEditorContent({
           ) : null
         }
         photos={
-          <p className="text-sm text-muted-foreground">
-            Фото для смет временно недоступны: media-service ещё не подтверждает
-            владельца MAINTENANCE_ESTIMATE.
-          </p>
+          <ServiceOwnerPhotos
+            accessToken={accessToken}
+            owner={mediaOwner}
+            ensureOwner={ensureMediaOwner}
+            readOnly={interactionDisabled}
+            title="Фотографии сметы"
+            onReadyReferencesChange={updateReadyMediaReferences}
+          />
         }
         information={information}
         estimate={estimateLines}

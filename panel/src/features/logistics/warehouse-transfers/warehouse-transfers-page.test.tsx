@@ -28,6 +28,36 @@ vi.mock(
   })
 )
 
+vi.mock("@/features/media/service-owner-photos", () => ({
+  ServiceOwnerPhotos: ({
+    title,
+    onReadyReferencesChange,
+  }: {
+    title: string
+    onReadyReferencesChange?: (
+      references: Array<{ mediaId: string; generation: number }>
+    ) => void
+  }) => (
+    <button
+      type="button"
+      onClick={() =>
+        onReadyReferencesChange?.([
+          {
+            mediaId: "88888888-8888-4888-8888-888888888888",
+            generation: 3,
+          },
+          {
+            mediaId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            generation: 4,
+          },
+        ])
+      }
+    >
+      Подготовить {title}
+    </button>
+  ),
+}))
+
 vi.mock("@/features/auth/use-auth", () => ({
   useAuth: () => ({
     accessToken: "transfer-token",
@@ -317,15 +347,11 @@ describe("WarehouseTransfersPage", () => {
     expect(
       screen.getByRole("heading", { name: "Принять строку перемещения" })
     ).toBeTruthy()
-    await user.type(screen.getByLabelText("Media UUID"), MEDIA_ID)
-    await user.clear(screen.getByLabelText("Поколение"))
-    await user.type(screen.getByLabelText("Поколение"), "3")
-    await user.click(screen.getByRole("button", { name: "Добавить media ref" }))
-    const mediaInputs = screen.getAllByLabelText("Media UUID")
-    const generationInputs = screen.getAllByLabelText("Поколение")
-    await user.type(mediaInputs[1]!, SECOND_MEDIA_ID)
-    await user.clear(generationInputs[1]!)
-    await user.type(generationInputs[1]!, "4")
+    await user.click(
+      screen.getByRole("button", {
+        name: "Подготовить Фотографии строки 1",
+      })
+    )
     await user.click(screen.getByRole("button", { name: "Принять строку" }))
 
     await waitFor(() =>
@@ -365,7 +391,11 @@ describe("WarehouseTransfersPage", () => {
     renderPage()
 
     await user.click(await screen.findByRole("button", { name: "Принять" }))
-    await user.type(screen.getByLabelText("Media UUID"), MEDIA_ID)
+    await user.click(
+      screen.getByRole("button", {
+        name: "Подготовить Фотографии строки 1",
+      })
+    )
     await user.click(screen.getByRole("button", { name: "Принять строку" }))
     await screen.findByText("Media-service временно недоступен")
     await user.click(screen.getByRole("button", { name: "Принять строку" }))
@@ -399,7 +429,11 @@ describe("WarehouseTransfersPage", () => {
     renderPage()
 
     await user.click(await screen.findByRole("button", { name: "Принять" }))
-    await user.type(screen.getByLabelText("Media UUID"), MEDIA_ID)
+    await user.click(
+      screen.getByRole("button", {
+        name: "Подготовить Фотографии строки 1",
+      })
+    )
     await user.click(screen.getByRole("button", { name: "Принять строку" }))
 
     await screen.findByText(/Конфликт данных: Версия документа устарела\./)

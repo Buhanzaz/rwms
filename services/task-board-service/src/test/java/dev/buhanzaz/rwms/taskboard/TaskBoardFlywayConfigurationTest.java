@@ -27,6 +27,14 @@ class TaskBoardFlywayConfigurationTest {
   }
 
   @Test
+  void queueRegistryAllowlistDefaultsToMaintenanceServiceOnly() throws IOException {
+    PropertySource<?> source = load("application.yaml");
+
+    assertThat(source.getProperty("rwms.security.queue-registry-client-ids"))
+        .isEqualTo("${TASK_BOARD_QUEUE_REGISTRY_CLIENT_IDS:maintenance-service}");
+  }
+
+  @Test
   void developmentNeverLetsHibernateMutateTheSchema() throws IOException {
     PropertySource<?> source = load("application-dev.yaml");
 

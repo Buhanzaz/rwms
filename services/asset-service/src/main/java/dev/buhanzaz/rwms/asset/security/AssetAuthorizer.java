@@ -41,6 +41,19 @@ public class AssetAuthorizer {
     requireWarehouse(jwt, warehouseId, AccessLevel.MANAGE);
   }
 
+  /** Orders use the constrained internal API; only warehouse operators and admins may mutate arbitrary balances. */
+  public void requireEquipmentMovement(Jwt jwt, UUID warehouseId) {
+    requireManage(jwt, warehouseId);
+    if (developmentPublicBypass) return;
+    String role = jwt == null ? null : jwt.getClaimAsString("global_role");
+    if (!"SYSTEM_ADMIN".equals(role)
+        && !"WMS_ADMIN".equals(role)
+        && !"WAREHOUSE_MANAGER".equals(role)) {
+      throw new AccessDeniedException(
+          "This role cannot perform arbitrary equipment movements");
+    }
+  }
+
   public void requireGlobalCatalogManagement(Jwt jwt) {
     if (developmentPublicBypass) return;
     requireUserScope(jwt, "rwms.write");

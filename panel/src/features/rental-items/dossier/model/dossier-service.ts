@@ -76,6 +76,7 @@ export type DossierSourceReference = {
 
 export type DossierMediaProjection = {
   mediaId: string
+  folderId: string
   findingId: string
   generation: number
   state: DossierMediaState

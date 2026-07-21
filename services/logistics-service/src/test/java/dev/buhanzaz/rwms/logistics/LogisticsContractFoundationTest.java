@@ -39,12 +39,26 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/shipments/{documentId}",
             "/api/logistics/v1/transfers",
             "/api/logistics/v1/transfers/{documentId}",
+            "/api/logistics/v1/equipment-movement-tasks",
+            "/api/logistics/v1/equipment-movement-tasks/{taskId}",
+            "/api/logistics/v1/orders",
+            "/api/logistics/v1/orders/{orderId}",
+            "/api/logistics/v1/orders/{orderId}/available-units",
+            "/api/logistics/v1/orders/{orderId}/units",
+            "/api/logistics/v1/clients",
             "/api/logistics/v1/{documentType}/{documentId}/reconcile");
     assertThat(child(child(document, "components"), "schemas"))
         .containsKeys(
             "CreateReturnRequest",
             "CreateShipmentRequest",
             "CreateTransferRequest",
+            "CreateEquipmentMovementTaskRequest",
+            "EquipmentMovementTask",
+            "EquipmentMovementTaskLine",
+            "CreateOrderRequest",
+            "OrderDetail",
+            "OrderUnit",
+            "OrderHistoryEvent",
             "LogisticsDocument",
             "LogisticsLine",
             "ReconcileRequest");
@@ -83,6 +97,22 @@ class LogisticsContractFoundationTest {
             "departTransferLine",
             "arriveTransferLine",
             "cancelTransfer",
+            "createEquipmentMovementTask",
+            "getEquipmentMovementTask",
+            "cancelEquipmentMovementTask",
+            "listOrders",
+            "createOrder",
+            "getOrder",
+            "updateOrder",
+            "cancelOrder",
+            "searchOrderClients",
+            "createOrderClient",
+            "selectOrderWarehouse",
+            "listOrderUnitCandidates",
+            "addOrderUnit",
+            "removeOrderUnit",
+            "adjustOrderUnitEquipment",
+            "getOrderHistory",
             "reconcileDocument");
     assertThat(paths.keySet())
         .allSatisfy(
@@ -112,6 +142,38 @@ class LogisticsContractFoundationTest {
                                     parameter ->
                                         assertThat(parameter.get("$ref"))
                                             .isEqualTo("#/components/parameters/ExpectedVersion"))));
+  }
+
+  @Test
+  void orderCreationCannotAssignAnArbitraryManagerAndUnitsKeepTheAssetShape()
+      throws Exception {
+    Map<String, Object> schemas = child(child(openApi(), "components"), "schemas");
+    Map<String, Object> createOrder = child(schemas, "CreateOrderRequest");
+    assertThat(child(createOrder, "properties"))
+        .containsOnlyKeys("clientId", "newClient")
+        .doesNotContainKey("managerId");
+    assertThat(child(schemas, "ClientType").get("enum"))
+        .isEqualTo(List.of("INDIVIDUAL", "LEGAL_ENTITY"));
+    Map<String, Object> paths = child(openApi(), "paths");
+    Map<String, Object> createOrderResponses =
+        child(child(child(paths, "/api/logistics/v1/orders"), "post"), "responses");
+    Map<String, Object> addUnitResponses =
+        child(
+            child(child(paths, "/api/logistics/v1/orders/{orderId}/units"), "post"),
+            "responses");
+    Map<String, Object> createClientResponses =
+        child(child(child(paths, "/api/logistics/v1/clients"), "post"), "responses");
+    assertThat(createOrderResponses).containsKeys("200", "201");
+    assertThat(addUnitResponses).containsKeys("200", "201");
+    assertThat(createClientResponses).containsKeys("200", "201");
+
+    Map<String, Object> orderUnit = child(schemas, "OrderUnit");
+    assertThat(child(orderUnit, "properties"))
+        .containsOnlyKeys("reservationId", "added", "unit");
+    Map<String, Object> history = child(schemas, "OrderHistoryEvent");
+    assertThat(child(history, "properties"))
+        .containsKeys("actorSubjectId", "occurredAt")
+        .doesNotContainKeys("actor", "timestamp");
   }
 
   @Test

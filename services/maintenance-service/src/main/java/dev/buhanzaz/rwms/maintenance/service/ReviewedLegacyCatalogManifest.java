@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.platform.contracts.FieldViolation;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -29,6 +30,10 @@ import tools.jackson.databind.ObjectMapper;
 public class ReviewedLegacyCatalogManifest {
   static final String MANIFEST_RESOURCE = "legacy/maintenance-catalog-manifest.json";
   static final String ARTIFACT_RESOURCE = "legacy/maintenance-catalog-v1.json";
+  static final String MANIFEST_SHA256 =
+      "cb82fadc291a111d2924cb4e6b20230b0aa0b0976b1e637d5d310e62b6478953";
+  static final String ARTIFACT_SHA256 =
+      "c35ff6611aeb6e6c711eb9e6181b20f325f2b1db349f04fc155f9839fae2411d";
   static final UUID SOURCE_WAREHOUSE_ID =
       UUID.fromString("00000000-0000-0000-0000-000000000002");
   static final String SOURCE_SHA256 =
@@ -54,8 +59,14 @@ public class ReviewedLegacyCatalogManifest {
   public ReviewedLegacyCatalogManifest(ObjectMapper mapper) {
     this.mapper = mapper;
     ObjectMapper strictMapper = strictMapper(mapper);
-    this.manifest = read(strictMapper, MANIFEST_RESOURCE, Manifest.class);
-    this.artifact = read(strictMapper, ARTIFACT_RESOURCE, ApprovedArtifact.class);
+    byte[] manifestBytes = readBytes(MANIFEST_RESOURCE);
+    byte[] artifactBytes = readBytes(ARTIFACT_RESOURCE);
+    if (!MANIFEST_SHA256.equals(MaintenanceChecksum.sha256(manifestBytes))
+        || !ARTIFACT_SHA256.equals(MaintenanceChecksum.sha256(artifactBytes))) {
+      throw new IllegalStateException("Packaged reviewed catalog resource hash is invalid");
+    }
+    this.manifest = read(strictMapper, manifestBytes, MANIFEST_RESOURCE, Manifest.class);
+    this.artifact = read(strictMapper, artifactBytes, ARTIFACT_RESOURCE, ApprovedArtifact.class);
     List<FieldViolation> authorityIssues = new ArrayList<>();
     validateAuthorityManifest(authorityIssues);
     if (!authorityIssues.isEmpty()) {
@@ -73,7 +84,7 @@ public class ReviewedLegacyCatalogManifest {
           issue(
               "warehouseId",
               "REVIEWED_SOURCE_WAREHOUSE_MISMATCH",
-              "Reviewed legacy routing snapshots are bound to their opaque source warehouse"));
+              "Reviewed legacy routing snapshots are bound to their source warehouse"));
     }
     if (!SOURCE_SHA256.equals(request.sourceSha256())) {
       issues.add(
@@ -116,6 +127,8 @@ public class ReviewedLegacyCatalogManifest {
       throw new MaintenanceCatalogImportValidationException(issues);
     }
     return new Review(
+        MANIFEST_SHA256,
+        ARTIFACT_SHA256,
         manifest.sourceEvidenceSha256(),
         manifest.nodeEvidenceSha256(),
         manifest.linkEvidenceSha256(),
@@ -123,13 +136,60 @@ public class ReviewedLegacyCatalogManifest {
         mappingSha256,
         manifest.nodeCount(),
         manifest.linkCount(),
+        manifest.nodeTypes().get("MATERIAL"),
+        10,
+        artifact.routingSnapshots().size(),
         manifest.nodeTypes(),
         manifest.linkTypes());
   }
 
   ImportCatalogRequest approvedRequest() {
+    return approvedRequest(SOURCE_WAREHOUSE_ID);
+  }
+
+  ImportCatalogRequest approvedRequest(UUID warehouseId) {
     return new ImportCatalogRequest(
-        artifact.sourceWarehouseId(), SOURCE_SHA256, artifact.nodes(), artifact.links());
+        warehouseId, SOURCE_SHA256, artifact.nodes(), artifact.links());
+  }
+
+  List<RoutingSnapshot> routingSnapshots() {
+    return artifact.routingSnapshots();
+  }
+
+  Review validatePersistedSnapshot(
+      UUID warehouseId, List<CatalogNodeInput> nodes, List<CatalogLinkInput> links) {
+    List<CatalogNodeInput> normalizedNodes =
+        nodes.stream()
+            .map(
+                node ->
+                    new CatalogNodeInput(
+                        node.id(),
+                        node.code(),
+                        node.nodeType(),
+                        node.name(),
+                        node.active(),
+                        node.parentNodeId(),
+                        false,
+                        null,
+                        node.unit(),
+                        node.unitPrice(),
+                        node.durationMinutes(),
+                        node.includeInEstimate(),
+                        node.commonItem(),
+                        node.showInMainMenu(),
+                        node.photoRequired(),
+                        node.routing(),
+                        List.of(),
+                        null,
+                        List.of()))
+            .sorted(Comparator.comparing(node -> node.id().toString()))
+            .toList();
+    List<CatalogLinkInput> normalizedLinks =
+        links.stream()
+            .sorted(Comparator.comparing(link -> link.id().toString()))
+            .toList();
+    return validate(
+        new ImportCatalogRequest(warehouseId, SOURCE_SHA256, normalizedNodes, normalizedLinks));
   }
 
   static void assertStrictResourceShape(
@@ -426,6 +486,8 @@ public class ReviewedLegacyCatalogManifest {
             .anyMatch(
                 node ->
                     node.comment() != null
+                        || Boolean.TRUE.equals(node.furnitureCategory())
+                        || node.furnitureEquipment() != null
                         || (node.references() != null && !node.references().isEmpty())
                         || (node.mediaReferences() != null && !node.mediaReferences().isEmpty()));
     if (excludedDataPresent) {
@@ -441,7 +503,8 @@ public class ReviewedLegacyCatalogManifest {
       List<CatalogNodeInput> nodes, List<CatalogLinkInput> links) {
     try {
       return MaintenanceChecksum.sha256(
-          mapper.writeValueAsBytes(new MappingArtifact(nodes, links)));
+          mapper.writeValueAsBytes(new MappingArtifact(
+              nodes.stream().map(ReviewedCatalogNodeMapping::from).toList(), links)));
     } catch (JacksonException exception) {
       throw new IllegalArgumentException("Catalog mapping cannot be hashed", exception);
     }
@@ -575,12 +638,23 @@ public class ReviewedLegacyCatalogManifest {
     return new FieldViolation(field, code, message);
   }
 
-  private static <T> T read(ObjectMapper mapper, String resource, Class<T> type) {
+  private static byte[] readBytes(String resource) {
     try (InputStream input = new ClassPathResource(resource).getInputStream()) {
-      return mapper.readValue(input, type);
+      return input.readAllBytes();
     } catch (IOException exception) {
       throw new IllegalStateException(
           "Reviewed legacy catalog resource cannot be loaded: " + resource, exception);
+    }
+  }
+
+  private static <T> T read(
+      ObjectMapper mapper, byte[] json, String resource, Class<T> type) {
+    try {
+      return mapper.readValue(json, type);
+    } catch (JacksonException exception) {
+      throw new IllegalStateException(
+          "Reviewed legacy catalog resource has an invalid strict shape: " + resource,
+          exception);
     }
   }
 
@@ -604,6 +678,8 @@ public class ReviewedLegacyCatalogManifest {
   }
 
   public record Review(
+      String manifestSha256,
+      String artifactSha256,
       String sourceEvidenceSha256,
       String nodeEvidenceSha256,
       String linkEvidenceSha256,
@@ -611,10 +687,58 @@ public class ReviewedLegacyCatalogManifest {
       String mappingSha256,
       int nodeCount,
       int linkCount,
+      int materialCount,
+      int routedNodeCount,
+      int routingSnapshotCount,
       Map<String, Integer> nodeTypes,
       Map<String, Integer> linkTypes) {}
 
-  private record MappingArtifact(List<CatalogNodeInput> nodes, List<CatalogLinkInput> links) {}
+  /**
+   * Exact reviewed-v1 projection. Furniture metadata was not part of the legacy evidence and is
+   * therefore both rejected on import and excluded from the immutable reviewed mapping hash.
+   */
+  private record ReviewedCatalogNodeMapping(
+      UUID id,
+      String code,
+      CatalogNodeType nodeType,
+      String name,
+      Boolean active,
+      UUID parentNodeId,
+      String unit,
+      String unitPrice,
+      Integer durationMinutes,
+      Boolean includeInEstimate,
+      Boolean commonItem,
+      Boolean showInMainMenu,
+      Boolean photoRequired,
+      RoutingSnapshot routing,
+      List<OpaqueCatalogReference> references,
+      String comment,
+      List<MediaReferenceInput> mediaReferences) {
+    private static ReviewedCatalogNodeMapping from(CatalogNodeInput node) {
+      return new ReviewedCatalogNodeMapping(
+          node.id(),
+          node.code(),
+          node.nodeType(),
+          node.name(),
+          node.active(),
+          node.parentNodeId(),
+          node.unit(),
+          node.unitPrice(),
+          node.durationMinutes(),
+          node.includeInEstimate(),
+          node.commonItem(),
+          node.showInMainMenu(),
+          node.photoRequired(),
+          node.routing(),
+          node.references(),
+          node.comment(),
+          node.mediaReferences());
+    }
+  }
+
+  private record MappingArtifact(
+      List<ReviewedCatalogNodeMapping> nodes, List<CatalogLinkInput> links) {}
 
   private record Defaults(String nullDurationMinutes, String nullLinkSortOrder) {}
 

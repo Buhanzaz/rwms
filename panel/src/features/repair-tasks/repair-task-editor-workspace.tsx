@@ -45,8 +45,14 @@ import type {
 } from "@/features/repair-tasks/model/repair-task"
 import { RepairTaskWriteOffDialog } from "@/features/repair-tasks/repair-task-write-off-dialog"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
+import {
+  maintenanceRepairMediaOwner,
+  type ReadyMediaReference,
+} from "@/features/media/media-service"
+import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
 
 type RepairTaskEditorWorkspaceProps = {
+  accessToken: string | null
   warehouseId: string
   task: RepairTaskDto | null
   readOnly?: boolean
@@ -60,6 +66,7 @@ type RepairTaskEditorWorkspaceProps = {
 }
 
 export function RepairTaskEditorWorkspace({
+  accessToken,
   warehouseId,
   task,
   readOnly = false,
@@ -86,6 +93,7 @@ export function RepairTaskEditorWorkspace({
   return (
     <RepairTaskEditorContent
       key={editorKey}
+      accessToken={accessToken}
       warehouseId={warehouseId}
       task={task}
       readOnly={readOnly}
@@ -100,6 +108,7 @@ export function RepairTaskEditorWorkspace({
 }
 
 function RepairTaskEditorContent({
+  accessToken,
   warehouseId,
   task,
   readOnly = false,
@@ -130,6 +139,9 @@ function RepairTaskEditorContent({
   const [writeOffOpen, setWriteOffOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [writeOffError, setWriteOffError] = useState<string | null>(null)
+  const mediaOwner = draft.taskId
+    ? maintenanceRepairMediaOwner(draft.taskId, warehouseId)
+    : null
   const pendingUploadsRef = useRef(draft.pendingUploads)
 
   useEffect(() => {
@@ -151,6 +163,43 @@ function RepairTaskEditorContent({
     )
     void queryClient.invalidateQueries({ queryKey: REPAIR_TASKS_QUERY_KEY })
     onSaved(saved)
+  }
+
+  function updateReadyMediaReferences(references: ReadyMediaReference[]) {
+    setDraft((current) => {
+      const previous = current.maintenanceMediaReferences
+      const unchanged =
+        previous.length === references.length &&
+        previous.every(
+          (reference, index) =>
+            reference.mediaId === references[index]?.mediaId &&
+            reference.generation === references[index]?.generation
+        )
+      return unchanged
+        ? current
+        : { ...current, maintenanceMediaReferences: references }
+    })
+  }
+
+  async function ensureMediaOwner() {
+    if (draft.taskId) {
+      return maintenanceRepairMediaOwner(draft.taskId, warehouseId)
+    }
+    if (readOnly) {
+      throw new Error("Для добавления фотографий нужен доступ EDIT")
+    }
+    if (!validateDraft()) {
+      throw new Error("Сначала заполните обязательные поля ремонта")
+    }
+
+    const saved = await saveRepairTaskDraft({ draft, warehouseId })
+    queryClient.setQueryData(
+      repairTaskDetailQueryKey(warehouseId, saved.id),
+      saved
+    )
+    setDraft(toRepairTaskEditorDraft(saved))
+    void queryClient.invalidateQueries({ queryKey: REPAIR_TASKS_QUERY_KEY })
+    return maintenanceRepairMediaOwner(saved.id, warehouseId)
   }
 
   const saveMutation = useMutation({
@@ -204,6 +253,7 @@ function RepairTaskEditorContent({
         comment: draft.comment,
         lines: draft.lines,
         media: draft.media,
+        maintenanceMediaReferences: draft.maintenanceMediaReferences,
         pendingUploads: draft.pendingUploads,
         writeOffReason,
       })
@@ -338,10 +388,11 @@ function RepairTaskEditorContent({
 
   const controls = (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+      <div className="min-h-24 flex-1 overflow-y-auto pr-1">
         <RepairEstimateCatalogPicker
           lines={draft.lines}
           readOnly={interactionDisabled}
+          excludeFurniture
           onChange={(lines) => setDraft((current) => ({ ...current, lines }))}
           onPagerChange={handleCatalogPagerChange}
         />
@@ -458,10 +509,14 @@ function RepairTaskEditorContent({
           ) : null
         }
         photos={
-          <p className="text-sm text-muted-foreground">
-            Фото для ремонтов временно недоступны: media-service ещё не
-            подтверждает владельца MAINTENANCE_REPAIR.
-          </p>
+          <ServiceOwnerPhotos
+            accessToken={accessToken}
+            owner={mediaOwner}
+            ensureOwner={ensureMediaOwner}
+            readOnly={interactionDisabled}
+            title="Фотографии ремонта"
+            onReadyReferencesChange={updateReadyMediaReferences}
+          />
         }
         information={information}
         estimate={taskLines}

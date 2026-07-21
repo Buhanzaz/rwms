@@ -43,6 +43,7 @@ function dossierResponse(overrides: Record<string, unknown> = {}) {
         media: [
           {
             mediaId: MEDIA_ID,
+            folderId: MEDIA_ID,
             findingId: FINDING_ID,
             generation: 2,
             state: "READY",

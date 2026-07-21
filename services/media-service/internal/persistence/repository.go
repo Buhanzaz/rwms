@@ -25,7 +25,9 @@ var (
 
 const (
 	OwnerTypeInventoryFinding = "INVENTORY_FINDING"
+	OwnerTypeCabin            = "CABIN"
 	ViewerContextInspection   = "INSPECTION"
+	ViewerContextWarehouse    = "WAREHOUSE"
 	MediaTopic                = "rwms.media.media.v1"
 	ProcessingTopic           = "rwms.media.processing.v1"
 	ProcessingDLTTopic        = "rwms.media.processing.v1.media-service-processing-v1.dlt"
@@ -87,6 +89,7 @@ func (repository *Repository) AcquireUploadSessionContentLock(
 
 type AssetRecord struct {
 	ID                uuid.UUID
+	FolderID          uuid.UUID
 	OwnerType         string
 	OwnerID           string
 	WarehouseID       uuid.UUID
@@ -127,8 +130,24 @@ type AssetWithVariants struct {
 	Variants []VariantRecord
 }
 
+type CabinCoverRecord struct {
+	CabinID    uuid.UUID
+	PhotoCount int64
+	MediaID    uuid.UUID
+	Generation int
+	Variant    *VariantRecord
+	Previews   []CabinPreviewRecord
+}
+
+type CabinPreviewRecord struct {
+	MediaID    uuid.UUID
+	Generation int
+	Variant    VariantRecord
+}
+
 type CreateUploadCommand struct {
 	MediaID         uuid.UUID
+	FolderID        uuid.UUID
 	UploadSessionID uuid.UUID
 	SubjectID       uuid.UUID
 	IdempotencyKey  uuid.UUID
@@ -176,6 +195,10 @@ func (repository *Repository) CreateUpload(ctx context.Context, command CreateUp
 	if assetID == uuid.Nil {
 		assetID = uuid.New()
 	}
+	folderID := command.FolderID
+	if folderID == uuid.Nil {
+		folderID = assetID
+	}
 	sessionID := command.UploadSessionID
 	if sessionID == uuid.Nil {
 		sessionID = uuid.New()
@@ -183,11 +206,11 @@ func (repository *Repository) CreateUpload(ctx context.Context, command CreateUp
 	now := repository.now().UTC()
 	_, err = tx.Exec(ctx, `
 		insert into media_asset (
-			media_id, owner_type, owner_id, warehouse_id, media_kind,
+			media_id, folder_id, owner_type, owner_id, warehouse_id, media_kind,
 			original_file_name, original_content_type, source_object_key,
 			processing_status, sort_order, version, next_generation, created_at, updated_at)
-		values ($1,$2,$3,$4,$5,$6,$7,$8,'UPLOADING',$9,1,1,$10,$10)`,
-		assetID, command.OwnerType, command.OwnerID, command.WarehouseID, command.Kind,
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'UPLOADING',$10,1,1,$11,$11)`,
+		assetID, folderID, command.OwnerType, command.OwnerID, command.WarehouseID, command.Kind,
 		command.FileName, command.ContentType, command.SourceObjectKey, command.SortOrder, now)
 	if err != nil {
 		return AssetRecord{}, false, translateConstraint(err)
@@ -220,7 +243,7 @@ func (repository *Repository) CreateUpload(ctx context.Context, command CreateUp
 		return AssetRecord{}, false, translateConstraint(err)
 	}
 	return AssetRecord{
-		ID: assetID, OwnerType: command.OwnerType, OwnerID: command.OwnerID,
+		ID: assetID, FolderID: folderID, OwnerType: command.OwnerType, OwnerID: command.OwnerID,
 		WarehouseID: command.WarehouseID, Kind: command.Kind, FileName: command.FileName,
 		ContentType: command.ContentType, SourceObjectKey: command.SourceObjectKey,
 		Status: media.StatusUploading, Version: 1, SortOrder: command.SortOrder, CreatedAt: now,
@@ -603,7 +626,7 @@ func (repository *Repository) ReadOwnerAssets(
 	}
 	rows, err := tx.Query(ctx, `/* media_public_owner_read */
 		with authorized_assets as materialized (
-		select a.media_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
+		select a.media_id,a.folder_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
 			a.original_file_name,a.original_content_type,a.source_object_key,
 			coalesce(a.source_version_id,''),coalesce(a.source_etag,''),coalesce(a.source_checksum_sha256,''),
 			a.processing_status,a.version,a.current_generation,a.rotation_degrees,
@@ -652,7 +675,7 @@ func (repository *Repository) ReadOwnerAssets(
 		var hasVariant bool
 		var variant VariantRecord
 		var variantName string
-		if err := rows.Scan(&asset.ID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID,
+		if err := rows.Scan(&asset.ID, &asset.FolderID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID,
 			&asset.Kind, &asset.FileName, &asset.ContentType, &asset.SourceObjectKey,
 			&asset.SourceVersionID, &asset.SourceETag, &asset.SourceChecksum, &asset.Status,
 			&asset.Version, &asset.Generation, &asset.Rotation, &asset.SortOrder,
@@ -684,6 +707,164 @@ func (repository *Repository) ReadOwnerAssets(
 			return err
 		}
 	}
+	if err := consume(records); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// ReadCabinCovers returns one bounded, warehouse-scoped cover projection per
+// requested cabin. The count is based on logical image assets, never on the
+// number of derived variants. Previews contain at most one exact SMALL variant
+// per READY image and are bounded by the owner media limit. Cabin bindings are
+// share-locked for the complete projection callback so a concurrent owner
+// revocation cannot race the read.
+func (repository *Repository) ReadCabinCovers(
+	ctx context.Context,
+	warehouseID uuid.UUID,
+	cabinIDs []uuid.UUID,
+	consume func([]CabinCoverRecord) error,
+) error {
+	if len(cabinIDs) < 1 || len(cabinIDs) > 200 || consume == nil {
+		return ErrConflict
+	}
+	requested := make([]string, len(cabinIDs))
+	for index, cabinID := range cabinIDs {
+		if cabinID == uuid.Nil {
+			return ErrConflict
+		}
+		requested[index] = cabinID.String()
+	}
+	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx, `/* media_public_cabin_cover_owner_proof */
+		select binding.owner_id
+		from media_owner_binding binding
+		join media_consumer_aggregate_checkpoint checkpoint
+		  on checkpoint.consumer_name=binding.proof_consumer_name
+		 and checkpoint.aggregate_type=binding.proof_aggregate_type
+		 and checkpoint.aggregate_id=binding.proof_aggregate_id
+		 and checkpoint.aggregate_version>=binding.proof_aggregate_version
+		where binding.owner_type='CABIN' and binding.warehouse_id=$1
+		  and binding.owner_id=any($2::text[]) and binding.active
+		  and not exists (select 1 from media_quarantined_aggregate quarantine
+			where quarantine.consumer_name=binding.proof_consumer_name
+			  and quarantine.aggregate_type=binding.proof_aggregate_type
+			  and quarantine.aggregate_id=binding.proof_aggregate_id
+			  and quarantine.reconciled_at is null)
+		order by binding.owner_id
+		for share of binding`, warehouseID, requested)
+	if err != nil {
+		return err
+	}
+	authorized := make([]string, 0, len(cabinIDs))
+	for rows.Next() {
+		var ownerID string
+		if err := rows.Scan(&ownerID); err != nil {
+			rows.Close()
+			return err
+		}
+		authorized = append(authorized, ownerID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	if len(authorized) == 0 {
+		if err := consume([]CabinCoverRecord{}); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+
+	rows, err = tx.Query(ctx, `/* media_public_cabin_covers */
+		with image_assets as materialized (
+			select a.media_id,a.owner_id,a.processing_status,a.current_generation,
+				a.sort_order,a.created_at
+			from media_asset a
+			where a.owner_type='CABIN' and a.warehouse_id=$1
+			  and a.owner_id=any($2::text[]) and a.media_kind='IMAGE'
+			  and a.deleted_at is null and media_asset_is_available(a.media_id)
+		), counts as (
+			select owner_id,count(*)::bigint as photo_count
+			from image_assets group by owner_id
+		), previews as (
+			select a.owner_id,a.media_id,a.current_generation,v.variant,
+				v.object_version_id,v.content_type,v.size_bytes,v.width,v.height,
+				v.checksum_sha256,row_number() over (
+					partition by a.owner_id order by a.sort_order,a.created_at,a.media_id
+				) as preview_rank
+			from image_assets a
+			join media_variant v on v.media_id=a.media_id
+			 and v.generation=a.current_generation and v.variant='SMALL'
+			where a.processing_status='READY' and a.current_generation>0
+			  and v.object_version_id<>''
+		)
+		select counts.owner_id,counts.photo_count,preview.media_id,preview.current_generation,
+			preview.variant,preview.object_version_id,preview.content_type,preview.size_bytes,
+			preview.width,preview.height,preview.checksum_sha256
+		from counts
+		left join previews preview on preview.owner_id=counts.owner_id
+		 and preview.preview_rank<=100
+		order by counts.owner_id,preview.preview_rank nulls last`, warehouseID, authorized)
+	if err != nil {
+		return err
+	}
+	records := make([]CabinCoverRecord, 0, len(authorized))
+	byOwner := make(map[string]int, len(authorized))
+	for rows.Next() {
+		var ownerID string
+		var photoCount int64
+		var mediaID *uuid.UUID
+		var generation *int
+		var variantName, objectVersionID, contentType, checksum *string
+		var sizeBytes *int64
+		var width, height *int
+		if err := rows.Scan(&ownerID, &photoCount, &mediaID, &generation, &variantName,
+			&objectVersionID, &contentType, &sizeBytes, &width, &height, &checksum); err != nil {
+			rows.Close()
+			return err
+		}
+		index, exists := byOwner[ownerID]
+		if !exists {
+			index = len(records)
+			byOwner[ownerID] = index
+			records = append(records, CabinCoverRecord{
+				CabinID: uuid.MustParse(ownerID), PhotoCount: photoCount,
+				Previews: make([]CabinPreviewRecord, 0),
+			})
+		}
+		if mediaID != nil && generation != nil && variantName != nil && objectVersionID != nil &&
+			contentType != nil && sizeBytes != nil && checksum != nil {
+			variant := VariantRecord{
+				Variant:         media.Variant(*variantName),
+				ObjectVersionID: *objectVersionID,
+				ContentType:     *contentType,
+				SizeBytes:       *sizeBytes,
+				Width:           width,
+				Height:          height,
+				Checksum:        *checksum,
+			}
+			records[index].Previews = append(records[index].Previews, CabinPreviewRecord{
+				MediaID: *mediaID, Generation: *generation, Variant: variant,
+			})
+			if records[index].Variant == nil {
+				records[index].MediaID = *mediaID
+				records[index].Generation = *generation
+				records[index].Variant = &records[index].Previews[0].Variant
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
 	if err := consume(records); err != nil {
 		return err
 	}
@@ -761,7 +942,7 @@ func (repository *Repository) ReadOriginal(
 	var variant VariantRecord
 	var variantName string
 	err = tx.QueryRow(ctx, `/* media_public_original_read */
-		select a.media_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
+		select a.media_id,a.folder_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
 			a.original_file_name,a.original_content_type,a.source_object_key,
 			coalesce(a.source_version_id,''),coalesce(a.source_etag,''),coalesce(a.source_checksum_sha256,''),
 			a.processing_status,a.version,a.current_generation,a.rotation_degrees,
@@ -788,7 +969,7 @@ func (repository *Repository) ReadOriginal(
 			  and quarantine.aggregate_id=binding.proof_aggregate_id
 			  and quarantine.reconciled_at is null)
 		for share of binding`, mediaID, ownerType, ownerID, warehouseID).Scan(
-		&asset.ID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
+		&asset.ID, &asset.FolderID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
 		&asset.FileName, &asset.ContentType, &asset.SourceObjectKey, &asset.SourceVersionID,
 		&asset.SourceETag, &asset.SourceChecksum, &asset.Status, &asset.Version,
 		&asset.Generation, &asset.Rotation, &asset.SortOrder, &asset.SizeBytes,
@@ -842,7 +1023,7 @@ func (repository *Repository) ReadCurrentVariant(
 	var variant VariantRecord
 	var variantName string
 	err = tx.QueryRow(ctx, `/* media_public_current_variant_read */
-		select a.media_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
+		select a.media_id,a.folder_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
 			a.original_file_name,a.original_content_type,a.source_object_key,
 			coalesce(a.source_version_id,''),coalesce(a.source_etag,''),coalesce(a.source_checksum_sha256,''),
 			a.processing_status,a.version,a.current_generation,a.rotation_degrees,
@@ -870,7 +1051,7 @@ func (repository *Repository) ReadCurrentVariant(
 			  and quarantine.reconciled_at is null)
 		for share of binding`, mediaID, ownerType, ownerID, warehouseID, generation,
 		requestedVariant).Scan(
-		&asset.ID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
+		&asset.ID, &asset.FolderID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
 		&asset.FileName, &asset.ContentType, &asset.SourceObjectKey, &asset.SourceVersionID,
 		&asset.SourceETag, &asset.SourceChecksum, &asset.Status, &asset.Version,
 		&asset.Generation, &asset.Rotation, &asset.SortOrder, &asset.SizeBytes,
@@ -955,13 +1136,13 @@ func (repository *Repository) assetForUpdate(ctx context.Context, tx pgx.Tx, med
 	return asset, err
 }
 
-const assetSQL = `select a.media_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
+const assetSQL = `select a.media_id,a.folder_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
 	a.original_file_name,a.original_content_type,a.source_object_key,
 	coalesce(a.source_version_id,''),coalesce(a.source_etag,''),coalesce(a.source_checksum_sha256,''),
 	a.processing_status,a.version,a.current_generation,a.rotation_degrees,
 	a.sort_order,a.size_bytes,a.created_at from media_asset a`
 
-const assetWithSessionSQL = `select a.media_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
+const assetWithSessionSQL = `select a.media_id,a.folder_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
 	a.original_file_name,a.original_content_type,a.source_object_key,
 	coalesce(a.source_version_id,''),coalesce(a.source_etag,''),coalesce(a.source_checksum_sha256,''),
 	a.processing_status,a.version,a.current_generation,a.rotation_degrees,
@@ -975,7 +1156,7 @@ type rowScanner interface {
 
 func scanAsset(row rowScanner) (AssetRecord, error) {
 	var asset AssetRecord
-	err := row.Scan(&asset.ID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
+	err := row.Scan(&asset.ID, &asset.FolderID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
 		&asset.FileName, &asset.ContentType, &asset.SourceObjectKey,
 		&asset.SourceVersionID, &asset.SourceETag, &asset.SourceChecksum,
 		&asset.Status, &asset.Version, &asset.Generation, &asset.Rotation,
@@ -1001,7 +1182,7 @@ func validSHA256(value string) bool {
 
 func scanAssetWithSession(row rowScanner) (AssetRecord, error) {
 	var asset AssetRecord
-	err := row.Scan(&asset.ID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
+	err := row.Scan(&asset.ID, &asset.FolderID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
 		&asset.FileName, &asset.ContentType, &asset.SourceObjectKey,
 		&asset.SourceVersionID, &asset.SourceETag, &asset.SourceChecksum,
 		&asset.Status, &asset.Version, &asset.Generation, &asset.Rotation,
@@ -1016,7 +1197,7 @@ type queryer interface {
 }
 
 func requireOwnerBinding(ctx context.Context, database queryer, ownerType, ownerID string, warehouseID uuid.UUID, now time.Time) error {
-	if ownerType != OwnerTypeInventoryFinding || ownerID == "" {
+	if !IsPublicOwnerType(ownerType) || ownerID == "" {
 		return ErrOwnerProofMissing
 	}
 	var exists bool
@@ -1158,7 +1339,7 @@ func canonicalJSON(value any) ([]byte, string, error) {
 
 func factPayload(asset AssetRecord, status media.Status, generation int, rotation media.Rotation) map[string]any {
 	return map[string]any{
-		"mediaId": asset.ID, "ownerType": asset.OwnerType, "ownerId": asset.OwnerID,
+		"mediaId": asset.ID, "folderId": asset.FolderID, "ownerType": asset.OwnerType, "ownerId": asset.OwnerID,
 		"warehouseId": asset.WarehouseID, "kind": asset.Kind, "status": status,
 		"generation": generation, "rotationDegrees": rotation,
 	}

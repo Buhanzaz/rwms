@@ -8,7 +8,7 @@ import {
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
-import { MemoryRouter, Route, Routes } from "react-router-dom"
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
@@ -17,7 +17,7 @@ const WAREHOUSE_ID = "11111111-1111-4111-8111-111111111111"
 const RENTAL_ITEM_ID = "22222222-2222-4222-8222-222222222222"
 
 const authState = vi.hoisted(() => ({
-  level: "VIEW" as "VIEW" | "EDIT",
+  level: "VIEW" as "VIEW" | "EDIT" | "MANAGE",
 }))
 
 const assetApi = vi.hoisted(() => ({
@@ -33,6 +33,15 @@ const assetApi = vi.hoisted(() => ({
 
 const dossierApi = vi.hoisted(() => ({
   getRentalItemDossierPage: vi.fn(),
+}))
+
+const mediaApi = vi.hoisted(() => ({
+  listCabinCovers: vi.fn(),
+  listOwnerMedia: vi.fn(),
+  uploadFile: vi.fn(),
+  createVariantObjectUrl: vi.fn(),
+  createOriginalObjectUrl: vi.fn(),
+  rotate: vi.fn(),
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({
@@ -69,6 +78,9 @@ vi.mock("@/hooks/use-warehouse", () => ({
 
 vi.mock("@/hooks/use-workspace-back", () => ({
   useWorkspaceBack: () => vi.fn(),
+  workspaceEntryNavigationOptions: {
+    state: { workspaceEntry: true },
+  },
 }))
 
 vi.mock(
@@ -88,6 +100,16 @@ vi.mock("@/features/rental-items/dossier/api/rental-item-dossier-api", () => ({
     rentalItemId,
   ],
   getRentalItemDossierPage: dossierApi.getRentalItemDossierPage,
+}))
+
+vi.mock("@/features/media/media-service", () => ({
+  cabinMediaOwner: (ownerId: string, warehouseId: string) => ({
+    ownerType: "CABIN",
+    ownerId,
+    warehouseId,
+    context: "WAREHOUSE",
+  }),
+  createHttpMediaClient: () => mediaApi,
 }))
 
 import { RentalItemDetailPage } from "@/features/rental-items/rental-item-detail-page"
@@ -135,7 +157,12 @@ function renderWithQuery(ui: ReactNode) {
   )
 }
 
-function renderDetail() {
+function RepairLocationProbe() {
+  const location = useLocation()
+  return <pre data-testid="repair-location">{JSON.stringify(location)}</pre>
+}
+
+function renderDetail(path = `/warehouse/${RENTAL_ITEM_ID}?tab=comments`) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -144,15 +171,14 @@ function renderDetail() {
   })
 
   return render(
-    <MemoryRouter
-      initialEntries={[`/warehouse/${RENTAL_ITEM_ID}?tab=comments`]}
-    >
+    <MemoryRouter initialEntries={[path]}>
       <QueryClientProvider client={queryClient}>
         <Routes>
           <Route
             path="/warehouse/:rentalItemId"
             element={<RentalItemDetailPage />}
           />
+          <Route path="/repairs" element={<RepairLocationProbe />} />
         </Routes>
       </QueryClientProvider>
     </MemoryRouter>
@@ -189,11 +215,19 @@ beforeEach(() => {
     nextCursor: null,
     visibility: "COMPLETE",
   })
+  mediaApi.listOwnerMedia.mockResolvedValue({ items: [], next: null })
+  mediaApi.listCabinCovers.mockResolvedValue({ items: [] })
+  mediaApi.uploadFile.mockResolvedValue({
+    session: {},
+    uploadedObject: {},
+    asset: {},
+  })
 })
 
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
+  window.localStorage.clear()
 })
 
 describe("rental item command access", () => {
@@ -207,6 +241,62 @@ describe("rental item command access", () => {
       screen.queryByRole("button", { name: "Добавить новую бытовку" })
     ).toBeNull()
     expect(assetApi.createAssetRentalItem).not.toHaveBeenCalled()
+  })
+
+  it("uses one cover batch and loads owner media only after opening one cabin", async () => {
+    window.localStorage.setItem(
+      `rental-items:${WAREHOUSE_ID}:columns:v2`,
+      JSON.stringify([{ id: "hasPhotos", visible: true }])
+    )
+    assetApi.listAssetRentalItems.mockResolvedValue({
+      content: [rentalItem()],
+      page: 0,
+      size: 200,
+      totalElements: 1,
+      totalPages: 1,
+    })
+    mediaApi.listCabinCovers.mockRejectedValue(
+      new Error("Media gateway returned 502")
+    )
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: 3, retryDelay: 0 },
+        mutations: { retry: false },
+      },
+    })
+
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <RentalItemsPage />
+        </QueryClientProvider>
+      </MemoryRouter>
+    )
+
+    expect(await screen.findByText("Сервис фото недоступен")).toBeTruthy()
+    expect(mediaApi.listCabinCovers).toHaveBeenCalledTimes(1)
+    expect(mediaApi.listOwnerMedia).not.toHaveBeenCalled()
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Открыть фото бытовки БЫТ-001",
+      })
+    )
+
+    await waitFor(() =>
+      expect(mediaApi.listOwnerMedia).toHaveBeenCalledTimes(1)
+    )
+    expect(mediaApi.listOwnerMedia).toHaveBeenCalledWith(
+      "asset-token",
+      {
+        ownerType: "CABIN",
+        ownerId: RENTAL_ITEM_ID,
+        warehouseId: WAREHOUSE_ID,
+        context: "WAREHOUSE",
+      },
+      { limit: 100 }
+    )
   })
 
   it("lets EDIT access open and execute create", async () => {
@@ -246,6 +336,112 @@ describe("rental item command access", () => {
     )
   })
 
+  it("creates the cabin before uploading staged photos through media-service", async () => {
+    authState.level = "EDIT"
+    const user = userEvent.setup()
+    renderWithQuery(<RentalItemsPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Добавить новую бытовку" })
+    )
+    const dialog = await screen.findByRole("dialog", {
+      name: "Создание новой бытовки",
+    })
+    const file = new File([new Uint8Array([1, 2, 3])], "new-cabin.jpg", {
+      type: "image/jpeg",
+    })
+    await user.upload(
+      within(dialog).getByLabelText("Фотографии новой бытовки"),
+      file
+    )
+    await user.type(within(dialog).getByLabelText("Номер бытовки"), "БЫТ-009")
+    await user.click(
+      within(dialog).getByRole("button", { name: "Выберите тип" })
+    )
+    await user.click(screen.getByRole("button", { name: "БК-1" }))
+    await user.click(
+      within(dialog).getByRole("button", { name: "Выберите отделку" })
+    )
+    await user.click(screen.getByRole("button", { name: "ДВП" }))
+    await user.click(
+      within(dialog).getByRole("button", { name: "Создать бытовку" })
+    )
+
+    await waitFor(() =>
+      expect(assetApi.createAssetRentalItem).toHaveBeenCalledTimes(1)
+    )
+    await waitFor(() =>
+      expect(mediaApi.uploadFile).toHaveBeenCalledWith(
+        "asset-token",
+        {
+          ownerType: "CABIN",
+          ownerId: RENTAL_ITEM_ID,
+          warehouseId: WAREHOUSE_ID,
+          context: "WAREHOUSE",
+        },
+        file,
+        0,
+        expect.any(String),
+        {
+          createSession: expect.any(String),
+          uploadAndFinalize: expect.any(String),
+        }
+      )
+    )
+  })
+
+  it("keeps a created cabin and retries only its failed photo upload", async () => {
+    authState.level = "EDIT"
+    mediaApi.uploadFile
+      .mockRejectedValueOnce(new Error("Сервис фото недоступен"))
+      .mockResolvedValueOnce({ session: {}, uploadedObject: {}, asset: {} })
+    const user = userEvent.setup()
+    renderWithQuery(<RentalItemsPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Добавить новую бытовку" })
+    )
+    const dialog = await screen.findByRole("dialog", {
+      name: "Создание новой бытовки",
+    })
+    const file = new File([new Uint8Array([1, 2, 3])], "retry.jpg", {
+      type: "image/jpeg",
+    })
+    await user.upload(
+      within(dialog).getByLabelText("Фотографии новой бытовки"),
+      file
+    )
+    await user.type(within(dialog).getByLabelText("Номер бытовки"), "БЫТ-010")
+    await user.click(
+      within(dialog).getByRole("button", { name: "Выберите тип" })
+    )
+    await user.click(screen.getByRole("button", { name: "БК-1" }))
+    await user.click(
+      within(dialog).getByRole("button", { name: "Выберите отделку" })
+    )
+    await user.click(screen.getByRole("button", { name: "ДВП" }))
+    await user.click(
+      within(dialog).getByRole("button", { name: "Создать бытовку" })
+    )
+
+    await screen.findByText(/Бытовка БЫТ-001 создана, но фото не загружены/)
+    const firstUploadArguments = mediaApi.uploadFile.mock.calls[0]
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Повторить загрузку фото",
+      })
+    )
+
+    await waitFor(() => expect(mediaApi.uploadFile).toHaveBeenCalledTimes(2))
+    expect(assetApi.createAssetRentalItem).toHaveBeenCalledTimes(1)
+    expect(mediaApi.uploadFile.mock.calls[1]?.[4]).toBe(
+      firstUploadArguments?.[4]
+    )
+    expect(mediaApi.uploadFile.mock.calls[1]?.[5]).toEqual(
+      firstUploadArguments?.[5]
+    )
+  })
+
   it("keeps detail reads but prevents VIEW from opening or executing commands", async () => {
     const user = userEvent.setup()
     renderDetail()
@@ -261,6 +457,10 @@ describe("rental item command access", () => {
       expect.objectContaining({ limit: 25, after: undefined })
     )
     expect(screen.queryByRole("button", { name: "Изменить статус" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Добавить фото" })).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Отправить в ремонт" })
+    ).toBeNull()
 
     const generalComment = screen.getByLabelText("Комментарий")
     const manualNote = screen.getByLabelText("Текст")
@@ -280,6 +480,38 @@ describe("rental item command access", () => {
     expect(assetApi.addAssetRentalItemManualNote).not.toHaveBeenCalled()
   })
 
+  it("keeps every old-panel dossier tab in the service-backed detail", async () => {
+    renderDetail(`/warehouse/${RENTAL_ITEM_ID}`)
+
+    await screen.findByText("БЫТ-001")
+    for (const tab of [
+      "Обзор",
+      "Фото",
+      "Осмотры",
+      "Сметы",
+      "Ремонт",
+      "Резервы",
+      "Отгрузки",
+      "Возвраты",
+      "История",
+      "Комментарии",
+    ]) {
+      expect(screen.getByRole("tab", { name: tab })).toBeTruthy()
+    }
+  })
+
+  it("reserves service-backed contents controls for MANAGE access", async () => {
+    authState.level = "MANAGE"
+    renderDetail(`/warehouse/${RENTAL_ITEM_ID}`)
+
+    await screen.findByText("БЫТ-001")
+    expect(screen.getByRole("button", { name: "Добавить" })).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: "В другую бытовку" })
+    ).toBeNull()
+    expect(screen.queryByRole("button", { name: "На склад" })).toBeNull()
+  })
+
   it("lets EDIT execute status, general-comment and manual-note commands", async () => {
     authState.level = "EDIT"
     const user = userEvent.setup()
@@ -297,6 +529,9 @@ describe("rental item command access", () => {
     await waitFor(() =>
       expect(assetApi.updateAssetRentalItemStatus).toHaveBeenCalled()
     )
+    await waitFor(() =>
+      expect(screen.getAllByText("Свободна").length).toBeGreaterThan(0)
+    )
 
     const generalComment = screen.getByLabelText("Комментарий")
     await user.clear(generalComment)
@@ -313,5 +548,68 @@ describe("rental item command access", () => {
     await waitFor(() =>
       expect(assetApi.addAssetRentalItemManualNote).toHaveBeenCalled()
     )
+  })
+
+  it("uploads a cabin photo through media-service from the transferred action", async () => {
+    authState.level = "EDIT"
+    const user = userEvent.setup()
+    renderDetail(`/warehouse/${RENTAL_ITEM_ID}`)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Добавить фото" })
+    )
+    const dialog = screen.getByRole("dialog", {
+      name: "Добавить фотографии",
+    })
+    const file = new File([new Uint8Array([1, 2, 3])], "cabin.jpg", {
+      type: "image/jpeg",
+    })
+    await user.upload(within(dialog).getByLabelText("Фотографии бытовки"), file)
+    await user.click(
+      within(dialog).getByRole("button", { name: "Добавить фото" })
+    )
+
+    await waitFor(() =>
+      expect(mediaApi.uploadFile).toHaveBeenCalledWith(
+        "asset-token",
+        {
+          ownerType: "CABIN",
+          ownerId: RENTAL_ITEM_ID,
+          warehouseId: WAREHOUSE_ID,
+          context: "WAREHOUSE",
+        },
+        file,
+        0,
+        expect.any(String),
+        {
+          createSession: expect.any(String),
+          uploadAndFinalize: expect.any(String),
+        }
+      )
+    )
+  })
+
+  it("opens a service-backed repair with the selected cabin prefilled", async () => {
+    authState.level = "EDIT"
+    const user = userEvent.setup()
+    renderDetail(`/warehouse/${RENTAL_ITEM_ID}`)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Отправить в ремонт" })
+    )
+
+    const location = JSON.parse(
+      screen.getByTestId("repair-location").textContent ?? "{}"
+    ) as { search?: string; state?: Record<string, unknown> }
+    expect(location.search).toBe("?create=1")
+    expect(location.state).toEqual({
+      workspaceEntry: true,
+      rentalItemSeed: {
+        type: "rental-item-repair-seed-v1",
+        warehouseId: WAREHOUSE_ID,
+        rentalItemId: RENTAL_ITEM_ID,
+        number: "БЫТ-001",
+      },
+    })
   })
 })

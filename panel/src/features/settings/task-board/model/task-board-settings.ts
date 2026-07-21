@@ -2,6 +2,23 @@ export type QueueType = "MOVEMENT" | "REPAIR" | "HOLDING"
 export type CredentialStatus = "NOT_CONFIGURED" | "PENDING" | "ACTIVE" | "ERROR"
 export type RestPeriodType = "SMOKE_BREAK" | "LUNCH"
 
+export type ReviewedTaskBoardBootstrapResult = {
+  warehouseId: string
+  sourceSha256: string
+  created: number
+  reused: number
+  conflicts: number
+  counts: {
+    workerClasses: number
+    workQueues: number
+    queueBindings: number
+    workers: number
+    qualifications: number
+    workerGroups: number
+    memberships: number
+  }
+}
+
 export type WorkerClassDto = {
   id: string
   version: number

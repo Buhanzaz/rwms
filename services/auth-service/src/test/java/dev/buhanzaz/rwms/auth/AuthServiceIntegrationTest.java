@@ -43,6 +43,7 @@ import java.util.Base64;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -135,7 +136,10 @@ class AuthServiceIntegrationTest {
                 .andExpect(jsonPath("$.issuer").value("http://localhost:9000"));
         mvc.perform(get("/oauth2/jwks"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.keys[0].kty").value("RSA"));
+                .andExpect(jsonPath("$.keys[0].kid").isNotEmpty())
+                .andExpect(jsonPath("$.keys[0].kty").value("RSA"))
+                .andExpect(jsonPath("$.keys[0].use").value("sig"))
+                .andExpect(jsonPath("$.keys[0].alg").value("RS256"));
     }
 
     @Test
@@ -195,7 +199,8 @@ class AuthServiceIntegrationTest {
     }
 
     @Test
-    void oidcLogoutAcceptsIdTokenHintWhileResourceApiRejectsTheIdToken() throws Exception {
+    void authorizationCodeTokensUseCanonicalSubjectAndOidcLogoutAcceptsIdTokenHint() throws Exception {
+        AuthSubject admin = subjects.findByUsernameIgnoreCase("admin").orElseThrow();
         MockHttpSession session = (MockHttpSession) mvc.perform(formLogin().user("admin").password("admin"))
                 .andExpect(authenticated())
                 .andReturn().getRequest().getSession(false);
@@ -229,7 +234,32 @@ class AuthServiceIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id_token").isNotEmpty())
                 .andReturn().getResponse().getContentAsString();
+        String accessToken = JsonPath.read(tokenBody, "$.access_token");
         String idToken = JsonPath.read(tokenBody, "$.id_token");
+        var signedAccessToken = SignedJWT.parse(accessToken);
+        var accessTokenClaims = signedAccessToken.getJWTClaimsSet();
+        var idTokenClaims = SignedJWT.parse(idToken).getJWTClaimsSet();
+        assertThat(signedAccessToken.getHeader().getAlgorithm()).isEqualTo(JWSAlgorithm.RS256);
+        assertThat(accessTokenClaims.getSubject()).isEqualTo(admin.getId().toString());
+        assertThat(accessTokenClaims.getStringClaim("preferred_username")).isEqualTo("admin");
+        assertThat(idTokenClaims.getSubject()).isEqualTo(admin.getId().toString());
+        assertThat(idTokenClaims.getStringClaim("preferred_username")).isEqualTo("admin");
+
+        mvc.perform(get("/api/users/me").header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(admin.getId().toString()))
+                .andExpect(jsonPath("$.username").value("admin"))
+                .andExpect(jsonPath("$.principalType").value("USER"));
+        mvc.perform(get("/api/users/actor-displays")
+                        .header("Authorization", "Bearer " + accessToken)
+                        .queryParam("subjectId", admin.getId().toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].subjectId").value(admin.getId().toString()))
+                .andExpect(jsonPath("$[0].principalType").value("USER"))
+                .andExpect(jsonPath("$[0].globalRole").value("SYSTEM_ADMIN"))
+                .andExpect(jsonPath("$[0].username").value("admin"))
+                .andExpect(jsonPath("$[0].passwordHash").doesNotExist())
+                .andExpect(jsonPath("$[0].timeZoneId").doesNotExist());
 
         String logoutLocation = mvc.perform(get("/connect/logout")
                         .session(session)
@@ -244,6 +274,22 @@ class AuthServiceIntegrationTest {
 
         mvc.perform(get("/api/users/me").header("Authorization", "Bearer " + idToken))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void actorDisplayBatchRequiresAuthenticationAndRejectsMoreThanOneHundredSubjects()
+            throws Exception {
+        String subjectId = subjects.findByUsernameIgnoreCase("admin").orElseThrow().getId().toString();
+        mvc.perform(get("/api/users/actor-displays").queryParam("subjectId", subjectId))
+                .andExpect(status().isUnauthorized());
+
+        String[] tooManySubjectIds = IntStream.range(0, 101)
+                .mapToObj(index -> UUID.randomUUID().toString())
+                .toArray(String[]::new);
+        mvc.perform(get("/api/users/actor-displays")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_USER")))
+                        .queryParam("subjectId", tooManySubjectIds))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -530,12 +576,17 @@ class AuthServiceIntegrationTest {
                     .andReturn().getResponse().getContentAsString();
             String accessToken = JsonPath.read(tokenBody, "$.access_token");
             var claims = SignedJWT.parse(accessToken).getJWTClaimsSet();
+            assertThat(claims.getSubject()).isEqualTo("task-board-service");
             assertThat(claims.getStringClaim("principal_type")).isEqualTo("SERVICE");
             assertThat(claims.getStringClaim("client_id")).isEqualTo("task-board-service");
             assertThat(claims.getClaim("global_role")).isNull();
 
             mvc.perform(get("/api/admin/users")
                             .header("Authorization", "Bearer " + accessToken))
+                    .andExpect(status().isForbidden());
+            mvc.perform(get("/api/users/actor-displays")
+                            .header("Authorization", "Bearer " + accessToken)
+                            .queryParam("subjectId", collision.getId().toString()))
                     .andExpect(status().isForbidden());
         } finally {
             subjects.delete(collision);

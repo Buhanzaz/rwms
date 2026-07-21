@@ -225,7 +225,7 @@ public class InventoryAssetService {
   public InventoryNumberResolutionResponse resolveNumber(InventoryNumberResolutionRequest request) {
     String display = RentalItem.canonicalNumber(request.number());
     String key = RentalItem.identityMatchKey(display);
-    return rentalItems.findByIdentityMatchKey(key)
+    return rentalItems.findByWarehouseIdAndIdentityMatchKey(request.warehouseId(), key)
         .map(item -> new InventoryNumberResolutionResponse(display, key, true, snapshot(item)))
         .orElseGet(() -> new InventoryNumberResolutionResponse(display, key, false, null));
   }
@@ -277,17 +277,20 @@ public class InventoryAssetService {
     if (!registeredFingerprint.equals(fingerprint)) {
       throw new AssetConflictException("Inventory source identity is bound to another asset request");
     }
-    registerConcurrentSafe(() -> registrar.claimNumber(candidate.getIdentityMatchKey(), sourceId));
+    registerConcurrentSafe(() -> registrar.claimNumber(
+        candidate.getWarehouseId(), candidate.getIdentityMatchKey(), sourceId));
     InventoryAssetSourceOperation operation = sourceOperations.findByIdForUpdate(sourceId)
         .orElseThrow(() -> new IllegalStateException("Inventory source registration failed"));
     if (!operation.getRequestFingerprint().equals(fingerprint)) {
       throw new AssetConflictException("Inventory source identity is bound to another asset request");
     }
     InventoryAssetNumberClaim claim = numberClaims
-        .findByIdForUpdate(candidate.getIdentityMatchKey())
+        .findByWarehouseIdAndIdentityMatchKeyForUpdate(
+            candidate.getWarehouseId(), candidate.getIdentityMatchKey())
         .orElseThrow(() -> new IllegalStateException("Inventory number claim registration failed"));
     if (!claim.belongsTo(sourceId)) {
-      throw new AssetConflictException("Rental item number identity is globally unique and cannot be reused");
+      throw new AssetConflictException(
+          "Rental item number identity is already used in this warehouse");
     }
     InventoryAssetSource stored = sources.findById(sourceId).orElse(null);
     if (stored != null) {
@@ -298,8 +301,10 @@ public class InventoryAssetService {
       return new CreateResult<>(
           read(stored.getResponseBody(), InventorySourceAssetResponse.class), true);
     }
-    if (rentalItems.existsByIdentityMatchKey(candidate.getIdentityMatchKey())) {
-      throw new AssetConflictException("Rental item number identity is globally unique and cannot be reused");
+    if (rentalItems.existsByWarehouseIdAndIdentityMatchKey(
+        candidate.getWarehouseId(), candidate.getIdentityMatchKey())) {
+      throw new AssetConflictException(
+          "Rental item number identity is already used in this warehouse");
     }
 
     RentalItem saved = rentalItems.saveAndFlush(candidate);
@@ -337,18 +342,22 @@ public class InventoryAssetService {
         ? List.of()
         : equipmentBalances.findAllByRentalItemIdInAndQuantityGreaterThanAndLocationKindIn(
             rentalItemIds, 0, CABIN_BALANCE_KINDS);
-    Map<UUID, String> equipmentCodes = equipmentCatalog
+    Map<UUID, EquipmentCatalogItem> equipmentItems = equipmentCatalog
         .findAllById(balances.stream().map(EquipmentBalance::getEquipmentId).collect(Collectors.toSet()))
         .stream()
-        .collect(Collectors.toMap(EquipmentCatalogItem::getId, EquipmentCatalogItem::getCode));
+        .collect(Collectors.toMap(EquipmentCatalogItem::getId, item -> item));
     Map<UUID, List<EquipmentContentResponse>> contentsByRentalItem = balances.stream()
-        .map(balance -> new EquipmentContentWithOwner(
-            balance.getRentalItemId(),
-            new EquipmentContentResponse(
-                balance.getEquipmentId(),
-                requireEquipmentCode(equipmentCodes, balance.getEquipmentId()),
-                balance.getQuantity(),
-                balance.getLocationKind())))
+        .map(balance -> {
+          EquipmentCatalogItem item = requireEquipment(equipmentItems, balance.getEquipmentId());
+          return new EquipmentContentWithOwner(
+              balance.getRentalItemId(),
+              new EquipmentContentResponse(
+                  balance.getEquipmentId(),
+                  item.getCode(),
+                  item.getName(),
+                  balance.getQuantity(),
+                  balance.getLocationKind()));
+        })
         .sorted(Comparator.comparing((EquipmentContentWithOwner value) ->
                 value.content().equipmentCode())
             .thenComparing(value -> value.content().equipmentId()))
@@ -374,8 +383,9 @@ public class InventoryAssetService {
     return List.copyOf(result);
   }
 
-  private static String requireEquipmentCode(Map<UUID, String> codes, UUID equipmentId) {
-    String value = codes.get(equipmentId);
+  private static EquipmentCatalogItem requireEquipment(
+      Map<UUID, EquipmentCatalogItem> items, UUID equipmentId) {
+    EquipmentCatalogItem value = items.get(equipmentId);
     if (value == null) {
       throw new IllegalStateException("Inventory capture equipment catalog reference is missing");
     }

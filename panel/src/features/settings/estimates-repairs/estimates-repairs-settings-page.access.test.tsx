@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type {
@@ -11,7 +12,9 @@ import type { RepairEstimateCatalogVersionDto } from "@/features/settings/estima
 const mocks = vi.hoisted(() => ({
   level: "VIEW" as WarehouseAccessLevel,
   listVersions: vi.fn(),
-  importCatalog: vi.fn(),
+  getCatalogCanvas: vi.fn(),
+  bootstrapCatalog: vi.fn(),
+  forkCatalog: vi.fn(),
   activateCatalog: vi.fn(),
 }))
 
@@ -36,7 +39,9 @@ vi.mock(
     return {
       ...actual,
       listRepairEstimateCatalogVersions: mocks.listVersions,
-      importRepairEstimateCatalog: mocks.importCatalog,
+      getRepairEstimateCatalogCanvas: mocks.getCatalogCanvas,
+      bootstrapRepairEstimateCatalog: mocks.bootstrapCatalog,
+      forkRepairEstimateCatalog: mocks.forkCatalog,
       activateRepairEstimateCatalog: mocks.activateCatalog,
     }
   }
@@ -73,9 +78,29 @@ function currentUser(level: WarehouseAccessLevel): CurrentUser {
   }
 }
 
-function renderPage(level: WarehouseAccessLevel) {
+type VersionsFixture =
+  | RepairEstimateCatalogVersionDto[]
+  | Error
+  | Promise<RepairEstimateCatalogVersionDto[]>
+
+function renderPage(
+  level: WarehouseAccessLevel,
+  versions: VersionsFixture = [version]
+) {
   mocks.level = level
-  mocks.listVersions.mockResolvedValue([version])
+  if (versions instanceof Error) {
+    mocks.listVersions.mockRejectedValue(versions)
+  } else if (Array.isArray(versions)) {
+    mocks.listVersions.mockResolvedValue(versions)
+  } else {
+    mocks.listVersions.mockImplementation(() => versions)
+  }
+  mocks.getCatalogCanvas.mockResolvedValue({
+    catalogVersion: version,
+    categories: [],
+    nodes: [],
+    links: [],
+  })
 
   return render(
     <QueryClientProvider
@@ -103,6 +128,67 @@ afterEach(() => {
 })
 
 describe("maintenance catalog warehouse access", () => {
+  it("opens a catalog section through its navigation button", async () => {
+    const user = userEvent.setup()
+    renderPage("VIEW")
+
+    const drilldown = await screen.findByRole("button", {
+      name: "Конструктор каталога смет",
+    })
+    await user.click(drilldown)
+
+    expect(await screen.findByRole("button", { name: "Назад" })).toBeTruthy()
+    await waitFor(() => {
+      expect(mocks.getCatalogCanvas).toHaveBeenCalledWith({
+        accessToken: "maintenance-token",
+        warehouseId: WAREHOUSE_ID,
+        catalogVersionId: version.id,
+      })
+    })
+  })
+
+  it("shows a loading state instead of disabled catalog navigation", async () => {
+    renderPage(
+      "MANAGE",
+      new Promise<RepairEstimateCatalogVersionDto[]>(() => undefined)
+    )
+
+    const status = await screen.findByRole("status")
+
+    expect(status.textContent).toContain(
+      "Загружаем доступную версию каталога смет"
+    )
+    expect(
+      screen.queryByRole("button", { name: "Конструктор каталога смет" })
+    ).toBeNull()
+  })
+
+  it("shows an actionable empty state when the warehouse has no catalog version", async () => {
+    renderPage("MANAGE", [])
+
+    await screen.findByText("Каталог смет ещё не создан")
+    const status = screen.getByRole("status")
+
+    expect(status.textContent).toContain("Каталог смет ещё не создан")
+    expect(button("Создать первый каталог").disabled).toBe(false)
+    expect(
+      screen.queryByRole("button", { name: "Конструктор каталога смет" })
+    ).toBeNull()
+  })
+
+  it("shows the version error and a retry action instead of dead navigation", async () => {
+    renderPage("MANAGE", new Error("maintenance-service недоступен"))
+
+    const alert = await screen.findByRole("alert")
+
+    expect(alert.textContent).toContain("Не удалось загрузить каталог смет")
+    expect(alert.textContent).toContain("maintenance-service недоступен")
+    expect(button("Повторить загрузку").disabled).toBe(false)
+    expect(
+      screen.queryByRole("button", { name: "Конструктор каталога смет" })
+    ).toBeNull()
+  })
+
   it("keeps catalog reads available but disables commands for VIEW", async () => {
     renderPage("VIEW")
 
@@ -114,8 +200,9 @@ describe("maintenance catalog warehouse access", () => {
       "maintenance-token",
       WAREHOUSE_ID
     )
-    expect(drilldown.disabled).toBe(true)
-    expect(button("Импортировать JSON").disabled).toBe(true)
+    expect(drilldown.disabled).toBe(false)
+    expect(button("Создать базовый каталог").disabled).toBe(true)
+    expect(button("Создать черновик").disabled).toBe(true)
     expect(button("Активировать").disabled).toBe(true)
   })
 
@@ -125,13 +212,16 @@ describe("maintenance catalog warehouse access", () => {
     const drilldown = (await screen.findByRole("button", {
       name: "Конструктор каталога смет",
     })) as HTMLButtonElement
+    const furniture = button("Мебель")
 
     expect(drilldown.disabled).toBe(false)
-    expect(button("Импортировать JSON").disabled).toBe(true)
+    expect(furniture.disabled).toBe(false)
+    expect(button("Создать базовый каталог").disabled).toBe(true)
+    expect(button("Создать черновик").disabled).toBe(true)
     expect(button("Активировать").disabled).toBe(true)
   })
 
-  it("enables drilldown, import and activation for MANAGE", async () => {
+  it("enables draft editing, bootstrap and activation for MANAGE", async () => {
     renderPage("MANAGE")
 
     const drilldown = (await screen.findByRole("button", {
@@ -139,7 +229,30 @@ describe("maintenance catalog warehouse access", () => {
     })) as HTMLButtonElement
 
     expect(drilldown.disabled).toBe(false)
-    expect(button("Импортировать JSON").disabled).toBe(false)
+    expect(button("Создать базовый каталог").disabled).toBe(false)
+    expect(button("Создать черновик").disabled).toBe(true)
     expect(button("Активировать").disabled).toBe(false)
   })
+
+  it.each(["ACTIVE", "SUPERSEDED"] as const)(
+    "allows MANAGE to fork a read-only %s version",
+    async (lifecycle) => {
+      renderPage("MANAGE", [
+        {
+          ...version,
+          lifecycle,
+          activatedAt: "2026-07-18T09:00:00Z",
+        },
+      ])
+
+      const drilldown = (await screen.findByRole("button", {
+        name: "Конструктор каталога смет",
+      })) as HTMLButtonElement
+
+      expect(drilldown.disabled).toBe(false)
+      expect(button("Создать базовый каталог").disabled).toBe(false)
+      expect(button("Создать черновик").disabled).toBe(false)
+      expect(button("Активировать").disabled).toBe(true)
+    }
+  )
 })

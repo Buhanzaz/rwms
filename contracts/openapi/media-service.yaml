@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Media Service API
-  version: 1.3.0
+  version: 1.8.0
   license: { name: UNLICENSED }
   description: >-
     Stateful Go media API. PostgreSQL owns metadata and replay state; MinIO
@@ -25,6 +25,44 @@ paths:
       operationId: mediaReadiness
       responses:
         '200': { description: Exact Flyway schema, PostgreSQL and versioned MinIO are ready. }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /api/internal/media/v1/owner-proofs:
+    post:
+      summary: Upsert one monotonic service-owned media authorization proof
+      operationId: upsertServiceMediaOwnerProof
+      description: >-
+        MAINTENANCE_* proofs require only sub=client_id=maintenance-service and
+        exactly media.maintenance. LOGISTICS_* proofs require only
+        sub=client_id=logistics-service and exactly media.logistics. Maintenance
+        supplies a UUID ownerId. Logistics supplies documentId plus lineId and
+        media-service alone derives its internal composite identity. Exact
+        proofEventId/body replay is safe. Event or owner revision regression,
+        gap, changed same-version state, event-ID reuse and a previously open
+        quarantine fail closed. The response contains no object key or URL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceOwnerProofRequest' }
+      responses:
+        '201':
+          description: New proof receipt, checkpoint and owner binding committed atomically.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceOwnerProof' }
+        '200':
+          description: Exact proofEventId and canonical-body replay.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceOwnerProof' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
         '503': { $ref: '#/components/responses/Unavailable' }
   /api/internal/media/v1/logistics/references/validate:
     post:
@@ -59,10 +97,11 @@ paths:
       summary: Authorize one constrained same-origin upload session
       operationId: createUploadSession
       description: >-
-        Requires USER, rwms.write and warehouse EDIT. Only the proven
-        INVENTORY_FINDING + INSPECTION owner binding is accepted. At most 100
-        live media assets may belong to one finding. The returned content path
-        is same-origin and never reveals a MinIO origin or storage credential.
+        Requires USER, rwms.write and warehouse EDIT. Only a proven
+        canonical owner/context pairs declared by MediaOwnerType are accepted.
+        At most 100 live media assets may belong to one owner. The
+        returned content path is same-origin and never reveals a MinIO origin
+        or storage credential.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -171,6 +210,8 @@ paths:
       parameters:
         - $ref: '#/components/parameters/OwnerType'
         - $ref: '#/components/parameters/OwnerId'
+        - $ref: '#/components/parameters/DocumentId'
+        - $ref: '#/components/parameters/LineId'
         - $ref: '#/components/parameters/WarehouseId'
         - $ref: '#/components/parameters/OwnerContext'
         - name: limit
@@ -191,6 +232,34 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '503': { $ref: '#/components/responses/Unavailable' }
+  /api/media/v1/cabin-covers:
+    post:
+      summary: Read bounded CABIN cover projections for one warehouse page
+      operationId: listCabinCovers
+      description: >-
+        Requires USER, rwms.read and warehouse VIEW. The service returns only
+        cabins with a current canonical media owner binding. photoCount counts
+        logical non-deleted IMAGE assets, never derived variant rows. previews
+        contains at most 100 ordered READY images with exactly one SMALL
+        variant per logical image. The optional cover is the first previews
+        item and remains for compatibility.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CabinCoverBatchRequest' }
+      responses:
+        '200':
+          description: Bounded cover projections for proved cabins that own image assets.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CabinCoverPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/Unavailable' }
   /api/media/v1/assets/{mediaId}/original:
     get:
       summary: Stream one owner-scoped ORIGINAL through the same-origin API
@@ -199,6 +268,8 @@ paths:
         - $ref: '#/components/parameters/MediaId'
         - $ref: '#/components/parameters/OwnerType'
         - $ref: '#/components/parameters/OwnerId'
+        - $ref: '#/components/parameters/DocumentId'
+        - $ref: '#/components/parameters/LineId'
         - $ref: '#/components/parameters/WarehouseId'
         - $ref: '#/components/parameters/OwnerContext'
       responses:
@@ -231,6 +302,8 @@ paths:
         - $ref: '#/components/parameters/Generation'
         - $ref: '#/components/parameters/OwnerType'
         - $ref: '#/components/parameters/OwnerId'
+        - $ref: '#/components/parameters/DocumentId'
+        - $ref: '#/components/parameters/LineId'
         - $ref: '#/components/parameters/WarehouseId'
         - $ref: '#/components/parameters/OwnerContext'
       responses:
@@ -258,6 +331,8 @@ paths:
         - $ref: '#/components/parameters/IdempotencyKey'
         - $ref: '#/components/parameters/OwnerType'
         - $ref: '#/components/parameters/OwnerId'
+        - $ref: '#/components/parameters/DocumentId'
+        - $ref: '#/components/parameters/LineId'
         - $ref: '#/components/parameters/WarehouseId'
         - $ref: '#/components/parameters/OwnerContext'
       requestBody:
@@ -273,6 +348,43 @@ paths:
               schema: { $ref: '#/components/schemas/MediaAsset' }
         '200':
           description: Exact command replay.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MediaAsset' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /api/media/v1/assets/{mediaId}/deletion:
+    post:
+      summary: Soft-delete one owner-scoped logical media asset
+      operationId: deleteMedia
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT. The command sets DELETED
+        and deletedAt, emits exactly one media.media.deleted.v1 fact and never
+        deletes source or derived MinIO versions. Wrong owner scope is 404;
+        stale expectedVersion is 409; an exact Idempotency-Key replay is safe.
+      parameters:
+        - $ref: '#/components/parameters/MediaId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/OwnerType'
+        - $ref: '#/components/parameters/OwnerId'
+        - $ref: '#/components/parameters/DocumentId'
+        - $ref: '#/components/parameters/LineId'
+        - $ref: '#/components/parameters/WarehouseId'
+        - $ref: '#/components/parameters/OwnerContext'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DeleteRequest' }
+      responses:
+        '200':
+          description: Soft-deleted asset or exact command replay.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MediaAsset' }
@@ -308,11 +420,25 @@ components:
       name: ownerType
       in: query
       required: true
-      schema: { const: INVENTORY_FINDING }
+      description: Must be paired with its canonical owner context.
+      schema: { $ref: '#/components/schemas/MediaOwnerType' }
     OwnerId:
       name: ownerId
       in: query
-      required: true
+      required: false
+      description: Required for inventory, cabin and maintenance owners; forbidden for logistics owners.
+      schema: { type: string, format: uuid }
+    DocumentId:
+      name: documentId
+      in: query
+      required: false
+      description: Required with lineId for logistics owners; forbidden for all other owners.
+      schema: { type: string, format: uuid }
+    LineId:
+      name: lineId
+      in: query
+      required: false
+      description: Required with documentId for logistics owners; forbidden for all other owners.
       schema: { type: string, format: uuid }
     WarehouseId:
       name: warehouseId
@@ -323,7 +449,8 @@ components:
       name: context
       in: query
       required: true
-      schema: { const: INSPECTION }
+      description: Must match the single canonical context paired with ownerType.
+      schema: { $ref: '#/components/schemas/MediaOwnerContext' }
     Variant:
       name: variant
       in: path
@@ -335,9 +462,85 @@ components:
       required: true
       schema: { type: integer, minimum: 1 }
   schemas:
+    MediaOwnerType:
+      type: string
+      enum:
+        - INVENTORY_FINDING
+        - CABIN
+        - MAINTENANCE_ESTIMATE
+        - MAINTENANCE_REPAIR
+        - MAINTENANCE_ACCEPTANCE
+        - MAINTENANCE_CATALOG_NODE
+        - LOGISTICS_RETURN
+        - LOGISTICS_SHIPMENT
+        - LOGISTICS_TRANSFER
+    MediaOwnerContext:
+      type: string
+      enum: [INSPECTION, WAREHOUSE, ESTIMATE, REPAIR, ACCEPTANCE, CATALOG, RETURN_INSPECTION, SHIPMENT, TRANSFER]
+    MaintenanceOwnerType:
+      type: string
+      enum: [MAINTENANCE_ESTIMATE, MAINTENANCE_REPAIR, MAINTENANCE_ACCEPTANCE, MAINTENANCE_CATALOG_NODE]
     LogisticsOwnerType:
       type: string
       enum: [LOGISTICS_RETURN, LOGISTICS_SHIPMENT, LOGISTICS_TRANSFER]
+    ServiceOwnerProofRequest:
+      type: object
+      additionalProperties: false
+      required: [ownerType, warehouseId, ownerRevision, aggregateVersion, proofEventId, active]
+      properties:
+        ownerType: { $ref: '#/components/schemas/MediaOwnerType' }
+        ownerId: { type: string, format: uuid }
+        documentId: { type: string, format: uuid }
+        lineId: { type: string, format: uuid }
+        warehouseId:
+          description: >-
+            Authorizing warehouse. LOGISTICS_RETURN uses the destination/receiving
+            warehouse. LOGISTICS_TRANSFER uses the line destinationWarehouseId
+            used by the receiving dialog, never the source warehouse.
+          type: string
+          format: uuid
+        ownerRevision: { type: integer, minimum: 0 }
+        aggregateVersion: { type: integer, minimum: 0 }
+        proofEventId: { type: string, format: uuid }
+        active: { type: boolean }
+      oneOf:
+        - required: [ownerId]
+          properties:
+            ownerType: { $ref: '#/components/schemas/MaintenanceOwnerType' }
+          not:
+            anyOf:
+              - required: [documentId]
+              - required: [lineId]
+        - required: [documentId, lineId]
+          properties:
+            ownerType: { $ref: '#/components/schemas/LogisticsOwnerType' }
+          not: { required: [ownerId] }
+    ServiceOwnerProof:
+      type: object
+      additionalProperties: false
+      required: [ownerType, warehouseId, ownerRevision, aggregateVersion, proofEventId, active]
+      properties:
+        ownerType: { $ref: '#/components/schemas/MediaOwnerType' }
+        ownerId: { type: string, format: uuid }
+        documentId: { type: string, format: uuid }
+        lineId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        ownerRevision: { type: integer, minimum: 0 }
+        aggregateVersion: { type: integer, minimum: 0 }
+        proofEventId: { type: string, format: uuid }
+        active: { type: boolean }
+      oneOf:
+        - required: [ownerId]
+          properties:
+            ownerType: { $ref: '#/components/schemas/MaintenanceOwnerType' }
+          not:
+            anyOf:
+              - required: [documentId]
+              - required: [lineId]
+        - required: [documentId, lineId]
+          properties:
+            ownerType: { $ref: '#/components/schemas/LogisticsOwnerType' }
+          not: { required: [ownerId] }
     OpaqueReadyMediaReference:
       type: object
       additionalProperties: false
@@ -353,7 +556,12 @@ components:
         ownerType: { $ref: '#/components/schemas/LogisticsOwnerType' }
         documentId: { type: string, format: uuid }
         lineId: { type: string, format: uuid }
-        warehouseId: { type: string, format: uuid }
+        warehouseId:
+          description: >-
+            Receiving/destination warehouse proved for this line. RETURN uses
+            its return destination; TRANSFER uses destinationWarehouseId.
+          type: string
+          format: uuid
         references:
           description: One to twenty unique media IDs; each must be READY at the stated current generation.
           type: array
@@ -378,17 +586,77 @@ components:
     CreateUploadSessionRequest:
       type: object
       additionalProperties: false
-      required: [ownerType, ownerId, warehouseId, context, fileName, contentType, contentLength, checksumSha256]
+      required: [ownerType, warehouseId, context, fileName, contentType, contentLength, checksumSha256]
       properties:
-        ownerType: { const: INVENTORY_FINDING }
+        ownerType: { $ref: '#/components/schemas/MediaOwnerType' }
         ownerId: { type: string, format: uuid }
-        warehouseId: { type: string, format: uuid }
-        context: { const: INSPECTION }
+        documentId: { type: string, format: uuid }
+        lineId: { type: string, format: uuid }
+        warehouseId:
+          description: >-
+            Proved owner warehouse. LOGISTICS_RETURN uses the destination/receiving
+            warehouse and LOGISTICS_TRANSFER uses destinationWarehouseId.
+          type: string
+          format: uuid
+        context: { $ref: '#/components/schemas/MediaOwnerContext' }
+        folderId:
+          description: >-
+            Stable logical folder for one user batch. Files uploaded by one
+            add-photo action share this UUID. If omitted, the asset forms its
+            own one-item folder.
+          type: string
+          format: uuid
         fileName: { type: string, minLength: 1, maxLength: 512 }
         contentType: { type: string, minLength: 1, maxLength: 255 }
         contentLength: { type: integer, minimum: 1 }
         checksumSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
         sortOrder: { type: integer, minimum: 0, default: 0 }
+      oneOf:
+        - required: [ownerId]
+          properties:
+            ownerType: { const: INVENTORY_FINDING }
+            context: { const: INSPECTION }
+          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }] }
+        - required: [ownerId]
+          properties:
+            ownerType: { const: CABIN }
+            context: { const: WAREHOUSE }
+          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }] }
+        - required: [ownerId]
+          properties:
+            ownerType: { const: MAINTENANCE_ESTIMATE }
+            context: { const: ESTIMATE }
+          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }] }
+        - required: [ownerId]
+          properties:
+            ownerType: { const: MAINTENANCE_REPAIR }
+            context: { const: REPAIR }
+          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }] }
+        - required: [ownerId]
+          properties:
+            ownerType: { const: MAINTENANCE_ACCEPTANCE }
+            context: { const: ACCEPTANCE }
+          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }] }
+        - required: [ownerId]
+          properties:
+            ownerType: { const: MAINTENANCE_CATALOG_NODE }
+            context: { const: CATALOG }
+          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }] }
+        - required: [documentId, lineId]
+          properties:
+            ownerType: { const: LOGISTICS_RETURN }
+            context: { const: RETURN_INSPECTION }
+          not: { required: [ownerId] }
+        - required: [documentId, lineId]
+          properties:
+            ownerType: { const: LOGISTICS_SHIPMENT }
+            context: { const: SHIPMENT }
+          not: { required: [ownerId] }
+        - required: [documentId, lineId]
+          properties:
+            ownerType: { const: LOGISTICS_TRANSFER }
+            context: { const: TRANSFER }
+          not: { required: [ownerId] }
     FinalizeUploadRequest:
       type: object
       additionalProperties: false
@@ -403,6 +671,12 @@ components:
       required: [rotationDegrees, expectedVersion]
       properties:
         rotationDegrees: { enum: [0, 90, 180, 270] }
+        expectedVersion: { type: integer, minimum: 1 }
+    DeleteRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
         expectedVersion: { type: integer, minimum: 1 }
     UploadSession:
       type: object
@@ -434,12 +708,74 @@ components:
           maxItems: 100
           items: { $ref: '#/components/schemas/MediaAsset' }
         next: { oneOf: [{ type: string, maxLength: 64 }, { type: 'null' }] }
+    CabinCoverBatchRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, cabinIds]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        cabinIds:
+          type: array
+          minItems: 1
+          maxItems: 200
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    CabinCoverPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 200
+          items: { $ref: '#/components/schemas/CabinCoverProjection' }
+    CabinCoverProjection:
+      type: object
+      additionalProperties: false
+      required: [cabinId, photoCount, cover, previews]
+      properties:
+        cabinId: { type: string, format: uuid }
+        photoCount:
+          description: Number of logical, non-deleted IMAGE assets for this cabin.
+          type: integer
+          minimum: 1
+          maximum: 100
+        cover:
+          description: First previews item, retained for compatibility; null when previews is empty.
+          oneOf:
+            - { $ref: '#/components/schemas/CabinCoverVariant' }
+            - { type: 'null' }
+        previews:
+          description: Ordered READY, non-deleted logical images with one exact SMALL variant each.
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/CabinCoverVariant' }
+    CabinCoverVariant:
+      type: object
+      additionalProperties: false
+      required: [mediaId, generation, kind, contentType, contentPath, width, height]
+      properties:
+        mediaId: { type: string, format: uuid }
+        generation: { type: integer, minimum: 1 }
+        kind: { const: SMALL }
+        contentType: { type: string }
+        contentPath:
+          description: Relative same-origin API path; never an object-store URL or key.
+          type: string
+          pattern: '^/api/media/v1/assets/[0-9a-f-]{36}/variants/SMALL/content\?'
+        width: { oneOf: [{ type: integer, minimum: 1 }, { type: 'null' }] }
+        height: { oneOf: [{ type: integer, minimum: 1 }, { type: 'null' }] }
     MediaAsset:
       type: object
       additionalProperties: false
-      required: [id, fileName, contentType, kind, status, version, generation, rotationDegrees, sortOrder, sizeBytes, createdAt, variants]
+      required: [id, folderId, fileName, contentType, kind, status, version, generation, rotationDegrees, sortOrder, sizeBytes, createdAt, variants]
       properties:
         id: { type: string, format: uuid }
+        folderId:
+          description: Logical photo folder shared by assets from one batch upload.
+          type: string
+          format: uuid
         fileName: { type: string, minLength: 1, maxLength: 512 }
         contentType: { type: string }
         kind: { enum: [IMAGE, VIDEO] }

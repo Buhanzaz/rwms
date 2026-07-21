@@ -30,7 +30,8 @@ public final class DossierApiModels {
       UUID aggregateId,
       @JsonInclude(JsonInclude.Include.NON_NULL) UUID secondaryId) {}
 
-  public record MediaProjection(UUID mediaId, UUID findingId, long generation, String state) {}
+  public record MediaProjection(
+      UUID mediaId, UUID folderId, UUID findingId, long generation, String state) {}
 
   public enum Visibility { COMPLETE, PARTIAL }
 }

@@ -13,7 +13,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import dev.buhanzaz.rwms.taskboard.config.DevTaskBoardBootstrap;
 import dev.buhanzaz.rwms.taskboard.config.TaskBoardClientProperties;
 import dev.buhanzaz.rwms.taskboard.domain.*;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
@@ -77,8 +76,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   @org.springframework.beans.factory.annotation.Autowired QueueUsageReferenceRepository queueReferences;
   @org.springframework.beans.factory.annotation.Autowired TaskAssignmentRepository assignments;
   @org.springframework.beans.factory.annotation.Autowired MockMvc mockMvc;
-  @org.springframework.beans.factory.annotation.Autowired(required = false)
-  DevTaskBoardBootstrap devBootstrap;
 
   @org.springframework.beans.factory.annotation.Autowired
   WorkerDeletionIntentRepository deletionIntents;
@@ -1598,11 +1595,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .andExpect(jsonPath("$.status").value("ACTIVE"))
         .andExpect(jsonPath("$.route.length()").value(1))
         .andExpect(jsonPath("$.route[0].queueId").value(queue.id().toString()));
-  }
-
-  @Test
-  void developmentBootstrapIsAbsentOutsideDevelopmentProfile() {
-    assertThat(devBootstrap).isNull();
   }
 
   private long kafkaOutboxCount(String eventType) {

@@ -7,11 +7,17 @@ import type {
   WorkerRequest,
   WorkQueueDto,
   WorkQueueRequest,
+  ReviewedTaskBoardBootstrapResult,
 } from "@/features/settings/task-board/model/task-board-settings"
 
 export type QueueOrderItem = { queueId: string; expectedVersion: number }
 
 export interface TaskBoardSettingsClient {
+  bootstrapReviewedData(
+    token: string,
+    warehouseId: string,
+    idempotencyKey: string
+  ): Promise<ReviewedTaskBoardBootstrapResult>
   listQueues(token: string, warehouseId: string): Promise<WorkQueueDto[]>
   createQueue(
     token: string,

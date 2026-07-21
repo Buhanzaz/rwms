@@ -223,9 +223,13 @@ components:
     MediaProjection:
       type: object
       additionalProperties: false
-      required: [mediaId, findingId, generation, state]
+      required: [mediaId, folderId, findingId, generation, state]
       properties:
         mediaId: { type: string, format: uuid }
+        folderId:
+          description: Logical batch folder from media-service; legacy assets use their own media ID.
+          type: string
+          format: uuid
         findingId: { type: string, format: uuid }
         generation: { type: integer, format: int64, minimum: 0 }
         state: { $ref: '#/components/schemas/MediaState' }

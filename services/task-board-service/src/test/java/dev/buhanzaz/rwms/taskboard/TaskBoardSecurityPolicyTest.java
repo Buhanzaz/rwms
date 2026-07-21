@@ -12,6 +12,7 @@ import dev.buhanzaz.rwms.taskboard.api.InternalQueueReferenceController;
 import dev.buhanzaz.rwms.taskboard.config.TaskBoardClientProperties;
 import dev.buhanzaz.rwms.taskboard.config.TaskBoardProductionSafetyValidator;
 import dev.buhanzaz.rwms.taskboard.domain.QueueReferenceType;
+import dev.buhanzaz.rwms.taskboard.security.QueueRegistryAuthorizer;
 import dev.buhanzaz.rwms.taskboard.security.WarehouseAccessAuthorizer;
 import dev.buhanzaz.rwms.taskboard.service.RegistryService;
 import java.net.URI;
@@ -140,37 +141,52 @@ class TaskBoardSecurityPolicyTest {
             UUID.randomUUID(), 0, queueId, QueueReferenceType.REPAIR_PLAN, "external-1");
     when(registry.registerReference(any(), any())).thenReturn(response);
 
-    var failClosed = new InternalQueueReferenceController(registry, List.of());
     assertThatThrownBy(
-            () ->
-                failClosed.register(
-                    jwt("SERVICE", "queue-registry.write", "client_id", "maintenance-service"),
-                    queueId,
-                    request))
-        .isInstanceOf(AccessDeniedException.class);
+            () -> new QueueRegistryAuthorizer(List.of()))
+        .isInstanceOf(IllegalStateException.class);
 
     var allowlisted =
-        new InternalQueueReferenceController(registry, List.of("maintenance-service"));
+        new InternalQueueReferenceController(
+            registry, new QueueRegistryAuthorizer(List.of("maintenance-service")));
     assertThatThrownBy(
             () ->
                 allowlisted.register(
-                    jwt("USER", "queue-registry.write", "client_id", "maintenance-service"),
+                    queueRegistryJwt(
+                        "USER", "maintenance-service", "maintenance-service", "queue-registry.write"),
                     queueId,
                     request))
         .isInstanceOf(AccessDeniedException.class);
     assertThatThrownBy(
             () ->
                 allowlisted.register(
-                    jwt("SERVICE", "rwms.write", "client_id", "maintenance-service"),
+                    queueRegistryJwt(
+                        "SERVICE", "maintenance-service", "maintenance-service", "rwms.write"),
                     queueId,
                     request))
         .isInstanceOf(AccessDeniedException.class);
     assertThat(
             allowlisted.register(
-                jwt("SERVICE", "queue-registry.write", "client_id", "maintenance-service"),
+                queueRegistryJwt(
+                    "SERVICE",
+                    "maintenance-service",
+                    "maintenance-service",
+                    List.of("queue-registry.write")),
                 queueId,
                 request))
         .isEqualTo(response);
+  }
+
+  private Jwt queueRegistryJwt(
+      String type, String clientId, String subject, Object scopes) {
+    return Jwt.withTokenValue("token")
+        .header("alg", "none")
+        .subject(subject)
+        .issuedAt(Instant.now())
+        .expiresAt(Instant.now().plusSeconds(60))
+        .claim("principal_type", type)
+        .claim("client_id", clientId)
+        .claim("scope", scopes)
+        .build();
   }
 
   private MockEnvironment secureProductionEnvironment() {

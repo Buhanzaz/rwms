@@ -44,6 +44,12 @@ export type RepairEstimateCatalogMediaReferenceDto = {
   generation: number
 }
 
+export type RepairEstimateFurnitureEquipmentReferenceDto = {
+  equipmentId: string
+  equipmentCode: string
+  equipmentName: string
+}
+
 export type RepairEstimateCatalogCanvasLinkAnchors = {
   source: "TOP" | "BOTTOM"
   target: "TOP" | "BOTTOM"
@@ -52,6 +58,7 @@ export type RepairEstimateCatalogCanvasLinkAnchors = {
 export type RepairEstimateCatalogNodeDto = {
   id: string
   catalogVersionId: string
+  mediaOwnerId: string
   code: string
   name: string
   nodeType: RepairEstimateCatalogNodeType
@@ -69,6 +76,8 @@ export type RepairEstimateCatalogNodeDto = {
   photoRequired: boolean
   includeInEstimate: boolean
   commonItem: boolean
+  furnitureCategory: boolean
+  furnitureEquipment: RepairEstimateFurnitureEquipmentReferenceDto | null
   references: RepairEstimateCatalogReferenceDto[]
   mediaReferences: RepairEstimateCatalogMediaReferenceDto[]
   /** Presentation coordinates only; canonical graph remains in maintenance-service. */
@@ -99,7 +108,8 @@ export type RepairEstimateCatalogCanvasDto =
     categories: RepairEstimateCatalogNodeDto[]
   }
 
-export type RepairEstimateCatalogSectionKind = "works" | "materials"
+export type RepairEstimateCatalogSectionKind =
+  "works" | "materials" | "furniture"
 
 export type RepairEstimateCatalogSectionDto = {
   kind: RepairEstimateCatalogSectionKind
@@ -112,6 +122,7 @@ export type RepairEstimateCatalogSectionDto = {
 
 export type RepairEstimateCatalogNodeMutation = {
   id?: string
+  mediaOwnerId?: string
   code: string
   name: string
   nodeType: RepairEstimateCatalogNodeType
@@ -128,6 +139,8 @@ export type RepairEstimateCatalogNodeMutation = {
   photoRequired: boolean
   includeInEstimate: boolean
   commonItem: boolean
+  furnitureCategory: boolean
+  furnitureEquipment: RepairEstimateFurnitureEquipmentReferenceDto | null
   comment: string | null
 }
 

@@ -37,17 +37,67 @@ public interface MaintenanceReconciliationRepository
       findByDependencyTypeAndOperationTypeAndIdempotencyKey(
           String dependencyType, String operationType, UUID idempotencyKey);
 
+  List<MaintenanceReconciliation>
+      findAllByCatalogVersionIdOrderByOperationTypeAscCatalogNodeIdAsc(UUID catalogVersionId);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select value from MaintenanceReconciliation value
+       where value.dependencyType = 'MEDIA'
+         and value.mediaOwnerType = :ownerType
+         and value.mediaOwnerId = :ownerId
+         and value.mediaSourceId = :sourceId
+         and value.mediaSourceVersion = :sourceVersion
+      """)
+  Optional<MaintenanceReconciliation> findMediaSourceForUpdate(
+      @Param("ownerType") String ownerType,
+      @Param("ownerId") UUID ownerId,
+      @Param("sourceId") UUID sourceId,
+      @Param("sourceVersion") long sourceVersion);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  Optional<MaintenanceReconciliation>
+      findFirstByDependencyTypeAndMediaOwnerTypeAndMediaOwnerIdOrderByMediaOwnerRevisionDesc(
+          String dependencyType, String mediaOwnerType, UUID mediaOwnerId);
+
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2"))
   @Query(
       """
       select value from MaintenanceReconciliation value
        where value.state in ('PENDING', 'RETRY_PENDING', 'RECONCILIATION_REQUIRED')
+         and value.dependencyType <> 'MEDIA'
          and value.attemptCount < :maximumAttempts
          and value.nextAttemptAt <= :now
        order by value.nextAttemptAt, value.id
       """)
   List<MaintenanceReconciliation> findDueForUpdateSkipLocked(
+      @Param("maximumAttempts") int maximumAttempts,
+      @Param("now") OffsetDateTime now,
+      Pageable pageable);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2"))
+  @Query(
+      """
+      select value from MaintenanceReconciliation value
+       where value.dependencyType = 'MEDIA'
+         and value.state in ('PENDING', 'RETRY_PENDING')
+         and value.attemptCount < :maximumAttempts
+         and value.nextAttemptAt <= :now
+         and not exists (
+           select predecessor.id from MaintenanceReconciliation predecessor
+            where predecessor.dependencyType = 'MEDIA'
+              and predecessor.mediaOwnerType = value.mediaOwnerType
+              and predecessor.mediaOwnerId = value.mediaOwnerId
+              and predecessor.mediaOwnerRevision < value.mediaOwnerRevision
+              and predecessor.state <> 'CONFIRMED'
+         )
+       order by value.nextAttemptAt, value.mediaOwnerType,
+         value.mediaOwnerId, value.mediaOwnerRevision
+      """)
+  List<MaintenanceReconciliation> findDueMediaForUpdateSkipLocked(
       @Param("maximumAttempts") int maximumAttempts,
       @Param("now") OffsetDateTime now,
       Pageable pageable);

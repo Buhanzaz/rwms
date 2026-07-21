@@ -154,13 +154,18 @@ vi.mock("@/features/repair-estimates/repair-work-information-fields", () => ({
   RepairWorkInformationFields: ({
     readOnly,
     disabled,
+    rentalItemId,
   }: {
     readOnly?: boolean
     disabled: boolean
+    rentalItemId: string
   }) => (
-    <p data-testid="information-access">
-      {readOnly || disabled ? "read-only" : "editable"}
-    </p>
+    <>
+      <p data-testid="information-access">
+        {readOnly || disabled ? "read-only" : "editable"}
+      </p>
+      <p data-testid="selected-rental-item">{rentalItemId || "unselected"}</p>
+    </>
   ),
 }))
 
@@ -239,7 +244,7 @@ const repair: RepairTaskDto = {
   updatedAt: "2026-07-18T10:00:00Z",
 }
 
-function renderPage(path: string, page: ReactNode) {
+function renderPage(path: string, page: ReactNode, state?: unknown) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -247,8 +252,18 @@ function renderPage(path: string, page: ReactNode) {
     },
   })
 
+  const [pathname, search = ""] = path.split("?", 2)
+
   return render(
-    <MemoryRouter initialEntries={[path]}>
+    <MemoryRouter
+      initialEntries={[
+        {
+          pathname,
+          search: search ? `?${search}` : "",
+          state,
+        },
+      ]}
+    >
       <QueryClientProvider client={queryClient}>{page}</QueryClientProvider>
     </MemoryRouter>
   )
@@ -348,6 +363,42 @@ describe("maintenance command access", () => {
       await screen.findByRole("button", { name: "Сохранить черновик" })
     ).toBeTruthy()
     expect(screen.getByRole("button", { name: "Завершить" })).toBeTruthy()
+  })
+
+  it("preselects the rental item supplied by the warehouse card", () => {
+    authState.level = "EDIT"
+
+    renderPage("/repairs?create=1", <RepairsPage />, {
+      workspaceEntry: true,
+      rentalItemSeed: {
+        type: "rental-item-repair-seed-v1",
+        warehouseId: WAREHOUSE_ID,
+        rentalItemId: RENTAL_ITEM_ID,
+        number: "БЫТ-001",
+      },
+    })
+
+    expect(screen.getByTestId("selected-rental-item").textContent).toBe(
+      RENTAL_ITEM_ID
+    )
+  })
+
+  it("does not use a rental item seed from another warehouse", () => {
+    authState.level = "EDIT"
+
+    renderPage("/repairs?create=1", <RepairsPage />, {
+      workspaceEntry: true,
+      rentalItemSeed: {
+        type: "rental-item-repair-seed-v1",
+        warehouseId: "55555555-5555-4555-8555-555555555555",
+        rentalItemId: RENTAL_ITEM_ID,
+        number: "БЫТ-001",
+      },
+    })
+
+    expect(screen.getByTestId("selected-rental-item").textContent).toBe(
+      "unselected"
+    )
   })
 
   it("shows cabin write-off only for MANAGE", async () => {

@@ -33,12 +33,13 @@ func main() {
 
 func run(logger *slog.Logger) error {
 	if len(os.Args) > 1 {
-		if len(os.Args) != 3 || os.Args[1] != "reconcile-inventory-owner" {
-			return errors.New("supported operator command: reconcile-inventory-owner <reviewed-batch.json>")
+		if len(os.Args) != 3 || (os.Args[1] != "reconcile-inventory-owner" &&
+			os.Args[1] != "reconcile-cabin-owner") {
+			return errors.New("supported operator commands: reconcile-inventory-owner or reconcile-cabin-owner <reviewed-batch.json>")
 		}
 		databaseURL := os.Getenv("MEDIA_DATABASE_URL")
 		if databaseURL == "" {
-			return errors.New("MEDIA_DATABASE_URL is required for inventory owner reconciliation")
+			return errors.New("MEDIA_DATABASE_URL is required for owner reconciliation")
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -47,8 +48,11 @@ func run(logger *slog.Logger) error {
 			return err
 		}
 		defer database.Close()
-		return worker.RunInventoryOwnerReconciliationFile(ctx,
-			persistence.NewRepository(database.Pool), os.Args[2])
+		repository := persistence.NewRepository(database.Pool)
+		if os.Args[1] == "reconcile-cabin-owner" {
+			return worker.RunCabinOwnerReconciliationFile(ctx, repository, os.Args[2])
+		}
+		return worker.RunInventoryOwnerReconciliationFile(ctx, repository, os.Args[2])
 	}
 	configuration, err := config.Load()
 	if err != nil {
@@ -94,6 +98,14 @@ func run(logger *slog.Logger) error {
 		producer.Close()
 		return err
 	}
+	cabinOwnerConsumerClient, err := worker.NewCabinOwnerKafkaConsumer(configuration.KafkaBrokers,
+		configuration.CabinOwnerGroup, configuration.AssetRentalItemTopic)
+	if err != nil {
+		ownerConsumerClient.Close()
+		consumerClient.Close()
+		producer.Close()
+		return err
+	}
 	limits := media.ProcessingLimits{
 		MaxImageBytes: configuration.MaxUploadBytes, MaxImageOutputBytes: configuration.MaxImageOutputBytes,
 		MaxDecodedPixels: configuration.MaxDecodedPixels, MaxVideoBytes: configuration.MaxUploadBytes,
@@ -105,11 +117,13 @@ func run(logger *slog.Logger) error {
 			AllowedCodecs: configuration.AllowedVideoCodecs, MaxDuration: configuration.MaxVideoDuration, Limits: limits},
 	}, configuration.InstanceID+":worker", configuration.ProcessingTimeout, logger)
 	ownerConsumer := worker.NewInventoryOwnerConsumer(repository, ownerConsumerClient, logger)
+	cabinOwnerConsumer := worker.NewCabinOwnerConsumer(repository, cabinOwnerConsumerClient, logger)
 	apiServer, err := api.NewServer(repository, database, validator, objectStore, api.Configuration{
 		MaxUploadBytes: configuration.MaxUploadBytes, AllowedMIMETypes: configuration.AllowedMIMETypes,
 		UploadExpiry: configuration.UploadExpiry,
 	}, logger)
 	if err != nil {
+		cabinOwnerConsumerClient.Close()
 		ownerConsumerClient.Close()
 		consumerClient.Close()
 		producer.Close()
@@ -128,6 +142,7 @@ func run(logger *slog.Logger) error {
 		{name: "outbox-relay", run: relay.Run},
 		{name: "processing-consumer", run: processingConsumer.Run},
 		{name: "inventory-owner-consumer", run: ownerConsumer.Run},
+		{name: "cabin-owner-consumer", run: cabinOwnerConsumer.Run},
 		{name: "http-server", run: func(context.Context) error {
 			err := httpServer.ListenAndServe()
 			if errors.Is(err, http.ErrServerClosed) {
@@ -146,6 +161,7 @@ func run(logger *slog.Logger) error {
 				shutdownError = closeErr
 			}
 			ownerConsumer.Close()
+			cabinOwnerConsumer.Close()
 			if closeErr := relay.Close(shutdownContext); closeErr != nil && shutdownError == nil {
 				shutdownError = closeErr
 			}
@@ -173,10 +189,11 @@ func superviseMediaRuntime(
 ) error {
 	required := map[string]bool{
 		"outbox-relay": false, "processing-consumer": false,
-		"inventory-owner-consumer": false, "http-server": false,
+		"inventory-owner-consumer": false, "cabin-owner-consumer": false,
+		"http-server": false,
 	}
 	if signalContext == nil || shutdownTimeout <= 0 || shutdown == nil || len(processes) != len(required) {
-		return errors.New("media runtime requires all four supervised processes")
+		return errors.New("media runtime requires all five supervised processes")
 	}
 	for _, process := range processes {
 		if process.run == nil {

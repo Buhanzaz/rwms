@@ -333,12 +333,26 @@ export function applyCatalogNodesToEstimateLines(params: {
               : node.nodeType === "OPTION"
                 ? "OPTION"
                 : "MATERIAL",
+          furnitureEquipment: node.furnitureEquipment ?? null,
         },
       }),
     ]
   })
 
   return nextLines
+}
+
+export function getRepairEstimateCatalogQuantityError(
+  node: RepairEstimateCatalogNodeDto,
+  quantity: number
+) {
+  if (node.nodeType !== "MATERIAL" || node.furnitureEquipment === null) {
+    return null
+  }
+
+  return Number.isInteger(quantity) && quantity > 0
+    ? null
+    : "Количество мебели должно быть целым положительным числом"
 }
 
 function lineQueueBinding(
@@ -417,23 +431,49 @@ export function buildRepairEstimateTaskPlans(
     groups.flatMap((group) => group.lines.map((line) => line.id))
   )
   const unassignedLines = lines.filter((line) => !assignedLineIds.has(line.id))
-  if (unassignedLines.length > 0) {
-    const includedLineIds = unassignedLines.map((line) => line.id)
-    const primaryLine = unassignedLines.find((line) => line.lineType === "WORK")
+  let currentStandalone: (typeof groups)[number] | null = null
+  unassignedLines.forEach((line) => {
+    const binding =
+      line.lineType === "MATERIAL" ? lineQueueBinding(line, catalog) : null
+    const queueId = binding?.queueId ?? null
+    const queueCode = binding?.queueCode ?? null
+    const routeQueueKind = binding?.queueKind ?? null
+    const bindingKey = queueCode
+      ? `QUEUE:${queueCode}`
+      : routeQueueKind
+        ? `KIND:${routeQueueKind}`
+        : "UNBOUND"
+
+    if (!currentStandalone || currentStandalone.bindingKey !== bindingKey) {
+      currentStandalone = {
+        queueId,
+        queueCode,
+        routeQueueKind,
+        bindingKey,
+        lines: [line],
+      }
+      groups.push(currentStandalone)
+      return
+    }
+
+    currentStandalone.lines.push(line)
+  })
+
+  groups.slice(plans.length).forEach((group) => {
     plans.push({
-      id: createOpaqueId("task-plan-unassigned"),
+      id: createOpaqueId("task-plan-standalone"),
       kind: "REPAIR_WORK",
-      includedLineIds,
-      primaryLineId: primaryLine?.id ?? null,
-      groupComment: commentsForLines(unassignedLines),
-      queueId: null,
-      queueCode: null,
-      routeQueueKind: null,
+      includedLineIds: group.lines.map((line) => line.id),
+      primaryLineId: null,
+      groupComment: commentsForLines(group.lines),
+      queueId: group.queueId,
+      queueCode: group.queueCode,
+      routeQueueKind: group.routeQueueKind,
       sortOrder: (plans.length + 1) * 10,
       generationStatus: "PENDING_GENERATION",
       workflowRequestRef: null,
     })
-  }
+  })
   return plans
 }
 

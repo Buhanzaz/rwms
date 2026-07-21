@@ -48,7 +48,7 @@ public interface MaintenanceRepairRepository extends JpaRepository<MaintenanceRe
             where reconciliation.repairId = repair.id
               and reconciliation.operationType = 'RENEW_LEASE'
               and reconciliation.state in (
-                'PENDING', 'RETRY_PENDING', 'RECONCILIATION_REQUIRED'))
+                'PENDING', 'RETRY_PENDING', 'RECONCILIATION_REQUIRED', 'QUARANTINED'))
        order by repair.leaseExpiresAt, repair.id
       """)
   List<MaintenanceRepair> findLeaseRenewalCandidateForUpdateSkipLocked(

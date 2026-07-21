@@ -1,12 +1,12 @@
 import {
   activateMaintenanceCatalog,
-  importMaintenanceCatalog,
+  bootstrapMaintenanceCatalog,
+  forkMaintenanceCatalog,
   listMaintenanceCatalogLinks,
   listMaintenanceCatalogNodes,
   listMaintenanceCatalogVersions,
   replaceMaintenanceCatalogLinks,
   replaceMaintenanceCatalogNodes,
-  type MaintenanceCatalogImportRequest,
   type MaintenanceCatalogLink,
   type MaintenanceCatalogLinkInput,
   type MaintenanceCatalogNode,
@@ -117,6 +117,7 @@ function toSnapshot(
       return {
         id: node.id,
         catalogVersionId: node.catalogVersionId,
+        mediaOwnerId: node.mediaOwnerId,
         code: node.code,
         name: node.name,
         nodeType: node.nodeType,
@@ -141,6 +142,8 @@ function toSnapshot(
         photoRequired: node.photoRequired,
         includeInEstimate: node.includeInEstimate,
         commonItem: node.commonItem,
+        furnitureCategory: Boolean(node.furnitureCategory),
+        furnitureEquipment: node.furnitureEquipment ?? null,
         references: node.references,
         mediaReferences: node.mediaReferences,
         canvasX: position?.x ?? null,
@@ -177,11 +180,37 @@ export async function getRepairEstimateCatalogSnapshot(
   return toSnapshot(request, await catalogState(request))
 }
 
-function rootCategories(nodes: RepairEstimateCatalogNodeDto[]) {
+function isFurnitureTreeNode(
+  node: RepairEstimateCatalogNodeDto,
+  nodesById: ReadonlyMap<string, RepairEstimateCatalogNodeDto>
+) {
+  const visited = new Set<string>()
+  let current: RepairEstimateCatalogNodeDto | undefined = node
+
+  while (current) {
+    if (current.furnitureCategory) return true
+    if (!current.parentId || visited.has(current.id)) return false
+    visited.add(current.id)
+    current = nodesById.get(current.parentId)
+  }
+
+  return false
+}
+
+function rootCategories(
+  nodes: RepairEstimateCatalogNodeDto[],
+  scope: "ALL" | "NON_FURNITURE" | "FURNITURE_ONLY" = "ALL"
+) {
   return nodes
     .filter(
       (node) =>
-        node.active && node.nodeType === "CATEGORY" && node.parentId === null
+        node.active &&
+        node.nodeType === "CATEGORY" &&
+        node.parentId === null &&
+        (scope === "ALL" ||
+          (scope === "FURNITURE_ONLY"
+            ? node.furnitureCategory
+            : !node.furnitureCategory))
     )
     .sort(compareNodes)
 }
@@ -201,11 +230,20 @@ export async function getRepairEstimateCatalogSection(
   kind: RepairEstimateCatalogSectionKind
 ) {
   const snapshot = await getRepairEstimateCatalogSnapshot(request)
+  const furniture = kind === "furniture"
   return {
     kind,
-    title: kind === "works" ? "Работы" : "Материалы",
+    title:
+      kind === "works"
+        ? "Работы"
+        : kind === "furniture"
+          ? "Мебель"
+          : "Материалы",
     sectionType: kind === "works" ? "WORK" : "MATERIAL",
-    categories: rootCategories(snapshot.nodes),
+    categories: rootCategories(
+      snapshot.nodes,
+      furniture ? "FURNITURE_ONLY" : "NON_FURNITURE"
+    ),
     nodes: snapshot.nodes,
     links: snapshot.links,
   } satisfies RepairEstimateCatalogSectionDto
@@ -246,6 +284,8 @@ function toNodeInput(
     commonItem: node.commonItem,
     showInMainMenu: node.showInMainMenu,
     photoRequired: node.photoRequired,
+    furnitureCategory: Boolean(node.furnitureCategory),
+    furnitureEquipment: node.furnitureEquipment ?? null,
     routing: node.routing,
     references: node.references,
     comment: node.comment,
@@ -275,6 +315,28 @@ function nodeInput(
     throw new Error("Родительский узел не найден.")
   }
 
+  const nodesById = new Map(nodes.map((node) => [node.id, node]))
+  let parent = input.parentId ? nodesById.get(input.parentId) : undefined
+  const visited = new Set<string>()
+  let furnitureTree = false
+  while (parent) {
+    if (parent.furnitureCategory) {
+      furnitureTree = true
+      break
+    }
+    if (!parent.parentNodeId || visited.has(parent.id)) break
+    visited.add(parent.id)
+    parent = nodesById.get(parent.parentNodeId)
+  }
+  const furnitureMaterial = input.nodeType === "MATERIAL" && furnitureTree
+  const furnitureEquipment =
+    input.furnitureEquipment ?? existing?.furnitureEquipment ?? null
+  if (!furnitureMaterial && furnitureEquipment !== null) {
+    throw new Error(
+      "Дополнительное оборудование можно привязать только к мебели."
+    )
+  }
+
   return {
     id: existing?.id ?? input.id ?? idempotencyKey(),
     code,
@@ -292,10 +354,13 @@ function nodeInput(
     commonItem: input.commonItem,
     showInMainMenu: input.showInMainMenu,
     photoRequired: input.nodeType === "WORK" && input.photoRequired,
+    furnitureCategory:
+      input.nodeType === "CATEGORY" && Boolean(input.furnitureCategory),
+    furnitureEquipment: furnitureMaterial ? furnitureEquipment : null,
     routing: existing?.routing ?? input.routing ?? null,
     references: existing?.references ?? input.references ?? [],
     comment: input.comment?.trim() || null,
-    mediaReferences: existing?.mediaReferences ?? input.mediaReferences ?? [],
+    mediaReferences: input.mediaReferences ?? existing?.mediaReferences ?? [],
   }
 }
 
@@ -427,66 +492,41 @@ export function moveRepairEstimateCatalogCanvasNode(
   )
 }
 
-type ImportArtifact = {
-  sourceWarehouseId?: unknown
-  sourceEvidenceSha256?: unknown
-  nodes?: unknown
-  links?: unknown
-}
-
-export function parseRepairEstimateCatalogImportArtifact(
-  request: Pick<RepairEstimateCatalogRequest, "warehouseId">,
-  source: string
-): MaintenanceCatalogImportRequest {
-  let artifact: ImportArtifact
-  try {
-    artifact = JSON.parse(source) as ImportArtifact
-  } catch {
-    throw new Error("Файл каталога не является корректным JSON.")
-  }
-  if (artifact.sourceWarehouseId !== request.warehouseId) {
-    throw new Error("Снимок каталога относится к другому складу.")
-  }
-  if (
-    typeof artifact.sourceEvidenceSha256 !== "string" ||
-    !/^[0-9a-f]{64}$/.test(artifact.sourceEvidenceSha256) ||
-    !Array.isArray(artifact.nodes) ||
-    !Array.isArray(artifact.links)
-  ) {
-    throw new Error(
-      "Файл не соответствует формату проверенного снимка каталога."
-    )
-  }
-  return {
-    warehouseId: request.warehouseId,
-    sourceSha256: artifact.sourceEvidenceSha256,
-    nodes: artifact.nodes as MaintenanceCatalogNodeInput[],
-    links: artifact.links as MaintenanceCatalogLinkInput[],
-  }
-}
-
-export function importRepairEstimateCatalog(
+export function bootstrapRepairEstimateCatalog(
   accessToken: string,
   warehouseId: string,
-  source: string
+  commandKey: string = idempotencyKey()
 ) {
-  return importMaintenanceCatalog(
-    accessToken,
-    idempotencyKey(),
-    parseRepairEstimateCatalogImportArtifact({ warehouseId }, source)
+  return bootstrapMaintenanceCatalog(accessToken, commandKey, {
+    warehouseId,
+  }).then(toVersion)
+}
+
+export function forkRepairEstimateCatalog(
+  request: RepairEstimateCatalogRequest,
+  expectedVersion: number,
+  commandKey: string = idempotencyKey()
+) {
+  return forkMaintenanceCatalog(
+    request.accessToken,
+    request.warehouseId,
+    request.catalogVersionId,
+    expectedVersion,
+    commandKey
   ).then(toVersion)
 }
 
 export function activateRepairEstimateCatalog(
   request: RepairEstimateCatalogRequest,
-  expectedVersion: number
+  expectedVersion: number,
+  commandKey: string = idempotencyKey()
 ) {
   return activateMaintenanceCatalog(
     request.accessToken,
     request.warehouseId,
     request.catalogVersionId,
     expectedVersion,
-    idempotencyKey()
+    commandKey
   ).then(toVersion)
 }
 
@@ -513,8 +553,13 @@ function belongsToCategory(
 export function getRepairEstimateCatalogSectionItems(
   section: RepairEstimateCatalogSectionDto
 ) {
+  const nodesById = nodeById(section.nodes)
   return section.nodes
-    .filter((node) => node.active && node.nodeType === section.sectionType)
+    .filter((node) => {
+      if (!node.active || node.nodeType !== section.sectionType) return false
+      const furniture = isFurnitureTreeNode(node, nodesById)
+      return section.kind === "furniture" ? furniture : !furniture
+    })
     .sort(compareNodes)
 }
 

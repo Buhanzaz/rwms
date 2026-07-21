@@ -69,7 +69,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -108,7 +108,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
     assertThat(columnCounts())
         .containsAllEntriesOf(
             Map.ofEntries(
-                Map.entry("board_task", 12),
+                Map.entry("board_task", 13),
                 Map.entry("queue_entry", 16),
                 Map.entry("queue_usage_reference", 6),
                 Map.entry("task_assignment", 12),
@@ -147,6 +147,14 @@ class TaskBoardFlywayMigrationIntegrationTest {
         .containsEntry("version", "6")
         .containsEntry("description", "task sync source ownership")
         .containsEntry("script", "V6__task_sync_source_ownership.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='7'"))
+        .containsEntry("version", "7")
+        .containsEntry("description", "equipment movement completion deadline")
+        .containsEntry("script", "V7__equipment_movement_completion_deadline.sql")
         .containsEntry("success", true);
   }
 
@@ -238,11 +246,15 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(3);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 
     assertThat(retainedContentDigests()).containsExactlyInAnyOrderEntriesOf(before);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from board_task where completion_deadline_enforced", Integer.class))
+        .isZero();
     assertThat(
             jdbc.queryForMap(
                 "select version, description, type, success from flyway_schema_history "
@@ -365,9 +377,16 @@ class TaskBoardFlywayMigrationIntegrationTest {
   }
 
   private String digest(String table) {
+    String json =
+        "board_task".equals(table)
+            ? "to_jsonb(row_value) - 'completion_deadline_enforced'"
+            : "to_jsonb(row_value)";
     return jdbc.queryForObject(
-        "select md5(coalesce(string_agg(to_jsonb(row_value)::text, '|' "
-            + "order by to_jsonb(row_value)::text), '')) from "
+        "select md5(coalesce(string_agg(("
+            + json
+            + ")::text, '|' order by ("
+            + json
+            + ")::text), '')) from "
             + table
             + " row_value",
         String.class);

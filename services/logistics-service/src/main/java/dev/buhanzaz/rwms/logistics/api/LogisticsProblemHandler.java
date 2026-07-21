@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.logistics.api;
 
+import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsNotFoundException;
 import dev.buhanzaz.rwms.platform.contracts.ApiProblem;
@@ -35,6 +36,13 @@ public class LogisticsProblemHandler {
 
   public LogisticsProblemHandler(RwmsProblemDetailFactory problems) {
     this.problems = problems;
+  }
+
+  @ExceptionHandler(OrderProblemException.class)
+  ResponseEntity<ApiProblem> orderProblem(
+      OrderProblemException exception, HttpServletRequest request) {
+    return problem(
+        exception.status(), exception.code(), exception.getMessage(), request);
   }
 
   @ExceptionHandler(LogisticsNotFoundException.class)

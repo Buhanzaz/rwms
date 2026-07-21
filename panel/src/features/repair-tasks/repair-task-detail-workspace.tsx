@@ -7,11 +7,15 @@ import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
 import { RepairSubtasksEditor } from "@/features/repair-tasks/repair-subtasks-editor"
 import { RepairTaskStatusBadge } from "@/features/repair-tasks/repair-task-status-badge"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
+import { maintenanceRepairMediaOwner } from "@/features/media/media-service"
+import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
 
 export function RepairTaskDetailWorkspace({
+  accessToken,
   task,
   readOnly = false,
 }: {
+  accessToken: string | null
   task: RepairTaskDto
   readOnly?: boolean
 }) {
@@ -30,10 +34,12 @@ export function RepairTaskDetailWorkspace({
     <RepairWorkDetailWorkspaceLayout
       ariaLabel={`Ремонт бытовки ${task.cabinNumber}`}
       photos={
-        <p className="text-sm text-muted-foreground">
-          Фото для ремонтов временно недоступны: media-service ещё не
-          подтверждает владельца MAINTENANCE_REPAIR.
-        </p>
+        <ServiceOwnerPhotos
+          accessToken={accessToken}
+          owner={maintenanceRepairMediaOwner(task.id, task.warehouseId)}
+          readOnly
+          title="Фотографии ремонта"
+        />
       }
       information={
         <RepairWorkInformationSnapshot

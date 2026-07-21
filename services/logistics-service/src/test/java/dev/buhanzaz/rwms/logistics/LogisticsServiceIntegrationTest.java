@@ -60,6 +60,7 @@ class LogisticsServiceIntegrationTest {
   @BeforeEach
   void cleanFixtures() {
     jdbc.update("delete from logistics_idempotency_record");
+    jdbc.update("delete from logistics_external_attempt");
     jdbc.update("delete from logistics_document_line");
     jdbc.update("delete from logistics_document");
   }

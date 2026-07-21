@@ -74,6 +74,10 @@ public final class MaintenanceApiModels {
   public record OpaqueCatalogReference(
       @NotBlank @Size(max = 128) String referenceId,
       @NotBlank @Size(max = 64) String code) {}
+  public record FurnitureEquipmentReference(
+      @NotNull UUID equipmentId,
+      @NotBlank @Pattern(regexp = "^[A-Z0-9][A-Z0-9_-]{0,63}$") String equipmentCode,
+      @NotBlank @Size(max = 255) String equipmentName) {}
 
   public record CatalogNodeInput(
       @NotNull UUID id,
@@ -82,6 +86,10 @@ public final class MaintenanceApiModels {
       @NotBlank @Size(max = 255) String name,
       @NotNull @JsonProperty(required = true) @JsonSetter(nulls = Nulls.FAIL) Boolean active,
       UUID parentNodeId,
+      @JsonProperty(defaultValue = "false")
+          @JsonDeserialize(using = DefaultFalseBooleanDeserializer.class)
+          Boolean furnitureCategory,
+      @Valid FurnitureEquipmentReference furnitureEquipment,
       @Size(max = 32) String unit,
       @JsonProperty(required = true)
           @Pattern(regexp = "^(?:0|[1-9][0-9]*)(?:\\.[0-9]{2})$") String unitPrice,
@@ -108,6 +116,7 @@ public final class MaintenanceApiModels {
       commonItem = commonItem == null ? Boolean.FALSE : commonItem;
       showInMainMenu = showInMainMenu == null ? Boolean.FALSE : showInMainMenu;
       photoRequired = photoRequired == null ? Boolean.FALSE : photoRequired;
+      furnitureCategory = furnitureCategory == null ? Boolean.FALSE : furnitureCategory;
     }
   }
 
@@ -163,6 +172,7 @@ public final class MaintenanceApiModels {
       @NotBlank @Pattern(regexp = "^[0-9a-f]{64}$") String sourceSha256,
       @NotNull @Size(max = 10000) List<@Valid CatalogNodeInput> nodes,
       @NotNull @Size(max = 20000) List<@Valid CatalogLinkInput> links) {}
+  public record BootstrapCatalogRequest(@NotNull UUID warehouseId) {}
   public record ReplaceCatalogNodesRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotNull @Size(max = 10000) List<@Valid CatalogNodeInput> nodes) {}
@@ -179,6 +189,14 @@ public final class MaintenanceApiModels {
   public record CatalogCounts(int nodes, int links) {}
   public record CatalogValidationReport(
       boolean valid, int errorCount, int warningCount, String reportSha256) {}
+  public record CatalogRoutingSyncSnapshot(
+      DeliveryState state,
+      int registrationsRequired,
+      int registrationsConfirmed,
+      int cleanupRequired,
+      int cleanupConfirmed,
+      int attempts,
+      OffsetDateTime updatedAt) {}
   public record CatalogVersionResponse(
       UUID id,
       UUID warehouseId,
@@ -188,15 +206,19 @@ public final class MaintenanceApiModels {
       CatalogCounts counts,
       CatalogValidationReport validation,
       OffsetDateTime createdAt,
-      OffsetDateTime activatedAt) {}
+      OffsetDateTime activatedAt,
+      CatalogRoutingSyncSnapshot routingSync) {}
   public record CatalogNodeResponse(
       UUID id,
       UUID catalogVersionId,
+      UUID mediaOwnerId,
       String code,
       CatalogNodeType nodeType,
       String name,
       boolean active,
       UUID parentNodeId,
+      boolean furnitureCategory,
+      FurnitureEquipmentReference furnitureEquipment,
       String unit,
       String unitPrice,
       int durationMinutes,
@@ -226,7 +248,8 @@ public final class MaintenanceApiModels {
       @JsonProperty(required = true)
           @Pattern(regexp = "^(?:0|[1-9][0-9]*)(?:\\.[0-9]{2})$") String unitPrice,
       @NotNull @Min(0) Integer durationMinutes,
-      @JsonProperty(required = true) @Valid RoutingSnapshot routing) {}
+      @JsonProperty(required = true) @Valid RoutingSnapshot routing,
+      @JsonProperty(required = true) @Valid FurnitureEquipmentReference furnitureEquipment) {}
   public record EstimateLineInput(
       @NotNull UUID id,
       @JsonProperty(required = true) @Valid CatalogNodeSnapshot catalogSnapshot,
@@ -437,7 +460,12 @@ public final class MaintenanceApiModels {
       @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> mediaReferences) {}
   public record UpdateRepairPlanRequest(
       @NotNull @Min(0) Long expectedVersion,
-      @NotEmpty @Size(max = 1000) List<@Valid PlanStageInput> stages) {}
+      @NotEmpty @Size(max = 1000) List<@Valid PlanStageInput> stages,
+      @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> mediaReferences) {
+    public UpdateRepairPlanRequest(Long expectedVersion, List<PlanStageInput> stages) {
+      this(expectedVersion, stages, List.of());
+    }
+  }
   public record CreateReworkRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotBlank @Size(max = 2000) String reason,
@@ -445,7 +473,12 @@ public final class MaintenanceApiModels {
       @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> mediaReferences) {}
   public record RepairDecisionRequest(
       @NotNull @Min(0) Long expectedVersion,
-      @Size(max = 2000) String comment) {}
+      @Size(max = 2000) String comment,
+      @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> mediaReferences) {
+    public RepairDecisionRequest(Long expectedVersion, String comment) {
+      this(expectedVersion, comment, List.of());
+    }
+  }
   public record WriteOffRepairRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotBlank @Size(max = 2000) String reason,

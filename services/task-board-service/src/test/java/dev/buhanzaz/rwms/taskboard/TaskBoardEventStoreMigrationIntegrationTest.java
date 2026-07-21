@@ -67,10 +67,10 @@ class TaskBoardEventStoreMigrationIntegrationTest {
   }
 
   @Test
-  void cleanInstallAppliesV4ThroughV6AndRepeatIsNoOp() {
+  void cleanInstallAppliesV4ThroughV7AndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -99,6 +99,14 @@ class TaskBoardEventStoreMigrationIntegrationTest {
         .containsEntry("version", "5")
         .containsEntry("description", "task board event sourcing")
         .containsEntry("script", "V5__task_board_event_sourcing.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='7'"))
+        .containsEntry("version", "7")
+        .containsEntry("description", "equipment movement completion deadline")
+        .containsEntry("script", "V7__equipment_movement_completion_deadline.sql")
         .containsEntry("success", true);
   }
 
@@ -496,10 +504,15 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(3);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
     assertThat(retainedContentDigests()).containsExactlyInAnyOrderEntriesOf(before);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from board_task where completion_deadline_enforced",
+                Integer.class))
+        .isZero();
   }
 
   private List<Map<String, Object>> deterministicBaselineProjection() {
@@ -683,9 +696,16 @@ class TaskBoardEventStoreMigrationIntegrationTest {
   }
 
   private String digest(String table) {
+    String json =
+        "board_task".equals(table)
+            ? "to_jsonb(row_value) - 'completion_deadline_enforced'"
+            : "to_jsonb(row_value)";
     return jdbc.queryForObject(
-        "select md5(coalesce(string_agg(to_jsonb(row_value)::text, '|' "
-            + "order by to_jsonb(row_value)::text), '')) from "
+        "select md5(coalesce(string_agg(("
+            + json
+            + ")::text, '|' order by ("
+            + json
+            + ")::text), '')) from "
             + table
             + " row_value",
         String.class);

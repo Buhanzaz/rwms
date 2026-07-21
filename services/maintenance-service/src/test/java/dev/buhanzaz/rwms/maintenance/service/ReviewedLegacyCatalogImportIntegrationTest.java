@@ -3,6 +3,11 @@ package dev.buhanzaz.rwms.maintenance.service;
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.buhanzaz.rwms.maintenance.domain.CatalogVersionState;
 import dev.buhanzaz.rwms.maintenance.domain.RentalItemFactProjection;
@@ -24,10 +29,14 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -46,8 +55,12 @@ import tools.jackson.databind.node.ObjectNode;
     })
 @ActiveProfiles("test")
 @Testcontainers
+@AutoConfigureMockMvc
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class ReviewedLegacyCatalogImportIntegrationTest {
+  private static final UUID SPB_WAREHOUSE_ID =
+      UUID.fromString("00000000-0000-0000-0000-000000000001");
+
   @Container
   @ServiceConnection
   static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
@@ -57,6 +70,7 @@ class ReviewedLegacyCatalogImportIntegrationTest {
   @Autowired RentalItemFactProjectionRepository rentalItemFacts;
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper mapper;
+  @Autowired MockMvc mvc;
 
   @BeforeEach
   void resetDatabase() {
@@ -83,6 +97,10 @@ class ReviewedLegacyCatalogImportIntegrationTest {
     assertThat(request.links()).hasSize(254);
     assertThat(review.mappingSha256())
         .isEqualTo(ReviewedLegacyCatalogManifest.APPROVED_MAPPING_SHA256);
+    assertThat(review.manifestSha256())
+        .isEqualTo(ReviewedLegacyCatalogManifest.MANIFEST_SHA256);
+    assertThat(review.artifactSha256())
+        .isEqualTo(ReviewedLegacyCatalogManifest.ARTIFACT_SHA256);
     assertThat(review.sourceEvidenceSha256())
         .isEqualTo(ReviewedLegacyCatalogManifest.SOURCE_SHA256);
     assertThat(review.nodeEvidenceSha256())
@@ -91,6 +109,9 @@ class ReviewedLegacyCatalogImportIntegrationTest {
         .isEqualTo(ReviewedLegacyCatalogManifest.LINK_SHA256);
     assertThat(review.queueEvidenceSha256())
         .isEqualTo(ReviewedLegacyCatalogManifest.QUEUE_SHA256);
+    assertThat(review.materialCount()).isEqualTo(91);
+    assertThat(review.routedNodeCount()).isEqualTo(10);
+    assertThat(review.routingSnapshotCount()).isEqualTo(6);
     assertThat(request.nodes()).allSatisfy(node -> {
       assertThat(node.comment()).isNull();
       assertThat(node.references()).isEmpty();
@@ -179,17 +200,19 @@ class ReviewedLegacyCatalogImportIntegrationTest {
   }
 
   @Test
-  void approvedImportPersistsDraftActivatesAndSuppliesEstimateWithIdempotentRetry() {
+  void packagedBootstrapPersistsDraftActivatesAndSuppliesEstimateWithIdempotentRetry() {
     ImportCatalogRequest request = reviewedCatalog.approvedRequest();
+    BootstrapCatalogRequest bootstrap =
+        new BootstrapCatalogRequest(ReviewedLegacyCatalogManifest.SOURCE_WAREHOUSE_ID);
     UUID subjectId = UUID.randomUUID();
     UUID importKey = UUID.randomUUID();
 
     CreateResult<CatalogVersionResponse> imported =
-        service.importCatalog(subjectId, importKey, request);
+        service.bootstrapCatalog(subjectId, importKey, bootstrap);
     CreateResult<CatalogVersionResponse> retry =
-        service.importCatalog(subjectId, importKey, request);
+        service.bootstrapCatalog(subjectId, importKey, bootstrap);
     CreateResult<CatalogVersionResponse> sameSourceRetry =
-        service.importCatalog(subjectId, UUID.randomUUID(), request);
+        service.bootstrapCatalog(subjectId, UUID.randomUUID(), bootstrap);
 
     assertThat(imported.replayed()).isFalse();
     assertThat(imported.response().lifecycle()).isEqualTo(CatalogVersionState.DRAFT);
@@ -201,23 +224,72 @@ class ReviewedLegacyCatalogImportIntegrationTest {
     assertThat(tableCount("catalog_version")).isOne();
     assertThat(tableCount("catalog_node")).isEqualTo(232);
     assertThat(tableCount("catalog_link")).isEqualTo(254);
+    assertThat(jdbc.queryForObject("""
+        select count(*) from integration_reconciliation
+        where dependency_type='MEDIA'
+          and media_owner_type='MAINTENANCE_CATALOG_NODE'
+          and media_owner_revision=0
+        """, Integer.class)).isEqualTo(232);
+    assertThat(jdbc.queryForObject("""
+        select count(distinct media_owner_id) from integration_reconciliation
+        where dependency_type='MEDIA'
+          and media_owner_type='MAINTENANCE_CATALOG_NODE'
+        """, Integer.class)).isEqualTo(232);
     String validationReport =
         jdbc.queryForObject(
             "select validation_report from catalog_version where id=?",
             String.class,
             imported.response().id());
     assertThat(validationReport)
+        .contains(ReviewedLegacyCatalogManifest.MANIFEST_SHA256)
+        .contains(ReviewedLegacyCatalogManifest.ARTIFACT_SHA256)
         .contains(ReviewedLegacyCatalogManifest.APPROVED_MAPPING_SHA256)
-        .contains(ReviewedLegacyCatalogManifest.QUEUE_SHA256);
+        .contains(ReviewedLegacyCatalogManifest.QUEUE_SHA256)
+        .contains("\"materialCount\":91")
+        .contains("\"routedNodeCount\":10")
+        .contains("\"routingSnapshotCount\":6");
+    assertThat(service.catalogNodes(imported.response().id()))
+        .filteredOn(node -> node.nodeType() == CatalogNodeType.MATERIAL)
+        .hasSize(91);
+
+    assertThat(service.catalogNodes(imported.response().id()))
+        .filteredOn(node -> node.code().equals("FURNITURE"))
+        .singleElement()
+        .extracting(CatalogNodeResponse::furnitureCategory)
+        .isEqualTo(true);
+
+    assertThatThrownBy(() -> service.activateCatalog(
+            subjectId,
+            UUID.randomUUID(),
+            imported.response().id(),
+            new VersionCommand(imported.response().version())))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .hasMessageContaining("furniture material");
+
+    CatalogVersionResponse linkedFurniture = service.replaceCatalogNodes(
+        imported.response().id(),
+        new ReplaceCatalogNodesRequest(
+            imported.response().version(), withFurnitureEquipment(request.nodes())));
+    assertThat(jdbc.queryForObject("""
+        select count(*) from integration_reconciliation
+        where dependency_type='MEDIA'
+          and media_owner_type='MAINTENANCE_CATALOG_NODE'
+          and media_owner_revision=1
+        """, Integer.class)).isEqualTo(232);
 
     CreateResult<CatalogVersionResponse> activated =
         service.activateCatalog(
             subjectId,
             UUID.randomUUID(),
             imported.response().id(),
-            new VersionCommand(imported.response().version()));
+            new VersionCommand(linkedFurniture.version()));
     assertThat(activated.replayed()).isFalse();
     assertThat(activated.response().lifecycle()).isEqualTo(CatalogVersionState.ACTIVE);
+    CreateResult<CatalogVersionResponse> currentRetry =
+        service.bootstrapCatalog(subjectId, UUID.randomUUID(), bootstrap);
+    assertThat(currentRetry.replayed()).isTrue();
+    assertThat(currentRetry.response().id()).isEqualTo(activated.response().id());
+    assertThat(currentRetry.response().lifecycle()).isEqualTo(CatalogVersionState.ACTIVE);
 
     CatalogNodeInput work =
         request.nodes().stream()
@@ -258,7 +330,8 @@ class ReviewedLegacyCatalogImportIntegrationTest {
             work.unit(),
             work.unitPrice(),
             work.durationMinutes(),
-            work.routing());
+            work.routing(),
+            null);
     EstimateLineInput line =
         new EstimateLineInput(
             UUID.randomUUID(),
@@ -286,6 +359,12 @@ class ReviewedLegacyCatalogImportIntegrationTest {
 
     assertThat(estimate.response().lifecycle())
         .isEqualTo(dev.buhanzaz.rwms.maintenance.domain.EstimateState.DRAFT);
+    assertThat(jdbc.queryForObject("""
+        select count(*) from integration_reconciliation
+        where dependency_type='MEDIA'
+          and media_owner_type='MAINTENANCE_ESTIMATE'
+          and media_owner_id=?
+        """, Integer.class, estimate.response().id())).isOne();
     UUID persistedCatalogVersionId =
         jdbc.queryForObject(
             "select catalog_version_id from maintenance_estimate where id=?",
@@ -298,8 +377,249 @@ class ReviewedLegacyCatalogImportIntegrationTest {
             estimate.response().id());
     assertThat(persistedCatalogVersionId).isEqualTo(imported.response().id());
     assertThat(persistedCatalogNodeId).isEqualTo(work.id());
-    assertThat(tableCount("domain_event")).isEqualTo(3);
-    assertThat(tableCount("outbox_event")).isEqualTo(3);
+    assertThat(service.estimate(estimate.response().id())
+        .revisions().getFirst().lines().getFirst().catalogSnapshot().furnitureEquipment())
+        .isNull();
+    assertThat(tableCount("domain_event")).isEqualTo(4);
+    assertThat(tableCount("outbox_event")).isEqualTo(4);
+  }
+
+  @Test
+  void bootstrapRequiresManageAndReplaysTheMatchingVersion() throws Exception {
+    UUID warehouseId = ReviewedLegacyCatalogManifest.SOURCE_WAREHOUSE_ID;
+    UUID subjectId = UUID.randomUUID();
+    UUID key = UUID.randomUUID();
+    String body = mapper.writeValueAsString(new BootstrapCatalogRequest(warehouseId));
+
+    mvc.perform(
+            post("/api/maintenance/v1/catalog/imports")
+                .with(userAccess(subjectId, warehouseId, "EDIT"))
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isForbidden());
+
+    mvc.perform(
+            post("/api/maintenance/v1/catalog/imports")
+                .with(userAccess(subjectId, warehouseId, "MANAGE"))
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isCreated())
+        .andExpect(header().doesNotExist("Idempotency-Replayed"))
+        .andExpect(jsonPath("$.warehouseId").value(warehouseId.toString()))
+        .andExpect(jsonPath("$.lifecycle").value("DRAFT"))
+        .andExpect(jsonPath("$.counts.nodes").value(232))
+        .andExpect(jsonPath("$.counts.links").value(254));
+
+    mvc.perform(
+            post("/api/maintenance/v1/catalog/imports")
+                .with(userAccess(subjectId, warehouseId, "MANAGE"))
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isCreated())
+        .andExpect(header().string("Idempotency-Replayed", "true"));
+
+    assertThat(tableCount("catalog_version")).isOne();
+    assertThat(tableCount("catalog_node")).isEqualTo(232);
+    assertThat(tableCount("catalog_link")).isEqualTo(254);
+  }
+
+  @Test
+  void bootstrapConflictsWhenAnExistingSourceBindingDoesNotMatchTheManifest() {
+    UUID subjectId = UUID.randomUUID();
+    BootstrapCatalogRequest request =
+        new BootstrapCatalogRequest(ReviewedLegacyCatalogManifest.SOURCE_WAREHOUSE_ID);
+    CatalogVersionResponse imported =
+        service.bootstrapCatalog(subjectId, UUID.randomUUID(), request).response();
+    jdbc.update(
+        "update catalog_node set name=? where catalog_version_id=? and code=?",
+        "Drifted reviewed name",
+        imported.id(),
+        "FURNITURE");
+
+    assertThatThrownBy(
+            () -> service.bootstrapCatalog(subjectId, UUID.randomUUID(), request))
+        .isInstanceOfSatisfying(
+            MaintenanceConflictException.class,
+            exception -> assertThat(exception.code()).isEqualTo("MAINTENANCE_STATE_CONFLICT"));
+
+    assertThat(tableCount("catalog_version")).isOne();
+    assertThat(tableCount("catalog_node")).isEqualTo(232);
+    assertThat(tableCount("catalog_link")).isEqualTo(254);
+  }
+
+  @Test
+  void activeAndSupersededReviewedVersionsForkExactImmutableDraftSnapshots() {
+    UUID subjectId = UUID.randomUUID();
+    ImportCatalogRequest approved = reviewedCatalog.approvedRequest();
+    CatalogVersionResponse imported = service.bootstrapCatalog(
+            subjectId,
+            UUID.randomUUID(),
+            new BootstrapCatalogRequest(ReviewedLegacyCatalogManifest.SOURCE_WAREHOUSE_ID))
+        .response();
+    CatalogVersionResponse linkedFurniture = service.replaceCatalogNodes(
+        imported.id(),
+        new ReplaceCatalogNodesRequest(
+            imported.version(), withFurnitureEquipment(approved.nodes())));
+    CatalogVersionResponse active = service.activateCatalog(
+            subjectId,
+            UUID.randomUUID(),
+            imported.id(),
+            new VersionCommand(linkedFurniture.version()))
+        .response();
+
+    UUID forkKey = UUID.randomUUID();
+    CreateResult<CatalogVersionResponse> forked = service.forkCatalog(
+        subjectId, forkKey, active.id(), new VersionCommand(active.version()));
+    CreateResult<CatalogVersionResponse> replay = service.forkCatalog(
+        subjectId, forkKey, active.id(), new VersionCommand(active.version()));
+    CreateResult<CatalogVersionResponse> sameSnapshot = service.forkCatalog(
+        subjectId, UUID.randomUUID(), active.id(), new VersionCommand(active.version()));
+
+    assertThat(forked.replayed()).isFalse();
+    assertThat(replay.replayed()).isTrue();
+    assertThat(sameSnapshot.replayed()).isTrue();
+    assertThat(replay.response().id()).isEqualTo(forked.response().id());
+    assertThat(sameSnapshot.response().id()).isEqualTo(forked.response().id());
+    assertThat(forked.response().lifecycle()).isEqualTo(CatalogVersionState.DRAFT);
+    assertThat(forked.response().counts()).isEqualTo(new CatalogCounts(232, 254));
+    assertThat(service.catalogNodes(forked.response().id()))
+        .hasSize(232)
+        .filteredOn(node -> node.nodeType() == CatalogNodeType.MATERIAL)
+        .hasSize(91);
+    assertThat(service.catalogLinks(forked.response().id())).hasSize(254);
+    assertThat(service.catalogNodes(forked.response().id()))
+        .extracting(CatalogNodeResponse::id)
+        .containsExactlyInAnyOrderElementsOf(
+            service.catalogNodes(active.id()).stream().map(CatalogNodeResponse::id).toList());
+    assertThat(service.catalogVersion(active.id()).lifecycle()).isEqualTo(CatalogVersionState.ACTIVE);
+    String forkReport = jdbc.queryForObject(
+        "select validation_report from catalog_version where id=?",
+        String.class,
+        forked.response().id());
+    assertThat(forkReport)
+        .contains(active.id().toString())
+        .contains("\"sourceCatalogLifecycle\":\"ACTIVE\"")
+        .contains("\"sourceNodeCount\":232")
+        .contains("\"sourceLinkCount\":254")
+        .contains("\"sourceMaterialCount\":91");
+
+    assertThatThrownBy(() -> service.replaceCatalogNodes(
+            active.id(),
+            new ReplaceCatalogNodesRequest(active.version(), withFurnitureEquipment(approved.nodes()))))
+        .isInstanceOfSatisfying(
+            MaintenanceConflictException.class,
+            exception -> assertThat(exception.code()).isEqualTo("MAINTENANCE_STATE_CONFLICT"));
+    assertThat(service.catalogNodes(active.id())).hasSize(232);
+
+    List<CatalogNodeInput> changedForkNodes = new ArrayList<>(withFurnitureEquipment(approved.nodes()));
+    CatalogNodeInput changedNode = changedForkNodes.getFirst();
+    changedForkNodes.set(
+        0,
+        copyNode(
+            changedNode,
+            changedNode.id(),
+            changedNode.nodeType(),
+            changedNode.parentNodeId(),
+            changedNode.name(),
+            changedNode.routing(),
+            changedNode.references(),
+            "draft-only fork note",
+            changedNode.mediaReferences()));
+    CatalogVersionResponse editedFork = service.replaceCatalogNodes(
+        forked.response().id(),
+        new ReplaceCatalogNodesRequest(forked.response().version(), changedForkNodes));
+    assertThatThrownBy(() -> service.forkCatalog(
+            subjectId,
+            UUID.randomUUID(),
+            active.id(),
+            new VersionCommand(active.version())))
+        .isInstanceOfSatisfying(
+            MaintenanceConflictException.class,
+            exception -> assertThat(exception.code()).isEqualTo("MAINTENANCE_STATE_CONFLICT"));
+
+    CatalogVersionResponse promotedFork = service.activateCatalog(
+            subjectId,
+            UUID.randomUUID(),
+            editedFork.id(),
+            new VersionCommand(editedFork.version()))
+        .response();
+    CatalogVersionResponse supersededSource = service.catalogVersion(active.id());
+    assertThat(promotedFork.lifecycle()).isEqualTo(CatalogVersionState.ACTIVE);
+    assertThat(supersededSource.lifecycle()).isEqualTo(CatalogVersionState.SUPERSEDED);
+
+    CreateResult<CatalogVersionResponse> supersededFork = service.forkCatalog(
+        subjectId,
+        UUID.randomUUID(),
+        supersededSource.id(),
+        new VersionCommand(supersededSource.version()));
+    assertThat(supersededFork.replayed()).isFalse();
+    assertThat(supersededFork.response().id())
+        .isNotEqualTo(forked.response().id())
+        .isNotEqualTo(supersededSource.id());
+    assertThat(supersededFork.response().lifecycle()).isEqualTo(CatalogVersionState.DRAFT);
+    assertThat(service.catalogNodes(supersededFork.response().id()))
+        .hasSize(232)
+        .filteredOn(node -> node.nodeType() == CatalogNodeType.MATERIAL)
+        .hasSize(91);
+    assertThat(service.catalogLinks(supersededFork.response().id())).hasSize(254);
+    assertThat(tableCount("catalog_version")).isEqualTo(3);
+  }
+
+  @Test
+  void forkRequiresManageAndRejectsStaleExpectedVersion() throws Exception {
+    UUID warehouseId = ReviewedLegacyCatalogManifest.SOURCE_WAREHOUSE_ID;
+    UUID serviceSubject = UUID.randomUUID();
+    ImportCatalogRequest approved = reviewedCatalog.approvedRequest();
+    CatalogVersionResponse imported = service.bootstrapCatalog(
+            serviceSubject,
+            UUID.randomUUID(),
+            new BootstrapCatalogRequest(warehouseId))
+        .response();
+    CatalogVersionResponse changed = service.replaceCatalogNodes(
+        imported.id(),
+        new ReplaceCatalogNodesRequest(
+            imported.version(), withFurnitureEquipment(approved.nodes())));
+    CatalogVersionResponse active = service.activateCatalog(
+            serviceSubject,
+            UUID.randomUUID(),
+            imported.id(),
+            new VersionCommand(changed.version()))
+        .response();
+    UUID subjectId = UUID.randomUUID();
+    UUID key = UUID.randomUUID();
+    String url = "/api/maintenance/v1/catalog/versions/" + active.id()
+        + "/fork?warehouseId=" + warehouseId;
+    String body = mapper.writeValueAsString(new VersionCommand(active.version()));
+
+    mvc.perform(
+            post(url)
+                .with(userAccess(subjectId, warehouseId, "EDIT"))
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            post(url)
+                .with(userAccess(subjectId, warehouseId, "MANAGE"))
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.lifecycle").value("DRAFT"))
+        .andExpect(jsonPath("$.counts.nodes").value(232))
+        .andExpect(jsonPath("$.counts.links").value(254));
+
+    mvc.perform(
+            post(url)
+                .with(userAccess(subjectId, warehouseId, "MANAGE"))
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsString(new VersionCommand(active.version() - 1))))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("MAINTENANCE_VERSION_CONFLICT"));
   }
 
   @Test
@@ -312,12 +632,35 @@ class ReviewedLegacyCatalogImportIntegrationTest {
   }
 
   @Test
-  void wrongSourceWarehouseProducesNoWrites() {
-    ImportCatalogRequest approved = reviewedCatalog.approvedRequest();
-    assertRejectedNoWrites(
-        new ImportCatalogRequest(
-            UUID.randomUUID(), approved.sourceSha256(), approved.nodes(), approved.links()),
-        "REVIEWED_SOURCE_WAREHOUSE_MISMATCH");
+  void packagedBootstrapFailsClosedForWarehouseWithoutReviewedRouting()
+      throws Exception {
+    mvc.perform(
+            post("/api/maintenance/v1/catalog/imports")
+                .with(
+                    jwt()
+                        .jwt(
+                            token ->
+                                token
+                                    .subject(UUID.randomUUID().toString())
+                                    .claim("principal_type", "USER")
+                                    .claim("scope", "rwms.write")
+                                    .claim(
+                                        "warehouse_access",
+                                        List.of(
+                                            Map.of(
+                                                "warehouseId",
+                                                SPB_WAREHOUSE_ID.toString(),
+                                                "level",
+                                                "MANAGE")))))
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsString(new BootstrapCatalogRequest(SPB_WAREHOUSE_ID))))
+        .andExpect(status().isUnprocessableContent())
+        .andExpect(jsonPath("$.code").value("MAINTENANCE_VALIDATION_FAILED"))
+        .andExpect(jsonPath("$.violations[0].code")
+            .value("REVIEWED_SOURCE_WAREHOUSE_MISMATCH"));
+
+    assertNoCatalogWrites();
   }
 
   @Test
@@ -563,14 +906,17 @@ class ReviewedLegacyCatalogImportIntegrationTest {
   }
 
   private void assertRejectedNoWrites(ImportCatalogRequest request, String expectedCode) {
-    assertThatThrownBy(
-            () -> service.importCatalog(UUID.randomUUID(), UUID.randomUUID(), request))
+    assertThatThrownBy(() -> reviewedCatalog.validate(request))
         .isInstanceOfSatisfying(
             MaintenanceCatalogImportValidationException.class,
             exception ->
                 assertThat(exception.violations())
                     .extracting(FieldViolation::code)
                     .contains(expectedCode));
+    assertNoCatalogWrites();
+  }
+
+  private void assertNoCatalogWrites() {
     assertThat(tableCount("catalog_version")).isZero();
     assertThat(tableCount("catalog_node")).isZero();
     assertThat(tableCount("catalog_link")).isZero();
@@ -628,6 +974,8 @@ class ReviewedLegacyCatalogImportIntegrationTest {
         name,
         source.active(),
         parentNodeId,
+        source.furnitureCategory(),
+        source.furnitureEquipment(),
         source.unit(),
         source.unitPrice(),
         source.durationMinutes(),
@@ -641,6 +989,63 @@ class ReviewedLegacyCatalogImportIntegrationTest {
         mediaReferences);
   }
 
+  private static List<CatalogNodeInput> withFurnitureEquipment(
+      List<CatalogNodeInput> nodes) {
+    Map<UUID, CatalogNodeInput> nodesById = nodes.stream().collect(
+        java.util.stream.Collectors.toMap(CatalogNodeInput::id, value -> value));
+    UUID furnitureRoot = nodes.stream()
+        .filter(node -> node.nodeType() == CatalogNodeType.CATEGORY)
+        .filter(node -> "FURNITURE".equals(node.code()))
+        .map(CatalogNodeInput::id)
+        .findFirst()
+        .orElseThrow();
+    return nodes.stream().map(node -> {
+      boolean furnitureMaterial = node.nodeType() == CatalogNodeType.MATERIAL
+          && belongsTo(node, furnitureRoot, nodesById);
+      return new CatalogNodeInput(
+          node.id(),
+          node.code(),
+          node.nodeType(),
+          node.name(),
+          node.active(),
+          node.parentNodeId(),
+          node.id().equals(furnitureRoot),
+          furnitureMaterial
+              ? new FurnitureEquipmentReference(
+                  UUID.nameUUIDFromBytes(
+                      ("furniture:" + node.code()).getBytes(StandardCharsets.UTF_8)),
+                  node.code(),
+                  node.name())
+              : null,
+          node.unit(),
+          node.unitPrice(),
+          node.durationMinutes(),
+          node.includeInEstimate(),
+          node.commonItem(),
+          node.showInMainMenu(),
+          node.photoRequired(),
+          node.routing(),
+          node.references(),
+          node.comment(),
+          node.mediaReferences());
+    }).toList();
+  }
+
+  private static boolean belongsTo(
+      CatalogNodeInput node,
+      UUID categoryId,
+      Map<UUID, CatalogNodeInput> nodesById) {
+    Set<UUID> visited = new HashSet<>();
+    CatalogNodeInput current = node;
+    while (current != null && visited.add(current.id())) {
+      if (current.id().equals(categoryId)) return true;
+      current = current.parentNodeId() == null
+          ? null
+          : nodesById.get(current.parentNodeId());
+    }
+    return false;
+  }
+
   private static int indexOf(
       List<CatalogNodeInput> nodes,
       java.util.function.Predicate<CatalogNodeInput> predicate) {
@@ -650,6 +1055,23 @@ class ReviewedLegacyCatalogImportIntegrationTest {
       }
     }
     throw new IllegalStateException("Matching catalog node not found");
+  }
+
+  private static JwtRequestPostProcessor userAccess(
+      UUID subjectId, UUID warehouseId, String level) {
+    return jwt()
+        .jwt(
+            token ->
+                token
+                    .subject(subjectId.toString())
+                    .claim("principal_type", "USER")
+                    .claim("scope", "rwms.write")
+                    .claim(
+                        "warehouse_access",
+                        List.of(
+                            Map.of(
+                                "warehouseId", warehouseId.toString(),
+                                "level", level))));
   }
 
   private static Set<String> textValues(JsonNode array) {

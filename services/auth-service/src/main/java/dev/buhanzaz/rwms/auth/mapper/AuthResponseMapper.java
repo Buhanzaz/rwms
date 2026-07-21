@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.auth.mapper;
 
 import dev.buhanzaz.rwms.auth.api.AdminUserResponse;
+import dev.buhanzaz.rwms.auth.api.ActorDisplayResponse;
 import dev.buhanzaz.rwms.auth.api.CurrentUserResponse;
 import dev.buhanzaz.rwms.auth.api.EffectiveWarehouseAccessDto;
 import dev.buhanzaz.rwms.auth.api.WarehouseAccessDto;
@@ -44,6 +45,15 @@ public interface AuthResponseMapper {
             String displayName,
             boolean warehouseAccessAll,
             List<EffectiveWarehouseAccessDto> warehouseAccesses);
+
+    @Mapping(target = "subjectId", source = "subject.id")
+    @Mapping(target = "principalType", source = "subject.principalType")
+    @Mapping(target = "globalRole", source = "subject.globalRole")
+    @Mapping(target = "username", source = "profile.username")
+    @Mapping(target = "firstName", source = "profile.firstName")
+    @Mapping(target = "lastName", source = "profile.lastName")
+    @Mapping(target = "email", source = "profile.email")
+    ActorDisplayResponse toActorDisplay(AuthSubject subject, Profile profile);
 
     WorkerCredentialResponse toWorker(
             String workerId,

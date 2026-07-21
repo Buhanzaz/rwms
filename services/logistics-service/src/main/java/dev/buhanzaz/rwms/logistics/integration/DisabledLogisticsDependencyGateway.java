@@ -100,6 +100,19 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
   }
 
   @Override
+  public MediaOwnerProof upsertMediaOwnerProof(
+      LogisticsOwnerType ownerType,
+      UUID documentId,
+      UUID lineId,
+      UUID warehouseId,
+      long ownerRevision,
+      long aggregateVersion,
+      UUID proofEventId,
+      boolean active) {
+    throw unavailable();
+  }
+
+  @Override
   public ReturnShortageSource upsertReturnShortage(
       UUID returnId,
       UUID lineId,
@@ -146,6 +159,112 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
 
   @Override
   public PreparationTask cancelPreparationTask(UUID externalTaskId, long expectedTaskVersion) {
+    throw unavailable();
+  }
+
+  @Override
+  public EquipmentMovementReservation acquireEquipmentMovementReservation(
+      UUID idempotencyKey,
+      UUID movementId,
+      UUID lineId,
+      UUID equipmentId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      String sourceLocationKind,
+      long expectedSourceBalanceVersion,
+      long quantity,
+      java.time.OffsetDateTime reservedUntil) {
+    throw unavailable();
+  }
+
+  @Override
+  public EquipmentMovementReservation releaseEquipmentMovementReservation(
+      UUID idempotencyKey,
+      UUID reservationId,
+      long expectedReservationVersion,
+      UUID movementId,
+      UUID lineId) {
+    throw unavailable();
+  }
+
+  @Override
+  public EquipmentMovementExecution executeEquipmentMovement(
+      UUID idempotencyKey,
+      UUID movementId,
+      java.util.List<EquipmentMovementExecutionRequestLine> lines) {
+    throw unavailable();
+  }
+
+  @Override
+  public EquipmentMovementBoardTask registerEquipmentMovementTask(
+      UUID warehouseId,
+      UUID externalTaskId,
+      String unitNumber,
+      Integer plannedDurationMinutes,
+      java.time.OffsetDateTime deadlineAt,
+      java.util.List<EquipmentMovementOperation> operations) {
+    throw unavailable();
+  }
+
+  @Override
+  public EquipmentMovementBoardTask readEquipmentMovementTask(UUID externalTaskId) {
+    throw unavailable();
+  }
+
+  @Override
+  public EquipmentMovementBoardTask cancelEquipmentMovementTask(
+      UUID externalTaskId, long expectedTaskVersion) {
+    throw unavailable();
+  }
+
+  @Override
+  public OrderUnitCandidatePage readOrderUnitCandidates(
+      UUID orderId, UUID warehouseId, int page, int size, String search) {
+    throw unavailable();
+  }
+
+  @Override
+  public java.util.List<OrderUnitReservation> readOrderUnits(UUID orderId) {
+    throw unavailable();
+  }
+
+  @Override
+  public OrderUnitReservation reserveOrderUnit(
+      UUID idempotencyKey,
+      UUID orderId,
+      UUID warehouseId,
+      UUID unitId,
+      UUID actorSubjectId,
+      String actorRole) {
+    throw unavailable();
+  }
+
+  @Override
+  public OrderUnitReservation releaseOrderUnit(
+      UUID idempotencyKey,
+      UUID orderId,
+      UUID unitId,
+      UUID actorSubjectId,
+      String actorRole) {
+    throw unavailable();
+  }
+
+  @Override
+  public java.util.List<OrderUnitReservation> releaseAllOrderUnits(
+      UUID idempotencyKey, UUID orderId, UUID actorSubjectId, String actorRole) {
+    throw unavailable();
+  }
+
+  @Override
+  public OrderEquipmentAdjustment adjustOrderEquipment(
+      UUID idempotencyKey,
+      UUID orderId,
+      UUID unitId,
+      UUID equipmentId,
+      UUID actorSubjectId,
+      String actorRole,
+      long expectedCurrentQuantity,
+      long requiredQuantity) {
     throw unavailable();
   }
 

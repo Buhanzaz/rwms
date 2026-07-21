@@ -61,6 +61,10 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty("rwms.auth.oauth.clients[5].scopes[1]"))
                 .isEqualTo("task-board.task-sync");
         assertThat(source.getProperty("rwms.auth.oauth.clients[5].scopes[2]"))
+                .isEqualTo("queue-registry.write");
+        assertThat(source.getProperty("rwms.auth.oauth.clients[5].scopes[3]"))
+                .isEqualTo("media.maintenance");
+        assertThat(source.getProperty("rwms.auth.oauth.clients[5].scopes[4]"))
                 .isNull();
         assertThat(source.getProperty("rwms.auth.oauth.clients[5].audiences[0]"))
                 .isEqualTo("rwms-services");

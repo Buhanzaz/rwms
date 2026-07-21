@@ -107,6 +107,7 @@ function linkedNodes(
 
 export type RepairEstimateCatalogIndex = {
   nodesById: ReadonlyMap<string, RepairEstimateCatalogNodeDto>
+  furnitureNodeIds: ReadonlySet<string>
   activeRootNodes: readonly RepairEstimateCatalogNodeDto[]
   activeMainMenuNodes: readonly RepairEstimateCatalogNodeDto[]
   operationalMenuNodes: readonly RepairEstimateCatalogNodeDto[]
@@ -163,6 +164,44 @@ export type RepairEstimateCatalogIndex = {
   getEffectiveQueueBinding: (
     nodeId: string
   ) => RepairEstimateCatalogEffectiveQueueBinding | null
+  isFurnitureNode: (nodeId: string) => boolean
+}
+
+function belongsToFurnitureTree(
+  node: RepairEstimateCatalogNodeDto,
+  nodesById: ReadonlyMap<string, RepairEstimateCatalogNodeDto>
+) {
+  const visited = new Set<string>()
+  let current: RepairEstimateCatalogNodeDto | undefined = node
+
+  while (current) {
+    if (current.furnitureCategory) {
+      return true
+    }
+    if (!current.parentId || visited.has(current.id)) {
+      return false
+    }
+    visited.add(current.id)
+    current = nodesById.get(current.parentId)
+  }
+
+  return false
+}
+
+export function filterRepairEstimateCatalogNodesForUsage(
+  nodes: readonly RepairEstimateCatalogNodeDto[],
+  catalog: Pick<RepairEstimateCatalogIndex, "isFurnitureNode">,
+  excludeFurniture: boolean
+) {
+  return nodes.filter((node) => {
+    const furniture = catalog.isFurnitureNode(node.id)
+    if (excludeFurniture && furniture) return false
+    return !(
+      furniture &&
+      node.nodeType === "MATERIAL" &&
+      node.furnitureEquipment === null
+    )
+  })
 }
 
 /**
@@ -172,6 +211,12 @@ export type RepairEstimateCatalogIndex = {
 export function createRepairEstimateCatalogIndex(
   snapshot: RepairEstimateCatalogSnapshotDto
 ): RepairEstimateCatalogIndex {
+  const allNodesById = new Map(snapshot.nodes.map((node) => [node.id, node]))
+  const furnitureNodeIds = new Set(
+    snapshot.nodes
+      .filter((node) => belongsToFurnitureTree(node, allNodesById))
+      .map((node) => node.id)
+  )
   const activeNodes = snapshot.nodes.filter((node) => node.active)
   const nodesById = new Map(activeNodes.map((node) => [node.id, node]))
   const activeNodeIds = new Set(nodesById.keys())
@@ -356,6 +401,7 @@ export function createRepairEstimateCatalogIndex(
 
   return {
     nodesById,
+    furnitureNodeIds,
     activeRootNodes,
     activeMainMenuNodes,
     operationalMenuNodes,
@@ -380,6 +426,7 @@ export function createRepairEstimateCatalogIndex(
       effectiveRouteQueueKindByNodeId.get(nodeId) ?? null,
     getEffectiveQueueBinding: (nodeId) =>
       effectiveQueueBindingByNodeId.get(nodeId) ?? null,
+    isFurnitureNode: (nodeId) => furnitureNodeIds.has(nodeId),
   }
 }
 

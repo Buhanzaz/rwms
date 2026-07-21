@@ -77,7 +77,7 @@ function AcceptanceMobileCard({
 
 export function AcceptancePage() {
   const { selectedWarehouseId } = useWarehouse()
-  const { currentUser } = useAuth()
+  const { accessToken, currentUser } = useAuth()
   const canEdit = Boolean(
     selectedWarehouseId &&
     hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
@@ -148,6 +148,7 @@ export function AcceptancePage() {
           </Card>
         ) : selectedTask ? (
           <RepairAcceptanceDossier
+            accessToken={accessToken}
             task={selectedTask}
             mode="ACCEPTANCE"
             canEdit={canEdit}

@@ -129,6 +129,41 @@ describe("PhotoCarousel", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
   })
 
+  it("requests LARGE for the initial fullscreen slide and every navigation", async () => {
+    const onRequestFullscreen = vi.fn()
+    const lazyPhotos = photos.map((photo, index) => ({
+      id: photo.id,
+      url: `/medium-${index + 1}.webp`,
+      variants: { medium: { url: `/medium-${index + 1}.webp` } },
+    }))
+    render(
+      <PhotoCarousel
+        photos={lazyPhotos}
+        title="Ленивая загрузка"
+        onRequestFullscreen={onRequestFullscreen}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Открыть фото 1" }))
+    const dialog = await screen.findByRole("dialog")
+    await waitFor(() =>
+      expect(onRequestFullscreen).toHaveBeenCalledWith(lazyPhotos[0])
+    )
+    expect(
+      screen.getAllByText("Загрузка полноэкранной фотографии...").length
+    ).toBeGreaterThan(0)
+    expect(
+      screen.queryByRole("img", {
+        name: "Ленивая загрузка, фото 1 из 2",
+      })
+    ).toBeNull()
+
+    fireEvent.keyDown(dialog, { key: "ArrowRight" })
+    await waitFor(() =>
+      expect(onRequestFullscreen).toHaveBeenCalledWith(lazyPhotos[1])
+    )
+  })
+
   it("uses preview by default and original only when explicitly requested", async () => {
     const { rerender } = render(
       <PhotoCarousel photos={[photos[0]]} title="Проверка качества" />

@@ -123,7 +123,7 @@ public final class DossierEnvelopeValidator {
       } catch (DossierValidationException exception) {
         throw invalid("SOURCE_PAYLOAD_REJECTED", exception);
       }
-      requireExactObject(payload, eventPolicy.payloadFields());
+      requireObjectFields(payload, eventPolicy.payloadFields(), eventPolicy.requiredFields());
       rejectProhibited(payload);
       eventPolicy.identityField().ifPresent(field -> require(uuid(payload, field, false).equals(aggregateId)));
 
@@ -194,8 +194,14 @@ public final class DossierEnvelopeValidator {
               uuid(payload, "warehouseId", false),
               uuid(payload, "ownerId", false));
       case MEDIA -> {
-        require("INVENTORY_FINDING".equals(text(payload, "ownerType")));
-        yield new Subject(null, uuid(payload, "warehouseId", false), uuid(payload, "ownerId", false));
+        String ownerType = text(payload, "ownerType");
+        UUID ownerId = uuid(payload, "ownerId", false);
+        UUID warehouseId = uuid(payload, "warehouseId", false);
+        yield switch (ownerType) {
+          case "INVENTORY_FINDING" -> new Subject(null, warehouseId, ownerId);
+          case "CABIN" -> new Subject(ownerId, warehouseId, ownerId);
+          default -> throw invalid("SOURCE_SCHEMA_REJECTED");
+        };
       }
       case NONE -> new Subject(null, optionalUuid(payload, "warehouseId"), aggregateId);
     };
@@ -260,14 +266,16 @@ public final class DossierEnvelopeValidator {
         Map.entry("inventory.publication.closed-blocked.v1", "INVENTORY_PUBLICATION_CLOSED_BLOCKED"));
     publicationCodes.forEach((event, code) -> add(result, "rwms.inventory.publication.v1", "PUBLICATION", SubjectKind.INVENTORY_PUBLICATION, publication, publication, "publicationIntentId", code, event));
 
-    Set<String> media = Set.of("mediaId", "ownerType", "ownerId", "warehouseId", "kind", "status", "generation", "rotationDegrees");
+    Set<String> requiredMedia = Set.of("mediaId", "ownerType", "ownerId", "warehouseId", "kind", "status", "generation", "rotationDegrees");
+    Set<String> media = new HashSet<>(requiredMedia);
+    media.add("folderId");
     Map<String, String> mediaCodes = Map.of(
         "media.media.ready.v1", "MEDIA_READY",
         "media.media.failed.v1", "MEDIA_FAILED",
         "media.media.rotated.v1", "MEDIA_ROTATED",
         "media.media.deleted.v1", "MEDIA_DELETED");
-    mediaCodes.forEach((event, code) -> add(result, "rwms.media.media.v1", "MEDIA", SubjectKind.MEDIA, media, media, "mediaId", code, event));
-    add(result, "rwms.media.media.v1", "MEDIA", SubjectKind.MEDIA, media, media, "mediaId", null, "media.media.uploaded.v1");
+    mediaCodes.forEach((event, code) -> add(result, "rwms.media.media.v1", "MEDIA", SubjectKind.MEDIA, media, requiredMedia, "mediaId", code, event));
+    add(result, "rwms.media.media.v1", "MEDIA", SubjectKind.MEDIA, media, requiredMedia, "mediaId", null, "media.media.uploaded.v1");
 
     Set<String> logistics = Set.of("documentId", "documentType", "state", "warehouseId", "destinationWarehouseId", "lineCount", "resultCode");
     String[] families = {"return", "shipment", "transfer"};
@@ -313,6 +321,14 @@ public final class DossierEnvelopeValidator {
     Set<String> names = new HashSet<>();
     names.addAll(node.propertyNames());
     require(names.equals(fields));
+  }
+
+  private static void requireObjectFields(
+      JsonNode node, Set<String> allowedFields, Set<String> requiredFields) {
+    require(node != null && node.isObject());
+    Set<String> names = new HashSet<>();
+    names.addAll(node.propertyNames());
+    require(allowedFields.containsAll(names) && names.containsAll(requiredFields));
   }
 
   private static void rejectProhibited(JsonNode node) {

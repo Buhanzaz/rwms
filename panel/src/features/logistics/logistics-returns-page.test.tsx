@@ -25,6 +25,37 @@ vi.mock("@/features/logistics/returns/api", () => ({
   ...returnApi,
 }))
 
+vi.mock("@/features/media/service-owner-photos", () => ({
+  ServiceOwnerPhotos: ({
+    title,
+    onReadyReferencesChange,
+  }: {
+    title: string
+    onReadyReferencesChange?: (
+      references: Array<{ mediaId: string; generation: number }>
+    ) => void
+  }) => (
+    <button
+      type="button"
+      onClick={() =>
+        onReadyReferencesChange?.([
+          title.endsWith("2")
+            ? {
+                mediaId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                generation: 2,
+              }
+            : {
+                mediaId: "88888888-8888-4888-8888-888888888888",
+                generation: 1,
+              },
+        ])
+      }
+    >
+      Подготовить {title}
+    </button>
+  ),
+}))
+
 vi.mock("@/features/auth/use-auth", () => ({
   useAuth: () => ({
     accessToken: "return-token",
@@ -152,13 +183,12 @@ async function openAcceptDialog(user: ReturnType<typeof userEvent.setup>) {
 async function fillAcceptanceReferences(
   user: ReturnType<typeof userEvent.setup>
 ) {
-  const mediaInputs = screen.getAllByLabelText(/^Media UUID ·/)
-  expect(mediaInputs).toHaveLength(2)
-  await user.type(mediaInputs[0]!, MEDIA_ID)
-  await user.type(mediaInputs[1]!, SECOND_MEDIA_ID)
-  const generations = screen.getAllByLabelText(/^Generation ·/)
-  await user.clear(generations[1]!)
-  await user.type(generations[1]!, "2")
+  await user.click(
+    screen.getByRole("button", { name: "Подготовить Фотографии строки 1" })
+  )
+  await user.click(
+    screen.getByRole("button", { name: "Подготовить Фотографии строки 2" })
+  )
 }
 
 beforeEach(() => {
@@ -206,9 +236,11 @@ describe("LogisticsReturnsPage", () => {
     expect(document.querySelector('input[type="file"]')).toBeNull()
 
     await openAcceptDialog(user)
-    expect(screen.getAllByLabelText(/^Media UUID ·/)).toHaveLength(2)
     expect(
-      screen.getByText(/заранее подтверждённые media-service READY/)
+      screen.getAllByRole("button", { name: /^Подготовить Фотографии строки/ })
+    ).toHaveLength(2)
+    expect(
+      screen.getByText(/Загрузите фотографии осмотра для каждой строки/)
     ).not.toBeNull()
     expect(document.querySelector('input[type="file"]')).toBeNull()
     await user.click(screen.getByRole("button", { name: "Отмена" }))
@@ -312,8 +344,6 @@ describe("LogisticsReturnsPage", () => {
     const user = userEvent.setup()
     const randomUUID = vi
       .fn()
-      .mockReturnValueOnce(UI_KEY_ONE)
-      .mockReturnValueOnce(UI_KEY_TWO)
       .mockReturnValueOnce(IDEMPOTENCY_KEY)
       .mockReturnValue(UNUSED_KEY)
     vi.stubGlobal("crypto", { randomUUID })
@@ -359,7 +389,7 @@ describe("LogisticsReturnsPage", () => {
     expect(returnApi.acceptUndamagedReturn.mock.calls[1]?.[0]).toEqual(
       expectedCommand
     )
-    expect(randomUUID).toHaveBeenCalledTimes(3)
+    expect(randomUUID).toHaveBeenCalledTimes(1)
   })
 
   it("closes a stale accept form, reports 409 and refreshes service state", async () => {

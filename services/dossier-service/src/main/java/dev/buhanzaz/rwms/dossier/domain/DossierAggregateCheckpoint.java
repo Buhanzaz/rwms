@@ -152,4 +152,19 @@ public class DossierAggregateCheckpoint {
     blockedAt = null;
     updatedAt = DossierSourceFact.require(now, "now");
   }
+
+  public void recoverProcessingFailure(long appliedVersion, OffsetDateTime now) {
+    if (!blocked
+        || blockedReason != DossierAggregateBlockReason.PROCESSING_FAILED
+        || appliedVersion <= this.appliedVersion) {
+      throw new IllegalStateException("Only a failed forward projection can be recovered");
+    }
+    this.appliedVersion = appliedVersion;
+    blocked = false;
+    blockedReason = null;
+    expectedVersion = null;
+    observedVersion = null;
+    blockedAt = null;
+    updatedAt = DossierSourceFact.require(now, "now");
+  }
 }

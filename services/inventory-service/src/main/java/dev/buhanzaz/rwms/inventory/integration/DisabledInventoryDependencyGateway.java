@@ -31,7 +31,7 @@ final class DisabledInventoryDependencyGateway implements InventoryDependencyGat
   }
 
   @Override
-  public NumberResolution resolveNumber(String number) {
+  public NumberResolution resolveNumber(UUID warehouseId, String number) {
     throw unavailable();
   }
 

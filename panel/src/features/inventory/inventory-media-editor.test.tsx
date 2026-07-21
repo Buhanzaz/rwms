@@ -54,6 +54,7 @@ const owner = {
 
 const readyAsset = {
   id: "00000000-0000-4000-8000-000000000803",
+  folderId: "00000000-0000-4000-8000-000000000803",
   fileName: "inspection.jpg",
   contentType: "image/jpeg",
   kind: "IMAGE",

@@ -68,6 +68,7 @@ public class InventoryMaintenanceService {
   private final MaintenanceEventFactFactory eventFacts;
   private final MaintenanceProjectionSnapshotFactory projectionSnapshots;
   private final InventoryRepairReconciliationWriter reconciliations;
+  private final MaintenanceReconciliationStore ownerProofs;
   private final InventoryRepairSourceOperationRegistrar sourceRegistrar;
   private final ObjectMapper mapper;
 
@@ -84,6 +85,7 @@ public class InventoryMaintenanceService {
       MaintenanceEventFactFactory eventFacts,
       MaintenanceProjectionSnapshotFactory projectionSnapshots,
       InventoryRepairReconciliationWriter reconciliations,
+      MaintenanceReconciliationStore ownerProofs,
       InventoryRepairSourceOperationRegistrar sourceRegistrar,
       ObjectMapper mapper) {
     this.catalogs = catalogs;
@@ -98,6 +100,7 @@ public class InventoryMaintenanceService {
     this.eventFacts = eventFacts;
     this.projectionSnapshots = projectionSnapshots;
     this.reconciliations = reconciliations;
+    this.ownerProofs = ownerProofs;
     this.sourceRegistrar = sourceRegistrar;
     this.mapper = mapper;
   }
@@ -205,6 +208,13 @@ public class InventoryMaintenanceService {
         snapshot,
         eventFacts.repairPayload(MaintenanceEventType.REPAIR_CREATED, repair, stages),
         snapshot);
+    ownerProofs.enqueueMediaOwnerProof(
+        "MAINTENANCE_REPAIR",
+        repair.getId(),
+        repair.getWarehouseId(),
+        repair.getId(),
+        repair.getVersion(),
+        true);
     reconciliations.enqueue(
         repair.getId(), stableKey("inventory-queue-repair", inventoryId, findingId));
     return result(repair, bound, false);
@@ -236,6 +246,9 @@ public class InventoryMaintenanceService {
         if (!node.isIncludeInEstimate()
             || !("WORK".equals(node.getNodeType()) || "MATERIAL".equals(node.getNodeType()))) {
           throw invalid("Inventory line must reference active estimate work or material");
+        }
+        if ("MATERIAL".equals(node.getNodeType()) && belongsToFurnitureTree(node, nodes)) {
+          throw invalid("Furniture materials can only be used through an estimate");
         }
         if (node.getPriceMinor() == null) {
           throw invalid("Inventory catalog line has no immutable price");
@@ -483,6 +496,24 @@ public class InventoryMaintenanceService {
         .toList();
     if (matches.size() > 1) throw invalid("AUTO movement stage may appear only once");
     return matches.isEmpty() ? null : matches.getFirst();
+  }
+
+  private static boolean belongsToFurnitureTree(
+      CatalogNode node, Map<UUID, CatalogNode> nodes) {
+    Set<UUID> visited = new HashSet<>();
+    CatalogNode current = node;
+    while (current != null && visited.add(current.getId())) {
+      if (current.isFurnitureCategory()
+          || ("CATEGORY".equals(current.getNodeType())
+              && current.getParentNodeId() == null
+              && "FURNITURE".equals(current.getCode()))) {
+        return true;
+      }
+      current = current.getParentNodeId() == null
+          ? null
+          : nodes.get(current.getParentNodeId());
+    }
+    return false;
   }
 
   private static RoutingSnapshot routing(CatalogNode node) {

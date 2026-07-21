@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.taskboard.api;
 
 import dev.buhanzaz.rwms.taskboard.domain.AssignmentStatus;
 import dev.buhanzaz.rwms.taskboard.domain.CredentialStatus;
+import dev.buhanzaz.rwms.taskboard.domain.EquipmentMovementDirection;
 import dev.buhanzaz.rwms.taskboard.domain.EntryStatus;
 import dev.buhanzaz.rwms.taskboard.domain.EntryType;
 import dev.buhanzaz.rwms.taskboard.domain.QueueReferenceType;
@@ -12,6 +13,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -164,6 +166,58 @@ public final class ApiModels {
       boolean active,
       List<GroupMemberDto> members) {}
 
+  public record ReviewedBootstrapCounts(
+      int workerClasses,
+      int workQueues,
+      int queueBindings,
+      int workers,
+      int qualifications,
+      int workerGroups,
+      int memberships) {}
+
+  public record ReviewedBootstrapResponse(
+      UUID warehouseId,
+      String sourceSha256,
+      int created,
+      int reused,
+      int conflicts,
+      ReviewedBootstrapCounts counts) {}
+
+  public record MaintenanceRoutingQueueRequirement(
+      @NotNull UUID queueId,
+      @NotBlank @Size(max = 64) String code,
+      @NotNull QueueType type) {}
+
+  public record MaintenanceRoutingPreflightRequest(
+      @NotNull UUID warehouseId,
+      @NotEmpty @Size(max = 100) List<@Valid MaintenanceRoutingQueueRequirement> queues) {}
+
+  public enum MaintenanceRoutingMismatchField {
+    WAREHOUSE_ID,
+    CODE,
+    TYPE,
+    ACTIVE,
+    HIDDEN
+  }
+
+  public record MaintenanceRoutingMismatch(
+      UUID queueId, List<MaintenanceRoutingMismatchField> fields) {
+    public MaintenanceRoutingMismatch {
+      fields = List.copyOf(fields);
+    }
+  }
+
+  public record MaintenanceRoutingPreflightResponse(
+      UUID warehouseId,
+      boolean ready,
+      List<UUID> missingQueueIds,
+      List<MaintenanceRoutingMismatch> mismatches) {
+    public MaintenanceRoutingPreflightResponse {
+      missingQueueIds = List.copyOf(missingQueueIds);
+      mismatches = List.copyOf(mismatches);
+    }
+  }
+
   public record RouteStepRequest(
       UUID queueId,
       @Size(max = 64) String queueCode,
@@ -200,6 +254,30 @@ public final class ApiModels {
       OffsetDateTime deadlineAt) {}
 
   public record CancelLogisticsPreparationTaskRequest(
+      @NotNull @Min(0) Long expectedTaskVersion) {}
+
+  /**
+   * Logistics supplies immutable equipment facts only. Task-board owns the title,
+   * description, queue and route generated from these facts.
+   */
+  public record RegisterLogisticsEquipmentMovementTaskRequest(
+      @NotNull UUID warehouseId,
+      @NotNull UUID externalTaskId,
+      @Size(max = 64) String unitNumber,
+      @Min(0) Integer plannedDurationMinutes,
+      @NotNull OffsetDateTime deadlineAt,
+      @NotEmpty @Size(max = 10) List<@Valid EquipmentMovementOperation> operations) {}
+
+  public record EquipmentMovementOperation(
+      @NotNull EquipmentMovementDirection direction,
+      @NotBlank
+          @Size(max = 64)
+          @Pattern(regexp = "^[A-Z0-9][A-Z0-9_-]{0,63}$")
+          String equipmentCode,
+      @NotBlank @Size(max = 255) String equipmentName,
+      @NotNull @Min(1) Long quantity) {}
+
+  public record CancelLogisticsEquipmentMovementTaskRequest(
       @NotNull @Min(0) Long expectedTaskVersion) {}
 
   public record LogisticsTaskSnapshot(

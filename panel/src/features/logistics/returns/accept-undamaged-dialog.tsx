@@ -1,12 +1,9 @@
 import { useRef, useState } from "react"
 import { useMutation } from "@tanstack/react-query"
-import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
-import { HugeiconsIcon } from "@hugeicons/react"
 
 import { Button } from "@/components/ui/button"
 import {
   Card,
-  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
@@ -21,54 +18,37 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import {
-  Field,
   FieldDescription,
   FieldError,
   FieldGroup,
-  FieldLabel,
   FieldLegend,
   FieldSet,
 } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import { acceptUndamagedReturn } from "@/features/logistics/returns/api"
 import type {
+  MediaReference,
   ReturnDocument,
   ReturnMediaLine,
 } from "@/features/logistics/returns/model"
-
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+import { logisticsReturnMediaOwner } from "@/features/media/media-service"
+import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
 
 type CommandAttempt = {
   signature: string
   idempotencyKey: string
 }
 
-type MediaReferenceDraft = {
-  key: string
-  mediaId: string
-  generation: string
-}
-
 type ReturnMediaLineDraft = {
   lineId: string
   lineNumber: number
-  references: MediaReferenceDraft[]
-}
-
-function emptyReference(): MediaReferenceDraft {
-  return {
-    key: crypto.randomUUID(),
-    mediaId: "",
-    generation: "1",
-  }
+  references: MediaReference[]
 }
 
 function initialLines(document: ReturnDocument): ReturnMediaLineDraft[] {
   return document.lines.map((line) => ({
     lineId: line.id,
     lineNumber: line.lineNumber,
-    references: [emptyReference()],
+    references: [],
   }))
 }
 
@@ -116,48 +96,18 @@ export function AcceptUndamagedDialog({
     },
   })
 
-  function updateReference(
-    lineId: string,
-    referenceKey: string,
-    update: Partial<Pick<MediaReferenceDraft, "mediaId" | "generation">>
-  ) {
+  function updateReferences(lineId: string, references: MediaReference[]) {
     setLines((current) =>
       current.map((line) =>
-        line.lineId === lineId
-          ? {
-              ...line,
-              references: line.references.map((reference) =>
-                reference.key === referenceKey
-                  ? { ...reference, ...update }
-                  : reference
-              ),
-            }
-          : line
-      )
-    )
-  }
-
-  function addReference(lineId: string) {
-    setLines((current) =>
-      current.map((line) =>
-        line.lineId === lineId && line.references.length < 20
-          ? { ...line, references: [...line.references, emptyReference()] }
-          : line
-      )
-    )
-  }
-
-  function removeReference(lineId: string, referenceKey: string) {
-    setLines((current) =>
-      current.map((line) =>
-        line.lineId === lineId && line.references.length > 1
-          ? {
-              ...line,
-              references: line.references.filter(
-                (reference) => reference.key !== referenceKey
-              ),
-            }
-          : line
+        line.lineId !== lineId ||
+        (line.references.length === references.length &&
+          line.references.every(
+            (reference, index) =>
+              reference.mediaId === references[index]?.mediaId &&
+              reference.generation === references[index]?.generation
+          ))
+          ? line
+          : { ...line, references }
       )
     )
   }
@@ -168,25 +118,22 @@ export function AcceptUndamagedDialog({
     const commandLines: ReturnMediaLine[] = []
 
     for (const line of lines) {
-      const references = []
+      if (line.references.length === 0) {
+        setValidationError(
+          "Добавьте хотя бы одну готовую фотографию осмотра для каждой строки."
+        )
+        return
+      }
       for (const reference of line.references) {
-        const mediaId = reference.mediaId.trim()
-        const generation = Number(reference.generation)
-        if (
-          !UUID_PATTERN.test(mediaId) ||
-          !Number.isSafeInteger(generation) ||
-          generation < 1 ||
-          mediaIds.has(mediaId)
-        ) {
+        if (mediaIds.has(reference.mediaId)) {
           setValidationError(
-            "Для каждой строки укажите уникальные READY media UUID и generation не меньше 1."
+            "Одна фотография не может относиться сразу к нескольким строкам возврата."
           )
           return
         }
-        mediaIds.add(mediaId)
-        references.push({ mediaId, generation })
+        mediaIds.add(reference.mediaId)
       }
-      commandLines.push({ lineId: line.lineId, references })
+      commandLines.push({ lineId: line.lineId, references: line.references })
     }
 
     setValidationError(null)
@@ -210,17 +157,17 @@ export function AcceptUndamagedDialog({
           <DialogHeader>
             <DialogTitle>Принять возврат без повреждений</DialogTitle>
             <DialogDescription>
-              Укажите заранее подтверждённые media-service READY references для
-              каждой server-issued строки. Панель не загружает и не привязывает
-              фотографии самостоятельно.
+              Загрузите фотографии осмотра для каждой строки возврата. Одна
+              фотография хранится как один объект, а размеры обрабатывает
+              media-service.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup className="py-4">
             <FieldSet>
               <FieldLegend variant="label">Фотографии осмотра</FieldLegend>
               <FieldDescription>
-                Logistics-service проверит владельца, готовность и generation
-                каждой ссылки до изменения состояния документа.
+                Подтвердить приёмку можно после завершения обработки хотя бы
+                одной фотографии для каждой строки.
               </FieldDescription>
               <FieldGroup>
                 {lines.map((line) => (
@@ -232,109 +179,20 @@ export function AcceptUndamagedDialog({
                       </CardDescription>
                     </CardHeader>
                     <CardContent>
-                      <FieldGroup>
-                        {line.references.map((reference, index) => {
-                          const mediaInvalid =
-                            reference.mediaId.length > 0 &&
-                            !UUID_PATTERN.test(reference.mediaId.trim())
-                          const generation = Number(reference.generation)
-                          const generationInvalid =
-                            !Number.isSafeInteger(generation) || generation < 1
-
-                          return (
-                            <Card key={reference.key} size="sm">
-                              <CardHeader>
-                                <CardTitle>
-                                  Media reference {index + 1}
-                                </CardTitle>
-                                {line.references.length > 1 ? (
-                                  <CardAction>
-                                    <Button
-                                      type="button"
-                                      size="icon-sm"
-                                      variant="outline"
-                                      aria-label={`Удалить media reference ${index + 1} строки ${line.lineNumber}`}
-                                      onClick={() =>
-                                        removeReference(
-                                          line.lineId,
-                                          reference.key
-                                        )
-                                      }
-                                    >
-                                      <HugeiconsIcon
-                                        icon={Delete02Icon}
-                                        data-icon="inline-start"
-                                      />
-                                    </Button>
-                                  </CardAction>
-                                ) : null}
-                              </CardHeader>
-                              <CardContent>
-                                <FieldGroup>
-                                  <Field data-invalid={mediaInvalid}>
-                                    <FieldLabel
-                                      htmlFor={`return-media-${line.lineId}-${reference.key}`}
-                                    >
-                                      Media UUID
-                                    </FieldLabel>
-                                    <Input
-                                      id={`return-media-${line.lineId}-${reference.key}`}
-                                      aria-label={`Media UUID · строка ${line.lineNumber} · ссылка ${index + 1}`}
-                                      aria-invalid={mediaInvalid}
-                                      required
-                                      value={reference.mediaId}
-                                      placeholder="00000000-0000-0000-0000-000000000000"
-                                      onChange={(event) =>
-                                        updateReference(
-                                          line.lineId,
-                                          reference.key,
-                                          { mediaId: event.target.value }
-                                        )
-                                      }
-                                    />
-                                  </Field>
-                                  <Field data-invalid={generationInvalid}>
-                                    <FieldLabel
-                                      htmlFor={`return-generation-${line.lineId}-${reference.key}`}
-                                    >
-                                      Generation
-                                    </FieldLabel>
-                                    <Input
-                                      id={`return-generation-${line.lineId}-${reference.key}`}
-                                      aria-label={`Generation · строка ${line.lineNumber} · ссылка ${index + 1}`}
-                                      aria-invalid={generationInvalid}
-                                      type="number"
-                                      min={1}
-                                      step={1}
-                                      required
-                                      value={reference.generation}
-                                      onChange={(event) =>
-                                        updateReference(
-                                          line.lineId,
-                                          reference.key,
-                                          { generation: event.target.value }
-                                        )
-                                      }
-                                    />
-                                  </Field>
-                                </FieldGroup>
-                              </CardContent>
-                            </Card>
-                          )
-                        })}
-                        <Button
-                          type="button"
-                          variant="outline"
-                          disabled={line.references.length >= 20}
-                          onClick={() => addReference(line.lineId)}
-                        >
-                          <HugeiconsIcon
-                            icon={Add01Icon}
-                            data-icon="inline-start"
-                          />
-                          Добавить media reference
-                        </Button>
-                      </FieldGroup>
+                      <ServiceOwnerPhotos
+                        accessToken={accessToken}
+                        owner={logisticsReturnMediaOwner(
+                          document.id,
+                          line.lineId,
+                          document.warehouseId
+                        )}
+                        readOnly={mutation.isPending}
+                        maxItems={20}
+                        title={`Фотографии строки ${line.lineNumber}`}
+                        onReadyReferencesChange={(references) =>
+                          updateReferences(line.lineId, references)
+                        }
+                      />
                     </CardContent>
                   </Card>
                 ))}

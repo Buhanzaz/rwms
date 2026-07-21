@@ -10,34 +10,36 @@ import (
 )
 
 type Config struct {
-	RuntimeProfile      string
-	HTTPAddress         string
-	DatabaseURL         string
-	Issuer              string
-	Audience            string
-	JWKSURL             string
-	MinIOEndpoint       string
-	MinIOAccessKey      string
-	MinIOSecretKey      string
-	MinIOBucket         string
-	MinIOUseSSL         bool
-	MaxUploadBytes      int64
-	AllowedMIMETypes    map[string]struct{}
-	UploadExpiry        time.Duration
-	MaxDecodedPixels    int64
-	MaxImageOutputBytes int64
-	MaxVideoOutputBytes int64
-	MaxVideoDuration    time.Duration
-	AllowedVideoCodecs  map[string]struct{}
-	ProcessingTimeout   time.Duration
-	KafkaBrokers        []string
-	MediaTopic          string
-	ProcessingTopic     string
-	ProcessingGroup     string
-	InventoryTopic      string
-	InventoryOwnerGroup string
-	InventoryOwnerDLT   string
-	InstanceID          string
+	RuntimeProfile       string
+	HTTPAddress          string
+	DatabaseURL          string
+	Issuer               string
+	Audience             string
+	JWKSURL              string
+	MinIOEndpoint        string
+	MinIOAccessKey       string
+	MinIOSecretKey       string
+	MinIOBucket          string
+	MinIOUseSSL          bool
+	MaxUploadBytes       int64
+	AllowedMIMETypes     map[string]struct{}
+	UploadExpiry         time.Duration
+	MaxDecodedPixels     int64
+	MaxImageOutputBytes  int64
+	MaxVideoOutputBytes  int64
+	MaxVideoDuration     time.Duration
+	AllowedVideoCodecs   map[string]struct{}
+	ProcessingTimeout    time.Duration
+	KafkaBrokers         []string
+	MediaTopic           string
+	ProcessingTopic      string
+	ProcessingGroup      string
+	InventoryTopic       string
+	InventoryOwnerGroup  string
+	InventoryOwnerDLT    string
+	AssetRentalItemTopic string
+	CabinOwnerGroup      string
+	InstanceID           string
 }
 
 func Load() (Config, error) {
@@ -61,6 +63,10 @@ func Load() (Config, error) {
 			"MEDIA_KAFKA_INVENTORY_OWNER_GROUP", "media-service-inventory-owner-v1"),
 		InventoryOwnerDLT: value("MEDIA_KAFKA_INVENTORY_OWNER_DLT_TOPIC",
 			"rwms.inventory.session.v1.media-service-inventory-owner-v1.dlt"),
+		AssetRentalItemTopic: value(
+			"MEDIA_KAFKA_ASSET_RENTAL_ITEM_TOPIC", "rwms.asset.rental-item.v1"),
+		CabinOwnerGroup: value(
+			"MEDIA_KAFKA_CABIN_OWNER_GROUP", "media-service-cabin-owner-v1"),
 		InstanceID: os.Getenv("MEDIA_INSTANCE_ID"),
 	}
 
@@ -130,6 +136,10 @@ func Load() (Config, error) {
 		configuration.InventoryOwnerGroup != "media-service-inventory-owner-v1" ||
 		configuration.InventoryOwnerDLT != "rwms.inventory.session.v1.media-service-inventory-owner-v1.dlt" {
 		return Config{}, fmt.Errorf("inventory owner Kafka topic, group and DLT must match the canonical contracts")
+	}
+	if configuration.AssetRentalItemTopic != "rwms.asset.rental-item.v1" ||
+		configuration.CabinOwnerGroup != "media-service-cabin-owner-v1" {
+		return Config{}, fmt.Errorf("cabin owner Kafka topic and group must match the canonical contracts")
 	}
 	if !validInstanceID(configuration.InstanceID) {
 		return Config{}, fmt.Errorf("MEDIA_INSTANCE_ID must be 1-64 safe ASCII characters")

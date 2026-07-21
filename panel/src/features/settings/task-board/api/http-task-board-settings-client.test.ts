@@ -15,12 +15,22 @@ describe("HttpTaskBoardSettingsClient gateway routes", () => {
 
     await client.listQueues("token", "warehouse/id")
     await client.listClasses("token")
+    await client.bootstrapReviewedData(
+      "token",
+      "warehouse/id",
+      "00000000-0000-4000-8000-000000000001"
+    )
 
     expect(
       fetchMock.mock.calls.map(([input]) => new URL(String(input)).pathname)
     ).toEqual([
       "/api/task-board/warehouses/warehouse%2Fid/work-queues",
       "/api/task-board/worker-classes",
+      "/api/task-board/warehouses/warehouse%2Fid/reviewed-bootstrap",
     ])
+    expect(fetchMock.mock.calls[2]?.[1]?.method).toBe("POST")
+    expect(
+      new Headers(fetchMock.mock.calls[2]?.[1]?.headers).get("Idempotency-Key")
+    ).toBe("00000000-0000-4000-8000-000000000001")
   })
 })

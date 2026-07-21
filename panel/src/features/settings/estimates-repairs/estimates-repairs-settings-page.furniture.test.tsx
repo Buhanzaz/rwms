@@ -1,0 +1,335 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+import type { CurrentUser } from "@/features/auth/auth-model"
+import type {
+  RepairEstimateCatalogNodeDto,
+  RepairEstimateCatalogSectionDto,
+  RepairEstimateCatalogVersionDto,
+} from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
+
+const mocks = vi.hoisted(() => ({
+  listVersions: vi.fn(),
+  getFurnitureCatalog: vi.fn(),
+  saveFurniture: vi.fn(),
+  deleteFurniture: vi.fn(),
+  getEquipmentItems: vi.fn(),
+  serviceOwnerPhotos: vi.fn(),
+}))
+
+vi.mock("@/features/auth/use-auth", () => ({
+  useAuth: () => ({
+    accessToken: "maintenance-token",
+    currentUser,
+  }),
+}))
+
+vi.mock("@/hooks/use-warehouse", () => ({
+  useWarehouse: () => ({ selectedWarehouseId: WAREHOUSE_ID }),
+}))
+
+vi.mock("@/api/equipment-api", () => ({
+  getEquipmentItems: mocks.getEquipmentItems,
+}))
+
+vi.mock("@/features/media/service-owner-photos", () => ({
+  ServiceOwnerPhotos: (props: unknown) => {
+    mocks.serviceOwnerPhotos(props)
+    return null
+  },
+}))
+
+vi.mock(
+  "@/features/settings/estimates-repairs/api/repair-estimate-catalog-store",
+  async () => {
+    const actual = await vi.importActual<
+      typeof import("@/features/settings/estimates-repairs/api/repair-estimate-catalog-store")
+    >("@/features/settings/estimates-repairs/api/repair-estimate-catalog-store")
+
+    return {
+      ...actual,
+      listRepairEstimateCatalogVersions: mocks.listVersions,
+    }
+  }
+)
+
+vi.mock(
+  "@/features/settings/estimates-repairs/api/repair-estimate-furniture-catalog-settings-api",
+  () => ({
+    getRepairEstimateFurnitureCatalogSettings: async () => ({
+      id: "repair-estimate-catalog-furniture",
+      title: "Мебель",
+      legacyRoute: "/repair-estimate-catalog-furniture",
+      legacyViewId: "RepairEstimateCatalogFurniture.view",
+      legacyClassName: "RepairEstimateFurnitureCatalogView",
+      sectionType: "MATERIAL",
+      categoryScope: "FURNITURE_ONLY",
+      order: 40,
+    }),
+    getRepairEstimateFurnitureCatalog: mocks.getFurnitureCatalog,
+    saveRepairEstimateFurnitureCatalogItem: mocks.saveFurniture,
+    deleteRepairEstimateFurnitureCatalogItem: mocks.deleteFurniture,
+  })
+)
+
+import { EstimatesRepairsSettingsPage } from "@/features/settings/estimates-repairs/estimates-repairs-settings-page"
+
+const WAREHOUSE_ID = "00000000-0000-4000-8000-000000000001"
+const VERSION_ID = "00000000-0000-4000-8000-000000000002"
+const CATEGORY_ID = "00000000-0000-4000-8000-000000000003"
+const FURNITURE_ID = "00000000-0000-4000-8000-000000000004"
+const CATEGORY_MEDIA_OWNER_ID = "00000000-0000-4000-8000-000000000006"
+const FURNITURE_MEDIA_OWNER_ID = "00000000-0000-4000-8000-000000000007"
+
+const currentUser: CurrentUser = {
+  id: "manager-1",
+  username: "manager",
+  displayName: "Менеджер",
+  firstName: null,
+  lastName: null,
+  email: null,
+  principalType: "USER",
+  globalRole: "WAREHOUSE_MANAGER",
+  warehouseAccessAll: false,
+  warehouseAccesses: [{ warehouseId: WAREHOUSE_ID, level: "MANAGE" }],
+}
+
+const version: RepairEstimateCatalogVersionDto = {
+  id: VERSION_ID,
+  warehouseId: WAREHOUSE_ID,
+  version: 3,
+  lifecycle: "DRAFT",
+  sourceSha256: "a".repeat(64),
+  nodeCount: 1,
+  linkCount: 0,
+  valid: true,
+  createdAt: "2026-07-20T08:00:00Z",
+  activatedAt: null,
+}
+
+const furnitureCategory: RepairEstimateCatalogNodeDto = {
+  id: CATEGORY_ID,
+  catalogVersionId: VERSION_ID,
+  mediaOwnerId: CATEGORY_MEDIA_OWNER_ID,
+  code: "FURNITURE",
+  name: "Мебельная группа",
+  nodeType: "CATEGORY",
+  parentId: null,
+  parentCode: null,
+  active: true,
+  unit: null,
+  unitPrice: null,
+  durationMinutes: null,
+  showInMainMenu: true,
+  routeQueueKind: null,
+  workQueueId: null,
+  workQueueCode: null,
+  routing: null,
+  photoRequired: false,
+  includeInEstimate: false,
+  commonItem: false,
+  furnitureCategory: true,
+  furnitureEquipment: null,
+  references: [],
+  mediaReferences: [],
+  canvasX: null,
+  canvasY: null,
+  comment: null,
+}
+
+const furnitureSection: RepairEstimateCatalogSectionDto = {
+  kind: "furniture",
+  title: "Мебель",
+  sectionType: "MATERIAL",
+  categories: [furnitureCategory],
+  nodes: [furnitureCategory],
+  links: [],
+}
+
+const furnitureEquipment = {
+  equipmentId: "00000000-0000-4000-8000-000000000005",
+  equipmentCode: "CHAIR",
+  equipmentName: "Стул",
+}
+
+const existingFurniture: RepairEstimateCatalogNodeDto = {
+  ...furnitureCategory,
+  id: FURNITURE_ID,
+  mediaOwnerId: FURNITURE_MEDIA_OWNER_ID,
+  code: "CHAIR",
+  name: "Стул",
+  nodeType: "MATERIAL",
+  parentId: CATEGORY_ID,
+  parentCode: furnitureCategory.code,
+  unit: "шт.",
+  unitPrice: "100.00",
+  includeInEstimate: true,
+  showInMainMenu: false,
+  furnitureCategory: false,
+  furnitureEquipment,
+}
+
+class ResizeObserverMock {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+function renderPage() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  })
+  const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries")
+
+  render(
+    <QueryClientProvider client={queryClient}>
+      <EstimatesRepairsSettingsPage />
+    </QueryClientProvider>
+  )
+
+  return { invalidateQueries }
+}
+
+async function openFurnitureEditor(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: "Мебель" }))
+  await user.click(
+    await screen.findByRole("button", { name: /^Мебельная группа/ })
+  )
+  await user.click(await screen.findByRole("button", { name: "Добавить" }))
+  return screen.findByRole("dialog", { name: "Добавить: Мебель" })
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.stubGlobal("ResizeObserver", ResizeObserverMock)
+  mocks.listVersions.mockResolvedValue([version])
+  mocks.getFurnitureCatalog.mockResolvedValue(furnitureSection)
+  mocks.saveFurniture.mockResolvedValue({
+    ...furnitureCategory,
+    id: FURNITURE_ID,
+    mediaOwnerId: FURNITURE_MEDIA_OWNER_ID,
+    code: "TABLE",
+    name: "Стол",
+    nodeType: "MATERIAL",
+    parentId: CATEGORY_ID,
+    parentCode: furnitureCategory.code,
+    unit: "шт.",
+    unitPrice: "0.00",
+    includeInEstimate: true,
+    showInMainMenu: false,
+    furnitureCategory: false,
+    furnitureEquipment: {
+      equipmentId: "00000000-0000-4000-8000-000000000005",
+      equipmentCode: "TABLE",
+      equipmentName: "Стол",
+    },
+  })
+})
+
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
+
+describe("automatic furniture equipment link", () => {
+  it("saves new furniture without loading or selecting asset equipment", async () => {
+    const user = userEvent.setup()
+    const { invalidateQueries } = renderPage()
+    const dialog = await openFurnitureEditor(user)
+
+    expect(dialog.textContent).toContain("Будет создано автоматически")
+    expect(dialog.textContent).toContain(
+      "автоматически создадут и привяжут строку в «Доп. оборудовании»"
+    )
+    expect(
+      screen.queryByRole("combobox", {
+        name: "Дополнительное оборудование",
+      })
+    ).toBeNull()
+
+    await user.type(screen.getByRole("textbox", { name: "Код" }), "table")
+    await user.type(screen.getByRole("textbox", { name: "Название" }), "Стол")
+    await user.click(screen.getByRole("button", { name: "Сохранить" }))
+
+    await waitFor(() => {
+      expect(mocks.saveFurniture).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accessToken: "maintenance-token",
+          warehouseId: WAREHOUSE_ID,
+          catalogVersionId: VERSION_ID,
+        }),
+        expect.objectContaining({
+          code: "table",
+          name: "Стол",
+          furnitureEquipment: null,
+        })
+      )
+    })
+    expect(mocks.getEquipmentItems).not.toHaveBeenCalled()
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["equipment-items"],
+    })
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["estimate-catalog"],
+    })
+  })
+
+  it("shows an existing canonical link read-only and preserves it on edit", async () => {
+    const user = userEvent.setup()
+    mocks.getFurnitureCatalog.mockResolvedValue({
+      ...furnitureSection,
+      nodes: [furnitureCategory, existingFurniture],
+    })
+    mocks.saveFurniture.mockResolvedValue({
+      ...existingFurniture,
+      name: "Стул складной",
+    })
+    renderPage()
+
+    await user.click(await screen.findByRole("button", { name: "Мебель" }))
+    await user.click(
+      await screen.findByRole("button", { name: /^Мебельная группа/ })
+    )
+    await user.click(
+      await screen.findByRole("button", { name: "Редактировать" })
+    )
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Редактировать: Мебель",
+    })
+    expect(dialog.textContent).toContain("Связано автоматически")
+    expect(dialog.textContent).toContain("CHAIR · Стул")
+    expect(mocks.serviceOwnerPhotos).toHaveBeenCalledWith(
+      expect.objectContaining({
+        owner: expect.objectContaining({ ownerId: FURNITURE_MEDIA_OWNER_ID }),
+      })
+    )
+    expect(
+      screen.queryByRole("combobox", {
+        name: "Дополнительное оборудование",
+      })
+    ).toBeNull()
+
+    const name = screen.getByRole("textbox", { name: "Название" })
+    await user.clear(name)
+    await user.type(name, "Стул складной")
+    await user.click(screen.getByRole("button", { name: "Сохранить" }))
+
+    await waitFor(() => {
+      expect(mocks.saveFurniture).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          id: FURNITURE_ID,
+          name: "Стул складной",
+          furnitureEquipment,
+        })
+      )
+    })
+    expect(mocks.getEquipmentItems).not.toHaveBeenCalled()
+  })
+})

@@ -41,6 +41,8 @@ export type PhotoCarouselPhoto = {
   url: string
   variants?: {
     small?: { url: string }
+    medium?: { url: string }
+    large?: { url: string }
     largeWebp?: { url: string }
     original?: { url: string }
   }
@@ -61,10 +63,12 @@ type PhotoCarouselProps = {
   photoCountClassName?: string
   className?: string
   imageClassName?: string
-  imageVariant?: "preview" | "fullscreen"
+  imageVariant?: "thumbnail" | "preview" | "fullscreen"
   fullscreenQuality?: "preview" | "original"
   placeholder?: ReactNode
+  emptyLabel?: string
   onCenterClick?: () => void
+  onRequestFullscreen?: (photo: PhotoCarouselPhoto) => void | Promise<void>
   activeIndex?: number
   onActiveIndexChange?: (index: number) => void
   onSwipeUp?: () => void
@@ -84,13 +88,6 @@ type SwipeStartPosition = {
 const SWIPE_MIN_DISTANCE = 56
 const SWIPE_AXIS_LOCK_RATIO = 1.15
 
-const MOCK_FALLBACK_PHOTO_URLS = [
-  "https://images.unsplash.com/photo-1494526585095-c41746248156?q=80&w=900&auto=format&fit=crop",
-  "https://images.unsplash.com/photo-1518780664697-55e3ad937233?q=80&w=900&auto=format&fit=crop",
-  "https://images.unsplash.com/photo-1564013799919-ab600027ffc6?q=80&w=900&auto=format&fit=crop",
-  "https://images.unsplash.com/photo-1570129477492-45c003edd2be?q=80&w=900&auto=format&fit=crop",
-]
-
 function getControlsVisibilityClass(
   controlsVisibility: PhotoCarouselControlsVisibility
 ) {
@@ -99,21 +96,6 @@ function getControlsVisibilityClass(
     return "opacity-100 lg:opacity-0 lg:group-hover/carousel:opacity-100 lg:group-focus-within/carousel:opacity-100"
   }
   return "opacity-0 group-hover/carousel:opacity-100 group-focus-within/carousel:opacity-100"
-}
-
-function buildVariantUrl(url: string, variant: "small" | "largeWebp") {
-  if (url.startsWith("blob:") || url.startsWith("data:")) return url
-
-  try {
-    const nextUrl = new URL(url)
-    nextUrl.searchParams.set("auto", "format")
-    nextUrl.searchParams.set("fm", "webp")
-    nextUrl.searchParams.set("q", variant === "small" ? "70" : "90")
-    nextUrl.searchParams.set("w", variant === "small" ? "360" : "1800")
-    return nextUrl.toString()
-  } catch {
-    return url
-  }
 }
 
 function normalizePhotoSource(
@@ -128,8 +110,9 @@ function normalizePhotoSource(
       id: `${item?.id ?? "photo"}-${index}-${url}`,
       url,
       variants: {
-        small: { url: buildVariantUrl(url, "small") },
-        largeWebp: { url: buildVariantUrl(url, "largeWebp") },
+        small: { url },
+        medium: { url },
+        large: { url },
       },
     }
   }
@@ -137,8 +120,24 @@ function normalizePhotoSource(
   return photo.url ? photo : null
 }
 
+function getPhotoThumbnailUrl(photo: PhotoCarouselPhoto) {
+  return (
+    photo.variants?.small?.url ??
+    photo.variants?.medium?.url ??
+    photo.url ??
+    photo.variants?.large?.url ??
+    photo.variants?.largeWebp?.url
+  )
+}
+
 function getPhotoPreviewUrl(photo: PhotoCarouselPhoto) {
-  return photo.variants?.small?.url ?? photo.url
+  return (
+    photo.variants?.medium?.url ??
+    photo.url ??
+    photo.variants?.large?.url ??
+    photo.variants?.largeWebp?.url ??
+    photo.variants?.small?.url
+  )
 }
 
 function getPhotoFullscreenUrl(
@@ -148,7 +147,13 @@ function getPhotoFullscreenUrl(
   if (quality === "original" && photo.variants?.original?.url) {
     return photo.variants.original.url
   }
-  return photo.variants?.largeWebp?.url ?? photo.url
+  return (
+    photo.variants?.large?.url ??
+    photo.variants?.largeWebp?.url ??
+    photo.variants?.medium?.url ??
+    photo.url ??
+    photo.variants?.small?.url
+  )
 }
 
 function buildItemFallbackPhotos(item?: RentalItemDto): PhotoCarouselPhoto[] {
@@ -162,29 +167,14 @@ function buildItemFallbackPhotos(item?: RentalItemDto): PhotoCarouselPhoto[] {
       id: `${item.id}-preview-${index}`,
       url,
       variants: {
-        small: { url: buildVariantUrl(url, "small") },
-        largeWebp: { url: buildVariantUrl(url, "largeWebp") },
+        small: { url },
+        medium: { url },
+        large: { url },
       },
     }))
   }
 
-  if (!item.hasPhotos || item.photoCount <= 0) return []
-
-  return Array.from(
-    { length: Math.min(item.photoCount, MOCK_FALLBACK_PHOTO_URLS.length) },
-    (_, index) => {
-      const url =
-        MOCK_FALLBACK_PHOTO_URLS[index % MOCK_FALLBACK_PHOTO_URLS.length]
-      return {
-        id: `${item.id}-fallback-${index}`,
-        url,
-        variants: {
-          small: { url: buildVariantUrl(url, "small") },
-          largeWebp: { url: buildVariantUrl(url, "largeWebp") },
-        },
-      }
-    }
-  )
+  return []
 }
 
 function useCarouselIndex(
@@ -262,7 +252,9 @@ export function PhotoCarousel({
   imageVariant = "preview",
   fullscreenQuality = "preview",
   placeholder,
+  emptyLabel = "Фото не загружены.",
   onCenterClick,
+  onRequestFullscreen,
   activeIndex: controlledActiveIndex,
   onActiveIndexChange,
   onSwipeUp,
@@ -290,6 +282,12 @@ export function PhotoCarousel({
   const hasPhotos = safePhotos.length > 0
   const hasMultiplePhotos = safePhotos.length > 1
 
+  useEffect(() => {
+    if (imageVariant !== "fullscreen") return
+    const activePhoto = safePhotos[safeActiveIndex]
+    if (activePhoto) void onRequestFullscreen?.(activePhoto)
+  }, [imageVariant, onRequestFullscreen, safeActiveIndex, safePhotos])
+
   const changeIndex = useCallback(
     (index: number) => {
       if (controlledActiveIndex === undefined) setInternalActiveIndex(index)
@@ -301,6 +299,8 @@ export function PhotoCarousel({
 
   function openViewer() {
     if (!hasPhotos || disableFullscreenViewer) return
+    const activePhoto = safePhotos[safeActiveIndex]
+    if (activePhoto) void onRequestFullscreen?.(activePhoto)
     setViewerOpen(true)
   }
 
@@ -323,17 +323,35 @@ export function PhotoCarousel({
   }
 
   if (!hasPhotos) {
-    return (
+    const emptyContent = (
+      <>
+        {placeholder ?? (
+          <HugeiconsIcon icon={Home01Icon} className="size-10 opacity-50" />
+        )}
+        <span>{emptyLabel}</span>
+      </>
+    )
+
+    return onCenterClick ? (
+      <button
+        type="button"
+        aria-label="Открыть фотографии"
+        onClick={onCenterClick}
+        className={cn(
+          "flex w-full flex-col items-center justify-center gap-2 rounded-lg border bg-muted text-sm text-muted-foreground transition-colors hover:bg-muted/80",
+          className ?? "h-[320px]"
+        )}
+      >
+        {emptyContent}
+      </button>
+    ) : (
       <div
         className={cn(
           "flex flex-col items-center justify-center gap-2 rounded-lg border bg-muted text-sm text-muted-foreground",
           className ?? "h-[320px]"
         )}
       >
-        {placeholder ?? (
-          <HugeiconsIcon icon={Home01Icon} className="size-10 opacity-50" />
-        )}
-        <span>Фото не загружены.</span>
+        {emptyContent}
       </div>
     )
   }
@@ -354,12 +372,22 @@ export function PhotoCarousel({
       >
         <CarouselContent className="-ml-0 h-full">
           {safePhotos.map((photo, index) => {
-            const image = (
+            const fullscreenPending =
+              imageVariant === "fullscreen" &&
+              onRequestFullscreen !== undefined &&
+              !photo.variants?.large?.url
+            const image = fullscreenPending ? (
+              <div className="flex h-full w-full items-center justify-center text-sm text-white/70">
+                Загрузка полноэкранной фотографии...
+              </div>
+            ) : (
               <img
                 src={
                   imageVariant === "fullscreen"
                     ? getPhotoFullscreenUrl(photo, fullscreenQuality)
-                    : getPhotoPreviewUrl(photo)
+                    : imageVariant === "thumbnail"
+                      ? getPhotoThumbnailUrl(photo)
+                      : getPhotoPreviewUrl(photo)
                 }
                 alt={`Фото ${index + 1} из ${safePhotos.length}`}
                 draggable={false}
@@ -459,6 +487,7 @@ export function PhotoCarousel({
         title={title ?? `Фото${item ? ` — ${item.number}` : ""}`}
         quality={fullscreenQuality}
         showToolbar={showViewerToolbar}
+        onRequestPhoto={onRequestFullscreen}
         onActiveIndexChange={changeIndex}
         onOpenChange={setViewerOpen}
       />
@@ -473,6 +502,7 @@ type PhotoFullscreenViewerProps = {
   title: string
   quality: "preview" | "original"
   showToolbar: boolean
+  onRequestPhoto?: (photo: PhotoCarouselPhoto) => void | Promise<void>
   onActiveIndexChange: (index: number) => void
   onOpenChange: (open: boolean) => void
 }
@@ -484,6 +514,7 @@ function PhotoFullscreenViewer({
   title,
   quality,
   showToolbar,
+  onRequestPhoto,
   onActiveIndexChange,
   onOpenChange,
 }: PhotoFullscreenViewerProps) {
@@ -494,6 +525,12 @@ function PhotoFullscreenViewer({
   const safeIndex =
     activeIndex >= 0 && activeIndex < photos.length ? activeIndex : 0
   useCarouselIndex(api, safeIndex, onActiveIndexChange)
+
+  useEffect(() => {
+    if (!open) return
+    const activePhoto = photos[safeIndex]
+    if (activePhoto) void onRequestPhoto?.(activePhoto)
+  }, [onRequestPhoto, open, photos, safeIndex])
 
   const goPrev = useCallback(() => api?.scrollPrev(), [api])
   const goNext = useCallback(() => api?.scrollNext(), [api])
@@ -561,16 +598,22 @@ function PhotoFullscreenViewer({
                 aria-label={`${index + 1} из ${photos.length}`}
                 className="flex h-dvh items-center justify-center p-12"
               >
-                <img
-                  src={getPhotoFullscreenUrl(photo, quality)}
-                  alt={`${title}, фото ${index + 1} из ${photos.length}`}
-                  draggable={false}
-                  className="max-h-full max-w-full object-contain select-none"
-                  style={{
-                    transform: `rotate(${orientationById[photo.id] ?? 0}deg)`,
-                    transformOrigin: "center center",
-                  }}
-                />
+                {onRequestPhoto && !photo.variants?.large?.url ? (
+                  <div className="text-sm text-white/70">
+                    Загрузка полноэкранной фотографии...
+                  </div>
+                ) : (
+                  <img
+                    src={getPhotoFullscreenUrl(photo, quality)}
+                    alt={`${title}, фото ${index + 1} из ${photos.length}`}
+                    draggable={false}
+                    className="max-h-full max-w-full object-contain select-none"
+                    style={{
+                      transform: `rotate(${orientationById[photo.id] ?? 0}deg)`,
+                      transformOrigin: "center center",
+                    }}
+                  />
+                )}
               </CarouselItem>
             ))}
           </CarouselContent>

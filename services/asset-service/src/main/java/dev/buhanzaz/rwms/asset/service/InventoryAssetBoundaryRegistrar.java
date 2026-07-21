@@ -45,9 +45,20 @@ public class InventoryAssetBoundaryRegistrar {
   }
 
   @Transactional(propagation = Propagation.REQUIRES_NEW)
-  public void claimNumber(String identityMatchKey, InventoryAssetSourceId sourceId) {
-    if (!numberClaims.existsById(identityMatchKey)) {
-      numberClaims.saveAndFlush(InventoryAssetNumberClaim.claim(identityMatchKey, sourceId));
+  public void claimNumber(
+      UUID warehouseId, String identityMatchKey, InventoryAssetSourceId sourceId) {
+    if (numberClaims.existsByWarehouseIdAndIdentityMatchKey(warehouseId, identityMatchKey)) {
+      return;
     }
+    InventoryAssetNumberClaim existing = numberClaims
+        .findBySourceForUpdate(sourceId.getInventoryId(), sourceId.getFindingId())
+        .orElse(null);
+    if (existing != null) {
+      existing.bindWarehouse(warehouseId, identityMatchKey);
+      numberClaims.saveAndFlush(existing);
+      return;
+    }
+    numberClaims.saveAndFlush(
+        InventoryAssetNumberClaim.claim(warehouseId, identityMatchKey, sourceId));
   }
 }

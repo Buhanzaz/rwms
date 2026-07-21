@@ -9,13 +9,16 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Add01Icon,
   ArrowLeft01Icon,
+  ImageUploadIcon,
   PencilEdit01Icon,
+  Wrench01Icon,
 } from "@hugeicons/core-free-icons"
-import { useParams, useSearchParams } from "react-router-dom"
+import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { PhotoCarousel } from "@/components/media/photo-carousel"
 import {
   Card,
   CardContent,
@@ -45,6 +48,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/features/auth/use-auth"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
+import { AddContentsDialog } from "@/features/rental-items/add-contents-dialog"
 import {
   getRentalItemDossierPage,
   RENTAL_ITEM_DOSSIER_QUERY_KEY,
@@ -54,7 +58,13 @@ import {
   DossierActivityFiltersPanel,
   DossierActivityRegister,
 } from "@/features/rental-items/dossier/dossier-activity-register"
+import { useDossierActorDisplays } from "@/features/rental-items/dossier/actor/use-dossier-actor-displays"
+import { formatDossierActorLabel } from "@/features/rental-items/dossier/actor/actor-display"
 import type { DossierActivityFilters } from "@/features/rental-items/dossier/model/dossier-service"
+import type {
+  DossierActivity,
+  DossierActivityCode,
+} from "@/features/rental-items/dossier/model/dossier-service"
 import {
   addAssetRentalItemManualNote,
   createIdempotencyKey,
@@ -65,8 +75,15 @@ import {
 } from "@/features/rental-items/api/asset-rental-items-api"
 import {
   CharacteristicTags,
-  UnavailableDossierSection,
+  EmptyDossierRegister,
 } from "@/features/rental-items/rental-item-detail-support"
+import { MoveContentsToRentalItemDialog } from "@/features/rental-items/move-contents-to-rental-item-dialog"
+import { MoveContentsToStockDialog } from "@/features/rental-items/move-contents-to-stock-dialog"
+import {
+  RentalItemPhotosRegister,
+  RentalItemPhotoUploadDialog,
+} from "@/features/rental-items/rental-item-media"
+import { useRentalItemMedia } from "@/features/rental-items/use-rental-item-media"
 import {
   formatRentalItemContents,
   RENTAL_ITEM_STATUS_LABEL,
@@ -74,7 +91,10 @@ import {
 } from "@/features/rental-items/model/rental-item"
 import { RentalItemStatusBadge } from "@/features/rental-items/rental-item-status-badge"
 import { useWarehouse } from "@/hooks/use-warehouse"
-import { useWorkspaceBack } from "@/hooks/use-workspace-back"
+import {
+  useWorkspaceBack,
+  workspaceEntryNavigationOptions,
+} from "@/hooks/use-workspace-back"
 import { ApiError } from "@/lib/api-client"
 
 const TAB_IDS = [
@@ -112,8 +132,69 @@ const MANUAL_STATUSES = [
   "USED_SALE",
 ] as const
 
+const STANDARD_MEDIA_VARIANTS = ["MEDIUM"] as const
+const PHOTO_ARCHIVE_MEDIA_VARIANTS = ["SMALL"] as const
+
+const TAB_ACTIVITY_CODES: Partial<Record<DetailTab, DossierActivityCode[]>> = {
+  inspections: [
+    "INVENTORY_FINDING_ADDED",
+    "INVENTORY_INSPECTION_SAVED",
+    "INVENTORY_PUBLICATION_READY",
+    "INVENTORY_PUBLICATION_REQUESTED",
+    "INVENTORY_PUBLICATION_SUCCEEDED",
+    "INVENTORY_PUBLICATION_TRANSIENT_FAILED",
+    "INVENTORY_PUBLICATION_BLOCKED",
+    "INVENTORY_PUBLICATION_CLOSED_BLOCKED",
+  ],
+  estimates: [
+    "ESTIMATE_CREATED",
+    "ESTIMATE_DRAFT_CHANGED",
+    "ESTIMATE_COMPLETED",
+    "ESTIMATE_AMENDED",
+  ],
+  repair: [
+    "REPAIR_CREATED",
+    "REPAIR_PLAN_CHANGED",
+    "REPAIR_QUEUED",
+    "REPAIR_STAGE_COMPLETED",
+    "REPAIR_PENDING_ACCEPTANCE",
+    "REPAIR_REWORK_CREATED",
+    "REPAIR_ACCEPTED",
+    "REPAIR_WRITTEN_OFF",
+  ],
+  shipments: ["CABIN_LOGISTICS_EFFECT_APPLIED"],
+}
+
 function isDetailTab(value: string | null): value is DetailTab {
   return TAB_IDS.includes(value as DetailTab)
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) return "—"
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return value
+  return new Intl.DateTimeFormat("ru-RU", {
+    dateStyle: "medium",
+    timeStyle: value.includes("T") ? "short" : undefined,
+  }).format(date)
+}
+
+function formatCurrency(value: number | null) {
+  if (value === null) return "—"
+  return new Intl.NumberFormat("ru-RU", {
+    style: "currency",
+    currency: "RUB",
+    maximumFractionDigits: 0,
+  }).format(value)
+}
+
+function latestActivity(
+  activities: DossierActivity[],
+  codes?: readonly DossierActivityCode[]
+) {
+  return activities.find(
+    (activity) => !codes || codes.includes(activity.activityCode)
+  )
 }
 
 function retryDossierQuery(failureCount: number, error: Error) {
@@ -145,13 +226,16 @@ function DossierActions({
   rentalItem,
   accessToken,
   canEdit,
+  onAddPhoto,
   onSaved,
 }: {
   rentalItem: RentalItemDto
   accessToken: string | null
   canEdit: boolean
+  onAddPhoto: () => void
   onSaved: (value: RentalItemDto) => void
 }) {
+  const navigate = useNavigate()
   const [statusOpen, setStatusOpen] = useState(false)
   const [status, setStatus] = useState<(typeof MANUAL_STATUSES)[number]>(
     () => MANUAL_STATUSES.find((value) => value !== rentalItem.status) ?? "FREE"
@@ -195,9 +279,40 @@ function DossierActions({
     return null
   }
 
+  const repairAllowed = ![
+    "WRITTEN_OFF",
+    "WAITING_ESTIMATE_CONFIRMATION",
+    "IN_TRANSFER",
+  ].includes(rentalItem.status)
+
+  function createRepair() {
+    navigate("/repairs?create=1", {
+      ...workspaceEntryNavigationOptions,
+      state: {
+        ...workspaceEntryNavigationOptions.state,
+        rentalItemSeed: {
+          type: "rental-item-repair-seed-v1",
+          warehouseId: rentalItem.warehouseId,
+          rentalItemId: rentalItem.id,
+          number: rentalItem.number,
+        },
+      },
+    })
+  }
+
   return (
     <>
       <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="outline" onClick={onAddPhoto}>
+          <HugeiconsIcon icon={ImageUploadIcon} data-icon="inline-start" />
+          Добавить фото
+        </Button>
+        {repairAllowed ? (
+          <Button size="sm" variant="outline" onClick={createRepair}>
+            <HugeiconsIcon icon={Wrench01Icon} data-icon="inline-start" />
+            Отправить в ремонт
+          </Button>
+        ) : null}
         <Button
           size="sm"
           variant="outline"
@@ -214,7 +329,8 @@ function DossierActions({
           <DialogHeader>
             <DialogTitle>Изменить статус</DialogTitle>
             <DialogDescription>
-              Причина и история статуса пока не передаются публичным API.
+              Изменение будет сохранено asset-service и появится в истории
+              бытовки.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
@@ -273,6 +389,11 @@ export function RentalItemDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const { selectedWarehouse } = useWarehouse()
   const { accessToken, currentUser } = useAuth()
+  const [photoUploadOpen, setPhotoUploadOpen] = useState(false)
+  const [addContentsOpen, setAddContentsOpen] = useState(false)
+  const [moveContentsToStockOpen, setMoveContentsToStockOpen] = useState(false)
+  const [moveContentsToRentalItemOpen, setMoveContentsToRentalItemOpen] =
+    useState(false)
   const [manualComment, setManualComment] = useState("")
   const [dossierFilters, setDossierFilters] = useState<DossierActivityFilters>(
     {}
@@ -281,11 +402,17 @@ export function RentalItemDetailPage() {
     rentalItemId: string
     value: string
   } | null>(null)
-  const activeTab = isDetailTab(searchParams.get("tab"))
-    ? searchParams.get("tab")!
+  const requestedTab = searchParams.get("tab")
+  const activeTab: DetailTab = isDetailTab(requestedTab)
+    ? requestedTab
     : "overview"
   const warehouseId = selectedWarehouse?.id ?? "none"
   const canEditRentalItem = hasWarehouseAccess(currentUser, warehouseId, "EDIT")
+  const canManageContents = hasWarehouseAccess(
+    currentUser,
+    warehouseId,
+    "MANAGE"
+  )
   const userCacheKey = currentUser?.id ?? "unknown-user"
   const currentRentalItemId = rentalItemId ?? "none"
   const assetQueryKey = [
@@ -336,6 +463,33 @@ export function RentalItemDetailPage() {
   })
   const rentalItem = assetQuery.data ?? null
   const dossierPages = dossierQuery.data?.pages
+  const dossierActivities =
+    dossierPages?.flatMap((page) => page.activities) ?? []
+  const actorDisplays = useDossierActorDisplays(
+    dossierActivities.flatMap((activity) =>
+      activity.actorRef ? [activity.actorRef.subjectId] : []
+    )
+  )
+  const media = useRentalItemMedia({
+    item: rentalItem,
+    accessToken,
+    dossierActivities,
+    actorDisplays,
+    initialVariants:
+      activeTab === "photos"
+        ? PHOTO_ARCHIVE_MEDIA_VARIANTS
+        : STANDARD_MEDIA_VARIANTS,
+    enabled: Boolean(rentalItem),
+  })
+  const sectionActivityCodes = TAB_ACTIVITY_CODES[activeTab]
+  const sectionDossierPages = sectionActivityCodes
+    ? dossierPages?.map((page) => ({
+        ...page,
+        activities: page.activities.filter((activity) =>
+          sectionActivityCodes.includes(activity.activityCode)
+        ),
+      }))
+    : dossierPages
   const hasGeneralComment = Boolean(rentalItem?.comment?.trim())
   const generalComment =
     rentalItem && generalCommentDraft?.rentalItemId === rentalItem.id
@@ -441,7 +595,7 @@ export function RentalItemDetailPage() {
         description={
           assetQuery.error instanceof Error
             ? assetQuery.error.message
-            : "Сервис имущества недоступен."
+            : "Не удалось получить данные от asset-service."
         }
       />
     )
@@ -453,6 +607,24 @@ export function RentalItemDetailPage() {
       />
     )
 
+  const lastRecordedActivity = latestActivity(dossierActivities)
+  const lastRecordedActorLabel = lastRecordedActivity?.actorRef
+    ? formatDossierActorLabel(
+        lastRecordedActivity.actorRef,
+        actorDisplays.get(lastRecordedActivity.actorRef.subjectId)
+      )
+    : "Не зафиксировано"
+  const lastInspectionActivity = latestActivity(
+    dossierActivities,
+    TAB_ACTIVITY_CODES.inspections
+  )
+  const repairActivityCount = dossierActivities.filter((activity) =>
+    TAB_ACTIVITY_CODES.repair?.includes(activity.activityCode)
+  ).length
+  const estimateActivityCount = dossierActivities.filter((activity) =>
+    TAB_ACTIVITY_CODES.estimates?.includes(activity.activityCode)
+  ).length
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto pb-4">
       <Button variant="ghost" className="w-fit" onClick={goBack}>
@@ -461,10 +633,24 @@ export function RentalItemDetailPage() {
       </Button>
       <section className="shrink-0 overflow-hidden rounded-lg border bg-card">
         <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(22rem,26rem)] xl:grid-cols-[minmax(0,1fr)_minmax(26rem,30rem)]">
-          <div className="flex h-[280px] items-center justify-center bg-muted p-6 text-center text-sm text-muted-foreground sm:h-[340px] md:h-[420px] lg:h-[560px]">
-            Фотографии бытовки недоступны: asset-service пока не предоставляет
-            публичный media API.
-          </div>
+          <PhotoCarousel
+            photos={media.photos}
+            item={rentalItem}
+            loading={media.isLoading}
+            photoCount={media.logicalPhotoCount}
+            showPhotoCount
+            emptyLabel={
+              media.error
+                ? "Сервис фото недоступен"
+                : media.logicalPhotoCount > 0
+                  ? "Фото обрабатываются"
+                  : "Нет фото"
+            }
+            className="h-[280px] bg-muted sm:h-[340px] md:h-[420px] lg:h-[560px]"
+            fit="contain"
+            controlsVisibility="always"
+            onRequestFullscreen={media.requestFullscreen}
+          />
           <aside className="flex min-h-0 flex-col gap-2 border-t p-3 md:border-t-0 md:border-l">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-xl font-semibold">{rentalItem.number}</h1>
@@ -475,6 +661,7 @@ export function RentalItemDetailPage() {
               rentalItem={rentalItem}
               accessToken={accessToken}
               canEdit={canEditRentalItem}
+              onAddPhoto={() => setPhotoUploadOpen(true)}
               onSaved={setRentalItem}
             />
             <Separator />
@@ -508,7 +695,16 @@ export function RentalItemDetailPage() {
               <dt className="text-muted-foreground">Комментарий</dt>
               <dd>{rentalItem.comment ?? "—"}</dd>
               <dt className="text-muted-foreground">Фото</dt>
-              <dd>Недоступно через публичный asset API</dd>
+              <dd>
+                <Button
+                  type="button"
+                  variant="link"
+                  className="h-auto p-0"
+                  onClick={() => changeTab("photos")}
+                >
+                  {media.logicalPhotoCount} фото
+                </Button>
+              </dd>
               <dt className="text-muted-foreground">Наполнение</dt>
               <dd>
                 {formatRentalItemContents(
@@ -517,15 +713,22 @@ export function RentalItemDetailPage() {
                 )}
               </dd>
               <dt className="text-muted-foreground">Отгрузка</dt>
-              <dd>Недоступно через публичный asset API</dd>
+              <dd>{formatDateTime(rentalItem.shipmentDate)}</dd>
               <dt className="text-muted-foreground">Арендатор</dt>
-              <dd>Недоступно через публичный asset API</dd>
+              <dd>{rentalItem.tenant ?? "—"}</dd>
               <dt className="text-muted-foreground">Цена</dt>
-              <dd>Недоступно через публичный asset API</dd>
-              <dt className="text-muted-foreground">История</dt>
-              <dd>См. подтверждённые события во вкладке «История»</dd>
-              <dt className="text-muted-foreground">Actor</dt>
-              <dd>Opaque actor reference доступен в истории</dd>
+              <dd>{formatCurrency(rentalItem.price)}</dd>
+              <dt className="text-muted-foreground">Последнее действие</dt>
+              <dd>
+                {lastRecordedActivity
+                  ? formatDateTime(
+                      lastRecordedActivity.occurredAt ??
+                        lastRecordedActivity.recordedAt
+                    )
+                  : "Не зафиксировано"}
+              </dd>
+              <dt className="text-muted-foreground">Автор действия</dt>
+              <dd>{lastRecordedActorLabel}</dd>
             </dl>
           </aside>
         </div>
@@ -567,11 +770,18 @@ export function RentalItemDetailPage() {
               </div>
               <div>
                 <p className="text-muted-foreground">Последний осмотр</p>
-                <p className="font-medium">Недоступно через публичный API</p>
+                <p className="font-medium">
+                  {lastInspectionActivity
+                    ? formatDateTime(
+                        lastInspectionActivity.occurredAt ??
+                          lastInspectionActivity.recordedAt
+                      )
+                    : "Не зафиксирован"}
+                </p>
               </div>
               <div>
-                <p className="text-muted-foreground">Активные ремонты</p>
-                <p className="font-medium">Недоступно через публичный API</p>
+                <p className="text-muted-foreground">События ремонта</p>
+                <p className="font-medium">{repairActivityCount}</p>
               </div>
             </CardContent>
           </Card>
@@ -583,16 +793,21 @@ export function RentalItemDetailPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-muted-foreground">Арендатор</p>
-                  <p className="font-medium">Недоступно через публичный API</p>
+                  <p className="font-medium">{rentalItem.tenant ?? "—"}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Дата отгрузки</p>
-                  <p className="font-medium">Недоступно через публичный API</p>
+                  <p className="font-medium">
+                    {formatDateTime(rentalItem.shipmentDate)}
+                  </p>
                 </div>
               </div>
-              <p className="text-muted-foreground">
-                Связанные документы не входят в публичный asset API.
-              </p>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="outline">Сметы: {estimateActivityCount}</Badge>
+                <Badge variant="outline">
+                  События ремонта: {repairActivityCount}
+                </Badge>
+              </div>
             </CardContent>
           </Card>
           <Card>
@@ -608,9 +823,8 @@ export function RentalItemDetailPage() {
               <CardTitle>Осмотр и ремонт</CardTitle>
             </CardHeader>
             <CardContent className="text-sm text-muted-foreground">
-              Dossier-service предоставляет подтверждённые события, но не
-              вычисляет текущие агрегированные счётчики документов. Полная
-              хронология доступна во вкладке «История».
+              Подтверждённые события осмотров, смет и ремонтов доступны в
+              соответствующих вкладках и в общей истории dossier-service.
             </CardContent>
           </Card>
           <Card className="lg:col-span-2">
@@ -622,6 +836,35 @@ export function RentalItemDetailPage() {
                     Мебель и оборудование, закреплённые за бытовкой.
                   </CardDescription>
                 </div>
+                {canManageContents ? (
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setAddContentsOpen(true)}
+                    >
+                      Добавить
+                    </Button>
+                    {rentalItem.contentsItems.length > 0 ? (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setMoveContentsToRentalItemOpen(true)}
+                        >
+                          В другую бытовку
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setMoveContentsToStockOpen(true)}
+                        >
+                          На склад
+                        </Button>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </CardHeader>
             <CardContent>
@@ -642,54 +885,76 @@ export function RentalItemDetailPage() {
                   Наполнение не указано.
                 </p>
               )}
-              <p className="mt-3 text-sm text-muted-foreground">
-                Изменение наполнения временно недоступно: версионная операция
-                перемещения исходного и целевого баланса ещё не подключена в
-                панели.
-              </p>
             </CardContent>
           </Card>
         </TabsContent>
         <TabsContent value="photos">
-          <UnavailableDossierSection
-            title="Фото"
-            description="Действия с фото принадлежат media-service. Dossier показывает только подтверждённые media state references во вкладке «История»."
+          <RentalItemPhotosRegister
+            item={rentalItem}
+            folders={media.photoFolders}
+            assets={media.assets}
+            loading={media.isLoading}
+            error={media.error}
+            canEdit={canEditRentalItem}
+            rotating={media.isRotating}
+            onAdd={() => setPhotoUploadOpen(true)}
+            onRotate={media.rotate}
+            onOpenFolder={media.requestFolderPreview}
+            onRequestFullscreen={media.requestFullscreen}
           />
         </TabsContent>
         <TabsContent value="inspections">
-          <UnavailableDossierSection
-            title="Осмотры"
-            description="Dossier не подменяет документы inventory-service. Подтверждённые коды событий доступны во вкладке «История»."
+          <DossierActivityRegister
+            pages={sectionDossierPages}
+            error={dossierQuery.error}
+            isLoading={dossierQuery.isLoading}
+            hasNextPage={Boolean(dossierQuery.hasNextPage)}
+            isFetchingNextPage={dossierQuery.isFetchingNextPage}
+            onLoadMore={() => void dossierQuery.fetchNextPage()}
           />
         </TabsContent>
         <TabsContent value="estimates">
-          <UnavailableDossierSection
-            title="Сметы"
-            description="Dossier не подменяет документы maintenance-service. Подтверждённые коды событий доступны во вкладке «История»."
+          <DossierActivityRegister
+            pages={sectionDossierPages}
+            error={dossierQuery.error}
+            isLoading={dossierQuery.isLoading}
+            hasNextPage={Boolean(dossierQuery.hasNextPage)}
+            isFetchingNextPage={dossierQuery.isFetchingNextPage}
+            onLoadMore={() => void dossierQuery.fetchNextPage()}
           />
         </TabsContent>
         <TabsContent value="repair">
-          <UnavailableDossierSection
-            title="Ремонт"
-            description="Dossier не подменяет ремонтные документы maintenance-service. Подтверждённые коды событий доступны во вкладке «История»."
+          <DossierActivityRegister
+            pages={sectionDossierPages}
+            error={dossierQuery.error}
+            isLoading={dossierQuery.isLoading}
+            hasNextPage={Boolean(dossierQuery.hasNextPage)}
+            isFetchingNextPage={dossierQuery.isFetchingNextPage}
+            onLoadMore={() => void dossierQuery.fetchNextPage()}
           />
         </TabsContent>
         <TabsContent value="reserves">
-          <UnavailableDossierSection
+          <EmptyDossierRegister
             title="Резервы"
-            description="Раздел подготовлен и пока не реализован."
+            description="Для этой бытовки нет подтверждённых резервов."
+            columns={["Клиент", "Статус", "Создан", "Истекает"]}
           />
         </TabsContent>
         <TabsContent value="shipments">
-          <UnavailableDossierSection
-            title="Отгрузки"
-            description="Покрытие logistics producer facts пока не подтверждено текущим dossier contract vocabulary."
+          <DossierActivityRegister
+            pages={sectionDossierPages}
+            error={dossierQuery.error}
+            isLoading={dossierQuery.isLoading}
+            hasNextPage={Boolean(dossierQuery.hasNextPage)}
+            isFetchingNextPage={dossierQuery.isFetchingNextPage}
+            onLoadMore={() => void dossierQuery.fetchNextPage()}
           />
         </TabsContent>
         <TabsContent value="returns">
-          <UnavailableDossierSection
+          <EmptyDossierRegister
             title="Возвраты"
-            description="Раздел подготовлен и пока не реализован."
+            description="Для этой бытовки нет подтверждённых возвратов."
+            columns={["Дата", "От кого", "Статус", "Действия"]}
           />
         </TabsContent>
         <TabsContent value="history">
@@ -805,7 +1070,7 @@ export function RentalItemDetailPage() {
               description={
                 manualNotesQuery.error instanceof Error
                   ? manualNotesQuery.error.message
-                  : "Asset-service недоступен."
+                  : "Не удалось получить заметки от asset-service."
               }
             />
           ) : manualNotesQuery.data?.length ? (
@@ -832,11 +1097,36 @@ export function RentalItemDetailPage() {
           ) : (
             <DetailEmpty
               title="Ручных заметок нет"
-              description="Asset-service пока не вернул ни одной заметки."
+              description="В asset-service нет ручных заметок для этой бытовки."
             />
           )}
         </TabsContent>
       </Tabs>
+      <RentalItemPhotoUploadDialog
+        open={photoUploadOpen}
+        pending={media.isUploading}
+        onOpenChange={setPhotoUploadOpen}
+        onConfirm={media.upload}
+      />
+      {canManageContents ? (
+        <>
+          <AddContentsDialog
+            item={rentalItem}
+            open={addContentsOpen}
+            onOpenChange={setAddContentsOpen}
+          />
+          <MoveContentsToRentalItemDialog
+            item={rentalItem}
+            open={moveContentsToRentalItemOpen}
+            onOpenChange={setMoveContentsToRentalItemOpen}
+          />
+          <MoveContentsToStockDialog
+            item={rentalItem}
+            open={moveContentsToStockOpen}
+            onOpenChange={setMoveContentsToStockOpen}
+          />
+        </>
+      ) : null}
     </div>
   )
 }

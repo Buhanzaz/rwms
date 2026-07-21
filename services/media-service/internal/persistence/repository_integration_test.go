@@ -121,7 +121,7 @@ func TestRepositoryConcurrencyOwnerProofCursorAndOutboxIntegration(t *testing.T)
 			created++
 		}
 	}
-	if created != 1 || replayed != 1 || asset.ID != command.MediaID {
+	if created != 1 || replayed != 1 || asset.ID != command.MediaID || asset.FolderID != command.FolderID {
 		t.Fatalf("concurrent create outcomes = created:%d replayed:%d asset:%s", created, replayed, asset.ID)
 	}
 	assertReplayParity(t, ctx, repository, command.MediaID)
@@ -132,6 +132,7 @@ func TestRepositoryConcurrencyOwnerProofCursorAndOutboxIntegration(t *testing.T)
 	}
 
 	second := createCommand(ownerID, warehouseID, media.KindImage, 10)
+	second.FolderID = command.FolderID
 	if _, _, err := repository.CreateUpload(ctx, second); err != nil {
 		t.Fatalf("create second image: %v", err)
 	}
@@ -142,6 +143,9 @@ func TestRepositoryConcurrencyOwnerProofCursorAndOutboxIntegration(t *testing.T)
 	page, err := repository.ListOwner(ctx, OwnerTypeInventoryFinding, ownerID.String(), warehouseID, 2, nil)
 	if err != nil || len(page) != 2 || page[0].Kind != media.KindImage || page[1].Kind != media.KindImage {
 		t.Fatalf("first page = %#v, %v; want both images", page, err)
+	}
+	if page[0].FolderID != command.FolderID || page[1].FolderID != command.FolderID {
+		t.Fatalf("batch folder IDs = %s, %s; want %s", page[0].FolderID, page[1].FolderID, command.FolderID)
 	}
 	next, err := repository.ListOwner(ctx, OwnerTypeInventoryFinding, ownerID.String(), warehouseID, 2, &page[1].ID)
 	if err != nil || len(next) != 1 || next[0].ID != video.MediaID {
@@ -168,6 +172,7 @@ func TestRepositoryConcurrencyOwnerProofCursorAndOutboxIntegration(t *testing.T)
 		t.Fatalf("first outbox claim = %#v, %v; want media fact", firstClaim, err)
 	}
 	assertExactClaimHash(t, firstClaim)
+	assertFactFolder(t, firstClaim, command.FolderID)
 	blocked, err := repository.ClaimOutbox(ctx, "integration-relay-2", time.Minute)
 	if err != nil || blocked != nil {
 		t.Fatalf("dependent request claim before ACK = %#v, %v; want nil", blocked, err)
@@ -595,13 +600,25 @@ func createCommand(ownerID, warehouseID uuid.UUID, kind media.Kind, sortOrder in
 		contentType = "video/mp4"
 	}
 	return CreateUploadCommand{
-		MediaID: mediaID, UploadSessionID: uuid.New(), SubjectID: uuid.New(),
+		MediaID: mediaID, FolderID: mediaID, UploadSessionID: uuid.New(), SubjectID: uuid.New(),
 		IdempotencyKey: uuid.New(), RequestSHA256: hex64('5'),
 		OwnerType: OwnerTypeInventoryFinding, OwnerID: ownerID.String(),
 		WarehouseID: warehouseID, Kind: kind, FileName: "source" + extension,
 		ContentType: contentType, ContentLength: 128, ChecksumSHA256: hex64('a'),
 		SortOrder: sortOrder, SourceObjectKey: "media/" + mediaID.String() + "/source/upload" + extension,
 		UploadExpiresAt: time.Now().UTC().Add(time.Hour), CorrelationID: uuid.New(),
+	}
+}
+
+func assertFactFolder(t *testing.T, claim *OutboxClaim, folderID uuid.UUID) {
+	t.Helper()
+	var envelope map[string]any
+	if err := json.Unmarshal(claim.Body, &envelope); err != nil {
+		t.Fatalf("decode media fact: %v", err)
+	}
+	payload, ok := envelope["payload"].(map[string]any)
+	if !ok || payload["folderId"] != folderID.String() {
+		t.Fatalf("media fact folder = %#v, want %s", payload["folderId"], folderID)
 	}
 }
 

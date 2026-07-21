@@ -2,6 +2,8 @@ package dev.buhanzaz.rwms.asset.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
@@ -13,6 +15,13 @@ import java.util.UUID;
 @Table(name = "inventory_asset_number_claim")
 public class InventoryAssetNumberClaim {
   @Id
+  @GeneratedValue(strategy = GenerationType.UUID)
+  @Column(name = "claim_id", nullable = false)
+  private UUID claimId;
+
+  @Column(name = "warehouse_id")
+  private UUID warehouseId;
+
   @Column(name = "identity_match_key", nullable = false, length = 128)
   private String identityMatchKey;
 
@@ -32,11 +41,12 @@ public class InventoryAssetNumberClaim {
   protected InventoryAssetNumberClaim() {}
 
   public static InventoryAssetNumberClaim claim(
-      String identityMatchKey, InventoryAssetSourceId sourceId) {
-    if (identityMatchKey == null || sourceId == null) {
+      UUID warehouseId, String identityMatchKey, InventoryAssetSourceId sourceId) {
+    if (warehouseId == null || identityMatchKey == null || sourceId == null) {
       throw new IllegalArgumentException("Inventory number claim identity is incomplete");
     }
     InventoryAssetNumberClaim value = new InventoryAssetNumberClaim();
+    value.warehouseId = warehouseId;
     value.identityMatchKey = identityMatchKey;
     value.inventoryId = sourceId.getInventoryId();
     value.findingId = sourceId.getFindingId();
@@ -44,8 +54,30 @@ public class InventoryAssetNumberClaim {
     return value;
   }
 
+  public void bindWarehouse(UUID requestedWarehouseId, String requestedIdentityMatchKey) {
+    if (requestedWarehouseId == null || requestedIdentityMatchKey == null) {
+      throw new IllegalArgumentException("Inventory number claim scope is incomplete");
+    }
+    if (!identityMatchKey.equals(requestedIdentityMatchKey)) {
+      throw new IllegalStateException("Inventory number claim is bound to another number");
+    }
+    if (warehouseId == null) {
+      warehouseId = requestedWarehouseId;
+    } else if (!warehouseId.equals(requestedWarehouseId)) {
+      throw new IllegalStateException("Inventory number claim is bound to another warehouse");
+    }
+  }
+
   public boolean belongsTo(InventoryAssetSourceId sourceId) {
     return inventoryId.equals(sourceId.getInventoryId()) && findingId.equals(sourceId.getFindingId());
+  }
+
+  public UUID getClaimId() {
+    return claimId;
+  }
+
+  public UUID getWarehouseId() {
+    return warehouseId;
   }
 
   public String getIdentityMatchKey() {

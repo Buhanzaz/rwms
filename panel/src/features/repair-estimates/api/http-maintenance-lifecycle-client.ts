@@ -17,6 +17,12 @@ export type MaintenanceRoutingSnapshot = {
   queueKind: string
 }
 
+export type MaintenanceFurnitureEquipmentSnapshot = {
+  equipmentId: string
+  equipmentCode: string
+  equipmentName: string
+}
+
 export type MaintenanceCatalogNodeSnapshot = {
   catalogVersionId: string
   nodeId: string
@@ -28,6 +34,7 @@ export type MaintenanceCatalogNodeSnapshot = {
   unitPrice: string | null
   durationMinutes: number
   routing: MaintenanceRoutingSnapshot | null
+  furnitureEquipment: MaintenanceFurnitureEquipmentSnapshot | null
 }
 
 export type MaintenanceEstimateLineInput = {
@@ -377,12 +384,13 @@ export function replaceMaintenanceRepairPlan(
   warehouseId: string,
   repairId: string,
   expectedVersion: number,
-  stages: MaintenancePlanStageInput[]
+  stages: MaintenancePlanStageInput[],
+  mediaReferences: MaintenanceMediaReference[]
 ) {
   return bearerRequest<MaintenanceRepair>(
     accessToken,
     itemEndpoint("repairs", warehouseId, repairId, "/plan"),
-    json("PUT", { expectedVersion, stages })
+    json("PUT", { expectedVersion, stages, mediaReferences })
   )
 }
 
@@ -425,6 +433,7 @@ export function acceptMaintenanceRepair(
   repairId: string,
   expectedVersion: number,
   comment: string | null,
+  mediaReferences: MaintenanceMediaReference[],
   idempotencyKey: string
 ) {
   return bearerRequest<MaintenanceRepairCommandResult>(
@@ -432,7 +441,7 @@ export function acceptMaintenanceRepair(
     itemEndpoint("repairs", warehouseId, repairId, "/accept"),
     json(
       "POST",
-      { expectedVersion, comment },
+      { expectedVersion, comment, mediaReferences },
       { "Idempotency-Key": idempotencyKey }
     )
   )

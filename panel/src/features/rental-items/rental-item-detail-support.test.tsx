@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest"
 
 import {
   CharacteristicTags,
-  UnavailableDossierSection,
+  EmptyDossierRegister,
 } from "@/features/rental-items/rental-item-detail-support"
 
 afterEach(cleanup)
@@ -21,19 +21,22 @@ describe("rental item detail support", () => {
     ).toContain("bg-secondary")
   })
 
-  it("shows a truthful unavailable section without a fake register", () => {
+  it("shows an honest empty register with the transferred columns", () => {
     render(
-      <UnavailableDossierSection
-        title="Осмотры"
-        description="Документы доступны только через inventory-service."
+      <EmptyDossierRegister
+        title="Возвраты"
+        description="Для этой бытовки нет подтверждённых возвратов."
+        columns={["Дата", "От кого", "Статус", "Действия"]}
       />
     )
 
-    expect(screen.getByText("Осмотры")).toBeTruthy()
+    expect(screen.getByText("Возвраты")).toBeTruthy()
     expect(
-      screen.getByText("Документы доступны только через inventory-service.")
+      screen.getByText("Для этой бытовки нет подтверждённых возвратов.")
     ).toBeTruthy()
-    expect(screen.queryByRole("table")).toBeNull()
+    expect(screen.getByRole("table")).toBeTruthy()
+    expect(screen.getByText("От кого")).toBeTruthy()
+    expect(screen.getByText("Записей нет")).toBeTruthy()
     expect(screen.queryByRole("textbox")).toBeNull()
   })
 })

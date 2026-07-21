@@ -238,6 +238,116 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
   }
 
   @Test
+  void internalRegistrationPreservesRepeatedQueueStagesAndFencesReplay() throws Exception {
+    UUID externalTaskId = UUID.randomUUID();
+    RegisterExternalTaskRequest registration =
+        repeatedQueueRegistration(externalTaskId, "MOVEMENT");
+
+    String first =
+        mvc.perform(
+                post("/api/internal/task-board/v1/tasks")
+                    .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(registration)))
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.route.length()").value(3))
+            .andExpect(jsonPath("$.route[0].queueId").value(queueId.toString()))
+            .andExpect(jsonPath("$.route[0].routeIndex").value(0))
+            .andExpect(jsonPath("$.route[0].taskText").value("MOVEMENT"))
+            .andExpect(jsonPath("$.route[1].queueId").value(verificationQueueId.toString()))
+            .andExpect(jsonPath("$.route[1].routeIndex").value(1))
+            .andExpect(jsonPath("$.route[1].taskText").value("INTERNAL_WORKS"))
+            .andExpect(jsonPath("$.route[2].queueId").value(queueId.toString()))
+            .andExpect(jsonPath("$.route[2].routeIndex").value(2))
+            .andExpect(jsonPath("$.route[2].taskText").value("MOVEMENT"))
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    var firstResponse = objectMapper.readTree(first);
+    UUID taskId = UUID.fromString(firstResponse.required("taskId").textValue());
+    assertThat(
+            List.of(
+                firstResponse.required("route").get(0).required("entryId").textValue(),
+                firstResponse.required("route").get(1).required("entryId").textValue(),
+                firstResponse.required("route").get(2).required("entryId").textValue()))
+        .doesNotHaveDuplicates();
+    assertThat(
+            jdbc.queryForList(
+                "select queue_id,route_index,task_text from queue_entry where task_id=? "
+                    + "order by route_index",
+                taskId))
+        .extracting(
+            row -> row.get("queue_id"),
+            row -> row.get("route_index"),
+            row -> row.get("task_text"))
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(queueId, 0, "MOVEMENT"),
+            org.assertj.core.groups.Tuple.tuple(verificationQueueId, 1, "INTERNAL_WORKS"),
+            org.assertj.core.groups.Tuple.tuple(queueId, 2, "MOVEMENT"));
+
+    String replay =
+        mvc.perform(
+                post("/api/internal/task-board/v1/tasks")
+                    .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(registration)))
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+    assertThat(objectMapper.readTree(replay)).isEqualTo(firstResponse);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from board_task where external_task_id=?",
+                Integer.class,
+                externalTaskId))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from queue_entry where task_id=?", Integer.class, taskId))
+        .isEqualTo(3);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from outbox_event where aggregate_id=? and event_type=?",
+                Integer.class,
+                taskId.toString(),
+                TaskBoardEventTypes.BOARD_TASK_CREATED))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from outbox_event where event_type=?",
+                Integer.class,
+                TaskBoardEventTypes.QUEUE_ENTRY_CREATED))
+        .isEqualTo(3);
+
+    mvc.perform(
+            post("/api/internal/task-board/v1/tasks")
+                .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        repeatedQueueRegistration(externalTaskId, "MOVEMENT_CHANGED"))))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("TASK_BOARD_CONFLICT"));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from board_task where external_task_id=?",
+                Integer.class,
+                externalTaskId))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from queue_entry where task_id=?", Integer.class, taskId))
+        .isEqualTo(3);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from outbox_event where event_type=?",
+                Integer.class,
+                TaskBoardEventTypes.QUEUE_ENTRY_CREATED))
+        .isEqualTo(3);
+  }
+
+  @Test
   void preStartUpdateRejectsAStartedRoute() throws Exception {
     UUID externalTaskId = UUID.randomUUID();
     board.registerExternalTask("maintenance-service", registration(externalTaskId));
@@ -302,6 +412,22 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
         15,
         null,
         List.of(new RouteStepRequest(queueId, null, "Repair", 15)));
+  }
+
+  private RegisterExternalTaskRequest repeatedQueueRegistration(
+      UUID externalTaskId, String returnStepText) {
+    return new RegisterExternalTaskRequest(
+        WAREHOUSE,
+        externalTaskId,
+        "Repair route",
+        "CABIN-1",
+        null,
+        30,
+        null,
+        List.of(
+            new RouteStepRequest(queueId, null, "MOVEMENT", 5),
+            new RouteStepRequest(verificationQueueId, null, "INTERNAL_WORKS", 20),
+            new RouteStepRequest(queueId, null, returnStepText, 5)));
   }
 
   private JwtRequestPostProcessor taskSyncJwt(String clientId, List<String> scopes) {

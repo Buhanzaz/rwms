@@ -64,7 +64,12 @@ public final class AssetApiModels {
   public record EquipmentResponse(UUID id, long version, String code, String name, EquipmentCategory category,
       boolean active, String comment, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
 
-  public record EquipmentContentResponse(UUID equipmentId, String equipmentCode, long quantity, BalanceLocationKind locationKind) {}
+  public record EquipmentContentResponse(
+      UUID equipmentId,
+      String equipmentCode,
+      String equipmentName,
+      long quantity,
+      BalanceLocationKind locationKind) {}
   public record EquipmentBalanceResponse(UUID id, long version, UUID equipmentId, UUID warehouseId, UUID rentalItemId,
       BalanceLocationKind locationKind, long quantity, long activeHeldQuantity, long availableStock) {}
   public record EquipmentTotalsResponse(UUID equipmentId, UUID warehouseId, long totalQuantity, long stockQuantity,
@@ -104,7 +109,8 @@ public final class AssetApiModels {
   public record CommitEquipmentHoldRequest(@NotNull @Min(0) Long expectedVersion) {}
   public record ReleaseEquipmentHoldRequest(@NotNull @Min(0) Long expectedVersion) {}
   public record EquipmentHoldResponse(UUID id, long version, UUID equipmentId, UUID warehouseId, String ownerType,
-      String ownerId, long quantity, String state, OffsetDateTime expiresAt, OffsetDateTime committedAt) {}
+      String ownerId, UUID sourceBalanceId, long quantity, String state, OffsetDateTime expiresAt,
+      OffsetDateTime committedAt, OffsetDateTime executedAt) {}
 
   public record AcquireOperationLeaseRequest(@NotNull UUID rentalItemId, @NotBlank @Size(max = 64) String ownerType,
       @NotBlank @Size(max = 128) String ownerId, @NotNull @Min(0) Long expectedRentalItemVersion) {}
@@ -123,6 +129,13 @@ public final class AssetApiModels {
     ACCEPT_REPAIR,
     WRITE_OFF
   }
+  /** Read projection deliberately excludes cabin number, passport, comments and equipment. */
+  public record MaintenanceRentalItemSnapshot(
+      UUID id, long version, UUID warehouseId, RentalItemStatus status) {}
+  public record EnsureMaintenanceFurnitureEquipmentRequest(
+      @NotBlank @Size(max = 255) String equipmentName) {}
+  public record MaintenanceFurnitureEquipmentResponse(
+      UUID equipmentId, String equipmentCode, String equipmentName) {}
   public record AcquireMaintenanceOperationLeaseRequest(
       @NotNull UUID rentalItemId,
       @NotNull MaintenanceLeaseOwnerType ownerType,
@@ -138,6 +151,10 @@ public final class AssetApiModels {
       @NotNull @Min(1) Long fencingToken,
       @NotNull MaintenanceLeaseOwnerType ownerType,
       @NotNull UUID ownerId) {}
+  public record MaintenanceFurnitureLoss(
+      @NotNull UUID equipmentId,
+      @NotBlank @Size(max = 64) @Pattern(regexp = "^[A-Z0-9][A-Z0-9_-]{0,63}$") String equipmentCode,
+      @Min(1) long quantity) {}
   public record MaintenanceFencedStatusRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotNull MaintenanceStatusAction action,
@@ -145,7 +162,29 @@ public final class AssetApiModels {
       @NotNull @Min(1) Long fencingToken,
       @NotNull MaintenanceLeaseOwnerType ownerType,
       @NotNull UUID ownerId,
-      UUID linkedReturnEstimateId) {}
+      UUID linkedReturnEstimateId,
+      UUID estimateId,
+      @NotNull @Valid List<@Valid MaintenanceFurnitureLoss> furnitureLosses) {
+    public MaintenanceFencedStatusRequest(
+        Long expectedVersion,
+        MaintenanceStatusAction action,
+        UUID leaseId,
+        Long fencingToken,
+        MaintenanceLeaseOwnerType ownerType,
+        UUID ownerId,
+        UUID linkedReturnEstimateId) {
+      this(
+          expectedVersion,
+          action,
+          leaseId,
+          fencingToken,
+          ownerType,
+          ownerId,
+          linkedReturnEstimateId,
+          null,
+          List.of());
+    }
+  }
 
   /**
    * The only operation-lease owners accepted from logistics. The service
@@ -232,6 +271,81 @@ public final class AssetApiModels {
       OffsetDateTime expiresAt,
       OffsetDateTime committedAt) {}
 
+  /**
+   * Equipment movement reservations are a closed logistics-owned hold type.
+   * The caller never selects another owner type; asset derives it from the
+   * movement and line identifiers supplied on every command.
+   */
+  public enum LogisticsEquipmentMovementReservationOwnerType {
+    LOGISTICS_EQUIPMENT_MOVEMENT
+  }
+
+  /**
+   * Reserves one exact physical source balance until the task deadline. The
+   * deadline is not a service TTL and therefore is never silently extended.
+   */
+  public record AcquireLogisticsEquipmentMovementReservationRequest(
+      @NotNull UUID movementId,
+      @NotNull UUID lineId,
+      @NotNull UUID equipmentId,
+      @NotNull UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      @NotNull BalanceLocationKind sourceLocationKind,
+      @NotNull @Min(0) Long expectedSourceBalanceVersion,
+      @NotNull @Min(1) Long quantity,
+      @NotNull OffsetDateTime reservedUntil) {}
+
+  /** Exact owner and reservation-version CAS used when cancelling a planned move. */
+  public record LogisticsEquipmentMovementReservationCommandRequest(
+      @NotNull @Min(0) Long expectedReservationVersion,
+      @NotNull UUID movementId,
+      @NotNull UUID lineId) {}
+
+  /**
+   * The target deliberately has no version precondition: it may legitimately
+   * receive independent stock while a worker is carrying out this task. The
+   * source is fenced by the active reservation and its reservation CAS.
+   */
+  public record ExecuteLogisticsEquipmentMovementReservationsRequest(
+      @NotNull UUID movementId,
+      @NotEmpty List<@NotNull @Valid ExecuteLogisticsEquipmentMovementReservationLine> lines) {}
+
+  public record ExecuteLogisticsEquipmentMovementReservationLine(
+      @NotNull UUID reservationId,
+      @NotNull @Min(0) Long expectedReservationVersion,
+      @NotNull UUID lineId,
+      @NotNull UUID targetWarehouseId,
+      UUID targetRentalItemId,
+      @NotNull BalanceLocationKind targetLocationKind) {}
+
+  public record LogisticsEquipmentMovementReservationResponse(
+      UUID reservationId,
+      long version,
+      LogisticsEquipmentMovementReservationOwnerType ownerType,
+      UUID movementId,
+      UUID lineId,
+      UUID equipmentId,
+      String equipmentCode,
+      String equipmentName,
+      UUID sourceBalanceId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      BalanceLocationKind sourceLocationKind,
+      long quantity,
+      String state,
+      OffsetDateTime reservedUntil,
+      OffsetDateTime executedAt) {}
+
+  public record LogisticsEquipmentMovementExecutionLine(
+      UUID reservationId,
+      long reservationVersion,
+      UUID lineId,
+      MovementResponse movement) {}
+
+  public record LogisticsEquipmentMovementExecutionResponse(
+      UUID movementId,
+      List<LogisticsEquipmentMovementExecutionLine> lines) {}
+
   public record InventoryCaptureRequest(
       @NotNull UUID operationId,
       @NotNull @Positive Long technicalAttempt,
@@ -267,6 +381,7 @@ public final class AssetApiModels {
       List<InventoryCaptureMember> content) {}
 
   public record InventoryNumberResolutionRequest(
+      @NotNull UUID warehouseId,
       @NotBlank @Size(max = 128) String number) {}
   public record InventoryAssetSnapshot(
       UUID assetId,

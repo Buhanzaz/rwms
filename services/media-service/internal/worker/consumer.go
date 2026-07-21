@@ -53,13 +53,22 @@ func (processor Processor) Process(ctx context.Context, job persistence.WorkerJo
 }
 
 type Consumer struct {
-	repository *persistence.Repository
-	client     *kgo.Client
-	processor  Processor
-	owner      string
-	lease      time.Duration
-	timeout    time.Duration
-	logger     *slog.Logger
+	repository   *persistence.Repository
+	client       processingKafkaClient
+	processor    Processor
+	owner        string
+	lease        time.Duration
+	timeout      time.Duration
+	logger       *slog.Logger
+	handleRecord func(context.Context, *kgo.Record) error
+	sleep        func(context.Context, time.Duration) error
+}
+
+type processingKafkaClient interface {
+	PollFetches(context.Context) kgo.Fetches
+	CommitRecords(context.Context, ...*kgo.Record) error
+	AllowRebalance()
+	Close()
 }
 
 func NewKafkaConsumer(brokers []string, group, topic string) (*kgo.Client, error) {
@@ -75,8 +84,11 @@ func NewKafkaConsumer(brokers []string, group, topic string) (*kgo.Client, error
 }
 
 func NewConsumer(repository *persistence.Repository, client *kgo.Client, processor Processor, owner string, processingTimeout time.Duration, logger *slog.Logger) *Consumer {
-	return &Consumer{repository: repository, client: client, processor: processor, owner: owner,
-		lease: processingTimeout + 30*time.Second, timeout: processingTimeout, logger: logger}
+	consumer := &Consumer{repository: repository, client: client, processor: processor, owner: owner,
+		lease: processingTimeout + 30*time.Second, timeout: processingTimeout, logger: logger,
+		sleep: sleepProcessingConsumer}
+	consumer.handleRecord = consumer.handle
+	return consumer
 }
 
 func (consumer *Consumer) Run(ctx context.Context) error {
@@ -91,22 +103,57 @@ func (consumer *Consumer) Run(ctx context.Context) error {
 		}
 		for iterator := fetches.RecordIter(); !iterator.Done(); {
 			record := iterator.Next()
-			if err := consumer.handle(ctx, record); err != nil {
-				if ctx.Err() != nil {
-					consumer.client.AllowRebalance()
-					return nil
-				}
-				consumer.logger.Error("process media request", "eventOffset", record.Offset, "errorType", "DEPENDENCY_ERROR")
+			if err := consumer.handleUntilPersisted(ctx, record); err != nil {
 				consumer.client.AllowRebalance()
-				return err
+				return nil
 			}
-			if err := consumer.client.CommitRecords(ctx, record); err != nil {
-				consumer.logger.Error("commit media request", "eventOffset", record.Offset, "errorType", "BROKER_UNAVAILABLE")
+			if err := consumer.commitUntilAcknowledged(ctx, record); err != nil {
 				consumer.client.AllowRebalance()
-				return err
+				return nil
 			}
 		}
 		consumer.client.AllowRebalance()
+	}
+}
+
+func (consumer *Consumer) handleUntilPersisted(ctx context.Context, record *kgo.Record) error {
+	delay := time.Second
+	for {
+		err := consumer.handleRecord(ctx, record)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		consumer.logger.Error("process media request", "eventOffset", record.Offset,
+			"errorType", "DEPENDENCY_ERROR")
+		if err := consumer.sleep(ctx, delay); err != nil {
+			return err
+		}
+		if delay < 4*time.Second {
+			delay *= 2
+		}
+	}
+}
+
+func (consumer *Consumer) commitUntilAcknowledged(ctx context.Context, record *kgo.Record) error {
+	delay := time.Second
+	for {
+		if err := consumer.client.CommitRecords(ctx, record); err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		consumer.logger.Error("commit media request", "eventOffset", record.Offset,
+			"errorType", "BROKER_UNAVAILABLE")
+		if err := consumer.sleep(ctx, delay); err != nil {
+			return err
+		}
+		if delay < 4*time.Second {
+			delay *= 2
+		}
 	}
 }
 
@@ -120,6 +167,27 @@ func (consumer *Consumer) handle(ctx context.Context, record *kgo.Record) error 
 		claim, err := consumer.repository.ClaimProcessingJob(ctx, message, consumer.owner, consumer.lease)
 		if errors.Is(err, persistence.ErrVersionGap) {
 			return nil
+		}
+		if errors.Is(err, persistence.ErrConflict) {
+			resolution, resolveErr := consumer.repository.ResolveProcessingClaimConflict(ctx, message)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			switch resolution.Disposition {
+			case persistence.ProcessingConflictTerminalConflict:
+				return nil
+			case persistence.ProcessingConflictRetryAt:
+				delay := time.Until(resolution.RetryAt)
+				if delay <= 0 {
+					delay = 100 * time.Millisecond
+				}
+				if err := consumer.sleep(ctx, delay); err != nil {
+					return err
+				}
+				continue
+			default:
+				return persistence.ErrConflict
+			}
 		}
 		if err != nil {
 			return err
@@ -142,13 +210,20 @@ func (consumer *Consumer) handle(ctx context.Context, record *kgo.Record) error 
 		if err != nil || terminal {
 			return err
 		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
+		if err := consumer.sleep(ctx, delay); err != nil {
+			return err
 		}
+	}
+}
+
+func sleepProcessingConsumer(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 

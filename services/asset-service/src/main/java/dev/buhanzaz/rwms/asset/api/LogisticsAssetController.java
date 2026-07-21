@@ -119,6 +119,45 @@ public class LogisticsAssetController {
         access.logisticsSubjectId(jwt), idempotencyKey, id, request));
   }
 
+  /**
+   * Reserves one exact stock or cabin balance for a planned worker movement.
+   * This is deliberately separate from the older shipment-only hold surface.
+   */
+  @PostMapping("/equipment-movement-reservations")
+  public ResponseEntity<LogisticsEquipmentMovementReservationResponse> acquireMovementReservation(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody AcquireLogisticsEquipmentMovementReservationRequest request) {
+    access.requireLogisticsAssetAccess(jwt);
+    return created(service.acquireLogisticsEquipmentMovementReservation(
+        access.logisticsSubjectId(jwt), idempotencyKey, request));
+  }
+
+  @PutMapping("/equipment-movement-reservations/{id}/release")
+  public ResponseEntity<LogisticsEquipmentMovementReservationResponse> releaseMovementReservation(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID id,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody LogisticsEquipmentMovementReservationCommandRequest request) {
+    access.requireLogisticsAssetAccess(jwt);
+    return idempotentOk(service.releaseLogisticsEquipmentMovementReservation(
+        access.logisticsSubjectId(jwt), idempotencyKey, id, request));
+  }
+
+  /**
+   * Applies the worker-completed task as one asset-owned transaction. A
+   * failed line rolls back every balance, ledger and reservation transition.
+   */
+  @PostMapping("/equipment-movement-reservations/execute")
+  public ResponseEntity<LogisticsEquipmentMovementExecutionResponse> executeMovementReservations(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ExecuteLogisticsEquipmentMovementReservationsRequest request) {
+    access.requireLogisticsAssetAccess(jwt);
+    return created(service.executeLogisticsEquipmentMovementReservations(
+        access.logisticsSubjectId(jwt), idempotencyKey, request));
+  }
+
   private static <T> ResponseEntity<T> created(AssetService.CreateResult<T> result) {
     ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
     if (result.replayed()) response.header("Idempotency-Replayed", "true");

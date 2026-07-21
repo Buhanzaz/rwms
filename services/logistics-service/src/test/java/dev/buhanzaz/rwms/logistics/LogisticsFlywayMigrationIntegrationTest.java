@@ -46,7 +46,7 @@ class LogisticsFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndCreatesOnlyLogisticsOwnedState() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(7);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(9);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -54,6 +54,8 @@ class LogisticsFlywayMigrationIntegrationTest {
         .contains(
             "aggregate_snapshot",
             "consumer_aggregate_checkpoint",
+            "equipment_movement_task",
+            "equipment_movement_task_line",
             "domain_event",
             "event_stream_head",
             "flyway_schema_history",
@@ -71,8 +73,12 @@ class LogisticsFlywayMigrationIntegrationTest {
             "logistics_reconciliation_request",
             "logistics_return_shortage_snapshot",
             "logistics_task_reference",
+            "order_client",
             "outbox_event",
             "projection_checkpoint",
+            "rental_order",
+            "rental_order_audit_event",
+            "rental_order_command_receipt",
             "sanitized_dead_letter",
             "version_gap_quarantine")
         .doesNotContain("warehouse", "rental_item", "inventory_session", "reservation");
@@ -111,7 +117,7 @@ class LogisticsFlywayMigrationIntegrationTest {
             jdbc.queryForObject(
                 "select envelope_body from inbox_message where event_id=?", String.class, eventId))
         .isNull();
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isOne();
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(3);
     flyway(MIGRATIONS).validate();
   }
 
@@ -192,11 +198,13 @@ class LogisticsFlywayMigrationIntegrationTest {
             "V4__shipment_workflow.sql",
             "V5__transfer_workflow.sql",
             "V6__inbound_reconciliation.sql",
-            "V7__mutable_projection_versions.sql")) {
+            "V7__mutable_projection_versions.sql",
+            "V8__orders_module.sql",
+            "V9__equipment_movement_tasks.sql")) {
       copyMigration(directory, migration);
     }
     Flyway latest = flyway(location);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(6);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(8);
     latest.validate();
     assertThat(latest.migrate().migrationsExecuted).isZero();
 
@@ -319,7 +327,7 @@ class LogisticsFlywayMigrationIntegrationTest {
                 "rwms.cors.allowed-origins=http://localhost",
                 "spring.security.oauth2.resourceserver.jwt.issuer-uri=http://issuer.invalid",
                 "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://127.0.0.1:65535/jwks")
-            .run()) {
+            .run("--server.port=0")) {
       assertThat(context.getBean(EntityManagerFactory.class).isOpen()).isTrue();
     }
   }

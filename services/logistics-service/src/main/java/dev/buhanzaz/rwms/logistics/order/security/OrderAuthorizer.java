@@ -1,0 +1,212 @@
+package dev.buhanzaz.rwms.logistics.order.security;
+
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
+import dev.buhanzaz.rwms.logistics.order.service.OrderProblemException;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.stereotype.Component;
+
+@Component
+public class OrderAuthorizer {
+  private static final UUID DEVELOPMENT_SUBJECT =
+      UUID.fromString("00000000-0000-0000-0000-0000000000d8");
+  private static final Set<String> ROLES =
+      Set.of(
+          "SYSTEM_ADMIN",
+          "WMS_ADMIN",
+          "WAREHOUSE_MANAGER",
+          "RENTAL_MANAGER",
+          "VIEWER");
+
+  private final boolean developmentBypass;
+
+  public OrderAuthorizer(
+      Environment environment,
+      @Value("${rwms.logistics.security.dev-auth-bypass:false}") boolean configuredBypass) {
+    boolean production = environment.matchesProfiles("prod", "production");
+    developmentBypass =
+        configuredBypass && environment.matchesProfiles("dev") && !production;
+  }
+
+  public OrderActor readActor(Jwt jwt) {
+    return actor(jwt, false);
+  }
+
+  public OrderActor writeActor(Jwt jwt) {
+    return actor(jwt, true);
+  }
+
+  public void requireVisible(OrderActor actor, RentalOrder order) {
+    if (!isVisible(actor, order)) {
+      throw new OrderProblemException(
+          HttpStatus.NOT_FOUND, "ORDER_NOT_FOUND", "Заказ не найден");
+    }
+  }
+
+  public void requireMutable(OrderActor actor, RentalOrder order) {
+    requireVisible(actor, order);
+    if (!actor.writeScope()) {
+      throw new AccessDeniedException("Required USER scope is missing");
+    }
+    if (order.getStatus() != RentalOrderStatus.DRAFT) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT, "ORDER_NOT_EDITABLE", "Заказ больше нельзя редактировать");
+    }
+    if (order.getWarehouseId() != null && !canEditWarehouse(actor, order.getWarehouseId())) {
+      throw new AccessDeniedException("Insufficient warehouse access");
+    }
+  }
+
+  public void requireWarehouseRead(OrderActor actor, UUID warehouseId) {
+    if (!canReadWarehouse(actor, warehouseId)) {
+      throw new AccessDeniedException("Insufficient warehouse access");
+    }
+  }
+
+  public void requireWarehouseEdit(OrderActor actor, UUID warehouseId) {
+    if (!actor.writeScope() || !canEditWarehouse(actor, warehouseId)) {
+      throw new AccessDeniedException("Insufficient warehouse access");
+    }
+  }
+
+  public void requireManagerAssignment(OrderActor actor, UUID managerId) {
+    if (!actor.subjectId().equals(managerId) && !actor.canViewOtherManagers()) {
+      throw new AccessDeniedException("A manager cannot assign an order to another user");
+    }
+  }
+
+  public boolean isVisible(OrderActor actor, RentalOrder order) {
+    if (actor.globalAdministrator()) return true;
+    if (actor.localAdministrator()) {
+      return order.getWarehouseId() == null
+          ? actor.subjectId().equals(order.getManagerId())
+          : actor.readableWarehouses().contains(order.getWarehouseId());
+    }
+    return actor.subjectId().equals(order.getManagerId());
+  }
+
+  public boolean canEdit(OrderActor actor, RentalOrder order) {
+    return actor.writeScope()
+        && isVisible(actor, order)
+        && order.getStatus() == RentalOrderStatus.DRAFT
+        && (order.getWarehouseId() == null
+            || canEditWarehouse(actor, order.getWarehouseId()));
+  }
+
+  public boolean canReadWarehouse(OrderActor actor, UUID warehouseId) {
+    return warehouseId != null
+        && (actor.globalAdministrator() || actor.readableWarehouses().contains(warehouseId));
+  }
+
+  public boolean canEditWarehouse(OrderActor actor, UUID warehouseId) {
+    return warehouseId != null
+        && (actor.globalAdministrator() || actor.editableWarehouses().contains(warehouseId));
+  }
+
+  private OrderActor actor(Jwt jwt, boolean requireWrite) {
+    if (developmentBypass) {
+      return new OrderActor(
+          DEVELOPMENT_SUBJECT,
+          "SYSTEM_ADMIN",
+          "development-admin",
+          Set.of(),
+          Set.of(),
+          true,
+          false,
+          true);
+    }
+    if (jwt == null || !"USER".equals(jwt.getClaimAsString("principal_type"))) {
+      throw new AccessDeniedException("USER principal is required");
+    }
+    Set<String> scopes = scopes(jwt);
+    String requiredScope = requireWrite ? "rwms.write" : "rwms.read";
+    if (!scopes.contains(requiredScope)) {
+      throw new AccessDeniedException("Required USER scope is missing");
+    }
+    UUID subjectId;
+    try {
+      subjectId = UUID.fromString(jwt.getSubject());
+    } catch (IllegalArgumentException exception) {
+      throw new AccessDeniedException("USER subject must be a UUID");
+    }
+    String role = jwt.getClaimAsString("global_role");
+    if (!ROLES.contains(role)) {
+      throw new AccessDeniedException("Recognized USER role is required");
+    }
+    WarehouseGrants grants = grants(jwt);
+    String displayName = jwt.getClaimAsString("preferred_username");
+    if (displayName == null || displayName.isBlank()) displayName = subjectId.toString();
+    boolean global = "SYSTEM_ADMIN".equals(role) || "WMS_ADMIN".equals(role);
+    boolean local = "WAREHOUSE_MANAGER".equals(role);
+    return new OrderActor(
+        subjectId,
+        role,
+        displayName.trim(),
+        Set.copyOf(grants.readable()),
+        Set.copyOf(grants.editable()),
+        global,
+        local,
+        scopes.contains("rwms.write"));
+  }
+
+  private static WarehouseGrants grants(Jwt jwt) {
+    Set<UUID> readable = new HashSet<>();
+    Set<UUID> editable = new HashSet<>();
+    Object claim = jwt.getClaims().get("warehouse_access");
+    if (claim instanceof Collection<?> entries) {
+      for (Object entry : entries) {
+        if (!(entry instanceof Map<?, ?> access)) continue;
+        Object warehouse = access.get("warehouseId");
+        Object level = access.get("level");
+        if (!(warehouse instanceof String id) || !(level instanceof String value)) continue;
+        try {
+          UUID warehouseId = UUID.fromString(id);
+          AccessLevel accessLevel = AccessLevel.valueOf(value);
+          readable.add(warehouseId);
+          if (accessLevel.ordinal() >= AccessLevel.EDIT.ordinal()) editable.add(warehouseId);
+        } catch (IllegalArgumentException ignored) {
+          // Malformed claims never grant authority.
+        }
+      }
+    }
+    return new WarehouseGrants(readable, editable);
+  }
+
+  private static Set<String> scopes(Jwt jwt) {
+    Object claim = jwt.getClaims().get("scope");
+    if (claim == null) claim = jwt.getClaims().get("scp");
+    if (claim instanceof String value) {
+      return Set.copyOf(
+          Arrays.stream(value.trim().split("\\s+"))
+              .filter(item -> !item.isBlank())
+              .toList());
+    }
+    if (claim instanceof Collection<?> values) {
+      return Set.copyOf(
+          values.stream()
+              .filter(String.class::isInstance)
+              .map(String.class::cast)
+              .filter(value -> !value.isBlank())
+              .toList());
+    }
+    return Set.of();
+  }
+
+  private record WarehouseGrants(Set<UUID> readable, Set<UUID> editable) {}
+
+  private enum AccessLevel {
+    VIEW,
+    EDIT,
+    MANAGE
+  }
+}

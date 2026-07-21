@@ -108,6 +108,7 @@ rwms:
       client-secret: ${MAINTENANCE_CLIENT_SECRET:}
       asset-base-url: ${ASSET_INTERNAL_BASE_URL:}
       task-board-base-url: ${TASK_BOARD_INTERNAL_BASE_URL:}
+      media-base-url: ${MEDIA_INTERNAL_BASE_URL:}
       connect-timeout: ${MAINTENANCE_CONNECT_TIMEOUT:2s}
       read-timeout: ${MAINTENANCE_READ_TIMEOUT:5s}
   security:
