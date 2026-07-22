@@ -145,6 +145,12 @@ export type RepairEstimateCatalogLinkMutation = {
   canvasAnchors: RepairEstimateCatalogCanvasLinkAnchors | null
 }
 
+export type RepairEstimateCatalogCanvasChangeSet = {
+  nodePositions: Array<{ nodeId: string; x: number; y: number }>
+  addedLinks: RepairEstimateCatalogLinkMutation[]
+  deletedLinkIds: string[]
+}
+
 export function repairEstimateCatalogNodeTypeLabel(
   type: RepairEstimateCatalogNodeType
 ) {

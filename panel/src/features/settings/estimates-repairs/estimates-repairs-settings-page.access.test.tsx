@@ -25,8 +25,12 @@ const mocks = vi.hoisted(() => ({
   getCatalog: vi.fn(),
   getCatalogCanvas: vi.fn(),
   bootstrapCatalog: vi.fn(),
-  saveCatalogLink: vi.fn(),
-  moveCanvasNode: vi.fn(),
+  saveCanvasChanges: vi.fn(),
+  toastSuccess: vi.fn(),
+}))
+
+vi.mock("sonner", () => ({
+  toast: { success: mocks.toastSuccess },
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({
@@ -52,8 +56,7 @@ vi.mock(
       getCurrentRepairEstimateCatalog: mocks.getCatalog,
       getRepairEstimateCatalogCanvas: mocks.getCatalogCanvas,
       bootstrapRepairEstimateCatalog: mocks.bootstrapCatalog,
-      saveRepairEstimateCatalogLink: mocks.saveCatalogLink,
-      moveRepairEstimateCatalogCanvasNode: mocks.moveCanvasNode,
+      saveRepairEstimateCatalogCanvasChanges: mocks.saveCanvasChanges,
     }
   }
 )
@@ -273,18 +276,9 @@ describe("maintenance catalog settings", () => {
     ).toBeNull()
   })
 
-  it("creates a typed arrow and persists a moved node", async () => {
+  it("saves a typed arrow and a moved node with one catalog command", async () => {
     const user = userEvent.setup()
-    mocks.saveCatalogLink.mockResolvedValue({
-      id: "00000000-0000-4000-8000-000000000017",
-      catalogVersionId: catalog.id,
-      sourceNodeId: FIRST_WORK_ID,
-      targetNodeId: SECOND_WORK_ID,
-      linkType: "DEPENDENCY",
-      sortOrder: 10,
-      canvasAnchors: { source: "BOTTOM", target: "TOP" },
-    })
-    mocks.moveCanvasNode.mockResolvedValue({ x: 120, y: 360 })
+    mocks.saveCanvasChanges.mockResolvedValue(canvasFixture())
     renderPage("EDIT")
 
     await user.click(
@@ -309,18 +303,6 @@ describe("maintenance catalog settings", () => {
     fireEvent.pointerDown(sourceAnchor, { pointerId: 1, pointerType: "mouse" })
     fireEvent.pointerUp(targetAnchor, { pointerId: 1, pointerType: "mouse" })
 
-    await waitFor(() => {
-      expect(mocks.saveCatalogLink).toHaveBeenCalledWith(
-        expect.objectContaining({ catalogVersionId: catalog.id }),
-        expect.objectContaining({
-          sourceNodeId: FIRST_WORK_ID,
-          targetNodeId: SECOND_WORK_ID,
-          linkType: "DEPENDENCY",
-          canvasAnchors: { source: "BOTTOM", target: "TOP" },
-        })
-      )
-    })
-
     fireEvent.pointerDown(firstWork, {
       pointerId: 2,
       pointerType: "mouse",
@@ -341,12 +323,82 @@ describe("maintenance catalog settings", () => {
       clientY: 360,
     })
 
+    expect(mocks.saveCanvasChanges).not.toHaveBeenCalled()
+    const saveButton = screen.getByRole("button", { name: "Сохранить" })
+    expect((saveButton as HTMLButtonElement).disabled).toBe(false)
+    await user.click(saveButton)
+
     await waitFor(() => {
-      expect(mocks.moveCanvasNode).toHaveBeenCalledWith(
+      expect(mocks.saveCanvasChanges).toHaveBeenCalledWith(
         expect.objectContaining({ catalogVersionId: catalog.id }),
-        FIRST_WORK_ID,
-        { x: 120, y: 360 }
+        expect.objectContaining({
+          nodePositions: [{ nodeId: FIRST_WORK_ID, x: 120, y: 360 }],
+          addedLinks: [
+            expect.objectContaining({
+              sourceNodeId: FIRST_WORK_ID,
+              targetNodeId: SECOND_WORK_ID,
+              linkType: "DEPENDENCY",
+              canvasAnchors: { source: "BOTTOM", target: "TOP" },
+            }),
+          ],
+          deletedLinkIds: [],
+        })
       )
     })
+    expect(mocks.toastSuccess).toHaveBeenCalledWith("Каталог сохранён.")
+  })
+
+  it("snaps the arrow preview to a target point and cancels it on empty canvas", async () => {
+    const user = userEvent.setup()
+    renderPage("EDIT")
+
+    await user.click(
+      await screen.findByRole("button", { name: "Конструктор каталога смет" })
+    )
+    await user.click(await screen.findByRole("button", { name: /^Окна/ }))
+
+    const firstWork = await screen.findByRole("group", {
+      name: "Блок: Установить окно",
+    })
+    const secondWork = screen.getByRole("group", {
+      name: "Блок: Отремонтировать окно",
+    })
+    vi.spyOn(secondWork, "getBoundingClientRect").mockReturnValue({
+      x: 380,
+      y: 320,
+      top: 320,
+      right: 636,
+      bottom: 528,
+      left: 380,
+      width: 256,
+      height: 208,
+      toJSON: () => undefined,
+    })
+
+    fireEvent.pointerDown(
+      within(firstWork).getByRole("button", {
+        name: "Нижняя точка связи: Установить окно",
+      }),
+      { pointerId: 1, pointerType: "mouse" }
+    )
+    fireEvent.pointerMove(secondWork, {
+      pointerId: 1,
+      pointerType: "mouse",
+      clientX: 500,
+      clientY: 330,
+    })
+
+    const preview = document.querySelector("[data-catalog-link-preview='true']")
+    expect(preview?.getAttribute("d")).toMatch(/508 321$/)
+
+    fireEvent.click(
+      document.querySelector("[data-catalog-canvas='true']") as HTMLElement
+    )
+    expect(
+      document.querySelector("[data-catalog-link-preview='true']")
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Отменить стрелку" })
+    ).toBeNull()
   })
 })

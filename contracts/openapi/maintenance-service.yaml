@@ -39,6 +39,27 @@ paths:
         '200': { description: Catalog versions., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersionPage' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/maintenance/v1/catalog/versions/{id}:
+    parameters:
+      - { $ref: '#/components/parameters/CatalogVersionId' }
+      - { $ref: '#/components/parameters/WarehouseIdQuery' }
+    put:
+      tags: [Catalog]
+      operationId: replaceCatalog
+      description: >-
+        Atomically replaces catalog nodes and links. Requires USER, rwms.write and warehouse EDIT
+        access. The current ACTIVE catalog and historical DRAFT versions may change with optimistic
+        locking; SUPERSEDED versions are immutable.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceCatalogRequest' } } } }
+      responses:
+        '200': { description: Changed catalog., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersion' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
   /api/maintenance/v1/catalog/versions/{id}/nodes:
     parameters:
       - { $ref: '#/components/parameters/CatalogVersionId' }
@@ -914,6 +935,14 @@ components:
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         nodes: { type: array, maxItems: 10000, items: { $ref: '#/components/schemas/CatalogNodeInput' } }
+    ReplaceCatalogRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, nodes, links]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        nodes: { type: array, maxItems: 10000, items: { $ref: '#/components/schemas/CatalogNodeInput' } }
+        links: { type: array, maxItems: 20000, items: { $ref: '#/components/schemas/CatalogLinkInput' } }
     ReplaceCatalogLinksRequest:
       type: object
       additionalProperties: false

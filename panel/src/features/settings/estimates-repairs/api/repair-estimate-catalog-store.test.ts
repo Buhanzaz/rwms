@@ -6,6 +6,7 @@ import {
   getRepairEstimateCatalogSectionItems,
   getRepairEstimateCatalogSnapshot,
   moveRepairEstimateCatalogCanvasNode,
+  saveRepairEstimateCatalogCanvasChanges,
   saveRepairEstimateCatalogLink,
   saveRepairEstimateCatalogNode,
 } from "@/features/settings/estimates-repairs/api/repair-estimate-catalog-store"
@@ -19,6 +20,7 @@ const http = vi.hoisted(() => ({
   listMaintenanceCatalogLinks: vi.fn(),
   listMaintenanceCatalogNodes: vi.fn(),
   listMaintenanceCatalogVersions: vi.fn(),
+  replaceMaintenanceCatalog: vi.fn(),
   replaceMaintenanceCatalogLinks: vi.fn(),
   replaceMaintenanceCatalogNodes: vi.fn(),
 }))
@@ -120,6 +122,10 @@ describe("maintenance-backed repair catalog store", () => {
     http.listMaintenanceCatalogNodes.mockResolvedValue([node])
     http.listMaintenanceCatalogLinks.mockResolvedValue([])
     http.replaceMaintenanceCatalogNodes.mockResolvedValue({
+      ...version,
+      version: 8,
+    })
+    http.replaceMaintenanceCatalog.mockResolvedValue({
       ...version,
       version: 8,
     })
@@ -251,6 +257,63 @@ describe("maintenance-backed repair catalog store", () => {
       ]
     )
     expect(saved.canvasAnchors).toEqual({ source: "BOTTOM", target: "TOP" })
+  })
+
+  it("atomically saves canvas positions and link changes", async () => {
+    const targetNode = {
+      ...node,
+      id: commandId,
+      code: "WINDOW_REPAIR",
+      nodeType: "WORK" as const,
+      parentNodeId: nodeId,
+    }
+    http.listMaintenanceCatalogNodes.mockResolvedValue([node, targetNode])
+    http.listMaintenanceCatalogLinks.mockResolvedValue([
+      {
+        id: linkId,
+        catalogVersionId: versionId,
+        fromNodeId: nodeId,
+        toNodeId: commandId,
+        linkType: "FOLLOW_UP",
+        sortOrder: 10,
+        sourceAnchor: "BOTTOM",
+        targetAnchor: "TOP",
+      },
+    ])
+
+    await saveRepairEstimateCatalogCanvasChanges(request, {
+      nodePositions: [{ nodeId, x: 333.4, y: 444.6 }],
+      addedLinks: [
+        {
+          sourceNodeId: commandId,
+          targetNodeId: nodeId,
+          linkType: "DEPENDENCY",
+          sortOrder: 20,
+          canvasAnchors: { source: "TOP", target: "BOTTOM" },
+        },
+      ],
+      deletedLinkIds: [linkId],
+    })
+
+    expect(http.replaceMaintenanceCatalog).toHaveBeenCalledWith(
+      "catalog-token",
+      warehouseId,
+      versionId,
+      7,
+      expect.arrayContaining([
+        expect.objectContaining({ id: nodeId, canvasX: 333, canvasY: 445 }),
+      ]),
+      [
+        expect.objectContaining({
+          id: commandId,
+          fromNodeId: commandId,
+          toNodeId: nodeId,
+          linkType: "DEPENDENCY",
+          sourceAnchor: "TOP",
+          targetAnchor: "BOTTOM",
+        }),
+      ]
+    )
   })
 
   it("builds work, material and furniture tables from the same catalog nodes", async () => {
