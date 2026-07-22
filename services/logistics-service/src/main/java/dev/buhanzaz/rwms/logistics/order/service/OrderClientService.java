@@ -50,13 +50,11 @@ public class OrderClientService {
           }
           return builder.and(predicates.toArray(Predicate[]::new));
         };
-    Page<OrderClient> result =
-        clients.findAll(
-            specification,
-            PageRequest.of(
-                page,
-                size,
-                Sort.by(Sort.Order.asc("normalizedName"), Sort.Order.asc("id"))));
+    Sort order =
+        normalizedSearch.isEmpty()
+            ? Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"))
+            : Sort.by(Sort.Order.asc("normalizedName"), Sort.Order.asc("id"));
+    Page<OrderClient> result = clients.findAll(specification, PageRequest.of(page, size, order));
     return new ClientPageResponse(
         result.getContent().stream().map(mapper::toClientResponse).toList(),
         result.getNumber(),

@@ -8,6 +8,8 @@ import type {
 export type ReturnCreateCommand = {
   accessToken: string
   warehouseId: string
+  clientId: string
+  driverSnapshot: string
   lines: CreateReturnLine[]
   idempotencyKey: string
 }

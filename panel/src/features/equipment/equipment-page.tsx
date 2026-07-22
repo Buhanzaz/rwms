@@ -1,5 +1,9 @@
 import { useMemo, useState } from "react"
-import { ArrowDown01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons"
+import {
+  ArrowDown01Icon,
+  ArrowRight01Icon,
+  WarehouseIcon,
+} from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
@@ -9,12 +13,14 @@ import {
   type OperationsListGridColumn,
 } from "@/components/operations-list-grid"
 import { PageToolbar, PageToolbarContent } from "@/components/page-toolbar"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useAuth } from "@/features/auth/use-auth"
 import { getEquipmentItemsWithRentalUsages } from "@/features/equipment/api/equipment-rental-usages-api"
+import { MoveEquipmentUsageToStockDialog } from "@/features/equipment/move-equipment-usage-to-stock-dialog"
 import { RentalItemStatusBadge } from "@/features/rental-items/rental-item-status-badge"
+import { RENTAL_ITEM_CONTENTS_TRANSFER_STATUSES } from "@/features/rental-items/rental-item-contents-transfer-support"
+import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { cn } from "@/lib/utils"
 import type {
@@ -24,6 +30,11 @@ import type {
 
 const EMPTY_EQUIPMENT_ITEMS: EquipmentItemDto[] = []
 const quantityFormatter = new Intl.NumberFormat("ru-RU")
+const EQUIPMENT_MOVEMENT_ROLES = new Set([
+  "SYSTEM_ADMIN",
+  "WMS_ADMIN",
+  "WAREHOUSE_MANAGER",
+])
 
 function QuantityCell({
   value,
@@ -68,20 +79,16 @@ function MobileQuantityStat({
   )
 }
 
-function UsageLocationBadge({ usage }: { usage: EquipmentRentalUsageDto }) {
-  return (
-    <Badge variant="outline">
-      {usage.locationKind === "CABIN_RENTED" ? "В аренде" : "В бытовке"}
-    </Badge>
-  )
-}
-
 function UsageRows({
   item,
+  canMoveToStock,
   onOpenRentalItem,
+  onMoveToStock,
 }: {
   item: EquipmentItemDto
+  canMoveToStock: boolean
   onOpenRentalItem: (rentalItemId: string) => void
+  onMoveToStock: (usage: EquipmentRentalUsageDto) => void
 }) {
   if (item.usages.length === 0) {
     return (
@@ -98,51 +105,95 @@ function UsageRows({
     >
       <div
         data-slot="equipment-usage-header"
-        className="hidden grid-cols-3 gap-4 border-b bg-muted px-3 py-2 text-left text-xs font-medium text-muted-foreground lg:grid"
+        className={cn(
+          "hidden gap-4 border-b bg-muted px-3 py-2 text-left text-xs font-medium text-muted-foreground lg:grid",
+          canMoveToStock ? "lg:grid-cols-5" : "lg:grid-cols-4"
+        )}
       >
         <div>Номер бытовки</div>
         <div>Тип</div>
         <div>Статус</div>
+        <div>Количество</div>
+        {canMoveToStock ? <div>Действие</div> : null}
       </div>
 
-      {item.usages.map((usage) => (
-        <div
-          key={usage.id}
-          data-slot="equipment-usage-row"
-          className="grid min-w-0 gap-4 border-b p-3 text-left text-sm last:border-b-0 lg:grid-cols-3 lg:items-center"
-        >
-          <div className="min-w-0">
-            <div className="text-[0.625rem] font-medium text-muted-foreground lg:hidden">
-              Номер бытовки
-            </div>
-            <Button
-              variant="link"
-              className="h-auto min-w-0 justify-start p-0 font-medium"
-              aria-label={`Открыть карточку бытовки ${usage.rentalItemNumber}`}
-              onClick={() => onOpenRentalItem(usage.rentalItemId)}
-            >
-              <span className="truncate">{usage.rentalItemNumber}</span>
-            </Button>
-          </div>
+      {item.usages.map((usage) => {
+        const canMoveUsageToStock =
+          canMoveToStock &&
+          usage.availableQuantity > 0 &&
+          RENTAL_ITEM_CONTENTS_TRANSFER_STATUSES.includes(
+            usage.rentalItemStatus
+          )
 
-          <div className="min-w-0">
-            <div className="text-[0.625rem] font-medium text-muted-foreground lg:hidden">
-              Тип
+        return (
+          <div
+            key={usage.id}
+            data-slot="equipment-usage-row"
+            className={cn(
+              "grid min-w-0 gap-4 border-b p-3 text-left text-sm last:border-b-0 lg:items-center",
+              canMoveToStock ? "lg:grid-cols-5" : "lg:grid-cols-4"
+            )}
+          >
+            <div className="min-w-0">
+              <div className="text-[0.625rem] font-medium text-muted-foreground lg:hidden">
+                Номер бытовки
+              </div>
+              <Button
+                variant="link"
+                className="h-auto min-w-0 justify-start p-0 font-medium"
+                aria-label={`Открыть карточку бытовки ${usage.rentalItemNumber}`}
+                onClick={() => onOpenRentalItem(usage.rentalItemId)}
+              >
+                <span className="truncate">{usage.rentalItemNumber}</span>
+              </Button>
             </div>
-            <div className="truncate">{usage.rentalItemType}</div>
-          </div>
 
-          <div data-slot="equipment-usage-status" className="min-w-0">
-            <div className="text-[0.625rem] font-medium text-muted-foreground lg:hidden">
-              Статус
+            <div className="min-w-0">
+              <div className="text-[0.625rem] font-medium text-muted-foreground lg:hidden">
+                Тип
+              </div>
+              <div className="truncate">{usage.rentalItemType}</div>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+
+            <div data-slot="equipment-usage-status" className="min-w-0">
+              <div className="text-[0.625rem] font-medium text-muted-foreground lg:hidden">
+                Статус
+              </div>
               <RentalItemStatusBadge status={usage.rentalItemStatus} />
-              <UsageLocationBadge usage={usage} />
             </div>
+
+            <div className="min-w-0">
+              <div className="text-[0.625rem] font-medium text-muted-foreground lg:hidden">
+                Количество
+              </div>
+              <QuantityCell value={usage.quantity} />
+            </div>
+
+            {canMoveToStock ? (
+              <div className="min-w-0">
+                <div className="text-[0.625rem] font-medium text-muted-foreground lg:hidden">
+                  Действие
+                </div>
+                {canMoveUsageToStock ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onMoveToStock(usage)}
+                  >
+                    <HugeiconsIcon
+                      icon={WarehouseIcon}
+                      data-icon="inline-start"
+                    />
+                    Переместить на склад
+                  </Button>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </div>
+            ) : null}
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -150,13 +201,20 @@ function UsageRows({
 function EquipmentDesktopGrid({
   items,
   expandedItemId,
+  canMoveToStock,
   onToggleExpanded,
   onOpenRentalItem,
+  onMoveToStock,
 }: {
   items: EquipmentItemDto[]
   expandedItemId: string | null
+  canMoveToStock: boolean
   onToggleExpanded: (item: EquipmentItemDto) => void
   onOpenRentalItem: (rentalItemId: string) => void
+  onMoveToStock: (
+    item: EquipmentItemDto,
+    usage: EquipmentRentalUsageDto
+  ) => void
 }) {
   const columns = useMemo<OperationsListGridColumn<EquipmentItemDto>[]>(
     () => [
@@ -246,7 +304,12 @@ function EquipmentDesktopGrid({
         items={items}
         expandedItemId={expandedItemId}
         renderExpandedRow={(item) => (
-          <UsageRows item={item} onOpenRentalItem={onOpenRentalItem} />
+          <UsageRows
+            item={item}
+            canMoveToStock={canMoveToStock}
+            onOpenRentalItem={onOpenRentalItem}
+            onMoveToStock={(usage) => onMoveToStock(item, usage)}
+          />
         )}
       />
     </div>
@@ -256,13 +319,20 @@ function EquipmentDesktopGrid({
 function EquipmentMobileList({
   items,
   expandedItemId,
+  canMoveToStock,
   onToggleExpanded,
   onOpenRentalItem,
+  onMoveToStock,
 }: {
   items: EquipmentItemDto[]
   expandedItemId: string | null
+  canMoveToStock: boolean
   onToggleExpanded: (item: EquipmentItemDto) => void
   onOpenRentalItem: (rentalItemId: string) => void
+  onMoveToStock: (
+    item: EquipmentItemDto,
+    usage: EquipmentRentalUsageDto
+  ) => void
 }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border bg-card md:hidden">
@@ -325,7 +395,12 @@ function EquipmentMobileList({
 
               {expanded ? (
                 <div className="border-t bg-muted/20 p-3">
-                  <UsageRows item={item} onOpenRentalItem={onOpenRentalItem} />
+                  <UsageRows
+                    item={item}
+                    canMoveToStock={canMoveToStock}
+                    onOpenRentalItem={onOpenRentalItem}
+                    onMoveToStock={(usage) => onMoveToStock(item, usage)}
+                  />
                 </div>
               ) : null}
             </div>
@@ -338,10 +413,14 @@ function EquipmentMobileList({
 
 export function EquipmentPage() {
   const navigate = useNavigate()
-  const { accessToken } = useAuth()
+  const { accessToken, currentUser } = useAuth()
   const { selectedWarehouse } = useWarehouse()
   const [search, setSearch] = useState("")
   const [expandedItemId, setExpandedItemId] = useState<string | null>(null)
+  const [moveTarget, setMoveTarget] = useState<{
+    equipmentId: string
+    usageId: string
+  } | null>(null)
   const warehouseId = selectedWarehouse?.id
 
   const equipmentQuery = useQuery({
@@ -354,6 +433,18 @@ export function EquipmentPage() {
     enabled: Boolean(warehouseId && accessToken),
   })
   const items = equipmentQuery.data ?? EMPTY_EQUIPMENT_ITEMS
+  const moveEquipment = moveTarget
+    ? (items.find((item) => item.id === moveTarget.equipmentId) ?? null)
+    : null
+  const moveUsage = moveEquipment?.usages.find(
+    (usage) => usage.id === moveTarget?.usageId
+  )
+  const canMoveToStock = Boolean(
+    currentUser &&
+    warehouseId &&
+    EQUIPMENT_MOVEMENT_ROLES.has(currentUser.globalRole) &&
+    hasWarehouseAccess(currentUser, warehouseId, "MANAGE")
+  )
 
   if (!selectedWarehouse) {
     return (
@@ -369,6 +460,13 @@ export function EquipmentPage() {
 
   function openRentalItem(rentalItemId: string) {
     navigate(`/warehouse/${rentalItemId}`)
+  }
+
+  function openMoveToStock(
+    item: EquipmentItemDto,
+    usage: EquipmentRentalUsageDto
+  ) {
+    setMoveTarget({ equipmentId: item.id, usageId: usage.id })
   }
 
   return (
@@ -405,17 +503,30 @@ export function EquipmentPage() {
           <EquipmentMobileList
             items={items}
             expandedItemId={expandedItemId}
+            canMoveToStock={canMoveToStock}
             onToggleExpanded={toggleExpanded}
             onOpenRentalItem={openRentalItem}
+            onMoveToStock={openMoveToStock}
           />
           <EquipmentDesktopGrid
             items={items}
             expandedItemId={expandedItemId}
+            canMoveToStock={canMoveToStock}
             onToggleExpanded={toggleExpanded}
             onOpenRentalItem={openRentalItem}
+            onMoveToStock={openMoveToStock}
           />
         </>
       )}
+      {moveEquipment && moveUsage && accessToken ? (
+        <MoveEquipmentUsageToStockDialog
+          key={`${moveUsage.id}:${moveUsage.balanceVersion}:${moveEquipment.balances.find((balance) => balance.rentalItemId === null && balance.locationKind === "STOCK")?.version ?? 0}`}
+          accessToken={accessToken}
+          equipment={moveEquipment}
+          usage={moveUsage}
+          onClose={() => setMoveTarget(null)}
+        />
+      ) : null}
     </div>
   )
 }

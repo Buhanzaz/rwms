@@ -208,7 +208,7 @@ export function RequestEstimateDialog({
       <DialogContent className="max-h-[calc(100svh-1rem)] overflow-y-auto sm:max-w-4xl">
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>Запросить смету</DialogTitle>
+            <DialogTitle>Создать смету</DialogTitle>
             <DialogDescription>
               Зафиксируйте недостающее оборудование для каждой server-issued
               строки. Logistics-service сам выполнит settlement и передаст факт
@@ -352,7 +352,7 @@ export function RequestEstimateDialog({
               <FieldError>
                 {mutation.error instanceof Error
                   ? mutation.error.message
-                  : "Не удалось запросить смету"}
+                  : "Не удалось создать смету"}
               </FieldError>
             ) : null}
           </FieldGroup>
@@ -365,7 +365,7 @@ export function RequestEstimateDialog({
               Отмена
             </Button>
             <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? "Запрашивается…" : "Запросить"}
+              {mutation.isPending ? "Создаётся…" : "Создать смету"}
             </Button>
           </DialogFooter>
         </form>

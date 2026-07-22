@@ -1,12 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Link, useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
-import {
-  ArrowLeft01Icon,
-  ArrowRight01Icon,
-  Settings02Icon,
-} from "@hugeicons/core-free-icons"
+import { ArrowLeft01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
@@ -342,6 +338,7 @@ function RepairTaskEditorContent({
     <RepairWorkInformationFields
       warehouseId={warehouseId}
       rentalItemId={draft.rentalItemId}
+      rentalItemScope="REPAIR"
       contextLabel={draft.kind === "REWORK" ? "Причина" : "Источник"}
       contextValue={draft.reason}
       dispatchDate={draft.dispatchDate}
@@ -351,8 +348,8 @@ function RepairTaskEditorContent({
       readOnly={readOnly}
       rentalItemDisabled={Boolean(task) || draft.kind === "REWORK"}
       rentalItemInvalid={Boolean(error && !draft.rentalItemId)}
-      onRentalItemChange={(rentalItemId) =>
-        setDraft((current) => ({ ...current, rentalItemId }))
+      onRentalItemChange={(rentalItem) =>
+        setDraft((current) => ({ ...current, rentalItemId: rentalItem.id }))
       }
       onContextChange={(reason) =>
         setDraft((current) => ({ ...current, reason }))
@@ -481,15 +478,6 @@ function RepairTaskEditorContent({
     </div>
   )
 
-  const catalogAction = (
-    <Button variant="outline" size="sm" asChild>
-      <Link to="/settings/estimates-repairs">
-        <HugeiconsIcon icon={Settings02Icon} data-icon="inline-start" />
-        Настроить каталог
-      </Link>
-    </Button>
-  )
-
   return (
     <>
       <RepairEstimateWorkspaceLayout
@@ -521,7 +509,6 @@ function RepairTaskEditorContent({
         information={information}
         estimate={taskLines}
         controls={controls}
-        catalogAction={readOnly ? undefined : catalogAction}
       />
       <RepairWorkCompletionDialog
         open={completionOpen && !readOnly}

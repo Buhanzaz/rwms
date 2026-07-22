@@ -50,6 +50,16 @@ public class TransferProcessor {
                     work.expectedAssetVersion(),
                     work.documentId(),
                     work.lineId()));
+        case TASK_REGISTER ->
+            store.confirmTaskRegistration(
+                work.operationId(),
+                dependencies.registerPreparationTask(
+                    work.warehouseId(), work.externalTaskId(), 0, null));
+        case TASK_CANCEL ->
+            store.confirmTaskCancellation(
+                work.operationId(),
+                dependencies.cancelPreparationTask(
+                    work.externalTaskId(), work.expectedLeaseVersion()));
         case MEDIA ->
             store.confirmMedia(
                 work.operationId(),

@@ -85,6 +85,7 @@ function returnLine(value: unknown): ReturnLine {
     assetVersion: integer(source.assetVersion),
     state: oneOf<ReturnLineState>(source.state, RETURN_LINE_STATES),
     tenantSnapshot: nullableText(source.tenantSnapshot),
+    rentalOrderId: nullableUuid(source.rentalOrderId),
   }
 }
 
@@ -94,8 +95,6 @@ export function parseReturnDocument(value: unknown): ReturnDocument {
   if (lines.length === 0) invalidResponse()
   if (source.documentType !== "RETURN") invalidResponse()
   if (nullableUuid(source.destinationWarehouseId) !== null) invalidResponse()
-  if (nullableText(source.partySnapshot) !== null) invalidResponse()
-  if (nullableText(source.driverSnapshot) !== null) invalidResponse()
 
   return {
     id: uuid(source.id),
@@ -104,8 +103,14 @@ export function parseReturnDocument(value: unknown): ReturnDocument {
     state: oneOf<ReturnDocumentState>(source.state, RETURN_DOCUMENT_STATES),
     warehouseId: uuid(source.warehouseId),
     destinationWarehouseId: null,
-    partySnapshot: null,
-    driverSnapshot: null,
+    partySnapshot: nullableText(source.partySnapshot),
+    driverSnapshot: nullableText(source.driverSnapshot),
+    clientId: nullableUuid(source.clientId),
+    equipmentMovementTaskId: (() => {
+      if (nullableUuid(source.equipmentMovementTaskId) !== null)
+        invalidResponse()
+      return null
+    })(),
     lines,
     createdAt: timestamp(source.createdAt),
     updatedAt: timestamp(source.updatedAt),
@@ -152,6 +157,8 @@ export class HttpReturnClient implements ReturnClient {
       headers: commandHeaders(input.idempotencyKey),
       body: JSON.stringify({
         warehouseId: input.warehouseId,
+        clientId: input.clientId,
+        driverSnapshot: input.driverSnapshot,
         lines: input.lines,
       }),
     })

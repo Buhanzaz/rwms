@@ -80,6 +80,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
 import { useWarehouse } from "@/hooks/use-warehouse"
@@ -116,6 +117,11 @@ type EstimateScreen =
       action: EstimateCatalogSettingsActionDto
       categoryId: string
     }
+
+type ForkCatalogRequest = {
+  screen: EstimateScreen
+  pendingCanvasNodeEditId?: string
+}
 
 type EstimateActionData =
   RepairEstimateCatalogCanvasDto | RepairEstimateCatalogSectionDto
@@ -1347,6 +1353,7 @@ function getCurveMidpoint(
 function CatalogCanvas({
   nodes,
   links,
+  readOnly,
   selectedNodeId,
   selectedLinkId,
   draftLinkType,
@@ -1357,10 +1364,13 @@ function CatalogCanvas({
   onCompleteLink,
   onMoveNode,
   onEditNode,
+  onStartEditing,
+  startEditingPending = false,
   onDeleteLink,
 }: {
   nodes: RepairEstimateCatalogNodeDto[]
   links: RepairEstimateCatalogLinkDto[]
+  readOnly: boolean
   selectedNodeId: string | null
   selectedLinkId: string | null
   draftLinkType: RepairEstimateCatalogLinkType
@@ -1377,6 +1387,8 @@ function CatalogCanvas({
     position: CanvasPosition
   ) => void
   onEditNode: (node: RepairEstimateCatalogNodeDto) => void
+  onStartEditing?: (nodeId?: string) => void
+  startEditingPending?: boolean
   onDeleteLink: (link: RepairEstimateCatalogLinkDto) => void
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null)
@@ -1648,56 +1660,57 @@ function CatalogCanvas({
         </svg>
       )}
 
-      {links.map((link) => {
-        if (link.id !== selectedLinkId) {
-          return null
-        }
+      {!readOnly &&
+        links.map((link) => {
+          if (link.id !== selectedLinkId) {
+            return null
+          }
 
-        const source = positionById.get(link.sourceNodeId)
-        const target = positionById.get(link.targetNodeId)
-        if (!source || !target) {
-          return null
-        }
+          const source = positionById.get(link.sourceNodeId)
+          const target = positionById.get(link.targetNodeId)
+          if (!source || !target) {
+            return null
+          }
 
-        const { sourceAnchor, targetAnchor } = getCatalogLinkAnchors(
-          link,
-          source,
-          target
-        )
-        const midpoint = getCurveMidpoint(
-          anchorPoint(source, sourceAnchor),
-          anchorPoint(target, targetAnchor),
-          sourceAnchor,
-          targetAnchor
-        )
+          const { sourceAnchor, targetAnchor } = getCatalogLinkAnchors(
+            link,
+            source,
+            target
+          )
+          const midpoint = getCurveMidpoint(
+            anchorPoint(source, sourceAnchor),
+            anchorPoint(target, targetAnchor),
+            sourceAnchor,
+            targetAnchor
+          )
 
-        return (
-          <Button
-            key={`delete-${link.id}`}
-            type="button"
-            variant="outline"
-            size="sm"
-            className="group/delete-link absolute z-30 -translate-x-1/2 -translate-y-1/2 border-border bg-background/95 text-muted-foreground shadow-md hover:border-foreground/70 hover:bg-muted/50 hover:text-foreground/80"
-            style={{
-              left: midpoint.x,
-              top: midpoint.y,
-            }}
-            onClick={(event) => {
-              event.stopPropagation()
-              onDeleteLink(link)
-            }}
-            onPointerDown={(event) => event.stopPropagation()}
-            onPointerUp={(event) => event.stopPropagation()}
-          >
-            <HugeiconsIcon
-              icon={Delete01Icon}
-              data-icon="inline-start"
-              className="text-muted-foreground transition-colors group-hover/delete-link:text-destructive"
-            />
-            <span>Удалить</span>
-          </Button>
-        )
-      })}
+          return (
+            <Button
+              key={`delete-${link.id}`}
+              type="button"
+              variant="outline"
+              size="sm"
+              className="group/delete-link absolute z-30 -translate-x-1/2 -translate-y-1/2 border-border bg-background/95 text-muted-foreground shadow-md hover:border-foreground/70 hover:bg-muted/50 hover:text-foreground/80"
+              style={{
+                left: midpoint.x,
+                top: midpoint.y,
+              }}
+              onClick={(event) => {
+                event.stopPropagation()
+                onDeleteLink(link)
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onPointerUp={(event) => event.stopPropagation()}
+            >
+              <HugeiconsIcon
+                icon={Delete01Icon}
+                data-icon="inline-start"
+                className="text-muted-foreground transition-colors group-hover/delete-link:text-destructive"
+              />
+              <span>Удалить</span>
+            </Button>
+          )
+        })}
 
       {positionedNodes.map(({ node, position }) => (
         <div
@@ -1706,7 +1719,10 @@ function CatalogCanvas({
           aria-label={`Блок: ${node.name}`}
           tabIndex={0}
           className={cn(
-            "absolute flex cursor-grab touch-none flex-col items-stretch gap-3 overflow-visible rounded-lg border bg-card px-3 py-3 text-left text-sm shadow-sm transition-colors select-none hover:bg-accent active:cursor-grabbing",
+            "absolute flex flex-col items-stretch gap-3 overflow-visible rounded-lg border bg-card px-3 py-3 text-left text-sm shadow-sm transition-colors hover:bg-accent",
+            readOnly
+              ? "cursor-default"
+              : "cursor-grab touch-none select-none active:cursor-grabbing",
             node.id === selectedNodeId && "border-primary bg-accent"
           )}
           style={{
@@ -1741,6 +1757,9 @@ function CatalogCanvas({
             }
           }}
           onPointerDown={(event) => {
+            if (readOnly) {
+              return
+            }
             if (event.button !== 0 && event.pointerType === "mouse") {
               return
             }
@@ -1789,6 +1808,9 @@ function CatalogCanvas({
             }))
           }}
           onPointerUp={(event) => {
+            if (readOnly) {
+              return
+            }
             const drag = dragRef.current
             if (
               drag !== null &&
@@ -1843,43 +1865,44 @@ function CatalogCanvas({
             }
           }}
         >
-          {(["TOP", "BOTTOM"] satisfies CatalogLinkAnchor[]).map((anchor) => (
-            <button
-              key={anchor}
-              type="button"
-              aria-label={`${anchor === "TOP" ? "Верхняя" : "Нижняя"} точка связи: ${node.name}`}
-              className={cn(
-                "absolute left-1/2 z-10 size-5 -translate-x-1/2 rounded-full border-2 border-background bg-primary shadow-md",
-                anchor === "TOP" ? "-top-2.5" : "-bottom-2.5",
-                draftLinkStart?.nodeId === node.id &&
-                  draftLinkStart.anchor === anchor &&
-                  "ring-2 ring-ring ring-offset-2"
-              )}
-              onClick={(event) => event.stopPropagation()}
-              onPointerDown={(event) => {
-                event.preventDefault()
-                event.stopPropagation()
-                if (
-                  draftLinkStart === null ||
-                  draftLinkStart.nodeId === node.id
-                ) {
-                  setLinkPreviewPoint(anchorPoint(position, anchor))
-                  onBeginLink({ nodeId: node.id, anchor })
-                }
-              }}
-              onPointerUp={(event) => {
-                event.preventDefault()
-                event.stopPropagation()
-                if (
-                  draftLinkStart !== null &&
-                  draftLinkStart.nodeId !== node.id
-                ) {
-                  setLinkPreviewPoint(null)
-                  onCompleteLink(node, anchor)
-                }
-              }}
-            />
-          ))}
+          {!readOnly &&
+            (["TOP", "BOTTOM"] satisfies CatalogLinkAnchor[]).map((anchor) => (
+              <button
+                key={anchor}
+                type="button"
+                aria-label={`${anchor === "TOP" ? "Верхняя" : "Нижняя"} точка связи: ${node.name}`}
+                className={cn(
+                  "absolute left-1/2 z-10 size-5 -translate-x-1/2 rounded-full border-2 border-background bg-primary shadow-md",
+                  anchor === "TOP" ? "-top-2.5" : "-bottom-2.5",
+                  draftLinkStart?.nodeId === node.id &&
+                    draftLinkStart.anchor === anchor &&
+                    "ring-2 ring-ring ring-offset-2"
+                )}
+                onClick={(event) => event.stopPropagation()}
+                onPointerDown={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  if (
+                    draftLinkStart === null ||
+                    draftLinkStart.nodeId === node.id
+                  ) {
+                    setLinkPreviewPoint(anchorPoint(position, anchor))
+                    onBeginLink({ nodeId: node.id, anchor })
+                  }
+                }}
+                onPointerUp={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  if (
+                    draftLinkStart !== null &&
+                    draftLinkStart.nodeId !== node.id
+                  ) {
+                    setLinkPreviewPoint(null)
+                    onCompleteLink(node, anchor)
+                  }
+                }}
+              />
+            ))}
           <div className="flex w-full items-start justify-between gap-2">
             <span className="min-w-0 flex-1 leading-snug font-medium break-words whitespace-normal">
               {node.name}
@@ -1898,20 +1921,27 @@ function CatalogCanvas({
               </span>
             )}
           </span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="mt-auto w-full"
-            onClick={(event) => {
-              event.stopPropagation()
-              onEditNode(node)
-            }}
-            onPointerDown={(event) => event.stopPropagation()}
-            onPointerUp={(event) => event.stopPropagation()}
-          >
-            Редактировать
-          </Button>
+          {(!readOnly || onStartEditing) && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-auto w-full"
+              disabled={readOnly && startEditingPending}
+              onClick={(event) => {
+                event.stopPropagation()
+                if (readOnly) {
+                  onStartEditing?.(node.id)
+                  return
+                }
+                onEditNode(node)
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onPointerUp={(event) => event.stopPropagation()}
+            >
+              {readOnly ? "Редактировать в черновике" : "Редактировать"}
+            </Button>
+          )}
         </div>
       ))}
     </div>
@@ -1922,10 +1952,18 @@ function CatalogCanvasCategoryEditor({
   request,
   categoryId,
   readOnly,
+  onStartEditing,
+  startEditingPending,
+  pendingNodeEditId,
+  onPendingNodeEditHandled,
 }: {
   request: RepairEstimateCatalogRequest
   categoryId: string
   readOnly: boolean
+  onStartEditing?: (nodeId?: string) => void
+  startEditingPending?: boolean
+  pendingNodeEditId?: string | null
+  onPendingNodeEditHandled?: () => void
 }) {
   const queryClient = useQueryClient()
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -2036,6 +2074,10 @@ function CatalogCanvasCategoryEditor({
   const data = canvasQuery.data
   const category =
     data.categories.find((item) => item.id === categoryId) ?? null
+  if (category === null) {
+    return <ErrorBox>Категория не найдена</ErrorBox>
+  }
+
   const canvasNodes = getCanvasNodes(data, categoryId)
   const nodeIds = new Set(canvasNodes.map((node) => node.id))
   const canvasLinks = data.links.filter(
@@ -2074,22 +2116,34 @@ function CatalogCanvasCategoryEditor({
   }
 
   const openNodeEditor = (node: RepairEstimateCatalogNodeDto) => {
-    if (readOnly) return
     setNodeDialogState({
       title: "Редактировать блок",
       description: node.name,
       submitLabel: "Сохранить",
       allowTypeSelect: node.nodeType !== "CATEGORY",
       request,
-      furnitureTree: category?.furnitureCategory ?? false,
+      furnitureTree: category.furnitureCategory,
       value: createNodeMutation(node),
       save: (input) => saveRepairEstimateCatalogCanvasNode(request, input),
     })
   }
-
-  if (category === null) {
-    return <ErrorBox>Категория не найдена</ErrorBox>
-  }
+  const pendingNode =
+    !readOnly && pendingNodeEditId
+      ? (data.nodes.find((node) => node.id === pendingNodeEditId) ?? null)
+      : null
+  const pendingNodeDialogState = pendingNode
+    ? {
+        title: "Редактировать блок",
+        description: pendingNode.name,
+        submitLabel: "Сохранить",
+        allowTypeSelect: pendingNode.nodeType !== "CATEGORY",
+        request,
+        furnitureTree: category.furnitureCategory,
+        value: createNodeMutation(pendingNode),
+        save: (input: RepairEstimateCatalogNodeMutation) =>
+          saveRepairEstimateCatalogCanvasNode(request, input),
+      }
+    : null
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
@@ -2126,13 +2180,19 @@ function CatalogCanvasCategoryEditor({
               <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
               Блок
             </Button>
-            <div className="w-52">
-              <NativeSelect
-                className="h-9 md:h-9"
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm text-muted-foreground">Тип стрелки</span>
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                size="sm"
                 value={draftLinkType}
-                onChange={(value) =>
-                  setDraftLinkType(value as RepairEstimateCatalogLinkType)
-                }
+                aria-label="Тип стрелки"
+                onValueChange={(value) => {
+                  if (value) {
+                    setDraftLinkType(value as RepairEstimateCatalogLinkType)
+                  }
+                }}
               >
                 {(
                   [
@@ -2140,11 +2200,11 @@ function CatalogCanvasCategoryEditor({
                     "DEPENDENCY",
                   ] satisfies RepairEstimateCatalogLinkType[]
                 ).map((type) => (
-                  <option key={type} value={type}>
+                  <ToggleGroupItem key={type} value={type}>
                     {repairEstimateCatalogLinkTypeLabel(type)}
-                  </option>
+                  </ToggleGroupItem>
                 ))}
-              </NativeSelect>
+              </ToggleGroup>
             </div>
             {draftLinkStart !== null && (
               <Button
@@ -2164,6 +2224,7 @@ function CatalogCanvasCategoryEditor({
         <CatalogCanvas
           nodes={canvasNodes}
           links={canvasLinks}
+          readOnly={readOnly}
           selectedNodeId={selectedNodeId}
           selectedLinkId={selectedLinkId}
           draftLinkType={draftLinkType}
@@ -2192,6 +2253,8 @@ function CatalogCanvasCategoryEditor({
             !readOnly && moveNodeMutation.mutate({ nodeId: node.id, position })
           }
           onEditNode={openNodeEditor}
+          onStartEditing={onStartEditing}
+          startEditingPending={startEditingPending}
           onDeleteLink={(link) => {
             if (!readOnly) deleteLinkMutation.mutate(link.id)
           }}
@@ -2201,10 +2264,14 @@ function CatalogCanvasCategoryEditor({
       {error !== null && <ErrorBox>{error}</ErrorBox>}
 
       <NodeEditorDialog
-        state={nodeDialogState}
-        onClose={() => setNodeDialogState(null)}
+        state={nodeDialogState ?? pendingNodeDialogState}
+        onClose={() => {
+          setNodeDialogState(null)
+          onPendingNodeEditHandled?.()
+        }}
         onSaved={() => {
           setError(null)
+          onPendingNodeEditHandled?.()
           invalidate()
         }}
       />
@@ -2561,11 +2628,19 @@ function EstimateCategoryEditor({
   action,
   categoryId,
   readOnly,
+  onStartEditing,
+  startEditingPending,
+  pendingNodeEditId,
+  onPendingNodeEditHandled,
 }: {
   request: RepairEstimateCatalogRequest
   action: EstimateCatalogSettingsActionDto
   categoryId: string
   readOnly: boolean
+  onStartEditing?: (nodeId?: string) => void
+  startEditingPending?: boolean
+  pendingNodeEditId?: string | null
+  onPendingNodeEditHandled?: () => void
 }) {
   if (action.id === "repair-estimate-catalog-canvas") {
     return (
@@ -2573,6 +2648,10 @@ function EstimateCategoryEditor({
         request={request}
         categoryId={categoryId}
         readOnly={readOnly}
+        onStartEditing={onStartEditing}
+        startEditingPending={startEditingPending}
+        pendingNodeEditId={pendingNodeEditId}
+        onPendingNodeEditHandled={onPendingNodeEditHandled}
       />
     )
   }
@@ -2615,12 +2694,20 @@ function EstimateDrilldownView({
   onBack,
   onOpenCategory,
   readOnly,
+  onStartEditing,
+  startEditingPending,
+  pendingNodeEditId,
+  onPendingNodeEditHandled,
 }: {
   request: RepairEstimateCatalogRequest
   screen: Exclude<EstimateScreen, { level: "root" }>
   onBack: () => void
   onOpenCategory: (categoryId: string) => void
   readOnly: boolean
+  onStartEditing?: (nodeId?: string) => void
+  startEditingPending?: boolean
+  pendingNodeEditId?: string | null
+  onPendingNodeEditHandled?: () => void
 }) {
   const categoryNameQuery = useQuery({
     queryKey: [
@@ -2657,6 +2744,18 @@ function EstimateDrilldownView({
           </Button>
           <BreadcrumbTitle action={screen.action} categoryName={categoryName} />
         </div>
+        {onStartEditing && (
+          <Button
+            type="button"
+            disabled={startEditingPending}
+            onClick={() => onStartEditing()}
+          >
+            <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
+            {startEditingPending
+              ? "Создаём черновик…"
+              : "Редактировать в черновике"}
+          </Button>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-4">
@@ -2673,6 +2772,10 @@ function EstimateDrilldownView({
             action={screen.action}
             categoryId={screen.categoryId}
             readOnly={readOnly}
+            onStartEditing={onStartEditing}
+            startEditingPending={startEditingPending}
+            pendingNodeEditId={pendingNodeEditId}
+            onPendingNodeEditHandled={onPendingNodeEditHandled}
           />
         )}
       </div>
@@ -2690,6 +2793,9 @@ export function EstimatesRepairsSettingsPage() {
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(
     null
   )
+  const [pendingCanvasNodeEditId, setPendingCanvasNodeEditId] = useState<
+    string | null
+  >(null)
   const [commandError, setCommandError] = useState<string | null>(null)
   const commandIdempotencyKeys = useRef(new Map<string, string>())
 
@@ -2783,7 +2889,7 @@ export function EstimatesRepairsSettingsPage() {
   })
 
   const forkMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: ({ screen, pendingCanvasNodeEditId }: ForkCatalogRequest) => {
       if (!accessToken) {
         throw new Error("Не получен токен доступа к maintenance-service.")
       }
@@ -2811,16 +2917,23 @@ export function EstimatesRepairsSettingsPage() {
         catalogRequest,
         selectedVersion.version,
         commandIdempotencyKey(signature)
-      ).then((version) => ({ version, signature }))
+      ).then((version) => ({
+        version,
+        signature,
+        screen,
+        pendingCanvasNodeEditId,
+      }))
     },
-    onSuccess: ({ version, signature }) => {
+    onSuccess: ({ version, signature, screen, pendingCanvasNodeEditId }) => {
       commandIdempotencyKeys.current.delete(signature)
       setCommandError(null)
       setSelectedVersionId(version.id)
-      setEstimateScreen({ level: "root" })
+      setPendingCanvasNodeEditId(pendingCanvasNodeEditId ?? null)
+      setEstimateScreen(screen)
       refreshCatalog()
     },
     onError: (error) => {
+      setPendingCanvasNodeEditId(null)
       setCommandError(
         error instanceof Error
           ? error.message
@@ -2927,6 +3040,12 @@ export function EstimatesRepairsSettingsPage() {
     void queryClient.invalidateQueries({ queryKey: ["estimate-settings"] })
   }
 
+  const canForkSelectedVersion = Boolean(
+    canManage &&
+    (selectedVersion?.lifecycle === "ACTIVE" ||
+      selectedVersion?.lifecycle === "SUPERSEDED")
+  )
+
   if (estimateScreen.level !== "root") {
     if (!catalogRequest || !selectedVersion) {
       return (
@@ -2940,6 +3059,18 @@ export function EstimatesRepairsSettingsPage() {
         request={catalogRequest}
         screen={estimateScreen}
         readOnly={!canEdit || selectedVersion.lifecycle !== "DRAFT"}
+        onStartEditing={
+          canForkSelectedVersion
+            ? (nodeId) =>
+                forkMutation.mutate({
+                  screen: estimateScreen,
+                  pendingCanvasNodeEditId: nodeId,
+                })
+            : undefined
+        }
+        startEditingPending={forkMutation.isPending}
+        pendingNodeEditId={pendingCanvasNodeEditId}
+        onPendingNodeEditHandled={() => setPendingCanvasNodeEditId(null)}
         onBack={() => {
           if (estimateScreen.level === "category") {
             setEstimateScreen({
@@ -2977,6 +3108,7 @@ export function EstimatesRepairsSettingsPage() {
               onChange={(value) => {
                 setSelectedVersionId(value)
                 setEstimateScreen({ level: "root" })
+                setPendingCanvasNodeEditId(null)
                 setCommandError(null)
               }}
             >
@@ -3025,7 +3157,7 @@ export function EstimatesRepairsSettingsPage() {
           <Button
             type="button"
             variant="outline"
-            onClick={() => forkMutation.mutate()}
+            onClick={() => forkMutation.mutate({ screen: { level: "root" } })}
             disabled={
               !accessToken ||
               !selectedWarehouseId ||

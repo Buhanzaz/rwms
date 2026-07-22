@@ -30,6 +30,8 @@ const DOCUMENT_KEYS = [
   "destinationWarehouseId",
   "partySnapshot",
   "driverSnapshot",
+  "clientId",
+  "equipmentMovementTaskId",
   "lines",
   "createdAt",
   "updatedAt",
@@ -42,6 +44,7 @@ const LINE_KEYS = [
   "assetVersion",
   "state",
   "tenantSnapshot",
+  "rentalOrderId",
 ] as const
 
 function invalidResponse(): never {
@@ -83,6 +86,10 @@ function nullableText(value: unknown): string | null {
   return value === null ? null : text(value)
 }
 
+function nullableUuid(value: unknown): string | null {
+  return value === null ? null : uuid(value)
+}
+
 function integer(value: unknown): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) invalidResponse()
   return value as number
@@ -112,6 +119,10 @@ function transferLine(value: unknown): TransferLine {
     assetVersion: integer(source.assetVersion),
     state: oneOf<TransferLineState>(source.state, TRANSFER_LINE_STATES),
     tenantSnapshot: nullableText(source.tenantSnapshot),
+    rentalOrderId: (() => {
+      if (nullableUuid(source.rentalOrderId) !== null) invalidResponse()
+      return null
+    })(),
   }
 }
 
@@ -123,7 +134,7 @@ export function parseTransferDocument(value: unknown): TransferDocument {
   if (
     source.documentType !== "TRANSFER" ||
     source.partySnapshot !== null ||
-    source.driverSnapshot !== null ||
+    nullableUuid(source.clientId) !== null ||
     warehouseId === destinationWarehouseId ||
     lines.length === 0
   ) {
@@ -138,7 +149,9 @@ export function parseTransferDocument(value: unknown): TransferDocument {
     warehouseId,
     destinationWarehouseId,
     partySnapshot: null,
-    driverSnapshot: null,
+    driverSnapshot: nullableText(source.driverSnapshot),
+    clientId: null,
+    equipmentMovementTaskId: nullableUuid(source.equipmentMovementTaskId),
     lines,
     createdAt: timestamp(source.createdAt),
     updatedAt: timestamp(source.updatedAt),
@@ -192,7 +205,10 @@ export class HttpWarehouseTransferClient implements WarehouseTransferClient {
       body: JSON.stringify({
         warehouseId: input.warehouseId,
         destinationWarehouseId: input.destinationWarehouseId,
+        driverSnapshot: input.driverSnapshot,
+        equipmentDeadlineAt: input.equipmentDeadlineAt,
         lines: input.lines,
+        equipment: input.equipment,
       }),
     })
   }

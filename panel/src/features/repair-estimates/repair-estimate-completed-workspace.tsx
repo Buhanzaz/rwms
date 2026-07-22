@@ -2,11 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
-import {
-  ArrowLeft01Icon,
-  ArrowRight01Icon,
-  Settings02Icon,
-} from "@hugeicons/core-free-icons"
+import { ArrowLeft01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -453,15 +449,6 @@ export function RepairEstimateCompletedWorkspace({
       </div>
     </div>
   )
-  const catalogAction = (
-    <Button variant="outline" size="sm" asChild>
-      <Link to="/settings/estimates-repairs">
-        <HugeiconsIcon icon={Settings02Icon} data-icon="inline-start" />
-        Настроить каталог
-      </Link>
-    </Button>
-  )
-
   return (
     <>
       <RepairEstimateWorkspaceLayout
@@ -485,7 +472,6 @@ export function RepairEstimateCompletedWorkspace({
         information={information}
         estimate={estimateLines}
         controls={controls}
-        catalogAction={catalogAction}
       />
 
       <RepairEstimateCompletionDialog

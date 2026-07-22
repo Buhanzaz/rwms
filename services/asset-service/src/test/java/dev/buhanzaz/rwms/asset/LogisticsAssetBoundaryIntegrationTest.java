@@ -21,6 +21,8 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.ExecuteLogisticsEquipmentMovem
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsEquipmentHoldCommandRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsFencedEffectRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsLeaseCommandRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsReturnEquipmentReceiptLine;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsReturnEquipmentReceiptRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.TransferEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest;
@@ -573,6 +575,106 @@ class LogisticsAssetBoundaryIntegrationTest {
         warehouse,
         cabin.id())).isEqualTo(2L);
     assertThat(replay.rebuildAndVerify().aggregateCount()).isGreaterThanOrEqualTo(6);
+  }
+
+  @Test
+  @Transactional
+  void movementReservationTransfersFurnitureStockBetweenWarehouses() {
+    UUID subject = UUID.randomUUID();
+    UUID origin = UUID.randomUUID();
+    UUID destination = UUID.randomUUID();
+    UUID equipmentId = service.createEquipment(
+        subject,
+        UUID.randomUUID(),
+        new CreateEquipmentRequest(
+            "XFER-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
+            "Transfer stock table",
+            EquipmentCategory.FURNITURE,
+            null))
+        .response()
+        .id();
+    seedStockBalance(equipmentId, origin, 5);
+    UUID movementId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    var reserved = service.acquireLogisticsEquipmentMovementReservation(
+        subject,
+        UUID.randomUUID(),
+        new AcquireLogisticsEquipmentMovementReservationRequest(
+            movementId,
+            lineId,
+            equipmentId,
+            origin,
+            null,
+            BalanceLocationKind.STOCK,
+            0L,
+            2L,
+            OffsetDateTime.now(ZoneOffset.UTC).plusHours(1)))
+        .response();
+
+    service.executeLogisticsEquipmentMovementReservations(
+        subject,
+        UUID.randomUUID(),
+        new ExecuteLogisticsEquipmentMovementReservationsRequest(
+            movementId,
+            List.of(new ExecuteLogisticsEquipmentMovementReservationLine(
+                reserved.reservationId(),
+                reserved.version(),
+                lineId,
+                destination,
+                null,
+                BalanceLocationKind.STOCK))));
+
+    assertThat(jdbc.queryForObject(
+        "select quantity from equipment_balance where equipment_id=? and warehouse_id=? and location_kind='STOCK'",
+        Long.class,
+        equipmentId,
+        origin)).isEqualTo(3L);
+    assertThat(jdbc.queryForObject(
+        "select quantity from equipment_balance where equipment_id=? and warehouse_id=? and location_kind='STOCK'",
+        Long.class,
+        equipmentId,
+        destination)).isEqualTo(2L);
+  }
+
+  @Test
+  @Transactional
+  void returnEquipmentReceiptIncreasesWarehouseFurnitureStockExactlyOnce() {
+    UUID subject = UUID.randomUUID();
+    UUID warehouse = UUID.randomUUID();
+    UUID equipmentId = service.createEquipment(
+        subject,
+        UUID.randomUUID(),
+        new CreateEquipmentRequest(
+            "RETURN-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
+            "Returned furniture chair",
+            EquipmentCategory.FURNITURE,
+            null))
+        .response()
+        .id();
+    LogisticsReturnEquipmentReceiptRequest request =
+        new LogisticsReturnEquipmentReceiptRequest(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            warehouse,
+            List.of(new LogisticsReturnEquipmentReceiptLine(equipmentId, 3L)));
+    UUID key = UUID.randomUUID();
+
+    var received = service.receiveLogisticsReturnEquipment(subject, key, request);
+    var replayed = service.receiveLogisticsReturnEquipment(subject, key, request);
+
+    assertThat(received.replayed()).isFalse();
+    assertThat(replayed.replayed()).isTrue();
+    assertThat(replayed.response()).isEqualTo(received.response());
+    assertThat(jdbc.queryForObject(
+        "select quantity from equipment_balance where equipment_id=? and warehouse_id=? and location_kind='STOCK'",
+        Long.class,
+        equipmentId,
+        warehouse)).isEqualTo(3L);
+    assertThat(jdbc.queryForObject(
+        "select count(*) from logistics_return_equipment_receipt where return_id=? and return_line_id=?",
+        Integer.class,
+        request.returnId(),
+        request.returnLineId())).isOne();
   }
 
   @Test

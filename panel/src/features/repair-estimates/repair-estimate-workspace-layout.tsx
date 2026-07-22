@@ -56,7 +56,6 @@ type RepairEstimateWorkspaceLayoutProps = {
   information: ReactNode
   estimate: ReactNode
   controls: ReactNode
-  catalogAction?: ReactNode
 }
 
 export function RepairEstimateWorkspaceLayout({
@@ -68,7 +67,6 @@ export function RepairEstimateWorkspaceLayout({
   information,
   estimate,
   controls,
-  catalogAction,
 }: RepairEstimateWorkspaceLayoutProps) {
   return (
     <section
@@ -104,7 +102,6 @@ export function RepairEstimateWorkspaceLayout({
         <WorkspacePanel
           title="Каталог"
           description={catalogDescription}
-          action={catalogAction}
           className="order-4 xl:col-start-2 xl:row-start-2"
           contentClassName="overflow-y-auto"
         >

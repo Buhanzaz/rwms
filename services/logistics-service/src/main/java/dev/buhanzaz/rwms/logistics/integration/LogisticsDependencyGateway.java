@@ -20,6 +20,17 @@ public interface LogisticsDependencyGateway {
       UUID documentId,
       UUID lineId);
 
+  default OperationLease acquireReturnLease(
+      UUID idempotencyKey,
+      UUID assetId,
+      long expectedAssetVersion,
+      UUID documentId,
+      UUID lineId,
+      UUID rentalOrderId) {
+    return acquireReturnLease(
+        idempotencyKey, assetId, expectedAssetVersion, documentId, lineId);
+  }
+
   OperationLease acquireOperationLease(
       UUID idempotencyKey,
       LogisticsOwnerType ownerType,
@@ -27,6 +38,23 @@ public interface LogisticsDependencyGateway {
       long expectedAssetVersion,
       UUID documentId,
       UUID lineId);
+
+  default OperationLease acquireOperationLease(
+      UUID idempotencyKey,
+      LogisticsOwnerType ownerType,
+      UUID assetId,
+      long expectedAssetVersion,
+      UUID documentId,
+      UUID lineId,
+      UUID rentalOrderId) {
+    return acquireOperationLease(
+        idempotencyKey,
+        ownerType,
+        assetId,
+        expectedAssetVersion,
+        documentId,
+        lineId);
+  }
 
   RentalItemSnapshot applyReturnIntake(
       UUID idempotencyKey,
@@ -46,6 +74,17 @@ public interface LogisticsDependencyGateway {
       UUID documentId,
       UUID lineId,
       boolean shortage);
+
+  default ReturnEquipmentReceipt receiveReturnEquipment(
+      UUID idempotencyKey,
+      UUID returnId,
+      UUID returnLineId,
+      UUID warehouseId,
+      List<ReturnEquipmentReceiptLine> lines) {
+    throw new LogisticsDependencyException(
+        LogisticsDependencyException.FailureKind.CONFIGURATION,
+        "Return equipment receipts are not configured");
+  }
 
   RentalItemSnapshot applyFencedEffect(
       UUID idempotencyKey,
@@ -247,6 +286,20 @@ public interface LogisticsDependencyGateway {
       List<EquipmentShortage> shortages,
       String snapshotSha256,
       OffsetDateTime receivedAt) {}
+
+  record ReturnEquipmentReceiptLine(
+      UUID receiptId,
+      UUID equipmentId,
+      long quantity,
+      UUID stockBalanceId,
+      long stockBalanceVersion,
+      long stockQuantity) {}
+
+  record ReturnEquipmentReceipt(
+      UUID returnId,
+      UUID returnLineId,
+      UUID warehouseId,
+      List<ReturnEquipmentReceiptLine> lines) {}
 
   enum EquipmentHoldAction {
     COMMIT,

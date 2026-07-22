@@ -376,13 +376,13 @@ export async function deleteOrder(params: {
 
 export async function listOrderClients(params: {
   accessToken: string
-  type: OrderClientType
+  type?: OrderClientType
   search: string
   page?: number
   size?: number
 }): Promise<OrderPage<OrderClientSearchItem>> {
   const endpoint = new URL(clientsEndpoint())
-  endpoint.searchParams.set("type", params.type)
+  if (params.type) endpoint.searchParams.set("type", params.type)
   endpoint.searchParams.set("search", params.search.trim())
   endpoint.searchParams.set("page", String(params.page ?? 0))
   endpoint.searchParams.set("size", String(params.size ?? 20))

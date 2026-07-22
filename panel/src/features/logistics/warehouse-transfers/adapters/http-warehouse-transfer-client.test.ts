@@ -10,6 +10,8 @@ const LINE_ID = "44444444-4444-4444-8444-444444444444"
 const ASSET_ID = "55555555-5555-4555-8555-555555555555"
 const MEDIA_ID = "66666666-6666-4666-8666-666666666666"
 const IDEMPOTENCY_KEY = "77777777-7777-4777-8777-777777777777"
+const EQUIPMENT_ID = "88888888-8888-4888-8888-888888888888"
+const EQUIPMENT_TASK_ID = "99999999-9999-4999-8999-999999999999"
 
 const document: TransferDocument = {
   id: DOCUMENT_ID,
@@ -20,6 +22,8 @@ const document: TransferDocument = {
   destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
   partySnapshot: null,
   driverSnapshot: null,
+  clientId: null,
+  equipmentMovementTaskId: EQUIPMENT_TASK_ID,
   lines: [
     {
       id: LINE_ID,
@@ -29,6 +33,7 @@ const document: TransferDocument = {
       assetVersion: 8,
       state: "PENDING",
       tenantSnapshot: null,
+      rentalOrderId: null,
     },
   ],
   createdAt: "2026-07-18T08:00:00Z",
@@ -90,8 +95,17 @@ describe("HttpWarehouseTransferClient", () => {
       accessToken: "transfer-token",
       warehouseId: SOURCE_WAREHOUSE_ID,
       destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
+      driverSnapshot: "Иванов Иван",
+      equipmentDeadlineAt: "2026-07-19T08:00:00Z",
       idempotencyKey: IDEMPOTENCY_KEY,
       lines: [{ assetId: ASSET_ID, assetVersion: 8 }],
+      equipment: [
+        {
+          equipmentId: EQUIPMENT_ID,
+          expectedSourceBalanceVersion: 3,
+          quantity: 2,
+        },
+      ],
     }
 
     await client.create(command)
@@ -110,7 +124,10 @@ describe("HttpWarehouseTransferClient", () => {
       expect(JSON.parse(init.body as string)).toEqual({
         warehouseId: SOURCE_WAREHOUSE_ID,
         destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
+        driverSnapshot: command.driverSnapshot,
+        equipmentDeadlineAt: command.equipmentDeadlineAt,
         lines: command.lines,
+        equipment: command.equipment,
       })
     }
   })

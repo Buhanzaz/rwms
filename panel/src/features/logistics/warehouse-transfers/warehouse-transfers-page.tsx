@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
+import { getEquipmentItems } from "@/api/equipment-api"
 import type { WarehouseInfo } from "@/api/warehouse-api"
 import { OperationsListGrid } from "@/components/operations-list-grid"
 import {
@@ -32,6 +33,16 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxLabel,
+  ComboboxList,
+} from "@/components/ui/combobox"
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -60,6 +71,12 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
+import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
+import { listAssetRentalItems } from "@/features/rental-items/api/asset-rental-items-api"
+import type {
+  RentalItemContentsItemDto,
+  RentalItemDto,
+} from "@/features/rental-items/model/rental-item"
 import {
   WAREHOUSE_TRANSFERS_QUERY_KEY,
   arriveWarehouseTransferLine,
@@ -73,11 +90,13 @@ import {
 import {
   TRANSFER_LINE_STATE_LABELS,
   TRANSFER_STATE_LABELS,
+  type CreateTransferEquipmentLine,
   type TransferDocument,
   type TransferDocumentState,
   type TransferLine,
   type TransferMediaReference,
 } from "@/features/logistics/warehouse-transfers/model/warehouse-transfer"
+import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
 import { logisticsTransferMediaOwner } from "@/features/media/media-service"
@@ -90,8 +109,35 @@ const ACTIONABLE_STATES = new Set<TransferDocumentState>([
   "CONFLICT",
   "RECONCILIATION_REQUIRED",
 ])
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+type TransferLineTarget = {
+  document: TransferDocument
+  line: TransferLine
+}
+
+type TransferLineDraft = {
+  key: string
+  assetId: string | null
+}
+
+type TransferEquipmentDraft = {
+  key: string
+  equipmentId: string
+  quantity: number
+}
+
+type CommandAttempt = {
+  signature: string
+  idempotencyKey: string
+}
+
+function commandIdentity() {
+  return crypto.randomUUID()
+}
+
+function emptyLine(): TransferLineDraft {
+  return { key: commandIdentity(), assetId: null }
+}
 
 function formatDateTime(value: string) {
   return new Intl.DateTimeFormat("ru-RU", {
@@ -108,17 +154,6 @@ function isConflict(cause: unknown): cause is ApiError {
   return cause instanceof ApiError && cause.status === 409
 }
 
-function commandErrorMessage(cause: unknown, fallback: string) {
-  const message = errorMessage(cause, fallback)
-  return isConflict(cause)
-    ? `Конфликт данных: ${message} Данные документа обновляются; повторите действие после обновления.`
-    : message
-}
-
-function commandIdentity() {
-  return crypto.randomUUID()
-}
-
 function statusVariant(state: TransferDocumentState) {
   if (state === "CONFLICT" || state === "RECONCILIATION_REQUIRED") {
     return "destructive" as const
@@ -131,25 +166,12 @@ function warehouseLabel(warehouse: WarehouseInfo | undefined, id: string) {
   return warehouse ? `${warehouse.name} · ${warehouse.city}` : id
 }
 
-function commandKey(
-  action: string,
-  document: TransferDocument,
-  line?: TransferLine,
-  fingerprint = ""
+function stockVersion(
+  item: Awaited<ReturnType<typeof getEquipmentItems>>[number]
 ) {
-  return [
-    action,
-    document.id,
-    document.version,
-    line?.id ?? "document",
-    line?.version ?? "",
-    fingerprint,
-  ].join(":")
-}
-
-type TransferLineTarget = {
-  document: TransferDocument
-  line: TransferLine
+  return item.balances.find(
+    (balance) => balance.locationKind === "STOCK" && balance.availableStock > 0
+  )?.version
 }
 
 export function WarehouseTransfersPage() {
@@ -188,7 +210,6 @@ export function WarehouseTransfersPage() {
     enabled: Boolean(accessToken && selectedWarehouseId),
     refetchInterval: 5_000,
   })
-
   const detailQuery = useQuery({
     queryKey: [...WAREHOUSE_TRANSFERS_QUERY_KEY, "detail", expandedId],
     queryFn: () => getWarehouseTransfer(accessToken!, expandedId!),
@@ -204,25 +225,14 @@ export function WarehouseTransfersPage() {
         document.id,
         document.warehouseId,
         document.destinationWarehouseId,
+        document.driverSnapshot,
         TRANSFER_STATE_LABELS[document.state],
         ...document.lines.flatMap((line) => [line.id, line.assetId]),
-      ].some((value) => value.toLocaleLowerCase("ru").includes(needle))
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLocaleLowerCase("ru").includes(needle))
     })
   }, [query.data, search, showAll])
-
-  function keyFor(
-    action: string,
-    document: TransferDocument,
-    line?: TransferLine,
-    fingerprint = ""
-  ) {
-    const identity = commandKey(action, document, line, fingerprint)
-    const existing = commandKeys.current.get(identity)
-    if (existing) return existing
-    const created = commandIdentity()
-    commandKeys.current.set(identity, created)
-    return created
-  }
 
   function invalidateTransfers() {
     void queryClient.invalidateQueries({
@@ -234,15 +244,19 @@ export function WarehouseTransfersPage() {
     if (selectedWarehouseId) {
       queryClient.setQueryData<TransferDocument[]>(
         [...WAREHOUSE_TRANSFERS_QUERY_KEY, selectedWarehouseId],
-        (current) =>
-          current?.map((document) =>
-            document.id === projection.id ? projection : document
-          )
+        (current) => {
+          if (!current) return [projection]
+          return current.some((document) => document.id === projection.id)
+            ? current.map((document) =>
+                document.id === projection.id ? projection : document
+              )
+            : [projection, ...current]
+        }
       )
     }
     queryClient.setQueryData<TransferDocument>(
       [...WAREHOUSE_TRANSFERS_QUERY_KEY, "detail", projection.id],
-      (current) => (current ? projection : current)
+      projection
     )
   }
 
@@ -253,47 +267,37 @@ export function WarehouseTransfersPage() {
     )
   }
 
-  function handleCommandError(cause: unknown, fallback: string) {
-    setCommandError(commandErrorMessage(cause, fallback))
-    if (isConflict(cause)) {
-      invalidateTransfers()
-      return true
-    }
-    return false
+  function keyFor(
+    action: string,
+    document: TransferDocument,
+    line?: TransferLine
+  ) {
+    const identity = `${action}:${document.id}:${document.version}:${line?.id ?? "document"}:${line?.version ?? ""}`
+    const existing = commandKeys.current.get(identity)
+    if (existing) return existing
+    const idempotencyKey = commandIdentity()
+    commandKeys.current.set(identity, idempotencyKey)
+    return idempotencyKey
   }
 
   const departMutation = useMutation({
-    mutationFn: ({
-      document,
-      line,
-    }: {
-      document: TransferDocument
-      line: TransferLine
-    }) => {
-      if (!canManageDocument(document)) {
-        throw new Error(
-          "Для отправки нужны права MANAGE на обоих складах перемещения."
-        )
-      }
-      return departWarehouseTransferLine({
+    mutationFn: ({ document, line }: TransferLineTarget) =>
+      departWarehouseTransferLine({
         accessToken: accessToken!,
         documentId: document.id,
         lineId: line.id,
         expectedVersion: document.version,
         expectedLineVersion: line.version,
         idempotencyKey: keyFor("depart", document, line),
-      })
-    },
-    onSuccess: (result, { document, line }) => {
+      }),
+    onSuccess: (result) => {
       applyTransferProjection(result)
-      commandKeys.current.delete(commandKey("depart", document, line))
       setCommandError(null)
       invalidateTransfers()
     },
-    onError: (cause, { document, line }) => {
-      if (handleCommandError(cause, "Не удалось отправить бытовку")) {
-        commandKeys.current.delete(commandKey("depart", document, line))
-      }
+    onError: (cause) => {
+      setCommandError(errorMessage(cause, "Не удалось отправить бытовку"))
+      if (isConflict(cause)) invalidateTransfers()
     },
   })
 
@@ -302,67 +306,54 @@ export function WarehouseTransfersPage() {
       document,
       line,
       references,
-    }: TransferLineTarget & { references: TransferMediaReference[] }) => {
-      if (!canManageDocument(document)) {
-        throw new Error(
-          "Для приёмки нужны права MANAGE на обоих складах перемещения."
-        )
-      }
-      const fingerprint = JSON.stringify(references)
-      return arriveWarehouseTransferLine({
+      idempotencyKey,
+    }: TransferLineTarget & {
+      references: TransferMediaReference[]
+      idempotencyKey: string
+    }) =>
+      arriveWarehouseTransferLine({
         accessToken: accessToken!,
         documentId: document.id,
         lineId: line.id,
         expectedVersion: document.version,
         expectedLineVersion: line.version,
-        idempotencyKey: keyFor("arrive", document, line, fingerprint),
         references,
-      })
-    },
-    onSuccess: (result, { document, line, references }) => {
+        idempotencyKey,
+      }),
+    onSuccess: (result) => {
       applyTransferProjection(result)
-      commandKeys.current.delete(
-        commandKey("arrive", document, line, JSON.stringify(references))
-      )
       setArrivalTarget(null)
       setCommandError(null)
       invalidateTransfers()
     },
-    onError: (cause, { document, line, references }) => {
-      if (handleCommandError(cause, "Не удалось принять бытовку")) {
-        commandKeys.current.delete(
-          commandKey("arrive", document, line, JSON.stringify(references))
-        )
+    onError: (cause) => {
+      setCommandError(errorMessage(cause, "Не удалось принять бытовку"))
+      if (isConflict(cause)) {
         setArrivalTarget(null)
+        invalidateTransfers()
       }
     },
   })
 
   const cancelMutation = useMutation({
-    mutationFn: (document: TransferDocument) => {
-      if (!canManageDocument(document)) {
-        throw new Error(
-          "Для отмены нужны права MANAGE на обоих складах перемещения."
-        )
-      }
-      return cancelWarehouseTransfer({
+    mutationFn: (document: TransferDocument) =>
+      cancelWarehouseTransfer({
         accessToken: accessToken!,
         documentId: document.id,
         expectedVersion: document.version,
         idempotencyKey: keyFor("cancel", document),
-      })
-    },
-    onSuccess: (result, document) => {
+      }),
+    onSuccess: (result) => {
       applyTransferProjection(result)
-      commandKeys.current.delete(commandKey("cancel", document))
       setCancelTarget(null)
       setCommandError(null)
       invalidateTransfers()
     },
-    onError: (cause, document) => {
-      if (handleCommandError(cause, "Не удалось отменить перемещение")) {
-        commandKeys.current.delete(commandKey("cancel", document))
+    onError: (cause) => {
+      setCommandError(errorMessage(cause, "Не удалось отменить перемещение"))
+      if (isConflict(cause)) {
         setCancelTarget(null)
+        invalidateTransfers()
       }
     },
   })
@@ -374,35 +365,25 @@ export function WarehouseTransfersPage() {
     }: {
       document: TransferDocument
       reason: string
-    }) => {
-      if (!canManageDocument(document)) {
-        throw new Error(
-          "Для сверки нужны права MANAGE на обоих складах перемещения."
-        )
-      }
-      return reconcileWarehouseTransfer({
+    }) =>
+      reconcileWarehouseTransfer({
         accessToken: accessToken!,
         documentId: document.id,
         expectedVersion: document.version,
-        idempotencyKey: keyFor("reconcile", document, undefined, reason),
+        idempotencyKey: keyFor("reconcile", document),
         reason,
-      })
-    },
-    onSuccess: (result, { document, reason }) => {
+      }),
+    onSuccess: (result) => {
       applyTransferProjection(result)
-      commandKeys.current.delete(
-        commandKey("reconcile", document, undefined, reason)
-      )
       setReconcileTarget(null)
       setCommandError(null)
       invalidateTransfers()
     },
-    onError: (cause, { document, reason }) => {
-      if (handleCommandError(cause, "Не удалось выполнить сверку")) {
-        commandKeys.current.delete(
-          commandKey("reconcile", document, undefined, reason)
-        )
+    onError: (cause) => {
+      setCommandError(errorMessage(cause, "Не удалось выполнить сверку"))
+      if (isConflict(cause)) {
         setReconcileTarget(null)
+        invalidateTransfers()
       }
     },
   })
@@ -427,17 +408,14 @@ export function WarehouseTransfersPage() {
             )
           }
         >
-          {expandedId === document.id ? "Скрыть строки" : "Показать строки"}
+          {expandedId === document.id ? "Скрыть состав" : "Показать состав"}
         </Button>
         {canManage && current.state === "DRAFT" ? (
           <Button
             size="sm"
             variant="outline"
             disabled={cancelMutation.isPending}
-            onClick={() => {
-              setCommandError(null)
-              setCancelTarget(current)
-            }}
+            onClick={() => setCancelTarget(current)}
           >
             Отменить документ
           </Button>
@@ -445,13 +423,7 @@ export function WarehouseTransfersPage() {
         {canManage &&
         (current.state === "CONFLICT" ||
           current.state === "RECONCILIATION_REQUIRED") ? (
-          <Button
-            size="sm"
-            onClick={() => {
-              setCommandError(null)
-              setReconcileTarget(current)
-            }}
-          >
+          <Button size="sm" onClick={() => setReconcileTarget(current)}>
             Выполнить сверку
           </Button>
         ) : null}
@@ -465,7 +437,7 @@ export function WarehouseTransfersPage() {
         <PageToolbarContent>
           <Input
             aria-label="Поиск перемещений"
-            placeholder="ID документа, строки, asset или склада"
+            placeholder="ID документа, бытовки, водителя или склада"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
@@ -475,7 +447,7 @@ export function WarehouseTransfersPage() {
             variant="outline"
             onClick={() => setShowAll((value) => !value)}
           >
-            {showAll ? "Требуют действий" : "Показать завершённые"}
+            {showAll ? "Требуют действий" : "Показать все"}
           </Button>
           <Button
             variant="outline"
@@ -492,24 +464,6 @@ export function WarehouseTransfersPage() {
           ) : null}
         </PageToolbarActions>
       </PageToolbar>
-
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>Перемещения обслуживает logistics-service</CardTitle>
-          <CardDescription>
-            Документы, строки, версии, отправка, отмена и сверка работают через
-            gateway. Браузер больше не создаёт задания и не меняет бытовки
-            напрямую.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="text-sm text-muted-foreground">
-          Публичного списка кандидатов пока нет, поэтому при создании нужны
-          server-issued asset UUID и версия. При приёмке фотографии загружаются
-          для строки перемещения на складе назначения и передаются только после
-          статуса READY. Перенос наполнения между бытовками недоступен до
-          появления server command.
-        </CardContent>
-      </Card>
 
       {!accessToken ? (
         <FieldError>
@@ -580,42 +534,51 @@ export function WarehouseTransfersPage() {
                 render: (document) => formatDateTime(document.updatedAt),
               },
               {
-                id: "document",
-                label: "Документ",
-                className: "min-w-64",
-                getSortValue: (document) => document.id,
-                render: (document) => (
-                  <span className="font-mono text-xs">{document.id}</span>
-                ),
-              },
-              {
                 id: "direction",
                 label: "Маршрут",
                 className: "min-w-72",
                 getSortValue: (document) =>
                   `${document.warehouseId}:${document.destinationWarehouseId}`,
                 render: (document) => (
-                  <div className="flex flex-col gap-1">
-                    <span>
-                      {warehouseLabel(
-                        warehouses.find(
-                          (warehouse) => warehouse.id === document.warehouseId
-                        ),
-                        document.warehouseId
-                      )}
-                    </span>
-                    <span className="text-muted-foreground">
-                      →{" "}
-                      {warehouseLabel(
-                        warehouses.find(
-                          (warehouse) =>
-                            warehouse.id === document.destinationWarehouseId
-                        ),
-                        document.destinationWarehouseId
-                      )}
-                    </span>
-                  </div>
+                  <span>
+                    {warehouseLabel(
+                      warehouses.find(
+                        (warehouse) => warehouse.id === document.warehouseId
+                      ),
+                      document.warehouseId
+                    )}
+                    {" → "}
+                    {warehouseLabel(
+                      warehouses.find(
+                        (warehouse) =>
+                          warehouse.id === document.destinationWarehouseId
+                      ),
+                      document.destinationWarehouseId
+                    )}
+                  </span>
                 ),
+              },
+              {
+                id: "driver",
+                label: "Водитель",
+                className: "min-w-44",
+                getSortValue: (document) => document.driverSnapshot ?? "",
+                render: (document) => document.driverSnapshot ?? "Не указан",
+              },
+              {
+                id: "task",
+                label: "Задача мебели",
+                className: "min-w-44",
+                getSortValue: (document) =>
+                  document.equipmentMovementTaskId ?? "",
+                render: (document) =>
+                  document.equipmentMovementTaskId ? (
+                    <span className="font-mono text-xs">
+                      {document.equipmentMovementTaskId}
+                    </span>
+                  ) : (
+                    "—"
+                  ),
               },
               {
                 id: "state",
@@ -630,46 +593,29 @@ export function WarehouseTransfersPage() {
                 ),
               },
               {
-                id: "lines",
-                label: "Строк",
-                className: "w-24",
-                getSortValue: (document) => document.lines.length,
-                render: (document) => document.lines.length,
-              },
-              {
                 id: "actions",
                 label: "Действия",
-                className: "min-w-80",
-                getSortValue: (document) => document.updatedAt,
+                className: "min-w-72",
+                getSortValue: (document) => document.id,
                 render: actions,
               },
             ]}
           />
         </div>
-
         <div className="grid gap-3 md:hidden">
           {rows.map((document) => (
             <Card key={document.id} size="sm">
               <CardHeader>
-                <CardTitle>Перемещение {document.id.slice(0, 8)}</CardTitle>
-                <CardDescription>
-                  {formatDateTime(document.updatedAt)}
-                </CardDescription>
-                <CardAction>
-                  <Badge variant={statusVariant(document.state)}>
-                    {TRANSFER_STATE_LABELS[document.state]}
-                  </Badge>
-                </CardAction>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-3">
-                <p className="text-sm text-muted-foreground">
+                <CardTitle>
                   {warehouseLabel(
                     warehouses.find(
                       (warehouse) => warehouse.id === document.warehouseId
                     ),
                     document.warehouseId
                   )}
-                  {" → "}
+                </CardTitle>
+                <CardDescription>
+                  →{" "}
                   {warehouseLabel(
                     warehouses.find(
                       (warehouse) =>
@@ -677,10 +623,17 @@ export function WarehouseTransfersPage() {
                     ),
                     document.destinationWarehouseId
                   )}
-                </p>
+                </CardDescription>
+                <CardAction>
+                  <Badge variant={statusVariant(document.state)}>
+                    {TRANSFER_STATE_LABELS[document.state]}
+                  </Badge>
+                </CardAction>
+              </CardHeader>
+              <CardContent>
                 <TransferLines
-                  document={document}
-                  canManage={canManageDocument(document)}
+                  document={currentDocument(document)}
+                  canManage={canManageDocument(currentDocument(document))}
                   departingLineId={
                     departMutation.isPending
                       ? (departMutation.variables?.line.id ?? null)
@@ -691,35 +644,34 @@ export function WarehouseTransfersPage() {
                       ? (arriveMutation.variables?.line.id ?? null)
                       : null
                   }
-                  onDepart={(line) => {
-                    setCommandError(null)
-                    departMutation.mutate({ document, line })
-                  }}
-                  onArrive={(line) => {
-                    setCommandError(null)
-                    setArrivalTarget({ document, line })
-                  }}
+                  onDepart={(line) =>
+                    departMutation.mutate({
+                      document: currentDocument(document),
+                      line,
+                    })
+                  }
+                  onArrive={(line) =>
+                    setArrivalTarget({
+                      document: currentDocument(document),
+                      line,
+                    })
+                  }
                 />
+                {document.equipmentMovementTaskId ? (
+                  <FieldDescription className="mt-3">
+                    Задача мебели: {document.equipmentMovementTaskId}
+                  </FieldDescription>
+                ) : null}
               </CardContent>
               <CardFooter className="flex-wrap gap-2">
                 {actions(document)}
               </CardFooter>
             </Card>
           ))}
-          {rows.length === 0 && !query.isLoading ? (
-            <Card size="sm">
-              <CardHeader>
-                <CardTitle>Перемещения не найдены</CardTitle>
-                <CardDescription>
-                  Измените фильтр или создайте новый документ.
-                </CardDescription>
-              </CardHeader>
-            </Card>
-          ) : null}
         </div>
       </div>
 
-      {createOpen && accessToken && selectedWarehouseId && canCreateTransfer ? (
+      {createOpen && selectedWarehouseId && accessToken ? (
         <CreateTransferDialog
           accessToken={accessToken}
           currentUser={currentUser}
@@ -728,67 +680,51 @@ export function WarehouseTransfersPage() {
           onOpenChange={setCreateOpen}
         />
       ) : null}
-      {arrivalTarget && canManageDocument(arrivalTarget.document) ? (
+      {arrivalTarget ? (
         <ArrivalTransferDialog
-          key={`${arrivalTarget.document.id}:${arrivalTarget.document.version}:${arrivalTarget.line.id}:${arrivalTarget.line.version}`}
+          accessToken={accessToken}
           document={arrivalTarget.document}
           line={arrivalTarget.line}
-          accessToken={accessToken}
           pending={arriveMutation.isPending}
           error={commandError}
-          onSubmit={(references) =>
-            arriveMutation.mutate({ ...arrivalTarget, references })
+          onOpenChange={(open) => !open && setArrivalTarget(null)}
+          onSubmit={(references, idempotencyKey) =>
+            arriveMutation.mutate({
+              ...arrivalTarget,
+              references,
+              idempotencyKey,
+            })
           }
-          onOpenChange={(open) => {
-            if (!open) {
-              setArrivalTarget(null)
-              setCommandError(null)
-            }
-          }}
         />
       ) : null}
-      {reconcileTarget &&
-      hasWarehouseAccess(currentUser, reconcileTarget.warehouseId, "MANAGE") &&
-      hasWarehouseAccess(
-        currentUser,
-        reconcileTarget.destinationWarehouseId,
-        "MANAGE"
-      ) ? (
+      {reconcileTarget ? (
         <ReconcileTransferDialog
           document={reconcileTarget}
           pending={reconcileMutation.isPending}
           error={commandError}
+          onOpenChange={(open) => !open && setReconcileTarget(null)}
           onSubmit={(reason) =>
             reconcileMutation.mutate({ document: reconcileTarget, reason })
           }
-          onOpenChange={(open) => {
-            if (!open) {
-              setReconcileTarget(null)
-              setCommandError(null)
-            }
-          }}
         />
       ) : null}
       <AlertDialog
         open={cancelTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setCancelTarget(null)
-            setCommandError(null)
-          }
-        }}
+        onOpenChange={(open) => !open && setCancelTarget(null)}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Отменить перемещение?</AlertDialogTitle>
             <AlertDialogDescription>
-              Logistics-service отменит весь документ. Отмена отдельной строки
-              публичным контрактом не поддерживается.
+              Logistics-service отменит ещё не выполненные серверные задания и
+              сохранит историю операции.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {commandError ? <FieldError>{commandError}</FieldError> : null}
           <AlertDialogFooter>
-            <AlertDialogCancel>Не отменять</AlertDialogCancel>
+            <AlertDialogCancel disabled={cancelMutation.isPending}>
+              Не отменять
+            </AlertDialogCancel>
             <AlertDialogAction
               disabled={cancelMutation.isPending}
               onClick={() =>
@@ -820,13 +756,12 @@ function TransferLines({
   onArrive: (line: TransferLine) => void
 }) {
   const lineCommandPending = departingLineId !== null || arrivingLineId !== null
-
   return (
     <div className="grid gap-2">
       {document.lines.map((line) => (
         <Card key={line.id} size="sm">
           <CardHeader>
-            <CardTitle>Строка {line.lineNumber}</CardTitle>
+            <CardTitle>Бытовка {line.lineNumber}</CardTitle>
             <CardDescription>
               Asset <span className="font-mono text-xs">{line.assetId}</span>
             </CardDescription>
@@ -838,7 +773,8 @@ function TransferLines({
           </CardHeader>
           <CardContent className="flex flex-col gap-2 text-sm">
             <span>
-              Asset version: {line.assetVersion} · Line version: {line.version}
+              Версия бытовки: {line.assetVersion} · версия строки:{" "}
+              {line.version}
             </span>
             {canManage &&
             line.state === "PENDING" &&
@@ -895,10 +831,14 @@ function ArrivalTransferDialog({
   line: TransferLine
   pending: boolean
   error: string | null
-  onSubmit: (references: TransferMediaReference[]) => void
+  onSubmit: (
+    references: TransferMediaReference[],
+    idempotencyKey: string
+  ) => void
   onOpenChange: (open: boolean) => void
 }) {
   const [references, setReferences] = useState<TransferMediaReference[]>([])
+  const attempt = useRef<CommandAttempt | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -909,9 +849,14 @@ function ArrivalTransferDialog({
       )
       return
     }
-
+    const signature = JSON.stringify(references)
+    const idempotencyKey =
+      attempt.current?.signature === signature
+        ? attempt.current.idempotencyKey
+        : commandIdentity()
+    attempt.current = { signature, idempotencyKey }
     setValidationError(null)
-    onSubmit(references)
+    onSubmit(references, idempotencyKey)
   }
 
   return (
@@ -919,19 +864,16 @@ function ArrivalTransferDialog({
       <DialogContent className="max-h-[calc(100svh-1rem)] overflow-y-auto sm:max-w-2xl">
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>Принять строку перемещения</DialogTitle>
+            <DialogTitle>Принять бытовку перемещения</DialogTitle>
             <DialogDescription>
-              Logistics-service примет строку {line.lineNumber} документа{" "}
-              {document.id.slice(0, 8)} по её текущим версиям. Загрузите
-              фотографии состояния бытовки на складе назначения.
+              Загрузите фотографии состояния бытовки {line.lineNumber} на складе
+              назначения.
             </DialogDescription>
           </DialogHeader>
-
           <FieldSet className="py-4">
             <FieldLegend variant="label">Фотографии приёмки</FieldLegend>
             <FieldDescription>
-              Media-service создаёт small, medium и large как варианты одной
-              логической фотографии.
+              В команду попадут только готовые ссылки media-service.
             </FieldDescription>
             <ServiceOwnerPhotos
               accessToken={accessToken}
@@ -943,24 +885,11 @@ function ArrivalTransferDialog({
               readOnly={pending}
               maxItems={20}
               title={`Фотографии строки ${line.lineNumber}`}
-              onReadyReferencesChange={(nextReferences) => {
-                setReferences((current) =>
-                  current.length === nextReferences.length &&
-                  current.every(
-                    (reference, index) =>
-                      reference.mediaId === nextReferences[index]?.mediaId &&
-                      reference.generation === nextReferences[index]?.generation
-                  )
-                    ? current
-                    : nextReferences
-                )
-              }}
+              onReadyReferencesChange={setReferences}
             />
           </FieldSet>
-
           {validationError ? <FieldError>{validationError}</FieldError> : null}
           {error ? <FieldError>{error}</FieldError> : null}
-
           <DialogFooter>
             <Button
               type="button"
@@ -971,31 +900,12 @@ function ArrivalTransferDialog({
               Отмена
             </Button>
             <Button type="submit" disabled={pending}>
-              {pending ? "Принимается…" : "Принять строку"}
+              {pending ? "Принимается…" : "Принять"}
             </Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
-  )
-}
-
-type TransferLineDraft = {
-  key: number
-  assetId: string
-  assetVersion: string
-}
-
-function emptyLine(key: number): TransferLineDraft {
-  return { key, assetId: "", assetVersion: "0" }
-}
-
-function assetIdIsUnique(draft: TransferLineDraft, lines: TransferLineDraft[]) {
-  const assetId = draft.assetId.trim().toLowerCase()
-  return (
-    assetId.length > 0 &&
-    lines.filter((line) => line.assetId.trim().toLowerCase() === assetId)
-      .length === 1
   )
 }
 
@@ -1013,31 +923,76 @@ function CreateTransferDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
+  const contentRef = useRef<HTMLDivElement>(null)
+  const attempt = useRef<CommandAttempt | null>(null)
   const destinations = warehouses.filter(
     (warehouse) =>
       warehouse.active &&
       warehouse.id !== warehouseId &&
       hasWarehouseAccess(currentUser, warehouse.id, "EDIT")
   )
-  const nextLineKey = useRef(1)
   const [destinationWarehouseId, setDestinationWarehouseId] = useState("")
-  const [lines, setLines] = useState<TransferLineDraft[]>(() => [emptyLine(0)])
-  const [idempotencyKey] = useState(commandIdentity)
-  const [submitted, setSubmitted] = useState(false)
+  const [driver, setDriver] = useState<RepairTaskWorkerSnapshotDto | null>(null)
+  const [equipmentDeadlineLocal, setEquipmentDeadlineLocal] = useState("")
+  const [lines, setLines] = useState<TransferLineDraft[]>(() => [emptyLine()])
+  const [equipment, setEquipment] = useState<TransferEquipmentDraft[]>([])
   const [validationError, setValidationError] = useState<string | null>(null)
+
+  const cabinsQuery = useQuery({
+    queryKey: ["rental-items", "transfer-candidates", warehouseId],
+    queryFn: () =>
+      listAssetRentalItems({
+        accessToken,
+        warehouseId,
+        page: 0,
+        size: 200,
+      }),
+  })
+  const cabins = (cabinsQuery.data?.content ?? [])
+    .filter((item) => item.status === "FREE")
+    .sort((left, right) => left.number.localeCompare(right.number, "ru"))
+  const cabinByAssetId = new Map(cabins.map((cabin) => [cabin.id, cabin]))
+  const selectedAssetIds = lines
+    .map((line) => line.assetId)
+    .filter((assetId): assetId is string => assetId !== null)
+  const equipmentQuery = useQuery({
+    queryKey: ["equipment", "transfer", warehouseId],
+    queryFn: () => getEquipmentItems(accessToken, { warehouseId }),
+  })
+  const furniture = (equipmentQuery.data ?? []).filter(
+    (item) =>
+      item.active && item.category === "FURNITURE" && item.availableStock > 0
+  )
   const mutation = useMutation({
-    mutationFn: () =>
+    mutationFn: ({
+      idempotencyKey,
+      commandLines,
+      commandEquipment,
+      equipmentDeadlineAt,
+    }: {
+      idempotencyKey: string
+      commandLines: Array<{ assetId: string; assetVersion: number }>
+      commandEquipment: CreateTransferEquipmentLine[]
+      equipmentDeadlineAt: string | null
+    }) =>
       createWarehouseTransfer({
         accessToken,
         warehouseId,
         destinationWarehouseId,
+        driverSnapshot: driver?.name ?? null,
+        equipmentDeadlineAt,
+        lines: commandLines,
+        equipment: commandEquipment,
         idempotencyKey,
-        lines: lines.map((line) => ({
-          assetId: line.assetId.trim(),
-          assetVersion: Number(line.assetVersion),
-        })),
       }),
-    onSuccess: () => {
+    onSuccess: (result) => {
+      queryClient.setQueryData<TransferDocument[]>(
+        [...WAREHOUSE_TRANSFERS_QUERY_KEY, warehouseId],
+        (current) => [
+          result,
+          ...(current ?? []).filter((item) => item.id !== result.id),
+        ]
+      )
       void queryClient.invalidateQueries({
         queryKey: WAREHOUSE_TRANSFERS_QUERY_KEY,
       })
@@ -1045,41 +1000,144 @@ function CreateTransferDialog({
     },
   })
 
+  function selectCabin(key: string, cabin: RentalItemDto | null) {
+    setLines((current) =>
+      current.map((line) =>
+        line.key === key ? { ...line, assetId: cabin?.id ?? null } : line
+      )
+    )
+  }
+
+  function addEquipment() {
+    setEquipment((current) => [
+      ...current,
+      { key: commandIdentity(), equipmentId: "", quantity: 1 },
+    ])
+  }
+
+  function updateEquipment(
+    key: string,
+    update: Partial<Pick<TransferEquipmentDraft, "equipmentId" | "quantity">>
+  ) {
+    setEquipment((current) =>
+      current.map((item) => (item.key === key ? { ...item, ...update } : item))
+    )
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    setSubmitted(true)
-    const invalidLine = lines.find(
-      (line) =>
-        !UUID_PATTERN.test(line.assetId.trim()) ||
-        !assetIdIsUnique(line, lines) ||
-        !Number.isSafeInteger(Number(line.assetVersion)) ||
-        Number(line.assetVersion) < 0
+    const selectedCabins = lines.map((line) =>
+      line.assetId ? (cabinByAssetId.get(line.assetId) ?? null) : null
     )
     if (
       !destinationWarehouseId ||
-      lines.length === 0 ||
-      lines.length > 100 ||
-      invalidLine
+      selectedCabins.some((cabin) => cabin === null)
+    ) {
+      setValidationError("Выберите склад назначения и бытовку в каждой строке.")
+      return
+    }
+    const cabinsForCommand = selectedCabins as RentalItemDto[]
+    if (
+      new Set(cabinsForCommand.map((cabin) => cabin.id)).size !==
+      cabinsForCommand.length
     ) {
       setValidationError(
-        "Выберите другой склад и укажите от 1 до 100 уникальных asset UUID с неотрицательной версией."
+        "Одну бытовку можно добавить в перемещение только один раз."
       )
       return
     }
+
+    const totals = new Map<string, number>()
+    const commandEquipment: CreateTransferEquipmentLine[] = []
+    for (const item of equipment) {
+      const furnitureItem = furniture.find(
+        (candidate) => candidate.id === item.equipmentId
+      )
+      const expectedSourceBalanceVersion = furnitureItem
+        ? stockVersion(furnitureItem)
+        : undefined
+      if (
+        !furnitureItem ||
+        expectedSourceBalanceVersion === undefined ||
+        !Number.isSafeInteger(item.quantity) ||
+        item.quantity < 1 ||
+        totals.has(item.equipmentId)
+      ) {
+        setValidationError(
+          "Выберите уникальную мебель и корректное количество для перемещения."
+        )
+        return
+      }
+      totals.set(item.equipmentId, item.quantity)
+      commandEquipment.push({
+        equipmentId: item.equipmentId,
+        expectedSourceBalanceVersion,
+        quantity: item.quantity,
+      })
+    }
+    for (const [equipmentId, quantity] of totals) {
+      const available = furniture.find(
+        (item) => item.id === equipmentId
+      )?.availableStock
+      if (available === undefined || quantity > available) {
+        setValidationError("Количество мебели превышает доступный остаток.")
+        return
+      }
+    }
+
+    let equipmentDeadlineAt: string | null = null
+    if (commandEquipment.length > 0) {
+      const deadline = new Date(equipmentDeadlineLocal)
+      if (
+        !equipmentDeadlineLocal ||
+        !Number.isFinite(deadline.getTime()) ||
+        deadline <= new Date()
+      ) {
+        setValidationError(
+          "Для мебели укажите будущий срок выполнения задания."
+        )
+        return
+      }
+      equipmentDeadlineAt = deadline.toISOString()
+    }
+    const commandLines = cabinsForCommand.map((cabin) => ({
+      assetId: cabin.id,
+      assetVersion: cabin.version,
+    }))
+    const signature = JSON.stringify({
+      warehouseId,
+      destinationWarehouseId,
+      driverSnapshot: driver?.name ?? null,
+      equipmentDeadlineAt,
+      lines: commandLines,
+      equipment: commandEquipment,
+    })
+    const idempotencyKey =
+      attempt.current?.signature === signature
+        ? attempt.current.idempotencyKey
+        : commandIdentity()
+    attempt.current = { signature, idempotencyKey }
     setValidationError(null)
-    mutation.mutate()
+    mutation.mutate({
+      idempotencyKey,
+      commandLines,
+      commandEquipment,
+      equipmentDeadlineAt,
+    })
   }
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100svh-1rem)] overflow-y-auto sm:max-w-3xl">
+      <DialogContent
+        ref={contentRef}
+        className="max-h-[calc(100svh-1rem)] overflow-y-auto sm:max-w-4xl"
+      >
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>Создать складское перемещение</DialogTitle>
             <DialogDescription>
-              Выберите склад назначения и укажите server-issued asset UUID и
-              текущую версию. Поиск кандидатов появится после отдельного
-              публичного контракта.
+              Выберите склад назначения, свободные бытовки и мебель исходного
+              склада. Сервер создаст соответствующие задания.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup className="py-4">
@@ -1089,6 +1147,7 @@ function CreateTransferDialog({
               </FieldLabel>
               <Select
                 value={destinationWarehouseId}
+                disabled={mutation.isPending}
                 onValueChange={setDestinationWarehouseId}
               >
                 <SelectTrigger id="transfer-destination">
@@ -1110,22 +1169,30 @@ function CreateTransferDialog({
                 </FieldDescription>
               ) : null}
             </Field>
-            <FieldSet>
-              <FieldLegend variant="label">Строки перемещения</FieldLegend>
+            <LogisticsDriverPicker
+              accessToken={accessToken}
+              id="transfer-driver"
+              required={false}
+              warehouseId={warehouseId}
+              value={driver}
+              disabled={mutation.isPending}
+              onChange={(next) => {
+                setDriver(next)
+                attempt.current = null
+                setValidationError(null)
+              }}
+            />
+            <FieldSet disabled={mutation.isPending}>
+              <FieldLegend variant="label">Бытовки и наполнение</FieldLegend>
               <FieldDescription>
-                Повторная отправка формы использует тот же Idempotency-Key.
+                Выберите свободные бытовки со склада-отправителя. Их текущее
+                наполнение перемещается вместе с бытовкой.
               </FieldDescription>
-              <FieldGroup>
+              <FieldGroup data-testid="transfer-cabin-list">
                 {lines.map((line, index) => {
-                  const assetInvalid =
-                    submitted &&
-                    (!UUID_PATTERN.test(line.assetId.trim()) ||
-                      !assetIdIsUnique(line, lines))
-                  const assetVersion = Number(line.assetVersion)
-                  const versionInvalid =
-                    submitted &&
-                    (!Number.isSafeInteger(assetVersion) || assetVersion < 0)
-
+                  const selectedCabin = line.assetId
+                    ? (cabinByAssetId.get(line.assetId) ?? null)
+                    : null
                   return (
                     <Card key={line.key} size="sm">
                       <CardHeader>
@@ -1136,7 +1203,7 @@ function CreateTransferDialog({
                               type="button"
                               size="icon-sm"
                               variant="outline"
-                              aria-label={`Удалить строку ${index + 1}`}
+                              aria-label={`Удалить бытовку ${index + 1}`}
                               onClick={() =>
                                 setLines((current) =>
                                   current.filter(
@@ -1153,96 +1220,192 @@ function CreateTransferDialog({
                           </CardAction>
                         ) : null}
                       </CardHeader>
-                      <CardContent>
-                        <FieldGroup>
-                          <Field data-invalid={assetInvalid || undefined}>
-                            <FieldLabel htmlFor={`transfer-asset-${line.key}`}>
-                              Asset UUID
-                            </FieldLabel>
-                            <Input
-                              id={`transfer-asset-${line.key}`}
-                              required
-                              value={line.assetId}
-                              aria-invalid={assetInvalid || undefined}
-                              placeholder="00000000-0000-0000-0000-000000000000"
-                              onChange={(event) =>
-                                setLines((current) =>
-                                  current.map((item) =>
-                                    item.key === line.key
-                                      ? { ...item, assetId: event.target.value }
-                                      : item
-                                  )
-                                )
-                              }
+                      <CardContent className="flex flex-col gap-4">
+                        <Field>
+                          <FieldLabel htmlFor={`transfer-cabin-${line.key}`}>
+                            Номер бытовки
+                          </FieldLabel>
+                          <Combobox<RentalItemDto>
+                            items={cabins}
+                            value={selectedCabin}
+                            itemToStringLabel={(cabin) => cabin.number}
+                            itemToStringValue={(cabin) => cabin.id}
+                            isItemEqualToValue={(left, right) =>
+                              left.id === right.id
+                            }
+                            onValueChange={(cabin) =>
+                              selectCabin(line.key, cabin)
+                            }
+                          >
+                            <ComboboxInput
+                              id={`transfer-cabin-${line.key}`}
+                              placeholder="Введите номер бытовки"
+                              showClear
                             />
-                            {assetInvalid ? (
-                              <FieldError>
-                                Укажите корректный уникальный asset UUID.
-                              </FieldError>
-                            ) : null}
-                          </Field>
-                          <Field data-invalid={versionInvalid || undefined}>
-                            <FieldLabel
-                              htmlFor={`transfer-version-${line.key}`}
-                            >
-                              Текущая версия asset
-                            </FieldLabel>
-                            <Input
-                              id={`transfer-version-${line.key}`}
-                              type="number"
-                              min={0}
-                              step={1}
-                              required
-                              value={line.assetVersion}
-                              aria-invalid={versionInvalid || undefined}
-                              onChange={(event) =>
-                                setLines((current) =>
-                                  current.map((item) =>
-                                    item.key === line.key
-                                      ? {
-                                          ...item,
-                                          assetVersion: event.target.value,
-                                        }
-                                      : item
-                                  )
-                                )
-                              }
-                            />
-                            {versionInvalid ? (
-                              <FieldError>
-                                Версия должна быть целым неотрицательным числом.
-                              </FieldError>
-                            ) : null}
-                          </Field>
-                        </FieldGroup>
+                            <ComboboxContent portalContainer={contentRef}>
+                              <ComboboxEmpty>
+                                {cabinsQuery.isFetching
+                                  ? "Загружаем бытовки…"
+                                  : "Свободные бытовки не найдены"}
+                              </ComboboxEmpty>
+                              <ComboboxList>
+                                <TransferCabinCandidateGroup
+                                  cabins={cabins}
+                                  selectedAssetIds={selectedAssetIds}
+                                  currentAssetId={line.assetId}
+                                />
+                              </ComboboxList>
+                            </ComboboxContent>
+                          </Combobox>
+                        </Field>
+                        {selectedCabin ? (
+                          <TransferCabinContents cabin={selectedCabin} />
+                        ) : null}
                       </CardContent>
                     </Card>
                   )
                 })}
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={
+                    lines.length >= 100 ||
+                    cabins.length === 0 ||
+                    lines.some((line) => line.assetId === null)
+                  }
+                  onClick={() =>
+                    setLines((current) => [...current, emptyLine()])
+                  }
+                >
+                  <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+                  Добавить ещё бытовку
+                </Button>
               </FieldGroup>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={lines.length >= 100}
-                onClick={() => {
-                  const key = nextLineKey.current
-                  nextLineKey.current += 1
-                  setLines((current) => [...current, emptyLine(key)])
-                }}
-              >
-                <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-                Добавить строку
-              </Button>
             </FieldSet>
+            <FieldSet disabled={mutation.isPending}>
+              <FieldLegend variant="label">Мебель</FieldLegend>
+              <FieldDescription>
+                Мебель списывается с доступного остатка исходного склада и
+                перемещается отдельной серверной задачей.
+              </FieldDescription>
+              <FieldGroup>
+                {equipment.map((item) => {
+                  const allowedFurniture = furniture.filter(
+                    (candidate) =>
+                      candidate.id === item.equipmentId ||
+                      !equipment.some(
+                        (other) =>
+                          other.key !== item.key &&
+                          other.equipmentId === candidate.id
+                      )
+                  )
+                  return (
+                    <div
+                      key={item.key}
+                      className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_8rem_auto]"
+                    >
+                      <Field>
+                        <FieldLabel htmlFor={`transfer-equipment-${item.key}`}>
+                          Мебель
+                        </FieldLabel>
+                        <Select
+                          value={item.equipmentId}
+                          onValueChange={(equipmentId) =>
+                            updateEquipment(item.key, { equipmentId })
+                          }
+                        >
+                          <SelectTrigger id={`transfer-equipment-${item.key}`}>
+                            <SelectValue placeholder="Выберите мебель" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectGroup>
+                              {allowedFurniture.map((candidate) => (
+                                <SelectItem
+                                  key={candidate.id}
+                                  value={candidate.id}
+                                >
+                                  {candidate.name} · доступно{" "}
+                                  {candidate.availableStock}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      <Field>
+                        <FieldLabel htmlFor={`transfer-quantity-${item.key}`}>
+                          Количество
+                        </FieldLabel>
+                        <Input
+                          id={`transfer-quantity-${item.key}`}
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={item.quantity}
+                          onChange={(event) =>
+                            updateEquipment(item.key, {
+                              quantity: Number(event.target.value),
+                            })
+                          }
+                        />
+                      </Field>
+                      <Button
+                        type="button"
+                        className="self-end"
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          setEquipment((current) =>
+                            current.filter(
+                              (candidate) => candidate.key !== item.key
+                            )
+                          )
+                        }
+                      >
+                        Удалить
+                      </Button>
+                    </div>
+                  )
+                })}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={furniture.length === 0}
+                  onClick={addEquipment}
+                >
+                  Добавить мебель
+                </Button>
+                {equipment.length > 0 ? (
+                  <Field>
+                    <FieldLabel htmlFor="transfer-equipment-deadline">
+                      Срок выполнения задачи мебели
+                    </FieldLabel>
+                    <Input
+                      id="transfer-equipment-deadline"
+                      type="datetime-local"
+                      required
+                      value={equipmentDeadlineLocal}
+                      onChange={(event) =>
+                        setEquipmentDeadlineLocal(event.target.value)
+                      }
+                    />
+                  </Field>
+                ) : null}
+                {equipmentQuery.isError ? (
+                  <FieldError>Не удалось загрузить остатки мебели.</FieldError>
+                ) : null}
+              </FieldGroup>
+            </FieldSet>
+            {cabinsQuery.isError ? (
+              <FieldError>Не удалось загрузить доступные бытовки.</FieldError>
+            ) : null}
             {validationError ? (
               <FieldError>{validationError}</FieldError>
             ) : null}
             {mutation.error ? (
               <FieldError>
-                {commandErrorMessage(
-                  mutation.error,
-                  "Не удалось создать перемещение"
-                )}
+                {errorMessage(mutation.error, "Не удалось создать перемещение")}
               </FieldError>
             ) : null}
           </FieldGroup>
@@ -1258,12 +1421,69 @@ function CreateTransferDialog({
               type="submit"
               disabled={mutation.isPending || destinations.length === 0}
             >
-              {mutation.isPending ? "Создаётся…" : "Создать черновик"}
+              {mutation.isPending ? "Создаётся…" : "Создать перемещение"}
             </Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function TransferCabinCandidateGroup({
+  cabins,
+  selectedAssetIds,
+  currentAssetId,
+}: {
+  cabins: RentalItemDto[]
+  selectedAssetIds: string[]
+  currentAssetId: string | null
+}) {
+  const available = cabins.filter(
+    (cabin) =>
+      cabin.id === currentAssetId || !selectedAssetIds.includes(cabin.id)
+  )
+
+  return available.length ? (
+    <ComboboxGroup>
+      <ComboboxLabel>Свободные на складе-отправителе</ComboboxLabel>
+      {available.map((cabin) => (
+        <ComboboxItem key={cabin.id} value={cabin}>
+          {cabin.number}
+        </ComboboxItem>
+      ))}
+    </ComboboxGroup>
+  ) : null
+}
+
+function TransferCabinContents({
+  cabin,
+}: {
+  cabin: Pick<RentalItemDto, "contents" | "contentsItems">
+}) {
+  const contents: RentalItemContentsItemDto[] = cabin.contentsItems
+
+  return (
+    <FieldSet>
+      <FieldLegend variant="label">Наполнение</FieldLegend>
+      {contents.length ? (
+        <div className="flex flex-col gap-1 text-sm">
+          {contents.map((item) => (
+            <div
+              key={`${item.equipmentId ?? item.name}:${item.quantity}`}
+              className="flex items-center justify-between gap-4"
+            >
+              <span>{item.equipmentName ?? item.name}</span>
+              <span className="text-muted-foreground">{item.quantity} шт.</span>
+            </div>
+          ))}
+        </div>
+      ) : cabin.contents ? (
+        <FieldDescription>{cabin.contents}</FieldDescription>
+      ) : (
+        <FieldDescription>В бытовке нет наполнения.</FieldDescription>
+      )}
+    </FieldSet>
   )
 }
 
@@ -1281,22 +1501,20 @@ function ReconcileTransferDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const [reason, setReason] = useState("")
-
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <form
           onSubmit={(event) => {
             event.preventDefault()
-            const normalized = reason.trim()
-            if (normalized) onSubmit(normalized)
+            if (reason.trim()) onSubmit(reason.trim())
           }}
         >
           <DialogHeader>
-            <DialogTitle>Сверить документ перемещения</DialogTitle>
+            <DialogTitle>Сверить перемещение</DialogTitle>
             <DialogDescription>
-              Logistics-service повторно проверит незавершённые эффекты для
-              документа {document.id.slice(0, 8)} с его текущей версией.
+              Logistics-service повторно проверит незавершённые эффекты
+              документа {document.id.slice(0, 8)}.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup className="py-4">
@@ -1313,8 +1531,8 @@ function ReconcileTransferDialog({
                 onChange={(event) => setReason(event.target.value)}
               />
             </Field>
+            {error ? <FieldError>{error}</FieldError> : null}
           </FieldGroup>
-          {error ? <FieldError>{error}</FieldError> : null}
           <DialogFooter>
             <Button
               type="button"

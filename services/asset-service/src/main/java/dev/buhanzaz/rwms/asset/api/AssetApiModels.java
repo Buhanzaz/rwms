@@ -224,7 +224,23 @@ public final class AssetApiModels {
       @NotNull LogisticsLeaseOwnerType ownerType,
       @NotNull UUID documentId,
       @NotNull UUID lineId,
-      @NotNull @Min(0) Long expectedRentalItemVersion) {}
+      @NotNull @Min(0) Long expectedRentalItemVersion,
+      UUID rentalOrderId) {
+    public AcquireLogisticsOperationLeaseRequest(
+        UUID rentalItemId,
+        LogisticsLeaseOwnerType ownerType,
+        UUID documentId,
+        UUID lineId,
+        Long expectedRentalItemVersion) {
+      this(
+          rentalItemId,
+          ownerType,
+          documentId,
+          lineId,
+          expectedRentalItemVersion,
+          null);
+    }
+  }
   public record LogisticsLeaseCommandRequest(
       @NotNull @Min(0) Long expectedVersion,
       @NotNull @Min(1) Long fencingToken,
@@ -238,6 +254,33 @@ public final class AssetApiModels {
       long fencingToken,
       String state,
       OffsetDateTime expiresAt) {}
+
+  /**
+   * Immutable physical receipt for furniture found in addition to the cabin's
+   * canonical contents during a completed rental return.
+   */
+  public record LogisticsReturnEquipmentReceiptRequest(
+      @NotNull UUID returnId,
+      @NotNull UUID returnLineId,
+      @NotNull UUID warehouseId,
+      @NotEmpty @Size(max = 100) List<@NotNull @Valid LogisticsReturnEquipmentReceiptLine> lines) {}
+
+  public record LogisticsReturnEquipmentReceiptLine(
+      @NotNull UUID equipmentId, @NotNull @Min(1) Long quantity) {}
+
+  public record LogisticsReturnEquipmentReceiptLineResponse(
+      UUID receiptId,
+      UUID equipmentId,
+      long quantity,
+      UUID stockBalanceId,
+      long stockBalanceVersion,
+      long stockQuantity) {}
+
+  public record LogisticsReturnEquipmentReceiptResponse(
+      UUID returnId,
+      UUID returnLineId,
+      UUID warehouseId,
+      List<LogisticsReturnEquipmentReceiptLineResponse> lines) {}
 
   public record LogisticsFencedEffectRequest(
       @NotNull @Min(0) Long expectedVersion,

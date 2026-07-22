@@ -1,12 +1,18 @@
-import { type MutableRefObject, useMemo, useRef, useState } from "react"
+import {
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type MutableRefObject,
+} from "react"
 import {
   type QueryClient,
   useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query"
-import { HugeiconsIcon } from "@hugeicons/react"
 import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 import { useSearchParams } from "react-router-dom"
 
 import { OperationsListGrid } from "@/components/operations-list-grid"
@@ -27,6 +33,16 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxLabel,
+  ComboboxList,
+} from "@/components/ui/combobox"
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -46,6 +62,8 @@ import {
 import { Input } from "@/components/ui/input"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
+import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
+import { RentalClientPicker } from "@/features/logistics/rental-client-picker"
 import {
   RETURNS_QUERY_KEY,
   createReturn,
@@ -61,6 +79,17 @@ import {
   type ReturnLine,
 } from "@/features/logistics/returns/model"
 import { RequestEstimateDialog } from "@/features/logistics/returns/request-estimate-dialog"
+import {
+  getOrder,
+  listOrders,
+  ORDERS_QUERY_KEY,
+} from "@/features/orders/api/orders-api"
+import type {
+  OrderClientSearchItem,
+  OrderDetail,
+  OrderRentalUnit,
+} from "@/features/orders/domain/orders"
+import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
 import { useWarehouse } from "@/hooks/use-warehouse"
 
 const ACTIONABLE_STATES = new Set<ReturnDocumentState>([
@@ -69,8 +98,42 @@ const ACTIONABLE_STATES = new Set<ReturnDocumentState>([
   "CONFLICT",
   "RECONCILIATION_REQUIRED",
 ])
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+type CommandAttempt = {
+  signature: string
+  idempotencyKey: string
+}
+
+type ReturnCandidate = {
+  rentalOrderId: string
+  orderNumber: string
+  unit: OrderRentalUnit
+}
+
+type ReturnLineDraft = {
+  key: string
+  assetId: string | null
+}
+
+function commandIdentity() {
+  return crypto.randomUUID()
+}
+
+function stableCommandKey(
+  attempt: MutableRefObject<CommandAttempt | null>,
+  signature: string
+) {
+  if (attempt.current?.signature === signature) {
+    return attempt.current.idempotencyKey
+  }
+  const idempotencyKey = commandIdentity()
+  attempt.current = { signature, idempotencyKey }
+  return idempotencyKey
+}
+
+function emptyReturnLine(): ReturnLineDraft {
+  return { key: commandIdentity(), assetId: null }
+}
 
 function formatDateTime(value: string) {
   return new Intl.DateTimeFormat("ru-RU", {
@@ -93,29 +156,13 @@ function errorMessage(cause: unknown, fallback: string) {
   return cause instanceof Error ? cause.message : fallback
 }
 
-function commandIdentity() {
-  return crypto.randomUUID()
-}
-
-type CommandAttempt = {
-  signature: string
-  idempotencyKey: string
-}
-
-function stableCommandKey(
-  attempt: MutableRefObject<CommandAttempt | null>,
-  signature: string
-) {
-  if (attempt.current?.signature === signature) {
-    return attempt.current.idempotencyKey
-  }
-  const idempotencyKey = commandIdentity()
-  attempt.current = { signature, idempotencyKey }
-  return idempotencyKey
-}
-
-function isUuid(value: string) {
-  return UUID_PATTERN.test(value)
+function isConflict(cause: unknown) {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "status" in cause &&
+    cause.status === 409
+  )
 }
 
 function returnListQueryKey(warehouseId: string) {
@@ -137,24 +184,6 @@ function storeServiceProjection(
           )
         : [document, ...current]
     }
-  )
-}
-
-function refreshServiceProjection(
-  queryClient: QueryClient,
-  warehouseId: string
-) {
-  return queryClient.invalidateQueries({
-    queryKey: returnListQueryKey(warehouseId),
-  })
-}
-
-function isConflict(cause: unknown) {
-  return (
-    typeof cause === "object" &&
-    cause !== null &&
-    "status" in cause &&
-    cause.status === 409
   )
 }
 
@@ -204,6 +233,8 @@ export function LogisticsReturnsPage() {
       if (!needle) return true
       return [
         document.id,
+        document.partySnapshot,
+        document.driverSnapshot,
         RETURN_STATE_LABELS[document.state],
         ...document.lines.flatMap((line) => [
           line.id,
@@ -216,13 +247,19 @@ export function LogisticsReturnsPage() {
     })
   }, [query.data, search, selectedDocumentId, selectedLineId, showAll])
 
+  function refresh(warehouseId: string) {
+    return queryClient.invalidateQueries({
+      queryKey: returnListQueryKey(warehouseId),
+    })
+  }
+
   function keyFor(action: string, document: ReturnDocument) {
     const identity = `${action}:${document.id}:${document.version}`
     const existing = commandKeys.current.get(identity)
     if (existing) return existing
-    const created = commandIdentity()
-    commandKeys.current.set(identity, created)
-    return created
+    const idempotencyKey = commandIdentity()
+    commandKeys.current.set(identity, idempotencyKey)
+    return idempotencyKey
   }
 
   const registerMutation = useMutation({
@@ -237,12 +274,10 @@ export function LogisticsReturnsPage() {
       commandKeys.current.delete(`register:${document.id}:${document.version}`)
       storeServiceProjection(queryClient, result)
       setCommandError(null)
-      void refreshServiceProjection(queryClient, result.warehouseId)
+      void refresh(result.warehouseId)
     },
     onError: (cause, document) => {
-      if (isConflict(cause)) {
-        void refreshServiceProjection(queryClient, document.warehouseId)
-      }
+      if (isConflict(cause)) void refresh(document.warehouseId)
       setCommandError(
         errorMessage(cause, "Не удалось зарегистрировать возврат")
       )
@@ -257,10 +292,10 @@ export function LogisticsReturnsPage() {
   }
 
   function actions(document: ReturnDocument) {
-    const processingThisDocument =
+    const processing =
       registerMutation.isPending &&
       registerMutation.variables?.id === document.id
-    const canEditDocument = hasWarehouseAccess(
+    const canEdit = hasWarehouseAccess(
       currentUser,
       document.warehouseId,
       "EDIT"
@@ -278,16 +313,16 @@ export function LogisticsReturnsPage() {
         >
           {expandedId === document.id ? "Скрыть состав" : "Показать состав"}
         </Button>
-        {canEditDocument && document.state === "DRAFT" ? (
+        {canEdit && document.state === "DRAFT" ? (
           <Button
             size="sm"
-            disabled={processingThisDocument || !accessToken}
+            disabled={processing || !accessToken}
             onClick={() => registerMutation.mutate(document)}
           >
-            {processingThisDocument ? "Регистрируется…" : "Зарегистрировать"}
+            {processing ? "Регистрируется…" : "Зарегистрировать"}
           </Button>
         ) : null}
-        {canEditDocument && document.state === "INSPECTION_REQUIRED" ? (
+        {canEdit && document.state === "INSPECTION_REQUIRED" ? (
           <>
             <Button
               size="sm"
@@ -306,7 +341,7 @@ export function LogisticsReturnsPage() {
                 setEstimateTarget(document)
               }}
             >
-              Запросить смету
+              Создать смету
             </Button>
           </>
         ) : null}
@@ -332,10 +367,11 @@ export function LogisticsReturnsPage() {
             </Button>
           ) : null}
           <Button
+            className="w-40 shrink-0"
             variant="outline"
             onClick={() => setShowAll((value) => !value)}
           >
-            {showAll ? "Требуют действий" : "Показать завершённые"}
+            {showAll ? "Требуют действий" : "Показать все"}
           </Button>
           <Button
             variant="outline"
@@ -347,28 +383,11 @@ export function LogisticsReturnsPage() {
           {canEditSelectedWarehouse ? (
             <Button onClick={() => setCreateOpen(true)}>
               <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-              Создать возврат
+              Добавить возврат
             </Button>
           ) : null}
         </PageToolbarActions>
       </PageToolbar>
-
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>Возвраты обслуживает logistics-service</CardTitle>
-          <CardDescription>
-            Документы, версии и переходы читаются через gateway. Справочники
-            компаний и кандидатов, редактирование состава, импорт арендованной
-            бытовки и решения по мебели скрыты до появления подтверждённых
-            контрактов.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="text-sm text-muted-foreground">
-          Фотографии осмотра загружаются в media-service для каждой
-          server-issued строки и передаются в команду только после статуса
-          READY. Запрос сметы доступен по line ID и подтверждённым equipment ID.
-        </CardContent>
-      </Card>
 
       {!accessToken ? (
         <FieldError>Для просмотра возвратов требуется авторизация.</FieldError>
@@ -404,35 +423,18 @@ export function LogisticsReturnsPage() {
                 render: (document) => formatDateTime(document.createdAt),
               },
               {
-                id: "document",
-                label: "Документ",
-                className: "min-w-64",
-                getSortValue: (document) => document.id,
-                render: (document) => (
-                  <span className="font-mono text-xs">{document.id}</span>
-                ),
+                id: "party",
+                label: "От кого",
+                className: "min-w-56",
+                getSortValue: (document) => document.partySnapshot ?? "",
+                render: (document) => document.partySnapshot ?? "Не указан",
               },
               {
-                id: "party",
-                label: "Контрагент",
-                className: "min-w-56",
-                getSortValue: (document) =>
-                  document.lines.map(lineSummary).join(" "),
-                render: (document) => (
-                  <div className="flex flex-col gap-1">
-                    {Array.from(
-                      new Set(
-                        document.lines.map((line) =>
-                          line.tenantSnapshot?.trim()
-                            ? line.tenantSnapshot
-                            : "Не указан"
-                        )
-                      )
-                    ).map((party) => (
-                      <span key={party}>{party}</span>
-                    ))}
-                  </div>
-                ),
+                id: "driver",
+                label: "Водитель",
+                className: "min-w-52",
+                getSortValue: (document) => document.driverSnapshot ?? "",
+                render: (document) => document.driverSnapshot ?? "Не указан",
               },
               {
                 id: "state",
@@ -447,7 +449,7 @@ export function LogisticsReturnsPage() {
               },
               {
                 id: "lines",
-                label: "Строк",
+                label: "Бытовок",
                 className: "w-24",
                 getSortValue: (document) => document.lines.length,
                 render: (document) => document.lines.length,
@@ -467,9 +469,10 @@ export function LogisticsReturnsPage() {
           {rows.map((document) => (
             <Card key={document.id} size="sm">
               <CardHeader>
-                <CardTitle>Возврат {document.id.slice(0, 8)}</CardTitle>
+                <CardTitle>{document.partySnapshot ?? "Возврат"}</CardTitle>
                 <CardDescription>
-                  {formatDateTime(document.createdAt)}
+                  {formatDateTime(document.createdAt)} ·{" "}
+                  {document.driverSnapshot ?? "Водитель не указан"}
                 </CardDescription>
                 <CardAction>
                   <Badge variant={statusVariant(document.state)}>
@@ -493,7 +496,7 @@ export function LogisticsReturnsPage() {
               <CardHeader>
                 <CardTitle>Возвраты не найдены</CardTitle>
                 <CardDescription>
-                  Измените фильтр или создайте новый документ возврата.
+                  Измените фильтр или добавьте возврат из аренды.
                 </CardDescription>
               </CardHeader>
             </Card>
@@ -520,15 +523,12 @@ export function LogisticsReturnsPage() {
           onOpenChange={(open) => !open && setEstimateTarget(null)}
           onSuccess={(result) => {
             storeServiceProjection(queryClient, result)
-            void refreshServiceProjection(queryClient, result.warehouseId)
+            void refresh(result.warehouseId)
             setEstimateTarget(null)
             setCommandError(null)
           }}
           onConflict={(cause) => {
-            void refreshServiceProjection(
-              queryClient,
-              estimateTarget.warehouseId
-            )
+            void refresh(estimateTarget.warehouseId)
             setEstimateTarget(null)
             setCommandError(errorMessage(cause, "Версия возврата изменилась"))
           }}
@@ -543,12 +543,12 @@ export function LogisticsReturnsPage() {
           onOpenChange={(open) => !open && setAcceptTarget(null)}
           onSuccess={(result) => {
             storeServiceProjection(queryClient, result)
-            void refreshServiceProjection(queryClient, result.warehouseId)
+            void refresh(result.warehouseId)
             setAcceptTarget(null)
             setCommandError(null)
           }}
           onConflict={(cause) => {
-            void refreshServiceProjection(queryClient, acceptTarget.warehouseId)
+            void refresh(acceptTarget.warehouseId)
             setAcceptTarget(null)
             setCommandError(errorMessage(cause, "Версия возврата изменилась"))
           }}
@@ -575,10 +575,8 @@ function ReturnLines({
           className="data-[selected=true]:ring-2 data-[selected=true]:ring-ring"
         >
           <CardHeader>
-            <CardTitle>Строка {line.lineNumber}</CardTitle>
-            <CardDescription>
-              {line.tenantSnapshot ?? "Контрагент не указан"}
-            </CardDescription>
+            <CardTitle>{lineSummary(line)}</CardTitle>
+            <CardDescription>Строка {line.lineNumber}</CardDescription>
             <CardAction>
               <Badge variant="outline">v{line.version}</Badge>
             </CardAction>
@@ -588,30 +586,14 @@ function ReturnLines({
               Asset: <span className="font-mono text-xs">{line.assetId}</span>
             </span>
             <span>
-              Версия asset: {line.assetVersion} · Line ID:{" "}
-              <span className="font-mono text-xs">{line.id}</span>
+              Аренда:{" "}
+              <span className="font-mono text-xs">{line.rentalOrderId}</span>
             </span>
           </CardContent>
         </Card>
       ))}
     </div>
   )
-}
-
-type ReturnLineDraft = {
-  key: string
-  assetId: string
-  assetVersion: string
-  tenantSnapshot: string
-}
-
-function emptyLine(): ReturnLineDraft {
-  return {
-    key: commandIdentity(),
-    assetId: "",
-    assetVersion: "0",
-    tenantSnapshot: "",
-  }
 }
 
 function CreateReturnDialog({
@@ -624,56 +606,157 @@ function CreateReturnDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
-  const [lines, setLines] = useState<ReturnLineDraft[]>(() => [emptyLine()])
-  const commandAttempt = useRef<CommandAttempt | null>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const [client, setClient] = useState<OrderClientSearchItem | null>(null)
+  const [driver, setDriver] = useState<RepairTaskWorkerSnapshotDto | null>(null)
+  const [lines, setLines] = useState<ReturnLineDraft[]>(() => [
+    emptyReturnLine(),
+  ])
   const [validationError, setValidationError] = useState<string | null>(null)
+  const commandAttempt = useRef<CommandAttempt | null>(null)
+
+  const ordersQuery = useQuery({
+    queryKey: [
+      ...ORDERS_QUERY_KEY,
+      "return-orders",
+      warehouseId,
+      client?.id ?? "none",
+    ],
+    queryFn: () =>
+      listOrders({
+        accessToken,
+        page: 0,
+        size: 100,
+        search: client?.displayName,
+        sort: "updatedAt",
+        direction: "desc",
+      }),
+    enabled: client !== null,
+  })
+  const orders = useMemo(
+    () =>
+      (ordersQuery.data?.content ?? []).filter(
+        (order) =>
+          order.client.id === client?.id &&
+          order.status === "DRAFT" &&
+          order.warehouseId === warehouseId
+      ),
+    [client?.id, ordersQuery.data?.content, warehouseId]
+  )
+  const candidatesQuery = useQuery({
+    queryKey: [
+      ...ORDERS_QUERY_KEY,
+      "return-candidates",
+      warehouseId,
+      orders.map((order) => order.id).join("|"),
+    ],
+    queryFn: async () => {
+      const details = await Promise.all(
+        orders.map((order) => getOrder(accessToken, order.id))
+      )
+      return returnCandidates(details)
+    },
+    enabled: client !== null && orders.length > 0,
+  })
+  const candidates = useMemo(
+    () => candidatesQuery.data ?? [],
+    [candidatesQuery.data]
+  )
+  const candidatesByOrder = useMemo(() => {
+    const groups = new Map<string, ReturnCandidate[]>()
+    for (const candidate of candidates) {
+      const group = groups.get(candidate.rentalOrderId) ?? []
+      group.push(candidate)
+      groups.set(candidate.rentalOrderId, group)
+    }
+    return groups
+  }, [candidates])
+  const selectedAssetIds = lines
+    .map((line) => line.assetId)
+    .filter((assetId): assetId is string => assetId !== null)
+  const candidateByAssetId = new Map(
+    candidates.map((item) => [item.unit.id, item])
+  )
   const mutation = useMutation({
-    mutationFn: (command: {
+    mutationFn: ({
+      clientId,
+      driverSnapshot,
+      lines: commandLines,
+      idempotencyKey,
+    }: {
+      clientId: string
+      driverSnapshot: string
       lines: CreateReturnLine[]
       idempotencyKey: string
     }) =>
       createReturn({
         accessToken,
         warehouseId,
-        ...command,
+        clientId,
+        driverSnapshot,
+        lines: commandLines,
+        idempotencyKey,
       }),
     onSuccess: (result) => {
       storeServiceProjection(queryClient, result)
-      void refreshServiceProjection(queryClient, result.warehouseId)
+      void queryClient.invalidateQueries({
+        queryKey: returnListQueryKey(result.warehouseId),
+      })
       onOpenChange(false)
     },
   })
 
-  function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const commandLines = lines.map((line) => ({
-      assetId: line.assetId.trim(),
-      assetVersion: Number(line.assetVersion),
-      tenantSnapshot: line.tenantSnapshot.trim(),
-    }))
-    const invalidLine = lines.find(
-      (line) =>
-        !isUuid(line.assetId.trim()) ||
-        !line.tenantSnapshot.trim() ||
-        !Number.isSafeInteger(Number(line.assetVersion)) ||
-        Number(line.assetVersion) < 0
+  function selectCandidate(key: string, candidate: ReturnCandidate | null) {
+    setLines((current) =>
+      current.map((line) =>
+        line.key === key
+          ? { ...line, assetId: candidate?.unit.id ?? null }
+          : line
+      )
     )
-    if (invalidLine) {
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const selected = lines.map((line) =>
+      line.assetId ? (candidateByAssetId.get(line.assetId) ?? null) : null
+    )
+    if (
+      !client ||
+      !driver ||
+      selected.some((candidate) => candidate === null)
+    ) {
       setValidationError(
-        "Для каждой строки укажите asset UUID, неотрицательную версию и снимок контрагента."
+        "Выберите контрагента, водителя и бытовку в каждой строке возврата."
       )
       return
     }
-    const assetIds = commandLines.map((line) => line.assetId.toLowerCase())
-    if (new Set(assetIds).size !== assetIds.length) {
+    const candidatesForCommand = selected as ReturnCandidate[]
+    if (
+      new Set(candidatesForCommand.map((candidate) => candidate.unit.id))
+        .size !== candidatesForCommand.length
+    ) {
       setValidationError(
-        "Каждый asset UUID можно добавить в документ возврата только один раз."
+        "Одну бытовку можно добавить в возврат только один раз."
       )
       return
     }
+    const commandLines = candidatesForCommand.map((candidate) => ({
+      assetId: candidate.unit.id,
+      assetVersion: candidate.unit.version,
+      tenantSnapshot: client.displayName,
+      rentalOrderId: candidate.rentalOrderId,
+    }))
+    const signature = JSON.stringify({
+      warehouseId,
+      clientId: client.id,
+      driverSnapshot: driver.name,
+      lines: commandLines,
+    })
     setValidationError(null)
-    const signature = JSON.stringify({ warehouseId, lines: commandLines })
     mutation.mutate({
+      clientId: client.id,
+      driverSnapshot: driver.name,
       lines: commandLines,
       idempotencyKey: stableCommandKey(commandAttempt, signature),
     })
@@ -681,140 +764,200 @@ function CreateReturnDialog({
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100svh-1rem)] overflow-y-auto sm:max-w-3xl">
+      <DialogContent
+        ref={contentRef}
+        className="max-h-[calc(100svh-1rem)] overflow-y-auto sm:max-w-4xl"
+      >
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>Создать документ возврата</DialogTitle>
+            <DialogTitle>Добавить возврат из аренды</DialogTitle>
             <DialogDescription>
-              Контракт logistics-service принимает только server-issued asset
-              ID, его текущую версию и снимок контрагента. Поиск компании и
-              бытовки появится после отдельного публичного контракта кандидатов.
+              Выберите контрагента, водителя и бытовки, которые находятся у
+              контрагента в активной аренде. Каждая строка сохраняет связь с
+              конкретным заказом.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup className="py-4">
-            <FieldSet>
-              <FieldLegend variant="label">Строки возврата</FieldLegend>
+            <RentalClientPicker
+              accessToken={accessToken}
+              idPrefix="return"
+              portalContainer={contentRef}
+              value={client}
+              disabled={mutation.isPending}
+              onChange={(next) => {
+                setClient(next)
+                setLines([emptyReturnLine()])
+                commandAttempt.current = null
+                setValidationError(null)
+              }}
+            />
+            <LogisticsDriverPicker
+              accessToken={accessToken}
+              id="return-driver"
+              warehouseId={warehouseId}
+              value={driver}
+              disabled={mutation.isPending}
+              onChange={(next) => {
+                setDriver(next)
+                commandAttempt.current = null
+                setValidationError(null)
+              }}
+            />
+            <FieldSet disabled={!client || mutation.isPending}>
+              <FieldLegend variant="label">Бытовки в аренде</FieldLegend>
               <FieldDescription>
-                Повторная отправка этого диалога использует тот же
-                Idempotency-Key.
+                Показаны только активные серверные резервы выбранного клиента со
+                статусом «в аренде».
               </FieldDescription>
               <FieldGroup>
-                {lines.map((line, index) => (
-                  <Card key={line.key} size="sm">
-                    <CardHeader>
-                      <CardTitle>Бытовка {index + 1}</CardTitle>
-                      {lines.length > 1 ? (
-                        <CardAction>
-                          <Button
-                            type="button"
-                            size="icon-sm"
-                            variant="outline"
-                            aria-label={`Удалить строку ${index + 1}`}
-                            onClick={() =>
-                              setLines((current) =>
-                                current.filter((item) => item.key !== line.key)
-                              )
+                {lines.map((line, index) => {
+                  const selectedCandidate = line.assetId
+                    ? (candidateByAssetId.get(line.assetId) ?? null)
+                    : null
+                  return (
+                    <Card key={line.key} size="sm">
+                      <CardHeader>
+                        <CardTitle>Бытовка {index + 1}</CardTitle>
+                        {lines.length > 1 ? (
+                          <CardAction>
+                            <Button
+                              type="button"
+                              size="icon-sm"
+                              variant="outline"
+                              aria-label={`Удалить бытовку ${index + 1}`}
+                              onClick={() =>
+                                setLines((current) =>
+                                  current.filter(
+                                    (item) => item.key !== line.key
+                                  )
+                                )
+                              }
+                            >
+                              <HugeiconsIcon
+                                icon={Delete02Icon}
+                                data-icon="inline-start"
+                              />
+                            </Button>
+                          </CardAction>
+                        ) : null}
+                      </CardHeader>
+                      <CardContent>
+                        <Field>
+                          <FieldLabel htmlFor={`return-cabin-${line.key}`}>
+                            Номер бытовки
+                          </FieldLabel>
+                          <Combobox<ReturnCandidate>
+                            items={candidates}
+                            value={selectedCandidate}
+                            itemToStringLabel={(candidate) =>
+                              candidate.unit.number
+                            }
+                            itemToStringValue={(candidate) => candidate.unit.id}
+                            isItemEqualToValue={(left, right) =>
+                              left.unit.id === right.unit.id
+                            }
+                            disabled={!client || mutation.isPending}
+                            onValueChange={(candidate) =>
+                              selectCandidate(line.key, candidate)
                             }
                           >
-                            <HugeiconsIcon
-                              icon={Delete02Icon}
-                              data-icon="inline-start"
+                            <ComboboxInput
+                              id={`return-cabin-${line.key}`}
+                              placeholder={
+                                client
+                                  ? "Введите номер бытовки"
+                                  : "Сначала выберите клиента"
+                              }
+                              showClear
                             />
-                          </Button>
-                        </CardAction>
-                      ) : null}
-                    </CardHeader>
-                    <CardContent>
-                      <FieldGroup>
-                        <Field>
-                          <FieldLabel htmlFor={`return-asset-${line.key}`}>
-                            Asset UUID
-                          </FieldLabel>
-                          <Input
-                            id={`return-asset-${line.key}`}
-                            value={line.assetId}
-                            required
-                            placeholder="00000000-0000-0000-0000-000000000000"
-                            onChange={(event) =>
-                              setLines((current) =>
-                                current.map((item) =>
-                                  item.key === line.key
-                                    ? { ...item, assetId: event.target.value }
-                                    : item
-                                )
-                              )
-                            }
-                          />
+                            <ComboboxContent portalContainer={contentRef}>
+                              <ComboboxEmpty>
+                                {candidatesQuery.isFetching
+                                  ? "Загружаем бытовки…"
+                                  : ordersQuery.isFetching
+                                    ? "Загружаем аренды…"
+                                    : "Бытовки в аренде не найдены"}
+                              </ComboboxEmpty>
+                              <ComboboxList>
+                                {Array.from(candidatesByOrder.entries()).map(
+                                  ([orderId, orderCandidates]) => {
+                                    const available = orderCandidates.filter(
+                                      (candidate) =>
+                                        candidate.unit.id === line.assetId ||
+                                        !selectedAssetIds.includes(
+                                          candidate.unit.id
+                                        )
+                                    )
+                                    if (!available.length) return null
+                                    return (
+                                      <ComboboxGroup key={orderId}>
+                                        <ComboboxLabel>
+                                          Аренда {available[0]?.orderNumber}
+                                        </ComboboxLabel>
+                                        {available.map((candidate) => (
+                                          <ComboboxItem
+                                            key={candidate.unit.id}
+                                            value={candidate}
+                                          >
+                                            <span>{candidate.unit.number}</span>
+                                            <Badge variant="secondary">
+                                              В аренде
+                                            </Badge>
+                                          </ComboboxItem>
+                                        ))}
+                                      </ComboboxGroup>
+                                    )
+                                  }
+                                )}
+                              </ComboboxList>
+                            </ComboboxContent>
+                          </Combobox>
                         </Field>
-                        <Field>
-                          <FieldLabel htmlFor={`return-version-${line.key}`}>
-                            Текущая версия asset
-                          </FieldLabel>
-                          <Input
-                            id={`return-version-${line.key}`}
-                            type="number"
-                            min={0}
-                            step={1}
-                            required
-                            value={line.assetVersion}
-                            onChange={(event) =>
-                              setLines((current) =>
-                                current.map((item) =>
-                                  item.key === line.key
-                                    ? {
-                                        ...item,
-                                        assetVersion: event.target.value,
-                                      }
-                                    : item
-                                )
-                              )
-                            }
-                          />
-                        </Field>
-                        <Field>
-                          <FieldLabel htmlFor={`return-tenant-${line.key}`}>
-                            Снимок контрагента
-                          </FieldLabel>
-                          <Input
-                            id={`return-tenant-${line.key}`}
-                            maxLength={512}
-                            required
-                            value={line.tenantSnapshot}
-                            onChange={(event) =>
-                              setLines((current) =>
-                                current.map((item) =>
-                                  item.key === line.key
-                                    ? {
-                                        ...item,
-                                        tenantSnapshot: event.target.value,
-                                      }
-                                    : item
-                                )
-                              )
-                            }
-                          />
-                        </Field>
-                      </FieldGroup>
-                    </CardContent>
-                  </Card>
-                ))}
+                        {selectedCandidate ? (
+                          <FieldDescription>
+                            Аренда {selectedCandidate.orderNumber} · версия
+                            бытовки {selectedCandidate.unit.version}
+                          </FieldDescription>
+                        ) : null}
+                      </CardContent>
+                    </Card>
+                  )
+                })}
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={
+                    !client ||
+                    mutation.isPending ||
+                    lines.length >= 100 ||
+                    candidates.length === 0 ||
+                    lines.some((line) => line.assetId === null)
+                  }
+                  onClick={() =>
+                    setLines((current) => [...current, emptyReturnLine()])
+                  }
+                >
+                  <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+                  Добавить ещё бытовку
+                </Button>
               </FieldGroup>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={lines.length >= 100}
-                onClick={() => setLines((current) => [...current, emptyLine()])}
-              >
-                <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-                Добавить строку
-              </Button>
             </FieldSet>
+            {ordersQuery.isSuccess && client && orders.length === 0 ? (
+              <FieldError>
+                Для выбранного клиента на этом складе нет активных аренд.
+              </FieldError>
+            ) : null}
+            {ordersQuery.isError || candidatesQuery.isError ? (
+              <FieldError>
+                Не удалось загрузить доступные бытовки для возврата.
+              </FieldError>
+            ) : null}
             {validationError ? (
               <FieldError>{validationError}</FieldError>
             ) : null}
             {mutation.error ? (
               <FieldError>
-                {errorMessage(mutation.error, "Не удалось создать возврат")}
+                {errorMessage(mutation.error, "Не удалось добавить возврат")}
               </FieldError>
             ) : null}
           </FieldGroup>
@@ -827,11 +970,29 @@ function CreateReturnDialog({
               Отмена
             </Button>
             <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? "Создаётся…" : "Создать черновик"}
+              {mutation.isPending ? "Создаётся…" : "Создать возврат"}
             </Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
   )
+}
+
+function returnCandidates(details: OrderDetail[]): ReturnCandidate[] {
+  return details
+    .flatMap((order) =>
+      order.units
+        .filter(
+          (candidate) => candidate.added && candidate.unit.status === "RENTED"
+        )
+        .map((candidate) => ({
+          rentalOrderId: order.id,
+          orderNumber: order.number,
+          unit: candidate.unit,
+        }))
+    )
+    .sort((left, right) =>
+      left.unit.number.localeCompare(right.unit.number, "ru")
+    )
 }

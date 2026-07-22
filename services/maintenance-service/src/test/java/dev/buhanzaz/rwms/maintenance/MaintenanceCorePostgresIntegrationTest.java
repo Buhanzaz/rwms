@@ -630,7 +630,7 @@ class MaintenanceCorePostgresIntegrationTest {
         new VersionCommand(changed.version()));
     clearInvocations(dependencies);
     rentalItemFacts.saveAndFlush(
-        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 7));
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "AFTER_RENT", 7));
 
     CatalogNodeSnapshot forgedChairSnapshot = new CatalogNodeSnapshot(
         catalogId,
@@ -753,7 +753,7 @@ class MaintenanceCorePostgresIntegrationTest {
     UUID leaseId = UUID.randomUUID();
     when(dependencies.getRentalItemSnapshot(rentalItemId))
         .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
-            rentalItemId, 7, warehouseId, "FREE"));
+            rentalItemId, 7, warehouseId, "AFTER_RENT"));
     when(dependencies.acquireLease(
         any(), eq(rentalItemId), eq(7L), eq("MAINTENANCE_ESTIMATE"), eq(estimateId.toString())))
         .thenReturn(new MaintenanceDependencyGateway.LeaseSnapshot(
@@ -814,7 +814,7 @@ class MaintenanceCorePostgresIntegrationTest {
         """, catalogId, materialId);
     jdbc.update("update catalog_version set state='ACTIVE' where id=?", catalogId);
     rentalItemFacts.saveAndFlush(
-        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 7));
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "AFTER_RENT", 7));
     CatalogNodeSnapshot submitted = new CatalogNodeSnapshot(
         catalogId, materialId, "CHAIR", CatalogNodeType.MATERIAL, "Chair", "piece",
         "100.00", 0, null, null);
@@ -890,7 +890,7 @@ class MaintenanceCorePostgresIntegrationTest {
         new VersionCommand(changed.version()));
     clearInvocations(dependencies);
     rentalItemFacts.saveAndFlush(
-        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 7));
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "AFTER_RENT", 7));
     CatalogNodeSnapshot submitted = new CatalogNodeSnapshot(
         catalogId, materialId, "CHAIR", CatalogNodeType.MATERIAL, "Chair", "piece",
         "100.00", 0, null, null);
@@ -1503,6 +1503,45 @@ class MaintenanceCorePostgresIntegrationTest {
             List.of(stage(0, first), stage(1, second)), List.of())))
         .isInstanceOf(dev.buhanzaz.rwms.maintenance.service.MaintenanceValidationException.class);
     assertThat(repairs.count()).isZero();
+  }
+
+  @Test
+  void estimatesRequireAnAfterRentRentalItemAndDirectRepairsExcludeIt() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID estimateRentalItemId = UUID.randomUUID();
+    rentalItemFacts.saveAndFlush(RentalItemFactProjection.create(
+        estimateRentalItemId, warehouseId, "FREE", 7));
+
+    assertThatThrownBy(() -> service.createEstimate(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        new CreateEstimateRequest(
+            warehouseId,
+            estimateRentalItemId,
+            LocalDate.of(2026, 7, 17),
+            null,
+            List.of(),
+            List.of(),
+            List.of())))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .hasMessageContaining("must have AFTER_RENT");
+
+    UUID directRepairRentalItemId = UUID.randomUUID();
+    rentalItemFacts.saveAndFlush(RentalItemFactProjection.create(
+        directRepairRentalItemId, warehouseId, "AFTER_RENT", 7));
+
+    assertThatThrownBy(() -> service.createDirectRepair(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        new CreateDirectRepairRequest(
+            warehouseId,
+            directRepairRentalItemId,
+            LocalDate.of(2026, 7, 17),
+            null,
+            List.of(stage()),
+            List.of())))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .hasMessageContaining("must not have AFTER_RENT");
   }
 
   @Test

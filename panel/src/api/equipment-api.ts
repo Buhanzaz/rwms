@@ -10,7 +10,6 @@ import type {
   EquipmentMovementDto,
   EquipmentWriteOffSummaryDto,
   DisposeEquipmentInput,
-  TransferEquipmentInput,
 } from "@/types/equipment"
 import type { WarehouseInventoryStockItemDto } from "@/types/warehouse-location"
 
@@ -365,62 +364,6 @@ export async function disposeEquipment(
   const response = await bearerRequest<unknown>(
     requireAccessToken(accessToken),
     `${assetApiBaseUrl()}/equipment/dispositions`,
-    {
-      method: "POST",
-      headers: { "Idempotency-Key": idempotencyKey },
-      body: JSON.stringify(request),
-    }
-  )
-
-  return parseMovement(response)
-}
-
-export async function transferEquipment(
-  accessToken: string | null,
-  idempotencyKey: string,
-  input: TransferEquipmentInput
-): Promise<EquipmentMovementDto> {
-  if (!UUID_PATTERN.test(idempotencyKey)) {
-    throw new Error("Для перемещения нужен UUID Idempotency-Key.")
-  }
-
-  if (
-    !Number.isSafeInteger(input.sourceExpectedVersion) ||
-    input.sourceExpectedVersion < 0 ||
-    !Number.isSafeInteger(input.targetExpectedVersion) ||
-    input.targetExpectedVersion < 0
-  ) {
-    throw new Error(
-      "Для перемещения нужны актуальные версии исходного и целевого остатков."
-    )
-  }
-
-  if (!Number.isSafeInteger(input.quantity) || input.quantity < 1) {
-    throw new Error("Количество перемещения должно быть целым и больше нуля.")
-  }
-
-  const request = {
-    equipmentId: uuid(input.equipmentId),
-    sourceWarehouseId: uuid(input.sourceWarehouseId),
-    sourceRentalItemId: nullableUuid(input.sourceRentalItemId),
-    sourceLocationKind: enumValue(
-      input.sourceLocationKind,
-      BALANCE_LOCATION_KINDS
-    ),
-    sourceExpectedVersion: input.sourceExpectedVersion,
-    targetWarehouseId: uuid(input.targetWarehouseId),
-    targetRentalItemId: nullableUuid(input.targetRentalItemId),
-    targetLocationKind: enumValue(
-      input.targetLocationKind,
-      BALANCE_LOCATION_KINDS
-    ),
-    targetExpectedVersion: input.targetExpectedVersion,
-    quantity: input.quantity,
-  }
-
-  const response = await bearerRequest<unknown>(
-    requireAccessToken(accessToken),
-    `${assetApiBaseUrl()}/equipment/transfers`,
     {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },

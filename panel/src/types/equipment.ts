@@ -99,17 +99,4 @@ export type DisposeEquipmentInput = {
   disposition: "WRITE_OFF" | "LOSS"
 }
 
-export type TransferEquipmentInput = {
-  equipmentId: string
-  sourceWarehouseId: string
-  sourceRentalItemId: string | null
-  sourceLocationKind: EquipmentBalanceLocationKind
-  sourceExpectedVersion: number
-  targetWarehouseId: string
-  targetRentalItemId: string | null
-  targetLocationKind: EquipmentBalanceLocationKind
-  targetExpectedVersion: number
-  quantity: number
-}
-
 export type EquipmentDispositionListItemDto = EquipmentDispositionDto

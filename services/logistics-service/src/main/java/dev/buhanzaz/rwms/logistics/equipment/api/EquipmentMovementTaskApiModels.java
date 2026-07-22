@@ -17,10 +17,20 @@ public final class EquipmentMovementTaskApiModels {
 
   public record CreateEquipmentMovementTaskRequest(
       @NotNull UUID warehouseId,
+      UUID targetWarehouseId,
       @Size(max = 64) String unitNumber,
       @Min(1) Integer plannedDurationMinutes,
       @NotNull @Future OffsetDateTime deadlineAt,
-      @NotNull @Size(min = 1, max = 100) List<@Valid EquipmentMovementLineRequest> lines) {}
+      @NotNull @Size(min = 1, max = 100) List<@Valid EquipmentMovementLineRequest> lines) {
+    public CreateEquipmentMovementTaskRequest(
+        UUID warehouseId,
+        String unitNumber,
+        Integer plannedDurationMinutes,
+        OffsetDateTime deadlineAt,
+        List<EquipmentMovementLineRequest> lines) {
+      this(warehouseId, null, unitNumber, plannedDurationMinutes, deadlineAt, lines);
+    }
+  }
 
   public record EquipmentMovementLineRequest(
       @NotNull UUID equipmentId,

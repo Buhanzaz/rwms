@@ -44,12 +44,20 @@ public class ReturnRegistrationProcessor {
         case ASSET_LEASE ->
             store.confirmLease(
                 work.operationId(),
-                dependencies.acquireReturnLease(
-                    work.operationId(),
-                    work.assetId(),
-                    work.expectedAssetVersion(),
-                    work.documentId(),
-                    work.lineId()));
+                work.rentalOrderId() == null
+                    ? dependencies.acquireReturnLease(
+                        work.operationId(),
+                        work.assetId(),
+                        work.expectedAssetVersion(),
+                        work.documentId(),
+                        work.lineId())
+                    : dependencies.acquireReturnLease(
+                        work.operationId(),
+                        work.assetId(),
+                        work.expectedAssetVersion(),
+                        work.documentId(),
+                        work.lineId(),
+                        work.rentalOrderId()));
         case ASSET_RETURN_INTAKE ->
             store.confirmReturnIntake(
                 work.operationId(),

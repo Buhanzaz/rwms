@@ -286,6 +286,36 @@ class OrderApiIntegrationTest {
   }
 
   @Test
+  void emptyClientSearchReturnsTheMostRecentCounterpartiesFirst() throws Exception {
+    List<UUID> clientIds =
+        List.of(
+            createClient(MANAGER_1, "manager-one", "Контрагент 1"),
+            createClient(MANAGER_1, "manager-one", "Контрагент 2"),
+            createClient(MANAGER_1, "manager-one", "Контрагент 3"),
+            createClient(MANAGER_1, "manager-one", "Контрагент 4"),
+            createClient(MANAGER_1, "manager-one", "Контрагент 5"),
+            createClient(MANAGER_1, "manager-one", "Контрагент 6"));
+    for (int index = 0; index < clientIds.size(); index++) {
+      jdbc.update(
+          "update order_client set created_at=? where id=?",
+          OffsetDateTime.of(2026, 7, 22, 10, index, 0, 0, ZoneOffset.UTC),
+          clientIds.get(index));
+    }
+
+    mvc.perform(
+            get("/api/logistics/v1/clients")
+                .param("search", "")
+                .param("page", "0")
+                .param("size", "5")
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.totalElements").value(6))
+        .andExpect(jsonPath("$.content.length()").value(5))
+        .andExpect(jsonPath("$.content[0].displayName").value("Контрагент 6"))
+        .andExpect(jsonPath("$.content[4].displayName").value("Контрагент 2"));
+  }
+
+  @Test
   void unsupportedClientTypeIsRejectedBeforeMutation() throws Exception {
     mvc.perform(
             post("/api/logistics/v1/clients")

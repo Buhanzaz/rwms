@@ -1,17 +1,14 @@
 import type { QueryClient } from "@tanstack/react-query"
 
-import { transferEquipment } from "@/api/equipment-api"
 import { RENTAL_ITEM_DOSSIER_QUERY_KEY } from "@/features/rental-items/dossier/api/rental-item-dossier-api"
 import type {
   RentalItemDto,
   RentalItemStatus,
 } from "@/features/rental-items/model/rental-item"
-import { ApiError } from "@/lib/api-client"
 import type {
   EquipmentBalanceDto,
   EquipmentBalanceLocationKind,
   EquipmentItemDto,
-  TransferEquipmentInput,
 } from "@/types/equipment"
 
 export const RENTAL_ITEM_CONTENTS_EQUIPMENT_QUERY_KEY = [
@@ -53,33 +50,6 @@ export type RentalItemContentsTransferRow<
   equipmentBalances: EquipmentBalanceDto[]
 }
 
-export type RentalItemContentsTransferLine = {
-  lineKey: string
-  input: TransferEquipmentInput
-}
-
-export class RentalItemContentsBatchTransferError extends Error {
-  readonly completedCount: number
-  readonly totalCount: number
-  readonly failure: unknown
-
-  constructor(params: {
-    completedCount: number
-    totalCount: number
-    failure: unknown
-  }) {
-    super(
-      params.failure instanceof Error
-        ? params.failure.message
-        : "Не удалось изменить наполнение бытовки."
-    )
-    this.name = "RentalItemContentsBatchTransferError"
-    this.completedCount = params.completedCount
-    this.totalCount = params.totalCount
-    this.failure = params.failure
-  }
-}
-
 const sourceSummaryQuantityFormatter = new Intl.NumberFormat("ru-RU")
 const SOURCE_SUMMARY_VISIBLE_ROWS = 3
 const SOURCE_SUMMARY_NAME_LENGTH = 36
@@ -114,122 +84,6 @@ export function formatRentalItemContentsSourceSummary(
   return remainingCount > 0
     ? `${number} — ${composition}, ещё ${sourceSummaryQuantityFormatter.format(remainingCount)}`
     : `${number} — ${composition}`
-}
-
-export function createRentalItemContentsTransferInput(params: {
-  row: RentalItemContentsTransferRow
-  targetWarehouseId: string
-  targetRentalItemId: string | null
-  targetLocationKind: EquipmentBalanceLocationKind
-  quantity: number
-}): TransferEquipmentInput {
-  const targetBalances = params.row.equipmentBalances.filter(
-    (balance) =>
-      balance.warehouseId === params.targetWarehouseId &&
-      balance.rentalItemId === params.targetRentalItemId &&
-      balance.locationKind === params.targetLocationKind
-  )
-  if (targetBalances.length > 1) {
-    throw new Error("Сервис имущества вернул дублирующий целевой остаток.")
-  }
-
-  return {
-    equipmentId: params.row.equipmentId,
-    sourceWarehouseId: params.row.sourceBalance.warehouseId,
-    sourceRentalItemId: params.row.sourceBalance.rentalItemId,
-    sourceLocationKind: params.row.sourceBalance.locationKind,
-    sourceExpectedVersion: params.row.sourceBalance.version,
-    targetWarehouseId: params.targetWarehouseId,
-    targetRentalItemId: params.targetRentalItemId,
-    targetLocationKind: params.targetLocationKind,
-    targetExpectedVersion: targetBalances[0]?.version ?? 0,
-    quantity: params.quantity,
-  }
-}
-
-export function rentalItemContentsTransferLineKey(
-  input: TransferEquipmentInput
-) {
-  return [
-    input.equipmentId,
-    input.sourceWarehouseId,
-    input.sourceRentalItemId ?? "stock",
-    input.sourceLocationKind,
-    input.targetWarehouseId,
-    input.targetRentalItemId ?? "stock",
-    input.targetLocationKind,
-  ].join(":")
-}
-
-function createTransferIdempotencyKey() {
-  if (
-    typeof crypto !== "undefined" &&
-    typeof crypto.randomUUID === "function"
-  ) {
-    return crypto.randomUUID()
-  }
-
-  throw new Error("Браузер не поддерживает генерацию ключа идемпотентности.")
-}
-
-export async function executeRentalItemContentsTransferBatch(params: {
-  accessToken: string | null
-  lines: RentalItemContentsTransferLine[]
-  idempotencyKeys: Map<string, string>
-  completedLineKeys: Set<string>
-  onLineCompleted?: (line: RentalItemContentsTransferLine) => void
-}) {
-  const pendingLines = params.lines.filter(
-    (line) => !params.completedLineKeys.has(line.lineKey)
-  )
-  let completedInBatch = 0
-
-  for (const line of pendingLines) {
-    const signature = JSON.stringify(line.input)
-    let idempotencyKey = params.idempotencyKeys.get(signature)
-    if (!idempotencyKey) {
-      idempotencyKey = createTransferIdempotencyKey()
-      params.idempotencyKeys.set(signature, idempotencyKey)
-    }
-
-    try {
-      await transferEquipment(params.accessToken, idempotencyKey, line.input)
-    } catch (failure) {
-      throw new RentalItemContentsBatchTransferError({
-        completedCount: completedInBatch,
-        totalCount: pendingLines.length,
-        failure,
-      })
-    }
-
-    completedInBatch += 1
-    params.completedLineKeys.add(line.lineKey)
-    params.onLineCompleted?.(line)
-  }
-
-  return { completedCount: completedInBatch, totalCount: pendingLines.length }
-}
-
-export function formatRentalItemContentsTransferError(error: unknown) {
-  const batchError =
-    error instanceof RentalItemContentsBatchTransferError ? error : null
-  const failure = batchError?.failure ?? error
-
-  if (failure instanceof ApiError && failure.status === 409) {
-    const partialPrefix =
-      batchError && batchError.completedCount > 0
-        ? `Перемещено ${batchError.completedCount} из ${batchError.totalCount}. `
-        : ""
-    return `${partialPrefix}Остатки изменились. Данные обновлены — проверьте количество и повторите.`
-  }
-
-  if (batchError && batchError.completedCount > 0) {
-    return `Перемещено ${batchError.completedCount} из ${batchError.totalCount}. Данные обновлены; повторите оставшиеся строки. ${batchError.message}`
-  }
-
-  return failure instanceof Error
-    ? failure.message
-    : "Не удалось изменить наполнение бытовки."
 }
 
 export function canTransferRentalItemContents(item: RentalItemDto) {

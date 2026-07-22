@@ -14,23 +14,34 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { FieldError } from "@/components/ui/field"
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import { useAuth } from "@/features/auth/use-auth"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
+import {
+  MAX_EQUIPMENT_MOVEMENT_WORKER_OPERATIONS,
+  createEquipmentMovementTask,
+  createEquipmentMovementTaskIdempotencyKey,
+  equipmentMovementDeadlineToIso,
+  equipmentMovementWorkerOperationCount,
+  type CreateEquipmentMovementTaskInput,
+} from "@/features/logistics/api/equipment-movement-tasks-api"
 import { RentalItemContentsQuantityRows } from "@/features/rental-items/rental-item-contents-quantity-rows"
 import {
   canTransferRentalItemContents,
-  createRentalItemContentsTransferInput,
-  executeRentalItemContentsTransferBatch,
   formatRentalItemContentsSourceSummary,
-  formatRentalItemContentsTransferError,
   invalidateRentalItemContentsQueries,
-  rentalItemContentsTransferLineKey,
   rentalItemContentsTransferRows,
   RENTAL_ITEM_CONTENTS_EQUIPMENT_QUERY_KEY,
-  type RentalItemContentsTransferRow,
 } from "@/features/rental-items/rental-item-contents-transfer-support"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
+import { ApiError } from "@/lib/api-client"
 
 type Props = {
   item: RentalItemDto | null
@@ -38,6 +49,13 @@ type Props = {
   onOpenChange: (open: boolean) => void
 }
 type Draft = { quantity: number; selected: boolean }
+
+function taskSuccessMessage(deadlineAt: string) {
+  return `Задание создано. Мебель зарезервирована до ${new Intl.DateTimeFormat(
+    "ru-RU",
+    { dateStyle: "short", timeStyle: "short" }
+  ).format(new Date(deadlineAt))}; остатки изменятся после выполнения.`
+}
 
 export function MoveContentsToStockDialog({ item, open, onOpenChange }: Props) {
   return (
@@ -49,8 +67,8 @@ export function MoveContentsToStockDialog({ item, open, onOpenChange }: Props) {
             {item ? ` — ${item.number}` : ""}
           </DialogTitle>
           <DialogDescription>
-            Выберите фактическое оборудование бытовки. Остатки на складе
-            обновятся сразу после перемещения.
+            Будет создано задание работнику. Выбранная мебель останется в
+            бытовке до его выполнения.
           </DialogDescription>
         </DialogHeader>
         {item && open ? (
@@ -77,9 +95,9 @@ function Content({
   const canManage = hasWarehouseAccess(currentUser, item.warehouseId, "MANAGE")
   const eligible = canTransferRentalItemContents(item)
   const [draft, setDraft] = useState<Record<string, Draft>>({})
+  const [reservationDeadline, setReservationDeadline] = useState("")
   const [errorText, setErrorText] = useState<string | null>(null)
   const idempotencyKeys = useRef(new Map<string, string>())
-  const completedLines = useRef(new Set<string>())
 
   const equipmentQuery = useQuery({
     queryKey: [...RENTAL_ITEM_CONTENTS_EQUIPMENT_QUERY_KEY, item.warehouseId],
@@ -106,24 +124,27 @@ function Content({
   )
   const selectedRows = rows.filter((row) => row.selected && row.quantity > 0)
   const allSelected = rows.length > 0 && rows.every((row) => row.selected)
+  const taskLines = selectedRows.map((row) => ({
+    equipmentId: row.equipmentId,
+    sourceRentalItemId: item.id,
+    sourceLocationKind: row.sourceBalance.locationKind,
+    expectedSourceBalanceVersion: row.sourceBalance.version,
+    targetRentalItemId: null,
+    targetLocationKind: "STOCK" as const,
+    quantity: row.quantity,
+  }))
+  const operationLimitExceeded =
+    equipmentMovementWorkerOperationCount(taskLines) >
+    MAX_EQUIPMENT_MOVEMENT_WORKER_OPERATIONS
 
-  function line(row: RentalItemContentsTransferRow & { quantity: number }) {
-    const input = createRentalItemContentsTransferInput({
-      row,
-      targetWarehouseId: item.warehouseId,
-      targetRentalItemId: null,
-      targetLocationKind: "STOCK",
-      quantity: row.quantity,
-    })
-    return { lineKey: rentalItemContentsTransferLineKey(input), input }
-  }
-
-  function clearCompleted(row: RentalItemContentsTransferRow) {
-    completedLines.current.delete(line({ ...row, quantity: 1 }).lineKey)
-  }
-
-  async function refresh() {
-    await invalidateRentalItemContentsQueries(queryClient)
+  function taskIdempotencyKey(input: CreateEquipmentMovementTaskInput) {
+    const signature = JSON.stringify(input)
+    let key = idempotencyKeys.current.get(signature)
+    if (!key) {
+      key = createEquipmentMovementTaskIdempotencyKey()
+      idempotencyKeys.current.set(signature, key)
+    }
+    return key
   }
 
   const mutation = useMutation({
@@ -137,33 +158,42 @@ function Content({
       if (!eligible) {
         throw new Error("Перемещение недоступно для текущего статуса бытовки.")
       }
-      return executeRentalItemContentsTransferBatch({
+      if (operationLimitExceeded) {
+        throw new Error(
+          `В одном задании допускается не более ${MAX_EQUIPMENT_MOVEMENT_WORKER_OPERATIONS} действий работника.`
+        )
+      }
+      const input: CreateEquipmentMovementTaskInput = {
+        warehouseId: item.warehouseId,
+        unitNumber: item.number,
+        plannedDurationMinutes: null,
+        deadlineAt: equipmentMovementDeadlineToIso(reservationDeadline),
+        lines: taskLines,
+      }
+      return createEquipmentMovementTask({
         accessToken,
-        lines: selectedRows.map(line),
-        idempotencyKeys: idempotencyKeys.current,
-        completedLineKeys: completedLines.current,
-        onLineCompleted: (completed) =>
-          setDraft((current) => ({
-            ...current,
-            [completed.input.equipmentId]: { quantity: 0, selected: false },
-          })),
+        idempotencyKey: taskIdempotencyKey(input),
+        input,
       })
     },
-    onSuccess: async () => {
-      await refresh()
-      toast.success("Оборудование возвращено на склад.")
+    onSuccess: (task) => {
+      void invalidateRentalItemContentsQueries(queryClient)
+      toast.success(taskSuccessMessage(task.deadlineAt))
       onClose()
     },
     onError: (error) => {
-      setErrorText(formatRentalItemContentsTransferError(error))
-      void refresh()
+      setErrorText(
+        error instanceof Error ? error.message : "Не удалось создать задание."
+      )
+      if (error instanceof ApiError && error.status === 409) {
+        void invalidateRentalItemContentsQueries(queryClient)
+      }
     },
   })
 
   function toggleRow(equipmentId: string, selected: boolean) {
     const row = rows.find((candidate) => candidate.equipmentId === equipmentId)
     if (!row) return
-    clearCompleted(row)
     setErrorText(null)
     setDraft((current) => ({
       ...current,
@@ -178,7 +208,6 @@ function Content({
   function changeQuantity(equipmentId: string, delta: number) {
     const row = rows.find((candidate) => candidate.equipmentId === equipmentId)
     if (!row) return
-    clearCompleted(row)
     const quantity = Math.min(
       row.availableQuantity,
       Math.max(0, row.quantity + delta)
@@ -192,7 +221,6 @@ function Content({
 
   function toggleAll() {
     const selected = !allSelected
-    rows.forEach(clearCompleted)
     setErrorText(null)
     setDraft((current) => ({
       ...current,
@@ -236,6 +264,28 @@ function Content({
           {formatRentalItemContentsSourceSummary(item.number, sourceRows)}
         </p>
       ) : null}
+      <FieldGroup className="gap-4">
+        <Field data-invalid={Boolean(errorText && !reservationDeadline)}>
+          <FieldLabel htmlFor="move-to-stock-reservation-deadline">
+            Резерв до
+          </FieldLabel>
+          <Input
+            id="move-to-stock-reservation-deadline"
+            type="datetime-local"
+            value={reservationDeadline}
+            onChange={(event) => {
+              setReservationDeadline(event.target.value)
+              setErrorText(null)
+            }}
+            aria-invalid={Boolean(errorText && !reservationDeadline)}
+            required
+          />
+          <FieldDescription>
+            После этого срока резерв освободится, если работник не завершит
+            задание.
+          </FieldDescription>
+        </Field>
+      </FieldGroup>
       {equipmentQuery.isLoading ? (
         <p className="text-sm text-muted-foreground">Загрузка наполнения…</p>
       ) : equipmentQuery.isError ? (
@@ -268,16 +318,28 @@ function Content({
         </>
       )}
       {errorText ? <FieldError>{errorText}</FieldError> : null}
+      {operationLimitExceeded ? (
+        <FieldError>
+          В одном задании допускается не более{" "}
+          {MAX_EQUIPMENT_MOVEMENT_WORKER_OPERATIONS} действий работника.
+        </FieldError>
+      ) : null}
       <DialogFooter>
         <Button variant="outline" onClick={onClose}>
           Отмена
         </Button>
         <Button
-          disabled={selectedRows.length === 0 || mutation.isPending}
+          disabled={
+            selectedRows.length === 0 ||
+            !reservationDeadline ||
+            equipmentQuery.isFetching ||
+            operationLimitExceeded ||
+            mutation.isPending
+          }
           onClick={() => mutation.mutate()}
         >
           <HugeiconsIcon icon={WarehouseIcon} data-icon="inline-start" />
-          {mutation.isPending ? "Перемещение…" : "Переместить на склад"}
+          {mutation.isPending ? "Создание задания…" : "Создать задание"}
         </Button>
       </DialogFooter>
     </div>

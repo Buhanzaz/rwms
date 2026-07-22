@@ -12,10 +12,14 @@ import static org.mockito.Mockito.when;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ArriveTransferLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateTransferRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.MediaReferenceInput;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferEquipmentLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferLineRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsLineState;
+import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementLocationKind;
+import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
+import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
@@ -65,6 +69,7 @@ class TransferWorkflowSagaIntegrationTest {
 
   @Autowired LogisticsDocumentService documents;
   @Autowired TransferProcessor processor;
+  @Autowired EquipmentMovementTaskService equipmentTasks;
   @Autowired JdbcTemplate jdbc;
 
   @MockitoBean LogisticsDependencyGateway dependencies;
@@ -278,6 +283,102 @@ class TransferWorkflowSagaIntegrationTest {
             any(),
             any(),
             any());
+  }
+
+  @Test
+  void cancelsRegisteredPreparationTasksBeforeClosingTheTransfer() {
+    TransferFixture fixture = createTransfer();
+    UUID taskId = UUID.randomUUID();
+    when(dependencies.registerPreparationTask(any(), any(), any(), any()))
+        .thenAnswer(
+            invocation ->
+                new LogisticsDependencyGateway.PreparationTask(
+                    taskId,
+                    1,
+                    ORIGIN,
+                    invocation.getArgument(1),
+                    "ACTIVE",
+                    null));
+    jdbc.update(
+        "update logistics_external_attempt set next_attempt_at=clock_timestamp() "
+            + "where document_id=? and operation_type='TRANSFER_TASK_REGISTER'",
+        fixture.documentId());
+    assertThat(processor.processUntilIdle(fixture.documentId())).isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select task_state from logistics_task_reference where line_id=?",
+                String.class,
+                fixture.lineId()))
+        .isEqualTo("REGISTERED");
+
+    when(dependencies.cancelPreparationTask(any(), eq(1L)))
+        .thenAnswer(
+            invocation ->
+                new LogisticsDependencyGateway.PreparationTask(
+                    taskId,
+                    2,
+                    ORIGIN,
+                    invocation.getArgument(0),
+                    "CANCELLED",
+                    null));
+
+    var cancelling =
+        documents.cancelTransfer(
+            SUBJECT,
+            UUID.randomUUID(),
+            CORRELATION,
+            fixture.documentId(),
+            documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER).version());
+    assertThat(cancelling.response().state()).isEqualTo(LogisticsDocumentState.CANCELLING);
+
+    processor.processUntilIdle(fixture.documentId());
+
+    var cancelled = documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER);
+    assertThat(cancelled.state()).isEqualTo(LogisticsDocumentState.CANCELLED);
+    assertThat(cancelled.lines()).singleElement().extracting(line -> line.state()).isEqualTo(LogisticsLineState.CANCELLED);
+    verify(dependencies).cancelPreparationTask(any(), eq(1L));
+  }
+
+  @Test
+  void createsAndCancelsTheLinkedFurnitureTaskForTheDestinationWarehouse() {
+    var created =
+        documents.createTransfer(
+            SUBJECT,
+            UUID.randomUUID(),
+            CORRELATION,
+            new CreateTransferRequest(
+                ORIGIN,
+                DESTINATION,
+                "Driver A",
+                OffsetDateTime.now(ZoneOffset.UTC).plusHours(1),
+                List.of(new TransferLineRequest(ASSET, 7)),
+                List.of(new TransferEquipmentLineRequest(EQUIPMENT, 4L, 2L))));
+
+    assertThat(created.response().equipmentMovementTaskId()).isNotNull();
+    var furnitureTask = equipmentTasks.get(created.response().equipmentMovementTaskId());
+    assertThat(furnitureTask.warehouseId()).isEqualTo(ORIGIN);
+    assertThat(furnitureTask.state()).isEqualTo(EquipmentMovementTaskState.RESERVING);
+    assertThat(furnitureTask.lines())
+        .singleElement()
+        .satisfies(
+            line -> {
+              assertThat(line.sourceWarehouseId()).isEqualTo(ORIGIN);
+              assertThat(line.sourceLocationKind()).isEqualTo(EquipmentMovementLocationKind.STOCK);
+              assertThat(line.targetWarehouseId()).isEqualTo(DESTINATION);
+              assertThat(line.targetLocationKind()).isEqualTo(EquipmentMovementLocationKind.STOCK);
+              assertThat(line.quantity()).isEqualTo(2L);
+            });
+
+    var cancelled =
+        documents.cancelTransfer(
+            SUBJECT,
+            UUID.randomUUID(),
+            CORRELATION,
+            created.response().id(),
+            created.response().version());
+    assertThat(cancelled.response().state()).isEqualTo(LogisticsDocumentState.CANCELLED);
+    assertThat(equipmentTasks.get(furnitureTask.id()).state())
+        .isEqualTo(EquipmentMovementTaskState.CANCELLING);
   }
 
   private TransferFixture createTransfer() {

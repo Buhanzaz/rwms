@@ -50,6 +50,17 @@ public class LogisticsAssetController {
     return created(result);
   }
 
+  @PostMapping("/return-equipment-receipts")
+  public ResponseEntity<LogisticsReturnEquipmentReceiptResponse> receiveReturnEquipment(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody LogisticsReturnEquipmentReceiptRequest request) {
+    access.requireLogisticsAssetAccess(jwt);
+    return created(
+        service.receiveLogisticsReturnEquipment(
+            access.logisticsSubjectId(jwt), idempotencyKey, request));
+  }
+
   @PutMapping("/operation-leases/{id}/renew")
   public ResponseEntity<LogisticsOperationLeaseResponse> renewLease(
       @AuthenticationPrincipal Jwt jwt,
