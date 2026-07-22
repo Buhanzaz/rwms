@@ -115,11 +115,28 @@ class ReviewedLegacyCatalogImportIntegrationTest {
     assertThat(request.nodes()).allSatisfy(node -> {
       assertThat(node.comment()).isNull();
       assertThat(node.references()).isEmpty();
-      assertThat(node.mediaReferences()).isEmpty();
       assertThat(node.durationMinutes()).isNotNegative();
     });
+    assertThat(request.nodes())
+        .filteredOn(node -> node.canvasX() == null && node.canvasY() == null)
+        .hasSize(8);
+    assertThat(request.nodes())
+        .filteredOn(node -> node.canvasX() != null && node.canvasY() != null)
+        .hasSize(224);
     assertThat(request.nodes()).filteredOn(node -> node.durationMinutes() == 0).hasSize(144);
     assertThat(request.links()).allSatisfy(link -> assertThat(link.sortOrder()).isZero());
+    assertThat(request.links())
+        .filteredOn(
+            link ->
+                link.sourceAnchor() == CatalogLinkAnchor.BOTTOM
+                    && link.targetAnchor() == CatalogLinkAnchor.TOP)
+        .hasSize(249);
+    assertThat(request.links())
+        .filteredOn(
+            link ->
+                link.sourceAnchor() == CatalogLinkAnchor.TOP
+                    && link.targetAnchor() == CatalogLinkAnchor.BOTTOM)
+        .hasSize(5);
     assertThat(request.nodes()).filteredOn(node -> node.routing() != null).hasSize(10);
     assertThat(request.nodes().stream()
             .map(CatalogNodeInput::routing)
@@ -142,6 +159,7 @@ class ReviewedLegacyCatalogImportIntegrationTest {
             "NODE.SORT_ORDER",
             "NODE.DEFAULT_QUANTITY",
             "NODE.ADDITIONAL_OPTION",
+            "NODE.PHOTO_REQUIRED",
             "NODE.FURNITURE_CATEGORY",
             "LINK.ACTIVE",
             "NODE.COMMENT_",
@@ -200,7 +218,7 @@ class ReviewedLegacyCatalogImportIntegrationTest {
   }
 
   @Test
-  void packagedBootstrapPersistsDraftActivatesAndSuppliesEstimateWithIdempotentRetry() {
+  void packagedBootstrapCreatesEditableActiveCatalogAndSuppliesEstimateWithIdempotentRetry() {
     ImportCatalogRequest request = reviewedCatalog.approvedRequest();
     BootstrapCatalogRequest bootstrap =
         new BootstrapCatalogRequest(ReviewedLegacyCatalogManifest.SOURCE_WAREHOUSE_ID);
@@ -215,7 +233,7 @@ class ReviewedLegacyCatalogImportIntegrationTest {
         service.bootstrapCatalog(subjectId, UUID.randomUUID(), bootstrap);
 
     assertThat(imported.replayed()).isFalse();
-    assertThat(imported.response().lifecycle()).isEqualTo(CatalogVersionState.DRAFT);
+    assertThat(imported.response().lifecycle()).isEqualTo(CatalogVersionState.ACTIVE);
     assertThat(imported.response().counts()).isEqualTo(new CatalogCounts(232, 254));
     assertThat(retry.replayed()).isTrue();
     assertThat(sameSourceRetry.replayed()).isTrue();
@@ -228,13 +246,11 @@ class ReviewedLegacyCatalogImportIntegrationTest {
         select count(*) from integration_reconciliation
         where dependency_type='MEDIA'
           and media_owner_type='MAINTENANCE_CATALOG_NODE'
-          and media_owner_revision=0
-        """, Integer.class)).isEqualTo(232);
+        """, Integer.class)).isZero();
     assertThat(jdbc.queryForObject("""
-        select count(distinct media_owner_id) from integration_reconciliation
-        where dependency_type='MEDIA'
-          and media_owner_type='MAINTENANCE_CATALOG_NODE'
-        """, Integer.class)).isEqualTo(232);
+        select count(*) from maintenance_media_reference
+        where aggregate_type='CATALOG_NODE'
+        """, Integer.class)).isZero();
     String validationReport =
         jdbc.queryForObject(
             "select validation_report from catalog_version where id=?",
@@ -257,39 +273,53 @@ class ReviewedLegacyCatalogImportIntegrationTest {
         .singleElement()
         .extracting(CatalogNodeResponse::furnitureCategory)
         .isEqualTo(true);
+    assertThat(service.catalogNodes(imported.response().id()))
+        .filteredOn(node -> node.furnitureEquipment() != null)
+        .isNotEmpty();
+    assertThat(service.catalogLinks(imported.response().id()))
+        .filteredOn(
+            link ->
+                link.sourceAnchor() == CatalogLinkAnchor.TOP
+                    && link.targetAnchor() == CatalogLinkAnchor.BOTTOM)
+        .hasSize(5);
 
-    assertThatThrownBy(() -> service.activateCatalog(
-            subjectId,
-            UUID.randomUUID(),
-            imported.response().id(),
-            new VersionCommand(imported.response().version())))
-        .isInstanceOf(MaintenanceValidationException.class)
-        .hasMessageContaining("furniture material");
-
-    CatalogVersionResponse linkedFurniture = service.replaceCatalogNodes(
+    List<CatalogNodeInput> activeNodes = new ArrayList<>(withFurnitureEquipment(request.nodes()));
+    CatalogNodeInput editedNode = activeNodes.getFirst();
+    activeNodes.set(0, moveNode(editedNode, 321, 654, "active catalog edit"));
+    List<CatalogLinkInput> activeLinks = new ArrayList<>(request.links());
+    CatalogLinkInput editedLink = activeLinks.getFirst();
+    activeLinks.set(
+        0,
+        new CatalogLinkInput(
+            editedLink.id(),
+            editedLink.fromNodeId(),
+            editedLink.toNodeId(),
+            editedLink.linkType(),
+            CatalogLinkAnchor.TOP,
+            CatalogLinkAnchor.BOTTOM,
+            editedLink.sortOrder()));
+    CatalogVersionResponse activeEdit = service.changeCatalog(
         imported.response().id(),
-        new ReplaceCatalogNodesRequest(
-            imported.response().version(), withFurnitureEquipment(request.nodes())));
-    assertThat(jdbc.queryForObject("""
-        select count(*) from integration_reconciliation
-        where dependency_type='MEDIA'
-          and media_owner_type='MAINTENANCE_CATALOG_NODE'
-          and media_owner_revision=1
-        """, Integer.class)).isEqualTo(232);
-
-    CreateResult<CatalogVersionResponse> activated =
-        service.activateCatalog(
-            subjectId,
-            UUID.randomUUID(),
-            imported.response().id(),
-            new VersionCommand(linkedFurniture.version()));
-    assertThat(activated.replayed()).isFalse();
-    assertThat(activated.response().lifecycle()).isEqualTo(CatalogVersionState.ACTIVE);
-    CreateResult<CatalogVersionResponse> currentRetry =
-        service.bootstrapCatalog(subjectId, UUID.randomUUID(), bootstrap);
-    assertThat(currentRetry.replayed()).isTrue();
-    assertThat(currentRetry.response().id()).isEqualTo(activated.response().id());
-    assertThat(currentRetry.response().lifecycle()).isEqualTo(CatalogVersionState.ACTIVE);
+        new ChangeCatalogRequest(imported.response().version(), activeNodes, activeLinks));
+    assertThat(activeEdit.lifecycle()).isEqualTo(CatalogVersionState.ACTIVE);
+    assertThat(activeEdit.version()).isGreaterThan(imported.response().version());
+    assertThat(service.catalogNodes(imported.response().id()))
+        .filteredOn(node -> node.id().equals(editedNode.id()))
+        .singleElement()
+        .satisfies(
+            node -> {
+              assertThat(node.canvasX()).isEqualTo(321);
+              assertThat(node.canvasY()).isEqualTo(654);
+              assertThat(node.comment()).isEqualTo("active catalog edit");
+            });
+    assertThat(service.catalogLinks(imported.response().id()))
+        .filteredOn(link -> link.id().equals(editedLink.id()))
+        .singleElement()
+        .satisfies(
+            link -> {
+              assertThat(link.sourceAnchor()).isEqualTo(CatalogLinkAnchor.TOP);
+              assertThat(link.targetAnchor()).isEqualTo(CatalogLinkAnchor.BOTTOM);
+            });
 
     CatalogNodeInput work =
         request.nodes().stream()
@@ -408,7 +438,7 @@ class ReviewedLegacyCatalogImportIntegrationTest {
         .andExpect(status().isCreated())
         .andExpect(header().doesNotExist("Idempotency-Replayed"))
         .andExpect(jsonPath("$.warehouseId").value(warehouseId.toString()))
-        .andExpect(jsonPath("$.lifecycle").value("DRAFT"))
+        .andExpect(jsonPath("$.lifecycle").value("ACTIVE"))
         .andExpect(jsonPath("$.counts.nodes").value(232))
         .andExpect(jsonPath("$.counts.links").value(254));
 
@@ -453,22 +483,12 @@ class ReviewedLegacyCatalogImportIntegrationTest {
   @Test
   void activeAndSupersededReviewedVersionsForkExactImmutableDraftSnapshots() {
     UUID subjectId = UUID.randomUUID();
-    ImportCatalogRequest approved = reviewedCatalog.approvedRequest();
-    CatalogVersionResponse imported = service.bootstrapCatalog(
+    CatalogVersionResponse active = service.bootstrapCatalog(
             subjectId,
             UUID.randomUUID(),
             new BootstrapCatalogRequest(ReviewedLegacyCatalogManifest.SOURCE_WAREHOUSE_ID))
         .response();
-    CatalogVersionResponse linkedFurniture = service.replaceCatalogNodes(
-        imported.id(),
-        new ReplaceCatalogNodesRequest(
-            imported.version(), withFurnitureEquipment(approved.nodes())));
-    CatalogVersionResponse active = service.activateCatalog(
-            subjectId,
-            UUID.randomUUID(),
-            imported.id(),
-            new VersionCommand(linkedFurniture.version()))
-        .response();
+    ImportCatalogRequest approved = reviewedCatalog.approvedRequest();
 
     UUID forkKey = UUID.randomUUID();
     CreateResult<CatalogVersionResponse> forked = service.forkCatalog(
@@ -506,14 +526,6 @@ class ReviewedLegacyCatalogImportIntegrationTest {
         .contains("\"sourceLinkCount\":254")
         .contains("\"sourceMaterialCount\":91");
 
-    assertThatThrownBy(() -> service.replaceCatalogNodes(
-            active.id(),
-            new ReplaceCatalogNodesRequest(active.version(), withFurnitureEquipment(approved.nodes()))))
-        .isInstanceOfSatisfying(
-            MaintenanceConflictException.class,
-            exception -> assertThat(exception.code()).isEqualTo("MAINTENANCE_STATE_CONFLICT"));
-    assertThat(service.catalogNodes(active.id())).hasSize(232);
-
     List<CatalogNodeInput> changedForkNodes = new ArrayList<>(withFurnitureEquipment(approved.nodes()));
     CatalogNodeInput changedNode = changedForkNodes.getFirst();
     changedForkNodes.set(
@@ -526,8 +538,7 @@ class ReviewedLegacyCatalogImportIntegrationTest {
             changedNode.name(),
             changedNode.routing(),
             changedNode.references(),
-            "draft-only fork note",
-            changedNode.mediaReferences()));
+            "draft-only fork note"));
     CatalogVersionResponse editedFork = service.replaceCatalogNodes(
         forked.response().id(),
         new ReplaceCatalogNodesRequest(forked.response().version(), changedForkNodes));
@@ -549,6 +560,14 @@ class ReviewedLegacyCatalogImportIntegrationTest {
     CatalogVersionResponse supersededSource = service.catalogVersion(active.id());
     assertThat(promotedFork.lifecycle()).isEqualTo(CatalogVersionState.ACTIVE);
     assertThat(supersededSource.lifecycle()).isEqualTo(CatalogVersionState.SUPERSEDED);
+    assertThatThrownBy(() -> service.replaceCatalogNodes(
+            supersededSource.id(),
+            new ReplaceCatalogNodesRequest(
+                supersededSource.version(), withFurnitureEquipment(approved.nodes()))))
+        .isInstanceOfSatisfying(
+            MaintenanceConflictException.class,
+            exception -> assertThat(exception.code()).isEqualTo("MAINTENANCE_STATE_CONFLICT"));
+    assertThat(service.catalogNodes(supersededSource.id())).hasSize(232);
 
     CreateResult<CatalogVersionResponse> supersededFork = service.forkCatalog(
         subjectId,
@@ -572,21 +591,10 @@ class ReviewedLegacyCatalogImportIntegrationTest {
   void forkRequiresManageAndRejectsStaleExpectedVersion() throws Exception {
     UUID warehouseId = ReviewedLegacyCatalogManifest.SOURCE_WAREHOUSE_ID;
     UUID serviceSubject = UUID.randomUUID();
-    ImportCatalogRequest approved = reviewedCatalog.approvedRequest();
-    CatalogVersionResponse imported = service.bootstrapCatalog(
+    CatalogVersionResponse active = service.bootstrapCatalog(
             serviceSubject,
             UUID.randomUUID(),
             new BootstrapCatalogRequest(warehouseId))
-        .response();
-    CatalogVersionResponse changed = service.replaceCatalogNodes(
-        imported.id(),
-        new ReplaceCatalogNodesRequest(
-            imported.version(), withFurnitureEquipment(approved.nodes())));
-    CatalogVersionResponse active = service.activateCatalog(
-            serviceSubject,
-            UUID.randomUUID(),
-            imported.id(),
-            new VersionCommand(changed.version()))
         .response();
     UUID subjectId = UUID.randomUUID();
     UUID key = UUID.randomUUID();
@@ -669,7 +677,7 @@ class ReviewedLegacyCatalogImportIntegrationTest {
     CatalogNodeInput first = approved.nodes().getFirst();
     assertRejectedNoWrites(
         withNode(approved, 0, copyNode(first, first.id(), first.nodeType(), first.parentNodeId(),
-            first.name() + " changed", first.routing(), List.of(), null, List.of())),
+            first.name() + " changed", first.routing(), List.of(), null)),
         "REVIEWED_MAPPING_HASH_MISMATCH");
   }
 
@@ -708,8 +716,7 @@ class ReviewedLegacyCatalogImportIntegrationTest {
                 firstNode.name(),
                 firstNode.routing(),
                 List.of(),
-                null,
-                List.of())),
+                null)),
         "REVIEWED_NODE_ID_MISMATCH");
 
     CatalogLinkInput firstLink = approved.links().getFirst();
@@ -722,6 +729,8 @@ class ReviewedLegacyCatalogImportIntegrationTest {
                 firstLink.fromNodeId(),
                 firstLink.toNodeId(),
                 firstLink.linkType(),
+                null,
+                null,
                 firstLink.sortOrder())),
         "REVIEWED_LINK_ID_MISMATCH");
   }
@@ -750,8 +759,7 @@ class ReviewedLegacyCatalogImportIntegrationTest {
                 parented.name(),
                 parented.routing(),
                 List.of(),
-                null,
-                List.of())),
+                null)),
         "REVIEWED_NODE_REFERENCE_MISMATCH");
 
     int routedIndex = indexOf(approved.nodes(), node -> node.routing() != null);
@@ -775,8 +783,7 @@ class ReviewedLegacyCatalogImportIntegrationTest {
                 routed.name(),
                 otherRouting,
                 List.of(),
-                null,
-                List.of())),
+                null)),
         "REVIEWED_ROUTING_MISMATCH");
 
     CatalogLinkInput link = approved.links().getFirst();
@@ -796,6 +803,8 @@ class ReviewedLegacyCatalogImportIntegrationTest {
                 link.fromNodeId(),
                 otherEndpoint,
                 link.linkType(),
+                null,
+                null,
                 link.sortOrder())),
         "REVIEWED_LINK_REFERENCE_MISMATCH");
   }
@@ -817,8 +826,7 @@ class ReviewedLegacyCatalogImportIntegrationTest {
             first.name(),
             first.routing(),
             List.of(),
-            null,
-            List.of()));
+            null));
     changed.set(
         otherIndex,
         copyNode(
@@ -829,8 +837,7 @@ class ReviewedLegacyCatalogImportIntegrationTest {
             other.name(),
             other.routing(),
             List.of(),
-            null,
-            List.of()));
+            null));
     assertRejectedNoWrites(
         new ImportCatalogRequest(
             approved.warehouseId(), approved.sourceSha256(), changed, approved.links()),
@@ -856,6 +863,8 @@ class ReviewedLegacyCatalogImportIntegrationTest {
             dependency.fromNodeId(),
             dependency.toNodeId(),
             CatalogLinkType.FOLLOW_UP,
+            null,
+            null,
             dependency.sortOrder()));
     changedLinks.set(
         followUpIndex,
@@ -864,6 +873,8 @@ class ReviewedLegacyCatalogImportIntegrationTest {
             followUp.fromNodeId(),
             followUp.toNodeId(),
             CatalogLinkType.DEPENDENCY,
+            null,
+            null,
             followUp.sortOrder()));
     assertRejectedNoWrites(
         new ImportCatalogRequest(
@@ -887,8 +898,7 @@ class ReviewedLegacyCatalogImportIntegrationTest {
                 first.name(),
                 first.routing(),
                 List.of(new OpaqueCatalogReference("legacy-audit", "LEGACY")),
-                "legacy comment must not cross the boundary",
-                List.of(new MediaReferenceInput(UUID.randomUUID(), 0L)))),
+                "legacy comment must not cross the boundary")),
         "REVIEWED_EXCLUDED_FIELD_PRESENT");
 
     CatalogLinkInput link = approved.links().getFirst();
@@ -901,6 +911,8 @@ class ReviewedLegacyCatalogImportIntegrationTest {
                 link.fromNodeId(),
                 link.fromNodeId(),
                 link.linkType(),
+                null,
+                null,
                 link.sortOrder())),
         "REVIEWED_LINK_REFERENCE_MISMATCH");
   }
@@ -965,8 +977,7 @@ class ReviewedLegacyCatalogImportIntegrationTest {
       String name,
       RoutingSnapshot routing,
       List<OpaqueCatalogReference> references,
-      String comment,
-      List<MediaReferenceInput> mediaReferences) {
+      String comment) {
     return new CatalogNodeInput(
         id,
         source.code(),
@@ -982,11 +993,35 @@ class ReviewedLegacyCatalogImportIntegrationTest {
         source.includeInEstimate(),
         source.commonItem(),
         source.showInMainMenu(),
-        source.photoRequired(),
+        source.canvasX(),
+        source.canvasY(),
         routing,
         references,
-        comment,
-        mediaReferences);
+        comment);
+  }
+
+  private static CatalogNodeInput moveNode(
+      CatalogNodeInput source, int canvasX, int canvasY, String comment) {
+    return new CatalogNodeInput(
+        source.id(),
+        source.code(),
+        source.nodeType(),
+        source.name(),
+        source.active(),
+        source.parentNodeId(),
+        source.furnitureCategory(),
+        source.furnitureEquipment(),
+        source.unit(),
+        source.unitPrice(),
+        source.durationMinutes(),
+        source.includeInEstimate(),
+        source.commonItem(),
+        source.showInMainMenu(),
+        canvasX,
+        canvasY,
+        source.routing(),
+        source.references(),
+        comment);
   }
 
   private static List<CatalogNodeInput> withFurnitureEquipment(
@@ -1023,11 +1058,11 @@ class ReviewedLegacyCatalogImportIntegrationTest {
           node.includeInEstimate(),
           node.commonItem(),
           node.showInMainMenu(),
-          node.photoRequired(),
+          node.canvasX(),
+          node.canvasY(),
           node.routing(),
           node.references(),
-          node.comment(),
-          node.mediaReferences());
+          node.comment());
     }).toList();
   }
 

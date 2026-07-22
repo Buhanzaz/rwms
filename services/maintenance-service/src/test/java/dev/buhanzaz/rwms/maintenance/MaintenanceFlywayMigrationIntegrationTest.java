@@ -42,7 +42,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTheAuthoritativeMaintenanceSchema() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(7);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(9);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -64,8 +64,19 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "active", "parent_node_id", "furniture_category", "furniture_equipment_id",
         "furniture_equipment_code", "furniture_equipment_name", "unit", "include_in_estimate",
         "common_item",
-        "show_in_main_menu", "photo_required", "routing_queue_id", "routing_queue_code",
-        "routing_queue_kind", "opaque_references", "comment", "media_references");
+        "show_in_main_menu", "routing_queue_id", "routing_queue_code",
+        "routing_queue_kind", "opaque_references", "comment", "canvas_x", "canvas_y")
+        .doesNotContain("media_references", "photo_required");
+    assertThat(columns("catalog_link")).contains("source_anchor", "target_anchor");
+    assertThat(constraintDefinition("catalog_link", "ck_catalog_link_anchors"))
+        .contains("source_anchor", "target_anchor", "TOP", "BOTTOM");
+    assertThat(constraintDefinition(
+        "maintenance_media_reference", "ck_maintenance_media_owner"))
+        .contains("MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR", "MAINTENANCE_ACCEPTANCE")
+        .doesNotContain("MAINTENANCE_CATALOG_NODE");
+    assertThat(constraintDefinition(
+        "integration_reconciliation", "ck_reconciliation_media_identity"))
+        .doesNotContain("MAINTENANCE_CATALOG_NODE");
     assertThat(columns("estimate_line")).contains(
         "catalog_snapshot", "comment", "media_references");
     assertThat(columns("estimate_plan_stage")).contains(
@@ -516,41 +527,111 @@ class MaintenanceFlywayMigrationIntegrationTest {
   }
 
   @Test
-  void catalogNodeMediaStorageIsIsolatedAcrossVersionsWithTheSameLogicalNodeId() {
-    flyway(MIGRATIONS).migrate();
-    UUID warehouseId = UUID.randomUUID();
-    UUID firstVersion = UUID.randomUUID();
-    UUID secondVersion = UUID.randomUUID();
-    UUID logicalNodeId = UUID.randomUUID();
-    UUID firstRowId = UUID.randomUUID();
-    UUID secondRowId = UUID.randomUUID();
-    UUID mediaId = UUID.randomUUID();
-    insertCatalogVersion(firstVersion, warehouseId, "1".repeat(64));
-    insertCatalogVersion(secondVersion, warehouseId, "2".repeat(64));
-    insertCatalogNode(firstRowId, logicalNodeId, firstVersion, "NODE_A");
-    insertCatalogNode(secondRowId, logicalNodeId, secondVersion, "NODE_B");
-
-    for (UUID storageId : List.of(firstRowId, secondRowId)) {
-      jdbc.update("""
-          insert into maintenance_media_reference(
-            aggregate_type,aggregate_id,media_id,generation,owner_type,warehouse_id,
-            safe_metadata,attached_at)
-          values ('CATALOG_NODE',?,?,0,'MAINTENANCE_CATALOG_NODE',?,'{}',clock_timestamp())
-          """, storageId, mediaId, warehouseId);
+  void existingV7BackfillsCatalogCanvasRetiresCatalogMediaAndDropsOnlyPhotoFlag(
+      @TempDir Path directory)
+      throws IOException {
+    for (String migration : List.of(
+        "V1__maintenance_schema.sql",
+        "V2__inventory_source.sql",
+        "V3__logistics_return_shortage.sql",
+        "V4__catalog_furniture_equipment.sql")) {
+      copyMigration(directory, migration);
     }
+    String location = "filesystem:" + directory.toAbsolutePath().toString().replace('\\', '/');
+    assertThat(flyway(location).migrate().migrationsExecuted).isEqualTo(4);
 
+    UUID warehouseId = UUID.randomUUID();
+    UUID catalogId = UUID.randomUUID();
+    UUID sourceNodeId = UUID.fromString("c1b41ba9-1eb4-5a2b-8b89-3838b49d2c2f");
+    UUID targetNodeId = UUID.fromString("1b5116c9-b9a6-53c0-91a5-d1b905ea7d37");
+    UUID sourceRowId = UUID.randomUUID();
+    UUID targetRowId = UUID.randomUUID();
+    UUID linkId = UUID.fromString("019f2288-2aa8-782d-95af-b0b29a20f7fb");
+    insertCatalogVersion(catalogId, warehouseId, "1".repeat(64));
+    insertCatalogNode(sourceRowId, sourceNodeId, catalogId, "ORGALIT_ZINC_DOOR");
+    insertCatalogNode(targetRowId, targetNodeId, catalogId, "INSTALL_ENTRY_DOOR");
+    jdbc.update("""
+        insert into catalog_link(
+          row_id,link_id,catalog_version_id,source_node_id,target_node_id,link_type,sort_order)
+        values (?,?,?,?,?,'DEPENDENCY',0)
+        """, UUID.randomUUID(), linkId, catalogId, sourceNodeId, targetNodeId);
+    UUID catalogMediaId = UUID.randomUUID();
+    jdbc.update("""
+        insert into maintenance_media_reference(
+          aggregate_type,aggregate_id,media_id,generation,owner_type,warehouse_id,
+          safe_metadata,attached_at)
+        values ('CATALOG_NODE',?,?,0,'MAINTENANCE_CATALOG_NODE',?,'{}',clock_timestamp())
+        """, sourceRowId, catalogMediaId, warehouseId);
+
+    for (String migration : List.of(
+        "V5__media_owner_proof_reconciliation.sql",
+        "V6__catalog_routing_reconciliation.sql",
+        "V7__correct_initial_media_owner_proof_version.sql")) {
+      copyMigration(directory, migration);
+    }
+    assertThat(flyway(location).migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(jdbc.queryForObject("""
+        select count(*) from integration_reconciliation
+        where dependency_type='MEDIA' and media_owner_type='MAINTENANCE_CATALOG_NODE'
+        """, Integer.class)).isEqualTo(2);
+
+    UUID repairProofId = UUID.randomUUID();
+    insertMediaProof(
+        repairProofId,
+        UUID.randomUUID(),
+        warehouseId,
+        UUID.randomUUID(),
+        0,
+        0,
+        0,
+        UUID.randomUUID(),
+        "PENDING",
+        0,
+        null);
+
+    copyMigration(directory, "V8__catalog_canvas_and_remove_catalog_media.sql");
+    Flyway upgraded = flyway(location);
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+    assertThat(upgraded.migrate().migrationsExecuted).isZero();
+
+    assertThat(jdbc.queryForMap("""
+        select canvas_x,canvas_y from catalog_node
+        where catalog_version_id=? and node_id=?
+        """, catalogId, sourceNodeId))
+        .containsEntry("canvas_x", 912)
+        .containsEntry("canvas_y", 1608);
+    assertThat(jdbc.queryForMap("""
+        select source_anchor,target_anchor from catalog_link
+        where catalog_version_id=? and link_id=?
+        """, catalogId, linkId))
+        .containsEntry("source_anchor", "TOP")
+        .containsEntry("target_anchor", "BOTTOM");
     assertThat(jdbc.queryForObject("""
         select count(*) from maintenance_media_reference
-        where aggregate_type='CATALOG_NODE' and media_id=?
-        """, Integer.class, mediaId)).isEqualTo(2);
-    jdbc.update("""
-        delete from maintenance_media_reference
-        where aggregate_type='CATALOG_NODE' and aggregate_id=?
-        """, secondRowId);
+        where aggregate_type='CATALOG_NODE' or owner_type='MAINTENANCE_CATALOG_NODE'
+        """, Integer.class)).isZero();
     assertThat(jdbc.queryForObject("""
-        select aggregate_id from maintenance_media_reference
-        where aggregate_type='CATALOG_NODE' and media_id=?
-        """, UUID.class, mediaId)).isEqualTo(firstRowId);
+        select count(*) from integration_reconciliation
+        where dependency_type='MEDIA' and media_owner_type='MAINTENANCE_CATALOG_NODE'
+        """, Integer.class)).isZero();
+    assertThat(jdbc.queryForObject(
+        "select count(*) from integration_reconciliation where id=?",
+        Integer.class,
+        repairProofId)).isOne();
+    assertThat(columns("catalog_node")).doesNotContain("media_references");
+
+    copyMigration(directory, "V9__remove_catalog_photo_requirement.sql");
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+    assertThat(upgraded.migrate().migrationsExecuted).isZero();
+    assertThat(columns("catalog_node"))
+        .contains("canvas_x", "canvas_y", "opaque_references")
+        .doesNotContain("media_references", "photo_required");
+    assertThat(jdbc.queryForObject(
+        "select count(*) from integration_reconciliation where id=?",
+        Integer.class,
+        repairProofId)).isOne();
   }
 
   @Test

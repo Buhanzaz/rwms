@@ -69,8 +69,11 @@ public class CatalogNode {
   @Column(name = "show_in_main_menu", nullable = false)
   private boolean showInMainMenu;
 
-  @Column(name = "photo_required", nullable = false)
-  private boolean photoRequired;
+  @Column(name = "canvas_x")
+  private Integer canvasX;
+
+  @Column(name = "canvas_y")
+  private Integer canvasY;
 
   @Column(name = "routing_queue_id")
   private UUID routingQueueId;
@@ -87,10 +90,6 @@ public class CatalogNode {
 
   @Column(name = "comment", length = 2000)
   private String comment;
-
-  @Column(name = "media_references", nullable = false, columnDefinition = "jsonb")
-  @JdbcTypeCode(SqlTypes.JSON)
-  private String mediaReferences;
 
   protected CatalogNode() {}
 
@@ -112,13 +111,13 @@ public class CatalogNode {
       boolean includeInEstimate,
       boolean commonItem,
       boolean showInMainMenu,
-      boolean photoRequired,
+      Integer canvasX,
+      Integer canvasY,
       UUID routingQueueId,
       String routingQueueCode,
       String routingQueueKind,
       String opaqueReferences,
-      String comment,
-      String mediaReferences) {
+      String comment) {
     this.id = require(id, "id");
     this.catalogVersionId = require(catalogVersionId, "catalogVersionId");
     this.code = text(code, "code", 64);
@@ -152,7 +151,8 @@ public class CatalogNode {
     this.includeInEstimate = includeInEstimate;
     this.commonItem = commonItem;
     this.showInMainMenu = showInMainMenu;
-    this.photoRequired = photoRequired;
+    this.canvasX = canvasX;
+    this.canvasY = canvasY;
     boolean completeRouting = routingQueueId != null
         && routingQueueCode != null && !routingQueueCode.isBlank()
         && routingQueueKind != null && !routingQueueKind.isBlank();
@@ -167,7 +167,6 @@ public class CatalogNode {
     this.routingQueueKind = optional(routingQueueKind, 64);
     this.opaqueReferences = opaqueReferences == null ? "[]" : opaqueReferences;
     this.comment = optional(comment, 2000);
-    this.mediaReferences = mediaReferences == null ? "[]" : mediaReferences;
   }
 
   private static <T> T require(T value, String field) {
@@ -206,11 +205,11 @@ public class CatalogNode {
   public boolean isIncludeInEstimate() { return includeInEstimate; }
   public boolean isCommonItem() { return commonItem; }
   public boolean isShowInMainMenu() { return showInMainMenu; }
-  public boolean isPhotoRequired() { return photoRequired; }
+  public Integer getCanvasX() { return canvasX; }
+  public Integer getCanvasY() { return canvasY; }
   public UUID getRoutingQueueId() { return routingQueueId; }
   public String getRoutingQueueCode() { return routingQueueCode; }
   public String getRoutingQueueKind() { return routingQueueKind; }
   public String getOpaqueReferences() { return opaqueReferences; }
   public String getComment() { return comment; }
-  public String getMediaReferences() { return mediaReferences; }
 }

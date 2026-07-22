@@ -307,6 +307,7 @@ class MaintenanceOpenApiParityTest {
     assertEnum(document, RepairStageState.class, "RepairStageState");
     assertEnum(document, CatalogNodeType.class, "CatalogNodeType");
     assertEnum(document, CatalogLinkType.class, "CatalogLinkType");
+    assertEnum(document, CatalogLinkAnchor.class, "CatalogLinkAnchor");
     assertEnum(document, DeliveryState.class, "DeliveryState");
     assertEnum(document, LeaseReconciliationState.class, "LeaseReconciliationState");
     assertEnum(document, GenerationState.class, "GenerationState");
@@ -397,14 +398,14 @@ class MaintenanceOpenApiParityTest {
     result.add(op("GET", "/api/maintenance/v1/catalog/versions/{id}/nodes", "listCatalogNodes",
         MaintenanceCatalogController.class, "nodes", catalogId,
         null, null, "200", "[CatalogNode]", false, "401", "403", "404"));
-    result.add(op("PUT", "/api/maintenance/v1/catalog/versions/{id}/nodes", "replaceDraftCatalogNodes",
+    result.add(op("PUT", "/api/maintenance/v1/catalog/versions/{id}/nodes", "replaceCatalogNodes",
         MaintenanceCatalogController.class, "replaceNodes", catalogId,
         ReplaceCatalogNodesRequest.class, "ReplaceCatalogNodesRequest", "200", "CatalogVersion", false,
         "400", "401", "403", "404", "409", "422", "503"));
     result.add(op("GET", "/api/maintenance/v1/catalog/versions/{id}/links", "listCatalogLinks",
         MaintenanceCatalogController.class, "links", catalogId,
         null, null, "200", "[CatalogLink]", false, "401", "403", "404"));
-    result.add(op("PUT", "/api/maintenance/v1/catalog/versions/{id}/links", "replaceDraftCatalogLinks",
+    result.add(op("PUT", "/api/maintenance/v1/catalog/versions/{id}/links", "replaceCatalogLinks",
         MaintenanceCatalogController.class, "replaceLinks", catalogId,
         ReplaceCatalogLinksRequest.class, "ReplaceCatalogLinksRequest", "200", "CatalogVersion", false,
         "400", "401", "403", "404", "409", "422"));

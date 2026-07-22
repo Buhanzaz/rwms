@@ -19,7 +19,6 @@ export type RepairEstimateFurnitureEquipmentReferenceDto = {
 export type RepairEstimateCatalogNodeDto = {
   id: string
   catalogVersionId: string
-  mediaOwnerId: string
   code: string
   name: string
   nodeType: RepairEstimateCatalogNodeType
@@ -33,7 +32,6 @@ export type RepairEstimateCatalogNodeDto = {
   routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
   workQueueId: string | null
   workQueueCode: string | null
-  photoRequired: boolean
   includeInEstimate: boolean
   commonItem: boolean
   furnitureCategory: boolean

@@ -17,11 +17,6 @@ export type MaintenanceCatalogReference = {
   code: string
 }
 
-export type MaintenanceCatalogMediaReference = {
-  mediaId: string
-  generation: number
-}
-
 export type MaintenanceFurnitureEquipmentReference = {
   equipmentId: string
   equipmentCode: string
@@ -41,18 +36,17 @@ export type MaintenanceCatalogNodeInput = {
   includeInEstimate: boolean
   commonItem: boolean
   showInMainMenu: boolean
-  photoRequired: boolean
   furnitureCategory: boolean
   furnitureEquipment: MaintenanceFurnitureEquipmentReference | null
   routing: MaintenanceCatalogRouting | null
   references: MaintenanceCatalogReference[]
+  canvasX: number | null
+  canvasY: number | null
   comment: string | null
-  mediaReferences: MaintenanceCatalogMediaReference[]
 }
 
 export type MaintenanceCatalogNode = MaintenanceCatalogNodeInput & {
   catalogVersionId: string
-  mediaOwnerId: string
 }
 
 export type MaintenanceCatalogLinkInput = {
@@ -61,6 +55,8 @@ export type MaintenanceCatalogLinkInput = {
   toNodeId: string
   linkType: MaintenanceCatalogLinkType
   sortOrder: number
+  sourceAnchor: "TOP" | "BOTTOM" | null
+  targetAnchor: "TOP" | "BOTTOM" | null
 }
 
 export type MaintenanceCatalogLink = MaintenanceCatalogLinkInput & {
@@ -188,37 +184,5 @@ export function bootstrapMaintenanceCatalog(
     accessToken,
     `${CATALOG_API}/imports`,
     json("POST", request, { "Idempotency-Key": idempotencyKey })
-  )
-}
-
-export function forkMaintenanceCatalog(
-  accessToken: string,
-  warehouseId: string,
-  catalogVersionId: string,
-  expectedVersion: number,
-  idempotencyKey: string
-) {
-  const endpoint = catalogVersionEndpoint(warehouseId, catalogVersionId)
-  endpoint.pathname += "/fork"
-  return bearerRequest<MaintenanceCatalogVersion>(
-    accessToken,
-    endpoint,
-    json("POST", { expectedVersion }, { "Idempotency-Key": idempotencyKey })
-  )
-}
-
-export function activateMaintenanceCatalog(
-  accessToken: string,
-  warehouseId: string,
-  catalogVersionId: string,
-  expectedVersion: number,
-  idempotencyKey: string
-) {
-  const endpoint = catalogVersionEndpoint(warehouseId, catalogVersionId)
-  endpoint.pathname += "/activate"
-  return bearerRequest<MaintenanceCatalogVersion>(
-    accessToken,
-    endpoint,
-    json("POST", { expectedVersion }, { "Idempotency-Key": idempotencyKey })
   )
 }

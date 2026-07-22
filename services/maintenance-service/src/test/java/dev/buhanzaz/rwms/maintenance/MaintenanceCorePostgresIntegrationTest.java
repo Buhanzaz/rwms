@@ -237,11 +237,11 @@ class MaintenanceCorePostgresIntegrationTest {
         true,
         false,
         true,
-        false,
+        null,
+        null,
         routing,
         List.of(),
-        null,
-        List.of());
+        null);
     CatalogVersionResponse changed = service.changeCatalog(
         firstCatalogId,
         new ChangeCatalogRequest(0L, List.of(routedNode), List.of()));
@@ -329,118 +329,6 @@ class MaintenanceCorePostgresIntegrationTest {
     assertThat(supersededTruth.state()).isEqualTo(DeliveryState.DELIVERED);
     assertThat(supersededTruth.cleanupRequired()).isOne();
     assertThat(supersededTruth.cleanupConfirmed()).isOne();
-  }
-
-  @Test
-  void catalogMediaOwnerIsStablePerWarehouseForSharedLogicalNodeAndRevokesIndependently() {
-    UUID firstWarehouseId = UUID.randomUUID();
-    UUID secondWarehouseId = UUID.randomUUID();
-    UUID sharedNodeId = UUID.randomUUID();
-    UUID firstCatalogId = insertDraftCatalog(firstWarehouseId, "a".repeat(64));
-    UUID secondCatalogId = insertDraftCatalog(secondWarehouseId, "b".repeat(64));
-
-    CatalogVersionResponse first = service.changeCatalog(
-        firstCatalogId,
-        new ChangeCatalogRequest(
-            0L, List.of(catalogWork(sharedNodeId, "First", List.of())), List.of()));
-    CatalogVersionResponse second = service.changeCatalog(
-        secondCatalogId,
-        new ChangeCatalogRequest(
-            0L, List.of(catalogWork(sharedNodeId, "Second", List.of())), List.of()));
-
-    UUID firstOwnerId = jdbc.queryForObject("""
-        select media_owner_id from integration_reconciliation
-        where dependency_type='MEDIA'
-          and media_owner_type='MAINTENANCE_CATALOG_NODE'
-          and media_source_id=? and media_owner_revision=0
-        """, UUID.class, firstCatalogId);
-    UUID secondOwnerId = jdbc.queryForObject("""
-        select media_owner_id from integration_reconciliation
-        where dependency_type='MEDIA'
-          and media_owner_type='MAINTENANCE_CATALOG_NODE'
-          and media_source_id=? and media_owner_revision=0
-        """, UUID.class, secondCatalogId);
-    assertThat(firstOwnerId).isNotEqualTo(secondOwnerId);
-
-    UUID firstMediaId = UUID.randomUUID();
-    UUID secondMediaId = UUID.randomUUID();
-    mediaFacts.saveAllAndFlush(List.of(
-        MediaFactProjection.create(
-            firstMediaId,
-            1,
-            "MAINTENANCE_CATALOG_NODE",
-            firstOwnerId,
-            firstWarehouseId,
-            "READY",
-            "{}",
-            1),
-        MediaFactProjection.create(
-            secondMediaId,
-            1,
-            "MAINTENANCE_CATALOG_NODE",
-            secondOwnerId,
-            secondWarehouseId,
-            "READY",
-            "{}",
-            1)));
-
-    CatalogVersionResponse firstWithMedia = service.changeCatalog(
-        firstCatalogId,
-        new ChangeCatalogRequest(
-            first.version(),
-            List.of(catalogWork(
-                sharedNodeId, "First with media", List.of(new MediaReferenceInput(firstMediaId, 1L)))),
-            List.of()));
-    service.changeCatalog(
-        secondCatalogId,
-        new ChangeCatalogRequest(
-            second.version(),
-            List.of(catalogWork(
-                sharedNodeId, "Second with media", List.of(new MediaReferenceInput(secondMediaId, 1L)))),
-            List.of()));
-
-    assertThat(jdbc.queryForObject("""
-        select count(*) from maintenance_media_reference
-        where aggregate_type='CATALOG_NODE'
-          and owner_type='MAINTENANCE_CATALOG_NODE'
-          and media_id in (?,?)
-        """, Integer.class, firstMediaId, secondMediaId)).isEqualTo(2);
-    assertThat(jdbc.queryForList("""
-        select distinct media_owner_id from integration_reconciliation
-        where dependency_type='MEDIA'
-          and media_owner_type='MAINTENANCE_CATALOG_NODE'
-          and media_source_id in (?,?)
-        """, UUID.class, firstCatalogId, secondCatalogId))
-        .containsExactlyInAnyOrder(firstOwnerId, secondOwnerId);
-
-    UUID replacementNodeId = UUID.randomUUID();
-    service.changeCatalog(
-        firstCatalogId,
-        new ChangeCatalogRequest(
-            firstWithMedia.version(),
-            List.of(catalogWork(replacementNodeId, "Replacement", List.of())),
-            List.of()));
-
-    assertThat(jdbc.queryForObject("""
-        select media_active from integration_reconciliation
-        where dependency_type='MEDIA'
-          and media_owner_type='MAINTENANCE_CATALOG_NODE'
-          and media_owner_id=?
-        order by media_owner_revision desc limit 1
-        """, Boolean.class, firstOwnerId)).isFalse();
-    assertThat(jdbc.queryForObject("""
-        select media_active from integration_reconciliation
-        where dependency_type='MEDIA'
-          and media_owner_type='MAINTENANCE_CATALOG_NODE'
-          and media_owner_id=?
-        order by media_owner_revision desc limit 1
-        """, Boolean.class, secondOwnerId)).isTrue();
-    assertThat(service.catalogNodes(secondCatalogId))
-        .singleElement()
-        .satisfies(node -> {
-          assertThat(node.id()).isEqualTo(sharedNodeId);
-          assertThat(node.mediaOwnerId()).isEqualTo(secondOwnerId);
-        });
   }
 
   @Test
@@ -611,18 +499,18 @@ class MaintenanceCorePostgresIntegrationTest {
     UUID tableEquipmentId = UUID.fromString("52000000-0000-4000-8000-000000000002");
     CatalogNodeInput category = new CatalogNodeInput(
         categoryId, "FURNITURE", CatalogNodeType.CATEGORY, "Furniture", true, null,
-        true, null, null, null, 0, false, false, true, false,
-        null, List.of(), null, List.of());
+        true, null, null, null, 0, false, false, true,
+        null, null, null, List.of(), null);
     CatalogNodeInput chair = new CatalogNodeInput(
         chairMaterialId, "CHAIR", CatalogNodeType.MATERIAL, "Chair", true, categoryId,
         false, new FurnitureEquipmentReference(chairEquipmentId, "CHAIR", "Chair"),
-        "piece", "100.00", 0, true, false, false, false,
-        null, List.of(), null, List.of());
+        "piece", "100.00", 0, true, false, false,
+        null, null, null, List.of(), null);
     CatalogNodeInput table = new CatalogNodeInput(
         tableMaterialId, "TABLE", CatalogNodeType.MATERIAL, "Table", true, categoryId,
         false, new FurnitureEquipmentReference(tableEquipmentId, "TABLE", "Table"),
-        "piece", "100.00", 0, true, false, false, false,
-        null, List.of(), null, List.of());
+        "piece", "100.00", 0, true, false, false,
+        null, null, null, List.of(), null);
     CatalogVersionResponse changed = service.changeCatalog(
         catalogId, new ChangeCatalogRequest(0L, List.of(category, chair, table), List.of()));
     service.activateCatalog(
@@ -796,12 +684,12 @@ class MaintenanceCorePostgresIntegrationTest {
             equipmentId, "CHAIR", "Chair"));
     CatalogNodeInput category = new CatalogNodeInput(
         categoryId, "FURNITURE", CatalogNodeType.CATEGORY, "Furniture", true, null,
-        false, null, null, null, 0, false, false, true, false,
-        null, List.of(), null, List.of());
+        false, null, null, null, 0, false, false, true,
+        null, null, null, List.of(), null);
     CatalogNodeInput material = new CatalogNodeInput(
         materialId, "CHAIR", CatalogNodeType.MATERIAL, "Chair", true, categoryId,
-        false, null, "piece", "100.00", 0, true, false, false, false,
-        null, List.of(), null, List.of());
+        false, null, "piece", "100.00", 0, true, false, false,
+        null, null, null, List.of(), null);
     service.changeCatalog(
         catalogId, new ChangeCatalogRequest(0L, List.of(category, material), List.of()));
     // V4 backfills the FURNITURE marker on catalogs that were active before mappings existed.
@@ -844,18 +732,18 @@ class MaintenanceCorePostgresIntegrationTest {
     UUID equipmentId = UUID.randomUUID();
     CatalogNodeInput category = new CatalogNodeInput(
         categoryId, "FURNITURE", CatalogNodeType.CATEGORY, "Furniture", true, null,
-        true, null, null, null, 0, false, false, true, false,
-        null, List.of(), null, List.of());
+        true, null, null, null, 0, false, false, true,
+        null, null, null, List.of(), null);
     CatalogNodeInput chair = new CatalogNodeInput(
         UUID.randomUUID(), "CHAIR", CatalogNodeType.MATERIAL, "Chair", true, categoryId,
         false, new FurnitureEquipmentReference(equipmentId, "CHAIR", "Chair"),
-        "piece", "100.00", 0, true, false, false, false,
-        null, List.of(), null, List.of());
+        "piece", "100.00", 0, true, false, false,
+        null, null, null, List.of(), null);
     CatalogNodeInput conflicting = new CatalogNodeInput(
         UUID.randomUUID(), "SEAT", CatalogNodeType.MATERIAL, "Seat", true, categoryId,
         false, new FurnitureEquipmentReference(equipmentId, "SEAT", "Seat"),
-        "piece", "100.00", 0, true, false, false, false,
-        null, List.of(), null, List.of());
+        "piece", "100.00", 0, true, false, false,
+        null, null, null, List.of(), null);
 
     assertThatThrownBy(() -> service.changeCatalog(
         catalogId,
@@ -876,13 +764,13 @@ class MaintenanceCorePostgresIntegrationTest {
     UUID equipmentId = UUID.randomUUID();
     CatalogNodeInput category = new CatalogNodeInput(
         categoryId, "FURNITURE", CatalogNodeType.CATEGORY, "Furniture", true, null,
-        true, null, null, null, 0, false, false, true, false,
-        null, List.of(), null, List.of());
+        true, null, null, null, 0, false, false, true,
+        null, null, null, List.of(), null);
     CatalogNodeInput material = new CatalogNodeInput(
         materialId, "CHAIR", CatalogNodeType.MATERIAL, "Chair", true, categoryId,
         false, new FurnitureEquipmentReference(equipmentId, "CHAIR", "Chair"),
-        "piece", "100.00", 0, true, false, false, false,
-        null, List.of(), null, List.of());
+        "piece", "100.00", 0, true, false, false,
+        null, null, null, List.of(), null);
     CatalogVersionResponse changed = service.changeCatalog(
         catalogId, new ChangeCatalogRequest(0L, List.of(category, material), List.of()));
     service.activateCatalog(
@@ -1947,30 +1835,6 @@ class MaintenanceCorePostgresIntegrationTest {
         values ('CATALOG_VERSION',?,0,?,clock_timestamp())
         """, id.toString(), UUID.randomUUID());
     return id;
-  }
-
-  private static CatalogNodeInput catalogWork(
-      UUID nodeId, String comment, List<MediaReferenceInput> mediaReferences) {
-    return new CatalogNodeInput(
-        nodeId,
-        "SHARED_WORK",
-        CatalogNodeType.WORK,
-        "Shared work",
-        true,
-        null,
-        false,
-        null,
-        "piece",
-        "100.00",
-        15,
-        true,
-        false,
-        true,
-        false,
-        null,
-        List.of(),
-        comment,
-        mediaReferences);
   }
 
   private Void activateAfter(CountDownLatch start, UUID catalogId) throws Exception {

@@ -154,21 +154,6 @@ class MaintenanceMediaOwnerProofIntegrationTest {
   }
 
   @Test
-  void catalogNodeOwnerIdIsStableWithinOneWarehouseAndDistinctAcrossWarehouses() {
-    UUID nodeId = UUID.randomUUID();
-    UUID firstWarehouseId = UUID.randomUUID();
-    UUID secondWarehouseId = UUID.randomUUID();
-
-    UUID first = MaintenanceMediaOwnerId.catalogNode(firstWarehouseId, nodeId);
-    UUID replay = MaintenanceMediaOwnerId.catalogNode(firstWarehouseId, nodeId);
-    UUID second = MaintenanceMediaOwnerId.catalogNode(secondWarehouseId, nodeId);
-
-    assertThat(first).isEqualTo(replay).isNotEqualTo(second);
-    assertThat(first.version()).isEqualTo(3);
-    assertThat(first.variant()).isEqualTo(2);
-  }
-
-  @Test
   void transientMediaOutageRetriesTheSameProofBeforeDeliveringTheNextRevision() {
     UUID ownerId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();

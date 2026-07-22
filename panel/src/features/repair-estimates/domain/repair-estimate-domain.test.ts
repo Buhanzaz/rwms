@@ -13,7 +13,6 @@ import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/re
 const furniture: RepairEstimateCatalogNodeDto = {
   id: "00000000-0000-4000-8000-000000000001",
   catalogVersionId: "00000000-0000-4000-8000-000000000002",
-  mediaOwnerId: "00000000-0000-4000-8000-000000000005",
   code: "CHAIR",
   name: "Стул",
   nodeType: "MATERIAL",
@@ -27,7 +26,6 @@ const furniture: RepairEstimateCatalogNodeDto = {
   routeQueueKind: null,
   workQueueId: null,
   workQueueCode: null,
-  photoRequired: false,
   includeInEstimate: true,
   commonItem: false,
   furnitureCategory: false,
@@ -46,7 +44,6 @@ function catalogNode(
   return {
     ...furniture,
     id,
-    mediaOwnerId: id,
     code: `NODE_${id.at(-1)}`,
     name: `Узел ${id.at(-1)}`,
     parentId: null,

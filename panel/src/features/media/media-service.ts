@@ -19,7 +19,6 @@ export {
   logisticsShipmentMediaOwner,
   logisticsTransferMediaOwner,
   maintenanceAcceptanceMediaOwner,
-  maintenanceCatalogNodeMediaOwner,
   maintenanceEstimateMediaOwner,
   maintenanceRepairMediaOwner,
   readyMediaReference,

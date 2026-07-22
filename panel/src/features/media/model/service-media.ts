@@ -10,9 +10,6 @@ export const MAINTENANCE_REPAIR_MEDIA_CONTEXT = "REPAIR" as const
 export const MAINTENANCE_ACCEPTANCE_MEDIA_OWNER_TYPE =
   "MAINTENANCE_ACCEPTANCE" as const
 export const MAINTENANCE_ACCEPTANCE_MEDIA_CONTEXT = "ACCEPTANCE" as const
-export const MAINTENANCE_CATALOG_NODE_MEDIA_OWNER_TYPE =
-  "MAINTENANCE_CATALOG_NODE" as const
-export const MAINTENANCE_CATALOG_NODE_MEDIA_CONTEXT = "CATALOG" as const
 export const LOGISTICS_RETURN_MEDIA_OWNER_TYPE = "LOGISTICS_RETURN" as const
 export const LOGISTICS_RETURN_MEDIA_CONTEXT = "RETURN_INSPECTION" as const
 export const LOGISTICS_SHIPMENT_MEDIA_OWNER_TYPE = "LOGISTICS_SHIPMENT" as const
@@ -56,10 +53,6 @@ export type MaintenanceMediaOwner =
   | MaintenanceOwnerScope<
       typeof MAINTENANCE_ACCEPTANCE_MEDIA_OWNER_TYPE,
       typeof MAINTENANCE_ACCEPTANCE_MEDIA_CONTEXT
-    >
-  | MaintenanceOwnerScope<
-      typeof MAINTENANCE_CATALOG_NODE_MEDIA_OWNER_TYPE,
-      typeof MAINTENANCE_CATALOG_NODE_MEDIA_CONTEXT
     >
 
 type LogisticsOwnerScope<
@@ -150,18 +143,6 @@ export function maintenanceAcceptanceMediaOwner(
     ownerId,
     warehouseId,
     context: MAINTENANCE_ACCEPTANCE_MEDIA_CONTEXT,
-  }
-}
-
-export function maintenanceCatalogNodeMediaOwner(
-  mediaOwnerId: string,
-  warehouseId: string
-): MaintenanceMediaOwner {
-  return {
-    ownerType: MAINTENANCE_CATALOG_NODE_MEDIA_OWNER_TYPE,
-    ownerId: mediaOwnerId,
-    warehouseId,
-    context: MAINTENANCE_CATALOG_NODE_MEDIA_CONTEXT,
   }
 }
 

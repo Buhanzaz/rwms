@@ -11,12 +11,11 @@ import type {
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
 
 const mocks = vi.hoisted(() => ({
-  listVersions: vi.fn(),
+  getCatalog: vi.fn(),
   getFurnitureCatalog: vi.fn(),
   saveFurniture: vi.fn(),
   deleteFurniture: vi.fn(),
   getEquipmentItems: vi.fn(),
-  serviceOwnerPhotos: vi.fn(),
 }))
 
 vi.mock("@/features/auth/use-auth", () => ({
@@ -34,13 +33,6 @@ vi.mock("@/api/equipment-api", () => ({
   getEquipmentItems: mocks.getEquipmentItems,
 }))
 
-vi.mock("@/features/media/service-owner-photos", () => ({
-  ServiceOwnerPhotos: (props: unknown) => {
-    mocks.serviceOwnerPhotos(props)
-    return null
-  },
-}))
-
 vi.mock(
   "@/features/settings/estimates-repairs/api/repair-estimate-catalog-store",
   async () => {
@@ -50,7 +42,7 @@ vi.mock(
 
     return {
       ...actual,
-      listRepairEstimateCatalogVersions: mocks.listVersions,
+      getCurrentRepairEstimateCatalog: mocks.getCatalog,
     }
   }
 )
@@ -80,8 +72,6 @@ const WAREHOUSE_ID = "00000000-0000-4000-8000-000000000001"
 const VERSION_ID = "00000000-0000-4000-8000-000000000002"
 const CATEGORY_ID = "00000000-0000-4000-8000-000000000003"
 const FURNITURE_ID = "00000000-0000-4000-8000-000000000004"
-const CATEGORY_MEDIA_OWNER_ID = "00000000-0000-4000-8000-000000000006"
-const FURNITURE_MEDIA_OWNER_ID = "00000000-0000-4000-8000-000000000007"
 
 const currentUser: CurrentUser = {
   id: "manager-1",
@@ -100,19 +90,18 @@ const version: RepairEstimateCatalogVersionDto = {
   id: VERSION_ID,
   warehouseId: WAREHOUSE_ID,
   version: 3,
-  lifecycle: "DRAFT",
+  lifecycle: "ACTIVE",
   sourceSha256: "a".repeat(64),
   nodeCount: 1,
   linkCount: 0,
   valid: true,
   createdAt: "2026-07-20T08:00:00Z",
-  activatedAt: null,
+  activatedAt: "2026-07-20T08:05:00Z",
 }
 
 const furnitureCategory: RepairEstimateCatalogNodeDto = {
   id: CATEGORY_ID,
   catalogVersionId: VERSION_ID,
-  mediaOwnerId: CATEGORY_MEDIA_OWNER_ID,
   code: "FURNITURE",
   name: "Мебельная группа",
   nodeType: "CATEGORY",
@@ -127,13 +116,11 @@ const furnitureCategory: RepairEstimateCatalogNodeDto = {
   workQueueId: null,
   workQueueCode: null,
   routing: null,
-  photoRequired: false,
   includeInEstimate: false,
   commonItem: false,
   furnitureCategory: true,
   furnitureEquipment: null,
   references: [],
-  mediaReferences: [],
   canvasX: null,
   canvasY: null,
   comment: null,
@@ -157,7 +144,6 @@ const furnitureEquipment = {
 const existingFurniture: RepairEstimateCatalogNodeDto = {
   ...furnitureCategory,
   id: FURNITURE_ID,
-  mediaOwnerId: FURNITURE_MEDIA_OWNER_ID,
   code: "CHAIR",
   name: "Стул",
   nodeType: "MATERIAL",
@@ -207,12 +193,11 @@ async function openFurnitureEditor(user: ReturnType<typeof userEvent.setup>) {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubGlobal("ResizeObserver", ResizeObserverMock)
-  mocks.listVersions.mockResolvedValue([version])
+  mocks.getCatalog.mockResolvedValue(version)
   mocks.getFurnitureCatalog.mockResolvedValue(furnitureSection)
   mocks.saveFurniture.mockResolvedValue({
     ...furnitureCategory,
     id: FURNITURE_ID,
-    mediaOwnerId: FURNITURE_MEDIA_OWNER_ID,
     code: "TABLE",
     name: "Стол",
     nodeType: "MATERIAL",
@@ -304,11 +289,7 @@ describe("automatic furniture equipment link", () => {
     })
     expect(dialog.textContent).toContain("Связано автоматически")
     expect(dialog.textContent).toContain("CHAIR · Стул")
-    expect(mocks.serviceOwnerPhotos).toHaveBeenCalledWith(
-      expect.objectContaining({
-        owner: expect.objectContaining({ ownerId: FURNITURE_MEDIA_OWNER_ID }),
-      })
-    )
+    expect(screen.queryByText("Фотографии")).toBeNull()
     expect(
       screen.queryByRole("combobox", {
         name: "Дополнительное оборудование",

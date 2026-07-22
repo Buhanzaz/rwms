@@ -39,11 +39,6 @@ export type RepairEstimateCatalogReferenceDto = {
   code: string
 }
 
-export type RepairEstimateCatalogMediaReferenceDto = {
-  mediaId: string
-  generation: number
-}
-
 export type RepairEstimateFurnitureEquipmentReferenceDto = {
   equipmentId: string
   equipmentCode: string
@@ -58,7 +53,6 @@ export type RepairEstimateCatalogCanvasLinkAnchors = {
 export type RepairEstimateCatalogNodeDto = {
   id: string
   catalogVersionId: string
-  mediaOwnerId: string
   code: string
   name: string
   nodeType: RepairEstimateCatalogNodeType
@@ -73,14 +67,12 @@ export type RepairEstimateCatalogNodeDto = {
   workQueueId: string | null
   workQueueCode: string | null
   routing: RepairEstimateCatalogRoutingDto | null
-  photoRequired: boolean
   includeInEstimate: boolean
   commonItem: boolean
   furnitureCategory: boolean
   furnitureEquipment: RepairEstimateFurnitureEquipmentReferenceDto | null
   references: RepairEstimateCatalogReferenceDto[]
-  mediaReferences: RepairEstimateCatalogMediaReferenceDto[]
-  /** Presentation coordinates only; canonical graph remains in maintenance-service. */
+  /** Persisted constructor coordinates owned by maintenance-service. */
   canvasX: number | null
   canvasY: number | null
   comment: string | null
@@ -93,7 +85,7 @@ export type RepairEstimateCatalogLinkDto = {
   targetNodeId: string
   linkType: RepairEstimateCatalogLinkType
   sortOrder: number
-  /** Presentation anchors only; maintenance-service owns the canonical link. */
+  /** Persisted constructor anchors owned by maintenance-service. */
   canvasAnchors: RepairEstimateCatalogCanvasLinkAnchors | null
 }
 
@@ -122,7 +114,6 @@ export type RepairEstimateCatalogSectionDto = {
 
 export type RepairEstimateCatalogNodeMutation = {
   id?: string
-  mediaOwnerId?: string
   code: string
   name: string
   nodeType: RepairEstimateCatalogNodeType
@@ -135,12 +126,12 @@ export type RepairEstimateCatalogNodeMutation = {
   routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
   routing?: RepairEstimateCatalogRoutingDto | null
   references?: RepairEstimateCatalogReferenceDto[]
-  mediaReferences?: RepairEstimateCatalogMediaReferenceDto[]
-  photoRequired: boolean
   includeInEstimate: boolean
   commonItem: boolean
   furnitureCategory: boolean
   furnitureEquipment: RepairEstimateFurnitureEquipmentReferenceDto | null
+  canvasX: number | null
+  canvasY: number | null
   comment: string | null
 }
 
@@ -150,7 +141,7 @@ export type RepairEstimateCatalogLinkMutation = {
   targetNodeId: string
   linkType: RepairEstimateCatalogLinkType
   sortOrder: number
-  /** Presentation anchors only; never sent to maintenance-service. */
+  /** Persisted constructor anchors owned by maintenance-service. */
   canvasAnchors: RepairEstimateCatalogCanvasLinkAnchors | null
 }
 

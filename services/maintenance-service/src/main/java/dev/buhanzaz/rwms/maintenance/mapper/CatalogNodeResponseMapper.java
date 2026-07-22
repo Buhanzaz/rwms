@@ -3,12 +3,10 @@ package dev.buhanzaz.rwms.maintenance.mapper;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.CatalogNodeResponse;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.CatalogNodeType;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.FurnitureEquipmentReference;
-import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.MediaReferenceInput;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.OpaqueCatalogReference;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.RoutingSnapshot;
 import dev.buhanzaz.rwms.maintenance.domain.CatalogNode;
 import java.util.List;
-import java.util.UUID;
 import org.mapstruct.InjectionStrategy;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
@@ -22,7 +20,6 @@ import org.mapstruct.ReportingPolicy;
 public interface CatalogNodeResponseMapper {
   @Mapping(target = "id", source = "node.id")
   @Mapping(target = "catalogVersionId", source = "node.catalogVersionId")
-  @Mapping(target = "mediaOwnerId", source = "mediaOwnerId")
   @Mapping(target = "code", source = "node.code")
   @Mapping(target = "nodeType", source = "nodeType")
   @Mapping(target = "name", source = "node.name")
@@ -36,18 +33,16 @@ public interface CatalogNodeResponseMapper {
   @Mapping(target = "includeInEstimate", source = "node.includeInEstimate")
   @Mapping(target = "commonItem", source = "node.commonItem")
   @Mapping(target = "showInMainMenu", source = "node.showInMainMenu")
-  @Mapping(target = "photoRequired", source = "node.photoRequired")
+  @Mapping(target = "canvasX", source = "node.canvasX")
+  @Mapping(target = "canvasY", source = "node.canvasY")
   @Mapping(target = "routing", source = "routing")
   @Mapping(target = "references", source = "references")
   @Mapping(target = "comment", source = "node.comment")
-  @Mapping(target = "mediaReferences", source = "mediaReferences")
   CatalogNodeResponse toResponse(
       CatalogNode node,
-      UUID mediaOwnerId,
       CatalogNodeType nodeType,
       FurnitureEquipmentReference furnitureEquipment,
       String unitPrice,
       RoutingSnapshot routing,
-      List<OpaqueCatalogReference> references,
-      List<MediaReferenceInput> mediaReferences);
+      List<OpaqueCatalogReference> references);
 }

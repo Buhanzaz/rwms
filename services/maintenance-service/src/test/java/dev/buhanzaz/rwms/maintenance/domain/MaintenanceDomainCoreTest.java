@@ -15,17 +15,20 @@ class MaintenanceDomainCoreTest {
       """;
 
   @Test
-  void catalogLifecycleMakesPublishedVersionsImmutable() {
+  void catalogLifecycleAllowsActiveEditsButKeepsSupersededVersionsImmutable() {
     CatalogVersion catalog = CatalogVersion.draft(
         UUID.randomUUID(), "a".repeat(64), 3, 2, "{}");
     catalog.activate();
 
     assertThat(catalog.getState()).isEqualTo(CatalogVersionState.ACTIVE);
-    assertThatThrownBy(() -> catalog.replaceDraft(4, 3, "{}"))
-        .isInstanceOf(IllegalStateException.class)
-        .hasMessageContaining("immutable");
+    catalog.replaceCatalog(4, 3, "{}");
+    assertThat(catalog.getNodeCount()).isEqualTo(4);
+    assertThat(catalog.getLinkCount()).isEqualTo(3);
     catalog.supersede();
     assertThat(catalog.getState()).isEqualTo(CatalogVersionState.SUPERSEDED);
+    assertThatThrownBy(() -> catalog.replaceCatalog(5, 4, "{}"))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("immutable");
   }
 
   @Test

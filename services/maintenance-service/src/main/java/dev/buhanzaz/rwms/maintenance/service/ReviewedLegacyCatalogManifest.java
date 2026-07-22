@@ -31,9 +31,9 @@ public class ReviewedLegacyCatalogManifest {
   static final String MANIFEST_RESOURCE = "legacy/maintenance-catalog-manifest.json";
   static final String ARTIFACT_RESOURCE = "legacy/maintenance-catalog-v1.json";
   static final String MANIFEST_SHA256 =
-      "cb82fadc291a111d2924cb4e6b20230b0aa0b0976b1e637d5d310e62b6478953";
+      "b10a424c588a228b3fd0392ca5fc7482a25aa9de006e6632ad8471c71e8b25ef";
   static final String ARTIFACT_SHA256 =
-      "c35ff6611aeb6e6c711eb9e6181b20f325f2b1db349f04fc155f9839fae2411d";
+      "fe213b9cab821af59fcbcf3a2849c70a392810a086c2e67fa98dde75040cda04";
   static final UUID SOURCE_WAREHOUSE_ID =
       UUID.fromString("00000000-0000-0000-0000-000000000002");
   static final String SOURCE_SHA256 =
@@ -45,9 +45,9 @@ public class ReviewedLegacyCatalogManifest {
   static final String QUEUE_SHA256 =
       "f486489d601cff0ddd85228516f1527277f8b90ec6fec6ee11e8aebcdd569766";
   static final String APPROVED_MAPPING_POLICY_SHA256 =
-      "c378e395ec2931b1639dac8547659a1f749530edf791c1db9c524dc66d1b6c85";
+      "9f2e239aa30982befe7d5195d21e75c13416c6287aac4585327d2cad19cd1117";
   static final String APPROVED_MAPPING_SHA256 =
-      "118aed23abfebeb213dc9dc37b415def2b8b0272e94971f2e2ab93d80ed280a2";
+      "fa2fb5acbf86a6c8ad8029ab8101f5577b15adec78e2d4a72c74b3357d0905ce";
 
   private static final Pattern CODE = Pattern.compile("^[A-Z0-9][A-Z0-9_-]{0,63}$");
   private static final Pattern PRICE = Pattern.compile("^(?:0|[1-9][0-9]*)(?:\\.[0-9]{2})$");
@@ -177,11 +177,11 @@ public class ReviewedLegacyCatalogManifest {
                         node.includeInEstimate(),
                         node.commonItem(),
                         node.showInMainMenu(),
-                        node.photoRequired(),
+                        node.canvasX(),
+                        node.canvasY(),
                         node.routing(),
                         List.of(),
-                        null,
-                        List.of()))
+                        null))
             .sorted(Comparator.comparing(node -> node.id().toString()))
             .toList();
     List<CatalogLinkInput> normalizedLinks =
@@ -317,6 +317,7 @@ public class ReviewedLegacyCatalogManifest {
           || link.toNodeId() == null
           || link.linkType() == null
           || link.sortOrder() < 0
+          || ((link.sourceAnchor() == null) != (link.targetAnchor() == null))
           || !linkIds.add(link.id())
           || !nodeIds.contains(link.fromNodeId())
           || !nodeIds.contains(link.toNodeId())
@@ -360,7 +361,6 @@ public class ReviewedLegacyCatalogManifest {
                 node ->
                     node.comment() != null
                         || !node.references().isEmpty()
-                        || !node.mediaReferences().isEmpty()
                         || (node.routing() != null && !reviewedRouting.contains(node.routing())));
     boolean policyInvalid =
         artifact.mappingPolicy() == null
@@ -488,8 +488,7 @@ public class ReviewedLegacyCatalogManifest {
                     node.comment() != null
                         || Boolean.TRUE.equals(node.furnitureCategory())
                         || node.furnitureEquipment() != null
-                        || (node.references() != null && !node.references().isEmpty())
-                        || (node.mediaReferences() != null && !node.mediaReferences().isEmpty()));
+                        || (node.references() != null && !node.references().isEmpty()));
     if (excludedDataPresent) {
       issues.add(
           issue(
@@ -504,7 +503,8 @@ public class ReviewedLegacyCatalogManifest {
     try {
       return MaintenanceChecksum.sha256(
           mapper.writeValueAsBytes(new MappingArtifact(
-              nodes.stream().map(ReviewedCatalogNodeMapping::from).toList(), links)));
+              nodes.stream().map(ReviewedCatalogNodeMapping::from).toList(),
+              links.stream().map(ReviewedCatalogLinkMapping::from).toList())));
     } catch (JacksonException exception) {
       throw new IllegalArgumentException("Catalog mapping cannot be hashed", exception);
     }
@@ -710,11 +710,9 @@ public class ReviewedLegacyCatalogManifest {
       Boolean includeInEstimate,
       Boolean commonItem,
       Boolean showInMainMenu,
-      Boolean photoRequired,
       RoutingSnapshot routing,
       List<OpaqueCatalogReference> references,
-      String comment,
-      List<MediaReferenceInput> mediaReferences) {
+      String comment) {
     private static ReviewedCatalogNodeMapping from(CatalogNodeInput node) {
       return new ReviewedCatalogNodeMapping(
           node.id(),
@@ -729,16 +727,27 @@ public class ReviewedLegacyCatalogManifest {
           node.includeInEstimate(),
           node.commonItem(),
           node.showInMainMenu(),
-          node.photoRequired(),
           node.routing(),
           node.references(),
-          node.comment(),
-          node.mediaReferences());
+          node.comment());
+    }
+  }
+
+  /** Exact reviewed-v1 link projection; canvas anchors are editable UI metadata. */
+  private record ReviewedCatalogLinkMapping(
+      UUID id,
+      UUID fromNodeId,
+      UUID toNodeId,
+      CatalogLinkType linkType,
+      int sortOrder) {
+    private static ReviewedCatalogLinkMapping from(CatalogLinkInput link) {
+      return new ReviewedCatalogLinkMapping(
+          link.id(), link.fromNodeId(), link.toNodeId(), link.linkType(), link.sortOrder());
     }
   }
 
   private record MappingArtifact(
-      List<ReviewedCatalogNodeMapping> nodes, List<CatalogLinkInput> links) {}
+      List<ReviewedCatalogNodeMapping> nodes, List<ReviewedCatalogLinkMapping> links) {}
 
   private record Defaults(String nullDurationMinutes, String nullLinkSortOrder) {}
 

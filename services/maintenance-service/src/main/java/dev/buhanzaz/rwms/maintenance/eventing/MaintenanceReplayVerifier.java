@@ -9,6 +9,7 @@ import java.time.OffsetDateTime;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -21,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 /** Deterministically rebuilds shadow state exclusively from ordered domain_event facts. */
 @Service
@@ -127,10 +129,15 @@ public class MaintenanceReplayVerifier {
       JsonNode state = requireAuthoritativeFact(event, authoritativeFact);
       verifySnapshot(event, state);
       verifyOutbox(event);
+      JsonNode replayState = normalizeRetiredCatalogNodeFields(event.aggregateType(), state);
       replayed.put(
           key,
           new ReplayState(
-              event.aggregateVersion(), state, event.eventId(), canonicalHash(state)));
+              event.aggregateVersion(),
+              replayState,
+              event.eventId(),
+              canonicalHash(replayState),
+              canonicalHash(state)));
     });
     return new Replay(Map.copyOf(replayed), counter.events, counter.integrationEvents);
   }
@@ -307,9 +314,28 @@ public class MaintenanceReplayVerifier {
         .orElseThrow(() -> new IllegalStateException(
             "Maintenance live projection checkpoint is missing for " + key));
     if (checkpoint.version() != state.version()
-        || !checkpoint.hash().equals(state.stateHash())) {
+        || !checkpoint.hash().equals(state.sourceStateHash())) {
       throw new IllegalStateException("Maintenance live projection parity mismatch for " + key);
     }
+  }
+
+  /**
+   * Catalog full-state facts are immutable evidence. Fields retired from the catalog model are
+   * ignored only for live-projection comparison while their original event, snapshot and
+   * checkpoint hashes continue to be verified above.
+   */
+  private static JsonNode normalizeRetiredCatalogNodeFields(
+      MaintenanceAggregateType aggregateType, JsonNode state) {
+    if (aggregateType != MaintenanceAggregateType.CATALOG_VERSION) return state;
+    JsonNode normalized = state.deepCopy();
+    JsonNode nodes = normalized.path("nodes");
+    if (!nodes.isArray()) return normalized;
+    nodes.forEach(node -> {
+      if (node instanceof ObjectNode object) {
+        object.remove(List.of("photoRequired", "mediaReferences", "mediaOwnerId", "media"));
+      }
+    });
+    return normalized;
   }
 
   private void verifyLiveJpaProjection(Map<StreamKey, ReplayState> replayed) {
@@ -431,7 +457,12 @@ public class MaintenanceReplayVerifier {
     }
   }
 
-  private record ReplayState(long version, JsonNode state, UUID eventId, String stateHash) {}
+  private record ReplayState(
+      long version,
+      JsonNode state,
+      UUID eventId,
+      String stateHash,
+      String sourceStateHash) {}
 
   private record Replay(
       Map<StreamKey, ReplayState> streams,
