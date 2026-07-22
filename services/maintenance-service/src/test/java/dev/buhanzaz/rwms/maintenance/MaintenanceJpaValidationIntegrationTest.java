@@ -32,10 +32,16 @@ class MaintenanceJpaValidationIntegrationTest {
   @Autowired JdbcTemplate jdbc;
 
   @Test
-  void flywayV7PassesHibernateValidationForEveryBusinessProjection() {
+  void flywayV9PassesHibernateValidationForEveryBusinessProjection() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(jdbc.queryForObject(
-        "select count(*) from flyway_schema_history where success", Integer.class)).isEqualTo(7);
+        "select count(*) from flyway_schema_history where success", Integer.class)).isEqualTo(9);
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from information_schema.columns
+        where table_schema='public' and table_name='catalog_node' and column_name='photo_required'
+        """,
+        Integer.class)).isZero();
     assertThat(entityManagerFactory.getMetamodel().getEntities())
         .extracting(value -> value.getJavaType().getSimpleName())
         .contains(

@@ -1,7 +1,5 @@
 import {
-  activateMaintenanceCatalog,
   bootstrapMaintenanceCatalog,
-  forkMaintenanceCatalog,
   listMaintenanceCatalogLinks,
   listMaintenanceCatalogNodes,
   listMaintenanceCatalogVersions,
@@ -13,12 +11,6 @@ import {
   type MaintenanceCatalogNodeInput,
   type MaintenanceCatalogVersion,
 } from "@/features/repair-estimate-catalog/api/http-maintenance-catalog-client"
-import {
-  deleteRepairEstimateCatalogLayoutLink,
-  getRepairEstimateCatalogLayout,
-  saveRepairEstimateCatalogLinkAnchors,
-  saveRepairEstimateCatalogNodePosition,
-} from "@/features/settings/estimates-repairs/api/repair-estimate-catalog-layout"
 import type {
   RepairEstimateCatalogCanvasDto,
   RepairEstimateCatalogLinkDto,
@@ -68,24 +60,30 @@ function toVersion(
   }
 }
 
-export async function listRepairEstimateCatalogVersions(
+export async function getCurrentRepairEstimateCatalog(
   accessToken: string,
   warehouseId: string
 ) {
-  const page = await listMaintenanceCatalogVersions(accessToken, warehouseId)
-  return page.items.map(toVersion)
+  const page = await listMaintenanceCatalogVersions(
+    accessToken,
+    warehouseId,
+    "ACTIVE"
+  )
+  const current = page.items.find((value) => value.lifecycle === "ACTIVE")
+  return current ? toVersion(current) : null
 }
 
 async function catalogState(request: RepairEstimateCatalogRequest) {
   const versions = await listMaintenanceCatalogVersions(
     request.accessToken,
-    request.warehouseId
+    request.warehouseId,
+    "ACTIVE"
   )
   const version = versions.items.find(
     (candidate) => candidate.id === request.catalogVersionId
   )
   if (!version) {
-    throw new Error("Версия каталога не найдена для выбранного склада.")
+    throw new Error("Текущий каталог не найден для выбранного склада.")
   }
 
   const [nodes, links] = await Promise.all([
@@ -104,20 +102,17 @@ async function catalogState(request: RepairEstimateCatalogRequest) {
 }
 
 function toSnapshot(
-  request: RepairEstimateCatalogRequest,
+  _request: RepairEstimateCatalogRequest,
   state: Awaited<ReturnType<typeof catalogState>>
 ): RepairEstimateCatalogSnapshotDto {
-  const layout = getRepairEstimateCatalogLayout(request)
   const nodeById = new Map(state.nodes.map((node) => [node.id, node]))
 
   const nodes = state.nodes
     .map((node): RepairEstimateCatalogNodeDto => {
-      const position = layout.nodePositions[node.id]
       const queueKind = node.routing?.queueKind
       return {
         id: node.id,
         catalogVersionId: node.catalogVersionId,
-        mediaOwnerId: node.mediaOwnerId,
         code: node.code,
         name: node.name,
         nodeType: node.nodeType,
@@ -139,15 +134,13 @@ function toSnapshot(
         workQueueId: node.routing?.queueId ?? null,
         workQueueCode: node.routing?.queueCode ?? null,
         routing: node.routing,
-        photoRequired: node.photoRequired,
         includeInEstimate: node.includeInEstimate,
         commonItem: node.commonItem,
         furnitureCategory: Boolean(node.furnitureCategory),
         furnitureEquipment: node.furnitureEquipment ?? null,
         references: node.references,
-        mediaReferences: node.mediaReferences,
-        canvasX: position?.x ?? null,
-        canvasY: position?.y ?? null,
+        canvasX: node.canvasX,
+        canvasY: node.canvasY,
         comment: node.comment,
       }
     })
@@ -155,7 +148,10 @@ function toSnapshot(
 
   const links = state.links
     .map((link): RepairEstimateCatalogLinkDto => {
-      const anchors = layout.linkAnchors[link.id]
+      const anchors =
+        link.sourceAnchor !== null && link.targetAnchor !== null
+          ? { source: link.sourceAnchor, target: link.targetAnchor }
+          : null
       return {
         id: link.id,
         catalogVersionId: link.catalogVersionId,
@@ -163,7 +159,7 @@ function toSnapshot(
         targetNodeId: link.toNodeId,
         linkType: link.linkType,
         sortOrder: link.sortOrder,
-        canvasAnchors: anchors ?? null,
+        canvasAnchors: anchors,
       }
     })
     .sort(
@@ -249,12 +245,6 @@ export async function getRepairEstimateCatalogSection(
   } satisfies RepairEstimateCatalogSectionDto
 }
 
-function requireDraft(version: MaintenanceCatalogVersion) {
-  if (version.lifecycle !== "DRAFT") {
-    throw new Error("Изменять можно только черновую версию каталога.")
-  }
-}
-
 function normalizeMoney(value: string | null) {
   if (value === null || value.trim() === "") return null
   const normalized = value.trim().replace(",", ".")
@@ -283,13 +273,13 @@ function toNodeInput(
     includeInEstimate: node.includeInEstimate,
     commonItem: node.commonItem,
     showInMainMenu: node.showInMainMenu,
-    photoRequired: node.photoRequired,
     furnitureCategory: Boolean(node.furnitureCategory),
     furnitureEquipment: node.furnitureEquipment ?? null,
     routing: node.routing,
     references: node.references,
+    canvasX: node.canvasX,
+    canvasY: node.canvasY,
     comment: node.comment,
-    mediaReferences: node.mediaReferences,
   }
 }
 
@@ -353,14 +343,14 @@ function nodeInput(
     includeInEstimate: input.includeInEstimate,
     commonItem: input.commonItem,
     showInMainMenu: input.showInMainMenu,
-    photoRequired: input.nodeType === "WORK" && input.photoRequired,
     furnitureCategory:
       input.nodeType === "CATEGORY" && Boolean(input.furnitureCategory),
     furnitureEquipment: furnitureMaterial ? furnitureEquipment : null,
     routing: existing?.routing ?? input.routing ?? null,
     references: existing?.references ?? input.references ?? [],
+    canvasX: input.canvasX ?? existing?.canvasX ?? null,
+    canvasY: input.canvasY ?? existing?.canvasY ?? null,
     comment: input.comment?.trim() || null,
-    mediaReferences: input.mediaReferences ?? existing?.mediaReferences ?? [],
   }
 }
 
@@ -369,7 +359,6 @@ export async function saveRepairEstimateCatalogNode(
   input: RepairEstimateCatalogNodeMutation
 ) {
   const state = await catalogState(request)
-  requireDraft(state.version)
   const existing = input.id
     ? state.nodes.find((node) => node.id === input.id)
     : undefined
@@ -396,7 +385,6 @@ export async function deleteRepairEstimateCatalogNode(
   id: string
 ) {
   const state = await catalogState(request)
-  requireDraft(state.version)
   if (state.nodes.some((node) => node.parentNodeId === id)) {
     throw new Error("Сначала удалите дочерние блоки.")
   }
@@ -423,6 +411,8 @@ function toLinkInput(
     toNodeId: link.toNodeId,
     linkType: link.linkType,
     sortOrder: link.sortOrder,
+    sourceAnchor: link.sourceAnchor,
+    targetAnchor: link.targetAnchor,
   }
 }
 
@@ -431,7 +421,6 @@ export async function saveRepairEstimateCatalogLink(
   input: RepairEstimateCatalogLinkMutation
 ) {
   const state = await catalogState(request)
-  requireDraft(state.version)
   if (input.sourceNodeId === input.targetNodeId) {
     throw new Error("Исходный и целевой узлы должны отличаться.")
   }
@@ -446,6 +435,8 @@ export async function saveRepairEstimateCatalogLink(
     toNodeId: input.targetNodeId,
     linkType: input.linkType,
     sortOrder: Math.max(0, Math.trunc(input.sortOrder)),
+    sourceAnchor: input.canvasAnchors?.source ?? null,
+    targetAnchor: input.canvasAnchors?.target ?? null,
   }
   const links = state.links.some((link) => link.id === id)
     ? state.links.map((link) => (link.id === id ? changed : toLinkInput(link)))
@@ -459,9 +450,6 @@ export async function saveRepairEstimateCatalogLink(
     links
   )
 
-  if (input.canvasAnchors) {
-    saveRepairEstimateCatalogLinkAnchors(request, id, input.canvasAnchors)
-  }
   const snapshot = await getRepairEstimateCatalogSnapshot(request)
   return snapshot.links.find((link) => link.id === id)!
 }
@@ -471,7 +459,6 @@ export async function deleteRepairEstimateCatalogLink(
   id: string
 ) {
   const state = await catalogState(request)
-  requireDraft(state.version)
   await replaceMaintenanceCatalogLinks(
     request.accessToken,
     request.warehouseId,
@@ -479,17 +466,30 @@ export async function deleteRepairEstimateCatalogLink(
     state.version.version,
     state.links.filter((link) => link.id !== id).map(toLinkInput)
   )
-  deleteRepairEstimateCatalogLayoutLink(request, id)
 }
 
-export function moveRepairEstimateCatalogCanvasNode(
+export async function moveRepairEstimateCatalogCanvasNode(
   request: RepairEstimateCatalogRequest,
   nodeId: string,
   position: { x: number; y: number }
 ) {
-  return Promise.resolve(
-    saveRepairEstimateCatalogNodePosition(request, nodeId, position)
+  const state = await catalogState(request)
+  if (!state.nodes.some((node) => node.id === nodeId)) {
+    throw new Error("Блок каталога не найден.")
+  }
+  const nodes = state.nodes.map((node) => ({
+    ...toNodeInput(node),
+    canvasX: node.id === nodeId ? Math.round(position.x) : node.canvasX,
+    canvasY: node.id === nodeId ? Math.round(position.y) : node.canvasY,
+  }))
+  await replaceMaintenanceCatalogNodes(
+    request.accessToken,
+    request.warehouseId,
+    state.version.id,
+    state.version.version,
+    nodes
   )
+  return position
 }
 
 export function bootstrapRepairEstimateCatalog(
@@ -500,34 +500,6 @@ export function bootstrapRepairEstimateCatalog(
   return bootstrapMaintenanceCatalog(accessToken, commandKey, {
     warehouseId,
   }).then(toVersion)
-}
-
-export function forkRepairEstimateCatalog(
-  request: RepairEstimateCatalogRequest,
-  expectedVersion: number,
-  commandKey: string = idempotencyKey()
-) {
-  return forkMaintenanceCatalog(
-    request.accessToken,
-    request.warehouseId,
-    request.catalogVersionId,
-    expectedVersion,
-    commandKey
-  ).then(toVersion)
-}
-
-export function activateRepairEstimateCatalog(
-  request: RepairEstimateCatalogRequest,
-  expectedVersion: number,
-  commandKey: string = idempotencyKey()
-) {
-  return activateMaintenanceCatalog(
-    request.accessToken,
-    request.warehouseId,
-    request.catalogVersionId,
-    expectedVersion,
-    commandKey
-  ).then(toVersion)
 }
 
 function nodeById(nodes: RepairEstimateCatalogNodeDto[]) {

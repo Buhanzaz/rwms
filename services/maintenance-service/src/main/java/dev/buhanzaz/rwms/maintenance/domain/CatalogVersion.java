@@ -84,9 +84,9 @@ public class CatalogVersion {
     activatedAt = MaintenanceTime.now();
   }
 
-  public void replaceDraft(int nodeCount, int linkCount, String validationReport) {
-    if (state != CatalogVersionState.DRAFT) {
-      throw new IllegalStateException("Published catalog versions are immutable");
+  public void replaceCatalog(int nodeCount, int linkCount, String validationReport) {
+    if (state == CatalogVersionState.SUPERSEDED) {
+      throw new IllegalStateException("Superseded catalog versions are immutable");
     }
     if (nodeCount < 0 || linkCount < 0) {
       throw new IllegalArgumentException("Catalog counts must not be negative");

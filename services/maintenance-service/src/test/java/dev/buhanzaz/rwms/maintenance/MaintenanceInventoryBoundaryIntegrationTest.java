@@ -330,9 +330,6 @@ class MaintenanceInventoryBoundaryIntegrationTest {
     UUID inventoryId = UUID.randomUUID();
     UUID findingId = UUID.randomUUID();
     UUID mediaId = UUID.randomUUID();
-    jdbc.update(
-        "update catalog_node set photo_required=true where catalog_version_id=? and node_id=?",
-        catalogId, workNodeId);
     mediaFacts.saveAndFlush(MediaFactProjection.create(
         mediaId, 2, "INVENTORY_FINDING", findingId, warehouseId, "READY", "{}", 4));
     FreezeInventoryPlanRequest manual = new FreezeInventoryPlanRequest(
@@ -344,7 +341,6 @@ class MaintenanceInventoryBoundaryIntegrationTest {
 
     FrozenInventoryPlanResponse frozen = inventory.freeze(manual).response();
     assertThat(frozen.snapshot().mode()).isEqualTo(InventoryPlanMode.MANUAL);
-    assertThat(frozen.snapshot().lines().getFirst().photoRequired()).isTrue();
     assertThat(frozen.fingerprint()).matches("[0-9a-f]{64}");
 
     FreezeInventoryPlanRequest unknown = new FreezeInventoryPlanRequest(
@@ -584,10 +580,10 @@ class MaintenanceInventoryBoundaryIntegrationTest {
     jdbc.update("""
         insert into catalog_node(
           row_id,node_id,catalog_version_id,code,node_type,name,active,unit,price_minor,
-          duration_minutes,include_in_estimate,common_item,show_in_main_menu,photo_required,
-          routing_queue_id,routing_queue_code,routing_queue_kind,opaque_references,media_references)
-        values (?,?,?,?,'WORK','Repair work',true,'pcs',12500,45,true,false,false,false,
-          ?,'REPAIR','REPAIR','[]','[]')
+          duration_minutes,include_in_estimate,common_item,show_in_main_menu,
+          routing_queue_id,routing_queue_code,routing_queue_kind,opaque_references)
+        values (?,?,?,?,'WORK','Repair work',true,'pcs',12500,45,true,false,false,
+          ?,'REPAIR','REPAIR','[]')
         """, UUID.randomUUID(), nodeId, versionId, code, UUID.randomUUID());
   }
 
@@ -599,10 +595,10 @@ class MaintenanceInventoryBoundaryIntegrationTest {
     jdbc.update("""
         insert into catalog_node(
           row_id,node_id,catalog_version_id,code,node_type,name,active,unit,price_minor,
-          duration_minutes,include_in_estimate,common_item,show_in_main_menu,photo_required,
-          routing_queue_id,routing_queue_code,routing_queue_kind,opaque_references,media_references)
-        values (?,?,?, ?,?,'Catalog node',true,'pcs',12500,45,true,false,false,false,
-          ?,?,?,'[]','[]')
+          duration_minutes,include_in_estimate,common_item,show_in_main_menu,
+          routing_queue_id,routing_queue_code,routing_queue_kind,opaque_references)
+        values (?,?,?, ?,?,'Catalog node',true,'pcs',12500,45,true,false,false,
+          ?,?,?,'[]')
         """, UUID.randomUUID(), nodeId, catalogId,
         ("NODE_" + nodeId.toString().substring(0, 8)).toUpperCase(Locale.ROOT),
         nodeType, queueId, queueCode, queueKind);
@@ -615,18 +611,17 @@ class MaintenanceInventoryBoundaryIntegrationTest {
     jdbc.update("""
         insert into catalog_node(
           row_id,node_id,catalog_version_id,code,node_type,name,active,furniture_category,
-          duration_minutes,include_in_estimate,common_item,show_in_main_menu,photo_required,
-          opaque_references,media_references)
+          duration_minutes,include_in_estimate,common_item,show_in_main_menu,opaque_references)
         values (?,?,?,'FURNITURE','CATEGORY','Furniture',true,true,
-          0,false,false,true,false,'[]','[]')
+          0,false,false,true,'[]')
         """, UUID.randomUUID(), categoryId, catalogId);
     jdbc.update("""
         insert into catalog_node(
           row_id,node_id,catalog_version_id,code,node_type,name,active,parent_node_id,unit,
           price_minor,duration_minutes,include_in_estimate,common_item,show_in_main_menu,
-          photo_required,opaque_references,media_references)
+          opaque_references)
         values (?,?,?,'FURNITURE_CHAIR','MATERIAL','Furniture chair',true,?,'pcs',12500,
-          0,true,false,false,false,'[]','[]')
+          0,true,false,false,'[]')
         """, UUID.randomUUID(), materialId, catalogId, categoryId);
     return materialId;
   }

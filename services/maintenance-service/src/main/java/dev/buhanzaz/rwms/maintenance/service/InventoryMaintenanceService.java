@@ -258,17 +258,11 @@ public class InventoryMaintenanceService {
           throw invalid("Inventory catalog line has no immutable unit");
         }
         validateMinorProduct(quantity, node.getPriceMinor());
-        if (node.isPhotoRequired()
-            && input.mediaReferences().isEmpty()
-            && request.mediaReferences().isEmpty()) {
-          throw invalid("Inventory catalog line requires a finalized photo");
-        }
         lines.add(new InventoryPlanLineSnapshot(
             InventoryPlanLineKind.CATALOG, catalog.getId(), node.getId(), node.getCode(),
             InventoryPlanLineType.valueOf(node.getNodeType()), node.getName(), null, unit,
             quantity, node.getPriceMinor(), normativeMinutes(node.getDurationMinutes()), routing(node),
-            normalize(input.groupComment()), node.isPhotoRequired(),
-            List.copyOf(input.mediaReferences())));
+            normalize(input.groupComment()), List.copyOf(input.mediaReferences())));
       } else {
         if (request.mode() != InventoryPlanMode.MANUAL) {
           throw invalid("MANUAL lines require MANUAL inventory plan mode");
@@ -290,7 +284,7 @@ public class InventoryMaintenanceService {
         lines.add(new InventoryPlanLineSnapshot(
             InventoryPlanLineKind.MANUAL, null, null, null, input.type(), description,
             description.toLowerCase(Locale.forLanguageTag("ru-RU")), unit, quantity,
-            input.unitPriceMinor(), minutes, null, normalize(input.groupComment()), false,
+            input.unitPriceMinor(), minutes, null, normalize(input.groupComment()),
             List.copyOf(input.mediaReferences())));
       }
     }

@@ -203,9 +203,9 @@ public class MaintenanceApplicationService {
 
   @Transactional(readOnly = true)
   public List<CatalogNodeResponse> catalogNodes(UUID id) {
-    CatalogVersion catalog = requireCatalog(id);
+    requireCatalog(id);
     return catalogNodes.findAllByCatalogVersionIdOrderByCode(id).stream()
-        .map(node -> catalogNodeResponse(node, catalog.getWarehouseId()))
+        .map(this::catalogNodeResponse)
         .toList();
   }
 
@@ -227,11 +227,15 @@ public class MaintenanceApplicationService {
     }
     ImportCatalogRequest approved = reviewedLegacyCatalog.approvedRequest(request.warehouseId());
     ReviewedLegacyCatalogManifest.Review review = reviewedLegacyCatalog.validate(approved);
-    CatalogValidation validation = validateCatalog(approved.nodes(), approved.links());
+    validateCatalog(approved.nodes(), approved.links());
     requireReviewedRoutingReady(request.warehouseId());
+    List<CatalogNodeInput> resolvedNodes = resolveFurnitureEquipment(approved.nodes());
+    ImportCatalogRequest resolved = new ImportCatalogRequest(
+        approved.warehouseId(), approved.sourceSha256(), resolvedNodes, approved.links());
+    CatalogValidation validation = validateCatalog(resolved.nodes(), resolved.links());
     CreateResult<CatalogVersionResponse> result = transactions.execute(status ->
         bootstrapCatalogAfterPreflight(
-            subjectId, key, requestHash, request, approved, review, validation));
+            subjectId, key, requestHash, request, resolved, review, validation));
     if (result == null) throw new IllegalStateException("Catalog bootstrap transaction was empty");
     return result;
   }
@@ -254,7 +258,17 @@ public class MaintenanceApplicationService {
         request.warehouseId(), approved.sourceSha256());
     if (existing.isPresent()) {
       requireMatchingReviewedCatalog(existing.get());
-      CatalogVersionResponse response = catalogResponse(existing.get());
+      CatalogVersion matched = existing.get();
+      if (matched.getState() == CatalogVersionState.DRAFT) {
+        changeCatalogAfterResolution(
+            matched.getId(),
+            new ChangeCatalogRequest(matched.getVersion(), approved.nodes(), approved.links()),
+            validation);
+        matched = catalogVersions.findByIdForUpdate(matched.getId())
+            .orElseThrow(() -> new MaintenanceNotFoundException("Catalog version not found"));
+        matched = activateBootstrapCatalog(matched);
+      }
+      CatalogVersionResponse response = catalogResponse(matched);
       idempotency.store(subjectId, "catalog.bootstrap", key, requestHash, 201, response);
       return new CreateResult<>(response, true);
     }
@@ -266,12 +280,7 @@ public class MaintenanceApplicationService {
             approved.nodes().size(),
             approved.links().size(),
             write(report)));
-    saveCatalog(
-        version.getId(),
-        version.getVersion(),
-        version.getWarehouseId(),
-        approved.nodes(),
-        approved.links());
+    saveCatalog(version.getId(), approved.nodes(), approved.links());
     events.initialize(
         MaintenanceAggregateType.CATALOG_VERSION,
         version.getId(),
@@ -280,9 +289,28 @@ public class MaintenanceApplicationService {
         catalogLocal(version),
         catalogFact(MaintenanceEventType.CATALOG_IMPORTED, version),
         catalogSnapshot(version));
-    CatalogVersionResponse response = catalogResponse(version);
+    CatalogVersion active = activateBootstrapCatalog(version);
+    CatalogVersionResponse response = catalogResponse(active);
     idempotency.store(subjectId, "catalog.bootstrap", key, requestHash, 201, response);
     return new CreateResult<>(response, false);
+  }
+
+  private CatalogVersion activateBootstrapCatalog(CatalogVersion version) {
+    validateFurnitureCatalogForActivation(version.getId());
+    requireReviewedRoutingSnapshots(version.getId());
+    long expectedVersion = version.getVersion();
+    version.activate();
+    CatalogVersion active = catalogVersions.saveAndFlush(version);
+    events.append(
+        MaintenanceAggregateType.CATALOG_VERSION,
+        active.getId(),
+        expectedVersion,
+        MaintenanceEventType.CATALOG_ACTIVATED,
+        catalogLocal(active),
+        catalogFact(MaintenanceEventType.CATALOG_ACTIVATED, active),
+        catalogSnapshot(active));
+    enqueueCatalogRouting(active, null);
+    return active;
   }
 
   public CatalogVersionResponse changeCatalog(UUID id, ChangeCatalogRequest request) {
@@ -306,10 +334,6 @@ public class MaintenanceApplicationService {
     if (contentSha256.equals(jsonMap(version.getValidationReport()).get("contentSha256"))) {
       return catalogResponse(version);
     }
-    List<CatalogNode> previousNodes = catalogNodes.findAllByCatalogVersionIdOrderByCode(id);
-    previousNodes.forEach(node ->
-        mediaReferences.deleteAllByAggregateTypeAndAggregateId("CATALOG_NODE", node.getRowId()));
-    mediaReferences.flush();
     catalogLinks.deleteAllByCatalogVersionId(id);
     catalogNodes.deleteAllByCatalogVersionId(id);
     catalogLinks.flush();
@@ -325,25 +349,9 @@ public class MaintenanceApplicationService {
     report.put("dependencyAcyclic", validation.dependencyAcyclic());
     copyCatalogSourceAttestation(jsonMap(version.getValidationReport()), report);
     report.put("reportSha256", hash(report));
-    version.replaceDraft(request.nodes().size(), request.links().size(), write(report));
+    version.replaceCatalog(request.nodes().size(), request.links().size(), write(report));
     CatalogVersion saved = catalogVersions.saveAndFlush(version);
-    saveCatalog(
-        id, saved.getVersion(), saved.getWarehouseId(), request.nodes(), request.links());
-    Set<UUID> currentNodeIds = request.nodes().stream()
-        .map(CatalogNodeInput::id)
-        .collect(java.util.stream.Collectors.toSet());
-    previousNodes.stream()
-        .map(CatalogNode::getId)
-        .filter(nodeId -> !currentNodeIds.contains(nodeId))
-        .distinct()
-        .filter(nodeId -> !catalogNodeExistsInWarehouse(saved.getWarehouseId(), nodeId))
-        .forEach(nodeId -> enqueueMediaOwnerProof(
-            "MAINTENANCE_CATALOG_NODE",
-            MaintenanceMediaOwnerId.catalogNode(saved.getWarehouseId(), nodeId),
-            saved.getWarehouseId(),
-            saved.getId(),
-            saved.getVersion(),
-            false));
+    saveCatalog(id, request.nodes(), request.links());
     events.append(
         MaintenanceAggregateType.CATALOG_VERSION,
         id,
@@ -412,8 +420,7 @@ public class MaintenanceApplicationService {
         source, sourceSnapshotSha256, nodes, links, validation, review);
     CatalogVersion fork = catalogVersions.saveAndFlush(CatalogVersion.draft(
         source.getWarehouseId(), sourceSnapshotSha256, nodes.size(), links.size(), write(report)));
-    saveCatalog(
-        fork.getId(), fork.getVersion(), fork.getWarehouseId(), nodes, links);
+    saveCatalog(fork.getId(), nodes, links);
     events.initialize(
         MaintenanceAggregateType.CATALOG_VERSION,
         fork.getId(),
@@ -1698,9 +1705,9 @@ public class MaintenanceApplicationService {
             .orElseThrow(() -> new MaintenanceNotFoundException("Catalog version not found"))
         : requireCatalog(id);
     assertVersion(version.getVersion(), expectedVersion);
-    if (version.getState() != CatalogVersionState.DRAFT) {
+    if (version.getState() == CatalogVersionState.SUPERSEDED) {
       throw new MaintenanceConflictException(
-          "MAINTENANCE_STATE_CONFLICT", "Published catalog versions are immutable");
+          "MAINTENANCE_STATE_CONFLICT", "Superseded catalog versions are immutable");
     }
     return version;
   }
@@ -1777,11 +1784,11 @@ public class MaintenanceApplicationService {
         node.includeInEstimate(),
         node.commonItem(),
         node.showInMainMenu(),
-        node.photoRequired(),
+        node.canvasX(),
+        node.canvasY(),
         node.routing(),
         node.references(),
-        node.comment(),
-        node.mediaReferences());
+        node.comment());
   }
 
   private CatalogValidation validateCatalog(
@@ -1841,6 +1848,9 @@ public class MaintenanceApplicationService {
         throw invalid("Catalog link endpoint is missing");
       }
       if (link.fromNodeId().equals(link.toNodeId())) throw invalid("Catalog link cannot self-reference");
+      if ((link.sourceAnchor() == null) != (link.targetAnchor() == null)) {
+        throw invalid("Catalog link anchors must be both absent or both present");
+      }
       String edge = link.fromNodeId() + ":" + link.toNodeId() + ":" + link.linkType().name();
       if (!typedEdges.add(edge)) throw invalid("Duplicate typed catalog edge");
       if (link.linkType() == CatalogLinkType.DEPENDENCY) {
@@ -2262,7 +2272,8 @@ public class MaintenanceApplicationService {
         value.isIncludeInEstimate(),
         value.isCommonItem(),
         value.isShowInMainMenu(),
-        value.isPhotoRequired(),
+        value.getCanvasX(),
+        value.getCanvasY(),
         value.getRoutingQueueId() == null
             ? null
             : new RoutingSnapshot(
@@ -2270,8 +2281,7 @@ public class MaintenanceApplicationService {
                 value.getRoutingQueueCode(),
                 value.getRoutingQueueKind()),
         readList(value.getOpaqueReferences(), OpaqueCatalogReference.class),
-        value.getComment(),
-        readList(value.getMediaReferences(), MediaReferenceInput.class));
+        value.getComment());
   }
 
   private List<CatalogLinkInput> catalogLinkInputs(UUID catalogVersionId) {
@@ -2281,17 +2291,21 @@ public class MaintenanceApplicationService {
             link.getSourceNodeId(),
             link.getTargetNodeId(),
             CatalogLinkType.valueOf(link.getLinkType()),
+            link.getSourceAnchor() == null
+                ? null
+                : CatalogLinkAnchor.valueOf(link.getSourceAnchor()),
+            link.getTargetAnchor() == null
+                ? null
+                : CatalogLinkAnchor.valueOf(link.getTargetAnchor()),
             link.getSortOrder()))
         .toList();
   }
 
   private void saveCatalog(
       UUID versionId,
-      long version,
-      UUID warehouseId,
       List<CatalogNodeInput> nodes,
       List<CatalogLinkInput> links) {
-    List<CatalogNode> savedNodes = catalogNodes.saveAllAndFlush(nodes.stream().map(node -> new CatalogNode(
+    catalogNodes.saveAllAndFlush(nodes.stream().map(node -> new CatalogNode(
         node.id(), versionId, node.code(), node.nodeType().name(), node.name(),
         node.active(), node.parentNodeId(), marksFurnitureTree(node),
         node.furnitureEquipment() == null ? null : node.furnitureEquipment().equipmentId(),
@@ -2299,41 +2313,17 @@ public class MaintenanceApplicationService {
         node.furnitureEquipment() == null ? null : node.furnitureEquipment().equipmentName(),
         node.unit(),
         node.unitPrice() == null ? null : moneyToMinor(node.unitPrice()), node.durationMinutes(),
-        node.includeInEstimate(), node.commonItem(), node.showInMainMenu(), node.photoRequired(),
+        node.includeInEstimate(), node.commonItem(), node.showInMainMenu(),
+        node.canvasX(), node.canvasY(),
         node.routing() == null ? null : node.routing().queueId(),
         node.routing() == null ? null : node.routing().queueCode(),
         node.routing() == null ? null : node.routing().queueKind(),
-        write(node.references()), node.comment(), write(node.mediaReferences()))).toList());
-    Map<UUID, CatalogNodeInput> inputsById = nodes.stream().collect(
-        java.util.stream.Collectors.toMap(CatalogNodeInput::id, value -> value));
-    savedNodes.forEach(node -> {
-      CatalogNodeInput input = inputsById.get(node.getId());
-      UUID mediaOwnerId = MaintenanceMediaOwnerId.catalogNode(warehouseId, node.getId());
-      replaceMedia(
-          "CATALOG_NODE", node.getRowId(), "MAINTENANCE_CATALOG_NODE", mediaOwnerId,
-          warehouseId, input.mediaReferences());
-      enqueueMediaOwnerProof(
-          "MAINTENANCE_CATALOG_NODE",
-          mediaOwnerId,
-          warehouseId,
-          versionId,
-          version,
-          true);
-    });
+        write(node.references()), node.comment())).toList());
     catalogLinks.saveAllAndFlush(links.stream().map(link -> new CatalogLink(
-        link.id(), versionId, link.fromNodeId(), link.toNodeId(), link.linkType().name(), link.sortOrder())).toList());
-  }
-
-  private boolean catalogNodeExistsInWarehouse(UUID warehouseId, UUID nodeId) {
-    Boolean exists = jdbc.queryForObject("""
-        select exists (
-          select 1
-          from catalog_node node
-          join catalog_version version on version.id=node.catalog_version_id
-          where version.warehouse_id=? and node.node_id=?
-        )
-        """, Boolean.class, warehouseId, nodeId);
-    return Boolean.TRUE.equals(exists);
+        link.id(), versionId, link.fromNodeId(), link.toNodeId(), link.linkType().name(),
+        link.sourceAnchor() == null ? null : link.sourceAnchor().name(),
+        link.targetAnchor() == null ? null : link.targetAnchor().name(),
+        link.sortOrder())).toList());
   }
 
   private void requireNoActiveRework(MaintenanceRepair repair) {
@@ -3246,10 +3236,9 @@ public class MaintenanceApplicationService {
         value.getCreatedAt(), value.getActivatedAt(), routingSync);
   }
 
-  private CatalogNodeResponse catalogNodeResponse(CatalogNode value, UUID warehouseId) {
+  private CatalogNodeResponse catalogNodeResponse(CatalogNode value) {
     return catalogNodeResponseMapper.toResponse(
         value,
-        MaintenanceMediaOwnerId.catalogNode(warehouseId, value.getId()),
         CatalogNodeType.valueOf(value.getNodeType()),
         value.getFurnitureEquipmentId() == null
             ? null
@@ -3259,14 +3248,20 @@ public class MaintenanceApplicationService {
             ? null
             : new RoutingSnapshot(
                 value.getRoutingQueueId(), value.getRoutingQueueCode(), value.getRoutingQueueKind()),
-        readList(value.getOpaqueReferences(), OpaqueCatalogReference.class),
-        readList(value.getMediaReferences(), MediaReferenceInput.class));
+        readList(value.getOpaqueReferences(), OpaqueCatalogReference.class));
   }
 
   private CatalogLinkResponse catalogLinkResponse(CatalogLink value) {
     return new CatalogLinkResponse(
         value.getId(), value.getCatalogVersionId(), value.getSourceNodeId(), value.getTargetNodeId(),
-        CatalogLinkType.valueOf(value.getLinkType()), value.getSortOrder());
+        CatalogLinkType.valueOf(value.getLinkType()),
+        value.getSourceAnchor() == null
+            ? null
+            : CatalogLinkAnchor.valueOf(value.getSourceAnchor()),
+        value.getTargetAnchor() == null
+            ? null
+            : CatalogLinkAnchor.valueOf(value.getTargetAnchor()),
+        value.getSortOrder());
   }
 
   private EstimateResponse estimateResponse(MaintenanceEstimate value) {

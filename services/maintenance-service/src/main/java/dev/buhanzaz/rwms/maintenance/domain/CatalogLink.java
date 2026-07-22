@@ -31,6 +31,12 @@ public class CatalogLink {
   @Column(name = "link_type", nullable = false, length = 32)
   private String linkType;
 
+  @Column(name = "source_anchor", length = 16)
+  private String sourceAnchor;
+
+  @Column(name = "target_anchor", length = 16)
+  private String targetAnchor;
+
   @Column(name = "sort_order", nullable = false)
   private int sortOrder;
 
@@ -42,18 +48,31 @@ public class CatalogLink {
       UUID sourceNodeId,
       UUID targetNodeId,
       String linkType,
+      String sourceAnchor,
+      String targetAnchor,
       int sortOrder) {
     if (id == null || catalogVersionId == null || sourceNodeId == null || targetNodeId == null) {
       throw new IllegalArgumentException("Catalog link references are required");
     }
     if (sourceNodeId.equals(targetNodeId)) throw new IllegalArgumentException("Catalog link cannot self-reference");
     if (sortOrder < 0) throw new IllegalArgumentException("sortOrder is invalid");
+    boolean anchorsAbsent = sourceAnchor == null && targetAnchor == null;
+    boolean anchorsPresent = isAnchor(sourceAnchor) && isAnchor(targetAnchor);
+    if (!anchorsAbsent && !anchorsPresent) {
+      throw new IllegalArgumentException("Catalog link anchors must be both absent or both present");
+    }
     this.id = id;
     this.catalogVersionId = catalogVersionId;
     this.sourceNodeId = sourceNodeId;
     this.targetNodeId = targetNodeId;
     this.linkType = linkType;
+    this.sourceAnchor = sourceAnchor;
+    this.targetAnchor = targetAnchor;
     this.sortOrder = sortOrder;
+  }
+
+  private static boolean isAnchor(String value) {
+    return "TOP".equals(value) || "BOTTOM".equals(value);
   }
 
   public UUID getId() { return id; }
@@ -61,5 +80,7 @@ public class CatalogLink {
   public UUID getSourceNodeId() { return sourceNodeId; }
   public UUID getTargetNodeId() { return targetNodeId; }
   public String getLinkType() { return linkType; }
+  public String getSourceAnchor() { return sourceAnchor; }
+  public String getTargetAnchor() { return targetAnchor; }
   public int getSortOrder() { return sortOrder; }
 }

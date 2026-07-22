@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
-  activateMaintenanceCatalog,
   bootstrapMaintenanceCatalog,
-  forkMaintenanceCatalog,
   listMaintenanceCatalogNodes,
   listMaintenanceCatalogVersions,
   replaceMaintenanceCatalogNodes,
@@ -14,13 +12,12 @@ import type { ApiError } from "@/lib/api-client"
 const warehouseId = "00000000-0000-4000-8000-000000000001"
 const versionId = "00000000-0000-4000-8000-000000000002"
 const commandId = "00000000-0000-4000-8000-000000000003"
-const mediaOwnerId = "00000000-0000-4000-8000-000000000004"
 
 const version = {
   id: versionId,
   warehouseId,
   version: 4,
-  lifecycle: "DRAFT",
+  lifecycle: "ACTIVE",
   sourceSha256: "a".repeat(64),
   counts: { nodes: 0, links: 0 },
   validation: {
@@ -51,7 +48,7 @@ describe("maintenance catalog HTTP client", () => {
       )
     vi.stubGlobal("fetch", fetchMock)
 
-    await listMaintenanceCatalogVersions("catalog-token", warehouseId, "DRAFT")
+    await listMaintenanceCatalogVersions("catalog-token", warehouseId, "ACTIVE")
 
     const [input, init] = fetchMock.mock.calls[0] as [URL, RequestInit]
     const endpoint = new URL(String(input))
@@ -61,18 +58,17 @@ describe("maintenance catalog HTTP client", () => {
       warehouseId,
       page: "0",
       size: "200",
-      lifecycle: "DRAFT",
+      lifecycle: "ACTIVE",
     })
     expect(new Headers(init.headers).get("Authorization")).toBe(
       "Bearer catalog-token"
     )
   })
 
-  it("keeps the server-issued media owner separate from the catalog node id", async () => {
+  it("reads persisted canvas coordinates without catalog photo metadata", async () => {
     const node = {
       id: commandId,
       catalogVersionId: versionId,
-      mediaOwnerId,
       code: "WINDOW",
       nodeType: "WORK",
       name: "Окно",
@@ -84,13 +80,13 @@ describe("maintenance catalog HTTP client", () => {
       includeInEstimate: true,
       commonItem: false,
       showInMainMenu: true,
-      photoRequired: false,
       furnitureCategory: false,
       furnitureEquipment: null,
       routing: null,
       references: [],
+      canvasX: 120,
+      canvasY: 340,
       comment: null,
-      mediaReferences: [],
     }
     const fetchMock = vi.fn().mockResolvedValue(json([node]))
     vi.stubGlobal("fetch", fetchMock)
@@ -101,7 +97,14 @@ describe("maintenance catalog HTTP client", () => {
       versionId
     )
 
-    expect(result[0]).toMatchObject({ id: commandId, mediaOwnerId })
+    expect(result[0]).toMatchObject({
+      id: commandId,
+      canvasX: 120,
+      canvasY: 340,
+    })
+    expect(result[0]).not.toHaveProperty("mediaOwnerId")
+    expect(result[0]).not.toHaveProperty("mediaReferences")
+    expect(result[0]).not.toHaveProperty("photoRequired")
     const endpoint = new URL(String(fetchMock.mock.calls[0]![0]))
     expect(endpoint.pathname).toBe(
       `/api/maintenance/v1/catalog/versions/${versionId}/nodes`
@@ -114,51 +117,22 @@ describe("maintenance catalog HTTP client", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     await replaceMaintenanceCatalogNodes("token", warehouseId, versionId, 4, [])
-    await activateMaintenanceCatalog(
-      "token",
-      warehouseId,
-      versionId,
-      5,
-      commandId
-    )
     await bootstrapMaintenanceCatalog("token", commandId, {
       warehouseId,
     } satisfies MaintenanceCatalogBootstrapRequest)
-    await forkMaintenanceCatalog("token", warehouseId, versionId, 6, commandId)
-
     expect(JSON.parse(String(fetchMock.mock.calls[0]![1]?.body))).toEqual({
       expectedVersion: 4,
       nodes: [],
     })
-    expect(JSON.parse(String(fetchMock.mock.calls[1]![1]?.body))).toEqual({
-      expectedVersion: 5,
-    })
     expect(
       new Headers(fetchMock.mock.calls[1]![1]?.headers).get("Idempotency-Key")
     ).toBe(commandId)
-    expect(
-      new Headers(fetchMock.mock.calls[2]![1]?.headers).get("Idempotency-Key")
-    ).toBe(commandId)
-    expect(new URL(String(fetchMock.mock.calls[2]![0])).pathname).toBe(
+    expect(new URL(String(fetchMock.mock.calls[1]![0])).pathname).toBe(
       "/api/maintenance/v1/catalog/imports"
     )
-    expect(JSON.parse(String(fetchMock.mock.calls[2]![1]?.body))).toEqual({
+    expect(JSON.parse(String(fetchMock.mock.calls[1]![1]?.body))).toEqual({
       warehouseId,
     })
-
-    const forkEndpoint = new URL(String(fetchMock.mock.calls[3]![0]))
-    expect(forkEndpoint.pathname).toBe(
-      `/api/maintenance/v1/catalog/versions/${versionId}/fork`
-    )
-    expect(Object.fromEntries(forkEndpoint.searchParams)).toEqual({
-      warehouseId,
-    })
-    expect(JSON.parse(String(fetchMock.mock.calls[3]![1]?.body))).toEqual({
-      expectedVersion: 6,
-    })
-    expect(
-      new Headers(fetchMock.mock.calls[3]![1]?.headers).get("Idempotency-Key")
-    ).toBe(commandId)
   })
 
   it.each([

@@ -285,11 +285,11 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
         false,
         false,
         true,
-        false,
+        null,
+        null,
         null,
         List.of(),
-        null,
-        List.of());
+        null);
   }
 
   private static CatalogNodeInput plainCategory(UUID id) {
@@ -308,11 +308,11 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
         false,
         false,
         true,
-        false,
+        null,
+        null,
         null,
         List.of(),
-        null,
-        List.of());
+        null);
   }
 
   private static CatalogNodeInput material(
@@ -336,10 +336,10 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
         true,
         false,
         false,
-        false,
+        null,
+        null,
         null,
         List.of(),
-        null,
-        List.of());
+        null);
   }
 }
