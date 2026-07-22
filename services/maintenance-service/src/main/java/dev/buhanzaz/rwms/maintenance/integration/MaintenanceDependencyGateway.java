@@ -219,8 +219,7 @@ public interface MaintenanceDependencyGateway {
     private static final java.util.Set<String> OWNER_TYPES = java.util.Set.of(
         "MAINTENANCE_ESTIMATE",
         "MAINTENANCE_REPAIR",
-        "MAINTENANCE_ACCEPTANCE",
-        "MAINTENANCE_CATALOG_NODE");
+        "MAINTENANCE_ACCEPTANCE");
 
     public MediaOwnerProof {
       if (!OWNER_TYPES.contains(ownerType)

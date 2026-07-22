@@ -38,6 +38,7 @@ public final class MaintenanceApiModels {
   public enum ActorType { USER, SERVICE }
   public enum CatalogNodeType { CATEGORY, SUBCATEGORY, WORK, MATERIAL, LOCATION, OPTION }
   public enum CatalogLinkType { DEPENDENCY, FOLLOW_UP }
+  public enum CatalogLinkAnchor { TOP, BOTTOM }
   public enum DeliveryState { PENDING, RETRY_PENDING, DELIVERED, QUARANTINED }
   public enum LeaseReconciliationState {
     NOT_ACQUIRED, ACTIVE, RELEASED, RECONCILIATION_REQUIRED
@@ -103,19 +104,16 @@ public final class MaintenanceApiModels {
       @JsonProperty(defaultValue = "false")
           @JsonDeserialize(using = DefaultFalseBooleanDeserializer.class)
           Boolean showInMainMenu,
-      @JsonProperty(defaultValue = "false")
-          @JsonDeserialize(using = DefaultFalseBooleanDeserializer.class)
-          Boolean photoRequired,
+      Integer canvasX,
+      Integer canvasY,
       @JsonProperty(required = true) @Valid RoutingSnapshot routing,
       @NotNull @Size(max = 100) List<@Valid OpaqueCatalogReference> references,
-      @Size(max = 2000) String comment,
-      @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> mediaReferences) {
+      @Size(max = 2000) String comment) {
     public CatalogNodeInput {
       if (active == null) throw new IllegalArgumentException("active is required");
       includeInEstimate = includeInEstimate == null ? Boolean.TRUE : includeInEstimate;
       commonItem = commonItem == null ? Boolean.FALSE : commonItem;
       showInMainMenu = showInMainMenu == null ? Boolean.FALSE : showInMainMenu;
-      photoRequired = photoRequired == null ? Boolean.FALSE : photoRequired;
       furnitureCategory = furnitureCategory == null ? Boolean.FALSE : furnitureCategory;
     }
   }
@@ -166,6 +164,8 @@ public final class MaintenanceApiModels {
       @NotNull UUID fromNodeId,
       @NotNull UUID toNodeId,
       @NotNull CatalogLinkType linkType,
+      CatalogLinkAnchor sourceAnchor,
+      CatalogLinkAnchor targetAnchor,
       @Min(0) int sortOrder) {}
   public record ImportCatalogRequest(
       @NotNull UUID warehouseId,
@@ -211,7 +211,6 @@ public final class MaintenanceApiModels {
   public record CatalogNodeResponse(
       UUID id,
       UUID catalogVersionId,
-      UUID mediaOwnerId,
       String code,
       CatalogNodeType nodeType,
       String name,
@@ -225,17 +224,19 @@ public final class MaintenanceApiModels {
       boolean includeInEstimate,
       boolean commonItem,
       boolean showInMainMenu,
-      boolean photoRequired,
+      Integer canvasX,
+      Integer canvasY,
       RoutingSnapshot routing,
       List<OpaqueCatalogReference> references,
-      String comment,
-      List<MediaReferenceInput> mediaReferences) {}
+      String comment) {}
   public record CatalogLinkResponse(
       UUID id,
       UUID catalogVersionId,
       UUID fromNodeId,
       UUID toNodeId,
       CatalogLinkType linkType,
+      CatalogLinkAnchor sourceAnchor,
+      CatalogLinkAnchor targetAnchor,
       int sortOrder) {}
 
   public record CatalogNodeSnapshot(
@@ -413,7 +414,6 @@ public final class MaintenanceApiModels {
       @NotBlank String normativeMinutes,
       @JsonProperty(required = true) @Valid RoutingSnapshot routing,
       @JsonProperty(required = true) String groupComment,
-      boolean photoRequired,
       @NotNull List<@Valid MediaReferenceInput> mediaReferences) {}
   public record InventoryPlanStageSnapshot(
       @NotNull UUID id,

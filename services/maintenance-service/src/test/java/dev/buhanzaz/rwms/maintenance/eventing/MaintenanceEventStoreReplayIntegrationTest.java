@@ -127,13 +127,82 @@ class MaintenanceEventStoreReplayIntegrationTest {
         where aggregate_type='ESTIMATE' and aggregate_id=? and aggregate_version=2
         """, String.class, fixture.estimateId().toString())).isEqualTo("Amended material");
     assertThat(jdbc.queryForObject("""
-        select payload #>> '{state,nodes,0,media,0,safeMetadata,contentType}'
+        select payload #>> '{state,nodes,0,canvasX}'
         from domain_event where aggregate_type='CATALOG_VERSION' and aggregate_id=?
-        """, String.class, fixture.catalogId().toString())).isEqualTo("image/jpeg");
+        """, String.class, fixture.catalogId().toString())).isEqualTo("128");
+    assertThat(jdbc.queryForObject("""
+        select payload #>> '{state,links,0,sourceAnchor}'
+        from domain_event where aggregate_type='CATALOG_VERSION' and aggregate_id=?
+        """, String.class, fixture.catalogId().toString())).isEqualTo("BOTTOM");
+    assertThat(jdbc.queryForObject("""
+        select payload #> '{state,nodes,0,media}' is null
+        from domain_event where aggregate_type='CATALOG_VERSION' and aggregate_id=?
+        """, Boolean.class, fixture.catalogId().toString())).isTrue();
     assertThat(jdbc.queryForObject("""
         select payload #>> '{state,media,0,safeMetadata,sha256}' from domain_event
         where aggregate_type='REPAIR' and aggregate_id=? and aggregate_version=0
         """, String.class, fixture.primaryRepairId().toString())).isEqualTo("c".repeat(64));
+  }
+
+  @Test
+  void replayIgnoresRetiredPhotoFieldInExistingCatalogFactsAfterV9() {
+    Fixture fixture = createCompleteFixture();
+
+    jdbc.update(
+        """
+        update domain_event
+        set payload=jsonb_set(payload,'{state,nodes,0,photoRequired}','true'::jsonb)
+        where aggregate_type='CATALOG_VERSION' and aggregate_id=? and aggregate_version=0
+        """,
+        fixture.catalogId().toString());
+    String payload = jdbc.queryForObject(
+        """
+        select payload::text from domain_event
+        where aggregate_type='CATALOG_VERSION' and aggregate_id=? and aggregate_version=0
+        """,
+        String.class,
+        fixture.catalogId().toString());
+    jdbc.update(
+        """
+        update domain_event set payload_sha256=?
+        where aggregate_type='CATALOG_VERSION' and aggregate_id=? and aggregate_version=0
+        """,
+        MaintenanceChecksum.sha256(payload.getBytes(StandardCharsets.UTF_8)),
+        fixture.catalogId().toString());
+
+    jdbc.update(
+        """
+        update aggregate_snapshot
+        set state=jsonb_set(state,'{nodes,0,photoRequired}','true'::jsonb)
+        where aggregate_type='CATALOG_VERSION' and aggregate_id=? and aggregate_version=0
+        """,
+        fixture.catalogId().toString());
+    String state = jdbc.queryForObject(
+        """
+        select state::text from aggregate_snapshot
+        where aggregate_type='CATALOG_VERSION' and aggregate_id=? and aggregate_version=0
+        """,
+        String.class,
+        fixture.catalogId().toString());
+    String legacyStateHash =
+        MaintenanceChecksum.sha256(state.getBytes(StandardCharsets.UTF_8));
+    jdbc.update(
+        """
+        update aggregate_snapshot set state_sha256=?
+        where aggregate_type='CATALOG_VERSION' and aggregate_id=? and aggregate_version=0
+        """,
+        legacyStateHash,
+        fixture.catalogId().toString());
+    jdbc.update(
+        """
+        update projection_checkpoint set projection_sha256=?
+        where projection_name='maintenance-live-v1'
+          and aggregate_type='CATALOG_VERSION' and aggregate_id=?
+        """,
+        legacyStateHash,
+        fixture.catalogId().toString());
+
+    assertThat(replay.rebuildAndVerify().streamCount()).isEqualTo(5);
   }
 
   @Test
@@ -383,13 +452,13 @@ class MaintenanceEventStoreReplayIntegrationTest {
           true,
           true,
           true,
-          true,
+          128,
+          64,
           queueId,
           "REPAIR",
           "GENERAL",
           "[{\"kind\":\"equipment\",\"id\":\"EQ-1\"}]",
-          "catalog-local comment",
-          "[{\"mediaId\":\"" + UUID.randomUUID() + "\",\"generation\":3}]");
+          "catalog-local comment");
       CatalogNode childNode = new CatalogNode(
           childNodeId,
           catalog.getId(),
@@ -408,13 +477,13 @@ class MaintenanceEventStoreReplayIntegrationTest {
           true,
           false,
           false,
-          false,
+          null,
+          null,
           null,
           null,
           null,
           "[]",
-          null,
-          "[]");
+          null);
       catalogNodes.saveAllAndFlush(List.of(parent, childNode));
       catalogLinks.saveAndFlush(new CatalogLink(
           UUID.randomUUID(),
@@ -422,15 +491,9 @@ class MaintenanceEventStoreReplayIntegrationTest {
           parentNodeId,
           childNodeId,
           "DEPENDENCY",
+          "BOTTOM",
+          "TOP",
           0));
-      media.saveAndFlush(new MaintenanceMediaReference(
-          "CATALOG_NODE",
-          parent.getRowId(),
-          UUID.randomUUID(),
-          3,
-          "MAINTENANCE_CATALOG_NODE",
-          warehouseId,
-          "{\"contentType\":\"image/jpeg\",\"sha256\":\"" + "b".repeat(64) + "\"}"));
       events.initialize(
           MaintenanceAggregateType.CATALOG_VERSION,
           catalog.getId(),

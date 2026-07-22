@@ -15,7 +15,6 @@ function node(
   return {
     id,
     catalogVersionId: versionId,
-    mediaOwnerId: id,
     code: `NODE_${id.at(-1)}`,
     name: `Узел ${id.at(-1)}`,
     nodeType: "CATEGORY",
@@ -29,7 +28,6 @@ function node(
     routeQueueKind: null,
     workQueueId: null,
     workQueueCode: null,
-    photoRequired: false,
     includeInEstimate: false,
     commonItem: false,
     furnitureCategory: false,

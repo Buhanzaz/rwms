@@ -115,7 +115,8 @@ public class MaintenanceProjectionSnapshotFactory {
       item.put("includeInEstimate", node.isIncludeInEstimate());
       item.put("commonItem", node.isCommonItem());
       item.put("showInMainMenu", node.isShowInMainMenu());
-      item.put("photoRequired", node.isPhotoRequired());
+      item.put("canvasX", node.getCanvasX());
+      item.put("canvasY", node.getCanvasY());
       if (node.getRoutingQueueId() == null) {
         item.put("routing", null);
       } else {
@@ -127,8 +128,6 @@ public class MaintenanceProjectionSnapshotFactory {
       }
       item.put("references", jsonValue(node.getOpaqueReferences()));
       item.put("comment", node.getComment());
-      item.put("mediaReferences", jsonValue(node.getMediaReferences()));
-      item.put("media", media("CATALOG_NODE", node.getRowId()));
       return item;
     }).toList());
     result.put("links", links.findAllByCatalogVersionIdOrderBySortOrderAscIdAsc(value.getId()).stream().map(link -> {
@@ -137,6 +136,8 @@ public class MaintenanceProjectionSnapshotFactory {
       item.put("sourceNodeId", link.getSourceNodeId().toString());
       item.put("targetNodeId", link.getTargetNodeId().toString());
       item.put("linkType", link.getLinkType());
+      item.put("sourceAnchor", link.getSourceAnchor());
+      item.put("targetAnchor", link.getTargetAnchor());
       item.put("sortOrder", link.getSortOrder());
       return item;
     }).toList());

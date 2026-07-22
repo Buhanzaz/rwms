@@ -42,12 +42,10 @@ import {
   saveRepairEstimateWorkCatalogItem,
 } from "@/features/settings/estimates-repairs/api/repair-estimate-work-catalog-settings-api"
 import {
-  activateRepairEstimateCatalog,
   bootstrapRepairEstimateCatalog,
-  forkRepairEstimateCatalog,
+  getCurrentRepairEstimateCatalog,
   getItemsForCategory,
   getRepairEstimateCatalogSectionItems,
-  listRepairEstimateCatalogVersions,
   moveRepairEstimateCatalogCanvasNode,
 } from "@/features/settings/estimates-repairs/api/repair-estimate-catalog-store"
 import { REPAIR_ESTIMATE_CATALOG_QUERY_KEY } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
@@ -98,11 +96,6 @@ import type {
   RepairEstimateCatalogSectionDto,
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
 import {
-  maintenanceCatalogNodeMediaOwner,
-  type ReadyMediaReference,
-} from "@/features/media/media-service"
-import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
-import {
   repairEstimateCatalogLinkTypeLabel,
   repairEstimateCatalogNodeTypeLabel,
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
@@ -117,11 +110,6 @@ type EstimateScreen =
       action: EstimateCatalogSettingsActionDto
       categoryId: string
     }
-
-type ForkCatalogRequest = {
-  screen: EstimateScreen
-  pendingCanvasNodeEditId?: string
-}
 
 type EstimateActionData =
   RepairEstimateCatalogCanvasDto | RepairEstimateCatalogSectionDto
@@ -550,7 +538,6 @@ function createNodeMutation(
 ): RepairEstimateCatalogNodeMutation {
   return {
     id: node.id,
-    mediaOwnerId: node.mediaOwnerId,
     code: node.code,
     name: node.name,
     nodeType: node.nodeType,
@@ -563,12 +550,12 @@ function createNodeMutation(
     routeQueueKind: node.routeQueueKind,
     routing: node.routing,
     references: node.references,
-    mediaReferences: node.mediaReferences,
-    photoRequired: node.photoRequired,
     includeInEstimate: node.includeInEstimate,
     commonItem: node.commonItem,
     furnitureCategory: node.furnitureCategory,
     furnitureEquipment: node.furnitureEquipment,
+    canvasX: node.canvasX,
+    canvasY: node.canvasY,
     comment: node.comment,
   }
 }
@@ -593,11 +580,12 @@ function createBlankNodeMutation({
     durationMinutes: nodeType === "WORK" ? 60 : null,
     showInMainMenu: false,
     routeQueueKind: null,
-    photoRequired: false,
     includeInEstimate: priced,
     commonItem: false,
     furnitureCategory: false,
     furnitureEquipment: null,
+    canvasX: null,
+    canvasY: null,
     comment: null,
   }
 }
@@ -671,54 +659,12 @@ function NodeEditorDialogContent({
   const furnitureMaterial = state.furnitureTree && draft.nodeType === "MATERIAL"
   const commentLength = (draft.comment ?? "").length
   const commentTooLong = commentLength > CATALOG_COMMENT_MAX_LENGTH
-  const mediaOwner = draft.mediaOwnerId
-    ? maintenanceCatalogNodeMediaOwner(
-        draft.mediaOwnerId,
-        state.request.warehouseId
-      )
-    : null
-
-  function updateReadyMediaReferences(references: ReadyMediaReference[]) {
-    setDraft((current) => {
-      const previous = current.mediaReferences ?? []
-      const unchanged =
-        previous.length === references.length &&
-        previous.every(
-          (reference, index) =>
-            reference.mediaId === references[index]?.mediaId &&
-            reference.generation === references[index]?.generation
-        )
-      return unchanged ? current : { ...current, mediaReferences: references }
-    })
-  }
 
   function notifySaved() {
     if (furnitureMaterial) {
       void queryClient.invalidateQueries({ queryKey: ["equipment-items"] })
     }
     onSaved()
-  }
-
-  async function ensureMediaOwner() {
-    if (draft.id) {
-      if (!draft.mediaOwnerId) {
-        throw new Error("Сервис не вернул идентификатор владельца фотографий.")
-      }
-      return maintenanceCatalogNodeMediaOwner(
-        draft.mediaOwnerId,
-        state.request.warehouseId
-      )
-    }
-    if (commentTooLong) {
-      throw new Error("Исправьте ошибки записи перед добавлением фотографии.")
-    }
-    const saved = await state.save({ ...draft, mediaReferences: [] })
-    setDraft(createNodeMutation(saved))
-    notifySaved()
-    return maintenanceCatalogNodeMediaOwner(
-      saved.mediaOwnerId,
-      state.request.warehouseId
-    )
   }
 
   const mutation = useMutation({
@@ -776,8 +722,6 @@ function NodeEditorDialogContent({
                         value === "WORK" || value === "MATERIAL"
                           ? current.unitPrice
                           : null,
-                      photoRequired:
-                        value === "WORK" ? current.photoRequired : false,
                       furnitureEquipment:
                         value === "MATERIAL"
                           ? current.furnitureEquipment
@@ -957,18 +901,6 @@ function NodeEditorDialogContent({
                   }))
                 }
               />
-              {draft.nodeType === "WORK" && (
-                <BooleanField
-                  title="Фото обязательно"
-                  checked={draft.photoRequired}
-                  onCheckedChange={(checked) =>
-                    setDraft((current) => ({
-                      ...current,
-                      photoRequired: checked,
-                    }))
-                  }
-                />
-              )}
               {draft.nodeType === "CATEGORY" && (
                 <BooleanField
                   title="Мебельная категория"
@@ -1008,21 +940,6 @@ function NodeEditorDialogContent({
                   символов. Сократите текст перед сохранением.
                 </FieldError>
               )}
-            </Field>
-
-            <Field>
-              <FieldLabel>Фотографии</FieldLabel>
-              <ServiceOwnerPhotos
-                accessToken={state.request.accessToken}
-                owner={mediaOwner}
-                ensureOwner={ensureMediaOwner}
-                readOnly={mutation.isPending}
-                title={`Фотографии: ${draft.name || "новая запись"}`}
-                onReadyReferencesChange={updateReadyMediaReferences}
-              />
-              <FieldDescription>
-                Превью использует medium, полноэкранный просмотр — large.
-              </FieldDescription>
             </Field>
 
             {error !== null && <ErrorBox>{error}</ErrorBox>}
@@ -1364,8 +1281,6 @@ function CatalogCanvas({
   onCompleteLink,
   onMoveNode,
   onEditNode,
-  onStartEditing,
-  startEditingPending = false,
   onDeleteLink,
 }: {
   nodes: RepairEstimateCatalogNodeDto[]
@@ -1387,8 +1302,6 @@ function CatalogCanvas({
     position: CanvasPosition
   ) => void
   onEditNode: (node: RepairEstimateCatalogNodeDto) => void
-  onStartEditing?: (nodeId?: string) => void
-  startEditingPending?: boolean
   onDeleteLink: (link: RepairEstimateCatalogLinkDto) => void
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null)
@@ -1921,25 +1834,20 @@ function CatalogCanvas({
               </span>
             )}
           </span>
-          {(!readOnly || onStartEditing) && (
+          {!readOnly && (
             <Button
               type="button"
               variant="outline"
               size="sm"
               className="mt-auto w-full"
-              disabled={readOnly && startEditingPending}
               onClick={(event) => {
                 event.stopPropagation()
-                if (readOnly) {
-                  onStartEditing?.(node.id)
-                  return
-                }
                 onEditNode(node)
               }}
               onPointerDown={(event) => event.stopPropagation()}
               onPointerUp={(event) => event.stopPropagation()}
             >
-              {readOnly ? "Редактировать в черновике" : "Редактировать"}
+              Редактировать
             </Button>
           )}
         </div>
@@ -1952,18 +1860,10 @@ function CatalogCanvasCategoryEditor({
   request,
   categoryId,
   readOnly,
-  onStartEditing,
-  startEditingPending,
-  pendingNodeEditId,
-  onPendingNodeEditHandled,
 }: {
   request: RepairEstimateCatalogRequest
   categoryId: string
   readOnly: boolean
-  onStartEditing?: (nodeId?: string) => void
-  startEditingPending?: boolean
-  pendingNodeEditId?: string | null
-  onPendingNodeEditHandled?: () => void
 }) {
   const queryClient = useQueryClient()
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -2127,24 +2027,6 @@ function CatalogCanvasCategoryEditor({
       save: (input) => saveRepairEstimateCatalogCanvasNode(request, input),
     })
   }
-  const pendingNode =
-    !readOnly && pendingNodeEditId
-      ? (data.nodes.find((node) => node.id === pendingNodeEditId) ?? null)
-      : null
-  const pendingNodeDialogState = pendingNode
-    ? {
-        title: "Редактировать блок",
-        description: pendingNode.name,
-        submitLabel: "Сохранить",
-        allowTypeSelect: pendingNode.nodeType !== "CATEGORY",
-        request,
-        furnitureTree: category.furnitureCategory,
-        value: createNodeMutation(pendingNode),
-        save: (input: RepairEstimateCatalogNodeMutation) =>
-          saveRepairEstimateCatalogCanvasNode(request, input),
-      }
-    : null
-
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="flex flex-col gap-3">
@@ -2153,7 +2035,7 @@ function CatalogCanvasCategoryEditor({
         </div>
         {readOnly ? (
           <p className="text-sm text-muted-foreground">
-            Опубликованная версия открыта только для просмотра.
+            У вас нет права редактировать каталог выбранного склада.
           </p>
         ) : (
           <div className="grid gap-2 sm:grid-cols-[repeat(auto-fit,minmax(13rem,13rem))]">
@@ -2253,8 +2135,6 @@ function CatalogCanvasCategoryEditor({
             !readOnly && moveNodeMutation.mutate({ nodeId: node.id, position })
           }
           onEditNode={openNodeEditor}
-          onStartEditing={onStartEditing}
-          startEditingPending={startEditingPending}
           onDeleteLink={(link) => {
             if (!readOnly) deleteLinkMutation.mutate(link.id)
           }}
@@ -2264,14 +2144,10 @@ function CatalogCanvasCategoryEditor({
       {error !== null && <ErrorBox>{error}</ErrorBox>}
 
       <NodeEditorDialog
-        state={nodeDialogState ?? pendingNodeDialogState}
-        onClose={() => {
-          setNodeDialogState(null)
-          onPendingNodeEditHandled?.()
-        }}
+        state={nodeDialogState}
+        onClose={() => setNodeDialogState(null)}
         onSaved={() => {
           setError(null)
-          onPendingNodeEditHandled?.()
           invalidate()
         }}
       />
@@ -2628,19 +2504,11 @@ function EstimateCategoryEditor({
   action,
   categoryId,
   readOnly,
-  onStartEditing,
-  startEditingPending,
-  pendingNodeEditId,
-  onPendingNodeEditHandled,
 }: {
   request: RepairEstimateCatalogRequest
   action: EstimateCatalogSettingsActionDto
   categoryId: string
   readOnly: boolean
-  onStartEditing?: (nodeId?: string) => void
-  startEditingPending?: boolean
-  pendingNodeEditId?: string | null
-  onPendingNodeEditHandled?: () => void
 }) {
   if (action.id === "repair-estimate-catalog-canvas") {
     return (
@@ -2648,10 +2516,6 @@ function EstimateCategoryEditor({
         request={request}
         categoryId={categoryId}
         readOnly={readOnly}
-        onStartEditing={onStartEditing}
-        startEditingPending={startEditingPending}
-        pendingNodeEditId={pendingNodeEditId}
-        onPendingNodeEditHandled={onPendingNodeEditHandled}
       />
     )
   }
@@ -2694,20 +2558,12 @@ function EstimateDrilldownView({
   onBack,
   onOpenCategory,
   readOnly,
-  onStartEditing,
-  startEditingPending,
-  pendingNodeEditId,
-  onPendingNodeEditHandled,
 }: {
   request: RepairEstimateCatalogRequest
   screen: Exclude<EstimateScreen, { level: "root" }>
   onBack: () => void
   onOpenCategory: (categoryId: string) => void
   readOnly: boolean
-  onStartEditing?: (nodeId?: string) => void
-  startEditingPending?: boolean
-  pendingNodeEditId?: string | null
-  onPendingNodeEditHandled?: () => void
 }) {
   const categoryNameQuery = useQuery({
     queryKey: [
@@ -2744,18 +2600,6 @@ function EstimateDrilldownView({
           </Button>
           <BreadcrumbTitle action={screen.action} categoryName={categoryName} />
         </div>
-        {onStartEditing && (
-          <Button
-            type="button"
-            disabled={startEditingPending}
-            onClick={() => onStartEditing()}
-          >
-            <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
-            {startEditingPending
-              ? "Создаём черновик…"
-              : "Редактировать в черновике"}
-          </Button>
-        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-4">
@@ -2772,10 +2616,6 @@ function EstimateDrilldownView({
             action={screen.action}
             categoryId={screen.categoryId}
             readOnly={readOnly}
-            onStartEditing={onStartEditing}
-            startEditingPending={startEditingPending}
-            pendingNodeEditId={pendingNodeEditId}
-            onPendingNodeEditHandled={onPendingNodeEditHandled}
           />
         )}
       </div>
@@ -2790,12 +2630,6 @@ export function EstimatesRepairsSettingsPage() {
   const [estimateScreen, setEstimateScreen] = useState<EstimateScreen>({
     level: "root",
   })
-  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(
-    null
-  )
-  const [pendingCanvasNodeEditId, setPendingCanvasNodeEditId] = useState<
-    string | null
-  >(null)
   const [commandError, setCommandError] = useState<string | null>(null)
   const commandIdempotencyKeys = useRef(new Map<string, string>())
 
@@ -2815,36 +2649,27 @@ export function EstimatesRepairsSettingsPage() {
     hasWarehouseAccess(currentUser, selectedWarehouseId, "MANAGE")
   )
 
-  const versionsQuery = useQuery({
+  const catalogQuery = useQuery({
     queryKey: [
       ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
       selectedWarehouseId,
-      "versions",
+      "current",
     ],
     queryFn: () =>
-      listRepairEstimateCatalogVersions(accessToken!, selectedWarehouseId!),
+      getCurrentRepairEstimateCatalog(accessToken!, selectedWarehouseId!),
     enabled: Boolean(accessToken && selectedWarehouseId),
   })
 
-  const selectedVersion = useMemo(() => {
-    const versions = versionsQuery.data ?? []
-    return (
-      versions.find((version) => version.id === selectedVersionId) ??
-      versions.find((version) => version.lifecycle === "DRAFT") ??
-      versions.find((version) => version.lifecycle === "ACTIVE") ??
-      versions[0] ??
-      null
-    )
-  }, [selectedVersionId, versionsQuery.data])
+  const currentCatalog = catalogQuery.data ?? null
 
   const catalogRequest = useMemo<RepairEstimateCatalogRequest | null>(() => {
-    if (!accessToken || !selectedWarehouseId || !selectedVersion) return null
+    if (!accessToken || !selectedWarehouseId || !currentCatalog) return null
     return {
       accessToken,
       warehouseId: selectedWarehouseId,
-      catalogVersionId: selectedVersion.id,
+      catalogVersionId: currentCatalog.id,
     }
-  }, [accessToken, selectedVersion, selectedWarehouseId])
+  }, [accessToken, currentCatalog, selectedWarehouseId])
 
   const refreshCatalog = () => {
     void queryClient.invalidateQueries({
@@ -2870,12 +2695,11 @@ export function EstimatesRepairsSettingsPage() {
         accessToken,
         selectedWarehouseId,
         commandIdempotencyKey(signature)
-      ).then((version) => ({ version, signature }))
+      ).then(() => ({ signature }))
     },
-    onSuccess: ({ version, signature }) => {
+    onSuccess: ({ signature }) => {
       commandIdempotencyKeys.current.delete(signature)
       setCommandError(null)
-      setSelectedVersionId(version.id)
       setEstimateScreen({ level: "root" })
       refreshCatalog()
     },
@@ -2884,99 +2708,6 @@ export function EstimatesRepairsSettingsPage() {
         error instanceof Error
           ? error.message
           : "Не удалось создать базовый каталог."
-      )
-    },
-  })
-
-  const forkMutation = useMutation({
-    mutationFn: ({ screen, pendingCanvasNodeEditId }: ForkCatalogRequest) => {
-      if (!accessToken) {
-        throw new Error("Не получен токен доступа к maintenance-service.")
-      }
-      if (!selectedWarehouseId) {
-        throw new Error("Выберите склад для создания черновика каталога.")
-      }
-      if (!canManage) {
-        throw new Error(
-          "Недостаточно прав для создания черновика выбранного склада."
-        )
-      }
-      if (!catalogRequest || !selectedVersion) {
-        throw new Error("Версия каталога не выбрана.")
-      }
-      if (
-        selectedVersion.lifecycle !== "ACTIVE" &&
-        selectedVersion.lifecycle !== "SUPERSEDED"
-      ) {
-        throw new Error(
-          "Черновик можно создать только из активной или заменённой версии."
-        )
-      }
-      const signature = `fork:${selectedVersion.id}:${selectedVersion.version}`
-      return forkRepairEstimateCatalog(
-        catalogRequest,
-        selectedVersion.version,
-        commandIdempotencyKey(signature)
-      ).then((version) => ({
-        version,
-        signature,
-        screen,
-        pendingCanvasNodeEditId,
-      }))
-    },
-    onSuccess: ({ version, signature, screen, pendingCanvasNodeEditId }) => {
-      commandIdempotencyKeys.current.delete(signature)
-      setCommandError(null)
-      setSelectedVersionId(version.id)
-      setPendingCanvasNodeEditId(pendingCanvasNodeEditId ?? null)
-      setEstimateScreen(screen)
-      refreshCatalog()
-    },
-    onError: (error) => {
-      setPendingCanvasNodeEditId(null)
-      setCommandError(
-        error instanceof Error
-          ? error.message
-          : "Не удалось создать черновик каталога."
-      )
-    },
-  })
-
-  const activationMutation = useMutation({
-    mutationFn: () => {
-      if (!accessToken) {
-        throw new Error("Не получен токен доступа к maintenance-service.")
-      }
-      if (!selectedWarehouseId) {
-        throw new Error("Выберите склад для активации каталога.")
-      }
-      if (!canManage) {
-        throw new Error(
-          "Недостаточно прав для активации каталога выбранного склада."
-        )
-      }
-      if (!catalogRequest || !selectedVersion) {
-        throw new Error("Версия каталога не выбрана.")
-      }
-      const signature = `activate:${selectedVersion.id}:${selectedVersion.version}`
-      return activateRepairEstimateCatalog(
-        catalogRequest,
-        selectedVersion.version,
-        commandIdempotencyKey(signature)
-      ).then((version) => ({ version, signature }))
-    },
-    onSuccess: ({ version, signature }) => {
-      commandIdempotencyKeys.current.delete(signature)
-      setCommandError(null)
-      setSelectedVersionId(version.id)
-      setEstimateScreen({ level: "root" })
-      refreshCatalog()
-    },
-    onError: (error) => {
-      setCommandError(
-        error instanceof Error
-          ? error.message
-          : "Не удалось активировать каталог."
       )
     },
   })
@@ -3040,37 +2771,15 @@ export function EstimatesRepairsSettingsPage() {
     void queryClient.invalidateQueries({ queryKey: ["estimate-settings"] })
   }
 
-  const canForkSelectedVersion = Boolean(
-    canManage &&
-    (selectedVersion?.lifecycle === "ACTIVE" ||
-      selectedVersion?.lifecycle === "SUPERSEDED")
-  )
-
   if (estimateScreen.level !== "root") {
-    if (!catalogRequest || !selectedVersion) {
-      return (
-        <ErrorBox>
-          Выберите версию каталога и склад, доступный для просмотра.
-        </ErrorBox>
-      )
+    if (!catalogRequest || !currentCatalog) {
+      return <ErrorBox>Выберите склад с доступным каталогом смет.</ErrorBox>
     }
     return (
       <EstimateDrilldownView
         request={catalogRequest}
         screen={estimateScreen}
-        readOnly={!canEdit || selectedVersion.lifecycle !== "DRAFT"}
-        onStartEditing={
-          canForkSelectedVersion
-            ? (nodeId) =>
-                forkMutation.mutate({
-                  screen: estimateScreen,
-                  pendingCanvasNodeEditId: nodeId,
-                })
-            : undefined
-        }
-        startEditingPending={forkMutation.isPending}
-        pendingNodeEditId={pendingCanvasNodeEditId}
-        onPendingNodeEditHandled={() => setPendingCanvasNodeEditId(null)}
+        readOnly={!canEdit}
         onBack={() => {
           if (estimateScreen.level === "category") {
             setEstimateScreen({
@@ -3095,115 +2804,6 @@ export function EstimatesRepairsSettingsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
-      <section className="rounded-lg border bg-card p-4">
-        <div className="flex flex-wrap items-end gap-3">
-          <Field className="min-w-72 flex-1">
-            <FieldLabel htmlFor="maintenance-catalog-version">
-              Версия каталога
-            </FieldLabel>
-            <NativeSelect
-              id="maintenance-catalog-version"
-              value={selectedVersion?.id ?? ""}
-              disabled={!versionsQuery.data?.length}
-              onChange={(value) => {
-                setSelectedVersionId(value)
-                setEstimateScreen({ level: "root" })
-                setPendingCanvasNodeEditId(null)
-                setCommandError(null)
-              }}
-            >
-              {!versionsQuery.data?.length && (
-                <option value="">
-                  {versionsQuery.isLoading
-                    ? "Загрузка версий…"
-                    : versionsQuery.error
-                      ? "Версии недоступны"
-                      : "Версий пока нет"}
-                </option>
-              )}
-              {(versionsQuery.data ?? []).map((version) => (
-                <option key={version.id} value={version.id}>
-                  {version.lifecycle} · v{version.version} · {version.nodeCount}{" "}
-                  узлов
-                </option>
-              ))}
-            </NativeSelect>
-          </Field>
-
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => refreshCatalog()}
-            disabled={versionsQuery.isFetching}
-          >
-            <HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" />
-            Обновить
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => bootstrapMutation.mutate()}
-            disabled={
-              !accessToken ||
-              !selectedWarehouseId ||
-              !canManage ||
-              bootstrapMutation.isPending ||
-              forkMutation.isPending ||
-              activationMutation.isPending
-            }
-          >
-            Создать базовый каталог
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => forkMutation.mutate({ screen: { level: "root" } })}
-            disabled={
-              !accessToken ||
-              !selectedWarehouseId ||
-              !canManage ||
-              (selectedVersion?.lifecycle !== "ACTIVE" &&
-                selectedVersion?.lifecycle !== "SUPERSEDED") ||
-              bootstrapMutation.isPending ||
-              forkMutation.isPending ||
-              activationMutation.isPending
-            }
-          >
-            Создать черновик
-          </Button>
-          <Button
-            type="button"
-            onClick={() => activationMutation.mutate()}
-            disabled={
-              !accessToken ||
-              !selectedWarehouseId ||
-              !canManage ||
-              selectedVersion?.lifecycle !== "DRAFT" ||
-              bootstrapMutation.isPending ||
-              forkMutation.isPending ||
-              activationMutation.isPending
-            }
-          >
-            Активировать
-          </Button>
-        </div>
-
-        {(selectedVersion?.lifecycle === "ACTIVE" ||
-          selectedVersion?.lifecycle === "SUPERSEDED") && (
-          <p className="mt-3 text-sm text-muted-foreground">
-            Опубликованная версия доступна только для чтения. Для изменений
-            создайте из неё новый черновик.
-          </p>
-        )}
-        {!accessToken && (
-          <ErrorBox>Не получен токен доступа к maintenance-service.</ErrorBox>
-        )}
-        {accessToken && !selectedWarehouseId && (
-          <ErrorBox>Выберите склад для каталога ремонта.</ErrorBox>
-        )}
-        {commandError && <ErrorBox>{commandError}</ErrorBox>}
-      </section>
-
       <SettingsSection title="Настройка смет" count={4}>
         {!accessToken || !selectedWarehouseId ? (
           <CatalogNavigationState
@@ -3215,46 +2815,42 @@ export function EstimatesRepairsSettingsPage() {
                 : "Выберите склад, чтобы загрузить его каталог смет."
             }
           />
-        ) : versionsQuery.isLoading ? (
-          <SectionSkeleton label="Загружаем доступную версию каталога смет…" />
-        ) : versionsQuery.error ? (
+        ) : catalogQuery.isLoading ? (
+          <SectionSkeleton label="Загружаем каталог смет…" />
+        ) : catalogQuery.error ? (
           <CatalogNavigationState
             kind="error"
             title="Не удалось загрузить каталог смет"
             description={
-              versionsQuery.error instanceof Error
-                ? `Причина: ${versionsQuery.error.message}`
-                : "Сервис версий каталога временно недоступен."
+              catalogQuery.error instanceof Error
+                ? `Причина: ${catalogQuery.error.message}`
+                : "Сервис каталога временно недоступен."
             }
           >
             <Button
               type="button"
               variant="outline"
-              disabled={versionsQuery.isFetching}
-              onClick={() => void versionsQuery.refetch()}
+              disabled={catalogQuery.isFetching}
+              onClick={() => void catalogQuery.refetch()}
             >
               <HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" />
               Повторить загрузку
             </Button>
           </CatalogNavigationState>
-        ) : !catalogRequest || !selectedVersion ? (
+        ) : !catalogRequest || !currentCatalog ? (
           <CatalogNavigationState
             kind="empty"
             title="Каталог смет ещё не создан"
             description={
               canManage
                 ? "Создайте базовый каталог для выбранного склада — после этого откроются конструктор, работы, материалы и мебель."
-                : "Для выбранного склада нет доступной версии каталога. Обратитесь к пользователю с правом управления или проверьте снова."
+                : "Для выбранного склада нет каталога. Обратитесь к пользователю с правом управления или проверьте снова."
             }
           >
             {canManage && (
               <Button
                 type="button"
-                disabled={
-                  bootstrapMutation.isPending ||
-                  forkMutation.isPending ||
-                  activationMutation.isPending
-                }
+                disabled={bootstrapMutation.isPending}
                 onClick={() => bootstrapMutation.mutate()}
               >
                 <HugeiconsIcon
@@ -3267,12 +2863,13 @@ export function EstimatesRepairsSettingsPage() {
             <Button
               type="button"
               variant="outline"
-              disabled={versionsQuery.isFetching}
+              disabled={catalogQuery.isFetching}
               onClick={() => refreshCatalog()}
             >
               <HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" />
               Проверить снова
             </Button>
+            {commandError && <ErrorBox>{commandError}</ErrorBox>}
           </CatalogNavigationState>
         ) : estimateLoading ? (
           <SectionSkeleton label="Подготавливаем разделы каталога смет…" />

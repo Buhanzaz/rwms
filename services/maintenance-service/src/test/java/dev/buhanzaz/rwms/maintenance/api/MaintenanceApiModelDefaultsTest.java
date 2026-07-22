@@ -19,13 +19,11 @@ class MaintenanceApiModelDefaultsTest {
     assertThat(value.includeInEstimate()).isTrue();
     assertThat(value.commonItem()).isFalse();
     assertThat(value.showInMainMenu()).isFalse();
-    assertThat(value.photoRequired()).isFalse();
   }
 
   @Test
   void explicitNullCatalogFlagsAreRejectedInsteadOfReceivingDefaults() {
-    for (String field : List.of(
-        "includeInEstimate", "commonItem", "showInMainMenu", "photoRequired")) {
+    for (String field : List.of("includeInEstimate", "commonItem", "showInMainMenu")) {
       assertThatThrownBy(() -> mapper.readValue(
           requiredNodeJson(",\"" + field + "\":null"), CatalogNodeInput.class))
           .as(field)
@@ -49,7 +47,7 @@ class MaintenanceApiModelDefaultsTest {
         {"id":"10000000-0000-0000-0000-000000000001",
          "code":"NODE","nodeType":"WORK","name":"Node","active":true,
          "unitPrice":null,"durationMinutes":0,"routing":null,
-         "references":[],"mediaReferences":[]%s}
+         "references":[]%s}
         """.formatted(extra);
   }
 }

@@ -45,7 +45,6 @@ export const httpRepairEstimateCatalogClient: RepairEstimateCatalogClient = {
       nodes: nodes.map((node) => ({
         id: node.id,
         catalogVersionId: node.catalogVersionId,
-        mediaOwnerId: node.mediaOwnerId,
         code: node.code,
         name: node.name,
         nodeType: node.nodeType,
@@ -66,7 +65,6 @@ export const httpRepairEstimateCatalogClient: RepairEstimateCatalogClient = {
             : null,
         workQueueId: node.routing?.queueId ?? null,
         workQueueCode: node.routing?.queueCode ?? null,
-        photoRequired: node.photoRequired,
         includeInEstimate: node.includeInEstimate,
         commonItem: node.commonItem,
         furnitureCategory: Boolean(node.furnitureCategory),

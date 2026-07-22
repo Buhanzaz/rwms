@@ -26,8 +26,7 @@ public class MaintenanceReconciliation {
   private static final Set<String> MEDIA_OWNER_TYPES = Set.of(
       "MAINTENANCE_ESTIMATE",
       "MAINTENANCE_REPAIR",
-      "MAINTENANCE_ACCEPTANCE",
-      "MAINTENANCE_CATALOG_NODE");
+      "MAINTENANCE_ACCEPTANCE");
   private static final Set<String> CLAIMABLE_STATES =
       Set.of("PENDING", "RETRY_PENDING", "RECONCILIATION_REQUIRED");
 

@@ -49,7 +49,7 @@ paths:
       description: Requires USER, rwms.read and warehouse VIEW access.
       responses:
         '200':
-          description: Frozen nodes in the selected catalog version.
+          description: Nodes in the selected catalog version.
           headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
           content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CatalogNode' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -57,15 +57,17 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
     put:
       tags: [Catalog]
-      operationId: replaceDraftCatalogNodes
+      operationId: replaceCatalogNodes
       description: >-
-        Requires USER, rwms.write and warehouse EDIT access. Only a DRAFT version may change.
+        Requires USER, rwms.write and warehouse EDIT access. The current ACTIVE catalog and
+        historical DRAFT versions may change with optimistic locking; SUPERSEDED versions are
+        immutable.
         A MATERIAL below a furnitureCategory may omit furnitureEquipment: maintenance-service then
         idempotently ensures the same code and name in asset-service additional equipment and stores
         the returned immutable identity. Dependency failure or conflict commits no catalog change.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceCatalogNodesRequest' } } } }
       responses:
-        '200': { description: Changed draft version., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersion' } } } }
+        '200': { description: Changed catalog., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersion' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -83,7 +85,7 @@ paths:
       description: Requires USER, rwms.read and warehouse VIEW access.
       responses:
         '200':
-          description: Frozen links in the selected catalog version.
+          description: Links in the selected catalog version.
           headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }
           content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/CatalogLink' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -91,11 +93,14 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
     put:
       tags: [Catalog]
-      operationId: replaceDraftCatalogLinks
-      description: Requires USER, rwms.write and warehouse EDIT access. Only a DRAFT version may change.
+      operationId: replaceCatalogLinks
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT access. The current ACTIVE catalog and
+        historical DRAFT versions may change with optimistic locking; SUPERSEDED versions are
+        immutable.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceCatalogLinksRequest' } } } }
       responses:
-        '200': { description: Changed draft version., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersion' } } } }
+        '200': { description: Changed catalog., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersion' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -109,7 +114,8 @@ paths:
       description: >-
         Requires USER, rwms.write and warehouse MANAGE access. Validates the packaged reviewed
         manifest, artifact hashes, exact 232-node/254-link/91-material distribution and reviewed
-        routing bound to the manifest warehouse before creating one complete DRAFT version.
+        routing bound to the manifest warehouse before creating and activating the one current
+        catalog. Bootstrap never leaves a browser-visible DRAFT.
         A matching existing version is returned with Idempotency-Replayed; a mismatched source
         binding conflicts and an unreviewed warehouse fails closed. No catalog rows are accepted
         from the browser.
@@ -664,6 +670,7 @@ components:
     LeaseReconciliationState: { enum: [NOT_ACQUIRED, ACTIVE, RELEASED, RECONCILIATION_REQUIRED] }
     CatalogNodeType: { enum: [CATEGORY, SUBCATEGORY, WORK, MATERIAL, LOCATION, OPTION] }
     CatalogLinkType: { enum: [DEPENDENCY, FOLLOW_UP] }
+    CatalogLinkAnchor: { enum: [TOP, BOTTOM] }
     ExpectedVersionRequest:
       type: object
       additionalProperties: false
@@ -692,7 +699,6 @@ components:
         - MAINTENANCE_ESTIMATE
         - MAINTENANCE_REPAIR
         - MAINTENANCE_ACCEPTANCE
-        - MAINTENANCE_CATALOG_NODE
         - INVENTORY_FINDING
     Money:
       type: string
@@ -799,7 +805,7 @@ components:
     CatalogNodeInput:
       type: object
       additionalProperties: false
-      required: [id, code, nodeType, name, active, durationMinutes, unitPrice, routing, references, mediaReferences]
+      required: [id, code, nodeType, name, active, durationMinutes, unitPrice, routing, references]
       properties:
         id: { type: string, format: uuid }
         code: { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{0,63}$' }
@@ -822,7 +828,10 @@ components:
         includeInEstimate: { type: boolean, default: true }
         commonItem: { type: boolean, default: false }
         showInMainMenu: { type: boolean, default: false }
-        photoRequired: { type: boolean, default: false }
+        canvasX:
+          oneOf: [ { type: integer }, { type: 'null' } ]
+        canvasY:
+          oneOf: [ { type: integer }, { type: 'null' } ]
         routing:
           oneOf: [ { $ref: '#/components/schemas/RoutingSnapshot' }, { type: 'null' } ]
         references:
@@ -832,21 +841,13 @@ components:
         comment:
           description: Service-local catalog text; never published to Kafka.
           oneOf: [ { type: string, maxLength: 2000 }, { type: 'null' } ]
-        mediaReferences:
-          type: array
-          maxItems: 100
-          items: { $ref: '#/components/schemas/MediaReference' }
     CatalogNode:
       type: object
       additionalProperties: false
-      required: [id, catalogVersionId, mediaOwnerId, code, nodeType, name, active, furnitureCategory, furnitureEquipment, durationMinutes, unitPrice, includeInEstimate, commonItem, showInMainMenu, photoRequired, routing, references, mediaReferences]
+      required: [id, catalogVersionId, code, nodeType, name, active, furnitureCategory, furnitureEquipment, durationMinutes, unitPrice, includeInEstimate, commonItem, showInMainMenu, routing, references]
       properties:
         id: { type: string, format: uuid }
         catalogVersionId: { type: string, format: uuid }
-        mediaOwnerId:
-          type: string
-          format: uuid
-          description: Server-issued warehouse-scoped owner identifier for catalog node media.
         code: { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{0,63}$' }
         nodeType: { $ref: '#/components/schemas/CatalogNodeType' }
         name: { type: string, minLength: 1, maxLength: 255 }
@@ -864,7 +865,10 @@ components:
         includeInEstimate: { type: boolean }
         commonItem: { type: boolean }
         showInMainMenu: { type: boolean }
-        photoRequired: { type: boolean }
+        canvasX:
+          oneOf: [ { type: integer }, { type: 'null' } ]
+        canvasY:
+          oneOf: [ { type: integer }, { type: 'null' } ]
         routing:
           oneOf: [ { $ref: '#/components/schemas/RoutingSnapshot' }, { type: 'null' } ]
         references:
@@ -874,10 +878,6 @@ components:
         comment:
           description: Service-local catalog text; never published to Kafka.
           oneOf: [ { type: string, maxLength: 2000 }, { type: 'null' } ]
-        mediaReferences:
-          type: array
-          maxItems: 100
-          items: { $ref: '#/components/schemas/MediaReference' }
     CatalogLink:
       type: object
       additionalProperties: false
@@ -888,6 +888,10 @@ components:
         fromNodeId: { type: string, format: uuid }
         toNodeId: { type: string, format: uuid }
         linkType: { $ref: '#/components/schemas/CatalogLinkType' }
+        sourceAnchor:
+          oneOf: [ { $ref: '#/components/schemas/CatalogLinkAnchor' }, { type: 'null' } ]
+        targetAnchor:
+          oneOf: [ { $ref: '#/components/schemas/CatalogLinkAnchor' }, { type: 'null' } ]
         sortOrder: { type: integer, minimum: 0 }
     CatalogLinkInput:
       type: object
@@ -898,6 +902,10 @@ components:
         fromNodeId: { type: string, format: uuid }
         toNodeId: { type: string, format: uuid }
         linkType: { $ref: '#/components/schemas/CatalogLinkType' }
+        sourceAnchor:
+          oneOf: [ { $ref: '#/components/schemas/CatalogLinkAnchor' }, { type: 'null' } ]
+        targetAnchor:
+          oneOf: [ { $ref: '#/components/schemas/CatalogLinkAnchor' }, { type: 'null' } ]
         sortOrder: { type: integer, minimum: 0 }
     ReplaceCatalogNodesRequest:
       type: object
@@ -1195,7 +1203,7 @@ components:
     InventoryPlanLineSnapshot:
       type: object
       additionalProperties: false
-      required: [aggregationKind, catalogVersionId, catalogNodeId, catalogNodeCode, type, description, normalizedDescription, unit, quantity, unitPriceMinor, normativeMinutes, routing, groupComment, photoRequired, mediaReferences]
+      required: [aggregationKind, catalogVersionId, catalogNodeId, catalogNodeCode, type, description, normalizedDescription, unit, quantity, unitPriceMinor, normativeMinutes, routing, groupComment, mediaReferences]
       properties:
         aggregationKind: { $ref: '#/components/schemas/InventoryPlanLineKind' }
         catalogVersionId:
@@ -1220,7 +1228,6 @@ components:
           oneOf: [ { $ref: '#/components/schemas/RoutingSnapshot' }, { type: 'null' } ]
         groupComment:
           oneOf: [ { type: string, minLength: 1, maxLength: 2000 }, { type: 'null' } ]
-        photoRequired: { type: boolean }
         mediaReferences:
           type: array
           maxItems: 100

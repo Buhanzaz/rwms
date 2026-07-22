@@ -21,7 +21,6 @@ const warehouseId = "00000000-0000-4000-8000-000000000001"
 const versionId = "00000000-0000-4000-8000-000000000002"
 const nodeId = "00000000-0000-4000-8000-000000000003"
 const linkId = "00000000-0000-4000-8000-000000000004"
-const mediaOwnerId = "00000000-0000-4000-8000-000000000005"
 
 describe("operational maintenance catalog adapter", () => {
   beforeEach(() => {
@@ -47,7 +46,6 @@ describe("operational maintenance catalog adapter", () => {
       {
         id: nodeId,
         catalogVersionId: versionId,
-        mediaOwnerId,
         code: "WORK",
         name: "Работа",
         nodeType: "WORK",
@@ -58,7 +56,6 @@ describe("operational maintenance catalog adapter", () => {
         durationMinutes: 30,
         showInMainMenu: true,
         routing: null,
-        photoRequired: false,
         includeInEstimate: true,
         commonItem: false,
         furnitureCategory: false,
@@ -90,7 +87,6 @@ describe("operational maintenance catalog adapter", () => {
     expect(snapshot.nodes[0]).toMatchObject({
       id: nodeId,
       catalogVersionId: versionId,
-      mediaOwnerId,
       nodeType: "WORK",
       furnitureCategory: false,
       furnitureEquipment: null,
@@ -99,6 +95,7 @@ describe("operational maintenance catalog adapter", () => {
     expect(snapshot.nodes[0]).not.toHaveProperty("defaultQuantity")
     expect(snapshot.nodes[0]).not.toHaveProperty("sortOrder")
     expect(snapshot.nodes[0]).not.toHaveProperty("mainMenuTitle")
+    expect(snapshot.nodes[0]).not.toHaveProperty("mediaOwnerId")
     expect(snapshot.links[0]).toEqual({
       id: linkId,
       catalogVersionId: versionId,
