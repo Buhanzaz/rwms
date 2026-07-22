@@ -60,6 +60,18 @@ public class LogisticsDocument {
   @Column(name = "driver_snapshot", length = 512)
   private String driverSnapshot;
 
+  /**
+   * Opaque reference to the selected existing order client.  Logistics keeps
+   * the immutable display snapshot above; the client aggregate remains owned
+   * by the order module.
+   */
+  @Column(name = "client_id")
+  private UUID clientId;
+
+  /** Optional same-service worker task that moves transfer furniture. */
+  @Column(name = "equipment_movement_task_id")
+  private UUID equipmentMovementTaskId;
+
   @Column(name = "requested_by_subject_id", nullable = false)
   private UUID requestedBySubjectId;
 
@@ -74,14 +86,37 @@ public class LogisticsDocument {
 
   public static LogisticsDocument createReturn(
       UUID warehouseId, UUID subjectId, UUID correlationId) {
-    return initialize(
-        LogisticsDocumentType.RETURN,
-        warehouseId,
-        null,
-        null,
-        null,
-        subjectId,
-        correlationId);
+    return createReturn(warehouseId, null, null, subjectId, correlationId);
+  }
+
+  public static LogisticsDocument createReturn(
+      UUID warehouseId,
+      UUID clientId,
+      String partySnapshot,
+      UUID subjectId,
+      UUID correlationId) {
+    return createReturn(
+        warehouseId, clientId, partySnapshot, null, subjectId, correlationId);
+  }
+
+  public static LogisticsDocument createReturn(
+      UUID warehouseId,
+      UUID clientId,
+      String partySnapshot,
+      String driverSnapshot,
+      UUID subjectId,
+      UUID correlationId) {
+    LogisticsDocument document =
+        initialize(
+            LogisticsDocumentType.RETURN,
+            warehouseId,
+            null,
+            optionalSnapshot(partySnapshot, "partySnapshot"),
+            optionalSnapshot(driverSnapshot, "driverSnapshot"),
+            subjectId,
+            correlationId);
+    document.clientId = clientId;
+    return document;
   }
 
   public static LogisticsDocument createShipment(
@@ -90,18 +125,41 @@ public class LogisticsDocument {
       String driverSnapshot,
       UUID subjectId,
       UUID correlationId) {
-    return initialize(
-        LogisticsDocumentType.SHIPMENT,
-        warehouseId,
-        null,
-        requiredSnapshot(partySnapshot, "partySnapshot"),
-        requiredSnapshot(driverSnapshot, "driverSnapshot"),
-        subjectId,
-        correlationId);
+    return createShipment(
+        warehouseId, null, partySnapshot, driverSnapshot, subjectId, correlationId);
+  }
+
+  public static LogisticsDocument createShipment(
+      UUID warehouseId,
+      UUID clientId,
+      String partySnapshot,
+      String driverSnapshot,
+      UUID subjectId,
+      UUID correlationId) {
+    LogisticsDocument document =
+        initialize(
+            LogisticsDocumentType.SHIPMENT,
+            warehouseId,
+            null,
+            requiredSnapshot(partySnapshot, "partySnapshot"),
+            requiredSnapshot(driverSnapshot, "driverSnapshot"),
+            subjectId,
+            correlationId);
+    document.clientId = clientId;
+    return document;
   }
 
   public static LogisticsDocument createTransfer(
       UUID warehouseId, UUID destinationWarehouseId, UUID subjectId, UUID correlationId) {
+    return createTransfer(warehouseId, destinationWarehouseId, null, subjectId, correlationId);
+  }
+
+  public static LogisticsDocument createTransfer(
+      UUID warehouseId,
+      UUID destinationWarehouseId,
+      String driverSnapshot,
+      UUID subjectId,
+      UUID correlationId) {
     requireId(destinationWarehouseId, "destinationWarehouseId");
     if (destinationWarehouseId.equals(warehouseId)) {
       throw new IllegalArgumentException("Transfer destination must differ from origin warehouse");
@@ -111,9 +169,19 @@ public class LogisticsDocument {
         warehouseId,
         destinationWarehouseId,
         null,
-        null,
+        optionalSnapshot(driverSnapshot, "driverSnapshot"),
         subjectId,
         correlationId);
+  }
+
+  public void linkEquipmentMovementTask(UUID taskId) {
+    if (documentType != LogisticsDocumentType.TRANSFER || taskId == null) {
+      throw new IllegalArgumentException("Transfer equipment movement task is required");
+    }
+    if (equipmentMovementTaskId != null && !equipmentMovementTaskId.equals(taskId)) {
+      throw new IllegalStateException("Transfer already has a different equipment movement task");
+    }
+    equipmentMovementTaskId = taskId;
   }
 
   public void beginReturnRegistration() {
@@ -283,9 +351,20 @@ public class LogisticsDocument {
     transition(LogisticsDocumentType.TRANSFER, LogisticsDocumentState.ARRIVING, LogisticsDocumentState.COMPLETED);
   }
 
+  public void beginTransferCancellation() {
+    transition(LogisticsDocumentType.TRANSFER, LogisticsDocumentState.DRAFT, LogisticsDocumentState.CANCELLING);
+  }
+
+  public void cancelTransfer() {
+    transition(LogisticsDocumentType.TRANSFER, LogisticsDocumentState.CANCELLING, LogisticsDocumentState.CANCELLED);
+  }
+
   public void transferConflict() {
     if (documentType != LogisticsDocumentType.TRANSFER
-        || (state != LogisticsDocumentState.DEPARTING && state != LogisticsDocumentState.ARRIVING)) {
+        || (state != LogisticsDocumentState.DRAFT
+            && state != LogisticsDocumentState.DEPARTING
+            && state != LogisticsDocumentState.ARRIVING
+            && state != LogisticsDocumentState.CANCELLING)) {
       throw new IllegalStateException("Transfer cannot enter conflict in its current lifecycle state");
     }
     state = LogisticsDocumentState.CONFLICT;
@@ -293,7 +372,10 @@ public class LogisticsDocument {
 
   public void transferRequiresReconciliation() {
     if (documentType != LogisticsDocumentType.TRANSFER
-        || (state != LogisticsDocumentState.DEPARTING && state != LogisticsDocumentState.ARRIVING)) {
+        || (state != LogisticsDocumentState.DRAFT
+            && state != LogisticsDocumentState.DEPARTING
+            && state != LogisticsDocumentState.ARRIVING
+            && state != LogisticsDocumentState.CANCELLING)) {
       throw new IllegalStateException("Transfer cannot require reconciliation in its current lifecycle state");
     }
     state = LogisticsDocumentState.RECONCILIATION_REQUIRED;
@@ -387,6 +469,16 @@ public class LogisticsDocument {
     String normalized = value.trim();
     if (normalized.isEmpty()) throw new IllegalArgumentException(field + " is required");
     if (normalized.length() > 512) throw new IllegalArgumentException(field + " is too long");
+    return normalized;
+  }
+
+  private static String optionalSnapshot(String value, String field) {
+    if (value == null) return null;
+    String normalized = value.trim();
+    if (normalized.isEmpty()) return null;
+    if (normalized.length() > 512) {
+      throw new IllegalArgumentException(field + " is too long");
+    }
     return normalized;
   }
 

@@ -88,13 +88,26 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       long expectedAssetVersion,
       UUID documentId,
       UUID lineId) {
+    return acquireReturnLease(
+        idempotencyKey, assetId, expectedAssetVersion, documentId, lineId, null);
+  }
+
+  @Override
+  public OperationLease acquireReturnLease(
+      UUID idempotencyKey,
+      UUID assetId,
+      long expectedAssetVersion,
+      UUID documentId,
+      UUID lineId,
+      UUID rentalOrderId) {
     return acquireOperationLease(
         idempotencyKey,
         LogisticsOwnerType.LOGISTICS_RETURN,
         assetId,
         expectedAssetVersion,
         documentId,
-        lineId);
+        lineId,
+        rentalOrderId);
   }
 
   @Override
@@ -105,13 +118,37 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       long expectedAssetVersion,
       UUID documentId,
       UUID lineId) {
+    return acquireOperationLease(
+        idempotencyKey,
+        ownerType,
+        assetId,
+        expectedAssetVersion,
+        documentId,
+        lineId,
+        null);
+  }
+
+  @Override
+  public OperationLease acquireOperationLease(
+      UUID idempotencyKey,
+      LogisticsOwnerType ownerType,
+      UUID assetId,
+      long expectedAssetVersion,
+      UUID documentId,
+      UUID lineId,
+      UUID rentalOrderId) {
     if (ownerType == null) throw malformed("Logistics operation-lease owner type is required");
     OperationLeaseResponse response =
         post(
             assetBase + "/operation-leases",
             idempotencyKey,
             new AcquireLeaseRequest(
-                assetId, ownerType.name(), documentId, lineId, expectedAssetVersion),
+                assetId,
+                ownerType.name(),
+                documentId,
+                lineId,
+                expectedAssetVersion,
+                rentalOrderId),
             OperationLeaseResponse.class,
             ASSET_CLIENT,
             ASSET_SCOPE);
@@ -180,6 +217,59 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
             ASSET_CLIENT,
             ASSET_SCOPE);
     return snapshot(response);
+  }
+
+  @Override
+  public ReturnEquipmentReceipt receiveReturnEquipment(
+      UUID idempotencyKey,
+      UUID returnId,
+      UUID returnLineId,
+      UUID warehouseId,
+      List<ReturnEquipmentReceiptLine> lines) {
+    if (returnId == null
+        || returnLineId == null
+        || warehouseId == null
+        || lines == null
+        || lines.isEmpty()) {
+      throw malformed("Return equipment receipt is invalid");
+    }
+    ReturnEquipmentReceiptResponse response =
+        post(
+            assetBase + "/return-equipment-receipts",
+            idempotencyKey,
+            new ReturnEquipmentReceiptRequest(
+                returnId,
+                returnLineId,
+                warehouseId,
+                lines.stream()
+                    .map(line -> new ReturnEquipmentReceiptLineRequest(line.equipmentId(), line.quantity()))
+                    .toList()),
+            ReturnEquipmentReceiptResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE);
+    if (response == null
+        || !returnId.equals(response.returnId())
+        || !returnLineId.equals(response.returnLineId())
+        || !warehouseId.equals(response.warehouseId())
+        || response.lines() == null) {
+      throw malformed("Asset-service returned an invalid return equipment receipt");
+    }
+    List<ReturnEquipmentReceiptLine> received =
+        response.lines().stream()
+            .map(
+                line ->
+                    new ReturnEquipmentReceiptLine(
+                        line.receiptId(),
+                        line.equipmentId(),
+                        line.quantity(),
+                        line.stockBalanceId(),
+                        line.stockBalanceVersion(),
+                        line.stockQuantity()))
+            .toList();
+    if (!sameReturnEquipmentReceiptLines(lines, received)) {
+      throw malformed("Asset-service returned mismatched return equipment receipt lines");
+    }
+    return new ReturnEquipmentReceipt(returnId, returnLineId, warehouseId, received);
   }
 
   @Override
@@ -1043,6 +1133,35 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         response.doneAt());
   }
 
+  private static boolean sameReturnEquipmentReceiptLines(
+      List<ReturnEquipmentReceiptLine> requested,
+      List<ReturnEquipmentReceiptLine> received) {
+    if (requested.size() != received.size()) return false;
+    java.util.Map<UUID, Long> expected = new java.util.HashMap<>();
+    for (ReturnEquipmentReceiptLine line : requested) {
+      if (line == null
+          || line.equipmentId() == null
+          || line.quantity() < 1
+          || expected.put(line.equipmentId(), line.quantity()) != null) {
+        return false;
+      }
+    }
+    java.util.Map<UUID, Long> actual = new java.util.HashMap<>();
+    for (ReturnEquipmentReceiptLine line : received) {
+      if (line == null
+          || line.receiptId() == null
+          || line.equipmentId() == null
+          || line.quantity() < 1
+          || line.stockBalanceId() == null
+          || line.stockBalanceVersion() < 0
+          || line.stockQuantity() < line.quantity()
+          || actual.put(line.equipmentId(), line.quantity()) != null) {
+        return false;
+      }
+    }
+    return expected.equals(actual);
+  }
+
   private static OrderUnitReservation orderReservation(
       OrderUnitReservationResponse response) {
     if (response == null || response.unit() == null) {
@@ -1190,7 +1309,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       String ownerType,
       UUID documentId,
       UUID lineId,
-      long expectedRentalItemVersion) {}
+      long expectedRentalItemVersion,
+      UUID rentalOrderId) {}
 
   private record OperationLeaseResponse(
       UUID leaseId,
@@ -1209,6 +1329,28 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID documentId,
       UUID lineId,
       UUID destinationWarehouseId) {}
+
+  private record ReturnEquipmentReceiptLineRequest(UUID equipmentId, long quantity) {}
+
+  private record ReturnEquipmentReceiptRequest(
+      UUID returnId,
+      UUID returnLineId,
+      UUID warehouseId,
+      List<ReturnEquipmentReceiptLineRequest> lines) {}
+
+  private record ReturnEquipmentReceiptLineResponse(
+      UUID receiptId,
+      UUID equipmentId,
+      long quantity,
+      UUID stockBalanceId,
+      long stockBalanceVersion,
+      long stockQuantity) {}
+
+  private record ReturnEquipmentReceiptResponse(
+      UUID returnId,
+      UUID returnLineId,
+      UUID warehouseId,
+      List<ReturnEquipmentReceiptLineResponse> lines) {}
 
   private record LeaseCommandRequest(
       long expectedVersion,

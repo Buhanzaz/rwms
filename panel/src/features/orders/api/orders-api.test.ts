@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { parseOrderDetail, updateOrder } from "@/features/orders/api/orders-api"
+import {
+  listOrderClients,
+  parseOrderDetail,
+  updateOrder,
+} from "@/features/orders/api/orders-api"
 
 const ORDER_ID = "50ac5b00-2378-457b-82fc-14d43daa5c5c"
 const CLIENT_ID = "8a14d50d-4b0b-4a4d-9aaf-b29cd877fcd3"
@@ -97,5 +101,47 @@ describe("parseOrderDetail", () => {
       expectedVersion: 4,
       clientId: CLIENT_ID,
     })
+  })
+
+  it("searches all counterparties when a type is not supplied", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          content: [
+            {
+              id: CLIENT_ID,
+              type: "LEGAL_ENTITY",
+              displayName: "Диагностический клиент",
+            },
+          ],
+          page: 0,
+          size: 50,
+          totalElements: 1,
+          totalPages: 1,
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      )
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      listOrderClients({
+        accessToken: "orders-token",
+        search: "Диагностический",
+        page: 0,
+        size: 50,
+      })
+    ).resolves.toMatchObject({
+      content: [{ id: CLIENT_ID }],
+    })
+
+    const [input] = fetchMock.mock.calls[0] as [string]
+    const url = new URL(input)
+    expect(url.pathname).toBe("/api/logistics/v1/clients")
+    expect(url.searchParams.get("search")).toBe("Диагностический")
+    expect(url.searchParams.has("type")).toBe(false)
   })
 })

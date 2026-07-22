@@ -1,15 +1,10 @@
 import { useCallback, useMemo, useState } from "react"
-import { Link } from "react-router-dom"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { HugeiconsIcon } from "@hugeicons/react"
-import {
-  ArrowLeft01Icon,
-  ArrowRight01Icon,
-  Settings02Icon,
-} from "@hugeicons/core-free-icons"
+import { ArrowLeft01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons"
 import {
   REPAIR_ESTIMATES_QUERY_KEY,
   completeRepairEstimate,
@@ -17,6 +12,7 @@ import {
   saveRepairEstimateDraft,
 } from "@/features/repair-estimates/api/repair-estimates-api"
 import {
+  applyEstimateRentalItemSelection,
   assertEstimateLinesValid,
   calculateEstimateTotal,
   createNewEstimateDraft,
@@ -306,8 +302,10 @@ function RepairEstimateEditorContent({
       disabled={interactionDisabled}
       readOnly={readOnly}
       rentalItemInvalid={Boolean(error && !draft.rentalItemId)}
-      onRentalItemChange={(rentalItemId) =>
-        setDraft((current) => ({ ...current, rentalItemId }))
+      onRentalItemChange={(rentalItem) =>
+        setDraft((current) =>
+          applyEstimateRentalItemSelection(current, rentalItem)
+        )
       }
       onContextChange={(sourceParty) =>
         setDraft((current) => ({ ...current, sourceParty }))
@@ -427,15 +425,6 @@ function RepairEstimateEditorContent({
     </div>
   )
 
-  const catalogAction = (
-    <Button variant="outline" size="sm" asChild>
-      <Link to="/settings/estimates-repairs">
-        <HugeiconsIcon icon={Settings02Icon} data-icon="inline-start" />
-        Настроить каталог
-      </Link>
-    </Button>
-  )
-
   return (
     <>
       <RepairEstimateWorkspaceLayout
@@ -459,7 +448,6 @@ function RepairEstimateEditorContent({
         information={information}
         estimate={estimateLines}
         controls={controls}
-        catalogAction={readOnly ? undefined : catalogAction}
       />
 
       <RepairEstimateCompletionDialog

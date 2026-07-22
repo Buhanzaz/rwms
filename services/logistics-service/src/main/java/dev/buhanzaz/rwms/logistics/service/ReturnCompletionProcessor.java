@@ -63,6 +63,15 @@ public class ReturnCompletionProcessor {
                     work.assetId(),
                     work.expectedAssetVersion(),
                     work.shortages()));
+        case RETURN_EQUIPMENT ->
+            store.confirmAdditionalEquipmentReceipt(
+                work.operationId(),
+                dependencies.receiveReturnEquipment(
+                    work.operationId(),
+                    work.documentId(),
+                    work.lineId(),
+                    work.warehouseId(),
+                    work.returnEquipment()));
         case LEASE_RELEASE ->
             store.confirmLeaseRelease(
                 work.operationId(),

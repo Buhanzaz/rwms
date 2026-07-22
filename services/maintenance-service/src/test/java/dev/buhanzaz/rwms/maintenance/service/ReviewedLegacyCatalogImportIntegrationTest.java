@@ -319,7 +319,7 @@ class ReviewedLegacyCatalogImportIntegrationTest {
     assertThat(reviewedRouting.queueKind()).isEqualTo("HOLDING");
     UUID rentalItemId = UUID.randomUUID();
     rentalItemFacts.saveAndFlush(
-        RentalItemFactProjection.create(rentalItemId, request.warehouseId(), "FREE", 7));
+        RentalItemFactProjection.create(rentalItemId, request.warehouseId(), "AFTER_RENT", 7));
     CatalogNodeSnapshot snapshot =
         new CatalogNodeSnapshot(
             imported.response().id(),

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react"
-import { useMutation } from "@tanstack/react-query"
+import { useMutation, useQuery } from "@tanstack/react-query"
 
+import { getEquipmentItems } from "@/api/equipment-api"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -18,15 +19,27 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import {
+  Field,
   FieldDescription,
   FieldError,
   FieldGroup,
+  FieldLabel,
   FieldLegend,
   FieldSet,
 } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { acceptUndamagedReturn } from "@/features/logistics/returns/api"
 import type {
   MediaReference,
+  ReturnAdditionalEquipment,
   ReturnDocument,
   ReturnMediaLine,
 } from "@/features/logistics/returns/model"
@@ -42,6 +55,7 @@ type ReturnMediaLineDraft = {
   lineId: string
   lineNumber: number
   references: MediaReference[]
+  additionalEquipment: Array<ReturnAdditionalEquipment & { key: string }>
 }
 
 function initialLines(document: ReturnDocument): ReturnMediaLineDraft[] {
@@ -49,6 +63,7 @@ function initialLines(document: ReturnDocument): ReturnMediaLineDraft[] {
     lineId: line.id,
     lineNumber: line.lineNumber,
     references: [],
+    additionalEquipment: [],
   }))
 }
 
@@ -79,6 +94,15 @@ export function AcceptUndamagedDialog({
   )
   const [validationError, setValidationError] = useState<string | null>(null)
   const attempt = useRef<CommandAttempt | null>(null)
+  const equipmentQuery = useQuery({
+    queryKey: ["equipment", "return-additional", document.warehouseId],
+    queryFn: () =>
+      getEquipmentItems(accessToken, { warehouseId: document.warehouseId }),
+    enabled: Boolean(accessToken),
+  })
+  const furniture = (equipmentQuery.data ?? []).filter(
+    (item) => item.active && item.category === "FURNITURE"
+  )
   const mutation = useMutation({
     mutationFn: (command: {
       lines: ReturnMediaLine[]
@@ -112,6 +136,56 @@ export function AcceptUndamagedDialog({
     )
   }
 
+  function addAdditionalEquipment(lineId: string) {
+    setLines((current) =>
+      current.map((line) =>
+        line.lineId === lineId
+          ? {
+              ...line,
+              additionalEquipment: [
+                ...line.additionalEquipment,
+                { key: crypto.randomUUID(), equipmentId: "", quantity: 1 },
+              ],
+            }
+          : line
+      )
+    )
+  }
+
+  function updateAdditionalEquipment(
+    lineId: string,
+    key: string,
+    update: Partial<ReturnAdditionalEquipment>
+  ) {
+    setLines((current) =>
+      current.map((line) =>
+        line.lineId === lineId
+          ? {
+              ...line,
+              additionalEquipment: line.additionalEquipment.map((item) =>
+                item.key === key ? { ...item, ...update } : item
+              ),
+            }
+          : line
+      )
+    )
+  }
+
+  function removeAdditionalEquipment(lineId: string, key: string) {
+    setLines((current) =>
+      current.map((line) =>
+        line.lineId === lineId
+          ? {
+              ...line,
+              additionalEquipment: line.additionalEquipment.filter(
+                (item) => item.key !== key
+              ),
+            }
+          : line
+      )
+    )
+  }
+
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const mediaIds = new Set<string>()
@@ -133,7 +207,28 @@ export function AcceptUndamagedDialog({
         }
         mediaIds.add(reference.mediaId)
       }
-      commandLines.push({ lineId: line.lineId, references: line.references })
+      const equipmentIds = new Set<string>()
+      for (const equipment of line.additionalEquipment) {
+        if (
+          !equipment.equipmentId ||
+          !Number.isSafeInteger(equipment.quantity) ||
+          equipment.quantity < 1 ||
+          equipmentIds.has(equipment.equipmentId)
+        ) {
+          setValidationError(
+            "Дополнительная мебель должна быть выбрана один раз для каждой бытовки, с целым количеством не меньше одного."
+          )
+          return
+        }
+        equipmentIds.add(equipment.equipmentId)
+      }
+      commandLines.push({
+        lineId: line.lineId,
+        references: line.references,
+        additionalEquipment: line.additionalEquipment.map(
+          ({ equipmentId, quantity }) => ({ equipmentId, quantity })
+        ),
+      })
     }
 
     setValidationError(null)
@@ -193,6 +288,125 @@ export function AcceptUndamagedDialog({
                           updateReferences(line.lineId, references)
                         }
                       />
+                      <FieldSet className="mt-4">
+                        <FieldLegend variant="label">
+                          Дополнительная мебель
+                        </FieldLegend>
+                        <FieldDescription>
+                          Добавьте мебель, приехавшую с бытовкой, которой нет в
+                          текущем составе. После приёмки logistics-service
+                          зафиксирует поступление на этот склад.
+                        </FieldDescription>
+                        <FieldGroup>
+                          {line.additionalEquipment.map((equipment) => {
+                            const availableFurniture = furniture.filter(
+                              (item) =>
+                                item.id === equipment.equipmentId ||
+                                !line.additionalEquipment.some(
+                                  (other) =>
+                                    other.key !== equipment.key &&
+                                    other.equipmentId === item.id
+                                )
+                            )
+                            return (
+                              <div
+                                key={equipment.key}
+                                className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_8rem_auto]"
+                              >
+                                <Field>
+                                  <FieldLabel
+                                    htmlFor={`return-extra-equipment-${equipment.key}`}
+                                  >
+                                    Мебель
+                                  </FieldLabel>
+                                  <Select
+                                    value={equipment.equipmentId}
+                                    disabled={mutation.isPending}
+                                    onValueChange={(equipmentId) =>
+                                      updateAdditionalEquipment(
+                                        line.lineId,
+                                        equipment.key,
+                                        { equipmentId }
+                                      )
+                                    }
+                                  >
+                                    <SelectTrigger
+                                      id={`return-extra-equipment-${equipment.key}`}
+                                    >
+                                      <SelectValue placeholder="Выберите мебель" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectGroup>
+                                        {availableFurniture.map((item) => (
+                                          <SelectItem
+                                            key={item.id}
+                                            value={item.id}
+                                          >
+                                            {item.name}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectGroup>
+                                    </SelectContent>
+                                  </Select>
+                                </Field>
+                                <Field>
+                                  <FieldLabel
+                                    htmlFor={`return-extra-quantity-${equipment.key}`}
+                                  >
+                                    Количество
+                                  </FieldLabel>
+                                  <Input
+                                    id={`return-extra-quantity-${equipment.key}`}
+                                    type="number"
+                                    min={1}
+                                    step={1}
+                                    disabled={mutation.isPending}
+                                    value={equipment.quantity}
+                                    onChange={(event) =>
+                                      updateAdditionalEquipment(
+                                        line.lineId,
+                                        equipment.key,
+                                        { quantity: Number(event.target.value) }
+                                      )
+                                    }
+                                  />
+                                </Field>
+                                <Button
+                                  type="button"
+                                  className="self-end"
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={mutation.isPending}
+                                  onClick={() =>
+                                    removeAdditionalEquipment(
+                                      line.lineId,
+                                      equipment.key
+                                    )
+                                  }
+                                >
+                                  Удалить
+                                </Button>
+                              </div>
+                            )
+                          })}
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={
+                              mutation.isPending || furniture.length === 0
+                            }
+                            onClick={() => addAdditionalEquipment(line.lineId)}
+                          >
+                            Добавить мебель
+                          </Button>
+                          {equipmentQuery.isError ? (
+                            <FieldError>
+                              Не удалось загрузить каталог мебели.
+                            </FieldError>
+                          ) : null}
+                        </FieldGroup>
+                      </FieldSet>
                     </CardContent>
                   </Card>
                 ))}

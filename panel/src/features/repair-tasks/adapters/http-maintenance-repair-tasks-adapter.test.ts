@@ -189,6 +189,7 @@ const board: TaskBoardSnapshotDto = {
 }
 
 const rentalItemsClient: RepairTaskRentalItemsClient = {
+  search: vi.fn(),
   resolveById: vi.fn(async () => ({
     id: rentalItemId,
     warehouseId,

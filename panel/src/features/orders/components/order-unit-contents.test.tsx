@@ -207,7 +207,7 @@ beforeEach(() => {
     .mockReturnValue(IDEMPOTENCY_KEY)
   movementTasksApi.createEquipmentMovementTask.mockResolvedValue({
     id: TASK_ID,
-    deadlineAt: "2026-07-21T09:30:00.000Z",
+    deadlineAt: "2030-07-21T09:30:00.000Z",
   })
 })
 
@@ -245,7 +245,7 @@ describe("order unit contents", () => {
     await user.click(
       screen.getByRole("button", { name: "Увеличить Стол офисный" })
     )
-    const deadline = "2026-07-21T12:30"
+    const deadline = "2030-07-21T12:30"
     fireEvent.change(screen.getByLabelText("Резерв до"), {
       target: { value: deadline },
     })
@@ -340,7 +340,7 @@ describe("order unit contents", () => {
       await screen.findByRole("button", { name: "Уменьшить Стул" })
     )
     fireEvent.change(screen.getByLabelText("Резерв до"), {
-      target: { value: "2026-07-21T12:30" },
+      target: { value: "2030-07-21T12:30" },
     })
     await user.click(screen.getByRole("button", { name: "Создать задание" }))
 

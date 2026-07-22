@@ -76,6 +76,8 @@ public class EquipmentMovementTaskService {
                 actorSubjectId,
                 idempotencyKey,
                 checksum));
+    UUID targetWarehouseId =
+        request.targetWarehouseId() == null ? request.warehouseId() : request.targetWarehouseId();
     List<EquipmentMovementTaskLine> planned = new ArrayList<>();
     int lineNumber = 1;
     for (EquipmentMovementLineRequest line : request.lines()) {
@@ -88,7 +90,7 @@ public class EquipmentMovementTaskService {
               line.sourceRentalItemId(),
               line.sourceLocationKind(),
               line.expectedSourceBalanceVersion(),
-              request.warehouseId(),
+              targetWarehouseId,
               line.targetRentalItemId(),
               line.targetLocationKind(),
               line.quantity()));
@@ -204,6 +206,8 @@ public class EquipmentMovementTaskService {
   private static String creationChecksum(CreateEquipmentMovementTaskRequest request) {
     List<String> values = new ArrayList<>();
     values.add(request.warehouseId().toString());
+    values.add(
+        request.targetWarehouseId() == null ? null : request.targetWarehouseId().toString());
     values.add(request.unitNumber());
     values.add(request.plannedDurationMinutes() == null ? null : request.plannedDurationMinutes().toString());
     values.add(request.deadlineAt().toString());

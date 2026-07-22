@@ -93,7 +93,8 @@ class ReturnRegistrationWorkflowStore {
                 line.getId(),
                 line.getAssetId(),
                 line.getAssetVersion(),
-                document.getCorrelationId()));
+                document.getCorrelationId(),
+                line.getRentalOrderId()));
       }
       if (RETURN_ASSET_INTAKE.equals(attempt.getOperationType())) {
         Optional<LogisticsGuard> guard = guardRepository.findByLine_Id(line.getId());
@@ -516,7 +517,33 @@ class ReturnRegistrationWorkflowStore {
       long expectedAssetVersion,
       UUID leaseId,
       long fencingToken,
-      UUID correlationId) {
+      UUID correlationId,
+      UUID rentalOrderId) {
+    Work(
+        WorkType type,
+        UUID operationId,
+        UUID documentId,
+        UUID lineId,
+        UUID warehouseId,
+        UUID assetId,
+        long expectedAssetVersion,
+        UUID leaseId,
+        long fencingToken,
+        UUID correlationId) {
+      this(
+          type,
+          operationId,
+          documentId,
+          lineId,
+          warehouseId,
+          assetId,
+          expectedAssetVersion,
+          leaseId,
+          fencingToken,
+          correlationId,
+          null);
+    }
+
     static Work warehouse(
         UUID operationId, UUID documentId, UUID warehouseId, UUID correlationId) {
       return new Work(
@@ -560,6 +587,24 @@ class ReturnRegistrationWorkflowStore {
         UUID assetId,
         long expectedAssetVersion,
         UUID correlationId) {
+      return lease(
+          operationId,
+          documentId,
+          lineId,
+          assetId,
+          expectedAssetVersion,
+          correlationId,
+          null);
+    }
+
+    static Work lease(
+        UUID operationId,
+        UUID documentId,
+        UUID lineId,
+        UUID assetId,
+        long expectedAssetVersion,
+        UUID correlationId,
+        UUID rentalOrderId) {
       return new Work(
           WorkType.ASSET_LEASE,
           operationId,
@@ -570,7 +615,8 @@ class ReturnRegistrationWorkflowStore {
           expectedAssetVersion,
           null,
           -1,
-          correlationId);
+          correlationId,
+          rentalOrderId);
     }
 
     static Work intake(

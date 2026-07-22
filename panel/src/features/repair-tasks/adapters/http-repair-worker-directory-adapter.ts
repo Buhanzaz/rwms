@@ -14,6 +14,8 @@ const ROUTE_QUEUE_TYPE: Record<
   HOLDING: "HOLDING",
 }
 
+const DRIVER_WORKER_CLASS_CODES = new Set(["DRIVER", "DRIVER_WORKER"])
+
 export class HttpRepairWorkerDirectoryAdapter implements RepairWorkerDirectoryClient {
   async listGroups(
     query: Parameters<RepairWorkerDirectoryClient["listGroups"]>[0],
@@ -48,7 +50,9 @@ export class HttpRepairWorkerDirectoryAdapter implements RepairWorkerDirectoryCl
       .filter((group) => {
         if (!group.active) return false
         if (driverDirectory) {
-          return classCodeById.get(group.workerClass.id) === "DRIVER"
+          return DRIVER_WORKER_CLASS_CODES.has(
+            classCodeById.get(group.workerClass.id) ?? ""
+          )
         }
         return eligibleClassIds.has(group.workerClass.id)
       })

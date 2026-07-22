@@ -10,6 +10,8 @@ const ASSET_ID = "44444444-4444-4444-8444-444444444444"
 const MEDIA_ID = "55555555-5555-4555-8555-555555555555"
 const EQUIPMENT_ID = "66666666-6666-4666-8666-666666666666"
 const IDEMPOTENCY_KEY = "77777777-7777-4777-8777-777777777777"
+const CLIENT_ID = "88888888-8888-4888-8888-888888888888"
+const RENTAL_ORDER_ID = "99999999-9999-4999-8999-999999999999"
 
 const document: ReturnDocument = {
   id: DOCUMENT_ID,
@@ -19,7 +21,9 @@ const document: ReturnDocument = {
   warehouseId: WAREHOUSE_ID,
   destinationWarehouseId: null,
   partySnapshot: null,
-  driverSnapshot: null,
+  driverSnapshot: "Иванов Иван",
+  clientId: CLIENT_ID,
+  equipmentMovementTaskId: null,
   lines: [
     {
       id: LINE_ID,
@@ -29,6 +33,7 @@ const document: ReturnDocument = {
       assetVersion: 8,
       state: "PENDING",
       tenantSnapshot: "ООО Тест",
+      rentalOrderId: RENTAL_ORDER_ID,
     },
   ],
   createdAt: "2026-07-18T08:00:00Z",
@@ -87,12 +92,15 @@ describe("HttpReturnClient", () => {
     const command = {
       accessToken: "return-token",
       warehouseId: WAREHOUSE_ID,
+      clientId: CLIENT_ID,
+      driverSnapshot: "Иванов Иван",
       idempotencyKey: IDEMPOTENCY_KEY,
       lines: [
         {
           assetId: ASSET_ID,
           assetVersion: 8,
           tenantSnapshot: "ООО Тест",
+          rentalOrderId: RENTAL_ORDER_ID,
         },
       ],
     }
@@ -108,6 +116,8 @@ describe("HttpReturnClient", () => {
       )
       expect(JSON.parse(call[1].body)).toEqual({
         warehouseId: WAREHOUSE_ID,
+        clientId: CLIENT_ID,
+        driverSnapshot: "Иванов Иван",
         lines: command.lines,
       })
     }
@@ -153,6 +163,7 @@ describe("HttpReturnClient", () => {
         {
           lineId: LINE_ID,
           references: [{ mediaId: MEDIA_ID, generation: 3 }],
+          additionalEquipment: [{ equipmentId: EQUIPMENT_ID, quantity: 2 }],
         },
       ],
     })
@@ -168,6 +179,7 @@ describe("HttpReturnClient", () => {
         {
           lineId: LINE_ID,
           references: [{ mediaId: MEDIA_ID, generation: 3 }],
+          additionalEquipment: [{ equipmentId: EQUIPMENT_ID, quantity: 2 }],
         },
       ],
     })

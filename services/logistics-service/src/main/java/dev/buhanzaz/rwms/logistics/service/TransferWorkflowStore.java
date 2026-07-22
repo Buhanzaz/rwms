@@ -14,6 +14,8 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsMediaReference;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsReconciliation;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsReconciliationState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsTargetService;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsTaskReference;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsTaskReferenceState;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventStore;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
@@ -24,6 +26,7 @@ import dev.buhanzaz.rwms.logistics.repository.LogisticsExternalAttemptRepository
 import dev.buhanzaz.rwms.logistics.repository.LogisticsGuardRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsMediaReferenceRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsReconciliationRepository;
+import dev.buhanzaz.rwms.logistics.repository.LogisticsTaskReferenceRepository;
 import java.time.DateTimeException;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
@@ -59,6 +62,7 @@ class TransferWorkflowStore {
   private final LogisticsExternalAttemptRepository attemptRepository;
   private final LogisticsGuardRepository guardRepository;
   private final LogisticsMediaReferenceRepository mediaReferenceRepository;
+  private final LogisticsTaskReferenceRepository taskReferenceRepository;
   private final LogisticsReconciliationRepository reconciliationRepository;
   private final LogisticsEventStore eventStore;
 
@@ -72,6 +76,8 @@ class TransferWorkflowStore {
       LogisticsDocumentLine line = requiredLine(attempt);
       Optional<Work> work =
           switch (document.getState()) {
+            case DRAFT -> draftWork(attempt, document, line);
+            case CANCELLING -> cancellationWork(attempt, document, line);
             case DEPARTING -> departureWork(attempt, document, line);
             case ARRIVING -> arrivalWork(attempt, document, line);
             default -> Optional.empty();
@@ -79,6 +85,46 @@ class TransferWorkflowStore {
       if (work.isPresent()) return work;
     }
     return Optional.empty();
+  }
+
+  @Transactional
+  public void confirmTaskRegistration(
+      UUID operationId, LogisticsDependencyGateway.PreparationTask task) {
+    LogisticsExternalAttempt attempt =
+        attempt(operationId, LogisticsDocumentService.TRANSFER_TASK_REGISTER);
+    if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
+    LogisticsDocument document = attempt.getDocument();
+    LogisticsDocumentLine line = requiredLine(attempt);
+    if (document.getState() != LogisticsDocumentState.DRAFT) return;
+    LogisticsTaskReference reference =
+        taskReferenceRepository
+            .findByLine_Id(line.getId())
+            .orElseThrow(() -> malformed("Transfer task registration has no local reference"));
+    requireRegisteredTask(document, reference, task);
+
+    OffsetDateTime completedAt = now();
+    attempt.confirm(taskDigest("TRANSFER_TASK_REGISTER_RESPONSE", task), completedAt);
+    reference.register(task.taskId(), task.taskVersion(), task.status(), task.doneAt());
+  }
+
+  @Transactional
+  public void confirmTaskCancellation(
+      UUID operationId, LogisticsDependencyGateway.PreparationTask task) {
+    LogisticsExternalAttempt attempt =
+        attempt(operationId, LogisticsDocumentService.TRANSFER_TASK_CANCEL);
+    if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
+    LogisticsDocument document = attempt.getDocument();
+    LogisticsDocumentLine line = requiredLine(attempt);
+    if (document.getState() != LogisticsDocumentState.CANCELLING) return;
+    LogisticsTaskReference reference =
+        taskReferenceRepository
+            .findByLine_Id(line.getId())
+            .orElseThrow(() -> malformed("Transfer cancellation has no local task reference"));
+    requireCancelledTask(document, reference, task);
+
+    attempt.confirm(taskDigest("TRANSFER_TASK_CANCEL_RESPONSE", task), now());
+    reference.cancel(task.taskVersion());
+    finishCancellationIfComplete(document);
   }
 
   @Transactional
@@ -393,6 +439,38 @@ class TransferWorkflowStore {
     return Optional.empty();
   }
 
+  private Optional<Work> draftWork(
+      LogisticsExternalAttempt attempt, LogisticsDocument document, LogisticsDocumentLine line) {
+    if (!LogisticsDocumentService.TRANSFER_TASK_REGISTER.equals(attempt.getOperationType())) {
+      return Optional.empty();
+    }
+    LogisticsTaskReference reference =
+        taskReferenceRepository
+            .findByLine_Id(line.getId())
+            .orElseThrow(() -> malformed("Transfer task registration has no local reference"));
+    return Optional.of(
+        Work.taskRegister(
+            attempt.getOperationId(), document.getWarehouseId(), reference.getExternalTaskId()));
+  }
+
+  private Optional<Work> cancellationWork(
+      LogisticsExternalAttempt attempt, LogisticsDocument document, LogisticsDocumentLine line) {
+    if (!LogisticsDocumentService.TRANSFER_TASK_CANCEL.equals(attempt.getOperationType())) {
+      return Optional.empty();
+    }
+    LogisticsTaskReference reference =
+        taskReferenceRepository
+            .findByLine_Id(line.getId())
+            .orElseThrow(() -> malformed("Transfer cancellation has no local task reference"));
+    if (reference.getTaskState() != LogisticsTaskReferenceState.REGISTERED
+        || reference.getTaskVersion() == null) {
+      return Optional.empty();
+    }
+    return Optional.of(
+        Work.taskCancel(
+            attempt.getOperationId(), reference.getExternalTaskId(), reference.getTaskVersion()));
+  }
+
   private Optional<Work> arrivalWork(
       LogisticsExternalAttempt attempt, LogisticsDocument document, LogisticsDocumentLine line) {
     String operation = attempt.getOperationType();
@@ -600,7 +678,10 @@ class TransferWorkflowStore {
   }
 
   private static boolean isTransferWorkState(LogisticsDocumentState state) {
-    return state == LogisticsDocumentState.DEPARTING || state == LogisticsDocumentState.ARRIVING;
+    return state == LogisticsDocumentState.DRAFT
+        || state == LogisticsDocumentState.CANCELLING
+        || state == LogisticsDocumentState.DEPARTING
+        || state == LogisticsDocumentState.ARRIVING;
   }
 
   private static boolean isIdentityOperation(String operation) {
@@ -735,6 +816,36 @@ class TransferWorkflowStore {
         || !"ACTIVE".equals(lease.state())
         || lease.expiresAt() == null) {
       throw malformed("Asset-service returned malformed transfer operation lease");
+    }
+  }
+
+  private static void requireRegisteredTask(
+      LogisticsDocument document,
+      LogisticsTaskReference reference,
+      LogisticsDependencyGateway.PreparationTask task) {
+    if (task == null
+        || task.taskId() == null
+        || task.taskVersion() < 0
+        || !document.getWarehouseId().equals(task.warehouseId())
+        || !reference.getExternalTaskId().equals(task.externalTaskId())
+        || !"ACTIVE".equals(task.status())) {
+      throw malformed("Task-board returned malformed transfer task registration");
+    }
+  }
+
+  private static void requireCancelledTask(
+      LogisticsDocument document,
+      LogisticsTaskReference reference,
+      LogisticsDependencyGateway.PreparationTask task) {
+    if (task == null
+        || reference.getTaskId() == null
+        || !reference.getTaskId().equals(task.taskId())
+        || reference.getTaskVersion() == null
+        || task.taskVersion() < reference.getTaskVersion()
+        || !document.getWarehouseId().equals(task.warehouseId())
+        || !reference.getExternalTaskId().equals(task.externalTaskId())
+        || !"CANCELLED".equals(task.status())) {
+      throw malformed("Task-board returned malformed transfer cancellation truth");
     }
   }
 
@@ -965,12 +1076,47 @@ class TransferWorkflowStore {
             line.getId().toString()));
   }
 
+  private static String taskDigest(
+      String operation, LogisticsDependencyGateway.PreparationTask task) {
+    List<String> values = new ArrayList<>();
+    values.add(task.taskId().toString());
+    values.add(Long.toString(task.taskVersion()));
+    values.add(task.warehouseId().toString());
+    values.add(task.externalTaskId().toString());
+    values.add(task.status());
+    values.add(task.doneAt() == null ? null : task.doneAt().toInstant().toString());
+    return LogisticsCommandChecksum.sha256(
+        operation, values);
+  }
+
   private List<LogisticsDocumentLine> lines(UUID documentId) {
     return lineRepository.findAllByDocument_IdOrderByLineNumber(documentId);
   }
 
   private int lineCount(LogisticsDocument document) {
     return lines(document.getId()).size();
+  }
+
+  private void finishCancellationIfComplete(LogisticsDocument document) {
+    if (taskReferenceRepository.findAllByDocument_IdOrderByCreatedAtAsc(document.getId()).stream()
+        .anyMatch(reference -> reference.getTaskState() != LogisticsTaskReferenceState.CANCELLED)) {
+      return;
+    }
+    List<LogisticsDocumentLine> lines = lines(document.getId());
+    if (lines.stream().anyMatch(line -> line.getState() != LogisticsLineState.PENDING)) {
+      throw malformed("Transfer cancellation has a non-pending line");
+    }
+    document.cancelTransfer();
+    documentRepository.saveAndFlush(document);
+    for (LogisticsDocumentLine line : lines) line.cancel();
+    lineRepository.saveAllAndFlush(lines);
+    eventStore.append(
+        document,
+        lines.size(),
+        document.getCorrelationId(),
+        document.getRequestedBySubjectId(),
+        LogisticsEventType.TRANSFER_CANCELLED,
+        null);
   }
 
   private static int retryDelaySeconds(int currentRetryCount) {
@@ -1007,7 +1153,71 @@ class TransferWorkflowStore {
       long expectedLeaseVersion,
       long fencingToken,
       LogisticsDependencyGateway.AssetEffect assetEffect,
-      List<LogisticsDependencyGateway.MediaReference> references) {
+      List<LogisticsDependencyGateway.MediaReference> references,
+      UUID externalTaskId) {
+    Work(
+        WorkType type,
+        UUID operationId,
+        UUID documentId,
+        UUID lineId,
+        UUID warehouseId,
+        UUID assetId,
+        long expectedAssetVersion,
+        UUID leaseId,
+        long expectedLeaseVersion,
+        long fencingToken,
+        LogisticsDependencyGateway.AssetEffect assetEffect,
+        List<LogisticsDependencyGateway.MediaReference> references) {
+      this(
+          type,
+          operationId,
+          documentId,
+          lineId,
+          warehouseId,
+          assetId,
+          expectedAssetVersion,
+          leaseId,
+          expectedLeaseVersion,
+          fencingToken,
+          assetEffect,
+          references,
+          null);
+    }
+
+    static Work taskRegister(UUID operationId, UUID warehouseId, UUID externalTaskId) {
+      return new Work(
+          WorkType.TASK_REGISTER,
+          operationId,
+          null,
+          null,
+          warehouseId,
+          null,
+          -1,
+          null,
+          -1,
+          -1,
+          null,
+          List.of(),
+          externalTaskId);
+    }
+
+    static Work taskCancel(UUID operationId, UUID externalTaskId, long expectedTaskVersion) {
+      return new Work(
+          WorkType.TASK_CANCEL,
+          operationId,
+          null,
+          null,
+          null,
+          null,
+          -1,
+          null,
+          expectedTaskVersion,
+          -1,
+          null,
+          List.of(),
+          externalTaskId);
+    }
+
     static Work warehouse(UUID operationId, UUID documentId, UUID lineId, UUID warehouseId) {
       return new Work(
           WorkType.WAREHOUSE,
@@ -1134,6 +1344,8 @@ class TransferWorkflowStore {
     WAREHOUSE,
     SNAPSHOT,
     LEASE,
+    TASK_REGISTER,
+    TASK_CANCEL,
     MEDIA,
     EFFECT,
     LEASE_RELEASE

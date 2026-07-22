@@ -135,7 +135,7 @@ class ReturnCompletionWorkflowStore {
           shortageDigest(document, line, source),
           completedAt);
     } else {
-      createReleaseAttempt(document, line, guard, completedAt);
+      createAdditionalEquipmentAttemptOrRelease(document, line, guard, completedAt);
     }
   }
 
@@ -156,6 +156,24 @@ class ReturnCompletionWorkflowStore {
 
     OffsetDateTime completedAt = now();
     attempt.confirm(maintenanceDigest(source), completedAt);
+    createAdditionalEquipmentAttemptOrRelease(document, line, activeGuard(line), completedAt);
+  }
+
+  @Transactional
+  public void confirmAdditionalEquipmentReceipt(
+      UUID operationId, LogisticsDependencyGateway.ReturnEquipmentReceipt receipt) {
+    LogisticsExternalAttempt attempt =
+        attempt(operationId, LogisticsDocumentService.RETURN_ASSET_ADDITIONAL_EQUIPMENT_RECEIVE);
+    if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
+    LogisticsDocument document = attempt.getDocument();
+    LogisticsDocumentLine line = requiredLine(attempt);
+    if (!isCompletionState(document.getState())) return;
+    List<LogisticsDependencyGateway.ReturnEquipmentReceiptLine> expected =
+        additionalEquipment(line);
+    requireAdditionalEquipmentReceipt(document, line, expected, receipt);
+
+    OffsetDateTime completedAt = now();
+    attempt.confirm(additionalEquipmentReceiptDigest(receipt), completedAt);
     createReleaseAttempt(document, line, activeGuard(line), completedAt);
   }
 
@@ -248,6 +266,10 @@ class ReturnCompletionWorkflowStore {
     if (LogisticsDocumentService.RETURN_ASSET_SETTLE_FREE.equals(attempt.getOperationType())) {
       return Optional.of(settlementWork(attempt, document, line, false));
     }
+    if (LogisticsDocumentService.RETURN_ASSET_ADDITIONAL_EQUIPMENT_RECEIVE.equals(
+        attempt.getOperationType())) {
+      return Optional.of(returnEquipmentWork(attempt, document, line));
+    }
     if (LogisticsDocumentService.RETURN_ASSET_LEASE_RELEASE.equals(attempt.getOperationType())) {
       return Optional.of(releaseWork(attempt, document, line));
     }
@@ -273,6 +295,10 @@ class ReturnCompletionWorkflowStore {
               snapshot.getRentalItemId(),
               snapshot.getRentalItemVersion(),
               shortages(snapshot)));
+    }
+    if (LogisticsDocumentService.RETURN_ASSET_ADDITIONAL_EQUIPMENT_RECEIVE.equals(
+        attempt.getOperationType())) {
+      return Optional.of(returnEquipmentWork(attempt, document, line));
     }
     if (LogisticsDocumentService.RETURN_ASSET_LEASE_RELEASE.equals(attempt.getOperationType())) {
       return Optional.of(releaseWork(attempt, document, line));
@@ -308,6 +334,36 @@ class ReturnCompletionWorkflowStore {
         guard.getLeaseId(),
         guard.getLeaseVersion(),
         guard.getFenceToken());
+  }
+
+  private Work returnEquipmentWork(
+      LogisticsExternalAttempt attempt, LogisticsDocument document, LogisticsDocumentLine line) {
+    return Work.returnEquipment(
+        attempt.getOperationId(),
+        document.getId(),
+        line.getId(),
+        document.getWarehouseId(),
+        additionalEquipment(line));
+  }
+
+  private void createAdditionalEquipmentAttemptOrRelease(
+      LogisticsDocument document,
+      LogisticsDocumentLine line,
+      LogisticsGuard guard,
+      OffsetDateTime createdAt) {
+    List<LogisticsDependencyGateway.ReturnEquipmentReceiptLine> additional =
+        additionalEquipment(line);
+    if (additional.isEmpty()) {
+      createReleaseAttempt(document, line, guard, createdAt);
+      return;
+    }
+    createAttemptIfMissing(
+        document,
+        line,
+        LogisticsTargetService.ASSET,
+        LogisticsDocumentService.RETURN_ASSET_ADDITIONAL_EQUIPMENT_RECEIVE,
+        additionalEquipmentRequestDigest(document, line, additional),
+        createdAt);
   }
 
   private void createReleaseAttempt(
@@ -602,6 +658,77 @@ class ReturnCompletionWorkflowStore {
     return Set.copyOf(shortages(snapshot));
   }
 
+  private static List<LogisticsDependencyGateway.ReturnEquipmentReceiptLine> additionalEquipment(
+      LogisticsDocumentLine line) {
+    JsonNode snapshot = line.getReturnAdditionalContentsSnapshot();
+    if (snapshot == null) return List.of();
+    JsonNode values = snapshot.get("additionalEquipment");
+    if (values == null || !values.isArray()) {
+      throw malformed("Return additional equipment snapshot is malformed");
+    }
+    List<LogisticsDependencyGateway.ReturnEquipmentReceiptLine> additional = new ArrayList<>();
+    HashSet<UUID> equipmentIds = new HashSet<>();
+    for (JsonNode value : values) {
+      JsonNode equipmentId = value.get("equipmentId");
+      JsonNode quantity = value.get("quantity");
+      if (equipmentId == null
+          || !equipmentId.isTextual()
+          || quantity == null
+          || !quantity.isIntegralNumber()
+          || quantity.longValue() < 1) {
+        throw malformed("Return additional equipment snapshot is malformed");
+      }
+      try {
+        UUID id = UUID.fromString(equipmentId.textValue());
+        if (!equipmentIds.add(id)) {
+          throw malformed("Return additional equipment snapshot has duplicate equipment");
+        }
+        additional.add(
+            new LogisticsDependencyGateway.ReturnEquipmentReceiptLine(
+                null, id, quantity.longValue(), null, -1, -1));
+      } catch (IllegalArgumentException exception) {
+        throw malformed("Return additional equipment snapshot has an invalid equipment identifier");
+      }
+    }
+    additional.sort(Comparator.comparing(value -> value.equipmentId().toString()));
+    return List.copyOf(additional);
+  }
+
+  private static void requireAdditionalEquipmentReceipt(
+      LogisticsDocument document,
+      LogisticsDocumentLine line,
+      List<LogisticsDependencyGateway.ReturnEquipmentReceiptLine> expected,
+      LogisticsDependencyGateway.ReturnEquipmentReceipt actual) {
+    if (actual == null
+        || !document.getId().equals(actual.returnId())
+        || !line.getId().equals(actual.returnLineId())
+        || !document.getWarehouseId().equals(actual.warehouseId())
+        || actual.lines() == null
+        || actual.lines().size() != expected.size()) {
+      throw malformed("Asset-service returned malformed return equipment receipt truth");
+    }
+    java.util.Map<UUID, Long> expectedQuantities = new java.util.HashMap<>();
+    for (LogisticsDependencyGateway.ReturnEquipmentReceiptLine value : expected) {
+      expectedQuantities.put(value.equipmentId(), value.quantity());
+    }
+    java.util.Map<UUID, Long> actualQuantities = new java.util.HashMap<>();
+    for (LogisticsDependencyGateway.ReturnEquipmentReceiptLine value : actual.lines()) {
+      if (value == null
+          || value.receiptId() == null
+          || value.equipmentId() == null
+          || value.quantity() < 1
+          || value.stockBalanceId() == null
+          || value.stockBalanceVersion() < 0
+          || value.stockQuantity() < value.quantity()
+          || actualQuantities.put(value.equipmentId(), value.quantity()) != null) {
+        throw malformed("Asset-service returned malformed return equipment receipt truth");
+      }
+    }
+    if (!expectedQuantities.equals(actualQuantities)) {
+      throw malformed("Asset-service returned mismatched return equipment receipt truth");
+    }
+  }
+
   private static String mediaDigest(
       String operation,
       LogisticsDocument document,
@@ -635,6 +762,46 @@ class ReturnCompletionWorkflowStore {
             Long.toString(guard.getFenceToken()),
             document.getId().toString(),
             line.getId().toString()));
+  }
+
+  private static String additionalEquipmentRequestDigest(
+      LogisticsDocument document,
+      LogisticsDocumentLine line,
+      List<LogisticsDependencyGateway.ReturnEquipmentReceiptLine> equipment) {
+    List<String> values = new ArrayList<>();
+    values.add(document.getId().toString());
+    values.add(line.getId().toString());
+    values.add(document.getWarehouseId().toString());
+    equipment.stream()
+        .sorted(Comparator.comparing(value -> value.equipmentId().toString()))
+        .forEach(
+            value -> {
+              values.add(value.equipmentId().toString());
+              values.add(Long.toString(value.quantity()));
+            });
+    return LogisticsCommandChecksum.sha256(
+        LogisticsDocumentService.RETURN_ASSET_ADDITIONAL_EQUIPMENT_RECEIVE, values);
+  }
+
+  private static String additionalEquipmentReceiptDigest(
+      LogisticsDependencyGateway.ReturnEquipmentReceipt receipt) {
+    List<String> values = new ArrayList<>();
+    values.add(receipt.returnId().toString());
+    values.add(receipt.returnLineId().toString());
+    values.add(receipt.warehouseId().toString());
+    receipt.lines().stream()
+        .sorted(Comparator.comparing(value -> value.equipmentId().toString()))
+        .forEach(
+            value -> {
+              values.add(value.receiptId().toString());
+              values.add(value.equipmentId().toString());
+              values.add(Long.toString(value.quantity()));
+              values.add(value.stockBalanceId().toString());
+              values.add(Long.toString(value.stockBalanceVersion()));
+              values.add(Long.toString(value.stockQuantity()));
+            });
+    return LogisticsCommandChecksum.sha256(
+        "RETURN_ASSET_ADDITIONAL_EQUIPMENT_RECEIVE_RESPONSE", values);
   }
 
   private static String shortageDigest(
@@ -745,7 +912,39 @@ class ReturnCompletionWorkflowStore {
       long fencingToken,
       boolean shortage,
       List<LogisticsDependencyGateway.MediaReference> references,
-      List<LogisticsDependencyGateway.EquipmentShortage> shortages) {
+      List<LogisticsDependencyGateway.EquipmentShortage> shortages,
+      List<LogisticsDependencyGateway.ReturnEquipmentReceiptLine> returnEquipment) {
+    Work(
+        WorkType type,
+        UUID operationId,
+        UUID documentId,
+        UUID lineId,
+        UUID warehouseId,
+        UUID assetId,
+        long expectedAssetVersion,
+        UUID leaseId,
+        long expectedLeaseVersion,
+        long fencingToken,
+        boolean shortage,
+        List<LogisticsDependencyGateway.MediaReference> references,
+        List<LogisticsDependencyGateway.EquipmentShortage> shortages) {
+      this(
+          type,
+          operationId,
+          documentId,
+          lineId,
+          warehouseId,
+          assetId,
+          expectedAssetVersion,
+          leaseId,
+          expectedLeaseVersion,
+          fencingToken,
+          shortage,
+          references,
+          shortages,
+          List.of());
+    }
+
     static Work media(
         UUID operationId,
         UUID documentId,
@@ -817,6 +1016,29 @@ class ReturnCompletionWorkflowStore {
           List.copyOf(shortages));
     }
 
+    static Work returnEquipment(
+        UUID operationId,
+        UUID documentId,
+        UUID lineId,
+        UUID warehouseId,
+        List<LogisticsDependencyGateway.ReturnEquipmentReceiptLine> equipment) {
+      return new Work(
+          WorkType.RETURN_EQUIPMENT,
+          operationId,
+          documentId,
+          lineId,
+          warehouseId,
+          null,
+          -1,
+          null,
+          -1,
+          -1,
+          false,
+          List.of(),
+          List.of(),
+          List.copyOf(equipment));
+    }
+
     static Work release(
         UUID operationId,
         UUID documentId,
@@ -846,6 +1068,7 @@ class ReturnCompletionWorkflowStore {
     MEDIA,
     SETTLEMENT,
     MAINTENANCE,
+    RETURN_EQUIPMENT,
     LEASE_RELEASE
   }
 }

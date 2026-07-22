@@ -40,13 +40,22 @@ public class ShipmentProcessor {
         case LEASE ->
             store.confirmLease(
                 work.operationId(),
-                dependencies.acquireOperationLease(
-                    work.operationId(),
-                    LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_SHIPMENT,
-                    work.assetId(),
-                    work.expectedAssetVersion(),
-                    work.documentId(),
-                    work.lineId()));
+                work.rentalOrderId() == null
+                    ? dependencies.acquireOperationLease(
+                        work.operationId(),
+                        LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_SHIPMENT,
+                        work.assetId(),
+                        work.expectedAssetVersion(),
+                        work.documentId(),
+                        work.lineId())
+                    : dependencies.acquireOperationLease(
+                        work.operationId(),
+                        LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_SHIPMENT,
+                        work.assetId(),
+                        work.expectedAssetVersion(),
+                        work.documentId(),
+                        work.lineId(),
+                        work.rentalOrderId()));
         case HOLD_ACQUIRE ->
             store.confirmHoldAcquire(
                 work.operationId(),

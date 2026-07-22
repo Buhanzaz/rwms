@@ -137,6 +137,26 @@ class LogisticsServiceIntegrationTest {
   }
 
   @Test
+  void returnDraftKeepsTheConfiguredDriverSnapshot() {
+    LogisticsDocumentService.CreateResult created =
+        service.createReturn(
+            SUBJECT,
+            UUID.randomUUID(),
+            CORRELATION,
+            new CreateReturnRequest(
+                WAREHOUSE,
+                null,
+                "  Водитель возврата  ",
+                List.of(
+                    new ReturnLineRequest(
+                        UUID.fromString("00000000-0000-0000-0000-000000000307"),
+                        3,
+                        "Tenant C"))));
+
+    assertThat(created.response().driverSnapshot()).isEqualTo("Водитель возврата");
+  }
+
+  @Test
   void concurrentCreateRetriesWithTheSameKeyProduceOneDocumentAndOneEvent() throws Exception {
     UUID key = UUID.randomUUID();
     CreateReturnRequest request =

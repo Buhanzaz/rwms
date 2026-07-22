@@ -10,7 +10,6 @@ import static org.mockito.Mockito.when;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateShipmentRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.EquipmentAllocationRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentLineRequest;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentPlanRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
@@ -119,15 +118,7 @@ class ShipmentWorkflowSagaIntegrationTest {
                     "ACTIVE",
                     null));
 
-    LogisticsDocumentService.CreateResult planned =
-        documents.planShipment(
-            SUBJECT,
-            UUID.randomUUID(),
-            CORRELATION,
-            documentId,
-            created.response().version(),
-            new ShipmentPlanRequest("Party A", "Driver A", List.of(line)));
-    assertThat(planned.response().state()).isEqualTo(LogisticsDocumentState.PREPARING);
+    assertThat(created.response().state()).isEqualTo(LogisticsDocumentState.PREPARING);
 
     processor.processUntilIdle(documentId);
     long awaitingVersion = documents.get(documentId, LogisticsDocumentType.SHIPMENT).version();

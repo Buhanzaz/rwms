@@ -2,13 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 vi.mock("@/features/rental-items/api/asset-rental-items-api", () => ({
   getAssetRentalItem: vi.fn(),
+  listAssetRentalItems: vi.fn(),
 }))
 
 vi.mock("@/features/repair-estimates/api/maintenance-auth", () => ({
   currentMaintenanceAccessToken: vi.fn().mockResolvedValue("access-token"),
 }))
 
-import { getAssetRentalItem } from "@/features/rental-items/api/asset-rental-items-api"
+import {
+  getAssetRentalItem,
+  listAssetRentalItems,
+} from "@/features/rental-items/api/asset-rental-items-api"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 import { panelRepairTaskRentalItemsClient } from "@/features/repair-tasks/adapters/panel-repair-task-rental-items-client"
 
@@ -55,6 +59,47 @@ describe("panel repair-task rental-items client", () => {
       id: RENTAL_ITEM_ID,
       warehouseId: WAREHOUSE_ID,
       number: "БЫТ-042",
+    })
+  })
+
+  it("searches every direct-repair status except after-rent and locked items", async () => {
+    vi.mocked(listAssetRentalItems).mockResolvedValue({
+      content: [rentalItem("WAREHOUSE")],
+      page: 0,
+      size: 40,
+      totalElements: 1,
+      totalPages: 1,
+    })
+
+    await expect(
+      panelRepairTaskRentalItemsClient.search({
+        warehouseId: WAREHOUSE_ID,
+        search: "042",
+        page: 0,
+        size: 40,
+      })
+    ).resolves.toMatchObject({
+      items: [
+        {
+          id: RENTAL_ITEM_ID,
+          warehouseId: WAREHOUSE_ID,
+          number: "БЫТ-042",
+        },
+      ],
+      totalElements: 1,
+    })
+
+    expect(listAssetRentalItems).toHaveBeenCalledWith({
+      accessToken: "access-token",
+      warehouseId: WAREHOUSE_ID,
+      search: "042",
+      page: 0,
+      size: 40,
+      excludeStatuses: [
+        "AFTER_RENT",
+        "WRITTEN_OFF",
+        "WAITING_ESTIMATE_CONFIRMATION",
+      ],
     })
   })
 

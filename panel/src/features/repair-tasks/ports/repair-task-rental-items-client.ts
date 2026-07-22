@@ -1,6 +1,13 @@
-import type { EstimateRentalItemOptionDto } from "@/features/repair-estimates/model/repair-estimate"
+import type {
+  EstimateRentalItemOptionDto,
+  EstimateRentalItemSearchPageDto,
+  EstimateRentalItemSearchQuery,
+} from "@/features/repair-estimates/model/repair-estimate"
 
 export interface RepairTaskRentalItemsClient {
+  search(
+    query: EstimateRentalItemSearchQuery
+  ): Promise<EstimateRentalItemSearchPageDto>
   resolveById(
     warehouseId: string,
     rentalItemId: string

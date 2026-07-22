@@ -7,12 +7,17 @@ import {
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { RepairEstimateRentalItemPicker } from "@/features/repair-estimates/repair-estimate-rental-item-picker"
+import type { EstimateRentalItemOptionDto } from "@/features/repair-estimates/model/repair-estimate"
+import {
+  RepairEstimateRentalItemPicker,
+  type RepairWorkRentalItemScope,
+} from "@/features/repair-estimates/repair-estimate-rental-item-picker"
 
 type RepairWorkInformationFieldsProps = {
   warehouseId: string
   rentalItemId: string
   rentalItemNumber?: string
+  rentalItemScope?: RepairWorkRentalItemScope
   contextLabel: "От кого" | "Причина" | "Источник"
   contextValue: string
   dispatchDate: string | null
@@ -22,7 +27,7 @@ type RepairWorkInformationFieldsProps = {
   readOnly?: boolean
   rentalItemInvalid?: boolean
   showComment?: boolean
-  onRentalItemChange: (rentalItemId: string) => void
+  onRentalItemChange: (rentalItem: EstimateRentalItemOptionDto) => void
   onContextChange: (value: string) => void
   onDispatchDateChange: (value: string | null) => void
   onCommentChange: (value: string) => void
@@ -35,6 +40,7 @@ export function RepairWorkInformationFields({
   warehouseId,
   rentalItemId,
   rentalItemNumber,
+  rentalItemScope = "ESTIMATE",
   contextLabel,
   contextValue,
   dispatchDate,
@@ -75,6 +81,7 @@ export function RepairWorkInformationFields({
               id="repair-work-rental-item"
               warehouseId={warehouseId}
               value={rentalItemId}
+              scope={rentalItemScope}
               invalid={rentalItemInvalid}
               disabled={disabled || rentalItemDisabled}
               onValueChange={onRentalItemChange}

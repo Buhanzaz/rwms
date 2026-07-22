@@ -19,23 +19,53 @@ import {
   resolveEstimateRentalItem,
   searchEstimateRentalItems,
 } from "@/features/repair-estimates/api/repair-estimates-api"
+import type { EstimateRentalItemOptionDto } from "@/features/repair-estimates/model/repair-estimate"
+import {
+  REPAIR_TASK_RENTAL_ITEMS_QUERY_KEY,
+  resolveRepairTaskRentalItem,
+  searchRepairTaskRentalItems,
+} from "@/features/repair-tasks/api/repair-tasks-api"
 import { cn } from "@/lib/utils"
 
 const PAGE_SIZE = 40
+
+export type RepairWorkRentalItemScope = "ESTIMATE" | "REPAIR"
 
 type RepairEstimateRentalItemPickerProps = {
   id: string
   warehouseId: string
   value: string
+  scope?: RepairWorkRentalItemScope
   invalid?: boolean
   disabled?: boolean
-  onValueChange: (rentalItemId: string) => void
+  onValueChange: (rentalItem: EstimateRentalItemOptionDto) => void
+}
+
+function formatArrivalDate(value: string) {
+  const [year, month, day] = value.split("-")
+  return year && month && day ? `${day}.${month}.${year}` : value
+}
+
+function RentalItemMetadata({ item }: { item: EstimateRentalItemOptionDto }) {
+  const values = [
+    item.counterparty ? `Контрагент: ${item.counterparty}` : null,
+    item.arrivalDate
+      ? `Прибытие: ${formatArrivalDate(item.arrivalDate)}`
+      : null,
+  ].filter((value): value is string => Boolean(value))
+
+  return values.length > 0 ? (
+    <span className="block truncate text-xs text-muted-foreground">
+      {values.join(" · ")}
+    </span>
+  ) : null
 }
 
 export function RepairEstimateRentalItemPicker({
   id,
   warehouseId,
   value,
+  scope = "ESTIMATE",
   invalid = false,
   disabled = false,
   onValueChange,
@@ -49,15 +79,19 @@ export function RepairEstimateRentalItemPicker({
     return () => window.clearTimeout(timer)
   }, [search])
 
+  const rentalItemsQueryKey =
+    scope === "REPAIR"
+      ? REPAIR_TASK_RENTAL_ITEMS_QUERY_KEY
+      : ESTIMATE_RENTAL_ITEMS_QUERY_KEY
+  const searchRentalItems =
+    scope === "REPAIR" ? searchRepairTaskRentalItems : searchEstimateRentalItems
+  const resolveRentalItem =
+    scope === "REPAIR" ? resolveRepairTaskRentalItem : resolveEstimateRentalItem
+
   const searchQuery = useInfiniteQuery({
-    queryKey: [
-      ...ESTIMATE_RENTAL_ITEMS_QUERY_KEY,
-      warehouseId,
-      "search",
-      debouncedSearch,
-    ],
+    queryKey: [...rentalItemsQueryKey, warehouseId, "search", debouncedSearch],
     queryFn: ({ pageParam }) =>
-      searchEstimateRentalItems({
+      searchRentalItems({
         warehouseId,
         search: debouncedSearch,
         page: pageParam,
@@ -69,13 +103,8 @@ export function RepairEstimateRentalItemPicker({
     enabled: open && Boolean(warehouseId),
   })
   const selectedQuery = useQuery({
-    queryKey: [
-      ...ESTIMATE_RENTAL_ITEMS_QUERY_KEY,
-      warehouseId,
-      "resolve",
-      value,
-    ],
-    queryFn: () => resolveEstimateRentalItem(warehouseId, value),
+    queryKey: [...rentalItemsQueryKey, warehouseId, "resolve", value],
+    queryFn: () => resolveRentalItem(warehouseId, value),
     enabled: Boolean(warehouseId && value),
   })
   const items = searchQuery.data?.pages.flatMap((page) => page.items) ?? []
@@ -106,8 +135,11 @@ export function RepairEstimateRentalItemPicker({
             !selected && "text-muted-foreground"
           )}
         >
-          <span className="truncate">
-            {selected?.number ?? (value ? "Загрузка..." : "Выберите бытовку")}
+          <span className="min-w-0 text-left">
+            <span className="block truncate">
+              {selected?.number ?? (value ? "Загрузка..." : "Выберите бытовку")}
+            </span>
+            {selected ? <RentalItemMetadata item={selected} /> : null}
           </span>
           <HugeiconsIcon icon={UnfoldMoreIcon} data-icon="inline-end" />
         </Button>
@@ -168,14 +200,17 @@ export function RepairEstimateRentalItemPicker({
                   variant={item.id === value ? "secondary" : "ghost"}
                   className="w-full justify-start"
                   onClick={() => {
-                    onValueChange(item.id)
+                    onValueChange(item)
                     setOpen(false)
                   }}
                 >
                   {item.id === value ? (
                     <HugeiconsIcon icon={Tick02Icon} data-icon="inline-start" />
                   ) : null}
-                  <span className="truncate">{item.number}</span>
+                  <span className="min-w-0 text-left">
+                    <span className="block truncate">{item.number}</span>
+                    <RentalItemMetadata item={item} />
+                  </span>
                 </Button>
               ))}
             </div>

@@ -32,6 +32,7 @@ export type ShipmentLine = {
   assetVersion: number
   state: ShipmentLineState
   tenantSnapshot: string | null
+  rentalOrderId: string | null
 }
 
 export type ShipmentDocument = {
@@ -43,6 +44,8 @@ export type ShipmentDocument = {
   destinationWarehouseId: null
   partySnapshot: string
   driverSnapshot: string
+  clientId: string | null
+  equipmentMovementTaskId: null
   lines: ShipmentLine[]
   createdAt: string
   updatedAt: string

@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest"
 import { createRepairEstimateCatalogIndex } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import type { RepairEstimateCatalogNodeDto } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 import {
+  applyEstimateRentalItemSelection,
   buildRepairEstimateTaskPlans,
+  createNewEstimateDraft,
   getRepairEstimateCatalogQuantityError,
 } from "@/features/repair-estimates/domain/repair-estimate-domain"
 import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
@@ -94,6 +96,29 @@ describe("furniture estimate quantities", () => {
         1.5
       )
     ).toBeNull()
+  })
+})
+
+describe("estimate return selection", () => {
+  it("replaces the estimate source fields with return metadata", () => {
+    const draft = {
+      ...createNewEstimateDraft(),
+      rentalItemId: "previous-item",
+      sourceParty: "Предыдущий контрагент",
+      dispatchDate: "2026-07-17",
+    }
+
+    expect(
+      applyEstimateRentalItemSelection(draft, {
+        id: "after-rent-item",
+        counterparty: "ООО Арендатор",
+        arrivalDate: "2026-07-18",
+      })
+    ).toMatchObject({
+      rentalItemId: "after-rent-item",
+      sourceParty: "ООО Арендатор",
+      dispatchDate: "2026-07-18",
+    })
   })
 })
 

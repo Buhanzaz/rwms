@@ -57,6 +57,7 @@ class AssetOpenApiParityTest {
         "/api/internal/asset/v1/maintenance/rental-items/{id}/fenced-status",
         "/api/internal/asset/v1/logistics/rental-items/{id}/snapshot",
         "/api/internal/asset/v1/logistics/operation-leases",
+        "/api/internal/asset/v1/logistics/return-equipment-receipts",
         "/api/internal/asset/v1/logistics/operation-leases/{id}/renew",
         "/api/internal/asset/v1/logistics/operation-leases/{id}/release",
         "/api/internal/asset/v1/logistics/rental-items/{id}/effects",

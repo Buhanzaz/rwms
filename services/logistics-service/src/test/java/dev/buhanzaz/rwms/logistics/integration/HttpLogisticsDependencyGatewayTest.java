@@ -121,6 +121,76 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
+  void recordsAdditionalReturnFurnitureThroughTheFrozenAssetReceiptContract() {
+    UUID idempotencyKey = UUID.randomUUID();
+    UUID returnId = UUID.randomUUID();
+    UUID returnLineId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID equipmentId = UUID.randomUUID();
+    UUID receiptId = UUID.randomUUID();
+    UUID stockBalanceId = UUID.randomUUID();
+
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/logistics/return-equipment-receipts"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andExpect(header("Idempotency-Key", idempotencyKey.toString()))
+        .andExpect(jsonPath("$.returnId").value(returnId.toString()))
+        .andExpect(jsonPath("$.returnLineId").value(returnLineId.toString()))
+        .andExpect(jsonPath("$.warehouseId").value(warehouseId.toString()))
+        .andExpect(jsonPath("$.lines[0].equipmentId").value(equipmentId.toString()))
+        .andExpect(jsonPath("$.lines[0].quantity").value(2))
+        .andRespond(
+            withStatus(HttpStatus.CREATED)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(
+                    """
+                    {
+                      "returnId":"%s",
+                      "returnLineId":"%s",
+                      "warehouseId":"%s",
+                      "lines":[{
+                        "receiptId":"%s",
+                        "equipmentId":"%s",
+                        "quantity":2,
+                        "stockBalanceId":"%s",
+                        "stockBalanceVersion":4,
+                        "stockQuantity":7
+                      }]
+                    }
+                    """
+                        .formatted(
+                            returnId,
+                            returnLineId,
+                            warehouseId,
+                            receiptId,
+                            equipmentId,
+                            stockBalanceId)));
+
+    LogisticsDependencyGateway.ReturnEquipmentReceipt receipt =
+        gateway.receiveReturnEquipment(
+            idempotencyKey,
+            returnId,
+            returnLineId,
+            warehouseId,
+            java.util.List.of(
+                new LogisticsDependencyGateway.ReturnEquipmentReceiptLine(
+                    null, equipmentId, 2, null, 0, 0)));
+
+    assertThat(receipt.lines())
+        .singleElement()
+        .satisfies(
+            line -> {
+              assertThat(line.receiptId()).isEqualTo(receiptId);
+              assertThat(line.stockBalanceId()).isEqualTo(stockBalanceId);
+              assertThat(line.stockQuantity()).isEqualTo(7);
+            });
+    server.verify();
+  }
+
+  @Test
   void usesTheExactWarehouseScopeForTheNarrowIdentityRoute() {
     UUID warehouseId = UUID.randomUUID();
     server
