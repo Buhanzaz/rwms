@@ -159,6 +159,22 @@ export function replaceMaintenanceCatalogNodes(
   )
 }
 
+export function replaceMaintenanceCatalog(
+  accessToken: string,
+  warehouseId: string,
+  catalogVersionId: string,
+  expectedVersion: number,
+  nodes: MaintenanceCatalogNodeInput[],
+  links: MaintenanceCatalogLinkInput[]
+) {
+  const endpoint = catalogVersionEndpoint(warehouseId, catalogVersionId)
+  return bearerRequest<MaintenanceCatalogVersion>(
+    accessToken,
+    endpoint,
+    json("PUT", { expectedVersion, nodes, links })
+  )
+}
+
 export function replaceMaintenanceCatalogLinks(
   accessToken: string,
   warehouseId: string,

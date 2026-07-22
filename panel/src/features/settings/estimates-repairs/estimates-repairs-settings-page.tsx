@@ -1,6 +1,7 @@
 import { useId, useMemo, useRef, useState, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
+import { toast } from "sonner"
 import {
   Add01Icon,
   AlertCircleIcon,
@@ -9,6 +10,8 @@ import {
   CanvasIcon,
   DatabaseAddIcon,
   Delete01Icon,
+  FloppyDiskIcon,
+  Loading03Icon,
   PackageIcon,
   PencilEdit01Icon,
   Refresh01Icon,
@@ -17,10 +20,8 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import {
-  deleteRepairEstimateCatalogCanvasLink,
   getRepairEstimateCatalogCanvasSettingsData,
   getRepairEstimateCatalogCanvasSettings,
-  saveRepairEstimateCatalogCanvasLink,
   saveRepairEstimateCatalogCanvasNode,
 } from "@/features/settings/estimates-repairs/api/repair-estimate-catalog-canvas-settings-api"
 import {
@@ -46,7 +47,7 @@ import {
   getCurrentRepairEstimateCatalog,
   getItemsForCategory,
   getRepairEstimateCatalogSectionItems,
-  moveRepairEstimateCatalogCanvasNode,
+  saveRepairEstimateCatalogCanvasChanges,
 } from "@/features/settings/estimates-repairs/api/repair-estimate-catalog-store"
 import { REPAIR_ESTIMATE_CATALOG_QUERY_KEY } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import { Badge } from "@/components/ui/badge"
@@ -86,6 +87,7 @@ import { cn } from "@/lib/utils"
 import type { EstimateCatalogSettingsActionDto } from "@/features/settings/estimates-repairs/model/estimate-repair-settings"
 import type {
   RepairEstimateCatalogCanvasDto,
+  RepairEstimateCatalogCanvasChangeSet,
   RepairEstimateCatalogLinkDto,
   RepairEstimateCatalogLinkMutation,
   RepairEstimateCatalogLinkType,
@@ -134,6 +136,11 @@ type CatalogLinkStart = {
   anchor: CatalogLinkAnchor
 }
 
+type PendingCatalogLink = {
+  draftId: string
+  input: RepairEstimateCatalogLinkMutation
+}
+
 type NodeDialogState = {
   title: string
   description: string
@@ -151,6 +158,7 @@ const CATALOG_TABLE_SORT_STORAGE_PREFIX =
   "rwms:repair-estimate-catalog-table-sort:v1:"
 const CANVAS_NODE_WIDTH = 256
 const CANVAS_NODE_MIN_HEIGHT = 208
+const CANVAS_ANCHOR_INSET = 1
 const CATALOG_COMMENT_MAX_LENGTH = 2000
 
 function getEstimateActionIcon(id: EstimateCatalogSettingsActionDto["id"]) {
@@ -1282,6 +1290,7 @@ function CatalogCanvas({
   onMoveNode,
   onEditNode,
   onDeleteLink,
+  onClearCanvas,
 }: {
   nodes: RepairEstimateCatalogNodeDto[]
   links: RepairEstimateCatalogLinkDto[]
@@ -1303,6 +1312,7 @@ function CatalogCanvas({
   ) => void
   onEditNode: (node: RepairEstimateCatalogNodeDto) => void
   onDeleteLink: (link: RepairEstimateCatalogLinkDto) => void
+  onClearCanvas: () => void
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<CanvasDragState | null>(null)
@@ -1345,7 +1355,10 @@ function CatalogCanvas({
     anchor: CatalogLinkAnchor
   ) => ({
     x: position.x + position.width / 2,
-    y: anchor === "TOP" ? position.y : position.y + position.height,
+    y:
+      anchor === "TOP"
+        ? position.y + CANVAS_ANCHOR_INSET
+        : position.y + position.height - CANVAS_ANCHOR_INSET,
   })
 
   const pathD = (
@@ -1389,7 +1402,12 @@ function CatalogCanvas({
     <div
       ref={canvasRef}
       className="relative"
+      data-catalog-canvas="true"
       style={{ width, height }}
+      onClick={() => {
+        setLinkPreviewPoint(null)
+        onClearCanvas()
+      }}
       onPointerMove={(event) => {
         if (draftLinkStart === null) {
           return
@@ -1649,14 +1667,15 @@ function CatalogCanvas({
               return
             }
 
-            const height = Math.ceil(element.getBoundingClientRect().height)
+            const height = element.getBoundingClientRect().height
             setNodeHeights((current) =>
               current[node.id] === height
                 ? current
                 : { ...current, [node.id]: height }
             )
           }}
-          onClick={() => {
+          onClick={(event) => {
+            event.stopPropagation()
             if (suppressClickRef.current) {
               suppressClickRef.current = false
               return
@@ -1692,6 +1711,18 @@ function CatalogCanvas({
           }}
           onPointerMove={(event) => {
             const drag = dragRef.current
+            if (
+              drag === null &&
+              draftLinkStart !== null &&
+              draftLinkStart.nodeId !== node.id
+            ) {
+              const rect = event.currentTarget.getBoundingClientRect()
+              const targetAnchor =
+                event.clientY <= rect.top + rect.height / 2 ? "TOP" : "BOTTOM"
+              event.stopPropagation()
+              setLinkPreviewPoint(anchorPoint(position, targetAnchor))
+              return
+            }
             if (
               drag === null ||
               drag.nodeId !== node.id ||
@@ -1784,6 +1815,8 @@ function CatalogCanvas({
                 key={anchor}
                 type="button"
                 aria-label={`${anchor === "TOP" ? "Верхняя" : "Нижняя"} точка связи: ${node.name}`}
+                data-catalog-link-anchor={anchor}
+                data-catalog-node-id={node.id}
                 className={cn(
                   "absolute left-1/2 z-10 size-5 -translate-x-1/2 rounded-full border-2 border-background bg-primary shadow-md",
                   anchor === "TOP" ? "-top-2.5" : "-bottom-2.5",
@@ -1801,6 +1834,15 @@ function CatalogCanvas({
                   ) {
                     setLinkPreviewPoint(anchorPoint(position, anchor))
                     onBeginLink({ nodeId: node.id, anchor })
+                  }
+                }}
+                onPointerMove={(event) => {
+                  if (
+                    draftLinkStart !== null &&
+                    draftLinkStart.nodeId !== node.id
+                  ) {
+                    event.stopPropagation()
+                    setLinkPreviewPoint(anchorPoint(position, anchor))
                   }
                 }}
                 onPointerUp={(event) => {
@@ -1873,17 +1915,24 @@ function CatalogCanvasCategoryEditor({
   const [draftLinkStart, setDraftLinkStart] = useState<CatalogLinkStart | null>(
     null
   )
+  const draftLinkSequenceRef = useRef(0)
+  const [pendingNodePositions, setPendingNodePositions] = useState<
+    Record<string, CanvasPosition>
+  >({})
+  const [pendingLinks, setPendingLinks] = useState<PendingCatalogLink[]>([])
+  const [deletedLinkIds, setDeletedLinkIds] = useState<string[]>([])
   const [nodeDialogState, setNodeDialogState] =
     useState<NodeDialogState | null>(null)
   const [error, setError] = useState<string | null>(null)
 
+  const canvasQueryKey = [
+    ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
+    request.warehouseId,
+    request.catalogVersionId,
+    "canvas",
+  ] as const
   const canvasQuery = useQuery({
-    queryKey: [
-      ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
-      request.warehouseId,
-      request.catalogVersionId,
-      "canvas",
-    ],
+    queryKey: canvasQueryKey,
     queryFn: () => getRepairEstimateCatalogCanvasSettingsData(request),
   })
 
@@ -1893,62 +1942,25 @@ function CatalogCanvasCategoryEditor({
     })
   }
 
-  const deleteLinkMutation = useMutation({
-    mutationFn: (id: string) =>
-      deleteRepairEstimateCatalogCanvasLink(request, id),
-    onSuccess: () => {
+  const saveCanvasMutation = useMutation({
+    mutationFn: (changes: RepairEstimateCatalogCanvasChangeSet) =>
+      saveRepairEstimateCatalogCanvasChanges(request, changes),
+    onSuccess: (savedCanvas) => {
+      queryClient.setQueryData(canvasQueryKey, savedCanvas)
+      setPendingNodePositions({})
+      setPendingLinks([])
+      setDeletedLinkIds([])
+      setDraftLinkStart(null)
       setError(null)
       setSelectedLinkId(null)
+      toast.success("Каталог сохранён.")
       invalidate()
     },
     onError: (mutationError) => {
       setError(
         mutationError instanceof Error
           ? mutationError.message
-          : "Не удалось удалить связь"
-      )
-    },
-  })
-
-  const createLinkMutation = useMutation({
-    mutationFn: (input: RepairEstimateCatalogLinkMutation) =>
-      saveRepairEstimateCatalogCanvasLink(request, input),
-    onSuccess: (link) => {
-      setError(null)
-      setDraftLinkStart(null)
-      setSelectedNodeId(null)
-      setSelectedLinkId(link.id)
-      invalidate()
-    },
-    onError: (mutationError) => {
-      setDraftLinkStart(null)
-      setError(
-        mutationError instanceof Error
-          ? mutationError.message
-          : "Не удалось создать связь"
-      )
-    },
-  })
-
-  const moveNodeMutation = useMutation({
-    mutationFn: ({
-      nodeId,
-      position,
-    }: {
-      nodeId: string
-      position: CanvasPosition
-    }) => moveRepairEstimateCatalogCanvasNode(request, nodeId, position),
-    onSuccess: (_position, variables) => {
-      setError(null)
-      setSelectedNodeId(variables.nodeId)
-      setSelectedLinkId(null)
-      invalidate()
-    },
-    onError: (mutationError) => {
-      setError(
-        mutationError instanceof Error
-          ? mutationError.message
-          : "Не удалось переместить блок"
+          : "Не удалось сохранить каталог"
       )
     },
   })
@@ -1980,9 +1992,27 @@ function CatalogCanvasCategoryEditor({
 
   const canvasNodes = getCanvasNodes(data, categoryId)
   const nodeIds = new Set(canvasNodes.map((node) => node.id))
-  const canvasLinks = data.links.filter(
-    (link) => nodeIds.has(link.sourceNodeId) && nodeIds.has(link.targetNodeId)
-  )
+  const canvasLinks = [
+    ...data.links.filter(
+      (link) =>
+        nodeIds.has(link.sourceNodeId) &&
+        nodeIds.has(link.targetNodeId) &&
+        !deletedLinkIds.includes(link.id)
+    ),
+    ...pendingLinks.map(({ draftId, input }): RepairEstimateCatalogLinkDto => ({
+      id: draftId,
+      catalogVersionId: data.catalogVersion.id,
+      sourceNodeId: input.sourceNodeId,
+      targetNodeId: input.targetNodeId,
+      linkType: input.linkType,
+      sortOrder: input.sortOrder,
+      canvasAnchors: input.canvasAnchors,
+    })),
+  ]
+  const hasPendingCanvasChanges =
+    Object.keys(pendingNodePositions).length > 0 ||
+    pendingLinks.length > 0 ||
+    deletedLinkIds.length > 0
   const createLinkFromAnchors = (
     target: RepairEstimateCatalogNodeDto,
     targetAnchor: CatalogLinkAnchor
@@ -2003,7 +2033,7 @@ function CatalogCanvasCategoryEditor({
       return
     }
 
-    createLinkMutation.mutate({
+    const input: RepairEstimateCatalogLinkMutation = {
       sourceNodeId: sourceNode.id,
       targetNodeId: target.id,
       linkType: draftLinkType,
@@ -2012,7 +2042,13 @@ function CatalogCanvasCategoryEditor({
         source: draftLinkStart.anchor,
         target: targetAnchor,
       },
-    })
+    }
+    const draftId = `draft-catalog-link-${++draftLinkSequenceRef.current}`
+    setPendingLinks((current) => [...current, { draftId, input }])
+    setError(null)
+    setDraftLinkStart(null)
+    setSelectedNodeId(null)
+    setSelectedLinkId(draftId)
   }
 
   const openNodeEditor = (node: RepairEstimateCatalogNodeDto) => {
@@ -2038,36 +2074,18 @@ function CatalogCanvasCategoryEditor({
             У вас нет права редактировать каталог выбранного склада.
           </p>
         ) : (
-          <div className="grid gap-2 sm:grid-cols-[repeat(auto-fit,minmax(13rem,13rem))]">
-            <Button
-              type="button"
-              className="h-9 w-52 justify-start md:h-9"
-              onClick={() =>
-                setNodeDialogState({
-                  title: "Добавить блок",
-                  description: category.name,
-                  submitLabel: "Сохранить",
-                  allowTypeSelect: true,
-                  request,
-                  furnitureTree: category.furnitureCategory,
-                  value: createBlankNodeMutation({
-                    nodeType: "WORK",
-                    parentId: category.id,
-                  }),
-                  save: (input) =>
-                    saveRepairEstimateCatalogCanvasNode(request, input),
-                })
-              }
-            >
-              <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-              Блок
-            </Button>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm text-muted-foreground">Тип стрелки</span>
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+            <fieldset className="flex w-fit items-center gap-3 rounded-lg border bg-muted/30 p-1.5">
+              <legend className="sr-only">Тип стрелки</legend>
+              <span className="pl-1 text-sm font-medium text-foreground">
+                Тип стрелки
+              </span>
               <ToggleGroup
                 type="single"
                 variant="outline"
                 size="sm"
+                spacing={0}
+                className="bg-background shadow-xs"
                 value={draftLinkType}
                 aria-label="Тип стрелки"
                 onValueChange={(value) => {
@@ -2082,22 +2100,74 @@ function CatalogCanvasCategoryEditor({
                     "DEPENDENCY",
                   ] satisfies RepairEstimateCatalogLinkType[]
                 ).map((type) => (
-                  <ToggleGroupItem key={type} value={type}>
+                  <ToggleGroupItem key={type} value={type} className="min-w-24">
                     {repairEstimateCatalogLinkTypeLabel(type)}
                   </ToggleGroupItem>
                 ))}
               </ToggleGroup>
-            </div>
-            {draftLinkStart !== null && (
+            </fieldset>
+            <div className="flex flex-wrap items-center gap-2 lg:ml-auto lg:justify-end">
+              {draftLinkStart !== null && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setDraftLinkStart(null)}
+                >
+                  Отменить стрелку
+                </Button>
+              )}
+              <Button
+                type="button"
+                disabled={
+                  !hasPendingCanvasChanges || saveCanvasMutation.isPending
+                }
+                onClick={() =>
+                  saveCanvasMutation.mutate({
+                    nodePositions: Object.entries(pendingNodePositions).map(
+                      ([nodeId, position]) => ({ nodeId, ...position })
+                    ),
+                    addedLinks: pendingLinks.map(({ input }) => input),
+                    deletedLinkIds,
+                  })
+                }
+              >
+                <HugeiconsIcon
+                  icon={
+                    saveCanvasMutation.isPending
+                      ? Loading03Icon
+                      : FloppyDiskIcon
+                  }
+                  data-icon="inline-start"
+                  className={
+                    saveCanvasMutation.isPending ? "animate-spin" : undefined
+                  }
+                />
+                {saveCanvasMutation.isPending ? "Сохраняем…" : "Сохранить"}
+              </Button>
               <Button
                 type="button"
                 variant="outline"
-                className="h-9 w-52 justify-start md:h-9"
-                onClick={() => setDraftLinkStart(null)}
+                onClick={() =>
+                  setNodeDialogState({
+                    title: "Добавить блок",
+                    description: category.name,
+                    submitLabel: "Сохранить",
+                    allowTypeSelect: true,
+                    request,
+                    furnitureTree: category.furnitureCategory,
+                    value: createBlankNodeMutation({
+                      nodeType: "WORK",
+                      parentId: category.id,
+                    }),
+                    save: (input) =>
+                      saveRepairEstimateCatalogCanvasNode(request, input),
+                  })
+                }
               >
-                Отменить точку
+                <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+                Блок
               </Button>
-            )}
+            </div>
           </div>
         )}
       </div>
@@ -2131,12 +2201,38 @@ function CatalogCanvasCategoryEditor({
           onCompleteLink={(target, anchor) => {
             if (!readOnly) createLinkFromAnchors(target, anchor)
           }}
-          onMoveNode={(node, position) =>
-            !readOnly && moveNodeMutation.mutate({ nodeId: node.id, position })
-          }
+          onMoveNode={(node, position) => {
+            if (readOnly) return
+            setPendingNodePositions((current) => ({
+              ...current,
+              [node.id]: position,
+            }))
+            setError(null)
+            setSelectedNodeId(node.id)
+            setSelectedLinkId(null)
+          }}
           onEditNode={openNodeEditor}
           onDeleteLink={(link) => {
-            if (!readOnly) deleteLinkMutation.mutate(link.id)
+            if (readOnly) return
+            const pendingLink = pendingLinks.find(
+              ({ draftId }) => draftId === link.id
+            )
+            if (pendingLink) {
+              setPendingLinks((current) =>
+                current.filter(({ draftId }) => draftId !== link.id)
+              )
+            } else {
+              setDeletedLinkIds((current) =>
+                current.includes(link.id) ? current : [...current, link.id]
+              )
+            }
+            setError(null)
+            setSelectedLinkId(null)
+          }}
+          onClearCanvas={() => {
+            setDraftLinkStart(null)
+            setSelectedNodeId(null)
+            setSelectedLinkId(null)
           }}
         />
       </div>

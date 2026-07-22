@@ -181,8 +181,8 @@ public final class MaintenanceApiModels {
       @NotNull @Size(max = 20000) List<@Valid CatalogLinkInput> links) {}
   public record ChangeCatalogRequest(
       @NotNull @Min(0) Long expectedVersion,
-      @NotNull List<@Valid CatalogNodeInput> nodes,
-      @NotNull List<@Valid CatalogLinkInput> links) {}
+      @NotNull @Size(max = 10000) List<@Valid CatalogNodeInput> nodes,
+      @NotNull @Size(max = 20000) List<@Valid CatalogLinkInput> links) {}
   public record VersionCommand(@NotNull @Min(0) Long expectedVersion) {}
   public record CompleteEstimateRequest(@NotNull @Min(0) Long expectedVersion) {}
 
