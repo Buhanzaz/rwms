@@ -108,6 +108,11 @@ describe("OrdersListPage", () => {
       search: "",
       sort: "updatedAt",
       direction: "desc",
+      statuses: [],
+      clientTypes: [],
+      warehouseIds: [],
+      createdFrom: undefined,
+      createdTo: undefined,
     })
 
     await user.type(screen.getByLabelText("Поиск заказов"), "Петров")
@@ -119,6 +124,11 @@ describe("OrdersListPage", () => {
         search: "Петров",
         sort: "updatedAt",
         direction: "desc",
+        statuses: [],
+        clientTypes: [],
+        warehouseIds: [],
+        createdFrom: undefined,
+        createdTo: undefined,
       })
     )
 
@@ -131,6 +141,11 @@ describe("OrdersListPage", () => {
         search: "Петров",
         sort: "number",
         direction: "asc",
+        statuses: [],
+        clientTypes: [],
+        warehouseIds: [],
+        createdFrom: undefined,
+        createdTo: undefined,
       })
     )
   })

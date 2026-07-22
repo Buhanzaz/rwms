@@ -1,18 +1,10 @@
+import { useMemo, useRef, useState, type FormEvent } from "react"
 import {
-  useMemo,
-  useRef,
-  useState,
-  type FormEvent,
-  type MutableRefObject,
-} from "react"
-import {
-  type QueryClient,
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
 } from "@tanstack/react-query"
-import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
-import { HugeiconsIcon } from "@hugeicons/react"
 import { useSearchParams } from "react-router-dom"
 
 import { OperationsListGrid } from "@/components/operations-list-grid"
@@ -33,16 +25,6 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import {
-  Combobox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxGroup,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxLabel,
-  ComboboxList,
-} from "@/components/ui/combobox"
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -52,87 +34,45 @@ import {
 } from "@/components/ui/dialog"
 import {
   Field,
-  FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
-  FieldLegend,
-  FieldSet,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
+import {
+  LogisticsDocumentFilters,
+  type LogisticsDocumentFiltersState,
+} from "@/features/logistics/logistics-document-filters"
 import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
-import { RentalClientPicker } from "@/features/logistics/rental-client-picker"
+import { AcceptUndamagedDialog } from "@/features/logistics/returns/accept-undamaged-dialog"
 import {
   RETURNS_QUERY_KEY,
-  createReturn,
   listReturns,
   registerReturn,
 } from "@/features/logistics/returns/api"
-import { AcceptUndamagedDialog } from "@/features/logistics/returns/accept-undamaged-dialog"
 import {
+  RETURN_DOCUMENT_STATES,
   RETURN_STATE_LABELS,
-  type CreateReturnLine,
   type ReturnDocument,
   type ReturnDocumentState,
   type ReturnLine,
 } from "@/features/logistics/returns/model"
 import { RequestEstimateDialog } from "@/features/logistics/returns/request-estimate-dialog"
-import {
-  getOrder,
-  listOrders,
-  ORDERS_QUERY_KEY,
-} from "@/features/orders/api/orders-api"
-import type {
-  OrderClientSearchItem,
-  OrderDetail,
-  OrderRentalUnit,
-} from "@/features/orders/domain/orders"
 import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
 import { useWarehouse } from "@/hooks/use-warehouse"
+import { ApiError } from "@/lib/api-client"
 
-const ACTIONABLE_STATES = new Set<ReturnDocumentState>([
-  "DRAFT",
-  "INSPECTION_REQUIRED",
-  "CONFLICT",
-  "RECONCILIATION_REQUIRED",
-])
-
-type CommandAttempt = {
-  signature: string
-  idempotencyKey: string
-}
-
-type ReturnCandidate = {
-  rentalOrderId: string
-  orderNumber: string
-  unit: OrderRentalUnit
-}
-
-type ReturnLineDraft = {
-  key: string
-  assetId: string | null
+const EMPTY_FILTERS: LogisticsDocumentFiltersState<ReturnDocumentState> = {
+  states: [],
+  schedule: "ALL",
+  dateFrom: "",
+  dateTo: "",
 }
 
 function commandIdentity() {
   return crypto.randomUUID()
-}
-
-function stableCommandKey(
-  attempt: MutableRefObject<CommandAttempt | null>,
-  signature: string
-) {
-  if (attempt.current?.signature === signature) {
-    return attempt.current.idempotencyKey
-  }
-  const idempotencyKey = commandIdentity()
-  attempt.current = { signature, idempotencyKey }
-  return idempotencyKey
-}
-
-function emptyReturnLine(): ReturnLineDraft {
-  return { key: commandIdentity(), assetId: null }
 }
 
 function formatDateTime(value: string) {
@@ -140,6 +80,37 @@ function formatDateTime(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value))
+}
+
+function toIsoDateTime(value: string) {
+  const date = new Date(value)
+  if (!value || !Number.isFinite(date.getTime())) {
+    throw new Error("Укажите корректную дату вывоза.")
+  }
+  return date.toISOString()
+}
+
+function matchesDateRange(
+  value: string | null,
+  filters: LogisticsDocumentFiltersState<string>
+) {
+  if (filters.schedule === "SCHEDULED" && value === null) return false
+  if (filters.schedule === "UNSCHEDULED" && value !== null) return false
+  if (!value) return !filters.dateFrom && !filters.dateTo
+  const timestamp = new Date(value).getTime()
+  if (
+    filters.dateFrom &&
+    timestamp < new Date(`${filters.dateFrom}T00:00:00.000`).getTime()
+  ) {
+    return false
+  }
+  if (
+    filters.dateTo &&
+    timestamp > new Date(`${filters.dateTo}T23:59:59.999`).getTime()
+  ) {
+    return false
+  }
+  return true
 }
 
 function statusVariant(state: ReturnDocumentState) {
@@ -154,15 +125,6 @@ function statusVariant(state: ReturnDocumentState) {
 
 function errorMessage(cause: unknown, fallback: string) {
   return cause instanceof Error ? cause.message : fallback
-}
-
-function isConflict(cause: unknown) {
-  return (
-    typeof cause === "object" &&
-    cause !== null &&
-    "status" in cause &&
-    cause.status === 409
-  )
 }
 
 function returnListQueryKey(warehouseId: string) {
@@ -196,10 +158,10 @@ export function LogisticsReturnsPage() {
   const { accessToken, currentUser } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
-  const [createOpen, setCreateOpen] = useState(false)
-  const [showAll, setShowAll] = useState(false)
   const [search, setSearch] = useState("")
+  const [filters, setFilters] = useState(EMPTY_FILTERS)
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [pickupTarget, setPickupTarget] = useState<ReturnDocument | null>(null)
   const [acceptTarget, setAcceptTarget] = useState<ReturnDocument | null>(null)
   const [estimateTarget, setEstimateTarget] = useState<ReturnDocument | null>(
     null
@@ -208,9 +170,6 @@ export function LogisticsReturnsPage() {
   const commandKeys = useRef(new Map<string, string>())
   const selectedDocumentId = searchParams.get("receiptId")
   const selectedLineId = searchParams.get("returnItemId")
-  const canEditSelectedWarehouse =
-    selectedWarehouseId !== null &&
-    hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
 
   const query = useQuery({
     queryKey: returnListQueryKey(selectedWarehouseId ?? "none"),
@@ -219,6 +178,14 @@ export function LogisticsReturnsPage() {
     refetchInterval: 5_000,
   })
 
+  const stateOptions = useMemo(
+    () =>
+      RETURN_DOCUMENT_STATES.map((state) => ({
+        value: state,
+        label: RETURN_STATE_LABELS[state],
+      })),
+    []
+  )
   const rows = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru")
     return (query.data ?? []).filter((document) => {
@@ -229,12 +196,19 @@ export function LogisticsReturnsPage() {
       ) {
         return false
       }
-      if (!showAll && !ACTIONABLE_STATES.has(document.state)) return false
+      if (
+        filters.states.length > 0 &&
+        !filters.states.includes(document.state)
+      ) {
+        return false
+      }
+      if (!matchesDateRange(document.scheduledAt, filters)) return false
       if (!needle) return true
       return [
         document.id,
         document.partySnapshot,
         document.driverSnapshot,
+        document.rentalOrderId,
         RETURN_STATE_LABELS[document.state],
         ...document.lines.flatMap((line) => [
           line.id,
@@ -245,7 +219,7 @@ export function LogisticsReturnsPage() {
         .filter(Boolean)
         .some((value) => String(value).toLocaleLowerCase("ru").includes(needle))
     })
-  }, [query.data, search, selectedDocumentId, selectedLineId, showAll])
+  }, [filters, query.data, search, selectedDocumentId, selectedLineId])
 
   function refresh(warehouseId: string) {
     return queryClient.invalidateQueries({
@@ -253,34 +227,48 @@ export function LogisticsReturnsPage() {
     })
   }
 
-  function keyFor(action: string, document: ReturnDocument) {
-    const identity = `${action}:${document.id}:${document.version}`
-    const existing = commandKeys.current.get(identity)
+  function keyFor(signature: string) {
+    const existing = commandKeys.current.get(signature)
     if (existing) return existing
     const idempotencyKey = commandIdentity()
-    commandKeys.current.set(identity, idempotencyKey)
+    commandKeys.current.set(signature, idempotencyKey)
     return idempotencyKey
   }
 
   const registerMutation = useMutation({
-    mutationFn: (document: ReturnDocument) =>
-      registerReturn({
+    mutationFn: ({
+      document,
+      driverSnapshot,
+      scheduledAt,
+    }: {
+      document: ReturnDocument
+      driverSnapshot: string
+      scheduledAt: string
+    }) => {
+      const signature = `pickup:${document.id}:${document.version}:${driverSnapshot}:${scheduledAt}`
+      return registerReturn({
         accessToken: accessToken!,
         documentId: document.id,
         expectedVersion: document.version,
-        idempotencyKey: keyFor("register", document),
-      }),
-    onSuccess: (result, document) => {
-      commandKeys.current.delete(`register:${document.id}:${document.version}`)
+        driverSnapshot,
+        scheduledAt,
+        idempotencyKey: keyFor(signature),
+      })
+    },
+    onSuccess: (result) => {
       storeServiceProjection(queryClient, result)
+      setPickupTarget(null)
       setCommandError(null)
       void refresh(result.warehouseId)
     },
-    onError: (cause, document) => {
-      if (isConflict(cause)) void refresh(document.warehouseId)
-      setCommandError(
-        errorMessage(cause, "Не удалось зарегистрировать возврат")
-      )
+    onError: (cause, variables) => {
+      if (cause instanceof ApiError && cause.status === 409) {
+        commandKeys.current.delete(
+          `pickup:${variables.document.id}:${variables.document.version}:${variables.driverSnapshot}:${variables.scheduledAt}`
+        )
+        void refresh(variables.document.warehouseId)
+      }
+      setCommandError(errorMessage(cause, "Не удалось создать вывоз"))
     },
   })
 
@@ -294,7 +282,7 @@ export function LogisticsReturnsPage() {
   function actions(document: ReturnDocument) {
     const processing =
       registerMutation.isPending &&
-      registerMutation.variables?.id === document.id
+      registerMutation.variables?.document.id === document.id
     const canEdit = hasWarehouseAccess(
       currentUser,
       document.warehouseId,
@@ -303,6 +291,7 @@ export function LogisticsReturnsPage() {
     return (
       <div className="flex flex-wrap gap-2">
         <Button
+          type="button"
           size="sm"
           variant="outline"
           onClick={() =>
@@ -315,16 +304,18 @@ export function LogisticsReturnsPage() {
         </Button>
         {canEdit && document.state === "DRAFT" ? (
           <Button
+            type="button"
             size="sm"
             disabled={processing || !accessToken}
-            onClick={() => registerMutation.mutate(document)}
+            onClick={() => setPickupTarget(document)}
           >
-            {processing ? "Регистрируется…" : "Зарегистрировать"}
+            {processing ? "Создаём…" : "Создать вывоз"}
           </Button>
         ) : null}
         {canEdit && document.state === "INSPECTION_REQUIRED" ? (
           <>
             <Button
+              type="button"
               size="sm"
               variant="outline"
               onClick={() => {
@@ -332,9 +323,10 @@ export function LogisticsReturnsPage() {
                 setAcceptTarget(document)
               }}
             >
-              Принять без повреждений
+              Принять без сметы
             </Button>
             <Button
+              type="button"
               size="sm"
               onClick={() => {
                 setCommandError(null)
@@ -355,39 +347,34 @@ export function LogisticsReturnsPage() {
         <PageToolbarContent>
           <Input
             aria-label="Поиск возвратов"
-            placeholder="ID документа, бытовки или контрагент"
+            placeholder="Заказ, бытовка, контрагент или водитель"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
         </PageToolbarContent>
         <PageToolbarActions>
           {selectedDocumentId || selectedLineId ? (
-            <Button variant="outline" onClick={clearSelection}>
+            <Button type="button" variant="outline" onClick={clearSelection}>
               Показать все документы
             </Button>
           ) : null}
           <Button
-            className="w-40 shrink-0"
-            variant="outline"
-            onClick={() => setShowAll((value) => !value)}
-          >
-            {showAll ? "Требуют действий" : "Показать все"}
-          </Button>
-          <Button
+            type="button"
             variant="outline"
             disabled={!accessToken || !selectedWarehouseId || query.isFetching}
             onClick={() => void query.refetch()}
           >
             {query.isFetching ? "Обновляется…" : "Обновить"}
           </Button>
-          {canEditSelectedWarehouse ? (
-            <Button onClick={() => setCreateOpen(true)}>
-              <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-              Добавить возврат
-            </Button>
-          ) : null}
         </PageToolbarActions>
       </PageToolbar>
+
+      <LogisticsDocumentFilters
+        filters={filters}
+        stateOptions={stateOptions}
+        dateLabel="Вывоз"
+        onChange={setFilters}
+      />
 
       {!accessToken ? (
         <FieldError>Для просмотра возвратов требуется авторизация.</FieldError>
@@ -416,11 +403,14 @@ export function LogisticsReturnsPage() {
             )}
             columns={[
               {
-                id: "createdAt",
-                label: "Создан",
+                id: "scheduledAt",
+                label: "Дата вывоза",
                 className: "w-48",
-                getSortValue: (document) => document.createdAt,
-                render: (document) => formatDateTime(document.createdAt),
+                getSortValue: (document) => document.scheduledAt ?? "",
+                render: (document) =>
+                  document.scheduledAt
+                    ? formatDateTime(document.scheduledAt)
+                    : "Не назначена",
               },
               {
                 id: "party",
@@ -434,7 +424,7 @@ export function LogisticsReturnsPage() {
                 label: "Водитель",
                 className: "min-w-52",
                 getSortValue: (document) => document.driverSnapshot ?? "",
-                render: (document) => document.driverSnapshot ?? "Не указан",
+                render: (document) => document.driverSnapshot ?? "Не назначен",
               },
               {
                 id: "state",
@@ -457,7 +447,7 @@ export function LogisticsReturnsPage() {
               {
                 id: "actions",
                 label: "Действия",
-                className: "min-w-80",
+                className: "min-w-96",
                 getSortValue: (document) => document.updatedAt,
                 render: actions,
               },
@@ -471,8 +461,10 @@ export function LogisticsReturnsPage() {
               <CardHeader>
                 <CardTitle>{document.partySnapshot ?? "Возврат"}</CardTitle>
                 <CardDescription>
-                  {formatDateTime(document.createdAt)} ·{" "}
-                  {document.driverSnapshot ?? "Водитель не указан"}
+                  {document.scheduledAt
+                    ? formatDateTime(document.scheduledAt)
+                    : "Дата вывоза не назначена"}
+                  {` · ${document.driverSnapshot ?? "водитель не назначен"}`}
                 </CardDescription>
                 <CardAction>
                   <Badge variant={statusVariant(document.state)}>
@@ -496,7 +488,8 @@ export function LogisticsReturnsPage() {
               <CardHeader>
                 <CardTitle>Возвраты не найдены</CardTitle>
                 <CardDescription>
-                  Измените фильтр или добавьте возврат из аренды.
+                  Измените поиск или фильтры. Возврат появляется автоматически
+                  после отгрузки бытовки клиенту.
                 </CardDescription>
               </CardHeader>
             </Card>
@@ -504,16 +497,18 @@ export function LogisticsReturnsPage() {
         </div>
       </div>
 
-      {createOpen &&
-      selectedWarehouseId &&
-      accessToken &&
-      canEditSelectedWarehouse ? (
-        <CreateReturnDialog
+      {pickupTarget && accessToken ? (
+        <ReturnPickupDialog
           accessToken={accessToken}
-          warehouseId={selectedWarehouseId}
-          onOpenChange={setCreateOpen}
+          document={pickupTarget}
+          pending={registerMutation.isPending}
+          onOpenChange={(open) => !open && setPickupTarget(null)}
+          onSubmit={(input) =>
+            registerMutation.mutate({ document: pickupTarget, ...input })
+          }
         />
       ) : null}
+
       {estimateTarget &&
       accessToken &&
       hasWarehouseAccess(currentUser, estimateTarget.warehouseId, "EDIT") ? (
@@ -558,6 +553,92 @@ export function LogisticsReturnsPage() {
   )
 }
 
+function ReturnPickupDialog({
+  accessToken,
+  document,
+  pending,
+  onOpenChange,
+  onSubmit,
+}: {
+  accessToken: string
+  document: ReturnDocument
+  pending: boolean
+  onOpenChange: (open: boolean) => void
+  onSubmit: (input: { driverSnapshot: string; scheduledAt: string }) => void
+}) {
+  const [driver, setDriver] = useState<RepairTaskWorkerSnapshotDto | null>(null)
+  const [scheduledAt, setScheduledAt] = useState("")
+  const [error, setError] = useState<string | null>(null)
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError(null)
+    if (!driver) {
+      setError("Выберите водителя.")
+      return
+    }
+    try {
+      onSubmit({
+        driverSnapshot: driver.name.trim(),
+        scheduledAt: toIsoDateTime(scheduledAt),
+      })
+    } catch (cause) {
+      setError(errorMessage(cause, "Проверьте дату вывоза."))
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogContent>
+        <form className="flex flex-col gap-4" onSubmit={submit}>
+          <DialogHeader>
+            <DialogTitle>Создать вывоз</DialogTitle>
+            <DialogDescription>
+              Назначьте водителя и дату. После запуска бытовки перейдут в
+              состояние «После аренды», а возврат — к осмотру.
+            </DialogDescription>
+          </DialogHeader>
+          <FieldGroup>
+            <LogisticsDriverPicker
+              accessToken={accessToken}
+              id="return-driver"
+              value={driver}
+              warehouseId={document.warehouseId}
+              onChange={setDriver}
+            />
+            <Field data-invalid={Boolean(error) || undefined}>
+              <FieldLabel htmlFor="return-scheduled-at">
+                Дата и время вывоза
+              </FieldLabel>
+              <Input
+                id="return-scheduled-at"
+                type="datetime-local"
+                value={scheduledAt}
+                aria-invalid={Boolean(error) || undefined}
+                onChange={(event) => setScheduledAt(event.target.value)}
+              />
+              {error ? <FieldError>{error}</FieldError> : null}
+            </Field>
+          </FieldGroup>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending}
+              onClick={() => onOpenChange(false)}
+            >
+              Отмена
+            </Button>
+            <Button type="submit" disabled={pending}>
+              {pending ? "Создаём…" : "Создать вывоз"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function ReturnLines({
   document,
   selectedLineId,
@@ -583,416 +664,15 @@ function ReturnLines({
           </CardHeader>
           <CardContent className="grid gap-1 text-sm">
             <span>
-              Asset: <span className="font-mono text-xs">{line.assetId}</span>
+              Бытовка: <span className="font-mono text-xs">{line.assetId}</span>
             </span>
             <span>
-              Аренда:{" "}
-              <span className="font-mono text-xs">{line.rentalOrderId}</span>
+              Заказ:{" "}
+              {line.rentalOrderId ?? document.rentalOrderId ?? "не указан"}
             </span>
           </CardContent>
         </Card>
       ))}
     </div>
   )
-}
-
-function CreateReturnDialog({
-  accessToken,
-  warehouseId,
-  onOpenChange,
-}: {
-  accessToken: string
-  warehouseId: string
-  onOpenChange: (open: boolean) => void
-}) {
-  const queryClient = useQueryClient()
-  const contentRef = useRef<HTMLDivElement>(null)
-  const [client, setClient] = useState<OrderClientSearchItem | null>(null)
-  const [driver, setDriver] = useState<RepairTaskWorkerSnapshotDto | null>(null)
-  const [lines, setLines] = useState<ReturnLineDraft[]>(() => [
-    emptyReturnLine(),
-  ])
-  const [validationError, setValidationError] = useState<string | null>(null)
-  const commandAttempt = useRef<CommandAttempt | null>(null)
-
-  const ordersQuery = useQuery({
-    queryKey: [
-      ...ORDERS_QUERY_KEY,
-      "return-orders",
-      warehouseId,
-      client?.id ?? "none",
-    ],
-    queryFn: () =>
-      listOrders({
-        accessToken,
-        page: 0,
-        size: 100,
-        search: client?.displayName,
-        sort: "updatedAt",
-        direction: "desc",
-      }),
-    enabled: client !== null,
-  })
-  const orders = useMemo(
-    () =>
-      (ordersQuery.data?.content ?? []).filter(
-        (order) =>
-          order.client.id === client?.id &&
-          order.status === "DRAFT" &&
-          order.warehouseId === warehouseId
-      ),
-    [client?.id, ordersQuery.data?.content, warehouseId]
-  )
-  const candidatesQuery = useQuery({
-    queryKey: [
-      ...ORDERS_QUERY_KEY,
-      "return-candidates",
-      warehouseId,
-      orders.map((order) => order.id).join("|"),
-    ],
-    queryFn: async () => {
-      const details = await Promise.all(
-        orders.map((order) => getOrder(accessToken, order.id))
-      )
-      return returnCandidates(details)
-    },
-    enabled: client !== null && orders.length > 0,
-  })
-  const candidates = useMemo(
-    () => candidatesQuery.data ?? [],
-    [candidatesQuery.data]
-  )
-  const candidatesByOrder = useMemo(() => {
-    const groups = new Map<string, ReturnCandidate[]>()
-    for (const candidate of candidates) {
-      const group = groups.get(candidate.rentalOrderId) ?? []
-      group.push(candidate)
-      groups.set(candidate.rentalOrderId, group)
-    }
-    return groups
-  }, [candidates])
-  const selectedAssetIds = lines
-    .map((line) => line.assetId)
-    .filter((assetId): assetId is string => assetId !== null)
-  const candidateByAssetId = new Map(
-    candidates.map((item) => [item.unit.id, item])
-  )
-  const mutation = useMutation({
-    mutationFn: ({
-      clientId,
-      driverSnapshot,
-      lines: commandLines,
-      idempotencyKey,
-    }: {
-      clientId: string
-      driverSnapshot: string
-      lines: CreateReturnLine[]
-      idempotencyKey: string
-    }) =>
-      createReturn({
-        accessToken,
-        warehouseId,
-        clientId,
-        driverSnapshot,
-        lines: commandLines,
-        idempotencyKey,
-      }),
-    onSuccess: (result) => {
-      storeServiceProjection(queryClient, result)
-      void queryClient.invalidateQueries({
-        queryKey: returnListQueryKey(result.warehouseId),
-      })
-      onOpenChange(false)
-    },
-  })
-
-  function selectCandidate(key: string, candidate: ReturnCandidate | null) {
-    setLines((current) =>
-      current.map((line) =>
-        line.key === key
-          ? { ...line, assetId: candidate?.unit.id ?? null }
-          : line
-      )
-    )
-  }
-
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const selected = lines.map((line) =>
-      line.assetId ? (candidateByAssetId.get(line.assetId) ?? null) : null
-    )
-    if (
-      !client ||
-      !driver ||
-      selected.some((candidate) => candidate === null)
-    ) {
-      setValidationError(
-        "Выберите контрагента, водителя и бытовку в каждой строке возврата."
-      )
-      return
-    }
-    const candidatesForCommand = selected as ReturnCandidate[]
-    if (
-      new Set(candidatesForCommand.map((candidate) => candidate.unit.id))
-        .size !== candidatesForCommand.length
-    ) {
-      setValidationError(
-        "Одну бытовку можно добавить в возврат только один раз."
-      )
-      return
-    }
-    const commandLines = candidatesForCommand.map((candidate) => ({
-      assetId: candidate.unit.id,
-      assetVersion: candidate.unit.version,
-      tenantSnapshot: client.displayName,
-      rentalOrderId: candidate.rentalOrderId,
-    }))
-    const signature = JSON.stringify({
-      warehouseId,
-      clientId: client.id,
-      driverSnapshot: driver.name,
-      lines: commandLines,
-    })
-    setValidationError(null)
-    mutation.mutate({
-      clientId: client.id,
-      driverSnapshot: driver.name,
-      lines: commandLines,
-      idempotencyKey: stableCommandKey(commandAttempt, signature),
-    })
-  }
-
-  return (
-    <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent
-        ref={contentRef}
-        className="max-h-[calc(100svh-1rem)] overflow-y-auto sm:max-w-4xl"
-      >
-        <form onSubmit={submit}>
-          <DialogHeader>
-            <DialogTitle>Добавить возврат из аренды</DialogTitle>
-            <DialogDescription>
-              Выберите контрагента, водителя и бытовки, которые находятся у
-              контрагента в активной аренде. Каждая строка сохраняет связь с
-              конкретным заказом.
-            </DialogDescription>
-          </DialogHeader>
-          <FieldGroup className="py-4">
-            <RentalClientPicker
-              accessToken={accessToken}
-              idPrefix="return"
-              portalContainer={contentRef}
-              value={client}
-              disabled={mutation.isPending}
-              onChange={(next) => {
-                setClient(next)
-                setLines([emptyReturnLine()])
-                commandAttempt.current = null
-                setValidationError(null)
-              }}
-            />
-            <LogisticsDriverPicker
-              accessToken={accessToken}
-              id="return-driver"
-              warehouseId={warehouseId}
-              value={driver}
-              disabled={mutation.isPending}
-              onChange={(next) => {
-                setDriver(next)
-                commandAttempt.current = null
-                setValidationError(null)
-              }}
-            />
-            <FieldSet disabled={!client || mutation.isPending}>
-              <FieldLegend variant="label">Бытовки в аренде</FieldLegend>
-              <FieldDescription>
-                Показаны только активные серверные резервы выбранного клиента со
-                статусом «в аренде».
-              </FieldDescription>
-              <FieldGroup>
-                {lines.map((line, index) => {
-                  const selectedCandidate = line.assetId
-                    ? (candidateByAssetId.get(line.assetId) ?? null)
-                    : null
-                  return (
-                    <Card key={line.key} size="sm">
-                      <CardHeader>
-                        <CardTitle>Бытовка {index + 1}</CardTitle>
-                        {lines.length > 1 ? (
-                          <CardAction>
-                            <Button
-                              type="button"
-                              size="icon-sm"
-                              variant="outline"
-                              aria-label={`Удалить бытовку ${index + 1}`}
-                              onClick={() =>
-                                setLines((current) =>
-                                  current.filter(
-                                    (item) => item.key !== line.key
-                                  )
-                                )
-                              }
-                            >
-                              <HugeiconsIcon
-                                icon={Delete02Icon}
-                                data-icon="inline-start"
-                              />
-                            </Button>
-                          </CardAction>
-                        ) : null}
-                      </CardHeader>
-                      <CardContent>
-                        <Field>
-                          <FieldLabel htmlFor={`return-cabin-${line.key}`}>
-                            Номер бытовки
-                          </FieldLabel>
-                          <Combobox<ReturnCandidate>
-                            items={candidates}
-                            value={selectedCandidate}
-                            itemToStringLabel={(candidate) =>
-                              candidate.unit.number
-                            }
-                            itemToStringValue={(candidate) => candidate.unit.id}
-                            isItemEqualToValue={(left, right) =>
-                              left.unit.id === right.unit.id
-                            }
-                            disabled={!client || mutation.isPending}
-                            onValueChange={(candidate) =>
-                              selectCandidate(line.key, candidate)
-                            }
-                          >
-                            <ComboboxInput
-                              id={`return-cabin-${line.key}`}
-                              placeholder={
-                                client
-                                  ? "Введите номер бытовки"
-                                  : "Сначала выберите клиента"
-                              }
-                              showClear
-                            />
-                            <ComboboxContent portalContainer={contentRef}>
-                              <ComboboxEmpty>
-                                {candidatesQuery.isFetching
-                                  ? "Загружаем бытовки…"
-                                  : ordersQuery.isFetching
-                                    ? "Загружаем аренды…"
-                                    : "Бытовки в аренде не найдены"}
-                              </ComboboxEmpty>
-                              <ComboboxList>
-                                {Array.from(candidatesByOrder.entries()).map(
-                                  ([orderId, orderCandidates]) => {
-                                    const available = orderCandidates.filter(
-                                      (candidate) =>
-                                        candidate.unit.id === line.assetId ||
-                                        !selectedAssetIds.includes(
-                                          candidate.unit.id
-                                        )
-                                    )
-                                    if (!available.length) return null
-                                    return (
-                                      <ComboboxGroup key={orderId}>
-                                        <ComboboxLabel>
-                                          Аренда {available[0]?.orderNumber}
-                                        </ComboboxLabel>
-                                        {available.map((candidate) => (
-                                          <ComboboxItem
-                                            key={candidate.unit.id}
-                                            value={candidate}
-                                          >
-                                            <span>{candidate.unit.number}</span>
-                                            <Badge variant="secondary">
-                                              В аренде
-                                            </Badge>
-                                          </ComboboxItem>
-                                        ))}
-                                      </ComboboxGroup>
-                                    )
-                                  }
-                                )}
-                              </ComboboxList>
-                            </ComboboxContent>
-                          </Combobox>
-                        </Field>
-                        {selectedCandidate ? (
-                          <FieldDescription>
-                            Аренда {selectedCandidate.orderNumber} · версия
-                            бытовки {selectedCandidate.unit.version}
-                          </FieldDescription>
-                        ) : null}
-                      </CardContent>
-                    </Card>
-                  )
-                })}
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={
-                    !client ||
-                    mutation.isPending ||
-                    lines.length >= 100 ||
-                    candidates.length === 0 ||
-                    lines.some((line) => line.assetId === null)
-                  }
-                  onClick={() =>
-                    setLines((current) => [...current, emptyReturnLine()])
-                  }
-                >
-                  <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-                  Добавить ещё бытовку
-                </Button>
-              </FieldGroup>
-            </FieldSet>
-            {ordersQuery.isSuccess && client && orders.length === 0 ? (
-              <FieldError>
-                Для выбранного клиента на этом складе нет активных аренд.
-              </FieldError>
-            ) : null}
-            {ordersQuery.isError || candidatesQuery.isError ? (
-              <FieldError>
-                Не удалось загрузить доступные бытовки для возврата.
-              </FieldError>
-            ) : null}
-            {validationError ? (
-              <FieldError>{validationError}</FieldError>
-            ) : null}
-            {mutation.error ? (
-              <FieldError>
-                {errorMessage(mutation.error, "Не удалось добавить возврат")}
-              </FieldError>
-            ) : null}
-          </FieldGroup>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
-              Отмена
-            </Button>
-            <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? "Создаётся…" : "Создать возврат"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-function returnCandidates(details: OrderDetail[]): ReturnCandidate[] {
-  return details
-    .flatMap((order) =>
-      order.units
-        .filter(
-          (candidate) => candidate.added && candidate.unit.status === "RENTED"
-        )
-        .map((candidate) => ({
-          rentalOrderId: order.id,
-          orderNumber: order.number,
-          unit: candidate.unit,
-        }))
-    )
-    .sort((left, right) =>
-      left.unit.number.localeCompare(right.unit.number, "ru")
-    )
 }

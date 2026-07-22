@@ -132,6 +132,35 @@ public class RentalOrder {
     updatedAt = nextUpdatedAt();
   }
 
+  public void saveForFulfillment() {
+    requireDraft();
+    if (warehouseId == null) {
+      throw new IllegalStateException("Order warehouse is required");
+    }
+    status = RentalOrderStatus.SAVED;
+    updatedAt = nextUpdatedAt();
+  }
+
+  public boolean fulfill() {
+    if (status == RentalOrderStatus.FULFILLED) return false;
+    if (status != RentalOrderStatus.SAVED) {
+      throw new IllegalStateException("Order cannot be fulfilled in its current state");
+    }
+    status = RentalOrderStatus.FULFILLED;
+    updatedAt = nextUpdatedAt();
+    return true;
+  }
+
+  public boolean close() {
+    if (status == RentalOrderStatus.CLOSED) return false;
+    if (status != RentalOrderStatus.FULFILLED) {
+      throw new IllegalStateException("Order cannot be closed in its current state");
+    }
+    status = RentalOrderStatus.CLOSED;
+    updatedAt = nextUpdatedAt();
+    return true;
+  }
+
   public void requireDraft() {
     if (status != RentalOrderStatus.DRAFT) {
       throw new IllegalStateException("Order is not editable");

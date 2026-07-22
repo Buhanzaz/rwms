@@ -23,6 +23,8 @@ const document: ShipmentDocument = {
   driverSnapshot: "Иванов Иван",
   clientId: CLIENT_ID,
   equipmentMovementTaskId: null,
+  scheduledAt: null,
+  rentalOrderId: RENTAL_ORDER_ID,
   lines: [
     {
       id: LINE_ID,
@@ -106,7 +108,7 @@ describe("HttpShipmentClient", () => {
       clientId: CLIENT_ID,
       rentalOrderId: RENTAL_ORDER_ID,
       partySnapshot: document.partySnapshot,
-      driverSnapshot: document.driverSnapshot,
+      driverSnapshot: document.driverSnapshot!,
       lines: planLines,
       idempotencyKey: IDEMPOTENCY_KEY,
     }
@@ -133,7 +135,7 @@ describe("HttpShipmentClient", () => {
     }
   })
 
-  it("repeats the immutable plan with CAS and idempotency", async () => {
+  it("assigns the driver and shipment date with CAS and idempotency", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(
@@ -145,9 +147,8 @@ describe("HttpShipmentClient", () => {
       accessToken: "shipment-token",
       documentId: DOCUMENT_ID,
       expectedVersion: 4,
-      partySnapshot: document.partySnapshot,
-      driverSnapshot: document.driverSnapshot,
-      lines: planLines,
+      driverSnapshot: document.driverSnapshot!,
+      scheduledAt: "2026-07-22T08:00:00Z",
       idempotencyKey: IDEMPOTENCY_KEY,
     })
 
@@ -160,9 +161,8 @@ describe("HttpShipmentClient", () => {
       IDEMPOTENCY_KEY
     )
     expect(JSON.parse(init.body)).toEqual({
-      partySnapshot: document.partySnapshot,
       driverSnapshot: document.driverSnapshot,
-      lines: planLines,
+      scheduledAt: "2026-07-22T08:00:00Z",
     })
   })
 

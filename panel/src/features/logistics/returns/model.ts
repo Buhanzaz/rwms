@@ -46,7 +46,9 @@ export type ReturnDocument = {
   partySnapshot: string | null
   driverSnapshot: string | null
   clientId: string | null
-  equipmentMovementTaskId: null
+  equipmentMovementTaskId: string | null
+  scheduledAt: string | null
+  rentalOrderId: string | null
   lines: ReturnLine[]
   createdAt: string
   updatedAt: string

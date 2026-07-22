@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.logistics.domain;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -16,6 +17,7 @@ class LogisticsDocumentTest {
   void returnFollowsTheFencedIntakeAndAcceptanceLifecycle() {
     LogisticsDocument document = LogisticsDocument.createReturn(WAREHOUSE, SUBJECT, CORRELATION);
 
+    document.scheduleReturn("Водитель", OffsetDateTime.parse("2026-07-01T08:00:00Z"));
     document.beginReturnRegistration();
     document.requireReturnInspection();
     document.beginReturnAcceptance();
@@ -33,6 +35,7 @@ class LogisticsDocumentTest {
     assertThat(document.getPartySnapshot()).isEqualTo("Арендатор");
     assertThat(document.getDriverSnapshot()).isEqualTo("Водитель");
 
+    document.scheduleShipment("Водитель", OffsetDateTime.parse("2026-07-01T08:00:00Z"));
     document.beginShipmentPreparation();
     document.awaitShipmentConfirmation();
     document.beginShipmentConfirmation();
@@ -40,6 +43,24 @@ class LogisticsDocumentTest {
     assertThatThrownBy(document::cancel)
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("cannot be cancelled");
+  }
+
+  @Test
+  void shipmentCannotDepartBeforeItsScheduledDate() {
+    LogisticsDocument document =
+        LogisticsDocument.createShipment(
+            WAREHOUSE, "Арендатор", "Водитель", SUBJECT, CORRELATION);
+    OffsetDateTime now = OffsetDateTime.parse("2026-07-22T08:00:00Z");
+    document.scheduleShipment("Водитель", now.plusDays(1));
+    document.beginShipmentPreparation();
+    document.awaitShipmentConfirmation();
+
+    assertThatThrownBy(() -> document.requireShipmentDepartureAllowed(now))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("future");
+
+    document.scheduleShipment("Водитель", now.minusMinutes(1));
+    document.requireShipmentDepartureAllowed(now);
   }
 
   @Test

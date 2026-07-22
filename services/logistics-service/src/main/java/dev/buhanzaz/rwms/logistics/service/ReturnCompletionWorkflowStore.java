@@ -56,6 +56,7 @@ class ReturnCompletionWorkflowStore {
   private final LogisticsReturnShortageSnapshotRepository shortageSnapshotRepository;
   private final LogisticsReconciliationRepository reconciliationRepository;
   private final LogisticsEventStore eventStore;
+  private final LogisticsDocumentService documents;
 
   Optional<Work> nextWork(UUID documentId) {
     if (documentId == null) return Optional.empty();
@@ -438,6 +439,7 @@ class ReturnCompletionWorkflowStore {
       return;
     }
     documentRepository.saveAndFlush(document);
+    documents.closeRentalOrderReturn(document);
     eventStore.append(
         document,
         lines.size(),

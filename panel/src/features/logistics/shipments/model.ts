@@ -43,9 +43,11 @@ export type ShipmentDocument = {
   warehouseId: string
   destinationWarehouseId: null
   partySnapshot: string
-  driverSnapshot: string
+  driverSnapshot: string | null
   clientId: string | null
-  equipmentMovementTaskId: null
+  equipmentMovementTaskId: string | null
+  scheduledAt: string | null
+  rentalOrderId: string | null
   lines: ShipmentLine[]
   createdAt: string
   updatedAt: string

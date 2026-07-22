@@ -10,6 +10,9 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface LogisticsDocumentRepository extends JpaRepository<LogisticsDocument, UUID> {
   Optional<LogisticsDocument> findByIdAndDocumentType(UUID id, LogisticsDocumentType documentType);
 
+  Optional<LogisticsDocument> findByDocumentTypeAndRentalOrderId(
+      LogisticsDocumentType documentType, UUID rentalOrderId);
+
   List<LogisticsDocument> findAllByDocumentTypeAndWarehouseIdOrderByCreatedAtDescIdDesc(
       LogisticsDocumentType documentType, UUID warehouseId);
 }

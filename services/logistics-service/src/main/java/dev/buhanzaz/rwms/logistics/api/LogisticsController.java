@@ -8,6 +8,7 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ArriveTransferLineRequ
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.RequestReturnEstimateRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReconcileRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnPickupRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentPlanRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
@@ -74,6 +75,7 @@ public class LogisticsController {
       @PathVariable UUID documentId,
       @RequestParam @Min(0) long expectedVersion,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ReturnPickupRequest request,
       HttpServletRequest servletRequest) {
     LogisticsDocumentView current = service.get(documentId, LogisticsDocumentType.RETURN);
     access.requireEdit(jwt, current.warehouseId());
@@ -83,7 +85,8 @@ public class LogisticsController {
             idempotencyKey,
             correlationId(servletRequest),
             documentId,
-            expectedVersion);
+            expectedVersion,
+            request);
     return accepted(result);
   }
 

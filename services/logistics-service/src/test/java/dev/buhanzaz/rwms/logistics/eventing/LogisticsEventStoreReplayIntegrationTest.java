@@ -7,7 +7,6 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateShipmentRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentLineRequest;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentPlanRequest;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import java.util.List;
 import java.util.UUID;
@@ -80,21 +79,12 @@ class LogisticsEventStoreReplayIntegrationTest {
                 WAREHOUSE,
                 List.of(new ReturnLineRequest(UUID.randomUUID(), 3, "Tenant snapshot"))));
     ShipmentLineRequest shipmentLine = new ShipmentLineRequest(UUID.randomUUID(), 4);
-    var createdShipment =
-        documents.createShipment(
-            SUBJECT,
-            UUID.randomUUID(),
-            CORRELATION,
-            new CreateShipmentRequest(
-                WAREHOUSE, "Party snapshot", "Driver snapshot", List.of(shipmentLine)));
-    documents.planShipment(
+    documents.createShipment(
         SUBJECT,
         UUID.randomUUID(),
         CORRELATION,
-        createdShipment.response().id(),
-        createdShipment.response().version(),
-        new ShipmentPlanRequest(
-            "Party snapshot", "Driver snapshot", List.of(shipmentLine)));
+        new CreateShipmentRequest(
+            WAREHOUSE, "Party snapshot", "Driver snapshot", List.of(shipmentLine)));
 
     LogisticsReplayVerifier.ReplayParityResult first = replay.rebuildAndVerify();
     LogisticsReplayVerifier.ReplayParityResult repeated = replay.rebuildAndVerify();

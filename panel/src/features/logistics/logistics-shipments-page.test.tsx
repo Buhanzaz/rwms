@@ -39,6 +39,41 @@ vi.mock("@/features/repair-tasks/api/repair-worker-directory-api", () => ({
   listRepairWorkerGroups: driverDirectoryApi.listRepairWorkerGroups,
 }))
 
+vi.mock("@/features/logistics/logistics-driver-picker", () => ({
+  LogisticsDriverPicker: ({
+    id,
+    value,
+    onChange,
+  }: {
+    id: string
+    value: { id: string; name: string } | null
+    onChange: (value: { id: string; name: string } | null) => void
+  }) => (
+    <label htmlFor={id}>
+      Водитель
+      <select
+        id={id}
+        value={value?.id ?? ""}
+        onChange={(event) =>
+          onChange(
+            event.target.value
+              ? {
+                  id: event.target.value,
+                  name: "Иванов Иван",
+                }
+              : null
+          )
+        }
+      >
+        <option value="">Выберите водителя</option>
+        <option value="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb">
+          Иванов Иван
+        </option>
+      </select>
+    </label>
+  ),
+}))
+
 vi.mock("@/features/auth/use-auth", () => ({
   useAuth: () => ({
     accessToken: "shipment-token",
@@ -77,6 +112,7 @@ const LINE_ID = "44444444-4444-4444-8444-444444444444"
 const ASSET_ID = "55555555-5555-4555-8555-555555555555"
 const CLIENT_ID = "66666666-6666-4666-8666-666666666666"
 const ORDER_ID = "77777777-7777-4777-8777-777777777777"
+const SCHEDULE_KEY = "10101010-1010-4010-8010-101010101010"
 const CONFIRM_KEY = "88888888-8888-4888-8888-888888888888"
 const CANCEL_KEY = "99999999-9999-4999-8999-999999999999"
 
@@ -93,9 +129,11 @@ function shipmentDocument(
     warehouseId: WAREHOUSE_ID,
     destinationWarehouseId: null,
     partySnapshot: "ООО Тест",
-    driverSnapshot: "Иванов Иван",
+    driverSnapshot: state === "DRAFT" ? null : "Иванов Иван",
     clientId: CLIENT_ID,
     equipmentMovementTaskId: null,
+    scheduledAt: state === "DRAFT" ? null : "2026-07-18T08:00:00Z",
+    rentalOrderId: ORDER_ID,
     lines: [
       {
         id: LINE_ID,
@@ -169,41 +207,43 @@ describe("LogisticsShipmentsPage", () => {
       "shipment-token",
       WAREHOUSE_ID
     )
-    expect(
-      screen.queryByRole("button", { name: "Создать отгрузку" })
-    ).toBeNull()
-    expect(
-      screen.queryByRole("button", { name: "Подтвердить подготовку" })
-    ).toBeNull()
-    expect(
-      screen.queryByText(
-        "Резерв за выбранным заказом показывается первым; свободные бытовки можно добавить в ту же отгрузку. Подготовка и задания создаются одним серверным workflow."
-      )
-    ).toBeNull()
+    expect(screen.queryByRole("button", { name: "Отгрузить" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Отгружена" })).toBeNull()
   })
 
-  it("opens the server-backed create form without a browser plan action", async () => {
+  it("assigns a driver and date to the shipment created from a saved order", async () => {
+    vi.stubGlobal("crypto", { randomUUID: () => SCHEDULE_KEY })
     const user = userEvent.setup()
+    shipmentApi.replaceShipmentPlan.mockResolvedValue(
+      shipmentDocument(DRAFT_ID, "PREPARING", 3)
+    )
     renderPage()
 
     await user.click(
-      await screen.findByRole("button", { name: "Создать отгрузку" })
+      (await screen.findAllByRole("button", { name: "Отгрузить" }))[0]!
     )
 
-    expect(
-      screen.getByRole("heading", { name: "Создать отгрузку в аренду" })
-    ).toBeTruthy()
-    expect(screen.getByRole("combobox", { name: "Водитель" })).toBeTruthy()
-    expect(screen.getByText(/Зарезервированные за/)).toBeTruthy()
-    expect(
-      screen.queryByRole("button", { name: /Запустить старый черновик/i })
-    ).toBeNull()
-    expect(
-      screen.queryByRole("button", { name: /Создать и запустить/i })
-    ).toBeNull()
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Водитель" }),
+      "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    )
+    const scheduledAt = "2026-07-20T10:30"
+    await user.type(screen.getByLabelText("Дата и время отгрузки"), scheduledAt)
+    await user.click(screen.getByRole("button", { name: "Сохранить дату" }))
+
+    await waitFor(() =>
+      expect(shipmentApi.replaceShipmentPlan).toHaveBeenCalledWith({
+        accessToken: "shipment-token",
+        documentId: DRAFT_ID,
+        expectedVersion: 2,
+        driverSnapshot: "Иванов Иван",
+        scheduledAt: new Date(scheduledAt).toISOString(),
+        idempotencyKey: SCHEDULE_KEY,
+      })
+    )
   })
 
-  it("confirms preparation with the current service-issued version", async () => {
+  it("marks a due shipment as shipped with the current service-issued version", async () => {
     vi.stubGlobal("crypto", { randomUUID: () => CONFIRM_KEY })
     const user = userEvent.setup()
     shipmentApi.confirmShipmentPreparation.mockResolvedValue(
@@ -214,7 +254,7 @@ describe("LogisticsShipmentsPage", () => {
     await user.click(
       (
         await screen.findAllByRole("button", {
-          name: "Подтвердить подготовку",
+          name: "Отгружена",
         })
       )[0]!
     )
@@ -227,6 +267,28 @@ describe("LogisticsShipmentsPage", () => {
         idempotencyKey: CONFIRM_KEY,
       })
     )
+  })
+
+  it("asks to change a future shipment date instead of shipping early", async () => {
+    const future = new Date(Date.now() + 86_400_000).toISOString()
+    shipmentApi.listShipments.mockResolvedValue([
+      {
+        ...shipmentDocument(AWAITING_ID, "AWAITING_CONFIRMATION", 5),
+        scheduledAt: future,
+      },
+    ])
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Отгружена" }))[0]!
+    )
+
+    expect(
+      screen.getByRole("heading", { name: "Изменить дату отгрузки" })
+    ).toBeTruthy()
+    expect(screen.getByText(/Дата отгрузки ещё не наступила/)).toBeTruthy()
+    expect(shipmentApi.confirmShipmentPreparation).not.toHaveBeenCalled()
   })
 
   it("cancels a preparation through the service workflow with document CAS", async () => {

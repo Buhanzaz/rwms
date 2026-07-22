@@ -11,7 +11,7 @@ import type {
   ReturnClient,
   ReturnCreateCommand,
   ReturnEstimateCommand,
-  ReturnVersionedCommand,
+  ReturnPickupCommand,
 } from "@/features/logistics/returns/ports/return-client"
 import { bearerRequest } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
@@ -67,6 +67,10 @@ function timestamp(value: unknown): string {
   return candidate
 }
 
+function nullableTimestamp(value: unknown): string | null {
+  return value === null ? null : timestamp(value)
+}
+
 function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T {
   const candidate = text(value)
   if (!allowed.includes(candidate as T)) invalidResponse()
@@ -106,11 +110,9 @@ export function parseReturnDocument(value: unknown): ReturnDocument {
     partySnapshot: nullableText(source.partySnapshot),
     driverSnapshot: nullableText(source.driverSnapshot),
     clientId: nullableUuid(source.clientId),
-    equipmentMovementTaskId: (() => {
-      if (nullableUuid(source.equipmentMovementTaskId) !== null)
-        invalidResponse()
-      return null
-    })(),
+    equipmentMovementTaskId: nullableUuid(source.equipmentMovementTaskId),
+    scheduledAt: nullableTimestamp(source.scheduledAt),
+    rentalOrderId: nullableUuid(source.rentalOrderId),
     lines,
     createdAt: timestamp(source.createdAt),
     updatedAt: timestamp(source.updatedAt),
@@ -164,7 +166,7 @@ export class HttpReturnClient implements ReturnClient {
     })
   }
 
-  register(input: ReturnVersionedCommand) {
+  register(input: ReturnPickupCommand) {
     return parsedRequest(
       input.accessToken,
       returnsEndpoint(
@@ -173,6 +175,10 @@ export class HttpReturnClient implements ReturnClient {
       {
         method: "POST",
         headers: commandHeaders(input.idempotencyKey),
+        body: JSON.stringify({
+          driverSnapshot: input.driverSnapshot,
+          scheduledAt: input.scheduledAt,
+        }),
       }
     )
   }

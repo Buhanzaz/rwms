@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import {
   Add01Icon,
@@ -31,8 +31,14 @@ import {
 import { listOrders, ORDERS_QUERY_KEY } from "@/features/orders/api/orders-api"
 import { CreateOrderDialog } from "@/features/orders/components/create-order-dialog"
 import {
+  OrdersFilters,
+  type OrdersFiltersState,
+} from "@/features/orders/components/orders-filters"
+import {
   formatOrderDateTime,
+  ORDER_CLIENT_TYPES,
   ORDER_CLIENT_TYPE_LABELS,
+  ORDER_STATUSES,
   ORDER_STATUS_LABELS,
 } from "@/features/orders/domain/orders"
 import {
@@ -42,6 +48,20 @@ import {
 import { useOrdersModule } from "@/features/orders/orders-module-context"
 
 const PAGE_SIZE = 20
+const EMPTY_FILTERS: OrdersFiltersState = {
+  statuses: [],
+  clientTypes: [],
+  warehouseIds: [],
+  createdFrom: "",
+  createdTo: "",
+}
+
+function dateBoundary(value: string, endOfDay: boolean) {
+  if (!value) return undefined
+  return new Date(
+    `${value}T${endOfDay ? "23:59:59.999" : "00:00:00.000"}`
+  ).toISOString()
+}
 
 type SortField =
   "number" | "client" | "manager" | "status" | "createdAt" | "updatedAt"
@@ -87,10 +107,35 @@ export function OrdersListPage() {
   const [page, setPage] = useState(0)
   const [sort, setSort] = useState<SortField>("updatedAt")
   const [direction, setDirection] = useState<"asc" | "desc">("desc")
+  const [filters, setFilters] = useState<OrdersFiltersState>(EMPTY_FILTERS)
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const routeRequestsCreate = location.pathname.endsWith("/orders/new")
   const canSearchManagers = canViewAllOrders(currentUser)
   const listTitle = getOrdersListNavigationLabel(currentUser)
+  const statusOptions = useMemo(
+    () =>
+      ORDER_STATUSES.map((status) => ({
+        value: status,
+        label: ORDER_STATUS_LABELS[status],
+      })),
+    []
+  )
+  const clientTypeOptions = useMemo(
+    () =>
+      ORDER_CLIENT_TYPES.map((clientType) => ({
+        value: clientType,
+        label: ORDER_CLIENT_TYPE_LABELS[clientType],
+      })),
+    []
+  )
+  const warehouseOptions = useMemo(
+    () =>
+      warehouses.map((warehouse) => ({
+        value: warehouse.id,
+        label: `${warehouse.code} · ${warehouse.name}`,
+      })),
+    [warehouses]
+  )
 
   const ordersQuery = useQuery({
     queryKey: [
@@ -102,6 +147,7 @@ export function OrdersListPage() {
       search,
       sort,
       direction,
+      filters,
     ],
     queryFn: () =>
       listOrders({
@@ -111,6 +157,11 @@ export function OrdersListPage() {
         search,
         sort,
         direction,
+        statuses: filters.statuses,
+        clientTypes: filters.clientTypes,
+        warehouseIds: filters.warehouseIds,
+        createdFrom: dateBoundary(filters.createdFrom, false),
+        createdTo: dateBoundary(filters.createdTo, true),
       }),
     enabled: Boolean(accessToken),
   })
@@ -165,6 +216,17 @@ export function OrdersListPage() {
         }}
       />
 
+      <OrdersFilters
+        filters={filters}
+        statusOptions={statusOptions}
+        clientTypeOptions={clientTypeOptions}
+        warehouseOptions={warehouseOptions}
+        onChange={(nextFilters) => {
+          setFilters(nextFilters)
+          setPage(0)
+        }}
+      />
+
       {ordersQuery.isLoading ? (
         <Card className="min-h-0 flex-1" size="sm">
           <CardHeader>
@@ -203,8 +265,13 @@ export function OrdersListPage() {
           <CardHeader>
             <CardTitle>Заказы не найдены</CardTitle>
             <CardDescription>
-              {search.trim()
-                ? "Измените поисковый запрос."
+              {search.trim() ||
+              filters.statuses.length > 0 ||
+              filters.clientTypes.length > 0 ||
+              filters.warehouseIds.length > 0 ||
+              filters.createdFrom ||
+              filters.createdTo
+                ? "Измените поисковый запрос или фильтры."
                 : "Создайте первый заказ для начала работы."}
             </CardDescription>
           </CardHeader>

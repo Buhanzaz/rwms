@@ -9,6 +9,7 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentSumma
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.RequestReturnEstimateRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReconcileRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnPickupRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentPlanRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentLine;
@@ -36,10 +37,13 @@ import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventStore;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventType;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.mapper.LogisticsDocumentResponseMapper;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.OrderAuditEventType;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
+import dev.buhanzaz.rwms.logistics.order.service.OrderAuditService;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsExternalAttemptRepository;
@@ -133,6 +137,7 @@ public class LogisticsDocumentService {
   private final LogisticsTaskReferenceRepository taskReferenceRepository;
   private final LogisticsReconciliationRequestRepository reconciliationRequestRepository;
   private final RentalOrderRepository rentalOrders;
+  private final OrderAuditService orderAudit;
   private final EquipmentMovementTaskService equipmentMovementTasks;
   private final LogisticsDocumentResponseMapper responseMapper;
   private final LogisticsIdempotencyProperties idempotencyProperties;
@@ -198,16 +203,17 @@ public class LogisticsDocumentService {
 
     RentalOrder shipmentOrder = validateShipmentRentalBinding(request);
     LogisticsDocument document =
-        documentRepository.saveAndFlush(
-            LogisticsDocument.createShipment(
-                request.warehouseId(),
-                request.clientId(),
-                shipmentOrder == null
-                    ? request.partySnapshot()
-                    : shipmentOrder.getClient().getDisplayName(),
-                request.driverSnapshot(),
-                subjectId,
-                correlationId));
+        LogisticsDocument.createShipment(
+            request.warehouseId(),
+            request.clientId(),
+            shipmentOrder == null
+                ? request.partySnapshot()
+                : shipmentOrder.getClient().getDisplayName(),
+            request.driverSnapshot(),
+            subjectId,
+            correlationId);
+    document.scheduleShipment(request.driverSnapshot(), now());
+    document = documentRepository.saveAndFlush(document);
     List<LogisticsDocumentLine> lines =
         lineRepository.saveAllAndFlush(
             shipmentLines(document, request.lines(), shipmentOrder == null ? null : shipmentOrder.getId()));
@@ -309,6 +315,183 @@ public class LogisticsDocumentService {
     return new CreateResult(toView(document), false);
   }
 
+  /** Creates the date-less shipment that becomes visible as soon as an order is saved. */
+  @Transactional
+  public LogisticsDocumentView createRentalOrderShipmentDraft(
+      UUID subjectId,
+      UUID correlationId,
+      RentalOrder order,
+      List<LogisticsDependencyGateway.OrderUnitReservation> reservations) {
+    requireRequest(order);
+    if (subjectId == null || correlationId == null) {
+      throw new IllegalArgumentException("Shipment actor and correlation identifiers are required");
+    }
+    if (order.getStatus() != RentalOrderStatus.SAVED
+        || order.getWarehouseId() == null
+        || order.getClient() == null) {
+      throw new LogisticsConflictException("Saved rental order is required for shipment creation");
+    }
+    LogisticsDocument existing =
+        documentRepository
+            .findByDocumentTypeAndRentalOrderId(LogisticsDocumentType.SHIPMENT, order.getId())
+            .orElse(null);
+    if (existing != null) return toView(existing);
+    if (reservations == null || reservations.isEmpty() || reservations.size() > 100) {
+      throw new LogisticsConflictException("Заказ должен содержать от 1 до 100 бытовок");
+    }
+
+    LogisticsDocument document =
+        documentRepository.saveAndFlush(
+            LogisticsDocument.createRentalOrderShipment(
+                order.getWarehouseId(),
+                order.getClient().getId(),
+                order.getId(),
+                order.getClient().getDisplayName(),
+                subjectId,
+                correlationId));
+    List<LogisticsDocumentLine> lines = new ArrayList<>(reservations.size());
+    HashSet<UUID> unitIds = new HashSet<>();
+    for (int index = 0; index < reservations.size(); index++) {
+      LogisticsDependencyGateway.OrderUnitReservation reservation = reservations.get(index);
+      if (reservation == null
+          || reservation.unit() == null
+          || reservation.unitId() == null
+          || !reservation.unitId().equals(reservation.unit().id())
+          || !order.getId().equals(reservation.orderId())
+          || !order.getWarehouseId().equals(reservation.warehouseId())
+          || !"ACTIVE".equals(reservation.state())
+          || !unitIds.add(reservation.unitId())) {
+        throw new LogisticsConflictException("Order unit reservation is invalid");
+      }
+      LogisticsDocumentLine line =
+          LogisticsDocumentLine.create(
+              document,
+              index + 1,
+              reservation.unitId(),
+              reservation.unit().version(),
+              null,
+              order.getId());
+      line.captureSourceAllocations(emptyAllocationSnapshot());
+      lines.add(line);
+    }
+    lines = lineRepository.saveAllAndFlush(lines);
+    eventStore.initialize(document, lines.size(), correlationId, subjectId);
+    return toView(document);
+  }
+
+  /** Advances the order and creates its date-less return after every cabin is shipped. */
+  @Transactional
+  public void completeRentalOrderShipment(LogisticsDocument shipment) {
+    if (shipment == null
+        || shipment.getDocumentType() != LogisticsDocumentType.SHIPMENT
+        || shipment.getState() != LogisticsDocumentState.SHIPPED
+        || shipment.getRentalOrderId() == null) {
+      return;
+    }
+    RentalOrder order =
+        rentalOrders
+            .findForUpdate(shipment.getRentalOrderId())
+            .orElseThrow(() -> new LogisticsConflictException("Rental order was not found"));
+    boolean fulfilled = order.fulfill();
+    if (fulfilled) {
+      rentalOrders.saveAndFlush(order);
+      orderAudit.appendForActor(
+          order.getId(),
+          OrderAuditEventType.ORDER_FULFILLED,
+          shipment.getRequestedBySubjectId(),
+          order.getCreatedByRole(),
+          "ORDER",
+          order.getId().toString(),
+          Map.of("status", RentalOrderStatus.SAVED.name()),
+          Map.of("status", RentalOrderStatus.FULFILLED.name()));
+    }
+    if (documentRepository
+        .findByDocumentTypeAndRentalOrderId(LogisticsDocumentType.RETURN, order.getId())
+        .isPresent()) {
+      return;
+    }
+
+    LogisticsDocument returnDocument =
+        documentRepository.saveAndFlush(
+            LogisticsDocument.createRentalOrderReturn(
+                order.getWarehouseId(),
+                order.getClient().getId(),
+                order.getId(),
+                order.getClient().getDisplayName(),
+                shipment.getRequestedBySubjectId(),
+                shipment.getCorrelationId()));
+    List<LogisticsDocumentLine> shipmentLines = linesRequired(shipment.getId());
+    List<LogisticsDocumentLine> returnLines = new ArrayList<>(shipmentLines.size());
+    for (LogisticsDocumentLine shipmentLine : shipmentLines) {
+      LogisticsGuard guard =
+          guardRepository
+              .findByLine_Id(shipmentLine.getId())
+              .orElseThrow(
+                  () -> new LogisticsConflictException("Shipped order line has no asset guard"));
+      if (guard.getObservedAssetVersion() == null) {
+        throw new LogisticsConflictException("Shipped order line has no observed asset version");
+      }
+      returnLines.add(
+          LogisticsDocumentLine.create(
+              returnDocument,
+              shipmentLine.getLineNumber(),
+              shipmentLine.getAssetId(),
+              guard.getObservedAssetVersion(),
+              order.getClient().getDisplayName(),
+              order.getId()));
+    }
+    returnLines = lineRepository.saveAllAndFlush(returnLines);
+    OffsetDateTime createdAt = now();
+    for (LogisticsDocumentLine line : returnLines) {
+      createLineAttempt(
+          returnDocument,
+          line,
+          LogisticsTargetService.MEDIA,
+          RETURN_MEDIA_OWNER_PROOF_REGISTER,
+          ownerProofDigest(
+              RETURN_MEDIA_OWNER_PROOF_REGISTER,
+              returnDocument,
+              line,
+              returnDocument.getWarehouseId(),
+              0,
+              0,
+              true),
+          createdAt);
+    }
+    eventStore.initialize(
+        returnDocument,
+        returnLines.size(),
+        shipment.getCorrelationId(),
+        shipment.getRequestedBySubjectId());
+  }
+
+  /** Closes a linked order after its return has reached either terminal inspection outcome. */
+  @Transactional
+  public void closeRentalOrderReturn(LogisticsDocument returnDocument) {
+    if (returnDocument == null
+        || returnDocument.getDocumentType() != LogisticsDocumentType.RETURN
+        || returnDocument.getRentalOrderId() == null
+        || (returnDocument.getState() != LogisticsDocumentState.ACCEPTED
+            && returnDocument.getState() != LogisticsDocumentState.ESTIMATE_REQUESTED)) {
+      return;
+    }
+    RentalOrder order =
+        rentalOrders
+            .findForUpdate(returnDocument.getRentalOrderId())
+            .orElseThrow(() -> new LogisticsConflictException("Rental order was not found"));
+    if (!order.close()) return;
+    rentalOrders.saveAndFlush(order);
+    orderAudit.appendForActor(
+        order.getId(),
+        OrderAuditEventType.ORDER_CLOSED,
+        returnDocument.getRequestedBySubjectId(),
+        order.getCreatedByRole(),
+        "ORDER",
+        order.getId().toString(),
+        Map.of("status", RentalOrderStatus.FULFILLED.name()),
+        Map.of("status", RentalOrderStatus.CLOSED.name()));
+  }
+
   /**
    * Commits the first durable return-registration attempt before any private
    * service call. The relay can therefore replay an uncertain outcome through
@@ -321,13 +504,17 @@ public class LogisticsDocumentService {
       UUID idempotencyKey,
       UUID correlationId,
       UUID documentId,
-      long expectedDocumentVersion) {
-    if (documentId == null || correlationId == null || expectedDocumentVersion < 0) {
-      throw new IllegalArgumentException("Return registration identifiers and version are required");
-    }
+      long expectedDocumentVersion,
+      ReturnPickupRequest request) {
+    requireReturnCommand(documentId, correlationId, expectedDocumentVersion, request);
     String checksum =
         LogisticsCommandChecksum.sha256(
-            REGISTER_RETURN, List.of(documentId.toString(), Long.toString(expectedDocumentVersion)));
+            REGISTER_RETURN,
+            List.of(
+                documentId.toString(),
+                Long.toString(expectedDocumentVersion),
+                request.driverSnapshot().trim(),
+                request.scheduledAt().toString()));
     acquireIdempotencyLock(subjectId, REGISTER_RETURN, idempotencyKey);
     CreateResult replay = replay(subjectId, idempotencyKey, REGISTER_RETURN, checksum);
     if (replay != null) return replay;
@@ -340,6 +527,7 @@ public class LogisticsDocumentService {
         lineRepository.findAllByDocument_IdOrderByLineNumber(documentId);
     if (lines.isEmpty()) throw new IllegalStateException("Return document has no lines");
 
+    document.scheduleReturn(request.driverSnapshot(), request.scheduledAt());
     document.beginReturnRegistration();
     documentRepository.saveAndFlush(document);
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
@@ -542,13 +730,26 @@ public class LogisticsDocumentService {
 
     LogisticsDocument document = document(documentId, LogisticsDocumentType.SHIPMENT);
     requireExpectedVersion(document, expectedDocumentVersion, "Shipment document version changed concurrently");
-    if (document.getState() != LogisticsDocumentState.DRAFT) {
-      throw new LogisticsConflictException("Shipment plan cannot be started in its current lifecycle state");
-    }
+    boolean startPreparation = document.getState() == LogisticsDocumentState.DRAFT;
     List<LogisticsDocumentLine> lines = linesRequired(documentId);
-    requireImmutableShipmentPlan(document, lines, request);
-
-    startShipmentPreparation(document, lines, correlationId, subjectId, now());
+    try {
+      document.scheduleShipment(request.driverSnapshot(), request.scheduledAt());
+    } catch (IllegalStateException exception) {
+      throw new LogisticsConflictException(
+          "Shipment plan cannot be changed in its current lifecycle state");
+    }
+    if (startPreparation) {
+      startShipmentPreparation(document, lines, correlationId, subjectId, now());
+    } else {
+      documentRepository.saveAndFlush(document);
+      eventStore.append(
+          document,
+          lines.size(),
+          correlationId,
+          subjectId,
+          LogisticsEventType.SHIPMENT_PLANNED,
+          null);
+    }
     remember(subjectId, idempotencyKey, PLAN_SHIPMENT, checksum, document);
     return new CreateResult(toView(document), false);
   }
@@ -600,6 +801,12 @@ public class LogisticsDocumentService {
     requireExpectedVersion(document, expectedDocumentVersion, "Shipment document version changed concurrently");
     if (document.getState() != LogisticsDocumentState.AWAITING_CONFIRMATION) {
       throw new LogisticsConflictException("Shipment preparation is not awaiting confirmation");
+    }
+    try {
+      document.requireShipmentDepartureAllowed(now());
+    } catch (IllegalStateException exception) {
+      throw new LogisticsConflictException(
+          "Дата отгрузки ещё не наступила. Измените дату и повторите действие");
     }
     List<LogisticsDocumentLine> lines = linesRequired(documentId);
     OffsetDateTime now = now();
@@ -1133,6 +1340,8 @@ public class LogisticsDocumentService {
         summary.driverSnapshot(),
         summary.clientId(),
         summary.equipmentMovementTaskId(),
+        summary.scheduledAt(),
+        summary.rentalOrderId(),
         responseMapper.toLineViews(lineRepository.findAllByDocument_IdOrderByLineNumber(summary.id())),
         summary.createdAt(),
         summary.updatedAt());
@@ -1234,66 +1443,6 @@ public class LogisticsDocumentService {
 
   private static Map<UUID, LogisticsDocumentLine> linesById(List<LogisticsDocumentLine> lines) {
     return lines.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(LogisticsDocumentLine::getId, line -> line));
-  }
-
-  private static void requireImmutableShipmentPlan(
-      LogisticsDocument document, List<LogisticsDocumentLine> lines, ShipmentPlanRequest request) {
-    if (!document.getPartySnapshot().equals(trimSnapshot(request.partySnapshot()))
-        || !document.getDriverSnapshot().equals(trimSnapshot(request.driverSnapshot()))
-        || request.lines() == null
-        || request.lines().size() != lines.size()) {
-      throw new LogisticsConflictException("Shipment plan differs from the immutable draft");
-    }
-    for (int index = 0; index < lines.size(); index++) {
-      LogisticsDocumentLine persisted = lines.get(index);
-      var input = request.lines().get(index);
-      validateShipmentAllocations(input);
-      if (input.assetId() == null
-          || !persisted.getAssetId().equals(input.assetId())
-          || persisted.getAssetVersion() != input.assetVersion()
-          || persisted.getSourceAllocationSnapshot() == null
-          || !sameAllocationSnapshot(persisted.getSourceAllocationSnapshot(), input)) {
-        throw new LogisticsConflictException("Shipment plan differs from the immutable draft");
-      }
-    }
-  }
-
-  private static String trimSnapshot(String value) {
-    if (value == null || value.trim().isEmpty()) {
-      throw new IllegalArgumentException("Shipment snapshot is required");
-    }
-    return value.trim();
-  }
-
-  private static boolean sameAllocationSnapshot(
-      tools.jackson.databind.JsonNode snapshot,
-      dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentLineRequest input) {
-    tools.jackson.databind.JsonNode values = snapshot == null ? null : snapshot.get("allocations");
-    if (values == null || !values.isArray() || values.size() != input.allocations().size()) return false;
-    java.util.HashMap<UUID, String> persisted = new java.util.HashMap<>();
-    for (tools.jackson.databind.JsonNode value : values) {
-      tools.jackson.databind.JsonNode equipmentId = value.get("equipmentId");
-      tools.jackson.databind.JsonNode quantity = value.get("quantity");
-      tools.jackson.databind.JsonNode expectedVersion = value.get("expectedStockVersion");
-      if (equipmentId == null
-          || !equipmentId.isTextual()
-          || quantity == null
-          || !quantity.isIntegralNumber()
-          || expectedVersion == null
-          || !expectedVersion.isIntegralNumber()) return false;
-      try {
-        UUID id = UUID.fromString(equipmentId.textValue());
-        if (persisted.put(id, quantity.longValue() + ":" + expectedVersion.longValue()) != null) return false;
-      } catch (IllegalArgumentException exception) {
-        return false;
-      }
-    }
-    for (var allocation : input.allocations()) {
-      if (!Long.toString(allocation.quantity())
-          .concat(":" + allocation.expectedStockVersion())
-          .equals(persisted.get(allocation.equipmentId()))) return false;
-    }
-    return true;
   }
 
   private static void validateAcceptanceLines(AcceptReturnRequest request, Set<UUID> requiredLineIds) {
@@ -1551,29 +1700,11 @@ public class LogisticsDocumentService {
 
   private static List<String> shipmentPlanFingerprintValues(
       UUID documentId, long expectedVersion, ShipmentPlanRequest request) {
-    List<String> values = new ArrayList<>();
-    values.add(documentId.toString());
-    values.add(Long.toString(expectedVersion));
-    values.add(trimSnapshot(request.partySnapshot()));
-    values.add(trimSnapshot(request.driverSnapshot()));
-    if (request.lines() == null) throw new IllegalArgumentException("Shipment lines are required");
-    for (var line : request.lines()) {
-      if (line == null || line.assetId() == null) {
-        throw new IllegalArgumentException("Shipment line is required");
-      }
-      validateShipmentAllocations(line);
-      values.add(line.assetId().toString());
-      values.add(Long.toString(line.assetVersion()));
-      line.allocations().stream()
-          .sorted(Comparator.comparing(value -> value.equipmentId().toString()))
-          .forEach(
-              allocation -> {
-                values.add(allocation.equipmentId().toString());
-                values.add(Long.toString(allocation.quantity()));
-                values.add(Long.toString(allocation.expectedStockVersion()));
-              });
-    }
-    return values;
+    return List.of(
+        documentId.toString(),
+        Long.toString(expectedVersion),
+        request.driverSnapshot().trim(),
+        request.scheduledAt().toString());
   }
 
   static String holdAcquireOperation(UUID equipmentId) {
@@ -1940,6 +2071,12 @@ public class LogisticsDocumentService {
               value.put("quantity", allocation.quantity());
               value.put("expectedStockVersion", allocation.expectedStockVersion());
             });
+    return root;
+  }
+
+  private static ObjectNode emptyAllocationSnapshot() {
+    ObjectNode root = JsonNodeFactory.instance.objectNode();
+    root.putArray("allocations");
     return root;
   }
 

@@ -84,6 +84,13 @@ class ReturnRegistrationApiIntegrationTest {
                 .param("expectedVersion", "0")
                 .header("Idempotency-Key", idempotencyKey)
                 .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {
+                      "driverSnapshot": "Водитель возврата",
+                      "scheduledAt": "2026-07-22T08:00:00Z"
+                    }
+                    """)
                 .with(
                     jwt()
                         .jwt(
