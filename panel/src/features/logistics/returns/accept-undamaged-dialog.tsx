@@ -250,7 +250,7 @@ export function AcceptUndamagedDialog({
       <DialogContent className="max-h-[calc(100svh-1rem)] overflow-y-auto sm:max-w-4xl">
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>Принять возврат без повреждений</DialogTitle>
+            <DialogTitle>Принять возврат без сметы</DialogTitle>
             <DialogDescription>
               Загрузите фотографии осмотра для каждой строки возврата. Одна
               фотография хранится как один объект, а размеры обрабатывает
@@ -432,7 +432,7 @@ export function AcceptUndamagedDialog({
               Отмена
             </Button>
             <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? "Принимается…" : "Подтвердить приёмку"}
+              {mutation.isPending ? "Принимается…" : "Принять без сметы"}
             </Button>
           </DialogFooter>
         </form>

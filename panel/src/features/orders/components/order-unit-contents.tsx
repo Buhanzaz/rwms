@@ -174,11 +174,13 @@ export function OrderUnitEquipmentDialog({
       <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle>
-            Наполнение{candidate ? ` — ${candidate.unit.number}` : ""}
+            Добавить наполнение
+            {candidate ? ` — ${candidate.unit.number}` : ""}
           </DialogTitle>
           <DialogDescription>
-            Укажите желаемое количество и срок резерва. Мебель переместится
-            только после выполнения задания работником.
+            Укажите количество из свободного остатка склада и срок резерва.
+            Бытовка-донор не используется; мебель переместится после выполнения
+            задания работником.
           </DialogDescription>
         </DialogHeader>
         {candidate && open ? (

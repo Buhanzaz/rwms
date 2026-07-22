@@ -36,6 +36,41 @@ vi.mock("@/features/repair-tasks/api/repair-worker-directory-api", () => ({
   listRepairWorkerGroups: driverDirectoryApi.listRepairWorkerGroups,
 }))
 
+vi.mock("@/features/logistics/logistics-driver-picker", () => ({
+  LogisticsDriverPicker: ({
+    id,
+    value,
+    onChange,
+  }: {
+    id: string
+    value: { id: string; name: string } | null
+    onChange: (value: { id: string; name: string } | null) => void
+  }) => (
+    <label htmlFor={id}>
+      Водитель
+      <select
+        id={id}
+        value={value?.id ?? ""}
+        onChange={(event) =>
+          onChange(
+            event.target.value
+              ? {
+                  id: event.target.value,
+                  name: "Иванов Иван",
+                }
+              : null
+          )
+        }
+      >
+        <option value="">Выберите водителя</option>
+        <option value="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb">
+          Иванов Иван
+        </option>
+      </select>
+    </label>
+  ),
+}))
+
 vi.mock("@/api/equipment-api", () => ({
   getEquipmentItems: vi.fn().mockResolvedValue([]),
 }))
@@ -140,6 +175,8 @@ function returnDocument(
     driverSnapshot: null,
     clientId: CLIENT_ID,
     equipmentMovementTaskId: null,
+    scheduledAt: state === "DRAFT" ? null : "2026-07-18T08:00:00Z",
+    rentalOrderId: ORDER_ID,
     lines,
     createdAt: "2026-07-18T08:00:00Z",
     updatedAt: "2026-07-18T08:10:00Z",
@@ -203,52 +240,44 @@ describe("LogisticsReturnsPage", () => {
       "return-token",
       WAREHOUSE_ID
     )
+    expect(screen.queryByRole("button", { name: "Создать вывоз" })).toBeNull()
     expect(
-      screen.queryByRole("button", { name: "Добавить возврат" })
-    ).toBeNull()
-    expect(
-      screen.queryByRole("button", { name: "Зарегистрировать" })
-    ).toBeNull()
-    expect(
-      screen.queryByRole("button", { name: "Принять без повреждений" })
+      screen.queryByRole("button", { name: "Принять без сметы" })
     ).toBeNull()
   })
 
-  it("retains the fixed state filter and removes the duplicate add-from-rental control", async () => {
+  it("shows warehouse-style filters and the lifecycle actions", async () => {
     renderPage()
 
     await screen.findAllByText("Требуется осмотр")
+    expect(screen.getAllByRole("button", { name: "Статус" })).not.toHaveLength(
+      0
+    )
+    expect(screen.getByLabelText("Вывоз с")).toBeTruthy()
     expect(
-      screen.queryByText(
-        "Выберите контрагента и его активную аренду. Список бытовок строится по серверным резервам и текущему статусу аренды."
-      )
-    ).toBeNull()
-    const filter = screen.getByRole("button", { name: "Показать все" })
-    expect(filter.className).toContain("w-40")
-    expect(filter.className).toContain("shrink-0")
+      screen.getAllByRole("button", { name: "Создать вывоз" })
+    ).not.toHaveLength(0)
     expect(
-      screen.queryByRole("button", { name: /Добавить бытовку из аренды/i })
-    ).toBeNull()
-    expect(
-      screen.getByRole("button", { name: "Добавить возврат" })
-    ).toBeTruthy()
+      screen.getAllByRole("button", { name: "Принять без сметы" })
+    ).not.toHaveLength(0)
     expect(
       screen.getAllByRole("button", { name: "Создать смету" })
     ).not.toHaveLength(0)
   })
 
-  it("opens the configured driver picker for a new return", async () => {
+  it("opens the configured driver and date picker for a new return", async () => {
     const user = userEvent.setup()
     renderPage()
 
     await user.click(
-      await screen.findByRole("button", { name: "Добавить возврат" })
+      (await screen.findAllByRole("button", { name: "Создать вывоз" }))[0]!
     )
 
     expect(screen.getByRole("combobox", { name: "Водитель" })).toBeTruthy()
+    expect(screen.getByLabelText("Дата и время вывоза")).toBeTruthy()
   })
 
-  it("uses the server document version for registration", async () => {
+  it("uses the server document version, driver and date for pickup", async () => {
     const user = userEvent.setup()
     returnApi.registerReturn.mockResolvedValue(
       returnDocument(DOCUMENT_ID, "REGISTERING", 3)
@@ -256,7 +285,16 @@ describe("LogisticsReturnsPage", () => {
     renderPage()
 
     await user.click(
-      (await screen.findAllByRole("button", { name: "Зарегистрировать" }))[0]!
+      (await screen.findAllByRole("button", { name: "Создать вывоз" }))[0]!
+    )
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Водитель" }),
+      "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    )
+    const scheduledAt = "2026-07-23T09:15"
+    await user.type(screen.getByLabelText("Дата и время вывоза"), scheduledAt)
+    await user.click(
+      screen.getByRole("dialog").querySelector('button[type="submit"]')!
     )
 
     await waitFor(() =>
@@ -264,6 +302,8 @@ describe("LogisticsReturnsPage", () => {
         accessToken: "return-token",
         documentId: DOCUMENT_ID,
         expectedVersion: 2,
+        driverSnapshot: "Иванов Иван",
+        scheduledAt: new Date(scheduledAt).toISOString(),
         idempotencyKey: IDEMPOTENCY_KEY,
       })
     )
@@ -279,7 +319,7 @@ describe("LogisticsReturnsPage", () => {
     await user.click(
       (
         await screen.findAllByRole("button", {
-          name: "Принять без повреждений",
+          name: "Принять без сметы",
         })
       )[0]!
     )
@@ -287,9 +327,7 @@ describe("LogisticsReturnsPage", () => {
     await user.click(
       screen.getByRole("button", { name: "Подготовить Фотографии строки 1" })
     )
-    await user.click(
-      screen.getByRole("button", { name: "Подтвердить приёмку" })
-    )
+    await user.click(screen.getByRole("button", { name: "Принять без сметы" }))
 
     await waitFor(() =>
       expect(returnApi.acceptUndamagedReturn).toHaveBeenCalledWith({

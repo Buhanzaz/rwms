@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.logistics.order.service;
 
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AddOrderUnitRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AdjustOrderEquipmentRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRequest;
@@ -16,6 +17,7 @@ import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderUnitPageRespons
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderUnitResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SelectWarehouseRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.UpdateOrderRequest;
+import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderAuditEventType;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderCommandReceipt;
@@ -28,6 +30,7 @@ import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
 import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
 import jakarta.persistence.criteria.Predicate;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -59,6 +62,7 @@ public class RentalOrderService {
   private static final String CREATE_ORDER = "CREATE_ORDER";
   private static final String UPDATE_ORDER = "UPDATE_ORDER";
   private static final String SELECT_WAREHOUSE = "SELECT_WAREHOUSE";
+  private static final String SAVE_ORDER = "SAVE_ORDER";
   private static final String CANCEL_ORDER = "CANCEL_ORDER";
   private static final String ADD_UNIT = "ADD_UNIT";
   private static final String REMOVE_UNIT = "REMOVE_UNIT";
@@ -72,6 +76,7 @@ public class RentalOrderService {
   private final OrderAuthorizer access;
   private final RentalOrderResponseMapper mapper;
   private final LogisticsDependencyGateway dependencies;
+  private final LogisticsDocumentService documents;
 
   public OrderPageResponse list(
       OrderActor actor,
@@ -79,8 +84,16 @@ public class RentalOrderService {
       int size,
       String search,
       String sort,
-      String direction) {
+      String direction,
+      List<RentalOrderStatus> statuses,
+      List<ClientType> clientTypes,
+      List<UUID> warehouseIds,
+      OffsetDateTime createdFrom,
+      OffsetDateTime createdTo) {
     requirePage(page, size);
+    if (createdFrom != null && createdTo != null && createdFrom.isAfter(createdTo)) {
+      throw new IllegalArgumentException("createdFrom must not be after createdTo");
+    }
     Sort pageSort = orderSort(sort, direction);
     String normalizedSearch = normalizeSearch(search);
     Specification<RentalOrder> specification =
@@ -88,6 +101,23 @@ public class RentalOrderService {
           List<Predicate> predicates = new ArrayList<>();
           Predicate visible = visibility(root, builder, actor);
           predicates.add(visible);
+          if (statuses != null && !statuses.isEmpty()) {
+            predicates.add(root.get("status").in(Set.copyOf(statuses)));
+          }
+          if (clientTypes != null && !clientTypes.isEmpty()) {
+            predicates.add(
+                root.join("client").get("clientType").in(Set.copyOf(clientTypes)));
+          }
+          if (warehouseIds != null && !warehouseIds.isEmpty()) {
+            predicates.add(root.get("warehouseId").in(Set.copyOf(warehouseIds)));
+          }
+          if (createdFrom != null) {
+            predicates.add(
+                builder.greaterThanOrEqualTo(root.get("createdAt"), createdFrom));
+          }
+          if (createdTo != null) {
+            predicates.add(builder.lessThanOrEqualTo(root.get("createdAt"), createdTo));
+          }
           if (!normalizedSearch.isEmpty()) {
             List<Predicate> matching = new ArrayList<>();
             matching.add(
@@ -664,6 +694,51 @@ public class RentalOrderService {
     changed(order, actor, "status");
     remember(actor, CANCEL_ORDER, idempotencyKey, checksum, order);
     return new MutationResult(detail(order, actor, List.of()), false);
+  }
+
+  @Transactional
+  public MutationResult save(
+      OrderActor actor,
+      UUID orderId,
+      long expectedVersion,
+      UUID idempotencyKey,
+      UUID correlationId) {
+    if (correlationId == null) {
+      throw new IllegalArgumentException("Order correlation identifier is required");
+    }
+    String checksum =
+        OrderCommandChecksum.sha256(
+            SAVE_ORDER, List.of(orderId.toString(), Long.toString(expectedVersion)));
+    OrderCommandReceipt replay = replay(actor, SAVE_ORDER, idempotencyKey, checksum);
+    if (replay != null) {
+      RentalOrder replayedOrder = replay.getOrder();
+      access.requireVisible(actor, replayedOrder);
+      return new MutationResult(
+          detail(replayedOrder, actor, readUnits(replayedOrder)), true);
+    }
+
+    RentalOrder order = lockedOrder(orderId);
+    access.requireMutable(actor, order);
+    requireVersion(order, expectedVersion);
+    List<LogisticsDependencyGateway.OrderUnitReservation> units = readUnits(order);
+    if (units.isEmpty()) {
+      throw conflict("ORDER_UNITS_REQUIRED", "Добавьте в заказ хотя бы одну бытовку");
+    }
+    order.saveForFulfillment();
+    orders.saveAndFlush(order);
+    documents.createRentalOrderShipmentDraft(
+        actor.subjectId(), correlationId, order, units);
+    audit.append(
+        orderId,
+        OrderAuditEventType.ORDER_SAVED,
+        actor,
+        "ORDER",
+        orderId.toString(),
+        Map.of("status", RentalOrderStatus.DRAFT.name()),
+        Map.of("status", RentalOrderStatus.SAVED.name()));
+    changed(order, actor, "status");
+    remember(actor, SAVE_ORDER, idempotencyKey, checksum, order);
+    return new MutationResult(detail(order, actor, units), false);
   }
 
   private RentalOrder order(UUID orderId) {

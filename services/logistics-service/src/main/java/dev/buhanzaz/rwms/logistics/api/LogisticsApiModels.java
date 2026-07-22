@@ -58,9 +58,12 @@ public final class LogisticsApiModels {
   }
 
   public record ShipmentPlanRequest(
-      @NotBlank @Size(max = 512) String partySnapshot,
       @NotBlank @Size(max = 512) String driverSnapshot,
-      @NotNull @Size(min = 1, max = 100) List<@Valid ShipmentLineRequest> lines) {}
+      @NotNull OffsetDateTime scheduledAt) {}
+
+  public record ReturnPickupRequest(
+      @NotBlank @Size(max = 512) String driverSnapshot,
+      @NotNull OffsetDateTime scheduledAt) {}
 
   public record EquipmentAllocationRequest(
       @NotNull UUID equipmentId, @Min(1) long quantity, @Min(0) long expectedStockVersion) {}
@@ -146,6 +149,8 @@ public final class LogisticsApiModels {
       String driverSnapshot,
       UUID clientId,
       UUID equipmentMovementTaskId,
+      OffsetDateTime scheduledAt,
+      UUID rentalOrderId,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {}
 
@@ -170,6 +175,8 @@ public final class LogisticsApiModels {
       String driverSnapshot,
       UUID clientId,
       UUID equipmentMovementTaskId,
+      OffsetDateTime scheduledAt,
+      UUID rentalOrderId,
       List<LogisticsLineView> lines,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {}

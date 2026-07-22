@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnLineRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnPickupRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
@@ -118,9 +119,23 @@ class ReturnRegistrationSagaIntegrationTest {
 
     UUID registrationKey = UUID.randomUUID();
     LogisticsDocumentService.CreateResult started =
-        documents.registerReturn(SUBJECT, registrationKey, CORRELATION, documentId, 0);
+        documents.registerReturn(
+            SUBJECT,
+            registrationKey,
+            CORRELATION,
+            documentId,
+            0,
+            new ReturnPickupRequest(
+                "Driver snapshot", OffsetDateTime.parse("2026-07-01T08:00:00Z")));
     LogisticsDocumentService.CreateResult replayed =
-        documents.registerReturn(SUBJECT, registrationKey, CORRELATION, documentId, 0);
+        documents.registerReturn(
+            SUBJECT,
+            registrationKey,
+            CORRELATION,
+            documentId,
+            0,
+            new ReturnPickupRequest(
+                "Driver snapshot", OffsetDateTime.parse("2026-07-01T08:00:00Z")));
 
     assertThat(started.replayed()).isFalse();
     assertThat(replayed.replayed()).isTrue();
@@ -178,7 +193,14 @@ class ReturnRegistrationSagaIntegrationTest {
             new LogisticsDependencyGateway.RentalItemSnapshot(
                 ASSET, 6, WAREHOUSE, "FREE", List.of()));
 
-    documents.registerReturn(SUBJECT, UUID.randomUUID(), CORRELATION, documentId, 0);
+    documents.registerReturn(
+        SUBJECT,
+        UUID.randomUUID(),
+        CORRELATION,
+        documentId,
+        0,
+        new ReturnPickupRequest(
+            "Driver snapshot", OffsetDateTime.parse("2026-07-01T08:00:00Z")));
     processor.processUntilIdle(documentId);
 
     assertThat(documents.get(documentId, LogisticsDocumentType.RETURN).state())
@@ -230,7 +252,14 @@ class ReturnRegistrationSagaIntegrationTest {
             new LogisticsDependencyGateway.RentalItemSnapshot(
                 ASSET, 8, WAREHOUSE, "AFTER_RENT", List.of()));
 
-    documents.registerReturn(SUBJECT, UUID.randomUUID(), CORRELATION, documentId, 0);
+    documents.registerReturn(
+        SUBJECT,
+        UUID.randomUUID(),
+        CORRELATION,
+        documentId,
+        0,
+        new ReturnPickupRequest(
+            "Driver snapshot", OffsetDateTime.parse("2026-07-01T08:00:00Z")));
     processor.processUntilIdle(documentId);
     UUID persistedKey =
         jdbc.queryForObject(

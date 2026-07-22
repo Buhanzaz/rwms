@@ -16,10 +16,17 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnAdditionalEquipm
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.RequestReturnEstimateRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnMediaLineRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnPickupRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnShortageLineRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
+import dev.buhanzaz.rwms.logistics.domain.LogisticsDocument;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
+import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.repository.OrderClientRepository;
+import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.ReturnCompletionProcessor;
 import dev.buhanzaz.rwms.logistics.service.ReturnRegistrationProcessor;
@@ -66,6 +73,8 @@ class ReturnCompletionSagaIntegrationTest {
   @Autowired ReturnRegistrationProcessor registration;
   @Autowired ReturnCompletionProcessor completion;
   @Autowired JdbcTemplate jdbc;
+  @Autowired OrderClientRepository clients;
+  @Autowired RentalOrderRepository orders;
 
   @MockitoBean LogisticsDependencyGateway dependencies;
 
@@ -75,6 +84,10 @@ class ReturnCompletionSagaIntegrationTest {
         """
         truncate table
           logistics_document,
+          rental_order_command_receipt,
+          rental_order_audit_event,
+          rental_order,
+          order_client,
           event_stream_head,
           domain_event,
           aggregate_snapshot,
@@ -309,6 +322,62 @@ class ReturnCompletionSagaIntegrationTest {
             eq(List.of(new LogisticsDependencyGateway.EquipmentShortage(equipmentId, 3))));
   }
 
+  @Test
+  void closesTheFulfilledOrderAfterItsLinkedReturnIsInspected() {
+    OrderClient client =
+        clients.saveAndFlush(
+            OrderClient.create(
+                ClientType.LEGAL_ENTITY,
+                "Tenant linked",
+                "tenant linked",
+                SUBJECT,
+                UUID.randomUUID(),
+                "0".repeat(64)));
+    RentalOrder order =
+        RentalOrder.create(
+            "ORD-888888",
+            client,
+            SUBJECT,
+            "Dispatcher",
+            SUBJECT,
+            "Dispatcher",
+            "RENTAL_MANAGER",
+            UUID.randomUUID(),
+            "1".repeat(64));
+    order.selectWarehouse(WAREHOUSE);
+    order.saveForFulfillment();
+    order.fulfill();
+    order = orders.saveAndFlush(order);
+    LogisticsDocument returnDocument =
+        LogisticsDocument.createRentalOrderReturn(
+            WAREHOUSE,
+            client.getId(),
+            order.getId(),
+            client.getDisplayName(),
+            SUBJECT,
+            CORRELATION);
+    returnDocument.scheduleReturn(
+        "Driver linked", OffsetDateTime.now(ZoneOffset.UTC));
+    returnDocument.beginReturnRegistration();
+    returnDocument.requireReturnInspection();
+    returnDocument.beginReturnAcceptance();
+    returnDocument.acceptReturn();
+
+    documents.closeRentalOrderReturn(returnDocument);
+    documents.closeRentalOrderReturn(returnDocument);
+
+    assertThat(
+            jdbc.queryForObject(
+                "select status from rental_order where id=?", String.class, order.getId()))
+        .isEqualTo("CLOSED");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_order_audit_event where order_id=? and event_type='ORDER_CLOSED'",
+                Long.class,
+                order.getId()))
+        .isOne();
+  }
+
   private RegisteredReturn registeredReturn() {
     LogisticsDocumentService.CreateResult created =
         documents.createReturn(
@@ -329,7 +398,14 @@ class ReturnCompletionSagaIntegrationTest {
             any(), eq(ASSET), eq(7L), eq(leaseId), eq(11L), eq(documentId), eq(lineId)))
         .thenReturn(snapshot(8, "AFTER_RENT"));
 
-    documents.registerReturn(SUBJECT, UUID.randomUUID(), CORRELATION, documentId, 0);
+    documents.registerReturn(
+        SUBJECT,
+        UUID.randomUUID(),
+        CORRELATION,
+        documentId,
+        0,
+        new ReturnPickupRequest(
+            "Driver snapshot", OffsetDateTime.parse("2026-07-01T08:00:00Z")));
     registration.processUntilIdle(documentId);
     long version = documents.get(documentId, LogisticsDocumentType.RETURN).version();
     assertThat(documents.get(documentId, LogisticsDocumentType.RETURN).state())

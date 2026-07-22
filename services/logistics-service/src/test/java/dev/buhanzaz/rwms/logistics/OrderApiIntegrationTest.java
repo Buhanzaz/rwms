@@ -316,6 +316,81 @@ class OrderApiIntegrationTest {
   }
 
   @Test
+  void savingOrderLocksItAndCreatesOneDateLessShipmentForItsReservedUnits()
+      throws Exception {
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент сохранённого заказа");
+    selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
+    addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    UUID idempotencyKey = UUID.randomUUID();
+
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "2")
+                .header("Idempotency-Key", idempotencyKey)
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(header().string("ETag", "\"3\""))
+        .andExpect(jsonPath("$.version").value(3))
+        .andExpect(jsonPath("$.status").value("SAVED"))
+        .andExpect(jsonPath("$.unitCount").value(1));
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "2")
+                .header("Idempotency-Key", idempotencyKey)
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.version").value(3));
+
+    mvc.perform(
+            get("/api/logistics/v1/shipments")
+                .param("warehouseId", WAREHOUSE_1.toString())
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.length()").value(1))
+        .andExpect(jsonPath("$[0].state").value("DRAFT"))
+        .andExpect(jsonPath("$[0].scheduledAt").isEmpty())
+        .andExpect(jsonPath("$[0].driverSnapshot").isEmpty())
+        .andExpect(jsonPath("$[0].rentalOrderId").value(orderId.toString()))
+        .andExpect(jsonPath("$[0].lines.length()").value(1))
+        .andExpect(jsonPath("$[0].lines[0].assetId").value(UNIT_1.toString()));
+
+    mvc.perform(
+            get("/api/logistics/v1/orders")
+                .param("status", "SAVED")
+                .param("clientType", "LEGAL_ENTITY")
+                .param("warehouseId", WAREHOUSE_1.toString())
+                .param("createdFrom", "2020-01-01T00:00:00Z")
+                .param("createdTo", "2030-01-01T00:00:00Z")
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.totalElements").value(1));
+    mvc.perform(
+            get("/api/logistics/v1/orders")
+                .param("status", "DRAFT")
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.totalElements").value(0));
+
+    mvc.perform(
+            put("/api/logistics/v1/orders/{orderId}", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(updateOrderBody(3, orderClientId(orderId)))
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ORDER_NOT_EDITABLE"));
+
+    assertAuditCount(orderId, "ORDER_SAVED", 1);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_document where rental_order_id=? and document_type='SHIPMENT'",
+                Long.class,
+                orderId))
+        .isOne();
+  }
+
+  @Test
   void unsupportedClientTypeIsRejectedBeforeMutation() throws Exception {
     mvc.perform(
             post("/api/logistics/v1/clients")
