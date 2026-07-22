@@ -48,6 +48,17 @@ public class MaintenanceCatalogController {
     return page(values, page, size);
   }
 
+  @PutMapping("/versions/{id}")
+  public CatalogVersionResponse replaceCatalog(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID id,
+      @RequestParam UUID warehouseId,
+      @Valid @RequestBody ChangeCatalogRequest request) {
+    access.requireEdit(jwt, warehouseId);
+    requireWarehouse(id, warehouseId);
+    return service.changeCatalog(id, request);
+  }
+
   @GetMapping("/versions/{id}/nodes")
   public List<CatalogNodeResponse> nodes(
       @AuthenticationPrincipal Jwt jwt,

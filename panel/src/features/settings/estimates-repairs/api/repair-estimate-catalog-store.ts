@@ -3,6 +3,7 @@ import {
   listMaintenanceCatalogLinks,
   listMaintenanceCatalogNodes,
   listMaintenanceCatalogVersions,
+  replaceMaintenanceCatalog,
   replaceMaintenanceCatalogLinks,
   replaceMaintenanceCatalogNodes,
   type MaintenanceCatalogLink,
@@ -13,6 +14,7 @@ import {
 } from "@/features/repair-estimate-catalog/api/http-maintenance-catalog-client"
 import type {
   RepairEstimateCatalogCanvasDto,
+  RepairEstimateCatalogCanvasChangeSet,
   RepairEstimateCatalogLinkDto,
   RepairEstimateCatalogLinkMutation,
   RepairEstimateCatalogNodeDto,
@@ -416,21 +418,19 @@ function toLinkInput(
   }
 }
 
-export async function saveRepairEstimateCatalogLink(
-  request: RepairEstimateCatalogRequest,
-  input: RepairEstimateCatalogLinkMutation
-) {
-  const state = await catalogState(request)
+function catalogLinkInput(
+  input: RepairEstimateCatalogLinkMutation,
+  nodeIds: ReadonlySet<string>
+): MaintenanceCatalogLinkInput {
   if (input.sourceNodeId === input.targetNodeId) {
     throw new Error("Исходный и целевой узлы должны отличаться.")
   }
-  const nodeIds = new Set(state.nodes.map((node) => node.id))
   if (!nodeIds.has(input.sourceNodeId) || !nodeIds.has(input.targetNodeId)) {
     throw new Error("Узел связи не найден.")
   }
-  const id = input.id ?? idempotencyKey()
-  const changed: MaintenanceCatalogLinkInput = {
-    id,
+
+  return {
+    id: input.id ?? idempotencyKey(),
     fromNodeId: input.sourceNodeId,
     toNodeId: input.targetNodeId,
     linkType: input.linkType,
@@ -438,6 +438,16 @@ export async function saveRepairEstimateCatalogLink(
     sourceAnchor: input.canvasAnchors?.source ?? null,
     targetAnchor: input.canvasAnchors?.target ?? null,
   }
+}
+
+export async function saveRepairEstimateCatalogLink(
+  request: RepairEstimateCatalogRequest,
+  input: RepairEstimateCatalogLinkMutation
+) {
+  const state = await catalogState(request)
+  const nodeIds = new Set(state.nodes.map((node) => node.id))
+  const changed = catalogLinkInput(input, nodeIds)
+  const id = changed.id
   const links = state.links.some((link) => link.id === id)
     ? state.links.map((link) => (link.id === id ? changed : toLinkInput(link)))
     : [...state.links.map(toLinkInput), changed]
@@ -490,6 +500,62 @@ export async function moveRepairEstimateCatalogCanvasNode(
     nodes
   )
   return position
+}
+
+export async function saveRepairEstimateCatalogCanvasChanges(
+  request: RepairEstimateCatalogRequest,
+  changes: RepairEstimateCatalogCanvasChangeSet
+) {
+  const state = await catalogState(request)
+  const nodeIds = new Set(state.nodes.map((node) => node.id))
+  const positions = new Map(
+    changes.nodePositions.map((position) => [position.nodeId, position])
+  )
+  for (const nodeId of positions.keys()) {
+    if (!nodeIds.has(nodeId)) {
+      throw new Error("Блок каталога не найден.")
+    }
+  }
+
+  const deletedLinkIds = new Set(changes.deletedLinkIds)
+  const linkIds = new Set(
+    state.links
+      .filter((link) => !deletedLinkIds.has(link.id))
+      .map((link) => link.id)
+  )
+  const addedLinks = changes.addedLinks.map((input) => {
+    const link = catalogLinkInput(input, nodeIds)
+    if (linkIds.has(link.id)) {
+      throw new Error("Связь с таким идентификатором уже существует.")
+    }
+    linkIds.add(link.id)
+    return link
+  })
+
+  const nodes = state.nodes.map((node) => {
+    const position = positions.get(node.id)
+    return {
+      ...toNodeInput(node),
+      canvasX: position ? Math.round(position.x) : node.canvasX,
+      canvasY: position ? Math.round(position.y) : node.canvasY,
+    }
+  })
+  const links = [
+    ...state.links
+      .filter((link) => !deletedLinkIds.has(link.id))
+      .map(toLinkInput),
+    ...addedLinks,
+  ]
+
+  await replaceMaintenanceCatalog(
+    request.accessToken,
+    request.warehouseId,
+    state.version.id,
+    state.version.version,
+    nodes,
+    links
+  )
+  return getRepairEstimateCatalogCanvas(request)
 }
 
 export function bootstrapRepairEstimateCatalog(

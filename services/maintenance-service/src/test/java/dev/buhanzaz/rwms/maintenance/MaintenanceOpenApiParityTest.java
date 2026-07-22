@@ -86,12 +86,12 @@ class MaintenanceOpenApiParityTest {
   private static final List<OperationSpec> OPERATIONS = canonicalOperations();
 
   @Test
-  void allTwentyTwoPathsAndTwentyNineOperationsExactlyMatchTheApprovedAcceptanceMatrix()
+  void allTwentyThreePathsAndThirtyOperationsExactlyMatchTheApprovedAcceptanceMatrix()
       throws Exception {
     Map<String, Object> document = openApi();
-    assertThat(child(document, "paths")).hasSize(22);
-    assertThat(openApiOperationCount(document)).isEqualTo(29);
-    assertThat(controllerOperations()).hasSize(29);
+    assertThat(child(document, "paths")).hasSize(23);
+    assertThat(openApiOperationCount(document)).isEqualTo(30);
+    assertThat(controllerOperations()).hasSize(30);
 
     for (OperationSpec expected : OPERATIONS) {
       assertOpenApiOperation(document, expected);
@@ -395,6 +395,10 @@ class MaintenanceOpenApiParityTest {
         MaintenanceCatalogController.class, "versions",
         append(warehousePage, query("lifecycle", false, "$CatalogLifecycle", null)),
         null, null, "200", "CatalogVersionPage", false, "401", "403"));
+    result.add(op("PUT", "/api/maintenance/v1/catalog/versions/{id}", "replaceCatalog",
+        MaintenanceCatalogController.class, "replaceCatalog", catalogId,
+        ChangeCatalogRequest.class, "ReplaceCatalogRequest", "200", "CatalogVersion", false,
+        "400", "401", "403", "404", "409", "422", "503"));
     result.add(op("GET", "/api/maintenance/v1/catalog/versions/{id}/nodes", "listCatalogNodes",
         MaintenanceCatalogController.class, "nodes", catalogId,
         null, null, "200", "[CatalogNode]", false, "401", "403", "404"));
@@ -855,7 +859,7 @@ class MaintenanceOpenApiParityTest {
   private static MaintenanceApplicationService serviceFixture() {
     return mock(MaintenanceApplicationService.class, invocation -> switch (invocation.getMethod().getName()) {
       case "catalogVersions" -> List.of(sample(CatalogVersionResponse.class, "catalogVersion"));
-      case "catalogVersion", "replaceCatalogNodes", "replaceCatalogLinks" ->
+      case "catalogVersion", "changeCatalog", "replaceCatalogNodes", "replaceCatalogLinks" ->
           sample(CatalogVersionResponse.class, "catalogVersion");
       case "catalogNodes" -> List.of(sample(CatalogNodeResponse.class, "catalogNode"));
       case "catalogLinks" -> List.of(sample(CatalogLinkResponse.class, "catalogLink"));
