@@ -8,6 +8,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.Future;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -17,18 +18,44 @@ public final class LogisticsApiModels {
 
   public record CreateReturnRequest(
       @NotNull UUID warehouseId,
-      @NotNull @Size(min = 1, max = 100) List<@Valid ReturnLineRequest> lines) {}
+      UUID clientId,
+      @Size(max = 512) String driverSnapshot,
+      @NotNull @Size(min = 1, max = 100) List<@Valid ReturnLineRequest> lines) {
+    public CreateReturnRequest(
+        UUID warehouseId, UUID clientId, List<ReturnLineRequest> lines) {
+      this(warehouseId, clientId, null, lines);
+    }
+
+    public CreateReturnRequest(UUID warehouseId, List<ReturnLineRequest> lines) {
+      this(warehouseId, null, null, lines);
+    }
+  }
 
   public record ReturnLineRequest(
       @NotNull UUID assetId,
       @Min(0) long assetVersion,
-      @NotBlank @Size(max = 512) String tenantSnapshot) {}
+      @NotBlank @Size(max = 512) String tenantSnapshot,
+      UUID rentalOrderId) {
+    public ReturnLineRequest(UUID assetId, long assetVersion, String tenantSnapshot) {
+      this(assetId, assetVersion, tenantSnapshot, null);
+    }
+  }
 
   public record CreateShipmentRequest(
       @NotNull UUID warehouseId,
+      UUID clientId,
+      UUID rentalOrderId,
       @NotBlank @Size(max = 512) String partySnapshot,
       @NotBlank @Size(max = 512) String driverSnapshot,
-      @NotNull @Size(min = 1, max = 100) List<@Valid ShipmentLineRequest> lines) {}
+      @NotNull @Size(min = 1, max = 100) List<@Valid ShipmentLineRequest> lines) {
+    public CreateShipmentRequest(
+        UUID warehouseId,
+        String partySnapshot,
+        String driverSnapshot,
+        List<ShipmentLineRequest> lines) {
+      this(warehouseId, null, null, partySnapshot, driverSnapshot, lines);
+    }
+  }
 
   public record ShipmentPlanRequest(
       @NotBlank @Size(max = 512) String partySnapshot,
@@ -50,18 +77,49 @@ public final class LogisticsApiModels {
   public record CreateTransferRequest(
       @NotNull UUID warehouseId,
       @NotNull UUID destinationWarehouseId,
-      @NotNull @Size(min = 1, max = 100) List<@Valid TransferLineRequest> lines) {}
+      @Size(max = 512) String driverSnapshot,
+      @Future OffsetDateTime equipmentDeadlineAt,
+      @NotNull @Size(min = 1, max = 100) List<@Valid TransferLineRequest> lines,
+      @NotNull @Size(max = 100) List<@Valid TransferEquipmentLineRequest> equipment) {
+    public CreateTransferRequest {
+      equipment = equipment == null ? List.of() : equipment;
+    }
+
+    public CreateTransferRequest(
+        UUID warehouseId, UUID destinationWarehouseId, List<TransferLineRequest> lines) {
+      this(warehouseId, destinationWarehouseId, null, null, lines, List.of());
+    }
+  }
 
   public record TransferLineRequest(@NotNull UUID assetId, @Min(0) long assetVersion) {}
+
+  /** Furniture is picked from the origin warehouse's available STOCK balance. */
+  public record TransferEquipmentLineRequest(
+      @NotNull UUID equipmentId,
+      @NotNull @Min(0) Long expectedSourceBalanceVersion,
+      @NotNull @Min(1) Long quantity) {}
 
   public record ArriveTransferLineRequest(
       @NotNull @Size(min = 1, max = 20) List<@Valid MediaReferenceInput> references) {}
 
   public record MediaReferenceInput(@NotNull UUID mediaId, @Min(1) long generation) {}
 
+  public record ReturnAdditionalEquipmentRequest(
+      @NotNull UUID equipmentId, @NotNull @Min(1) Long quantity) {}
+
   public record ReturnMediaLineRequest(
       @NotNull UUID lineId,
-      @NotNull @Size(min = 1, max = 20) List<@Valid MediaReferenceInput> references) {}
+      @NotNull @Size(min = 1, max = 20) List<@Valid MediaReferenceInput> references,
+      @NotNull @Size(max = 100) List<@Valid ReturnAdditionalEquipmentRequest>
+          additionalEquipment) {
+    public ReturnMediaLineRequest {
+      additionalEquipment = additionalEquipment == null ? List.of() : additionalEquipment;
+    }
+
+    public ReturnMediaLineRequest(UUID lineId, List<MediaReferenceInput> references) {
+      this(lineId, references, List.of());
+    }
+  }
 
   public record AcceptReturnRequest(
       @NotNull @Size(min = 1, max = 100) List<@Valid ReturnMediaLineRequest> lines) {}
@@ -86,6 +144,8 @@ public final class LogisticsApiModels {
       UUID destinationWarehouseId,
       String partySnapshot,
       String driverSnapshot,
+      UUID clientId,
+      UUID equipmentMovementTaskId,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {}
 
@@ -96,7 +156,8 @@ public final class LogisticsApiModels {
       UUID assetId,
       long assetVersion,
       LogisticsLineState state,
-      String tenantSnapshot) {}
+      String tenantSnapshot,
+      UUID rentalOrderId) {}
 
   public record LogisticsDocumentView(
       UUID id,
@@ -107,6 +168,8 @@ public final class LogisticsApiModels {
       UUID destinationWarehouseId,
       String partySnapshot,
       String driverSnapshot,
+      UUID clientId,
+      UUID equipmentMovementTaskId,
       List<LogisticsLineView> lines,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {}

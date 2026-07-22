@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, waitFor, within } from "@testing-library/react"
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
@@ -13,13 +19,20 @@ const SECOND_RENTAL_ITEM_ID = "00000000-0000-0000-0000-000000000202"
 const equipmentApi = vi.hoisted(() => ({
   getEquipmentItemsWithRentalUsages: vi.fn(),
 }))
+const authApi = vi.hoisted(() => ({
+  useAuth: vi.fn(),
+}))
+const movementApi = vi.hoisted(() => ({
+  createIdempotencyKey: vi.fn(),
+  moveToStock: vi.fn(),
+}))
 
 vi.mock("@/features/equipment/api/equipment-rental-usages-api", () => ({
   getEquipmentItemsWithRentalUsages:
     equipmentApi.getEquipmentItemsWithRentalUsages,
 }))
 vi.mock("@/features/auth/use-auth", () => ({
-  useAuth: () => ({ accessToken: "asset-token" }),
+  useAuth: authApi.useAuth,
 }))
 vi.mock("@/hooks/use-warehouse", () => ({
   useWarehouse: () => ({
@@ -36,6 +49,13 @@ vi.mock("@/hooks/use-warehouse", () => ({
       sortOrder: 1,
     },
   }),
+}))
+vi.mock("@/features/equipment/api/equipment-usage-movements-api", () => ({
+  createEquipmentUsageMoveIdempotencyKey: movementApi.createIdempotencyKey,
+  moveEquipmentUsageToStock: movementApi.moveToStock,
+}))
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
 }))
 
 import { EquipmentPage } from "@/features/equipment/equipment-page"
@@ -77,7 +97,7 @@ function expectExpandedUsage(params: {
   rentalItemNumber: string
   rentalItemType: string
   statusText: string
-  locationText: string
+  quantity: string
 }) {
   const usageGrids = Array.from(
     params.pageContainer.querySelectorAll<HTMLElement>(
@@ -91,9 +111,10 @@ function expectExpandedUsage(params: {
     expect(usage.getByText(params.rentalItemNumber)).toBeTruthy()
     expect(usage.getByText(params.rentalItemType)).toBeTruthy()
     expect(usage.getByText(params.statusText)).toBeTruthy()
-    expect(usage.getByText(params.locationText)).toBeTruthy()
+    expect(usage.getByText(params.quantity)).toBeTruthy()
+    expect(usage.queryByText("В бытовке")).toBeNull()
+    expect(usage.queryByText("В аренде")).toBeNull()
     expect(usage.queryByText("Доступно")).toBeNull()
-    expect(usage.queryByText(/^\d[\d\s]*\sшт\.$/)).toBeNull()
     expect(usage.queryByText("Склад Санкт-Петербург")).toBeNull()
     expect(usage.queryByText("SPB · Санкт-Петербург")).toBeNull()
 
@@ -105,15 +126,15 @@ function expectExpandedUsage(params: {
     )
     expect(header).not.toBeNull()
     expect(row).not.toBeNull()
-    expect(header!.children).toHaveLength(3)
-    expect(row!.children).toHaveLength(3)
+    expect(header!.children).toHaveLength(5)
+    expect(row!.children).toHaveLength(5)
     expect(within(header!).queryByText("Склад")).toBeNull()
-    expect(within(header!).queryByText("Количество")).toBeNull()
+    expect(within(header!).getByText("Количество")).toBeTruthy()
     expect(within(header!).queryByText("Доступно")).toBeNull()
-    expect(header!.className).toContain("grid-cols-3")
+    expect(header!.className).toContain("grid-cols-5")
     expect(header!.className).toContain("gap-4")
     expect(header!.className).toContain("text-left")
-    expect(row!.className).toContain("grid-cols-3")
+    expect(row!.className).toContain("grid-cols-5")
     expect(row!.className).toContain("gap-4")
     expect(row!.className).toContain("text-left")
     expect(usageGrid.querySelector(".text-right")).toBeNull()
@@ -122,6 +143,34 @@ function expectExpandedUsage(params: {
 }
 
 beforeEach(() => {
+  authApi.useAuth.mockReturnValue({
+    accessToken: "asset-token",
+    currentUser: {
+      id: "operator-1",
+      username: "operator",
+      displayName: "Оператор",
+      firstName: null,
+      lastName: null,
+      email: null,
+      principalType: "USER",
+      globalRole: "WAREHOUSE_MANAGER",
+      warehouseAccessAll: false,
+      warehouseAccesses: [{ warehouseId: WAREHOUSE_ID, level: "MANAGE" }],
+    },
+  })
+  movementApi.createIdempotencyKey.mockReturnValue(
+    "00000000-0000-0000-0000-000000000901"
+  )
+  movementApi.moveToStock.mockResolvedValue({
+    id: "00000000-0000-0000-0000-000000000999",
+    version: 0,
+    equipmentId: "00000000-0000-0000-0000-000000000101",
+    sourceBalanceId: "00000000-0000-0000-0000-000000000301",
+    targetBalanceId: "00000000-0000-0000-0000-000000000401",
+    quantity: 3,
+    kind: "CABIN_TO_STOCK",
+    occurredAt: "2026-07-22T10:00:00Z",
+  })
   equipmentApi.getEquipmentItemsWithRentalUsages.mockResolvedValue([
     equipmentItem("00000000-0000-0000-0000-000000000101", "Конвектор", [
       {
@@ -210,7 +259,7 @@ describe("EquipmentPage", () => {
       rentalItemNumber: "БЫТ-001",
       rentalItemType: "БК-01",
       statusText: "Склад",
-      locationText: "В бытовке",
+      quantity: "5",
     })
 
     await user.click(
@@ -221,7 +270,7 @@ describe("EquipmentPage", () => {
       rentalItemNumber: "БЫТ-002",
       rentalItemType: "БК-02",
       statusText: "Аренда",
-      locationText: "В аренде",
+      quantity: "9",
     })
 
     await user.click(
@@ -235,5 +284,114 @@ describe("EquipmentPage", () => {
     expect(within(container).getByTestId("location").textContent).toBe(
       `/warehouse/${RENTAL_ITEM_ID}`
     )
+  })
+
+  it("moves the selected available quantity to stock through asset-service", async () => {
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    })
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route path="/" element={<EquipmentPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+
+    const desktopGrid = await waitFor(() => {
+      const element = container.querySelector(
+        '[data-slot="operations-list-grid"]'
+      )
+      expect(element).not.toBeNull()
+      return element as HTMLElement
+    })
+    await user.click(
+      within(desktopGrid).getByRole("button", {
+        name: "Развернуть оборудование Конвектор",
+      })
+    )
+    await user.click(
+      screen.getAllByRole("button", { name: "Переместить на склад" })[0]!
+    )
+
+    const dialog = await screen.findByRole("alertdialog", {
+      name: "Переместить на склад?",
+    })
+    await user.clear(within(dialog).getByLabelText("Количество"))
+    await user.type(within(dialog).getByLabelText("Количество"), "3")
+    await user.click(
+      within(dialog).getByRole("button", { name: "Переместить на склад" })
+    )
+
+    await waitFor(() =>
+      expect(movementApi.moveToStock).toHaveBeenCalledWith({
+        accessToken: "asset-token",
+        idempotencyKey: "00000000-0000-0000-0000-000000000901",
+        input: {
+          equipmentId: "00000000-0000-0000-0000-000000000101",
+          warehouseId: WAREHOUSE_ID,
+          rentalItemId: RENTAL_ITEM_ID,
+          sourceLocationKind: "CABIN_NON_RENTED",
+          sourceExpectedVersion: 4,
+          targetExpectedVersion: 0,
+          quantity: 3,
+        },
+      })
+    )
+  })
+
+  it("does not offer a move command without warehouse manage access", async () => {
+    const user = userEvent.setup()
+    authApi.useAuth.mockReturnValue({
+      accessToken: "asset-token",
+      currentUser: {
+        id: "operator-1",
+        username: "operator",
+        displayName: "Оператор",
+        firstName: null,
+        lastName: null,
+        email: null,
+        principalType: "USER",
+        globalRole: "WAREHOUSE_MANAGER",
+        warehouseAccessAll: false,
+        warehouseAccesses: [{ warehouseId: WAREHOUSE_ID, level: "EDIT" }],
+      },
+    })
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route path="/" element={<EquipmentPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+
+    const desktopGrid = await waitFor(() => {
+      const element = container.querySelector(
+        '[data-slot="operations-list-grid"]'
+      )
+      expect(element).not.toBeNull()
+      return element as HTMLElement
+    })
+    await user.click(
+      within(desktopGrid).getByRole("button", {
+        name: "Развернуть оборудование Конвектор",
+      })
+    )
+
+    expect(
+      screen.queryByRole("button", { name: "Переместить на склад" })
+    ).toBeNull()
+    expect(screen.queryByText("Действие")).toBeNull()
   })
 })

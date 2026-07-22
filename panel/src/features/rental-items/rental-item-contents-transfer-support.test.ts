@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  createRentalItemContentsTransferInput,
   formatRentalItemContentsSourceSummary,
   rentalItemContentsTransferRows,
-  warehouseStockTransferRows,
 } from "@/features/rental-items/rental-item-contents-transfer-support"
 import type { EquipmentItemDto } from "@/types/equipment"
 
@@ -90,81 +88,5 @@ describe("rental-item contents source summary", () => {
     } satisfies EquipmentItemDto
 
     expect(rentalItemContentsTransferRows([equipment], "cabin-1")).toEqual([])
-  })
-
-  it("uses both balance versions and zero only for an absent target", () => {
-    const equipment = {
-      id: "equipment-1",
-      version: 1,
-      warehouseId: "warehouse-1",
-      category: "FURNITURE",
-      code: "TABLE",
-      name: "Стол",
-      active: true,
-      comment: null,
-      totalQuantity: 5,
-      stockQuantity: 3,
-      cabinStockQuantity: 2,
-      rentedQuantity: 0,
-      writtenOffQuantity: 0,
-      lostQuantity: 0,
-      activeHeldQuantity: 0,
-      availableStock: 3,
-      usages: [],
-      balances: [
-        {
-          id: "balance-stock",
-          version: 8,
-          equipmentId: "equipment-1",
-          warehouseId: "warehouse-1",
-          rentalItemId: null,
-          locationKind: "STOCK",
-          quantity: 3,
-          activeHeldQuantity: 0,
-          availableStock: 3,
-        },
-        {
-          id: "balance-cabin",
-          version: 4,
-          equipmentId: "equipment-1",
-          warehouseId: "warehouse-1",
-          rentalItemId: "cabin-1",
-          locationKind: "CABIN_NON_RENTED",
-          quantity: 2,
-          activeHeldQuantity: 0,
-          availableStock: 2,
-        },
-      ],
-    } satisfies EquipmentItemDto
-
-    const cabinRow = rentalItemContentsTransferRows([equipment], "cabin-1")[0]
-    const stockRow = warehouseStockTransferRows([equipment])[0]
-    expect(cabinRow).toBeDefined()
-    expect(stockRow).toBeDefined()
-
-    expect(
-      createRentalItemContentsTransferInput({
-        row: cabinRow!,
-        targetWarehouseId: "warehouse-1",
-        targetRentalItemId: null,
-        targetLocationKind: "STOCK",
-        quantity: 2,
-      })
-    ).toMatchObject({
-      sourceExpectedVersion: 4,
-      targetExpectedVersion: 8,
-    })
-    expect(
-      createRentalItemContentsTransferInput({
-        row: stockRow!,
-        targetWarehouseId: "warehouse-1",
-        targetRentalItemId: "cabin-2",
-        targetLocationKind: "CABIN_NON_RENTED",
-        quantity: 1,
-      })
-    ).toMatchObject({
-      sourceExpectedVersion: 8,
-      targetExpectedVersion: 0,
-    })
   })
 })

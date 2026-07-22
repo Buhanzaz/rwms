@@ -1,26 +1,31 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
-import { ApiError } from "@/lib/api-client"
 import type { EquipmentItemDto } from "@/types/equipment"
 
 const WAREHOUSE_ID = "11111111-1111-4111-8111-111111111111"
 const RENTAL_ITEM_ID = "22222222-2222-4222-8222-222222222222"
 const TARGET_RENTAL_ITEM_ID = "22222222-2222-4222-8222-222222222223"
 const EQUIPMENT_ID = "33333333-3333-4333-8333-333333333333"
-const SECOND_EQUIPMENT_ID = "33333333-3333-4333-8333-333333333334"
 const STOCK_BALANCE_ID = "44444444-4444-4444-8444-444444444444"
 const CABIN_BALANCE_ID = "55555555-5555-4555-8555-555555555555"
 
-const equipmentApi = vi.hoisted(() => ({
-  getEquipmentItems: vi.fn(),
-  transferEquipment: vi.fn(),
-}))
+const equipmentApi = vi.hoisted(() => ({ getEquipmentItems: vi.fn() }))
 const rentalItemsApi = vi.hoisted(() => ({ listAssetRentalItems: vi.fn() }))
+const movementTasksApi = vi.hoisted(() => ({
+  createTask: vi.fn(),
+  createIdempotencyKey: vi.fn(),
+}))
 
 vi.mock("@/features/auth/use-auth", () => ({
   useAuth: () => ({
@@ -42,12 +47,23 @@ vi.mock("@/features/auth/use-auth", () => ({
 
 vi.mock("@/api/equipment-api", () => ({
   getEquipmentItems: equipmentApi.getEquipmentItems,
-  transferEquipment: equipmentApi.transferEquipment,
 }))
 
 vi.mock("@/features/rental-items/api/asset-rental-items-api", () => ({
   listAssetRentalItems: rentalItemsApi.listAssetRentalItems,
 }))
+
+vi.mock(
+  "@/features/logistics/api/equipment-movement-tasks-api",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/features/logistics/api/equipment-movement-tasks-api")
+    >()),
+    createEquipmentMovementTask: movementTasksApi.createTask,
+    createEquipmentMovementTaskIdempotencyKey:
+      movementTasksApi.createIdempotencyKey,
+  })
+)
 
 import { AddContentsDialog } from "@/features/rental-items/add-contents-dialog"
 import { MoveContentsToRentalItemDialog } from "@/features/rental-items/move-contents-to-rental-item-dialog"
@@ -89,32 +105,19 @@ function rentalItem(overrides: Partial<RentalItemDto> = {}): RentalItemDto {
   }
 }
 
-function equipment(
-  params: {
-    id?: string
-    code?: string
-    name?: string
-    stockBalanceId?: string
-    cabinBalanceId?: string
-    targetCabinQuantity?: number
-  } = {}
-): EquipmentItemDto {
-  const id = params.id ?? EQUIPMENT_ID
-  const stockBalanceId = params.stockBalanceId ?? STOCK_BALANCE_ID
-  const cabinBalanceId = params.cabinBalanceId ?? CABIN_BALANCE_ID
-  const targetCabinQuantity = params.targetCabinQuantity ?? 0
+function equipment(): EquipmentItemDto {
   return {
-    id,
+    id: EQUIPMENT_ID,
     version: 1,
     warehouseId: WAREHOUSE_ID,
     category: "FURNITURE",
-    code: params.code ?? "TABLE",
-    name: params.name ?? "Стол",
+    code: "TABLE",
+    name: "Стол",
     active: true,
     comment: null,
-    totalQuantity: 12 + targetCabinQuantity,
+    totalQuantity: 12,
     stockQuantity: 10,
-    cabinStockQuantity: 2 + targetCabinQuantity,
+    cabinStockQuantity: 2,
     rentedQuantity: 0,
     writtenOffQuantity: 0,
     lostQuantity: 0,
@@ -122,9 +125,9 @@ function equipment(
     availableStock: 10,
     balances: [
       {
-        id: stockBalanceId,
+        id: STOCK_BALANCE_ID,
         version: 9,
-        equipmentId: id,
+        equipmentId: EQUIPMENT_ID,
         warehouseId: WAREHOUSE_ID,
         rentalItemId: null,
         locationKind: "STOCK",
@@ -133,9 +136,9 @@ function equipment(
         availableStock: 10,
       },
       {
-        id: cabinBalanceId,
+        id: CABIN_BALANCE_ID,
         version: 5,
-        equipmentId: id,
+        equipmentId: EQUIPMENT_ID,
         warehouseId: WAREHOUSE_ID,
         rentalItemId: RENTAL_ITEM_ID,
         locationKind: "CABIN_NON_RENTED",
@@ -143,46 +146,25 @@ function equipment(
         activeHeldQuantity: 0,
         availableStock: 2,
       },
-      ...(targetCabinQuantity > 0
-        ? [
-            {
-              id: "55555555-5555-4555-8555-555555555599",
-              version: 6,
-              equipmentId: id,
-              warehouseId: WAREHOUSE_ID,
-              rentalItemId: TARGET_RENTAL_ITEM_ID,
-              locationKind: "CABIN_NON_RENTED" as const,
-              quantity: targetCabinQuantity,
-              activeHeldQuantity: 0,
-              availableStock: targetCabinQuantity,
-            },
-          ]
-        : []),
     ],
     usages: [],
   }
 }
 
 function renderDialog(node: ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  })
   return render(
-    <QueryClientProvider
-      client={
-        new QueryClient({
-          defaultOptions: {
-            queries: { retry: false },
-            mutations: { retry: false },
-          },
-        })
-      }
-    >
-      {node}
-    </QueryClientProvider>
+    <QueryClientProvider client={queryClient}>{node}</QueryClientProvider>
   )
 }
 
 beforeEach(() => {
   equipmentApi.getEquipmentItems.mockResolvedValue([equipment()])
-  equipmentApi.transferEquipment.mockResolvedValue({ id: "movement-1" })
   rentalItemsApi.listAssetRentalItems.mockResolvedValue({
     content: [
       rentalItem({
@@ -197,6 +179,12 @@ beforeEach(() => {
     totalElements: 1,
     totalPages: 1,
   })
+  movementTasksApi.createIdempotencyKey.mockReturnValue(
+    "66666666-6666-4666-8666-666666666666"
+  )
+  movementTasksApi.createTask.mockResolvedValue({
+    deadlineAt: "2030-07-21T10:30:00.000Z",
+  })
 })
 
 afterEach(() => {
@@ -204,38 +192,52 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-describe("rental-item direct equipment transfer dialogs", () => {
-  it("moves stock to a cabin with both current balance versions", async () => {
+describe("rental-item equipment movement task dialogs", () => {
+  it("schedules a stock-to-cabin task with the source balance version", async () => {
     const user = userEvent.setup()
+    const deadline = "2030-07-21T10:30"
+
     renderDialog(
       <AddContentsDialog item={rentalItem()} open onOpenChange={vi.fn()} />
     )
 
     await user.click(await screen.findByLabelText("Выбрать Стол"))
-    await user.click(screen.getByRole("button", { name: "Добавить со склада" }))
+    fireEvent.change(screen.getByLabelText("Резерв до"), {
+      target: { value: deadline },
+    })
+    await user.click(
+      screen.getByRole("button", { name: "Создать задание со склада" })
+    )
 
     await waitFor(() =>
-      expect(equipmentApi.transferEquipment).toHaveBeenCalledWith(
-        "asset-token",
-        expect.any(String),
-        {
-          equipmentId: EQUIPMENT_ID,
-          sourceWarehouseId: WAREHOUSE_ID,
-          sourceRentalItemId: null,
-          sourceLocationKind: "STOCK",
-          sourceExpectedVersion: 9,
-          targetWarehouseId: WAREHOUSE_ID,
-          targetRentalItemId: RENTAL_ITEM_ID,
-          targetLocationKind: "CABIN_NON_RENTED",
-          targetExpectedVersion: 5,
-          quantity: 1,
-        }
-      )
+      expect(movementTasksApi.createTask).toHaveBeenCalledWith({
+        accessToken: "asset-token",
+        idempotencyKey: "66666666-6666-4666-8666-666666666666",
+        input: {
+          warehouseId: WAREHOUSE_ID,
+          unitNumber: "БЫТ-001",
+          plannedDurationMinutes: null,
+          deadlineAt: new Date(deadline).toISOString(),
+          lines: [
+            {
+              equipmentId: EQUIPMENT_ID,
+              sourceRentalItemId: null,
+              sourceLocationKind: "STOCK",
+              expectedSourceBalanceVersion: 9,
+              targetRentalItemId: RENTAL_ITEM_ID,
+              targetLocationKind: "CABIN_NON_RENTED",
+              quantity: 1,
+            },
+          ],
+        },
+      })
     )
   })
 
-  it("moves a cabin balance to another cabin and uses zero for its absent target", async () => {
+  it("schedules a cabin-to-cabin task with the source balance version", async () => {
     const user = userEvent.setup()
+    const deadline = "2030-07-21T11:30"
+
     renderDialog(
       <MoveContentsToRentalItemDialog
         item={rentalItem()}
@@ -249,30 +251,40 @@ describe("rental-item direct equipment transfer dialogs", () => {
     )
     await user.click(await screen.findByText("БЫТ-002"))
     await user.click(await screen.findByLabelText("Выбрать Стол"))
-    await user.click(screen.getByRole("button", { name: "Переместить" }))
+    fireEvent.change(screen.getByLabelText("Резерв до"), {
+      target: { value: deadline },
+    })
+    await user.click(screen.getByRole("button", { name: "Создать задание" }))
 
     await waitFor(() =>
-      expect(equipmentApi.transferEquipment).toHaveBeenCalledWith(
-        "asset-token",
-        expect.any(String),
-        {
-          equipmentId: EQUIPMENT_ID,
-          sourceWarehouseId: WAREHOUSE_ID,
-          sourceRentalItemId: RENTAL_ITEM_ID,
-          sourceLocationKind: "CABIN_NON_RENTED",
-          sourceExpectedVersion: 5,
-          targetWarehouseId: WAREHOUSE_ID,
-          targetRentalItemId: TARGET_RENTAL_ITEM_ID,
-          targetLocationKind: "CABIN_NON_RENTED",
-          targetExpectedVersion: 0,
-          quantity: 2,
-        }
-      )
+      expect(movementTasksApi.createTask).toHaveBeenCalledWith({
+        accessToken: "asset-token",
+        idempotencyKey: "66666666-6666-4666-8666-666666666666",
+        input: {
+          warehouseId: WAREHOUSE_ID,
+          unitNumber: "БЫТ-001",
+          plannedDurationMinutes: null,
+          deadlineAt: new Date(deadline).toISOString(),
+          lines: [
+            {
+              equipmentId: EQUIPMENT_ID,
+              sourceRentalItemId: RENTAL_ITEM_ID,
+              sourceLocationKind: "CABIN_NON_RENTED",
+              expectedSourceBalanceVersion: 5,
+              targetRentalItemId: TARGET_RENTAL_ITEM_ID,
+              targetLocationKind: "CABIN_NON_RENTED",
+              quantity: 2,
+            },
+          ],
+        },
+      })
     )
   })
 
-  it("moves a cabin balance back to the versioned stock balance", async () => {
+  it("schedules a cabin-to-stock task with a reservation deadline", async () => {
     const user = userEvent.setup()
+    const deadline = "2030-07-21T12:30"
+
     renderDialog(
       <MoveContentsToStockDialog
         item={rentalItem()}
@@ -282,128 +294,33 @@ describe("rental-item direct equipment transfer dialogs", () => {
     )
 
     await user.click(await screen.findByLabelText("Выбрать Стол"))
-    await user.click(
-      screen.getByRole("button", { name: "Переместить на склад" })
-    )
+    fireEvent.change(screen.getByLabelText("Резерв до"), {
+      target: { value: deadline },
+    })
+    await user.click(screen.getByRole("button", { name: "Создать задание" }))
 
     await waitFor(() =>
-      expect(equipmentApi.transferEquipment).toHaveBeenCalledWith(
-        "asset-token",
-        expect.any(String),
-        {
-          equipmentId: EQUIPMENT_ID,
-          sourceWarehouseId: WAREHOUSE_ID,
-          sourceRentalItemId: RENTAL_ITEM_ID,
-          sourceLocationKind: "CABIN_NON_RENTED",
-          sourceExpectedVersion: 5,
-          targetWarehouseId: WAREHOUSE_ID,
-          targetRentalItemId: null,
-          targetLocationKind: "STOCK",
-          targetExpectedVersion: 9,
-          quantity: 2,
-        }
-      )
+      expect(movementTasksApi.createTask).toHaveBeenCalledWith({
+        accessToken: "asset-token",
+        idempotencyKey: "66666666-6666-4666-8666-666666666666",
+        input: {
+          warehouseId: WAREHOUSE_ID,
+          unitNumber: "БЫТ-001",
+          plannedDurationMinutes: null,
+          deadlineAt: new Date(deadline).toISOString(),
+          lines: [
+            {
+              equipmentId: EQUIPMENT_ID,
+              sourceRentalItemId: RENTAL_ITEM_ID,
+              sourceLocationKind: "CABIN_NON_RENTED",
+              expectedSourceBalanceVersion: 5,
+              targetRentalItemId: null,
+              targetLocationKind: "STOCK",
+              quantity: 2,
+            },
+          ],
+        },
+      })
     )
-  })
-
-  it("shows the source cabin's actual equipment composition", async () => {
-    const user = userEvent.setup()
-    equipmentApi.getEquipmentItems.mockResolvedValue([
-      equipment({ targetCabinQuantity: 3 }),
-    ])
-    renderDialog(
-      <AddContentsDialog item={rentalItem()} open onOpenChange={vi.fn()} />
-    )
-
-    await user.click(
-      await screen.findByPlaceholderText("Введите номер бытовки")
-    )
-    expect(await screen.findByText("БЫТ-002 — Стол: 3")).toBeTruthy()
-    expect(screen.queryByText(/\d+ позиц/)).toBeNull()
-  })
-
-  it("refreshes a 409 and retries the same command with its stable key", async () => {
-    const user = userEvent.setup()
-    equipmentApi.transferEquipment
-      .mockRejectedValueOnce(new ApiError("Версия остатка устарела", 409))
-      .mockResolvedValueOnce({ id: "movement-1" })
-    renderDialog(
-      <MoveContentsToStockDialog
-        item={rentalItem()}
-        open
-        onOpenChange={vi.fn()}
-      />
-    )
-
-    await user.click(await screen.findByLabelText("Выбрать Стол"))
-    await user.click(
-      screen.getByRole("button", { name: "Переместить на склад" })
-    )
-    expect(await screen.findByText(/Остатки изменились/)).toBeTruthy()
-    await user.click(
-      screen.getByRole("button", { name: "Переместить на склад" })
-    )
-
-    await waitFor(() =>
-      expect(equipmentApi.transferEquipment).toHaveBeenCalledTimes(2)
-    )
-    expect(equipmentApi.transferEquipment.mock.calls[0]?.[1]).toBe(
-      equipmentApi.transferEquipment.mock.calls[1]?.[1]
-    )
-  })
-
-  it("does not repeat completed lines when a partial batch is retried", async () => {
-    const user = userEvent.setup()
-    const second = equipment({
-      id: SECOND_EQUIPMENT_ID,
-      code: "BETA",
-      name: "Бета",
-      stockBalanceId: "44444444-4444-4444-8444-444444444445",
-      cabinBalanceId: "55555555-5555-4555-8555-555555555556",
-    })
-    const first = equipment({ name: "Альфа" })
-    equipmentApi.getEquipmentItems.mockResolvedValue([first, second])
-    let secondAttempt = 0
-    equipmentApi.transferEquipment.mockImplementation(
-      (_token: string, _key: string, input: { equipmentId: string }) => {
-        if (
-          input.equipmentId === SECOND_EQUIPMENT_ID &&
-          secondAttempt++ === 0
-        ) {
-          return Promise.reject(new Error("Сервис временно недоступен."))
-        }
-        return Promise.resolve({ id: `movement-${input.equipmentId}` })
-      }
-    )
-    renderDialog(
-      <MoveContentsToStockDialog
-        item={rentalItem()}
-        open
-        onOpenChange={vi.fn()}
-      />
-    )
-
-    await user.click(await screen.findByRole("button", { name: "Выбрать всё" }))
-    await user.click(
-      screen.getByRole("button", { name: "Переместить на склад" })
-    )
-    expect(await screen.findByText(/Перемещено 1 из 2/)).toBeTruthy()
-    await user.click(
-      screen.getByRole("button", { name: "Переместить на склад" })
-    )
-
-    await waitFor(() => {
-      const calls = equipmentApi.transferEquipment.mock.calls
-      expect(
-        calls.filter((call) => call[2].equipmentId === EQUIPMENT_ID)
-      ).toHaveLength(1)
-      expect(
-        calls.filter((call) => call[2].equipmentId === SECOND_EQUIPMENT_ID)
-      ).toHaveLength(2)
-    })
-    const secondKeys = equipmentApi.transferEquipment.mock.calls
-      .filter((call) => call[2].equipmentId === SECOND_EQUIPMENT_ID)
-      .map((call) => call[1])
-    expect(secondKeys[0]).toBe(secondKeys[1])
   })
 })

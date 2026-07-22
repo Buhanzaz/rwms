@@ -48,6 +48,10 @@ public enum LogisticsEventType {
       LogisticsAggregateType.TRANSFER, "logistics.transfer.line-arrived.v1", "ARRIVING"),
   TRANSFER_COMPLETED(
       LogisticsAggregateType.TRANSFER, "logistics.transfer.completed.v1", "COMPLETED"),
+  TRANSFER_CANCELLATION_STARTED(
+      LogisticsAggregateType.TRANSFER,
+      "logistics.transfer.cancellation-started.v1",
+      "CANCELLING"),
   TRANSFER_CANCELLED(
       LogisticsAggregateType.TRANSFER, "logistics.transfer.cancelled.v1", "CANCELLED"),
   TRANSFER_CONFLICT(

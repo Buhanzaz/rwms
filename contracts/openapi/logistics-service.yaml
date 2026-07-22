@@ -410,6 +410,9 @@ paths:
   /api/logistics/v1/clients:
     get:
       operationId: searchOrderClients
+      description: >-
+        Searches counterparties by normalized name. With an empty search query,
+        returns the most recently created counterparties first.
       parameters:
         - { name: type, in: query, schema: { $ref: '#/components/schemas/ClientType' } }
         - { name: search, in: query, schema: { type: string, default: '' } }
@@ -640,7 +643,7 @@ components:
     LogisticsDocument:
       type: object
       additionalProperties: false
-      required: [id, version, documentType, state, warehouseId, destinationWarehouseId, partySnapshot, driverSnapshot, lines, createdAt, updatedAt]
+      required: [id, version, documentType, state, warehouseId, destinationWarehouseId, partySnapshot, driverSnapshot, clientId, equipmentMovementTaskId, lines, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, minimum: 0 }
@@ -652,6 +655,8 @@ components:
         destinationWarehouseId: { type: [string, 'null'], format: uuid }
         partySnapshot: { type: [string, 'null'], maxLength: 512, description: Immutable, trimmed workflow snapshot; no directory identity. }
         driverSnapshot: { type: [string, 'null'], maxLength: 512, description: Immutable, trimmed workflow snapshot; no directory identity. }
+        clientId: { type: [string, 'null'], format: uuid, description: Client bound to the return or shipment. }
+        equipmentMovementTaskId: { type: [string, 'null'], format: uuid, description: Server-created task that moves transfer furniture between warehouses. }
         lines:
           type: array
           minItems: 1
@@ -661,7 +666,7 @@ components:
     LogisticsLine:
       type: object
       additionalProperties: false
-      required: [id, version, lineNumber, assetId, assetVersion, state, tenantSnapshot]
+      required: [id, version, lineNumber, assetId, assetVersion, state, tenantSnapshot, rentalOrderId]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, minimum: 0 }
@@ -670,6 +675,7 @@ components:
         assetVersion: { type: integer, minimum: 0 }
         state: { type: string, enum: [PENDING, DEPARTING, DEPARTED, ARRIVING, ARRIVED, CONFLICT, CANCELLED] }
         tenantSnapshot: { type: [string, 'null'], maxLength: 512 }
+        rentalOrderId: { type: [string, 'null'], format: uuid, description: Rental order that owns the return or shipment cabin reservation. }
     EquipmentMovementLocationKind:
       type: string
       enum: [STOCK, CABIN_NON_RENTED, CABIN_RENTED]
@@ -694,9 +700,10 @@ components:
     CreateEquipmentMovementTaskRequest:
       type: object
       additionalProperties: false
-      required: [warehouseId, unitNumber, plannedDurationMinutes, deadlineAt, lines]
+      required: [warehouseId, targetWarehouseId, unitNumber, plannedDurationMinutes, deadlineAt, lines]
       properties:
         warehouseId: { type: string, format: uuid }
+        targetWarehouseId: { type: [string, 'null'], format: uuid, description: Target warehouse for STOCK-to-STOCK movement; omitted means the source warehouse. }
         unitNumber: { type: [string, 'null'], maxLength: 64 }
         plannedDurationMinutes: { type: [integer, 'null'], minimum: 1 }
         deadlineAt: { type: string, format: date-time }
@@ -770,6 +777,8 @@ components:
       required: [warehouseId, lines]
       properties:
         warehouseId: { type: string, format: uuid }
+        clientId: { type: [string, 'null'], format: uuid }
+        driverSnapshot: { type: [string, 'null'], maxLength: 512, description: Immutable, trimmed workflow snapshot selected from the configured driver directory. }
         lines:
           type: array
           minItems: 1
@@ -778,11 +787,12 @@ components:
     ReturnLineRequest:
       type: object
       additionalProperties: false
-      required: [assetId, assetVersion, tenantSnapshot]
+      required: [assetId, assetVersion, tenantSnapshot, rentalOrderId]
       properties:
         assetId: { type: string, format: uuid }
         assetVersion: { type: integer, minimum: 0 }
         tenantSnapshot: { type: string, minLength: 1, maxLength: 512 }
+        rentalOrderId: { type: [string, 'null'], format: uuid }
     AcceptReturnRequest:
       type: object
       additionalProperties: false
@@ -812,6 +822,18 @@ components:
           minItems: 1
           maxItems: 20
           items: { $ref: '#/components/schemas/MediaReferenceInput' }
+        additionalEquipment:
+          type: array
+          maxItems: 100
+          description: Furniture received with the cabin that is not present in its current return composition.
+          items: { $ref: '#/components/schemas/ReturnAdditionalEquipmentRequest' }
+    ReturnAdditionalEquipmentRequest:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, quantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        quantity: { type: integer, format: int64, minimum: 1 }
     EquipmentShortageRequest:
       type: object
       additionalProperties: false
@@ -843,9 +865,11 @@ components:
     CreateShipmentRequest:
       type: object
       additionalProperties: false
-      required: [warehouseId, partySnapshot, driverSnapshot, lines]
+      required: [warehouseId, clientId, rentalOrderId, partySnapshot, driverSnapshot, lines]
       properties:
         warehouseId: { type: string, format: uuid }
+        clientId: { type: [string, 'null'], format: uuid }
+        rentalOrderId: { type: [string, 'null'], format: uuid }
         partySnapshot: { type: string, minLength: 1, maxLength: 512 }
         driverSnapshot: { type: string, minLength: 1, maxLength: 512 }
         lines:
@@ -887,15 +911,21 @@ components:
     CreateTransferRequest:
       type: object
       additionalProperties: false
-      required: [warehouseId, destinationWarehouseId, lines]
+      required: [warehouseId, destinationWarehouseId, driverSnapshot, equipmentDeadlineAt, lines, equipment]
       properties:
         warehouseId: { type: string, format: uuid }
         destinationWarehouseId: { type: string, format: uuid }
+        driverSnapshot: { type: [string, 'null'], maxLength: 512 }
+        equipmentDeadlineAt: { type: [string, 'null'], format: date-time }
         lines:
           type: array
           minItems: 1
           maxItems: 100
           items: { $ref: '#/components/schemas/TransferLineRequest' }
+        equipment:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/TransferEquipmentLineRequest' }
     TransferLineRequest:
       type: object
       additionalProperties: false
@@ -903,6 +933,14 @@ components:
       properties:
         assetId: { type: string, format: uuid }
         assetVersion: { type: integer, minimum: 0 }
+    TransferEquipmentLineRequest:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, expectedSourceBalanceVersion, quantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        expectedSourceBalanceVersion: { type: integer, format: int64, minimum: 0 }
+        quantity: { type: integer, format: int64, minimum: 1 }
     ArriveTransferLineRequest:
       type: object
       additionalProperties: false

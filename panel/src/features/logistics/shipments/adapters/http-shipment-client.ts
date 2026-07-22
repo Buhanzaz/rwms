@@ -90,6 +90,7 @@ function shipmentLine(value: unknown): ShipmentLine {
     assetVersion: integer(source.assetVersion),
     state: oneOf<ShipmentLineState>(source.state, SHIPMENT_LINE_STATES),
     tenantSnapshot: nullableText(source.tenantSnapshot),
+    rentalOrderId: nullableUuid(source.rentalOrderId),
   }
 }
 
@@ -109,6 +110,12 @@ export function parseShipmentDocument(value: unknown): ShipmentDocument {
     destinationWarehouseId: null,
     partySnapshot: nonBlankText(source.partySnapshot),
     driverSnapshot: nonBlankText(source.driverSnapshot),
+    clientId: nullableUuid(source.clientId),
+    equipmentMovementTaskId: (() => {
+      if (nullableUuid(source.equipmentMovementTaskId) !== null)
+        invalidResponse()
+      return null
+    })(),
     lines,
     createdAt: timestamp(source.createdAt),
     updatedAt: timestamp(source.updatedAt),
@@ -155,6 +162,8 @@ export class HttpShipmentClient implements ShipmentClient {
       headers: commandHeaders(input.idempotencyKey),
       body: JSON.stringify({
         warehouseId: input.warehouseId,
+        clientId: input.clientId,
+        rentalOrderId: input.rentalOrderId,
         partySnapshot: input.partySnapshot,
         driverSnapshot: input.driverSnapshot,
         lines: input.lines,

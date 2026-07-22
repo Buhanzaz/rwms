@@ -6,6 +6,8 @@ import type {
 export type ShipmentCreateCommand = {
   accessToken: string
   warehouseId: string
+  clientId: string
+  rentalOrderId: string
   partySnapshot: string
   driverSnapshot: string
   lines: ShipmentPlanLine[]

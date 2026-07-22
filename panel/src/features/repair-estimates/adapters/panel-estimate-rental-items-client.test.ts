@@ -9,12 +9,18 @@ vi.mock("@/features/repair-estimates/api/maintenance-auth", () => ({
   currentMaintenanceAccessToken: vi.fn().mockResolvedValue("access-token"),
 }))
 
+vi.mock("@/features/logistics/returns/api", () => ({
+  listReturns: vi.fn(),
+}))
+
 import {
   getAssetRentalItem,
   listAssetRentalItems,
 } from "@/features/rental-items/api/asset-rental-items-api"
+import { listReturns } from "@/features/logistics/returns/api"
 import { panelEstimateRentalItemsClient } from "@/features/repair-estimates/adapters/panel-estimate-rental-items-client"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
+import type { ReturnDocument } from "@/features/logistics/returns/model"
 
 const WAREHOUSE_ID = "69d4ca7e-d4d6-48d3-a5b4-0f60e43680f3"
 const RENTAL_ITEM_ID = "4b87e123-1f2a-4a38-ae57-c0d0e2a05c01"
@@ -31,7 +37,7 @@ function rentalItem(overrides: Partial<RentalItemDto> = {}): RentalItemDto {
     category: "Обычная",
     characteristics: "Окно",
     linoleum: true,
-    status: "WAREHOUSE",
+    status: "AFTER_RENT",
     comment: null,
     hasPhotos: false,
     photoCount: 0,
@@ -46,12 +52,45 @@ function rentalItem(overrides: Partial<RentalItemDto> = {}): RentalItemDto {
   }
 }
 
+function returnDocument(
+  overrides: Partial<ReturnDocument> = {}
+): ReturnDocument {
+  return {
+    id: "0f38fbbc-98c8-4fbd-94a3-68e37dd2ec1e",
+    version: 3,
+    documentType: "RETURN",
+    state: "INSPECTION_REQUIRED",
+    warehouseId: WAREHOUSE_ID,
+    destinationWarehouseId: null,
+    partySnapshot: "ООО Арендатор",
+    driverSnapshot: null,
+    clientId: null,
+    equipmentMovementTaskId: null,
+    lines: [
+      {
+        id: "7d244fd4-4e41-4a7e-8f57-7ccfbff7b0f3",
+        version: 1,
+        lineNumber: 1,
+        assetId: RENTAL_ITEM_ID,
+        assetVersion: 4,
+        state: "ARRIVED",
+        tenantSnapshot: "ООО Арендатор из строки",
+        rentalOrderId: null,
+      },
+    ],
+    createdAt: "2026-07-18T08:00:00Z",
+    updatedAt: "2026-07-18T08:10:00Z",
+    ...overrides,
+  }
+}
+
 describe("panel estimate rental-items client", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(listReturns).mockResolvedValue([returnDocument()])
   })
 
-  it("searches the asset service with maintenance-ineligible statuses excluded", async () => {
+  it("searches only after-rent cabins and includes their return metadata", async () => {
     vi.mocked(listAssetRentalItems).mockResolvedValue({
       content: [rentalItem()],
       page: 0,
@@ -73,6 +112,8 @@ describe("panel estimate rental-items client", () => {
           id: RENTAL_ITEM_ID,
           warehouseId: WAREHOUSE_ID,
           number: "БЫТ-042",
+          counterparty: "ООО Арендатор",
+          arrivalDate: "2026-07-18",
         },
       ],
       totalElements: 1,
@@ -84,11 +125,28 @@ describe("panel estimate rental-items client", () => {
       search: "042",
       page: 0,
       size: 40,
-      excludeStatuses: ["WRITTEN_OFF", "WAITING_ESTIMATE_CONFIRMATION"],
+      excludeStatuses: [
+        "NEW",
+        "RENTED",
+        "BOOKED",
+        "REPAIR",
+        "WAITING_REPAIR_CHECK",
+        "WRITTEN_OFF",
+        "CAPITAL_REPAIR",
+        "WAITING_ESTIMATE_CONFIRMATION",
+        "SALE",
+        "USED_SALE",
+        "RESERVED",
+        "FREE",
+        "WAREHOUSE",
+        "OWN_NEEDS",
+        "IN_TRANSFER",
+      ],
     })
+    expect(listReturns).toHaveBeenCalledWith("access-token", WAREHOUSE_ID)
   })
 
-  it("resolves an eligible asset-service rental item", async () => {
+  it("resolves an after-rent item with its counterparty and arrival date", async () => {
     vi.mocked(getAssetRentalItem).mockResolvedValue(rentalItem())
 
     await expect(
@@ -97,6 +155,8 @@ describe("panel estimate rental-items client", () => {
       id: RENTAL_ITEM_ID,
       warehouseId: WAREHOUSE_ID,
       number: "БЫТ-042",
+      counterparty: "ООО Арендатор",
+      arrivalDate: "2026-07-18",
     })
 
     expect(getAssetRentalItem).toHaveBeenCalledWith(

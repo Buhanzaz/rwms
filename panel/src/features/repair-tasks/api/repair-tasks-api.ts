@@ -8,6 +8,7 @@ import {
   validateAutoCompletion,
 } from "@/features/repair-estimates/domain/repair-estimate-domain"
 import type {
+  EstimateRentalItemSearchQuery,
   PendingEstimateMediaUpload,
   RepairEstimateCompletionMode,
   RepairEstimateDto,
@@ -31,6 +32,10 @@ import type {
 import type { RepairTasksClient } from "@/features/repair-tasks/ports/repair-tasks-client"
 
 export const REPAIR_TASKS_QUERY_KEY = ["repair-tasks"] as const
+export const REPAIR_TASK_RENTAL_ITEMS_QUERY_KEY = [
+  "repair-tasks",
+  "rental-items",
+] as const
 
 const repairTasksClient: RepairTasksClient =
   new HttpMaintenanceRepairTasksAdapter(panelRepairTaskRentalItemsClient)
@@ -44,6 +49,19 @@ export function repairTaskDetailQueryKey(
   taskId: string | null
 ) {
   return [...REPAIR_TASKS_QUERY_KEY, "detail", warehouseId, taskId] as const
+}
+
+export function searchRepairTaskRentalItems(
+  query: EstimateRentalItemSearchQuery
+) {
+  return panelRepairTaskRentalItemsClient.search(query)
+}
+
+export function resolveRepairTaskRentalItem(
+  warehouseId: string,
+  rentalItemId: string
+) {
+  return panelRepairTaskRentalItemsClient.resolveById(warehouseId, rentalItemId)
 }
 
 export function repairTaskBySourceEstimateQueryKey(

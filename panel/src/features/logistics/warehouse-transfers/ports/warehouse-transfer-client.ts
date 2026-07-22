@@ -1,4 +1,5 @@
 import type {
+  CreateTransferEquipmentLine,
   CreateTransferLine,
   TransferDocument,
   TransferMediaReference,
@@ -8,7 +9,10 @@ export type TransferCreateCommand = {
   accessToken: string
   warehouseId: string
   destinationWarehouseId: string
+  driverSnapshot: string | null
+  equipmentDeadlineAt: string | null
   lines: CreateTransferLine[]
+  equipment: CreateTransferEquipmentLine[]
   idempotencyKey: string
 }
 

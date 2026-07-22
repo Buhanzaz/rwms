@@ -12,6 +12,7 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.AcceptReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.EquipmentShortageRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.MediaReferenceInput;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnAdditionalEquipmentRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.RequestReturnEstimateRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnMediaLineRequest;
@@ -88,12 +89,15 @@ class ReturnCompletionSagaIntegrationTest {
   void acceptsAnUndamagedReturnOnlyAfterMediaSettlementAndLeaseReleaseConfirm() {
     RegisteredReturn registered = registeredReturn();
     UUID mediaId = UUID.randomUUID();
+    UUID additionalEquipmentId = UUID.randomUUID();
     UUID acceptanceKey = UUID.randomUUID();
     AcceptReturnRequest request =
         new AcceptReturnRequest(
             List.of(
                 new ReturnMediaLineRequest(
-                    registered.lineId(), List.of(new MediaReferenceInput(mediaId, 2)))));
+                    registered.lineId(),
+                    List.of(new MediaReferenceInput(mediaId, 2)),
+                    List.of(new ReturnAdditionalEquipmentRequest(additionalEquipmentId, 3L)))));
     when(dependencies.validateMediaReferences(
             eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_RETURN),
             eq(registered.documentId()),
@@ -126,6 +130,28 @@ class ReturnCompletionSagaIntegrationTest {
             eq(registered.documentId()),
             eq(registered.lineId())))
         .thenReturn(releasedLease(registered.leaseId()));
+    when(dependencies.receiveReturnEquipment(
+            any(),
+            eq(registered.documentId()),
+            eq(registered.lineId()),
+            eq(WAREHOUSE),
+            eq(
+                List.of(
+                    new LogisticsDependencyGateway.ReturnEquipmentReceiptLine(
+                        null, additionalEquipmentId, 3L, null, -1L, -1L)))))
+        .thenReturn(
+            new LogisticsDependencyGateway.ReturnEquipmentReceipt(
+                registered.documentId(),
+                registered.lineId(),
+                WAREHOUSE,
+                List.of(
+                    new LogisticsDependencyGateway.ReturnEquipmentReceiptLine(
+                        UUID.randomUUID(),
+                        additionalEquipmentId,
+                        3L,
+                        UUID.randomUUID(),
+                        0L,
+                        3L))));
 
     LogisticsDocumentService.CreateResult started =
         documents.acceptUndamagedReturn(
@@ -175,6 +201,16 @@ class ReturnCompletionSagaIntegrationTest {
             eq(registered.documentId()),
             eq(registered.lineId()),
             eq(false));
+    verify(dependencies)
+        .receiveReturnEquipment(
+            any(),
+            eq(registered.documentId()),
+            eq(registered.lineId()),
+            eq(WAREHOUSE),
+            eq(
+                List.of(
+                    new LogisticsDependencyGateway.ReturnEquipmentReceiptLine(
+                        null, additionalEquipmentId, 3L, null, -1L, -1L))));
   }
 
   @Test

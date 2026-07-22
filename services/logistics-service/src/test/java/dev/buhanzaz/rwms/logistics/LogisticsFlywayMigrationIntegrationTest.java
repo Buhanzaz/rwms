@@ -46,7 +46,7 @@ class LogisticsFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndCreatesOnlyLogisticsOwnedState() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(9);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(11);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -117,7 +117,7 @@ class LogisticsFlywayMigrationIntegrationTest {
             jdbc.queryForObject(
                 "select envelope_body from inbox_message where event_id=?", String.class, eventId))
         .isNull();
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(5);
     flyway(MIGRATIONS).validate();
   }
 

@@ -33,6 +33,7 @@ export type ReturnLine = {
   assetVersion: number
   state: ReturnLineState
   tenantSnapshot: string | null
+  rentalOrderId: string | null
 }
 
 export type ReturnDocument = {
@@ -42,8 +43,10 @@ export type ReturnDocument = {
   state: ReturnDocumentState
   warehouseId: string
   destinationWarehouseId: null
-  partySnapshot: null
-  driverSnapshot: null
+  partySnapshot: string | null
+  driverSnapshot: string | null
+  clientId: string | null
+  equipmentMovementTaskId: null
   lines: ReturnLine[]
   createdAt: string
   updatedAt: string
@@ -53,6 +56,7 @@ export type CreateReturnLine = {
   assetId: string
   assetVersion: number
   tenantSnapshot: string
+  rentalOrderId: string
 }
 
 export type MediaReference = {
@@ -63,6 +67,12 @@ export type MediaReference = {
 export type ReturnMediaLine = {
   lineId: string
   references: MediaReference[]
+  additionalEquipment: ReturnAdditionalEquipment[]
+}
+
+export type ReturnAdditionalEquipment = {
+  equipmentId: string
+  quantity: number
 }
 
 export type EquipmentShortage = {

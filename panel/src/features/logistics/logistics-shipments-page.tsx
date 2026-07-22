@@ -1,9 +1,10 @@
-import { useMemo, useRef, useState } from "react"
+import { useMemo, useRef, useState, type FormEvent } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { useSearchParams } from "react-router-dom"
 
+import { getEquipmentItems } from "@/api/equipment-api"
 import { OperationsListGrid } from "@/components/operations-list-grid"
 import {
   PageToolbar,
@@ -32,6 +33,16 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxGroup,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxLabel,
+  ComboboxList,
+} from "@/components/ui/combobox"
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -49,22 +60,41 @@ import {
   FieldSet,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
+import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
+import { RentalClientPicker } from "@/features/logistics/rental-client-picker"
 import {
   SHIPMENTS_QUERY_KEY,
   cancelShipment,
   confirmShipmentPreparation,
   createShipment,
   listShipments,
-  replaceShipmentPlan,
 } from "@/features/logistics/shipments/api"
 import {
   SHIPMENT_STATE_LABELS,
   type ShipmentDocument,
   type ShipmentDocumentState,
-  type ShipmentPlanLine,
+  type ShipmentEquipmentAllocation,
 } from "@/features/logistics/shipments/model"
+import {
+  listAvailableOrderUnits,
+  listOrders,
+  ORDERS_QUERY_KEY,
+} from "@/features/orders/api/orders-api"
+import type {
+  OrderClientSearchItem,
+  OrderUnitCandidate,
+} from "@/features/orders/domain/orders"
+import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
 
@@ -74,8 +104,31 @@ const CANCELLABLE_STATES = new Set<ShipmentDocumentState>([
   "PREPARING",
   "AWAITING_CONFIRMATION",
 ])
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+type ShipmentEquipmentDraft = {
+  key: string
+  equipmentId: string
+  quantity: number
+}
+
+type ShipmentLineDraft = {
+  key: string
+  assetId: string | null
+  allocations: ShipmentEquipmentDraft[]
+}
+
+type CommandAttempt = {
+  signature: string
+  idempotencyKey: string
+}
+
+function commandIdentity() {
+  return crypto.randomUUID()
+}
+
+function emptyLine(): ShipmentLineDraft {
+  return { key: commandIdentity(), assetId: null, allocations: [] }
+}
 
 function formatDateTime(value: string) {
   return new Intl.DateTimeFormat("ru-RU", {
@@ -98,8 +151,12 @@ function errorMessage(cause: unknown, fallback: string) {
   return cause instanceof Error ? cause.message : fallback
 }
 
-function commandIdentity() {
-  return crypto.randomUUID()
+function stockVersion(
+  item: Awaited<ReturnType<typeof getEquipmentItems>>[number]
+) {
+  return item.balances.find(
+    (balance) => balance.locationKind === "STOCK" && balance.availableStock > 0
+  )?.version
 }
 
 export function LogisticsShipmentsPage() {
@@ -141,7 +198,9 @@ export function LogisticsShipmentsPage() {
         shipment.driverSnapshot,
         SHIPMENT_STATE_LABELS[shipment.state],
         ...shipment.lines.flatMap((line) => [line.id, line.assetId]),
-      ].some((value) => value.toLocaleLowerCase("ru").includes(needle))
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLocaleLowerCase("ru").includes(needle))
     })
   }, [query.data, search, selectedShipmentId, showAll])
 
@@ -149,9 +208,9 @@ export function LogisticsShipmentsPage() {
     const identity = `${action}:${shipment.id}:${shipment.version}`
     const existing = commandKeys.current.get(identity)
     if (existing) return existing
-    const created = commandIdentity()
-    commandKeys.current.set(identity, created)
-    return created
+    const idempotencyKey = commandIdentity()
+    commandKeys.current.set(identity, idempotencyKey)
+    return idempotencyKey
   }
 
   function applyServerProjection(shipment: ShipmentDocument) {
@@ -162,7 +221,7 @@ export function LogisticsShipmentsPage() {
         ? current.map((candidate) =>
             candidate.id === shipment.id ? shipment : candidate
           )
-        : [...current, shipment]
+        : [shipment, ...current]
     })
   }
 
@@ -225,7 +284,7 @@ export function LogisticsShipmentsPage() {
       confirmMutation.isPending && confirmMutation.variables?.id === shipment.id
     const cancelling =
       cancelMutation.isPending && cancelMutation.variables?.id === shipment.id
-    const canEditDocument = hasWarehouseAccess(
+    const canEdit = hasWarehouseAccess(
       currentUser,
       shipment.warehouseId,
       "EDIT"
@@ -243,17 +302,7 @@ export function LogisticsShipmentsPage() {
         >
           {expandedId === shipment.id ? "Скрыть состав" : "Показать состав"}
         </Button>
-        {canEditDocument && shipment.state === "DRAFT" ? (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled
-            title="Проекция отгрузки не содержит immutable equipment allocations; создайте новый план"
-          >
-            Запустить старый черновик
-          </Button>
-        ) : null}
-        {canEditDocument && shipment.state === "AWAITING_CONFIRMATION" ? (
+        {canEdit && shipment.state === "AWAITING_CONFIRMATION" ? (
           <Button
             size="sm"
             disabled={confirming || cancelling || !accessToken}
@@ -262,7 +311,7 @@ export function LogisticsShipmentsPage() {
             {confirming ? "Подтверждается…" : "Подтвердить подготовку"}
           </Button>
         ) : null}
-        {canEditDocument && CANCELLABLE_STATES.has(shipment.state) ? (
+        {canEdit && CANCELLABLE_STATES.has(shipment.state) ? (
           <Button
             size="sm"
             variant="destructive"
@@ -282,7 +331,7 @@ export function LogisticsShipmentsPage() {
         <PageToolbarContent>
           <Input
             aria-label="Поиск отгрузок"
-            placeholder="ID документа, asset, компания или водитель"
+            placeholder="ID документа, бытовки, контрагент или водитель"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
@@ -315,23 +364,6 @@ export function LogisticsShipmentsPage() {
         </PageToolbarActions>
       </PageToolbar>
 
-      <Card size="sm">
-        <CardHeader>
-          <CardTitle>Подготовкой управляет logistics-service</CardTitle>
-          <CardDescription>
-            Документ, версии, task-board задания, equipment holds и компенсация
-            отмены находятся на сервере. Панель не изменяет бытовки, остатки и
-            задачи напрямую.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="text-sm text-muted-foreground">
-          Справочники компаний, кандидатов, оборудования и бытовок-источников
-          пока отсутствуют в публичном shipment contract. Новый план принимает
-          явные asset ID/версии без изменений оборудования; отдельной команды
-          finalizeShipment контракт не предоставляет.
-        </CardContent>
-      </Card>
-
       {!accessToken ? (
         <FieldError>Для просмотра отгрузок требуется авторизация.</FieldError>
       ) : null}
@@ -363,17 +395,8 @@ export function LogisticsShipmentsPage() {
                 render: (shipment) => formatDateTime(shipment.createdAt),
               },
               {
-                id: "document",
-                label: "Документ",
-                className: "min-w-64",
-                getSortValue: (shipment) => shipment.id,
-                render: (shipment) => (
-                  <span className="font-mono text-xs">{shipment.id}</span>
-                ),
-              },
-              {
                 id: "party",
-                label: "Компания",
+                label: "Контрагент",
                 className: "min-w-52",
                 getSortValue: (shipment) => shipment.partySnapshot,
                 render: (shipment) => shipment.partySnapshot,
@@ -399,7 +422,7 @@ export function LogisticsShipmentsPage() {
               },
               {
                 id: "lines",
-                label: "Строк",
+                label: "Бытовок",
                 className: "w-24",
                 getSortValue: (shipment) => shipment.lines.length,
                 render: (shipment) => shipment.lines.length,
@@ -419,10 +442,8 @@ export function LogisticsShipmentsPage() {
           {rows.map((shipment) => (
             <Card key={shipment.id} size="sm">
               <CardHeader>
-                <CardTitle>Отгрузка {shipment.id.slice(0, 8)}</CardTitle>
-                <CardDescription>
-                  {shipment.partySnapshot} · {shipment.driverSnapshot}
-                </CardDescription>
+                <CardTitle>{shipment.partySnapshot}</CardTitle>
+                <CardDescription>{shipment.driverSnapshot}</CardDescription>
                 <CardAction>
                   <Badge variant={statusVariant(shipment.state)}>
                     {SHIPMENT_STATE_LABELS[shipment.state]}
@@ -442,7 +463,7 @@ export function LogisticsShipmentsPage() {
               <CardHeader>
                 <CardTitle>Отгрузки не найдены</CardTitle>
                 <CardDescription>
-                  Измените фильтр или создайте новый документ отгрузки.
+                  Измените фильтр или создайте новую отгрузку в аренду.
                 </CardDescription>
               </CardHeader>
             </Card>
@@ -469,8 +490,8 @@ export function LogisticsShipmentsPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Отменить отгрузку?</AlertDialogTitle>
             <AlertDialogDescription>
-              Logistics-service отменит свои task-board задания, equipment holds
-              и leases. Панель не выполняет компенсацию самостоятельно.
+              Logistics-service отменит свои задания, резервирование мебели и
+              leases. Панель не выполняет компенсацию самостоятельно.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -498,9 +519,10 @@ function ShipmentLines({ shipment }: { shipment: ShipmentDocument }) {
       {shipment.lines.map((line) => (
         <Card key={line.id} size="sm">
           <CardHeader>
-            <CardTitle>Строка {line.lineNumber}</CardTitle>
+            <CardTitle>Бытовка {line.lineNumber}</CardTitle>
             <CardDescription>
-              Server-issued asset и line versions
+              Аренда{" "}
+              <span className="font-mono text-xs">{line.rentalOrderId}</span>
             </CardDescription>
             <CardAction>
               <Badge variant="outline">v{line.version}</Badge>
@@ -510,29 +532,12 @@ function ShipmentLines({ shipment }: { shipment: ShipmentDocument }) {
             <span>
               Asset: <span className="font-mono text-xs">{line.assetId}</span>
             </span>
-            <span>
-              Версия asset: {line.assetVersion} · Line ID:{" "}
-              <span className="font-mono text-xs">{line.id}</span>
-            </span>
+            <span>Версия бытовки: {line.assetVersion}</span>
           </CardContent>
         </Card>
       ))}
     </div>
   )
-}
-
-type ShipmentLineDraft = {
-  key: string
-  assetId: string
-  assetVersion: string
-}
-
-function emptyLine(): ShipmentLineDraft {
-  return {
-    key: commandIdentity(),
-    assetId: "",
-    assetVersion: "0",
-  }
 }
 
 function CreateShipmentDialog({
@@ -545,233 +550,574 @@ function CreateShipmentDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
-  const [partySnapshot, setPartySnapshot] = useState("")
-  const [driverSnapshot, setDriverSnapshot] = useState("")
+  const contentRef = useRef<HTMLDivElement>(null)
+  const commandAttempt = useRef<CommandAttempt | null>(null)
+  const [client, setClient] = useState<OrderClientSearchItem | null>(null)
+  const [orderId, setOrderId] = useState("")
+  const [driver, setDriver] = useState<RepairTaskWorkerSnapshotDto | null>(null)
   const [lines, setLines] = useState<ShipmentLineDraft[]>(() => [emptyLine()])
-  const [draft, setDraft] = useState<ShipmentDocument | null>(null)
-  const [createKey] = useState(commandIdentity)
-  const [planKey] = useState(commandIdentity)
   const [validationError, setValidationError] = useState<string | null>(null)
 
-  function planLines(): ShipmentPlanLine[] {
-    return lines.map((line) => ({
-      assetId: line.assetId.trim(),
-      assetVersion: Number(line.assetVersion),
-      allocations: [],
-    }))
-  }
-
-  const mutation = useMutation({
-    mutationFn: async () => {
-      const immutableLines = planLines()
-      let created = draft
-      if (!created) {
-        created = await createShipment({
-          accessToken,
-          warehouseId,
-          partySnapshot: partySnapshot.trim(),
-          driverSnapshot: driverSnapshot.trim(),
-          lines: immutableLines,
-          idempotencyKey: createKey,
-        })
-        setDraft(created)
-      }
-      if (created.state !== "DRAFT") {
-        throw new Error("Созданный документ уже вышел из состояния DRAFT.")
-      }
-      return replaceShipmentPlan({
+  const ordersQuery = useQuery({
+    queryKey: [
+      ...ORDERS_QUERY_KEY,
+      "shipment-orders",
+      warehouseId,
+      client?.id ?? "none",
+    ],
+    queryFn: () =>
+      listOrders({
         accessToken,
-        documentId: created.id,
-        expectedVersion: created.version,
-        partySnapshot: partySnapshot.trim(),
-        driverSnapshot: driverSnapshot.trim(),
-        lines: immutableLines,
-        idempotencyKey: planKey,
-      })
-    },
-    onSuccess: () => {
+        page: 0,
+        size: 100,
+        search: client?.displayName,
+        sort: "updatedAt",
+        direction: "desc",
+      }),
+    enabled: client !== null,
+  })
+  const orders = useMemo(
+    () =>
+      (ordersQuery.data?.content ?? []).filter(
+        (order) =>
+          order.client.id === client?.id &&
+          order.status === "DRAFT" &&
+          order.warehouseId === warehouseId
+      ),
+    [client?.id, ordersQuery.data?.content, warehouseId]
+  )
+  const selectedOrder = orders.find((order) => order.id === orderId) ?? null
+  const candidatesQuery = useQuery({
+    queryKey: [...ORDERS_QUERY_KEY, "shipment-candidates", orderId],
+    queryFn: () =>
+      listAvailableOrderUnits({
+        accessToken,
+        orderId,
+        page: 0,
+        size: 100,
+      }),
+    enabled: orderId.length > 0,
+  })
+  const candidates = candidatesQuery.data?.content ?? []
+  const equipmentQuery = useQuery({
+    queryKey: ["equipment", "shipment", warehouseId],
+    queryFn: () => getEquipmentItems(accessToken, { warehouseId }),
+  })
+  const furniture = (equipmentQuery.data ?? []).filter(
+    (item) =>
+      item.active && item.category === "FURNITURE" && item.availableStock > 0
+  )
+  const candidateByAssetId = new Map(
+    candidates.map((candidate) => [candidate.unit.id, candidate])
+  )
+  const selectedAssetIds = lines
+    .map((line) => line.assetId)
+    .filter((assetId): assetId is string => assetId !== null)
+  const mutation = useMutation({
+    mutationFn: ({
+      idempotencyKey,
+      commandLines,
+    }: {
+      idempotencyKey: string
+      commandLines: Array<{
+        assetId: string
+        assetVersion: number
+        allocations: ShipmentEquipmentAllocation[]
+      }>
+    }) =>
+      createShipment({
+        accessToken,
+        warehouseId,
+        clientId: client!.id,
+        rentalOrderId: orderId,
+        partySnapshot: client!.displayName,
+        driverSnapshot: driver!.name,
+        lines: commandLines,
+        idempotencyKey,
+      }),
+    onSuccess: (result) => {
+      queryClient.setQueryData<ShipmentDocument[]>(
+        [...SHIPMENTS_QUERY_KEY, warehouseId],
+        (current) => [
+          result,
+          ...(current ?? []).filter((item) => item.id !== result.id),
+        ]
+      )
       void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
       onOpenChange(false)
     },
-    onError: () => {
-      void queryClient.invalidateQueries({ queryKey: SHIPMENTS_QUERY_KEY })
-    },
   })
 
-  function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const normalizedAssetIds = lines.map((line) => line.assetId.trim())
-    const invalidLine = lines.find(
-      (line) =>
-        !UUID_PATTERN.test(line.assetId.trim()) ||
-        !Number.isSafeInteger(Number(line.assetVersion)) ||
-        Number(line.assetVersion) < 0
+  function selectCandidate(key: string, candidate: OrderUnitCandidate | null) {
+    setLines((current) =>
+      current.map((line) =>
+        line.key === key
+          ? { ...line, assetId: candidate?.unit.id ?? null, allocations: [] }
+          : line
+      )
     )
-    const duplicateAsset =
-      new Set(normalizedAssetIds).size !== normalizedAssetIds.length
+  }
+
+  function addAllocation(lineKey: string) {
+    setLines((current) =>
+      current.map((line) =>
+        line.key === lineKey
+          ? {
+              ...line,
+              allocations: [
+                ...line.allocations,
+                { key: commandIdentity(), equipmentId: "", quantity: 1 },
+              ],
+            }
+          : line
+      )
+    )
+  }
+
+  function updateAllocation(
+    lineKey: string,
+    allocationKey: string,
+    update: Partial<Pick<ShipmentEquipmentDraft, "equipmentId" | "quantity">>
+  ) {
+    setLines((current) =>
+      current.map((line) =>
+        line.key === lineKey
+          ? {
+              ...line,
+              allocations: line.allocations.map((allocation) =>
+                allocation.key === allocationKey
+                  ? { ...allocation, ...update }
+                  : allocation
+              ),
+            }
+          : line
+      )
+    )
+  }
+
+  function removeAllocation(lineKey: string, allocationKey: string) {
+    setLines((current) =>
+      current.map((line) =>
+        line.key === lineKey
+          ? {
+              ...line,
+              allocations: line.allocations.filter(
+                (allocation) => allocation.key !== allocationKey
+              ),
+            }
+          : line
+      )
+    )
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const selected = lines.map((line) =>
+      line.assetId ? (candidateByAssetId.get(line.assetId) ?? null) : null
+    )
+    if (!client || !selectedOrder || !driver) {
+      setValidationError("Выберите контрагента, аренду и водителя.")
+      return
+    }
+    if (selected.some((candidate) => candidate === null)) {
+      setValidationError("Выберите бытовку в каждой строке отгрузки.")
+      return
+    }
+    const selectedCandidates = selected as OrderUnitCandidate[]
     if (
-      !partySnapshot.trim() ||
-      !driverSnapshot.trim() ||
-      invalidLine ||
-      duplicateAsset
+      new Set(selectedCandidates.map((candidate) => candidate.unit.id)).size !==
+      selectedCandidates.length
     ) {
       setValidationError(
-        "Укажите компанию, водителя и для каждой строки уникальный asset UUID с неотрицательной версией."
+        "Одну бытовку можно добавить в отгрузку только один раз."
       )
       return
     }
+
+    const allocatedTotals = new Map<string, number>()
+    const commandLines: Array<{
+      assetId: string
+      assetVersion: number
+      allocations: ShipmentEquipmentAllocation[]
+    }> = []
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index]!
+      const equipmentIds = new Set<string>()
+      const allocations: ShipmentEquipmentAllocation[] = []
+      for (const allocation of line.allocations) {
+        const furnitureItem = furniture.find(
+          (item) => item.id === allocation.equipmentId
+        )
+        const expectedStockVersion = furnitureItem
+          ? stockVersion(furnitureItem)
+          : undefined
+        if (
+          !furnitureItem ||
+          expectedStockVersion === undefined ||
+          !Number.isSafeInteger(allocation.quantity) ||
+          allocation.quantity < 1 ||
+          equipmentIds.has(allocation.equipmentId)
+        ) {
+          setValidationError(
+            "Выберите уникальную мебель и корректное количество для каждой бытовки."
+          )
+          return
+        }
+        equipmentIds.add(allocation.equipmentId)
+        allocatedTotals.set(
+          allocation.equipmentId,
+          (allocatedTotals.get(allocation.equipmentId) ?? 0) +
+            allocation.quantity
+        )
+        allocations.push({
+          equipmentId: allocation.equipmentId,
+          quantity: allocation.quantity,
+          expectedStockVersion,
+        })
+      }
+      const candidate = selectedCandidates[index]!
+      commandLines.push({
+        assetId: candidate.unit.id,
+        assetVersion: candidate.unit.version,
+        allocations,
+      })
+    }
+    for (const [equipmentId, quantity] of allocatedTotals) {
+      const available = furniture.find(
+        (item) => item.id === equipmentId
+      )?.availableStock
+      if (available === undefined || quantity > available) {
+        setValidationError(
+          "Количество мебели превышает доступный остаток на складе."
+        )
+        return
+      }
+    }
+
+    const signature = JSON.stringify({
+      warehouseId,
+      clientId: client.id,
+      rentalOrderId: selectedOrder.id,
+      driverSnapshot: driver.name,
+      lines: commandLines,
+    })
+    const idempotencyKey =
+      commandAttempt.current?.signature === signature
+        ? commandAttempt.current.idempotencyKey
+        : commandIdentity()
+    commandAttempt.current = { signature, idempotencyKey }
     setValidationError(null)
-    mutation.mutate()
+    mutation.mutate({ idempotencyKey, commandLines })
   }
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[calc(100svh-1rem)] overflow-y-auto sm:max-w-3xl">
+      <DialogContent
+        ref={contentRef}
+        className="max-h-[calc(100svh-1rem)] overflow-y-auto sm:max-w-4xl"
+      >
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>Создать и запустить отгрузку</DialogTitle>
+            <DialogTitle>Создать отгрузку в аренду</DialogTitle>
             <DialogDescription>
-              Панель создаст immutable DRAFT и повторит тот же payload через
-              команду plan. При сетевой ошибке обе команды повторяются со
-              стабильными Idempotency-Key без browser rollback.
+              Выберите контрагента, аренду, водителя, бытовки и требуемую
+              мебель. Сервер создаст документ и задания подготовки.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup className="py-4">
+            <RentalClientPicker
+              accessToken={accessToken}
+              idPrefix="shipment"
+              portalContainer={contentRef}
+              value={client}
+              disabled={mutation.isPending}
+              onChange={(next) => {
+                setClient(next)
+                setOrderId("")
+                setLines([emptyLine()])
+                commandAttempt.current = null
+                setValidationError(null)
+              }}
+            />
             <Field>
-              <FieldLabel htmlFor="shipment-party">Компания</FieldLabel>
-              <Input
-                id="shipment-party"
-                required
-                maxLength={512}
-                disabled={draft !== null}
-                value={partySnapshot}
-                onChange={(event) => setPartySnapshot(event.target.value)}
-              />
-              <FieldDescription>
-                Это immutable текстовый снимок; справочник компаний пока не
-                опубликован.
-              </FieldDescription>
+              <FieldLabel htmlFor="shipment-order">Аренда</FieldLabel>
+              <Select
+                value={orderId}
+                disabled={!client || mutation.isPending}
+                onValueChange={(next) => {
+                  setOrderId(next)
+                  setLines([emptyLine()])
+                  commandAttempt.current = null
+                }}
+              >
+                <SelectTrigger id="shipment-order">
+                  <SelectValue placeholder="Выберите аренду" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {orders.map((order) => (
+                      <SelectItem key={order.id} value={order.id}>
+                        {order.number} · {order.unitCount} бытовок
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              {ordersQuery.isError ? (
+                <FieldError>Не удалось загрузить аренды клиента.</FieldError>
+              ) : ordersQuery.isSuccess && client && orders.length === 0 ? (
+                <FieldDescription>
+                  У клиента нет активной аренды на выбранном складе.
+                </FieldDescription>
+              ) : null}
             </Field>
-            <Field>
-              <FieldLabel htmlFor="shipment-driver">Водитель</FieldLabel>
-              <Input
-                id="shipment-driver"
-                required
-                maxLength={512}
-                disabled={draft !== null}
-                value={driverSnapshot}
-                onChange={(event) => setDriverSnapshot(event.target.value)}
-              />
-            </Field>
-            <FieldSet>
-              <FieldLegend variant="label">Строки отгрузки</FieldLegend>
+            <LogisticsDriverPicker
+              accessToken={accessToken}
+              id="shipment-driver"
+              warehouseId={warehouseId}
+              value={driver}
+              disabled={mutation.isPending}
+              onChange={(next) => {
+                setDriver(next)
+                commandAttempt.current = null
+                setValidationError(null)
+              }}
+            />
+            <FieldSet disabled={!selectedOrder || mutation.isPending}>
+              <FieldLegend variant="label">Бытовки и наполнение</FieldLegend>
               <FieldDescription>
-                Укажите server-issued asset ID и версию. Equipment allocations
-                пусты, потому что публичного discovery contract ещё нет.
+                Зарезервированные за{" "}
+                {client?.displayName ?? "выбранным клиентом"} бытовки показаны
+                первыми. Остальные свободные бытовки можно добавить в эту же
+                отгрузку.
               </FieldDescription>
               <FieldGroup>
-                {lines.map((line, index) => (
-                  <Card key={line.key} size="sm">
-                    <CardHeader>
-                      <CardTitle>Бытовка {index + 1}</CardTitle>
-                      {lines.length > 1 ? (
-                        <CardAction>
-                          <Button
-                            type="button"
-                            size="icon-sm"
-                            variant="outline"
-                            disabled={draft !== null}
-                            aria-label={`Удалить строку ${index + 1}`}
-                            onClick={() =>
-                              setLines((current) =>
-                                current.filter((item) => item.key !== line.key)
-                              )
+                {lines.map((line, index) => {
+                  const selectedCandidate = line.assetId
+                    ? (candidateByAssetId.get(line.assetId) ?? null)
+                    : null
+                  return (
+                    <Card key={line.key} size="sm">
+                      <CardHeader>
+                        <CardTitle>Бытовка {index + 1}</CardTitle>
+                        {lines.length > 1 ? (
+                          <CardAction>
+                            <Button
+                              type="button"
+                              size="icon-sm"
+                              variant="outline"
+                              aria-label={`Удалить бытовку ${index + 1}`}
+                              onClick={() =>
+                                setLines((current) =>
+                                  current.filter(
+                                    (item) => item.key !== line.key
+                                  )
+                                )
+                              }
+                            >
+                              <HugeiconsIcon
+                                icon={Delete02Icon}
+                                data-icon="inline-start"
+                              />
+                            </Button>
+                          </CardAction>
+                        ) : null}
+                      </CardHeader>
+                      <CardContent className="flex flex-col gap-4">
+                        <Field>
+                          <FieldLabel htmlFor={`shipment-cabin-${line.key}`}>
+                            Номер бытовки
+                          </FieldLabel>
+                          <Combobox<OrderUnitCandidate>
+                            items={candidates}
+                            value={selectedCandidate}
+                            itemToStringLabel={(candidate) =>
+                              candidate.unit.number
+                            }
+                            itemToStringValue={(candidate) => candidate.unit.id}
+                            isItemEqualToValue={(left, right) =>
+                              left.unit.id === right.unit.id
+                            }
+                            disabled={!selectedOrder || mutation.isPending}
+                            onValueChange={(candidate) =>
+                              selectCandidate(line.key, candidate)
                             }
                           >
-                            <HugeiconsIcon icon={Delete02Icon} />
-                          </Button>
-                        </CardAction>
-                      ) : null}
-                    </CardHeader>
-                    <CardContent>
-                      <FieldGroup>
-                        <Field>
-                          <FieldLabel htmlFor={`shipment-asset-${line.key}`}>
-                            Asset UUID
-                          </FieldLabel>
-                          <Input
-                            id={`shipment-asset-${line.key}`}
-                            required
-                            disabled={draft !== null}
-                            placeholder="00000000-0000-0000-0000-000000000000"
-                            value={line.assetId}
-                            onChange={(event) =>
-                              setLines((current) =>
-                                current.map((item) =>
-                                  item.key === line.key
-                                    ? { ...item, assetId: event.target.value }
-                                    : item
-                                )
-                              )
-                            }
-                          />
+                            <ComboboxInput
+                              id={`shipment-cabin-${line.key}`}
+                              placeholder={
+                                selectedOrder
+                                  ? "Введите номер бытовки"
+                                  : "Сначала выберите аренду"
+                              }
+                              showClear
+                            />
+                            <ComboboxContent portalContainer={contentRef}>
+                              <ComboboxEmpty>
+                                {candidatesQuery.isFetching
+                                  ? "Загружаем бытовки…"
+                                  : "Доступные бытовки не найдены"}
+                              </ComboboxEmpty>
+                              <ComboboxList>
+                                <ShipmentCandidateGroup
+                                  clientName={client?.displayName ?? "клиентом"}
+                                  candidates={candidates}
+                                  selectedAssetIds={selectedAssetIds}
+                                  currentAssetId={line.assetId}
+                                />
+                              </ComboboxList>
+                            </ComboboxContent>
+                          </Combobox>
                         </Field>
-                        <Field>
-                          <FieldLabel htmlFor={`shipment-version-${line.key}`}>
-                            Текущая версия asset
-                          </FieldLabel>
-                          <Input
-                            id={`shipment-version-${line.key}`}
-                            type="number"
-                            min={0}
-                            step={1}
-                            required
-                            disabled={draft !== null}
-                            value={line.assetVersion}
-                            onChange={(event) =>
-                              setLines((current) =>
-                                current.map((item) =>
-                                  item.key === line.key
-                                    ? {
-                                        ...item,
-                                        assetVersion: event.target.value,
+                        {selectedCandidate ? (
+                          <FieldSet>
+                            <FieldLegend variant="label">
+                              Мебель для бытовки
+                            </FieldLegend>
+                            <FieldDescription>
+                              Выберите мебель со свободного остатка исходного
+                              склада. Logistics-service создаст hold и задачу
+                              подготовки.
+                            </FieldDescription>
+                            <FieldGroup>
+                              {line.allocations.map((allocation) => {
+                                const allowedFurniture = furniture.filter(
+                                  (item) =>
+                                    item.id === allocation.equipmentId ||
+                                    !line.allocations.some(
+                                      (other) =>
+                                        other.key !== allocation.key &&
+                                        other.equipmentId === item.id
+                                    )
+                                )
+                                return (
+                                  <div
+                                    key={allocation.key}
+                                    className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_8rem_auto]"
+                                  >
+                                    <Field>
+                                      <FieldLabel
+                                        htmlFor={`shipment-equipment-${allocation.key}`}
+                                      >
+                                        Мебель
+                                      </FieldLabel>
+                                      <Select
+                                        value={allocation.equipmentId}
+                                        onValueChange={(equipmentId) =>
+                                          updateAllocation(
+                                            line.key,
+                                            allocation.key,
+                                            { equipmentId }
+                                          )
+                                        }
+                                      >
+                                        <SelectTrigger
+                                          id={`shipment-equipment-${allocation.key}`}
+                                        >
+                                          <SelectValue placeholder="Выберите мебель" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectGroup>
+                                            {allowedFurniture.map((item) => (
+                                              <SelectItem
+                                                key={item.id}
+                                                value={item.id}
+                                              >
+                                                {item.name} · доступно{" "}
+                                                {item.availableStock}
+                                              </SelectItem>
+                                            ))}
+                                          </SelectGroup>
+                                        </SelectContent>
+                                      </Select>
+                                    </Field>
+                                    <Field>
+                                      <FieldLabel
+                                        htmlFor={`shipment-quantity-${allocation.key}`}
+                                      >
+                                        Количество
+                                      </FieldLabel>
+                                      <Input
+                                        id={`shipment-quantity-${allocation.key}`}
+                                        type="number"
+                                        min={1}
+                                        step={1}
+                                        value={allocation.quantity}
+                                        onChange={(event) =>
+                                          updateAllocation(
+                                            line.key,
+                                            allocation.key,
+                                            {
+                                              quantity: Number(
+                                                event.target.value
+                                              ),
+                                            }
+                                          )
+                                        }
+                                      />
+                                    </Field>
+                                    <Button
+                                      type="button"
+                                      className="self-end"
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() =>
+                                        removeAllocation(
+                                          line.key,
+                                          allocation.key
+                                        )
                                       }
-                                    : item
+                                    >
+                                      Удалить
+                                    </Button>
+                                  </div>
                                 )
-                              )
-                            }
-                          />
-                        </Field>
-                      </FieldGroup>
-                    </CardContent>
-                  </Card>
-                ))}
+                              })}
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={furniture.length === 0}
+                                onClick={() => addAllocation(line.key)}
+                              >
+                                Добавить мебель
+                              </Button>
+                              {equipmentQuery.isError ? (
+                                <FieldError>
+                                  Не удалось загрузить остатки мебели.
+                                </FieldError>
+                              ) : null}
+                            </FieldGroup>
+                          </FieldSet>
+                        ) : null}
+                      </CardContent>
+                    </Card>
+                  )
+                })}
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={
+                    !selectedOrder ||
+                    lines.length >= 100 ||
+                    candidates.length === 0 ||
+                    lines.some((line) => line.assetId === null)
+                  }
+                  onClick={() =>
+                    setLines((current) => [...current, emptyLine()])
+                  }
+                >
+                  <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+                  Добавить ещё бытовку
+                </Button>
               </FieldGroup>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={lines.length >= 100 || draft !== null}
-                onClick={() => setLines((current) => [...current, emptyLine()])}
-              >
-                <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-                Добавить строку
-              </Button>
             </FieldSet>
-            {draft ? (
-              <FieldDescription>
-                Черновик {draft.id} уже создан. Повтор отправит только тот же
-                immutable plan с прежним Idempotency-Key.
-              </FieldDescription>
-            ) : null}
             {validationError ? (
               <FieldError>{validationError}</FieldError>
             ) : null}
             {mutation.error ? (
               <FieldError>
-                {errorMessage(
-                  mutation.error,
-                  "Не удалось создать или запустить отгрузку"
-                )}
+                {errorMessage(mutation.error, "Не удалось создать отгрузку")}
               </FieldError>
             ) : null}
           </FieldGroup>
@@ -781,18 +1127,59 @@ function CreateShipmentDialog({
               variant="outline"
               onClick={() => onOpenChange(false)}
             >
-              Закрыть
+              Отмена
             </Button>
             <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending
-                ? "Запускается…"
-                : draft
-                  ? "Повторить запуск подготовки"
-                  : "Создать и запустить"}
+              {mutation.isPending ? "Создаётся…" : "Создать отгрузку"}
             </Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function ShipmentCandidateGroup({
+  clientName,
+  candidates,
+  selectedAssetIds,
+  currentAssetId,
+}: {
+  clientName: string
+  candidates: OrderUnitCandidate[]
+  selectedAssetIds: string[]
+  currentAssetId: string | null
+}) {
+  const available = candidates.filter(
+    (candidate) =>
+      candidate.unit.id === currentAssetId ||
+      !selectedAssetIds.includes(candidate.unit.id)
+  )
+  const reserved = available.filter((candidate) => candidate.added)
+  const free = available.filter((candidate) => !candidate.added)
+  return (
+    <>
+      {reserved.length ? (
+        <ComboboxGroup>
+          <ComboboxLabel>Зарезервированы за {clientName}</ComboboxLabel>
+          {reserved.map((candidate) => (
+            <ComboboxItem key={candidate.unit.id} value={candidate}>
+              <span>{candidate.unit.number}</span>
+              <Badge variant="secondary">Зарезервирована</Badge>
+            </ComboboxItem>
+          ))}
+        </ComboboxGroup>
+      ) : null}
+      {free.length ? (
+        <ComboboxGroup>
+          <ComboboxLabel>Другие доступные</ComboboxLabel>
+          {free.map((candidate) => (
+            <ComboboxItem key={candidate.unit.id} value={candidate}>
+              {candidate.unit.number}
+            </ComboboxItem>
+          ))}
+        </ComboboxGroup>
+      ) : null}
+    </>
   )
 }

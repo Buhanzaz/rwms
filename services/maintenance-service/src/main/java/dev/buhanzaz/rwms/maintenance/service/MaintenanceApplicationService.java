@@ -77,6 +77,7 @@ import tools.jackson.databind.ObjectMapper;
 @Service
 public class MaintenanceApplicationService {
   private static final Duration LEASE_RENEWAL_GUARD = Duration.ofMinutes(5);
+  private static final String AFTER_RENT_STATUS = "AFTER_RENT";
   private static final Set<String> REPAIR_QUEUE_SOURCE_STATUSES = Set.of(
       "FREE",
       "WAREHOUSE",
@@ -543,13 +544,14 @@ public class MaintenanceApplicationService {
     String requestHash = hash(request);
     Optional<JsonNode> replay = idempotency.replay(subjectId, "estimate.create", key, requestHash);
     if (replay.isPresent()) return new CreateResult<>(read(replay.get(), EstimateResponse.class), true);
+    RentalItemFactProjection rentalItem = requireRentalItemFact(
+        request.rentalItemId(), request.warehouseId());
+    requireEstimateSourceStatus(rentalItem);
     CatalogVersion catalog = catalogVersions.findByWarehouseIdAndState(
         request.warehouseId(), CatalogVersionState.ACTIVE).orElseThrow(() ->
         new MaintenanceValidationException(
             "MAINTENANCE_VALIDATION_FAILED", "Warehouse has no active catalog version"));
     validateEstimatePlan(request.lines(), request.plan());
-    RentalItemFactProjection rentalItem = requireRentalItemFact(
-        request.rentalItemId(), request.warehouseId());
     MaintenanceEstimate estimate = estimates.saveAndFlush(MaintenanceEstimate.create(
         request.warehouseId(), request.rentalItemId(), rentalItem.getAggregateVersion(),
         catalog.getId(), request.dispatchDate(), request.sourceParty(), null, actorJson()));
@@ -783,6 +785,7 @@ public class MaintenanceApplicationService {
     if (replay.isPresent()) return new CreateResult<>(read(replay.get(), RepairResponse.class), true);
     RentalItemFactProjection rentalItem = requireRentalItemFact(
         request.rentalItemId(), request.warehouseId());
+    requireDirectRepairSourceStatus(rentalItem);
     MaintenanceRepair repair = repairs.saveAndFlush(MaintenanceRepair.primary(
         request.warehouseId(), request.rentalItemId(), rentalItem.getAggregateVersion(), null,
         RepairOrigin.DIRECT_REPAIR,
@@ -3197,6 +3200,22 @@ public class MaintenanceApplicationService {
           "Rental item does not belong to the command warehouse");
     }
     return fact;
+  }
+
+  private static void requireEstimateSourceStatus(RentalItemFactProjection rentalItem) {
+    if (!AFTER_RENT_STATUS.equals(rentalItem.getAssetStatus())) {
+      throw new MaintenanceValidationException(
+          "MAINTENANCE_VALIDATION_FAILED",
+          "Estimate source rental item must have AFTER_RENT status");
+    }
+  }
+
+  private static void requireDirectRepairSourceStatus(RentalItemFactProjection rentalItem) {
+    if (AFTER_RENT_STATUS.equals(rentalItem.getAssetStatus())) {
+      throw new MaintenanceValidationException(
+          "MAINTENANCE_VALIDATION_FAILED",
+          "Direct repair source rental item must not have AFTER_RENT status");
+    }
   }
 
   private static void assertVersion(long actual, long expected) {

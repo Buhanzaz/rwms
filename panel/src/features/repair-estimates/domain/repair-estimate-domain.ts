@@ -1,6 +1,7 @@
 import type { RepairEstimateCatalogIndex } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import type { RepairEstimateCatalogNodeDto } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 import type {
+  EstimateRentalItemOptionDto,
   MoneyDecimal,
   RepairEstimateCompletionMode,
   RepairEstimateDto,
@@ -223,6 +224,21 @@ export function createNewEstimateDraft(): RepairEstimateEditorDraft {
     lines: [],
     media: [],
     pendingUploads: [],
+  }
+}
+
+export function applyEstimateRentalItemSelection(
+  draft: RepairEstimateEditorDraft,
+  rentalItem: Pick<
+    EstimateRentalItemOptionDto,
+    "id" | "counterparty" | "arrivalDate"
+  >
+): RepairEstimateEditorDraft {
+  return {
+    ...draft,
+    rentalItemId: rentalItem.id,
+    sourceParty: rentalItem.counterparty ?? "",
+    dispatchDate: rentalItem.arrivalDate ?? null,
   }
 }
 

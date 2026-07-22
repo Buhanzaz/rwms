@@ -1,5 +1,6 @@
 export const TRANSFER_DOCUMENT_STATES = [
   "DRAFT",
+  "CANCELLING",
   "DEPARTING",
   "IN_TRANSIT",
   "ARRIVING",
@@ -31,6 +32,7 @@ export type TransferLine = {
   assetVersion: number
   state: TransferLineState
   tenantSnapshot: string | null
+  rentalOrderId: null
 }
 
 export type TransferDocument = {
@@ -41,7 +43,9 @@ export type TransferDocument = {
   warehouseId: string
   destinationWarehouseId: string
   partySnapshot: null
-  driverSnapshot: null
+  driverSnapshot: string | null
+  clientId: null
+  equipmentMovementTaskId: string | null
   lines: TransferLine[]
   createdAt: string
   updatedAt: string
@@ -52,6 +56,12 @@ export type CreateTransferLine = {
   assetVersion: number
 }
 
+export type CreateTransferEquipmentLine = {
+  equipmentId: string
+  expectedSourceBalanceVersion: number
+  quantity: number
+}
+
 export type TransferMediaReference = {
   mediaId: string
   generation: number
@@ -59,6 +69,7 @@ export type TransferMediaReference = {
 
 export const TRANSFER_STATE_LABELS: Record<TransferDocumentState, string> = {
   DRAFT: "Черновик",
+  CANCELLING: "Отменяется",
   DEPARTING: "Отправляется",
   IN_TRANSIT: "В пути",
   ARRIVING: "Принимается",

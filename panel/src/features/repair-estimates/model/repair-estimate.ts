@@ -184,6 +184,10 @@ export type EstimateRentalItemOptionDto = {
   id: string
   warehouseId: string
   number: string
+  /** Filled from the public return document for an item returned from rent. */
+  counterparty?: string | null
+  /** Local calendar date of the public return document. */
+  arrivalDate?: string | null
 }
 
 export type EstimateRentalItemSearchQuery = {

@@ -403,7 +403,12 @@ class ShipmentWorkflowStore {
     if (LogisticsDocumentService.SHIPMENT_ASSET_LEASE_ACQUIRE.equals(attempt.getOperationType())) {
       return Optional.of(
           Work.lease(
-              attempt.getOperationId(), document.getId(), line.getId(), line.getAssetId(), line.getAssetVersion()));
+              attempt.getOperationId(),
+              document.getId(),
+              line.getId(),
+              line.getAssetId(),
+              line.getAssetVersion(),
+              line.getRentalOrderId()));
     }
     if (attempt.getOperationType().startsWith(LogisticsDocumentService.SHIPMENT_HOLD_ACQUIRE_PREFIX)) {
       Allocation allocation =
@@ -1080,7 +1085,49 @@ class ShipmentWorkflowStore {
       LogisticsDependencyGateway.EquipmentHoldAction holdAction,
       UUID externalTaskId,
       long expectedTaskVersion,
-      LogisticsDependencyGateway.AssetEffect assetEffect) {
+      LogisticsDependencyGateway.AssetEffect assetEffect,
+      UUID rentalOrderId) {
+    Work(
+        WorkType type,
+        UUID operationId,
+        UUID documentId,
+        UUID lineId,
+        UUID warehouseId,
+        UUID assetId,
+        long expectedAssetVersion,
+        UUID leaseId,
+        long expectedLeaseVersion,
+        long fencingToken,
+        UUID equipmentId,
+        long quantity,
+        long expectedStockVersion,
+        UUID holdId,
+        LogisticsDependencyGateway.EquipmentHoldAction holdAction,
+        UUID externalTaskId,
+        long expectedTaskVersion,
+        LogisticsDependencyGateway.AssetEffect assetEffect) {
+      this(
+          type,
+          operationId,
+          documentId,
+          lineId,
+          warehouseId,
+          assetId,
+          expectedAssetVersion,
+          leaseId,
+          expectedLeaseVersion,
+          fencingToken,
+          equipmentId,
+          quantity,
+          expectedStockVersion,
+          holdId,
+          holdAction,
+          externalTaskId,
+          expectedTaskVersion,
+          assetEffect,
+          null);
+    }
+
     static Work snapshot(UUID operationId, UUID assetId) {
       return new Work(
           WorkType.SNAPSHOT,
@@ -1105,6 +1152,22 @@ class ShipmentWorkflowStore {
 
     static Work lease(
         UUID operationId, UUID documentId, UUID lineId, UUID assetId, long expectedAssetVersion) {
+      return lease(
+          operationId,
+          documentId,
+          lineId,
+          assetId,
+          expectedAssetVersion,
+          null);
+    }
+
+    static Work lease(
+        UUID operationId,
+        UUID documentId,
+        UUID lineId,
+        UUID assetId,
+        long expectedAssetVersion,
+        UUID rentalOrderId) {
       return new Work(
           WorkType.LEASE,
           operationId,
@@ -1123,7 +1186,8 @@ class ShipmentWorkflowStore {
           null,
           null,
           -1,
-          null);
+          null,
+          rentalOrderId);
     }
 
     static Work holdAcquire(

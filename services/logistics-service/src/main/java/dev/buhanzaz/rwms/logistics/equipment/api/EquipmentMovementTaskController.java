@@ -39,6 +39,9 @@ public class EquipmentMovementTaskController {
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody CreateEquipmentMovementTaskRequest request) {
     access.requireEdit(jwt, request.warehouseId());
+    if (request.targetWarehouseId() != null) {
+      access.requireEdit(jwt, request.targetWarehouseId());
+    }
     EquipmentMovementTaskService.CreateResult result =
         service.create(access.subjectId(jwt), idempotencyKey, request);
     processor.processUntilIdle(result.response().id());

@@ -9,6 +9,8 @@ import dev.buhanzaz.rwms.asset.domain.EquipmentCatalogItem;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
 import dev.buhanzaz.rwms.asset.domain.OperationLease;
 import dev.buhanzaz.rwms.asset.domain.OperationLeaseState;
+import dev.buhanzaz.rwms.asset.domain.OrderUnitReservation;
+import dev.buhanzaz.rwms.asset.domain.OrderUnitReservationState;
 import dev.buhanzaz.rwms.asset.domain.RentalItem;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.eventing.AssetEventStore;
@@ -17,6 +19,7 @@ import dev.buhanzaz.rwms.asset.mapper.AssetLogisticsResponseMapper;
 import dev.buhanzaz.rwms.asset.mapper.EquipmentCatalogItemMapper;
 import dev.buhanzaz.rwms.asset.repository.EquipmentCatalogItemRepository;
 import dev.buhanzaz.rwms.asset.repository.OperationLeaseRepository;
+import dev.buhanzaz.rwms.asset.repository.OrderUnitReservationRepository;
 import dev.buhanzaz.rwms.asset.repository.RentalItemRepository;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -52,6 +55,7 @@ public class AssetService {
   private final RentalItemRepository rentalItems;
   private final EquipmentCatalogItemRepository equipment;
   private final OperationLeaseRepository operationLeases;
+  private final OrderUnitReservationRepository orderUnitReservations;
   private final JdbcTemplate jdbc;
   private final AssetEventStore events;
   private final AssetIdempotencyStore idempotency;
@@ -66,6 +70,7 @@ public class AssetService {
       RentalItemRepository rentalItems,
       EquipmentCatalogItemRepository equipment,
       OperationLeaseRepository operationLeases,
+      OrderUnitReservationRepository orderUnitReservations,
       JdbcTemplate jdbc,
       AssetEventStore events,
       AssetIdempotencyStore idempotency,
@@ -78,6 +83,7 @@ public class AssetService {
     this.rentalItems = rentalItems;
     this.equipment = equipment;
     this.operationLeases = operationLeases;
+    this.orderUnitReservations = orderUnitReservations;
     this.jdbc = jdbc;
     this.events = events;
     this.idempotency = idempotency;
@@ -136,10 +142,9 @@ public class AssetService {
     }
 
     lockRentalItemAndLease(request.rentalItemId());
-    assertNoActiveOrderReservation(
-        request.rentalItemId(), "Reserved order unit cannot acquire an operation lease");
     RentalItem item = requireRentalItem(request.rentalItemId());
     assertVersion(item.getVersion(), request.expectedRentalItemVersion());
+    assertLogisticsOrderReservation(subjectId, request, item);
     expireLeases(request.rentalItemId());
     if (!activeLeasesForUpdate(request.rentalItemId()).isEmpty()) {
       throw new AssetConflictException(
@@ -258,6 +263,11 @@ public class AssetService {
     } else {
       reclassifyCabinBalances(saved, previous);
     }
+    if (request.ownerType() == LogisticsLeaseOwnerType.LOGISTICS_RETURN
+        && (request.action() == LogisticsRentalItemAction.RETURN_SETTLE_FREE
+            || request.action() == LogisticsRentalItemAction.RETURN_SETTLE_SHORTAGE)) {
+      releaseReturnOrderReservation(saved.getId(), subjectId);
+    }
     events.append(
         AssetAggregateType.RENTAL_ITEM,
         saved.getId(),
@@ -269,6 +279,131 @@ public class AssetService {
         logisticsMapper.toLogisticsSnapshot(rentalResponse(saved));
     idempotency.store(subjectId, "logistics.rental-item.effect", key, hash, 200, safe);
     return new CreateResult<>(safe, false);
+  }
+
+  /**
+   * Receives furniture that was physically found with a returned cabin but
+   * was absent from its canonical contents.  This is an asset-owned stock
+   * increase with append-only receipt evidence, not a fabricated transfer
+   * from a non-existent source balance.
+   */
+  @Transactional
+  public CreateResult<LogisticsReturnEquipmentReceiptResponse>
+      receiveLogisticsReturnEquipment(
+          UUID subjectId, UUID key, LogisticsReturnEquipmentReceiptRequest request) {
+    validateReturnEquipmentReceiptRequest(request);
+    String hash = hash(request);
+    Optional<JsonNode> replay = idempotency.replay(
+        subjectId, "logistics.return-equipment-receipt.receive", key, hash);
+    if (replay.isPresent()) {
+      return new CreateResult<>(
+          read(replay.get(), LogisticsReturnEquipmentReceiptResponse.class), true);
+    }
+
+    warehouses.requireActive(request.warehouseId());
+    List<LogisticsReturnEquipmentReceiptLine> lines = validatedReturnEquipmentReceiptLines(request);
+    advisoryLocks(
+        lines.stream()
+            .map(
+                line ->
+                    balanceLockKey(
+                        line.equipmentId(),
+                        request.warehouseId(),
+                        null,
+                        BalanceLocationKind.STOCK))
+            .toList());
+
+    List<LogisticsReturnEquipmentReceiptLineResponse> received = new ArrayList<>();
+    for (LogisticsReturnEquipmentReceiptLine line : lines) {
+      EquipmentCatalogItem catalog = requireEquipment(line.equipmentId());
+      if (!catalog.isActive() || catalog.getCategory() != EquipmentCategory.FURNITURE) {
+        throw new AssetConflictException(
+            "Returned additional equipment must reference active furniture");
+      }
+
+      Optional<ReturnEquipmentReceiptRow> existing =
+          findReturnEquipmentReceipt(
+              request.returnId(), request.returnLineId(), line.equipmentId());
+      if (existing.isPresent()) {
+        ReturnEquipmentReceiptRow receipt = existing.get();
+        if (!receipt.warehouseId().equals(request.warehouseId())
+            || receipt.quantity() != line.quantity()) {
+          throw new AssetConflictException(
+              "Return equipment receipt conflicts with existing immutable evidence");
+        }
+        BalanceRow target = balanceReadById(receipt.stockBalanceId());
+        requireStockReceiptBalance(target, line.equipmentId(), request.warehouseId());
+        received.add(returnEquipmentReceiptResponse(receipt, target));
+        continue;
+      }
+
+      BalanceRow target =
+          findBalance(
+                  line.equipmentId(),
+                  request.warehouseId(),
+                  null,
+                  BalanceLocationKind.STOCK)
+              .orElseGet(
+                  () ->
+                      createEmptyBalance(
+                          line.equipmentId(),
+                          request.warehouseId(),
+                          null,
+                          BalanceLocationKind.STOCK));
+      long streamVersion =
+          events.lockCurrentVersion(AssetAggregateType.EQUIPMENT_BALANCE, target.id());
+      if (streamVersion != target.version()) {
+        throw new AssetConflictException("Equipment stock balance changed concurrently");
+      }
+      increment(target, line.quantity(), streamVersion);
+      BalanceRow targetAfter = requireBalanceById(target.id());
+      events.append(
+          AssetAggregateType.EQUIPMENT_BALANCE,
+          target.id(),
+          streamVersion,
+          AssetEventType.EQUIPMENT_BALANCE_CHANGED,
+          balanceFact(targetAfter),
+          balanceSnapshot(targetAfter));
+
+      UUID receiptId = UUID.randomUUID();
+      jdbc.update(
+          """
+          insert into logistics_return_equipment_receipt(
+            id,return_id,return_line_id,equipment_id,warehouse_id,stock_balance_id,quantity,received_at,actor_subject_id)
+          values (?,?,?,?,?,?,?,clock_timestamp(),?)
+          """,
+          receiptId,
+          request.returnId(),
+          request.returnLineId(),
+          line.equipmentId(),
+          request.warehouseId(),
+          targetAfter.id(),
+          line.quantity(),
+          subjectId);
+      received.add(
+          new LogisticsReturnEquipmentReceiptLineResponse(
+              receiptId,
+              line.equipmentId(),
+              line.quantity(),
+              targetAfter.id(),
+              targetAfter.version(),
+              targetAfter.quantity()));
+    }
+
+    LogisticsReturnEquipmentReceiptResponse response =
+        new LogisticsReturnEquipmentReceiptResponse(
+            request.returnId(),
+            request.returnLineId(),
+            request.warehouseId(),
+            List.copyOf(received));
+    idempotency.store(
+        subjectId,
+        "logistics.return-equipment-receipt.receive",
+        key,
+        hash,
+        201,
+        response);
+    return new CreateResult<>(response, false);
   }
 
   @Transactional
@@ -1733,6 +1868,85 @@ public class AssetService {
     return jdbc.query("select id,version,equipment_id,warehouse_id,rental_item_id,location_kind,quantity from equipment_balance where equipment_id=? and warehouse_id=? and rental_item_id is not distinct from ? and location_kind=? for update",
         (rs, row) -> balanceRow(rs), equipmentId, warehouseId, rentalItemId, kind.name()).stream().findFirst();
   }
+
+  private Optional<ReturnEquipmentReceiptRow> findReturnEquipmentReceipt(
+      UUID returnId, UUID returnLineId, UUID equipmentId) {
+    return jdbc
+        .query(
+            """
+            select id,return_id,return_line_id,equipment_id,warehouse_id,stock_balance_id,quantity
+            from logistics_return_equipment_receipt
+            where return_id=? and return_line_id=? and equipment_id=?
+            """,
+            (rs, row) ->
+                new ReturnEquipmentReceiptRow(
+                    rs.getObject("id", UUID.class),
+                    rs.getObject("return_id", UUID.class),
+                    rs.getObject("return_line_id", UUID.class),
+                    rs.getObject("equipment_id", UUID.class),
+                    rs.getObject("warehouse_id", UUID.class),
+                    rs.getObject("stock_balance_id", UUID.class),
+                    rs.getLong("quantity")),
+            returnId,
+            returnLineId,
+            equipmentId)
+        .stream()
+        .findFirst();
+  }
+
+  private static void requireStockReceiptBalance(
+      BalanceRow balance, UUID equipmentId, UUID warehouseId) {
+    if (!balance.equipmentId().equals(equipmentId)
+        || !balance.warehouseId().equals(warehouseId)
+        || balance.rentalItemId() != null
+        || balance.kind() != BalanceLocationKind.STOCK) {
+      throw new AssetConflictException("Return equipment receipt stock balance is malformed");
+    }
+  }
+
+  private static LogisticsReturnEquipmentReceiptLineResponse returnEquipmentReceiptResponse(
+      ReturnEquipmentReceiptRow receipt, BalanceRow balance) {
+    return new LogisticsReturnEquipmentReceiptLineResponse(
+        receipt.id(),
+        receipt.equipmentId(),
+        receipt.quantity(),
+        balance.id(),
+        balance.version(),
+        balance.quantity());
+  }
+
+  private static void validateReturnEquipmentReceiptRequest(
+      LogisticsReturnEquipmentReceiptRequest request) {
+    if (request == null
+        || request.returnId() == null
+        || request.returnLineId() == null
+        || request.warehouseId() == null
+        || request.lines() == null) {
+      throw new IllegalArgumentException("Return equipment receipt is required");
+    }
+  }
+
+  private static List<LogisticsReturnEquipmentReceiptLine> validatedReturnEquipmentReceiptLines(
+      LogisticsReturnEquipmentReceiptRequest request) {
+    if (request.lines().isEmpty() || request.lines().size() > 100) {
+      throw new IllegalArgumentException("Return equipment receipt line count is invalid");
+    }
+    Set<UUID> equipmentIds = new HashSet<>();
+    List<LogisticsReturnEquipmentReceiptLine> result = new ArrayList<>();
+    for (LogisticsReturnEquipmentReceiptLine line : request.lines()) {
+      if (line == null
+          || line.equipmentId() == null
+          || line.quantity() == null
+          || line.quantity() < 1
+          || !equipmentIds.add(line.equipmentId())) {
+        throw new IllegalArgumentException("Return equipment receipt line is invalid");
+      }
+      result.add(line);
+    }
+    result.sort(Comparator.comparing(line -> line.equipmentId().toString()));
+    return List.copyOf(result);
+  }
+
   private BalanceRow requireBalance(UUID equipmentId, UUID warehouseId, UUID rentalItemId, BalanceLocationKind kind) {
     return findBalance(equipmentId, warehouseId, rentalItemId, kind).orElseThrow(() -> new AssetNotFoundException("Equipment balance was not found"));
   }
@@ -2316,6 +2530,73 @@ public class AssetService {
       throw new AssetConflictException(message);
     }
   }
+
+  /**
+   * An order reservation remains the asset-side proof of the rental link while
+   * a cabin is shipped and rented.  Logistics is allowed to create that proof
+   * for a selected free cabin, or to consume an already matching reservation;
+   * it can never take a cabin reserved by another rental order.
+   */
+  private void assertLogisticsOrderReservation(
+      UUID subjectId, AcquireLogisticsOperationLeaseRequest request, RentalItem item) {
+    OrderUnitReservation current =
+        orderUnitReservations
+            .findByRentalItemIdAndState(item.getId(), OrderUnitReservationState.ACTIVE)
+            .orElse(null);
+    if (request.ownerType() == LogisticsLeaseOwnerType.LOGISTICS_SHIPMENT) {
+      if (request.rentalOrderId() == null) {
+        if (current != null) {
+          throw new AssetConflictException(
+              "Reserved order unit cannot acquire an operation lease");
+        }
+        return;
+      }
+      if (current == null) {
+        if (item.getStatus() != RentalItemStatus.FREE) {
+          throw new AssetConflictException(
+              "Only a free rental item can be added to a rental shipment");
+        }
+        orderUnitReservations.saveAndFlush(
+            OrderUnitReservation.create(
+                request.rentalOrderId(),
+                item.getId(),
+                item.getWarehouseId(),
+                subjectId,
+                "SYSTEM_ADMIN"));
+        return;
+      }
+      if (!request.rentalOrderId().equals(current.getOrderId())) {
+        throw new AssetConflictException(
+            "Rental item is reserved by a different rental order");
+      }
+      return;
+    }
+
+    if (request.ownerType() == LogisticsLeaseOwnerType.LOGISTICS_RETURN
+        && request.rentalOrderId() != null) {
+      if (current == null || !request.rentalOrderId().equals(current.getOrderId())) {
+        throw new AssetConflictException(
+            "Rental item is not actively reserved by the selected rental order");
+      }
+      return;
+    }
+
+    if (current != null) {
+      throw new AssetConflictException(
+          "Reserved order unit cannot acquire an operation lease");
+    }
+  }
+
+  private void releaseReturnOrderReservation(UUID rentalItemId, UUID subjectId) {
+    orderUnitReservations
+        .findByRentalItemIdAndState(rentalItemId, OrderUnitReservationState.ACTIVE)
+        .ifPresent(
+            reservation -> {
+              reservation.release(subjectId, "SYSTEM_ADMIN");
+              orderUnitReservations.saveAndFlush(reservation);
+            });
+  }
+
   private OperationLease requireLeaseForUpdate(UUID id) {
     UUID rentalItemId = operationLeases.findRentalItemIdById(id)
         .orElseThrow(() -> new AssetNotFoundException("Operation lease was not found"));
@@ -2517,6 +2798,14 @@ public class AssetService {
   }
 
   private record BalanceRow(UUID id, long version, UUID equipmentId, UUID warehouseId, UUID rentalItemId, BalanceLocationKind kind, long quantity) {}
+  private record ReturnEquipmentReceiptRow(
+      UUID id,
+      UUID returnId,
+      UUID returnLineId,
+      UUID equipmentId,
+      UUID warehouseId,
+      UUID stockBalanceId,
+      long quantity) {}
   private record EquipmentFurnitureRow(
       UUID id, String code, EquipmentCategory category, boolean active) {}
   private record FurnitureLossAllocation(

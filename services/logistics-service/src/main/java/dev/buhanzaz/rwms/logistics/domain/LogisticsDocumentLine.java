@@ -63,6 +63,10 @@ public class LogisticsDocumentLine {
   @Column(name = "tenant_snapshot", length = 512)
   private String tenantSnapshot;
 
+  /** Opaque existing rental-order reference used to prove client ownership. */
+  @Column(name = "rental_order_id")
+  private UUID rentalOrderId;
+
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(name = "passport_snapshot", columnDefinition = "jsonb")
   private JsonNode passportSnapshot;
@@ -79,6 +83,15 @@ public class LogisticsDocumentLine {
   @Column(name = "source_allocation_snapshot", columnDefinition = "jsonb")
   private JsonNode sourceAllocationSnapshot;
 
+  /**
+   * Furniture found in addition to the canonical cabin contents at return
+   * acceptance.  The logistics completion workflow turns this immutable fact
+   * into an asset-service stock receipt.
+   */
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "return_additional_contents_snapshot", columnDefinition = "jsonb")
+  private JsonNode returnAdditionalContentsSnapshot;
+
   @Column(name = "created_at", nullable = false)
   private OffsetDateTime createdAt;
 
@@ -91,6 +104,16 @@ public class LogisticsDocumentLine {
       UUID assetId,
       long assetVersion,
       String tenantSnapshot) {
+    return create(document, lineNumber, assetId, assetVersion, tenantSnapshot, null);
+  }
+
+  public static LogisticsDocumentLine create(
+      LogisticsDocument document,
+      int lineNumber,
+      UUID assetId,
+      long assetVersion,
+      String tenantSnapshot,
+      UUID rentalOrderId) {
     if (document == null) throw new IllegalArgumentException("document is required");
     if (lineNumber < 1) throw new IllegalArgumentException("lineNumber must be positive");
     if (assetId == null) throw new IllegalArgumentException("assetId is required");
@@ -102,6 +125,7 @@ public class LogisticsDocumentLine {
     line.assetVersion = assetVersion;
     line.state = LogisticsLineState.PENDING;
     line.tenantSnapshot = optionalSnapshot(tenantSnapshot);
+    line.rentalOrderId = rentalOrderId;
     return line;
   }
 
@@ -146,6 +170,12 @@ public class LogisticsDocumentLine {
   public void captureSourceAllocations(JsonNode snapshot) {
     sourceAllocationSnapshot =
         captureImmutable(sourceAllocationSnapshot, snapshot, "sourceAllocationSnapshot");
+  }
+
+  public void captureReturnAdditionalContents(JsonNode snapshot) {
+    returnAdditionalContentsSnapshot =
+        captureImmutable(
+            returnAdditionalContentsSnapshot, snapshot, "returnAdditionalContentsSnapshot");
   }
 
   @PrePersist
