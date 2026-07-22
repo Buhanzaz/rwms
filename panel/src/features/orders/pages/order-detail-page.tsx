@@ -52,6 +52,7 @@ import {
   listOrderHistory,
   ORDERS_QUERY_KEY,
   removeOrderUnit,
+  saveOrder,
   selectOrderWarehouse,
 } from "@/features/orders/api/orders-api"
 import { OrderCommandIdentityRegistry } from "@/features/orders/api/order-command-identity"
@@ -114,6 +115,8 @@ export function OrderDetailPage() {
     enabled: Boolean(accessToken && orderId),
   })
   const order = detailQuery.data
+  const editableOrder =
+    order?.permissions.canEdit === true && order.status === "DRAFT"
 
   const availableQueryKey = [
     ...ORDERS_QUERY_KEY,
@@ -134,10 +137,13 @@ export function OrderDetailPage() {
         size: UNIT_PAGE_SIZE,
         search: unitSearch,
       }),
-    enabled: Boolean(accessToken && orderId && order?.warehouseId),
-    refetchInterval: order?.warehouseId
-      ? AVAILABLE_UNITS_REFETCH_INTERVAL_MS
-      : false,
+    enabled: Boolean(
+      accessToken && orderId && order?.warehouseId && editableOrder
+    ),
+    refetchInterval:
+      order?.warehouseId && editableOrder
+        ? AVAILABLE_UNITS_REFETCH_INTERVAL_MS
+        : false,
   })
   const historyQuery = useQuery({
     queryKey: [...ORDERS_QUERY_KEY, "history", subjectId, orderId],
@@ -343,6 +349,37 @@ export function OrderDetailPage() {
     },
   })
 
+  const saveMutation = useMutation({
+    mutationFn: ({
+      expectedVersion,
+      fingerprint,
+    }: {
+      expectedVersion: number
+      fingerprint: string
+    }) => {
+      if (!accessToken || !order) throw new Error("Сессия завершена.")
+      return saveOrder({
+        accessToken,
+        orderId: order.id,
+        expectedVersion,
+        idempotencyKey: commandIdentity.current.keyFor(fingerprint),
+      })
+    },
+    onSuccess: (projection, { fingerprint }) => {
+      commandIdentity.current.confirm(fingerprint)
+      applyProjection(projection)
+      toast.success("Заказ сохранён и добавлен в ожидающие отгрузки.")
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error ? error.message : "Не удалось сохранить заказ."
+      )
+      if (error instanceof ApiError && error.status === 409) {
+        refreshOrderBoundary()
+      }
+    },
+  })
+
   const selectedUnits = useMemo(
     () => order?.units.filter((candidate) => candidate.added) ?? [],
     [order?.units]
@@ -473,6 +510,29 @@ export function OrderDetailPage() {
           <div className="flex flex-wrap items-center gap-2">
             <Button
               type="button"
+              disabled={
+                saveMutation.isPending ||
+                order.unitCount === 0 ||
+                order.warehouseId === null
+              }
+              onClick={() =>
+                saveMutation.mutate({
+                  expectedVersion: order.version,
+                  fingerprint: `save:${order.id}:${order.version}`,
+                })
+              }
+            >
+              {saveMutation.isPending ? (
+                <HugeiconsIcon
+                  icon={Loading03Icon}
+                  data-icon="inline-start"
+                  className="animate-spin"
+                />
+              ) : null}
+              {saveMutation.isPending ? "Сохраняем…" : "Сохранить заказ"}
+            </Button>
+            <Button
+              type="button"
               variant="outline"
               onClick={() => setEditDialogOpen(true)}
             >
@@ -579,7 +639,7 @@ export function OrderDetailPage() {
         </CardContent>
       </Card>
 
-      {!order.warehouseId ? (
+      {!canEdit ? null : !order.warehouseId ? (
         <Card size="sm">
           <CardHeader>
             <CardTitle>Склад не выбран</CardTitle>
@@ -706,8 +766,8 @@ export function OrderDetailPage() {
             Бытовки в заказе
           </h2>
           <p className="text-sm text-muted-foreground">
-            Наполнение показано только для просмотра. Изменения открываются
-            отдельной кнопкой с плюсом рядом со статусом.
+            Наполнение показано для каждой бытовки. Пока заказ в черновике, его
+            можно добавить или изменить из свободного остатка склада.
           </p>
         </div>
         {selectedUnits.length === 0 ? (
@@ -738,16 +798,23 @@ export function OrderDetailPage() {
                 </CardDescription>
                 <CardAction className="flex items-center gap-1">
                   <Badge variant="secondary">Добавлено</Badge>
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="outline"
-                    disabled={!canEdit}
-                    aria-label={`Изменить наполнение ${candidate.unit.number}`}
-                    onClick={() => setContentsUnitId(candidate.unit.id)}
-                  >
-                    <HugeiconsIcon icon={Add01Icon} />
-                  </Button>
+                  {canEdit ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      aria-label={`Добавить наполнение ${candidate.unit.number}`}
+                      onClick={() => setContentsUnitId(candidate.unit.id)}
+                    >
+                      <HugeiconsIcon
+                        icon={Add01Icon}
+                        data-icon="inline-start"
+                      />
+                      {candidate.unit.contents.length > 0
+                        ? "Изменить наполнение"
+                        : "Добавить наполнение"}
+                    </Button>
+                  ) : null}
                 </CardAction>
               </CardHeader>
               <CardContent className="flex flex-col gap-2">

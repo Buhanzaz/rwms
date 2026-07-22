@@ -72,6 +72,13 @@ public class LogisticsDocument {
   @Column(name = "equipment_movement_task_id")
   private UUID equipmentMovementTaskId;
 
+  @Column(name = "scheduled_at")
+  private OffsetDateTime scheduledAt;
+
+  /** Opaque service-local reference used to join one rental lifecycle. */
+  @Column(name = "rental_order_id")
+  private UUID rentalOrderId;
+
   @Column(name = "requested_by_subject_id", nullable = false)
   private UUID requestedBySubjectId;
 
@@ -149,6 +156,46 @@ public class LogisticsDocument {
     return document;
   }
 
+  public static LogisticsDocument createRentalOrderShipment(
+      UUID warehouseId,
+      UUID clientId,
+      UUID rentalOrderId,
+      String partySnapshot,
+      UUID subjectId,
+      UUID correlationId) {
+    LogisticsDocument document =
+        initialize(
+            LogisticsDocumentType.SHIPMENT,
+            warehouseId,
+            null,
+            requiredSnapshot(partySnapshot, "partySnapshot"),
+            null,
+            subjectId,
+            correlationId);
+    document.clientId = Objects.requireNonNull(clientId, "clientId");
+    document.rentalOrderId = Objects.requireNonNull(rentalOrderId, "rentalOrderId");
+    return document;
+  }
+
+  public static LogisticsDocument createRentalOrderReturn(
+      UUID warehouseId,
+      UUID clientId,
+      UUID rentalOrderId,
+      String partySnapshot,
+      UUID subjectId,
+      UUID correlationId) {
+    LogisticsDocument document =
+        createReturn(
+            warehouseId,
+            Objects.requireNonNull(clientId, "clientId"),
+            partySnapshot,
+            null,
+            subjectId,
+            correlationId);
+    document.rentalOrderId = Objects.requireNonNull(rentalOrderId, "rentalOrderId");
+    return document;
+  }
+
   public static LogisticsDocument createTransfer(
       UUID warehouseId, UUID destinationWarehouseId, UUID subjectId, UUID correlationId) {
     return createTransfer(warehouseId, destinationWarehouseId, null, subjectId, correlationId);
@@ -185,7 +232,17 @@ public class LogisticsDocument {
   }
 
   public void beginReturnRegistration() {
+    requireSchedule("Return pickup");
     transition(LogisticsDocumentType.RETURN, LogisticsDocumentState.DRAFT, LogisticsDocumentState.REGISTERING);
+  }
+
+  public void scheduleReturn(String driver, OffsetDateTime date) {
+    if (documentType != LogisticsDocumentType.RETURN || state != LogisticsDocumentState.DRAFT) {
+      throw new IllegalStateException("Return pickup cannot be scheduled in its current state");
+    }
+    driverSnapshot = requiredSnapshot(driver, "driverSnapshot");
+    scheduledAt = Objects.requireNonNull(date, "scheduledAt");
+    touch();
   }
 
   public void requireReturnInspection() {
@@ -257,7 +314,30 @@ public class LogisticsDocument {
   }
 
   public void beginShipmentPreparation() {
+    requireSchedule("Shipment");
     transition(LogisticsDocumentType.SHIPMENT, LogisticsDocumentState.DRAFT, LogisticsDocumentState.PREPARING);
+  }
+
+  public void scheduleShipment(String driver, OffsetDateTime date) {
+    boolean allowed =
+        documentType == LogisticsDocumentType.SHIPMENT
+            && (state == LogisticsDocumentState.DRAFT
+                || state == LogisticsDocumentState.AWAITING_CONFIRMATION);
+    if (!allowed) {
+      throw new IllegalStateException("Shipment cannot be scheduled in its current state");
+    }
+    driverSnapshot = requiredSnapshot(driver, "driverSnapshot");
+    scheduledAt = Objects.requireNonNull(date, "scheduledAt");
+    touch();
+  }
+
+  public void requireShipmentDepartureAllowed(OffsetDateTime currentTime) {
+    if (documentType != LogisticsDocumentType.SHIPMENT || scheduledAt == null) {
+      throw new IllegalStateException("Shipment date is required");
+    }
+    if (scheduledAt.isAfter(Objects.requireNonNull(currentTime, "currentTime"))) {
+      throw new IllegalStateException("Shipment date is in the future");
+    }
   }
 
   public void awaitShipmentConfirmation() {
@@ -462,6 +542,12 @@ public class LogisticsDocument {
   private void touch() {
     OffsetDateTime now = currentTime();
     updatedAt = updatedAt != null && !now.isAfter(updatedAt) ? updatedAt.plus(1, ChronoUnit.MICROS) : now;
+  }
+
+  private void requireSchedule(String subject) {
+    if (driverSnapshot == null || scheduledAt == null) {
+      throw new IllegalStateException(subject + " driver and date are required");
+    }
   }
 
   private static String requiredSnapshot(String value, String field) {

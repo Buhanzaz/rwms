@@ -38,6 +38,11 @@ export type ListOrdersParams = {
   search?: string
   sort: string
   direction: "asc" | "desc"
+  statuses?: OrderStatus[]
+  clientTypes?: OrderClientType[]
+  warehouseIds?: string[]
+  createdFrom?: string
+  createdTo?: string
 }
 
 export type CreateOrderInput =
@@ -301,6 +306,21 @@ export async function listOrders(
   }
   endpoint.searchParams.set("sort", params.sort)
   endpoint.searchParams.set("direction", params.direction.toUpperCase())
+  params.statuses?.forEach((status) =>
+    endpoint.searchParams.append("status", status)
+  )
+  params.clientTypes?.forEach((clientType) =>
+    endpoint.searchParams.append("clientType", clientType)
+  )
+  params.warehouseIds?.forEach((warehouseId) =>
+    endpoint.searchParams.append("warehouseId", uuid(warehouseId))
+  )
+  if (params.createdFrom) {
+    endpoint.searchParams.set("createdFrom", params.createdFrom)
+  }
+  if (params.createdTo) {
+    endpoint.searchParams.set("createdTo", params.createdTo)
+  }
 
   return parsePage(
     await bearerRequest<unknown>(params.accessToken, endpoint),
@@ -369,6 +389,23 @@ export async function deleteOrder(params: {
   return parseOrderDetail(
     await bearerRequest<unknown>(params.accessToken, endpoint, {
       method: "DELETE",
+      headers: idempotencyHeaders(params.idempotencyKey),
+    })
+  )
+}
+
+export async function saveOrder(params: {
+  accessToken: string
+  orderId: string
+  expectedVersion: number
+  idempotencyKey: string
+}): Promise<OrderDetail> {
+  const endpoint = new URL(ordersEndpoint(orderPath(params.orderId, "/save")))
+  endpoint.searchParams.set("expectedVersion", String(params.expectedVersion))
+
+  return parseOrderDetail(
+    await bearerRequest<unknown>(params.accessToken, endpoint, {
+      method: "POST",
       headers: idempotencyHeaders(params.idempotencyKey),
     })
   )

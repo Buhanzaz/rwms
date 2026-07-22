@@ -3,7 +3,7 @@ import type {
   ReturnAcceptUndamagedCommand,
   ReturnCreateCommand,
   ReturnEstimateCommand,
-  ReturnVersionedCommand,
+  ReturnPickupCommand,
 } from "@/features/logistics/returns/ports/return-client"
 
 export const RETURNS_QUERY_KEY = ["logistics", "returns"] as const
@@ -19,7 +19,7 @@ export const getReturn = (accessToken: string, documentId: string) =>
 export const createReturn = (input: ReturnCreateCommand) =>
   returnClient.create(input)
 
-export const registerReturn = (input: ReturnVersionedCommand) =>
+export const registerReturn = (input: ReturnPickupCommand) =>
   returnClient.register(input)
 
 export const acceptUndamagedReturn = (input: ReturnAcceptUndamagedCommand) =>

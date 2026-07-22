@@ -72,6 +72,10 @@ function timestamp(value: unknown): string {
   return candidate
 }
 
+function nullableTimestamp(value: unknown): string | null {
+  return value === null ? null : timestamp(value)
+}
+
 function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T {
   const candidate = text(value)
   if (!allowed.includes(candidate as T)) invalidResponse()
@@ -109,13 +113,14 @@ export function parseShipmentDocument(value: unknown): ShipmentDocument {
     warehouseId: uuid(source.warehouseId),
     destinationWarehouseId: null,
     partySnapshot: nonBlankText(source.partySnapshot),
-    driverSnapshot: nonBlankText(source.driverSnapshot),
+    driverSnapshot:
+      source.driverSnapshot === null
+        ? null
+        : nonBlankText(source.driverSnapshot),
     clientId: nullableUuid(source.clientId),
-    equipmentMovementTaskId: (() => {
-      if (nullableUuid(source.equipmentMovementTaskId) !== null)
-        invalidResponse()
-      return null
-    })(),
+    equipmentMovementTaskId: nullableUuid(source.equipmentMovementTaskId),
+    scheduledAt: nullableTimestamp(source.scheduledAt),
+    rentalOrderId: nullableUuid(source.rentalOrderId),
     lines,
     createdAt: timestamp(source.createdAt),
     updatedAt: timestamp(source.updatedAt),
@@ -181,9 +186,8 @@ export class HttpShipmentClient implements ShipmentClient {
         method: "PUT",
         headers: commandHeaders(input.idempotencyKey),
         body: JSON.stringify({
-          partySnapshot: input.partySnapshot,
           driverSnapshot: input.driverSnapshot,
-          lines: input.lines,
+          scheduledAt: input.scheduledAt,
         }),
       }
     )

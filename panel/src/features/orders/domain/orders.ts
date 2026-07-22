@@ -13,11 +13,20 @@ export const ORDER_CLIENT_TYPE_LABELS: Record<OrderClientType, string> = {
   LEGAL_ENTITY: "Юридическое лицо",
 }
 
-export const ORDER_STATUSES = ["DRAFT", "CANCELLED"] as const
+export const ORDER_STATUSES = [
+  "DRAFT",
+  "SAVED",
+  "FULFILLED",
+  "CLOSED",
+  "CANCELLED",
+] as const
 export type OrderStatus = (typeof ORDER_STATUSES)[number]
 
 export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   DRAFT: "Черновик",
+  SAVED: "Сохранён",
+  FULFILLED: "Исполнен",
+  CLOSED: "Закрыт",
   CANCELLED: "Отменён",
 }
 
@@ -114,6 +123,9 @@ export const ORDER_AUDIT_EVENT_TYPES = [
   "EQUIPMENT_DECREASED",
   "WAREHOUSE_OPERATION_CREATED",
   "ORDER_CHANGED",
+  "ORDER_SAVED",
+  "ORDER_FULFILLED",
+  "ORDER_CLOSED",
   "ORDER_CANCELLED",
 ] as const
 
@@ -134,6 +146,9 @@ export const ORDER_AUDIT_EVENT_LABELS: Record<OrderAuditEventType, string> = {
   EQUIPMENT_DECREASED: "Количество наполнения уменьшено",
   WAREHOUSE_OPERATION_CREATED: "Складская операция создана",
   ORDER_CHANGED: "Заказ изменён",
+  ORDER_SAVED: "Заказ сохранён",
+  ORDER_FULFILLED: "Заказ исполнен",
+  ORDER_CLOSED: "Заказ закрыт",
   ORDER_CANCELLED: "Заказ отменён",
 }
 

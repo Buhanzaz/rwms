@@ -56,6 +56,7 @@ class ShipmentWorkflowStore {
   private final LogisticsTaskReferenceRepository taskRepository;
   private final LogisticsReconciliationRepository reconciliationRepository;
   private final LogisticsEventStore eventStore;
+  private final LogisticsDocumentService documents;
 
   Optional<Work> nextWork(UUID documentId) {
     if (documentId == null) return Optional.empty();
@@ -642,6 +643,7 @@ class ShipmentWorkflowStore {
     }
     document.ship();
     documentRepository.saveAndFlush(document);
+    documents.completeRentalOrderShipment(document);
     eventStore.append(
         document,
         lineCount(document),

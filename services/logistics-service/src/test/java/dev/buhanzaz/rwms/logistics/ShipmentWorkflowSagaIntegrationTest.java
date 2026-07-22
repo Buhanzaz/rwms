@@ -10,9 +10,15 @@ import static org.mockito.Mockito.when;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateShipmentRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.EquipmentAllocationRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentLineRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentPlanRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
+import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.repository.OrderClientRepository;
+import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.ShipmentProcessor;
 import java.time.OffsetDateTime;
@@ -59,6 +65,8 @@ class ShipmentWorkflowSagaIntegrationTest {
   @Autowired LogisticsDocumentService documents;
   @Autowired ShipmentProcessor processor;
   @Autowired JdbcTemplate jdbc;
+  @Autowired OrderClientRepository clients;
+  @Autowired RentalOrderRepository orders;
 
   @MockitoBean LogisticsDependencyGateway dependencies;
 
@@ -68,6 +76,10 @@ class ShipmentWorkflowSagaIntegrationTest {
         """
         truncate table
           logistics_document,
+          rental_order_command_receipt,
+          rental_order_audit_event,
+          rental_order,
+          order_client,
           event_stream_head,
           domain_event,
           aggregate_snapshot,
@@ -209,6 +221,168 @@ class ShipmentWorkflowSagaIntegrationTest {
     verify(dependencies)
         .acquireEquipmentHold(
             any(), eq(EQUIPMENT), eq(WAREHOUSE), eq(documentId), eq(lineId), eq(2L), eq(4L));
+  }
+
+  @Test
+  void shippedSavedOrderBecomesFulfilledAndGetsOneDateLessReturn() {
+    OrderClient client =
+        clients.saveAndFlush(
+            OrderClient.create(
+                ClientType.LEGAL_ENTITY,
+                "Party linked",
+                "party linked",
+                SUBJECT,
+                UUID.randomUUID(),
+                "0".repeat(64)));
+    RentalOrder order =
+        RentalOrder.create(
+            "ORD-999999",
+            client,
+            SUBJECT,
+            "Dispatcher",
+            SUBJECT,
+            "Dispatcher",
+            "RENTAL_MANAGER",
+            UUID.randomUUID(),
+            "1".repeat(64));
+    order.selectWarehouse(WAREHOUSE);
+    order.saveForFulfillment();
+    order = orders.saveAndFlush(order);
+    LogisticsDependencyGateway.OrderUnitReservation reservation = reservation(order.getId());
+
+    var created =
+        documents.createRentalOrderShipmentDraft(
+            SUBJECT, CORRELATION, order, List.of(reservation));
+    UUID documentId = created.id();
+    UUID lineId = created.lines().getFirst().id();
+    UUID leaseId = UUID.randomUUID();
+    UUID taskId = UUID.randomUUID();
+
+    when(dependencies.readRentalItemSnapshot(ASSET)).thenReturn(snapshot(7, "FREE"));
+    when(dependencies.acquireOperationLease(
+            any(),
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_SHIPMENT),
+            eq(ASSET),
+            eq(7L),
+            eq(documentId),
+            eq(lineId),
+            eq(order.getId())))
+        .thenReturn(activeLease(leaseId));
+    when(dependencies.registerPreparationTask(eq(WAREHOUSE), any(), eq(0), eq(null)))
+        .thenAnswer(
+            invocation ->
+                new LogisticsDependencyGateway.PreparationTask(
+                    taskId,
+                    1,
+                    WAREHOUSE,
+                    invocation.getArgument(1),
+                    "ACTIVE",
+                    null));
+
+    documents.planShipment(
+        SUBJECT,
+        UUID.randomUUID(),
+        CORRELATION,
+        documentId,
+        created.version(),
+        new ShipmentPlanRequest(
+            "Driver linked", OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(1)));
+    processor.processUntilIdle(documentId);
+    long awaitingVersion = documents.get(documentId, LogisticsDocumentType.SHIPMENT).version();
+
+    when(dependencies.readPreparationTask(any()))
+        .thenAnswer(
+            invocation ->
+                new LogisticsDependencyGateway.PreparationTask(
+                    taskId,
+                    2,
+                    WAREHOUSE,
+                    invocation.getArgument(0),
+                    "DONE",
+                    OffsetDateTime.now(ZoneOffset.UTC)));
+    when(dependencies.applyFencedEffect(
+            any(),
+            eq(LogisticsDependencyGateway.AssetEffect.SHIPMENT_CONFIRM),
+            eq(ASSET),
+            eq(7L),
+            eq(leaseId),
+            eq(11L),
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_SHIPMENT),
+            eq(documentId),
+            eq(lineId),
+            eq(null)))
+        .thenReturn(snapshot(8, "RENTED"));
+    when(dependencies.releaseOperationLease(
+            any(),
+            eq(leaseId),
+            eq(3L),
+            eq(11L),
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_SHIPMENT),
+            eq(documentId),
+            eq(lineId)))
+        .thenReturn(releasedLease(leaseId));
+
+    documents.confirmShipmentPreparation(
+        SUBJECT, UUID.randomUUID(), CORRELATION, documentId, awaitingVersion);
+    processor.processUntilIdle(documentId);
+
+    assertThat(
+            jdbc.queryForObject(
+                "select status from rental_order where id=?", String.class, order.getId()))
+        .isEqualTo("FULFILLED");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from rental_order_audit_event where order_id=? and event_type='ORDER_FULFILLED'",
+                Long.class,
+                order.getId()))
+        .isOne();
+    assertThat(
+            jdbc.queryForMap(
+                "select state, driver_snapshot, scheduled_at, rental_order_id from logistics_document where document_type='RETURN' and rental_order_id=?",
+                order.getId()))
+        .containsEntry("state", "DRAFT")
+        .containsEntry("rental_order_id", order.getId())
+        .containsEntry("driver_snapshot", null)
+        .containsEntry("scheduled_at", null);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_document_line line join logistics_document document on document.id=line.document_id where document.document_type='RETURN' and document.rental_order_id=? and line.asset_id=?",
+                Long.class,
+                order.getId(),
+                ASSET))
+        .isOne();
+  }
+
+  private static LogisticsDependencyGateway.OrderUnitReservation reservation(UUID orderId) {
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    return new LogisticsDependencyGateway.OrderUnitReservation(
+        UUID.randomUUID(),
+        0,
+        orderId,
+        ASSET,
+        WAREHOUSE,
+        "ACTIVE",
+        SUBJECT,
+        "RENTAL_MANAGER",
+        now,
+        null,
+        false,
+        new LogisticsDependencyGateway.OrderRentalItem(
+            ASSET,
+            7,
+            WAREHOUSE,
+            "CAB-801",
+            "FREE",
+            "RENT",
+            null,
+            null,
+            null,
+            null,
+            null,
+            List.of(),
+            List.of(),
+            now,
+            now));
   }
 
   private static LogisticsDependencyGateway.RentalItemSnapshot snapshot(long version, String status) {

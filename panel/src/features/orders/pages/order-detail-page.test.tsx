@@ -27,6 +27,7 @@ const ordersApi = vi.hoisted(() => ({
   deleteOrder: vi.fn(),
   listOrderClients: vi.fn(),
   updateOrder: vi.fn(),
+  saveOrder: vi.fn(),
   createOrderIdempotencyKey: vi.fn(
     () => "99999999-9999-4999-8999-999999999999"
   ),
@@ -202,6 +203,12 @@ beforeEach(() => {
     totalPages: 0,
   })
   ordersApi.updateOrder.mockResolvedValue(detail)
+  ordersApi.saveOrder.mockResolvedValue({
+    ...detail,
+    version: 5,
+    status: "SAVED",
+    permissions: { ...detail.permissions, canEdit: false },
+  })
   ordersApi.deleteOrder.mockResolvedValue({
     ...detail,
     version: 5,
@@ -381,6 +388,49 @@ describe("OrderDetailPage reservation conflict", () => {
 })
 
 describe("OrderDetailPage draft actions", () => {
+  it("saves a populated order and locks its editing controls", async () => {
+    const selectedCandidate = {
+      ...candidate,
+      reservationId: "66666666-6666-4666-8666-666666666666",
+      added: true,
+    }
+    ordersApi.getOrder.mockResolvedValue({
+      ...detail,
+      unitCount: 1,
+      units: [selectedCandidate],
+    })
+    ordersApi.saveOrder.mockResolvedValue({
+      ...detail,
+      version: 5,
+      status: "SAVED",
+      unitCount: 1,
+      units: [selectedCandidate],
+      permissions: { ...detail.permissions, canEdit: false },
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Сохранить заказ" })
+    )
+
+    await waitFor(() =>
+      expect(ordersApi.saveOrder).toHaveBeenCalledWith({
+        accessToken: "orders-token",
+        orderId: ORDER_ID,
+        expectedVersion: 4,
+        idempotencyKey: "99999999-9999-4999-8999-999999999999",
+      })
+    )
+    expect(toast.success).toHaveBeenCalledWith(
+      "Заказ сохранён и добавлен в ожидающие отгрузки."
+    )
+    expect(
+      screen.queryByRole("button", { name: "Редактировать заказ" })
+    ).toBeNull()
+    expect(screen.queryByRole("button", { name: "Сохранить заказ" })).toBeNull()
+  })
+
   it("updates the detail projection after selecting an existing client", async () => {
     const replacementClient = {
       id: "66666666-6666-4666-8666-666666666666",

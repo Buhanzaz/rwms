@@ -18,262 +18,268 @@ paths:
       operationId: listReturns
       description: Lists visible return documents. Requires rwms.read and VIEW at the document warehouse.
       parameters:
-        - $ref: '#/components/parameters/WarehouseIdQuery'
+        - $ref: "#/components/parameters/WarehouseIdQuery"
       responses:
-        '200': { $ref: '#/components/responses/DocumentList' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        "200": { $ref: "#/components/responses/DocumentList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
     post:
       operationId: createReturn
       description: Creates a DRAFT return. No canonical asset effect occurs during creation.
       parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CreateReturnRequest' }
+            schema: { $ref: "#/components/schemas/CreateReturnRequest" }
       responses:
-        '201': { $ref: '#/components/responses/CreatedDocument' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        "201": { $ref: "#/components/responses/CreatedDocument" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /api/logistics/v1/returns/{documentId}:
     parameters:
-      - $ref: '#/components/parameters/DocumentId'
+      - $ref: "#/components/parameters/DocumentId"
     get:
       operationId: getReturn
       responses:
-        '200': { $ref: '#/components/responses/Document' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        "200": { $ref: "#/components/responses/Document" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/logistics/v1/returns/{documentId}/register:
     parameters:
-      - $ref: '#/components/parameters/DocumentId'
-      - $ref: '#/components/parameters/ExpectedVersion'
-      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/ExpectedVersion"
+      - $ref: "#/components/parameters/IdempotencyKey"
     post:
       operationId: registerReturn
-      description: Starts the fenced return-intake saga from a DRAFT return.
+      description: Assigns the pickup driver/date and starts the fenced return-intake saga from a DRAFT return.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReturnPickupRequest" }
       responses:
-        '202': { $ref: '#/components/responses/Document' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        "202": { $ref: "#/components/responses/Document" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/logistics/v1/returns/{documentId}/accept-undamaged:
     parameters:
-      - $ref: '#/components/parameters/DocumentId'
-      - $ref: '#/components/parameters/ExpectedVersion'
-      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/ExpectedVersion"
+      - $ref: "#/components/parameters/IdempotencyKey"
     post:
       operationId: acceptUndamagedReturn
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/AcceptReturnRequest' }
+            schema: { $ref: "#/components/schemas/AcceptReturnRequest" }
       responses:
-        '202': { $ref: '#/components/responses/Document' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        "202": { $ref: "#/components/responses/Document" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /api/logistics/v1/returns/{documentId}/request-estimate:
     parameters:
-      - $ref: '#/components/parameters/DocumentId'
-      - $ref: '#/components/parameters/ExpectedVersion'
-      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/ExpectedVersion"
+      - $ref: "#/components/parameters/IdempotencyKey"
     post:
       operationId: requestReturnEstimate
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/RequestReturnEstimateRequest' }
+            schema:
+              { $ref: "#/components/schemas/RequestReturnEstimateRequest" }
       responses:
-        '202': { $ref: '#/components/responses/Document' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        "202": { $ref: "#/components/responses/Document" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/logistics/v1/shipments:
     get:
       operationId: listShipments
       parameters:
-        - $ref: '#/components/parameters/WarehouseIdQuery'
+        - $ref: "#/components/parameters/WarehouseIdQuery"
       responses:
-        '200': { $ref: '#/components/responses/DocumentList' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        "200": { $ref: "#/components/responses/DocumentList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
     post:
       operationId: createShipment
       parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CreateShipmentRequest' }
+            schema: { $ref: "#/components/schemas/CreateShipmentRequest" }
       responses:
-        '201': { $ref: '#/components/responses/CreatedDocument' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        "201": { $ref: "#/components/responses/CreatedDocument" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /api/logistics/v1/shipments/{documentId}:
     parameters:
-      - $ref: '#/components/parameters/DocumentId'
+      - $ref: "#/components/parameters/DocumentId"
     get:
       operationId: getShipment
       responses:
-        '200': { $ref: '#/components/responses/Document' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        "200": { $ref: "#/components/responses/Document" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/logistics/v1/shipments/{documentId}/plan:
     parameters:
-      - $ref: '#/components/parameters/DocumentId'
-      - $ref: '#/components/parameters/ExpectedVersion'
-      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/ExpectedVersion"
+      - $ref: "#/components/parameters/IdempotencyKey"
     put:
       operationId: replaceShipmentPlan
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ShipmentPlanRequest' }
+            schema: { $ref: "#/components/schemas/ShipmentPlanRequest" }
       responses:
-        '202': { $ref: '#/components/responses/Document' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        "202": { $ref: "#/components/responses/Document" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /api/logistics/v1/shipments/{documentId}/confirm-preparation:
     parameters:
-      - $ref: '#/components/parameters/DocumentId'
-      - $ref: '#/components/parameters/ExpectedVersion'
-      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/ExpectedVersion"
+      - $ref: "#/components/parameters/IdempotencyKey"
     post:
       operationId: confirmShipmentPreparation
       responses:
-        '202': { $ref: '#/components/responses/Document' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        "202": { $ref: "#/components/responses/Document" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/logistics/v1/shipments/{documentId}/cancel:
     parameters:
-      - $ref: '#/components/parameters/DocumentId'
-      - $ref: '#/components/parameters/ExpectedVersion'
-      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/ExpectedVersion"
+      - $ref: "#/components/parameters/IdempotencyKey"
     post:
       operationId: cancelShipment
       responses:
-        '202': { $ref: '#/components/responses/Document' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        "202": { $ref: "#/components/responses/Document" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/logistics/v1/transfers:
     get:
       operationId: listTransfers
       parameters:
-        - $ref: '#/components/parameters/WarehouseIdQuery'
+        - $ref: "#/components/parameters/WarehouseIdQuery"
       responses:
-        '200': { $ref: '#/components/responses/DocumentList' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        "200": { $ref: "#/components/responses/DocumentList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
     post:
       operationId: createTransfer
       parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CreateTransferRequest' }
+            schema: { $ref: "#/components/schemas/CreateTransferRequest" }
       responses:
-        '201': { $ref: '#/components/responses/CreatedDocument' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        "201": { $ref: "#/components/responses/CreatedDocument" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /api/logistics/v1/transfers/{documentId}:
     parameters:
-      - $ref: '#/components/parameters/DocumentId'
+      - $ref: "#/components/parameters/DocumentId"
     get:
       operationId: getTransfer
       responses:
-        '200': { $ref: '#/components/responses/Document' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        "200": { $ref: "#/components/responses/Document" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/logistics/v1/transfers/{documentId}/lines/{lineId}/depart:
     parameters:
-      - $ref: '#/components/parameters/DocumentId'
-      - $ref: '#/components/parameters/LineId'
-      - $ref: '#/components/parameters/ExpectedVersion'
-      - $ref: '#/components/parameters/ExpectedLineVersion'
-      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/LineId"
+      - $ref: "#/components/parameters/ExpectedVersion"
+      - $ref: "#/components/parameters/ExpectedLineVersion"
+      - $ref: "#/components/parameters/IdempotencyKey"
     post:
       operationId: departTransferLine
       responses:
-        '202': { $ref: '#/components/responses/Document' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        "202": { $ref: "#/components/responses/Document" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/logistics/v1/transfers/{documentId}/lines/{lineId}/arrive:
     parameters:
-      - $ref: '#/components/parameters/DocumentId'
-      - $ref: '#/components/parameters/LineId'
-      - $ref: '#/components/parameters/ExpectedVersion'
-      - $ref: '#/components/parameters/ExpectedLineVersion'
-      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/LineId"
+      - $ref: "#/components/parameters/ExpectedVersion"
+      - $ref: "#/components/parameters/ExpectedLineVersion"
+      - $ref: "#/components/parameters/IdempotencyKey"
     post:
       operationId: arriveTransferLine
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ArriveTransferLineRequest' }
+            schema: { $ref: "#/components/schemas/ArriveTransferLineRequest" }
       responses:
-        '202': { $ref: '#/components/responses/Document' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '422': { $ref: '#/components/responses/Unprocessable' }
+        "202": { $ref: "#/components/responses/Document" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
   /api/logistics/v1/transfers/{documentId}/cancel:
     parameters:
-      - $ref: '#/components/parameters/DocumentId'
-      - $ref: '#/components/parameters/ExpectedVersion'
-      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/ExpectedVersion"
+      - $ref: "#/components/parameters/IdempotencyKey"
     post:
       operationId: cancelTransfer
       responses:
-        '202': { $ref: '#/components/responses/Document' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        "202": { $ref: "#/components/responses/Document" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/logistics/v1/equipment-movement-tasks:
     post:
       operationId: createEquipmentMovementTask
@@ -282,34 +288,37 @@ paths:
         It never changes physical equipment balances itself: asset-service executes the
         reserved batch only after task-board reports DONE before the deadline.
       parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CreateEquipmentMovementTaskRequest' }
+            schema:
+              {
+                $ref: "#/components/schemas/CreateEquipmentMovementTaskRequest",
+              }
       responses:
-        '200': { $ref: '#/components/responses/EquipmentMovementTask' }
-        '201': { $ref: '#/components/responses/EquipmentMovementTask' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+        "200": { $ref: "#/components/responses/EquipmentMovementTask" }
+        "201": { $ref: "#/components/responses/EquipmentMovementTask" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/equipment-movement-tasks/{taskId}:
     parameters:
-      - $ref: '#/components/parameters/EquipmentMovementTaskId'
+      - $ref: "#/components/parameters/EquipmentMovementTaskId"
     get:
       operationId: getEquipmentMovementTask
       responses:
-        '200': { $ref: '#/components/responses/EquipmentMovementTask' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        "200": { $ref: "#/components/responses/EquipmentMovementTask" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/logistics/v1/equipment-movement-tasks/{taskId}/cancel:
     parameters:
-      - $ref: '#/components/parameters/EquipmentMovementTaskId'
-      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: "#/components/parameters/EquipmentMovementTaskId"
+      - $ref: "#/components/parameters/IdempotencyKey"
     post:
       operationId: cancelEquipmentMovementTask
       description: >-
@@ -319,15 +328,18 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CancelEquipmentMovementTaskRequest' }
+            schema:
+              {
+                $ref: "#/components/schemas/CancelEquipmentMovementTaskRequest",
+              }
       responses:
-        '202': { $ref: '#/components/responses/EquipmentMovementTask' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+        "202": { $ref: "#/components/responses/EquipmentMovementTask" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/orders:
     get:
       operationId: listOrders
@@ -336,77 +348,164 @@ paths:
         warehouse managers receive granted-warehouse orders plus their own unassigned drafts;
         system administrators receive the global view.
       parameters:
-        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
-        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
-        - { name: search, in: query, schema: { type: string, default: '' } }
-        - { name: sort, in: query, schema: { type: string, enum: [number, client, manager, warehouse, status, createdAt, updatedAt], default: updatedAt } }
-        - { name: direction, in: query, schema: { type: string, enum: [ASC, DESC], default: DESC } }
+        - {
+            name: page,
+            in: query,
+            schema: { type: integer, minimum: 0, default: 0 },
+          }
+        - {
+            name: size,
+            in: query,
+            schema: { type: integer, minimum: 1, maximum: 100, default: 25 },
+          }
+        - { name: search, in: query, schema: { type: string, default: "" } }
+        - {
+            name: sort,
+            in: query,
+            schema:
+              {
+                type: string,
+                enum:
+                  [
+                    number,
+                    client,
+                    manager,
+                    warehouse,
+                    status,
+                    createdAt,
+                    updatedAt,
+                  ],
+                default: updatedAt,
+              },
+          }
+        - {
+            name: direction,
+            in: query,
+            schema: { type: string, enum: [ASC, DESC], default: DESC },
+          }
+        - name: status
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              {
+                type: string,
+                enum: [DRAFT, SAVED, FULFILLED, CLOSED, CANCELLED],
+              }
+        - name: clientType
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/ClientType" }
+        - name: warehouseId
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string, format: uuid }
+        - {
+            name: createdFrom,
+            in: query,
+            schema: { type: string, format: date-time },
+          }
+        - {
+            name: createdTo,
+            in: query,
+            schema: { type: string, format: date-time },
+          }
       responses:
-        '200':
+        "200":
           description: Visible orders only.
-          content: { application/json: { schema: { $ref: '#/components/schemas/OrderPage' } } }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+          content:
+            {
+              application/json:
+                { schema: { $ref: "#/components/schemas/OrderPage" } },
+            }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
     post:
       operationId: createOrder
       description: >-
         Creates a DRAFT order owned by the JWT subject. Exactly one existing
         clientId or explicitly confirmed newClient is required.
       parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CreateOrderRequest' }
+            schema: { $ref: "#/components/schemas/CreateOrderRequest" }
       responses:
-        '200': { $ref: '#/components/responses/OrderDetail' }
-        '201': { $ref: '#/components/responses/OrderDetail' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        "200": { $ref: "#/components/responses/OrderDetail" }
+        "201": { $ref: "#/components/responses/OrderDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/logistics/v1/orders/{orderId}:
     parameters:
-      - $ref: '#/components/parameters/OrderId'
+      - $ref: "#/components/parameters/OrderId"
     get:
       operationId: getOrder
       responses:
-        '200': { $ref: '#/components/responses/OrderDetail' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        "200": { $ref: "#/components/responses/OrderDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
     put:
       operationId: updateOrder
       description: Updates only the existing client of an editable DRAFT order.
       parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/UpdateOrderRequest' }
+            schema: { $ref: "#/components/schemas/UpdateOrderRequest" }
       responses:
-        '200': { $ref: '#/components/responses/OrderDetail' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        "200": { $ref: "#/components/responses/OrderDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
     delete:
       operationId: cancelOrder
       description: Logically cancels an editable draft and atomically requests release of every active unit reservation.
       parameters:
-        - $ref: '#/components/parameters/ExpectedVersion'
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/ExpectedVersion"
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
-        '200': { $ref: '#/components/responses/OrderDetail' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        "200": { $ref: "#/components/responses/OrderDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/v1/orders/{orderId}/save:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+      - $ref: "#/components/parameters/ExpectedVersion"
+      - $ref: "#/components/parameters/IdempotencyKey"
+    post:
+      operationId: saveOrder
+      description: >-
+        Locks a non-empty DRAFT order and atomically creates its DRAFT shipment
+        without a driver or shipment date. A saved order is no longer editable.
+      responses:
+        "200": { $ref: "#/components/responses/OrderDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/clients:
     get:
       operationId: searchOrderClients
@@ -414,169 +513,197 @@ paths:
         Searches counterparties by normalized name. With an empty search query,
         returns the most recently created counterparties first.
       parameters:
-        - { name: type, in: query, schema: { $ref: '#/components/schemas/ClientType' } }
-        - { name: search, in: query, schema: { type: string, default: '' } }
-        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
-        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 25 } }
+        - {
+            name: type,
+            in: query,
+            schema: { $ref: "#/components/schemas/ClientType" },
+          }
+        - { name: search, in: query, schema: { type: string, default: "" } }
+        - {
+            name: page,
+            in: query,
+            schema: { type: integer, minimum: 0, default: 0 },
+          }
+        - {
+            name: size,
+            in: query,
+            schema: { type: integer, minimum: 1, maximum: 100, default: 25 },
+          }
       responses:
-        '200':
+        "200":
           description: Matching normalized clients.
-          content: { application/json: { schema: { $ref: '#/components/schemas/ClientPage' } } }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+          content:
+            {
+              application/json:
+                { schema: { $ref: "#/components/schemas/ClientPage" } },
+            }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
     post:
       operationId: createOrderClient
       parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CreateClientRequest' }
+            schema: { $ref: "#/components/schemas/CreateClientRequest" }
       responses:
-        '200': { $ref: '#/components/responses/OrderClient' }
-        '201': { $ref: '#/components/responses/OrderClient' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        "200": { $ref: "#/components/responses/OrderClient" }
+        "201": { $ref: "#/components/responses/OrderClient" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/logistics/v1/orders/{orderId}/warehouse:
     parameters:
-      - $ref: '#/components/parameters/OrderId'
+      - $ref: "#/components/parameters/OrderId"
     put:
       operationId: selectOrderWarehouse
       description: Warehouse changes are rejected after the first active unit reservation.
       parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/SelectOrderWarehouseRequest' }
+            schema: { $ref: "#/components/schemas/SelectOrderWarehouseRequest" }
       responses:
-        '200': { $ref: '#/components/responses/OrderDetail' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        "200": { $ref: "#/components/responses/OrderDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/logistics/v1/orders/{orderId}/available-units:
     parameters:
-      - $ref: '#/components/parameters/OrderId'
+      - $ref: "#/components/parameters/OrderId"
     get:
       operationId: listOrderUnitCandidates
       parameters:
-        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
-        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
-        - { name: search, in: query, schema: { type: string, default: '' } }
+        - {
+            name: page,
+            in: query,
+            schema: { type: integer, minimum: 0, default: 0 },
+          }
+        - {
+            name: size,
+            in: query,
+            schema: { type: integer, minimum: 1, maximum: 100, default: 50 },
+          }
+        - { name: search, in: query, schema: { type: string, default: "" } }
       responses:
-        '200':
+        "200":
           description: Free units plus units already added to this order.
-          content: { application/json: { schema: { $ref: '#/components/schemas/OrderUnitPage' } } }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+          content:
+            {
+              application/json:
+                { schema: { $ref: "#/components/schemas/OrderUnitPage" } },
+            }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/logistics/v1/orders/{orderId}/units:
     parameters:
-      - $ref: '#/components/parameters/OrderId'
+      - $ref: "#/components/parameters/OrderId"
     post:
       operationId: addOrderUnit
       description: Atomically reserves one unit in asset-service for this editable order.
       parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/AddOrderUnitRequest' }
+            schema: { $ref: "#/components/schemas/AddOrderUnitRequest" }
       responses:
-        '200': { $ref: '#/components/responses/OrderDetail' }
-        '201': { $ref: '#/components/responses/OrderDetail' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+        "200": { $ref: "#/components/responses/OrderDetail" }
+        "201": { $ref: "#/components/responses/OrderDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/orders/{orderId}/units/{unitId}:
     parameters:
-      - $ref: '#/components/parameters/OrderId'
-      - $ref: '#/components/parameters/UnitId'
+      - $ref: "#/components/parameters/OrderId"
+      - $ref: "#/components/parameters/UnitId"
     delete:
       operationId: removeOrderUnit
       parameters:
-        - $ref: '#/components/parameters/ExpectedVersion'
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/ExpectedVersion"
+        - $ref: "#/components/parameters/IdempotencyKey"
       responses:
-        '200': { $ref: '#/components/responses/OrderDetail' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+        "200": { $ref: "#/components/responses/OrderDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/orders/{orderId}/units/{unitId}/equipment/{equipmentId}:
     parameters:
-      - $ref: '#/components/parameters/OrderId'
-      - $ref: '#/components/parameters/UnitId'
-      - $ref: '#/components/parameters/EquipmentId'
+      - $ref: "#/components/parameters/OrderId"
+      - $ref: "#/components/parameters/UnitId"
+      - $ref: "#/components/parameters/EquipmentId"
     put:
       operationId: adjustOrderUnitEquipment
       description: >-
         Sets required quantity using only the stock-to-selected-unit or
         selected-unit-to-stock asset operation. Arbitrary unit-to-unit movement is impossible.
       parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/AdjustOrderEquipmentRequest' }
+            schema: { $ref: "#/components/schemas/AdjustOrderEquipmentRequest" }
       responses:
-        '200': { $ref: '#/components/responses/OrderDetail' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+        "200": { $ref: "#/components/responses/OrderDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/orders/{orderId}/history:
     parameters:
-      - $ref: '#/components/parameters/OrderId'
+      - $ref: "#/components/parameters/OrderId"
     get:
       operationId: getOrderHistory
       responses:
-        '200':
+        "200":
           description: Append-only order audit history.
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/OrderHistoryEvent' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
+                items: { $ref: "#/components/schemas/OrderHistoryEvent" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/logistics/v1/{documentType}/{documentId}/reconcile:
     parameters:
-      - $ref: '#/components/parameters/DocumentTypePath'
-      - $ref: '#/components/parameters/DocumentId'
-      - $ref: '#/components/parameters/ExpectedVersion'
-      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: "#/components/parameters/DocumentTypePath"
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/ExpectedVersion"
+      - $ref: "#/components/parameters/IdempotencyKey"
     post:
       operationId: reconcileDocument
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ReconcileRequest' }
+            schema: { $ref: "#/components/schemas/ReconcileRequest" }
       responses:
-        '202': { $ref: '#/components/responses/Document' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+        "202": { $ref: "#/components/responses/Document" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 components:
   securitySchemes:
     bearerJwt:
@@ -643,69 +770,206 @@ components:
     LogisticsDocument:
       type: object
       additionalProperties: false
-      required: [id, version, documentType, state, warehouseId, destinationWarehouseId, partySnapshot, driverSnapshot, clientId, equipmentMovementTaskId, lines, createdAt, updatedAt]
+      required:
+        [
+          id,
+          version,
+          documentType,
+          state,
+          warehouseId,
+          destinationWarehouseId,
+          partySnapshot,
+          driverSnapshot,
+          clientId,
+          equipmentMovementTaskId,
+          scheduledAt,
+          rentalOrderId,
+          lines,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, minimum: 0 }
         documentType: { type: string, enum: [RETURN, SHIPMENT, TRANSFER] }
         state:
           type: string
-          enum: [DRAFT, REGISTERING, INSPECTION_REQUIRED, ACCEPTING, ACCEPTED, ESTIMATE_PENDING, ESTIMATE_REQUESTED, PREPARING, AWAITING_CONFIRMATION, CONFIRMING_PREPARATION, SHIPPED, CANCELLING, DEPARTING, IN_TRANSIT, ARRIVING, COMPLETED, CANCELLED, CONFLICT, RECONCILIATION_REQUIRED]
+          enum:
+            [
+              DRAFT,
+              REGISTERING,
+              INSPECTION_REQUIRED,
+              ACCEPTING,
+              ACCEPTED,
+              ESTIMATE_PENDING,
+              ESTIMATE_REQUESTED,
+              PREPARING,
+              AWAITING_CONFIRMATION,
+              CONFIRMING_PREPARATION,
+              SHIPPED,
+              CANCELLING,
+              DEPARTING,
+              IN_TRANSIT,
+              ARRIVING,
+              COMPLETED,
+              CANCELLED,
+              CONFLICT,
+              RECONCILIATION_REQUIRED,
+            ]
         warehouseId: { type: string, format: uuid }
-        destinationWarehouseId: { type: [string, 'null'], format: uuid }
-        partySnapshot: { type: [string, 'null'], maxLength: 512, description: Immutable, trimmed workflow snapshot; no directory identity. }
-        driverSnapshot: { type: [string, 'null'], maxLength: 512, description: Immutable, trimmed workflow snapshot; no directory identity. }
-        clientId: { type: [string, 'null'], format: uuid, description: Client bound to the return or shipment. }
-        equipmentMovementTaskId: { type: [string, 'null'], format: uuid, description: Server-created task that moves transfer furniture between warehouses. }
+        destinationWarehouseId: { type: [string, "null"], format: uuid }
+        partySnapshot:
+          {
+            type: [string, "null"],
+            maxLength: 512,
+            description: Immutable,
+            trimmed workflow snapshot; no directory identity.,
+          }
+        driverSnapshot:
+          {
+            type: [string, "null"],
+            maxLength: 512,
+            description: Immutable,
+            trimmed workflow snapshot; no directory identity.,
+          }
+        clientId:
+          {
+            type: [string, "null"],
+            format: uuid,
+            description: Client bound to the return or shipment.,
+          }
+        equipmentMovementTaskId:
+          {
+            type: [string, "null"],
+            format: uuid,
+            description: Server-created task that moves transfer furniture between warehouses.,
+          }
+        scheduledAt:
+          {
+            type: [string, "null"],
+            format: date-time,
+            description: Assigned shipment or return pickup date; absent while waiting for scheduling.,
+          }
+        rentalOrderId:
+          {
+            type: [string, "null"],
+            format: uuid,
+            description: Order whose shipment/return lifecycle owns this document.,
+          }
         lines:
           type: array
           minItems: 1
-          items: { $ref: '#/components/schemas/LogisticsLine' }
+          items: { $ref: "#/components/schemas/LogisticsLine" }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     LogisticsLine:
       type: object
       additionalProperties: false
-      required: [id, version, lineNumber, assetId, assetVersion, state, tenantSnapshot, rentalOrderId]
+      required:
+        [
+          id,
+          version,
+          lineNumber,
+          assetId,
+          assetVersion,
+          state,
+          tenantSnapshot,
+          rentalOrderId,
+        ]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, minimum: 0 }
         lineNumber: { type: integer, minimum: 1 }
         assetId: { type: string, format: uuid }
         assetVersion: { type: integer, minimum: 0 }
-        state: { type: string, enum: [PENDING, DEPARTING, DEPARTED, ARRIVING, ARRIVED, CONFLICT, CANCELLED] }
-        tenantSnapshot: { type: [string, 'null'], maxLength: 512 }
-        rentalOrderId: { type: [string, 'null'], format: uuid, description: Rental order that owns the return or shipment cabin reservation. }
+        state:
+          {
+            type: string,
+            enum:
+              [
+                PENDING,
+                DEPARTING,
+                DEPARTED,
+                ARRIVING,
+                ARRIVED,
+                CONFLICT,
+                CANCELLED,
+              ],
+          }
+        tenantSnapshot: { type: [string, "null"], maxLength: 512 }
+        rentalOrderId:
+          {
+            type: [string, "null"],
+            format: uuid,
+            description: Rental order that owns the return or shipment cabin reservation.,
+          }
     EquipmentMovementLocationKind:
       type: string
       enum: [STOCK, CABIN_NON_RENTED, CABIN_RENTED]
     EquipmentMovementTaskState:
       type: string
-      enum: [RESERVING, REGISTERING_TASK, AWAITING_WORKER, EXECUTING, CANCELLING, COMPLETED, CANCELLED, EXPIRED, CONFLICT, RECONCILIATION_REQUIRED]
+      enum:
+        [
+          RESERVING,
+          REGISTERING_TASK,
+          AWAITING_WORKER,
+          EXECUTING,
+          CANCELLING,
+          COMPLETED,
+          CANCELLED,
+          EXPIRED,
+          CONFLICT,
+          RECONCILIATION_REQUIRED,
+        ]
     EquipmentMovementLineState:
       type: string
       enum: [PENDING_RESERVATION, RESERVED, EXECUTED, RELEASED]
     EquipmentMovementLineRequest:
       type: object
       additionalProperties: false
-      required: [equipmentId, sourceRentalItemId, sourceLocationKind, expectedSourceBalanceVersion, targetRentalItemId, targetLocationKind, quantity]
+      required:
+        [
+          equipmentId,
+          sourceRentalItemId,
+          sourceLocationKind,
+          expectedSourceBalanceVersion,
+          targetRentalItemId,
+          targetLocationKind,
+          quantity,
+        ]
       properties:
         equipmentId: { type: string, format: uuid }
-        sourceRentalItemId: { type: [string, 'null'], format: uuid }
-        sourceLocationKind: { $ref: '#/components/schemas/EquipmentMovementLocationKind' }
-        expectedSourceBalanceVersion: { type: integer, format: int64, minimum: 0 }
-        targetRentalItemId: { type: [string, 'null'], format: uuid }
-        targetLocationKind: { $ref: '#/components/schemas/EquipmentMovementLocationKind' }
+        sourceRentalItemId: { type: [string, "null"], format: uuid }
+        sourceLocationKind:
+          { $ref: "#/components/schemas/EquipmentMovementLocationKind" }
+        expectedSourceBalanceVersion:
+          { type: integer, format: int64, minimum: 0 }
+        targetRentalItemId: { type: [string, "null"], format: uuid }
+        targetLocationKind:
+          { $ref: "#/components/schemas/EquipmentMovementLocationKind" }
         quantity: { type: integer, format: int64, minimum: 1 }
     CreateEquipmentMovementTaskRequest:
       type: object
       additionalProperties: false
-      required: [warehouseId, targetWarehouseId, unitNumber, plannedDurationMinutes, deadlineAt, lines]
+      required:
+        [
+          warehouseId,
+          targetWarehouseId,
+          unitNumber,
+          plannedDurationMinutes,
+          deadlineAt,
+          lines,
+        ]
       properties:
         warehouseId: { type: string, format: uuid }
-        targetWarehouseId: { type: [string, 'null'], format: uuid, description: Target warehouse for STOCK-to-STOCK movement; omitted means the source warehouse. }
-        unitNumber: { type: [string, 'null'], maxLength: 64 }
-        plannedDurationMinutes: { type: [integer, 'null'], minimum: 1 }
+        targetWarehouseId:
+          {
+            type: [string, "null"],
+            format: uuid,
+            description: Target warehouse for STOCK-to-STOCK movement; omitted means the source warehouse.,
+          }
+        unitNumber: { type: [string, "null"], maxLength: 64 }
+        plannedDurationMinutes: { type: [integer, "null"], minimum: 1 }
         deadlineAt: { type: string, format: date-time }
         lines:
           type: array
@@ -714,7 +978,7 @@ components:
           description: >-
             At most ten worker operations are accepted. A cabin-to-cabin line produces
             two operations (take out and bring in); a stock/cabin line produces one.
-          items: { $ref: '#/components/schemas/EquipmentMovementLineRequest' }
+          items: { $ref: "#/components/schemas/EquipmentMovementLineRequest" }
     CancelEquipmentMovementTaskRequest:
       type: object
       additionalProperties: false
@@ -724,51 +988,95 @@ components:
     EquipmentMovementTaskLine:
       type: object
       additionalProperties: false
-      required: [id, version, lineNumber, equipmentId, equipmentCode, equipmentName, sourceWarehouseId, sourceRentalItemId, sourceLocationKind, expectedSourceBalanceVersion, targetWarehouseId, targetRentalItemId, targetLocationKind, quantity, reservationId, reservationVersion, state, createdAt, updatedAt]
+      required:
+        [
+          id,
+          version,
+          lineNumber,
+          equipmentId,
+          equipmentCode,
+          equipmentName,
+          sourceWarehouseId,
+          sourceRentalItemId,
+          sourceLocationKind,
+          expectedSourceBalanceVersion,
+          targetWarehouseId,
+          targetRentalItemId,
+          targetLocationKind,
+          quantity,
+          reservationId,
+          reservationVersion,
+          state,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         lineNumber: { type: integer, minimum: 1 }
         equipmentId: { type: string, format: uuid }
-        equipmentCode: { type: [string, 'null'], maxLength: 128 }
-        equipmentName: { type: [string, 'null'], maxLength: 512 }
+        equipmentCode: { type: [string, "null"], maxLength: 128 }
+        equipmentName: { type: [string, "null"], maxLength: 512 }
         sourceWarehouseId: { type: string, format: uuid }
-        sourceRentalItemId: { type: [string, 'null'], format: uuid }
-        sourceLocationKind: { $ref: '#/components/schemas/EquipmentMovementLocationKind' }
-        expectedSourceBalanceVersion: { type: integer, format: int64, minimum: 0 }
+        sourceRentalItemId: { type: [string, "null"], format: uuid }
+        sourceLocationKind:
+          { $ref: "#/components/schemas/EquipmentMovementLocationKind" }
+        expectedSourceBalanceVersion:
+          { type: integer, format: int64, minimum: 0 }
         targetWarehouseId: { type: string, format: uuid }
-        targetRentalItemId: { type: [string, 'null'], format: uuid }
-        targetLocationKind: { $ref: '#/components/schemas/EquipmentMovementLocationKind' }
+        targetRentalItemId: { type: [string, "null"], format: uuid }
+        targetLocationKind:
+          { $ref: "#/components/schemas/EquipmentMovementLocationKind" }
         quantity: { type: integer, format: int64, minimum: 1 }
-        reservationId: { type: [string, 'null'], format: uuid }
-        reservationVersion: { type: [integer, 'null'], format: int64, minimum: 0 }
-        state: { $ref: '#/components/schemas/EquipmentMovementLineState' }
+        reservationId: { type: [string, "null"], format: uuid }
+        reservationVersion:
+          { type: [integer, "null"], format: int64, minimum: 0 }
+        state: { $ref: "#/components/schemas/EquipmentMovementLineState" }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     EquipmentMovementTask:
       type: object
       additionalProperties: false
-      required: [id, version, warehouseId, externalTaskId, taskBoardTaskId, taskBoardTaskVersion, taskBoardDoneAt, unitNumber, plannedDurationMinutes, deadlineAt, state, terminalState, failureCode, lines, createdAt, updatedAt]
+      required:
+        [
+          id,
+          version,
+          warehouseId,
+          externalTaskId,
+          taskBoardTaskId,
+          taskBoardTaskVersion,
+          taskBoardDoneAt,
+          unitNumber,
+          plannedDurationMinutes,
+          deadlineAt,
+          state,
+          terminalState,
+          failureCode,
+          lines,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         warehouseId: { type: string, format: uuid }
         externalTaskId: { type: string, format: uuid }
-        taskBoardTaskId: { type: [string, 'null'], format: uuid }
-        taskBoardTaskVersion: { type: [integer, 'null'], format: int64, minimum: 0 }
-        taskBoardDoneAt: { type: [string, 'null'], format: date-time }
-        unitNumber: { type: [string, 'null'], maxLength: 64 }
-        plannedDurationMinutes: { type: [integer, 'null'], minimum: 1 }
+        taskBoardTaskId: { type: [string, "null"], format: uuid }
+        taskBoardTaskVersion:
+          { type: [integer, "null"], format: int64, minimum: 0 }
+        taskBoardDoneAt: { type: [string, "null"], format: date-time }
+        unitNumber: { type: [string, "null"], maxLength: 64 }
+        plannedDurationMinutes: { type: [integer, "null"], minimum: 1 }
         deadlineAt: { type: string, format: date-time }
-        state: { $ref: '#/components/schemas/EquipmentMovementTaskState' }
+        state: { $ref: "#/components/schemas/EquipmentMovementTaskState" }
         terminalState:
           oneOf:
-            - { $ref: '#/components/schemas/EquipmentMovementTaskState' }
-            - { type: 'null' }
-        failureCode: { type: [string, 'null'], maxLength: 96 }
+            - { $ref: "#/components/schemas/EquipmentMovementTaskState" }
+            - { type: "null" }
+        failureCode: { type: [string, "null"], maxLength: 96 }
         lines:
           type: array
-          items: { $ref: '#/components/schemas/EquipmentMovementTaskLine' }
+          items: { $ref: "#/components/schemas/EquipmentMovementTaskLine" }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     CreateReturnRequest:
@@ -777,13 +1085,26 @@ components:
       required: [warehouseId, lines]
       properties:
         warehouseId: { type: string, format: uuid }
-        clientId: { type: [string, 'null'], format: uuid }
-        driverSnapshot: { type: [string, 'null'], maxLength: 512, description: Immutable, trimmed workflow snapshot selected from the configured driver directory. }
+        clientId: { type: [string, "null"], format: uuid }
+        driverSnapshot:
+          {
+            type: [string, "null"],
+            maxLength: 512,
+            description: Immutable,
+            trimmed workflow snapshot selected from the configured driver directory.,
+          }
         lines:
           type: array
           minItems: 1
           maxItems: 100
-          items: { $ref: '#/components/schemas/ReturnLineRequest' }
+          items: { $ref: "#/components/schemas/ReturnLineRequest" }
+    ReturnPickupRequest:
+      type: object
+      additionalProperties: false
+      required: [driverSnapshot, scheduledAt]
+      properties:
+        driverSnapshot: { type: string, minLength: 1, maxLength: 512 }
+        scheduledAt: { type: string, format: date-time }
     ReturnLineRequest:
       type: object
       additionalProperties: false
@@ -792,7 +1113,7 @@ components:
         assetId: { type: string, format: uuid }
         assetVersion: { type: integer, minimum: 0 }
         tenantSnapshot: { type: string, minLength: 1, maxLength: 512 }
-        rentalOrderId: { type: [string, 'null'], format: uuid }
+        rentalOrderId: { type: [string, "null"], format: uuid }
     AcceptReturnRequest:
       type: object
       additionalProperties: false
@@ -803,7 +1124,7 @@ components:
           minItems: 1
           maxItems: 100
           uniqueItems: true
-          items: { $ref: '#/components/schemas/ReturnMediaLineRequest' }
+          items: { $ref: "#/components/schemas/ReturnMediaLineRequest" }
     MediaReferenceInput:
       type: object
       additionalProperties: false
@@ -821,12 +1142,13 @@ components:
           type: array
           minItems: 1
           maxItems: 20
-          items: { $ref: '#/components/schemas/MediaReferenceInput' }
+          items: { $ref: "#/components/schemas/MediaReferenceInput" }
         additionalEquipment:
           type: array
           maxItems: 100
           description: Furniture received with the cabin that is not present in its current return composition.
-          items: { $ref: '#/components/schemas/ReturnAdditionalEquipmentRequest' }
+          items:
+            { $ref: "#/components/schemas/ReturnAdditionalEquipmentRequest" }
     ReturnAdditionalEquipmentRequest:
       type: object
       additionalProperties: false
@@ -851,7 +1173,7 @@ components:
           type: array
           minItems: 1
           maxItems: 100
-          items: { $ref: '#/components/schemas/EquipmentShortageRequest' }
+          items: { $ref: "#/components/schemas/EquipmentShortageRequest" }
     RequestReturnEstimateRequest:
       type: object
       additionalProperties: false
@@ -861,34 +1183,37 @@ components:
           type: array
           minItems: 1
           maxItems: 100
-          items: { $ref: '#/components/schemas/ReturnShortageLineRequest' }
+          items: { $ref: "#/components/schemas/ReturnShortageLineRequest" }
     CreateShipmentRequest:
       type: object
       additionalProperties: false
-      required: [warehouseId, clientId, rentalOrderId, partySnapshot, driverSnapshot, lines]
+      required:
+        [
+          warehouseId,
+          clientId,
+          rentalOrderId,
+          partySnapshot,
+          driverSnapshot,
+          lines,
+        ]
       properties:
         warehouseId: { type: string, format: uuid }
-        clientId: { type: [string, 'null'], format: uuid }
-        rentalOrderId: { type: [string, 'null'], format: uuid }
+        clientId: { type: [string, "null"], format: uuid }
+        rentalOrderId: { type: [string, "null"], format: uuid }
         partySnapshot: { type: string, minLength: 1, maxLength: 512 }
         driverSnapshot: { type: string, minLength: 1, maxLength: 512 }
         lines:
           type: array
           minItems: 1
           maxItems: 100
-          items: { $ref: '#/components/schemas/ShipmentLineRequest' }
+          items: { $ref: "#/components/schemas/ShipmentLineRequest" }
     ShipmentPlanRequest:
       type: object
       additionalProperties: false
-      required: [partySnapshot, driverSnapshot, lines]
+      required: [driverSnapshot, scheduledAt]
       properties:
-        partySnapshot: { type: string, minLength: 1, maxLength: 512 }
         driverSnapshot: { type: string, minLength: 1, maxLength: 512 }
-        lines:
-          type: array
-          minItems: 1
-          maxItems: 100
-          items: { $ref: '#/components/schemas/ShipmentLineRequest' }
+        scheduledAt: { type: string, format: date-time }
     ShipmentLineRequest:
       type: object
       additionalProperties: false
@@ -899,7 +1224,7 @@ components:
         allocations:
           type: array
           maxItems: 100
-          items: { $ref: '#/components/schemas/EquipmentAllocationRequest' }
+          items: { $ref: "#/components/schemas/EquipmentAllocationRequest" }
     EquipmentAllocationRequest:
       type: object
       additionalProperties: false
@@ -911,21 +1236,29 @@ components:
     CreateTransferRequest:
       type: object
       additionalProperties: false
-      required: [warehouseId, destinationWarehouseId, driverSnapshot, equipmentDeadlineAt, lines, equipment]
+      required:
+        [
+          warehouseId,
+          destinationWarehouseId,
+          driverSnapshot,
+          equipmentDeadlineAt,
+          lines,
+          equipment,
+        ]
       properties:
         warehouseId: { type: string, format: uuid }
         destinationWarehouseId: { type: string, format: uuid }
-        driverSnapshot: { type: [string, 'null'], maxLength: 512 }
-        equipmentDeadlineAt: { type: [string, 'null'], format: date-time }
+        driverSnapshot: { type: [string, "null"], maxLength: 512 }
+        equipmentDeadlineAt: { type: [string, "null"], format: date-time }
         lines:
           type: array
           minItems: 1
           maxItems: 100
-          items: { $ref: '#/components/schemas/TransferLineRequest' }
+          items: { $ref: "#/components/schemas/TransferLineRequest" }
         equipment:
           type: array
           maxItems: 100
-          items: { $ref: '#/components/schemas/TransferEquipmentLineRequest' }
+          items: { $ref: "#/components/schemas/TransferEquipmentLineRequest" }
     TransferLineRequest:
       type: object
       additionalProperties: false
@@ -939,7 +1272,8 @@ components:
       required: [equipmentId, expectedSourceBalanceVersion, quantity]
       properties:
         equipmentId: { type: string, format: uuid }
-        expectedSourceBalanceVersion: { type: integer, format: int64, minimum: 0 }
+        expectedSourceBalanceVersion:
+          { type: integer, format: int64, minimum: 0 }
         quantity: { type: integer, format: int64, minimum: 1 }
     ArriveTransferLineRequest:
       type: object
@@ -950,7 +1284,7 @@ components:
           type: array
           minItems: 1
           maxItems: 20
-          items: { $ref: '#/components/schemas/MediaReferenceInput' }
+          items: { $ref: "#/components/schemas/MediaReferenceInput" }
     ReconcileRequest:
       type: object
       additionalProperties: false
@@ -965,21 +1299,21 @@ components:
       additionalProperties: false
       required: [clientType, displayName]
       properties:
-        clientType: { $ref: '#/components/schemas/ClientType' }
+        clientType: { $ref: "#/components/schemas/ClientType" }
         displayName: { type: string, minLength: 1, maxLength: 512 }
     CreateClientRequest:
       type: object
       additionalProperties: false
       required: [clientType, displayName]
       properties:
-        clientType: { $ref: '#/components/schemas/ClientType' }
+        clientType: { $ref: "#/components/schemas/ClientType" }
         displayName: { type: string, minLength: 1, maxLength: 512 }
     CreateOrderRequest:
       type: object
       additionalProperties: false
       properties:
         clientId: { type: string, format: uuid }
-        newClient: { $ref: '#/components/schemas/NewClientInput' }
+        newClient: { $ref: "#/components/schemas/NewClientInput" }
       oneOf:
         - required: [clientId]
           not: { required: [newClient] }
@@ -1021,7 +1355,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
-        type: { $ref: '#/components/schemas/ClientType' }
+        type: { $ref: "#/components/schemas/ClientType" }
         displayName: { type: string }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
@@ -1032,7 +1366,7 @@ components:
       properties:
         content:
           type: array
-          items: { $ref: '#/components/schemas/OrderClient' }
+          items: { $ref: "#/components/schemas/OrderClient" }
         page: { type: integer, format: int64, minimum: 0 }
         size: { type: integer, format: int64, minimum: 1 }
         totalElements: { type: integer, format: int64, minimum: 0 }
@@ -1040,18 +1374,34 @@ components:
     OrderSummary:
       type: object
       additionalProperties: false
-      required: [id, version, number, status, client, managerId, managerDisplayName, createdBy, createdByDisplayName, warehouseId, unitCount, createdAt, updatedAt]
+      required:
+        [
+          id,
+          version,
+          number,
+          status,
+          client,
+          managerId,
+          managerDisplayName,
+          createdBy,
+          createdByDisplayName,
+          warehouseId,
+          unitCount,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         number: { type: string }
-        status: { type: string, enum: [DRAFT, CANCELLED] }
-        client: { $ref: '#/components/schemas/OrderClient' }
+        status:
+          { type: string, enum: [DRAFT, SAVED, FULFILLED, CLOSED, CANCELLED] }
+        client: { $ref: "#/components/schemas/OrderClient" }
         managerId: { type: string, format: uuid }
         managerDisplayName: { type: string }
         createdBy: { type: string, format: uuid }
         createdByDisplayName: { type: string }
-        warehouseId: { type: [string, 'null'], format: uuid }
+        warehouseId: { type: [string, "null"], format: uuid }
         unitCount: { type: integer, format: int64, minimum: 0 }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
@@ -1062,7 +1412,7 @@ components:
       properties:
         content:
           type: array
-          items: { $ref: '#/components/schemas/OrderSummary' }
+          items: { $ref: "#/components/schemas/OrderSummary" }
         page: { type: integer, format: int64, minimum: 0 }
         size: { type: integer, format: int64, minimum: 1 }
         totalElements: { type: integer, format: int64, minimum: 0 }
@@ -1070,33 +1420,51 @@ components:
     OrderEquipmentContent:
       type: object
       additionalProperties: false
-      required: [equipmentId, equipmentCode, equipmentName, quantity, locationKind]
+      required:
+        [equipmentId, equipmentCode, equipmentName, quantity, locationKind]
       properties:
         equipmentId: { type: string, format: uuid }
-        equipmentCode: { type: [string, 'null'] }
-        equipmentName: { type: [string, 'null'] }
+        equipmentCode: { type: [string, "null"] }
+        equipmentName: { type: [string, "null"] }
         quantity: { type: integer, format: int64, minimum: 0 }
         locationKind: { type: string }
     OrderRentalItem:
       type: object
       additionalProperties: false
-      required: [id, version, warehouseId, number, status, rentalType, dimensions, finishing, category, characteristics, linoleum, tags, contents, createdAt, updatedAt]
+      required:
+        [
+          id,
+          version,
+          warehouseId,
+          number,
+          status,
+          rentalType,
+          dimensions,
+          finishing,
+          category,
+          characteristics,
+          linoleum,
+          tags,
+          contents,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         warehouseId: { type: string, format: uuid }
         number: { type: string }
         status: { type: string }
-        rentalType: { type: [string, 'null'] }
-        dimensions: { type: [string, 'null'] }
-        finishing: { type: [string, 'null'] }
-        category: { type: [string, 'null'] }
-        characteristics: { type: [string, 'null'] }
-        linoleum: { type: [boolean, 'null'] }
+        rentalType: { type: [string, "null"] }
+        dimensions: { type: [string, "null"] }
+        finishing: { type: [string, "null"] }
+        category: { type: [string, "null"] }
+        characteristics: { type: [string, "null"] }
+        linoleum: { type: [boolean, "null"] }
         tags: { type: array, items: { type: string } }
         contents:
           type: array
-          items: { $ref: '#/components/schemas/OrderEquipmentContent' }
+          items: { $ref: "#/components/schemas/OrderEquipmentContent" }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     OrderUnit:
@@ -1104,15 +1472,16 @@ components:
       additionalProperties: false
       required: [reservationId, added, unit]
       properties:
-        reservationId: { type: [string, 'null'], format: uuid }
+        reservationId: { type: [string, "null"], format: uuid }
         added: { type: boolean }
-        unit: { $ref: '#/components/schemas/OrderRentalItem' }
+        unit: { $ref: "#/components/schemas/OrderRentalItem" }
     OrderUnitPage:
       type: object
       additionalProperties: false
       required: [content, page, size, totalElements, totalPages]
       properties:
-        content: { type: array, items: { $ref: '#/components/schemas/OrderUnit' } }
+        content:
+          { type: array, items: { $ref: "#/components/schemas/OrderUnit" } }
         page: { type: integer, format: int64, minimum: 0 }
         size: { type: integer, format: int64, minimum: 1 }
         totalElements: { type: integer, format: int64, minimum: 0 }
@@ -1127,27 +1496,58 @@ components:
     OrderDetail:
       type: object
       additionalProperties: false
-      required: [id, version, number, status, client, managerId, managerDisplayName, createdBy, createdByDisplayName, warehouseId, unitCount, createdAt, updatedAt, units, permissions]
+      required:
+        [
+          id,
+          version,
+          number,
+          status,
+          client,
+          managerId,
+          managerDisplayName,
+          createdBy,
+          createdByDisplayName,
+          warehouseId,
+          unitCount,
+          createdAt,
+          updatedAt,
+          units,
+          permissions,
+        ]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         number: { type: string }
-        status: { type: string, enum: [DRAFT, CANCELLED] }
-        client: { $ref: '#/components/schemas/OrderClient' }
+        status:
+          { type: string, enum: [DRAFT, SAVED, FULFILLED, CLOSED, CANCELLED] }
+        client: { $ref: "#/components/schemas/OrderClient" }
         managerId: { type: string, format: uuid }
         managerDisplayName: { type: string }
         createdBy: { type: string, format: uuid }
         createdByDisplayName: { type: string }
-        warehouseId: { type: [string, 'null'], format: uuid }
+        warehouseId: { type: [string, "null"], format: uuid }
         unitCount: { type: integer, format: int64, minimum: 0 }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
-        units: { type: array, items: { $ref: '#/components/schemas/OrderUnit' } }
-        permissions: { $ref: '#/components/schemas/OrderPermissions' }
+        units:
+          { type: array, items: { $ref: "#/components/schemas/OrderUnit" } }
+        permissions: { $ref: "#/components/schemas/OrderPermissions" }
     OrderHistoryEvent:
       type: object
       additionalProperties: false
-      required: [id, eventType, actorSubjectId, actorRole, orderId, subjectType, subjectId, previousValues, newValues, occurredAt]
+      required:
+        [
+          id,
+          eventType,
+          actorSubjectId,
+          actorRole,
+          orderId,
+          subjectType,
+          subjectId,
+          previousValues,
+          newValues,
+          occurredAt,
+        ]
       properties:
         id: { type: string, format: uuid }
         eventType: { type: string }
@@ -1156,8 +1556,8 @@ components:
         orderId: { type: string, format: uuid }
         subjectType: { type: string }
         subjectId: { type: string }
-        previousValues: { type: [object, 'null'], additionalProperties: true }
-        newValues: { type: [object, 'null'], additionalProperties: true }
+        previousValues: { type: [object, "null"], additionalProperties: true }
+        newValues: { type: [object, "null"], additionalProperties: true }
         occurredAt: { type: string, format: date-time }
     ApiProblem:
       type: object
@@ -1175,10 +1575,10 @@ components:
           schema: { type: string }
         Idempotency-Replayed:
           required: false
-          schema: { type: string, const: 'true' }
+          schema: { type: string, const: "true" }
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/EquipmentMovementTask' }
+          schema: { $ref: "#/components/schemas/EquipmentMovementTask" }
     Document:
       description: Current logistics document state.
       headers:
@@ -1187,7 +1587,7 @@ components:
           schema: { type: string }
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/LogisticsDocument' }
+          schema: { $ref: "#/components/schemas/LogisticsDocument" }
     CreatedDocument:
       description: New DRAFT document, or the original successful create response.
       headers:
@@ -1196,17 +1596,17 @@ components:
           schema: { type: string }
         Idempotency-Replayed:
           required: false
-          schema: { type: string, const: 'true' }
+          schema: { type: string, const: "true" }
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/LogisticsDocument' }
+          schema: { $ref: "#/components/schemas/LogisticsDocument" }
     DocumentList:
       description: Visible documents.
       content:
         application/json:
           schema:
             type: array
-            items: { $ref: '#/components/schemas/LogisticsDocument' }
+            items: { $ref: "#/components/schemas/LogisticsDocument" }
     OrderDetail:
       description: Current order state and authoritative active asset reservations.
       headers:
@@ -1215,10 +1615,10 @@ components:
           schema: { type: string }
         Idempotency-Replayed:
           required: false
-          schema: { type: string, const: 'true' }
+          schema: { type: string, const: "true" }
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/OrderDetail' }
+          schema: { $ref: "#/components/schemas/OrderDetail" }
     OrderClient:
       description: Explicitly created client, or the original idempotent result.
       headers:
@@ -1227,28 +1627,56 @@ components:
           schema: { type: string }
         Idempotency-Replayed:
           required: false
-          schema: { type: string, const: 'true' }
+          schema: { type: string, const: "true" }
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/OrderClient' }
+          schema: { $ref: "#/components/schemas/OrderClient" }
     BadRequest:
       description: Invalid shape, missing idempotency key, or invalid expected version.
-      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/ApiProblem" } },
+        }
     Unauthorized:
       description: Missing or invalid Bearer JWT.
-      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/ApiProblem" } },
+        }
     Forbidden:
       description: Missing USER principal, scope, warehouse access, or required management level.
-      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/ApiProblem" } },
+        }
     NotFound:
       description: Document is absent or outside the caller's warehouse scope.
-      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/ApiProblem" } },
+        }
     Conflict:
       description: Stale version, changed idempotency replay, lease/hold/task conflict, or forbidden lifecycle transition.
-      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/ApiProblem" } },
+        }
     Unprocessable:
       description: Semantic request error such as an impossible contents delta or unsupported correction capability.
-      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/ApiProblem" } },
+        }
     DependencyUnavailable:
       description: An owning service required by the order operation is temporarily unavailable.
-      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/ApiProblem" } },
+        }

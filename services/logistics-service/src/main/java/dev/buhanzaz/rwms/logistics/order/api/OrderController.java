@@ -13,15 +13,19 @@ import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderUnitPageRespons
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SelectWarehouseRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.UpdateOrderRequest;
 import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
 import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
 import dev.buhanzaz.rwms.logistics.order.service.OrderAuditService;
 import dev.buhanzaz.rwms.logistics.order.service.OrderClientService;
 import dev.buhanzaz.rwms.logistics.order.service.OrderUnitConflictException;
 import dev.buhanzaz.rwms.logistics.order.service.RentalOrderService;
+import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -29,6 +33,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -58,8 +63,28 @@ public class OrderController {
       @RequestParam(defaultValue = "25") @Min(1) @Max(100) int size,
       @RequestParam(defaultValue = "") String search,
       @RequestParam(defaultValue = "updatedAt") String sort,
-      @RequestParam(defaultValue = "DESC") String direction) {
-    return orders.list(access.readActor(jwt), page, size, search, sort, direction);
+      @RequestParam(defaultValue = "DESC") String direction,
+      @RequestParam(required = false) List<RentalOrderStatus> status,
+      @RequestParam(required = false) List<ClientType> clientType,
+      @RequestParam(required = false) List<UUID> warehouseId,
+      @RequestParam(required = false)
+          @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
+          OffsetDateTime createdFrom,
+      @RequestParam(required = false)
+          @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
+          OffsetDateTime createdTo) {
+    return orders.list(
+        access.readActor(jwt),
+        page,
+        size,
+        search,
+        sort,
+        direction,
+        status,
+        clientType,
+        warehouseId,
+        createdFrom,
+        createdTo);
   }
 
   @PostMapping("/orders")
@@ -100,6 +125,23 @@ public class OrderController {
       @RequestHeader("Idempotency-Key") UUID idempotencyKey) {
     RentalOrderService.MutationResult result =
         orders.cancel(access.writeActor(jwt), orderId, expectedVersion, idempotencyKey);
+    return response(result.response(), result.replayed(), HttpStatus.OK);
+  }
+
+  @PostMapping("/orders/{orderId}/save")
+  public ResponseEntity<OrderDetailResponse> save(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID orderId,
+      @RequestParam @Min(0) long expectedVersion,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      HttpServletRequest servletRequest) {
+    RentalOrderService.MutationResult result =
+        orders.save(
+            access.writeActor(jwt),
+            orderId,
+            expectedVersion,
+            idempotencyKey,
+            correlationId(servletRequest));
     return response(result.response(), result.replayed(), HttpStatus.OK);
   }
 
@@ -216,5 +258,14 @@ public class OrderController {
         ResponseEntity.status(status).eTag(Long.toString(body.version()));
     if (replayed) response.header("Idempotency-Replayed", "true");
     return response.body(body);
+  }
+
+  private static UUID correlationId(HttpServletRequest request) {
+    Object value = request.getAttribute(CorrelationIdFilter.REQUEST_ATTRIBUTE);
+    try {
+      return UUID.fromString(String.valueOf(value));
+    } catch (IllegalArgumentException exception) {
+      return UUID.randomUUID();
+    }
   }
 }

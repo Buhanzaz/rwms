@@ -18,9 +18,8 @@ export type ShipmentPlanCommand = {
   accessToken: string
   documentId: string
   expectedVersion: number
-  partySnapshot: string
   driverSnapshot: string
-  lines: ShipmentPlanLine[]
+  scheduledAt: string
   idempotencyKey: string
 }
 
