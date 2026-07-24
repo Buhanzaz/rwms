@@ -210,89 +210,91 @@ export function OrderWarehouseUnitSelection({
 
   return (
     <>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        {filterOptions.length > 0 ? (
-          <RentalItemsFilters
-            options={filterOptions}
-            filters={effectiveFilters}
-            onFiltersChange={setFilters}
-          />
-        ) : (
-          <span />
-        )}
-        <div className="flex items-center gap-2">
-          <ToggleGroup
-            type="single"
-            value={viewMode}
-            onValueChange={(value) => {
-              if (value === "table" || value === "grid") {
-                setViewMode(value)
-              }
-            }}
-            variant="outline"
-            size="lg"
-            spacing={2}
-            aria-label="Вид бытовок заказа"
-          >
-            <ToggleGroupItem
-              value="table"
-              className="size-8 min-w-0 px-0"
-              aria-label="Список"
-            >
-              <HugeiconsIcon icon={ListViewIcon} aria-hidden="true" />
-            </ToggleGroupItem>
-            <ToggleGroupItem
-              value="grid"
-              className="size-8 min-w-0 px-0"
-              aria-label="Сетка"
-            >
-              <HugeiconsIcon icon={GridViewIcon} aria-hidden="true" />
-            </ToggleGroupItem>
-          </ToggleGroup>
-          {viewMode === "grid" && gridFormatSelectionAvailable ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setGridSettingsOpen(true)}
-            >
-              <HugeiconsIcon icon={GridViewIcon} data-icon="inline-start" />
-              до {effectiveGridFormat.columns}x{effectiveGridFormat.rows}
-            </Button>
-          ) : null}
-        </div>
-      </div>
-      {displayedItems.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          Бытовки по выбранным фильтрам не найдены.
-        </p>
-      ) : (
-        <div className="flex min-h-[24rem] flex-1">
-          {viewMode === "table" ? (
-            <RentalItemsTableView
-              schema={tableSchema}
-              items={displayedItems}
-              sorting={sorting}
-              columnsConfig={columnsConfig}
-              onSortingChange={setSorting}
-              onOpenPhotos={(item) => setPhotoItemId(item.id)}
-              onOpenItem={() => undefined}
-              mediaCovers={mediaCovers}
-              renderItemActions={renderItemActions}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-hidden">
+        <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+          {filterOptions.length > 0 ? (
+            <RentalItemsFilters
+              options={filterOptions}
+              filters={effectiveFilters}
+              onFiltersChange={setFilters}
             />
           ) : (
-            <RentalItemsGridView
-              items={displayedItems}
-              gridFormat={effectiveGridFormat}
-              accessToken={accessToken}
-              mediaCovers={mediaCovers}
-              onOpenPhotos={(item) => setPhotoItemId(item.id)}
-              onOpenItem={() => undefined}
-              renderItemActions={renderItemActions}
-            />
+            <span />
           )}
+          <div className="flex shrink-0 items-center gap-2">
+            <ToggleGroup
+              type="single"
+              value={viewMode}
+              onValueChange={(value) => {
+                if (value === "table" || value === "grid") {
+                  setViewMode(value)
+                }
+              }}
+              variant="outline"
+              size="lg"
+              spacing={2}
+              aria-label="Вид бытовок заказа"
+            >
+              <ToggleGroupItem
+                value="table"
+                className="size-8 min-w-0 px-0"
+                aria-label="Список"
+              >
+                <HugeiconsIcon icon={ListViewIcon} aria-hidden="true" />
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                value="grid"
+                className="size-8 min-w-0 px-0"
+                aria-label="Сетка"
+              >
+                <HugeiconsIcon icon={GridViewIcon} aria-hidden="true" />
+              </ToggleGroupItem>
+            </ToggleGroup>
+            {viewMode === "grid" && gridFormatSelectionAvailable ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setGridSettingsOpen(true)}
+              >
+                <HugeiconsIcon icon={GridViewIcon} data-icon="inline-start" />
+                до {effectiveGridFormat.columns}x{effectiveGridFormat.rows}
+              </Button>
+            ) : null}
+          </div>
         </div>
-      )}
+        {displayedItems.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Бытовки по выбранным фильтрам не найдены.
+          </p>
+        ) : (
+          <div className="flex min-h-[24rem] min-w-0 flex-1 overflow-hidden">
+            {viewMode === "table" ? (
+              <RentalItemsTableView
+                schema={tableSchema}
+                items={displayedItems}
+                sorting={sorting}
+                columnsConfig={columnsConfig}
+                onSortingChange={setSorting}
+                onOpenPhotos={(item) => setPhotoItemId(item.id)}
+                onOpenItem={() => undefined}
+                mediaCovers={mediaCovers}
+                renderItemActions={renderItemActions}
+              />
+            ) : (
+              <RentalItemsGridView
+                items={displayedItems}
+                gridFormat={effectiveGridFormat}
+                accessToken={accessToken}
+                mediaCovers={mediaCovers}
+                onOpenPhotos={(item) => setPhotoItemId(item.id)}
+                onOpenItem={() => undefined}
+                renderItemActions={renderItemActions}
+              />
+            )}
+          </div>
+        )}
+      </div>
       <RentalItemPhotoDialog
         item={photoItem}
         open={photoItem !== null}

@@ -13,7 +13,7 @@ import {
   PencilEdit01Icon,
   Wrench01Icon,
 } from "@hugeicons/core-free-icons"
-import { useNavigate, useParams, useSearchParams } from "react-router-dom"
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
@@ -48,6 +48,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/features/auth/use-auth"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
+import {
+  SHIPMENTS_QUERY_KEY,
+  listShipments,
+} from "@/features/logistics/shipments/api"
 import { AddContentsDialog } from "@/features/rental-items/add-contents-dialog"
 import {
   getRentalItemDossierPage,
@@ -241,6 +245,7 @@ function DossierActions({
     () => MANUAL_STATUSES.find((value) => value !== rentalItem.status) ?? "FREE"
   )
   const statusBlocked = [
+    "BOOKED",
     "RENTED",
     "WRITTEN_OFF",
     "REPAIR",
@@ -462,6 +467,21 @@ export function RentalItemDetailPage() {
     ),
   })
   const rentalItem = assetQuery.data ?? null
+  const activeOrderReservation = rentalItem?.activeOrderReservation ?? null
+  const shipmentsQuery = useQuery({
+    queryKey: [...SHIPMENTS_QUERY_KEY, rentalItem?.warehouseId ?? "none"],
+    queryFn: () => listShipments(accessToken!, rentalItem!.warehouseId),
+    enabled: Boolean(accessToken && rentalItem && activeOrderReservation),
+  })
+  const rentalOrderShipment = shipmentsQuery.data?.find(
+    (shipment) =>
+      shipment.rentalOrderId === activeOrderReservation?.orderId &&
+      shipment.lines.some((line) => line.assetId === rentalItem?.id)
+  )
+  const effectiveShipmentDate =
+    rentalOrderShipment?.scheduledDate ?? rentalItem?.shipmentDate ?? null
+  const effectiveTenant =
+    activeOrderReservation?.tenantSnapshot ?? rentalItem?.tenant ?? null
   const dossierPages = dossierQuery.data?.pages
   const dossierActivities =
     dossierPages?.flatMap((page) => page.activities) ?? []
@@ -713,9 +733,9 @@ export function RentalItemDetailPage() {
                 )}
               </dd>
               <dt className="text-muted-foreground">Отгрузка</dt>
-              <dd>{formatDateTime(rentalItem.shipmentDate)}</dd>
+              <dd>{formatDateTime(effectiveShipmentDate)}</dd>
               <dt className="text-muted-foreground">Арендатор</dt>
-              <dd>{rentalItem.tenant ?? "—"}</dd>
+              <dd>{effectiveTenant ?? "—"}</dd>
               <dt className="text-muted-foreground">Цена</dt>
               <dd>{formatCurrency(rentalItem.price)}</dd>
               <dt className="text-muted-foreground">Последнее действие</dt>
@@ -793,20 +813,52 @@ export function RentalItemDetailPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-muted-foreground">Арендатор</p>
-                  <p className="font-medium">{rentalItem.tenant ?? "—"}</p>
+                  <p className="font-medium">{effectiveTenant ?? "—"}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">Дата отгрузки</p>
                   <p className="font-medium">
-                    {formatDateTime(rentalItem.shipmentDate)}
+                    {formatDateTime(effectiveShipmentDate)}
                   </p>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Badge variant="outline">Сметы: {estimateActivityCount}</Badge>
-                <Badge variant="outline">
+                {activeOrderReservation ? (
+                  <Button size="sm" variant="outline" asChild>
+                    <Link
+                      to={`/orders/${activeOrderReservation.orderId}`}
+                      state={workspaceEntryNavigationOptions.state}
+                    >
+                      Открыть заказ
+                    </Link>
+                  </Button>
+                ) : null}
+                {rentalOrderShipment ? (
+                  <Button size="sm" variant="outline" asChild>
+                    <Link
+                      to="/logistics/shipments"
+                      state={workspaceEntryNavigationOptions.state}
+                    >
+                      Открыть отгрузки
+                    </Link>
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => changeTab("estimates")}
+                >
+                  Сметы: {estimateActivityCount}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => changeTab("repair")}
+                >
                   События ремонта: {repairActivityCount}
-                </Badge>
+                </Button>
               </div>
             </CardContent>
           </Card>
@@ -934,11 +986,61 @@ export function RentalItemDetailPage() {
           />
         </TabsContent>
         <TabsContent value="reserves">
-          <EmptyDossierRegister
-            title="Резервы"
-            description="Для этой бытовки нет подтверждённых резервов."
-            columns={["Клиент", "Статус", "Создан", "Истекает"]}
-          />
+          {activeOrderReservation ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Активный резерв заказа</CardTitle>
+                <CardDescription>
+                  Резерв подтверждён asset-service и блокирует бытовку для
+                  других заказов.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4 text-sm">
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div>
+                    <p className="text-muted-foreground">Клиент</p>
+                    <p className="font-medium">{effectiveTenant ?? "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Статус</p>
+                    <p className="font-medium">Активен</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Создан</p>
+                    <p className="font-medium">
+                      {formatDateTime(activeOrderReservation.reservedAt)}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="sm" variant="outline" asChild>
+                    <Link
+                      to={`/orders/${activeOrderReservation.orderId}`}
+                      state={workspaceEntryNavigationOptions.state}
+                    >
+                      Открыть заказ
+                    </Link>
+                  </Button>
+                  {rentalOrderShipment ? (
+                    <Button size="sm" variant="outline" asChild>
+                      <Link
+                        to="/logistics/shipments"
+                        state={workspaceEntryNavigationOptions.state}
+                      >
+                        Открыть отгрузки
+                      </Link>
+                    </Button>
+                  ) : null}
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <EmptyDossierRegister
+              title="Резервы"
+              description="Для этой бытовки нет подтверждённых резервов."
+              columns={["Клиент", "Статус", "Создан", "Истекает"]}
+            />
+          )}
         </TabsContent>
         <TabsContent value="shipments">
           <DossierActivityRegister

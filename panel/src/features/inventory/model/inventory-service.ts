@@ -27,6 +27,10 @@ export type InventorySessionSummary = {
   warehouseId: string
   warehouseVersion: number
   warehouseTimeZone: string
+  author: {
+    id: string
+    displayName: string
+  }
   businessDate: string
   lifecycle: InventorySessionLifecycle
   expectedCount: number
@@ -50,13 +54,16 @@ export type InventoryMediaReference = {
 export type InventoryExpectedSnapshot = {
   assetId: string
   assetVersion: number
+  warehouseId: string
   status: string
   displayCanonicalNumber: string
+  tenantSnapshot: string | null
   passportSnapshot: Record<string, unknown>
   contentsSnapshot: Record<string, unknown> | unknown[]
 }
 
 export type InventoryFrozenPlanLine = {
+  id: string
   sourceKind: "CATALOG" | "MANUAL"
   lineType: "WORK" | "MATERIAL"
   catalogVersionId: string | null
@@ -67,16 +74,46 @@ export type InventoryFrozenPlanLine = {
   quantity: string
   unitPriceMinor: number
   normativeMinutes: string
+  groupComment: string | null
 }
 
 export type InventoryFrozenPlanStage = {
+  id: string
   order: number
+  catalogNodeId: string
+  catalogNodeCode: string
   kind: "REPAIR_WORK" | "MOVE_TO_REPAIR" | "MOVE_FROM_REPAIR"
   routingQueueId: string
   routingQueueCode: string
   routingQueueKind: string
   movementRequired: boolean
   photoRequired: boolean
+  normativeDurationMinutes: number
+}
+
+export type InventoryCurrentSnapshot = {
+  assetId: string
+  assetVersion: number
+  warehouseId: string
+  status: string
+  displayCanonicalNumber: string
+  tenantSnapshot: string | null
+}
+
+export type InventoryConflict = {
+  code:
+    | "WAREHOUSE_CHANGED"
+    | "STATUS_CHANGED"
+    | "TENANT_CHANGED"
+    | "RENTED"
+    | "WRITTEN_OFF"
+    | "OTHER_WAREHOUSE"
+    | "ADDED_AFTER_START"
+    | "RENTAL_ITEM_MISSING"
+    | "ASSET_CHANGED"
+  message: string
+  expected: string | null
+  actual: string | null
 }
 
 export type InventoryFrozenPlan = {
@@ -115,7 +152,10 @@ export type InventoryFinding = {
   mutationState:
     "IDLE" | "SOURCE_CREATE_PENDING" | "SOURCE_CREATED" | "PLAN_RESOLVE_PENDING"
   planFingerprintSha256: string | null
+  comment: string
   expectedSnapshot: InventoryExpectedSnapshot | null
+  currentSnapshot: InventoryCurrentSnapshot | null
+  conflicts: InventoryConflict[]
   frozenPlan: InventoryFrozenPlan | null
   media: InventoryMediaReference[]
   publication: InventoryPublicationIntent | null
@@ -179,6 +219,7 @@ export type InventoryNumberResolution = {
     | "MATCHED"
     | "CROSS_WAREHOUSE_CONFLICT"
     | "EXCLUDED_STATUS_CONFLICT"
+    | "MISSING_CONFLICT"
     | "NOT_FOUND"
   finding: InventoryFinding | null
 }
@@ -205,6 +246,11 @@ export type InventoryCompletionPreview = {
       | "MEDIA_NOT_READY"
       | "PLAN_STALE"
       | "MUTATION_IN_FLIGHT"
+  }>
+  validatedFindings: Array<{
+    findingId: string
+    currentSnapshot: InventoryCurrentSnapshot | null
+    conflicts: InventoryConflict[]
   }>
 }
 

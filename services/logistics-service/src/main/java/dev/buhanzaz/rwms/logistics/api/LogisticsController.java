@@ -3,6 +3,8 @@ package dev.buhanzaz.rwms.logistics.api;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateShipmentRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateTransferRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CabinFurnitureTaskResult;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateCabinFurnitureTaskRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.AcceptReturnRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ArriveTransferLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.LogisticsDocumentView;
@@ -10,9 +12,13 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.RequestReturnEstimateR
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReconcileRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnPickupRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentPlanRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureReadinessView;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureTaskResult;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
+import dev.buhanzaz.rwms.logistics.service.CabinFurnitureTaskService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
+import dev.buhanzaz.rwms.logistics.service.ShipmentFurnitureTaskService;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -42,6 +48,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class LogisticsController {
   private final LogisticsDocumentService service;
+  private final ShipmentFurnitureTaskService shipmentFurnitureTasks;
+  private final CabinFurnitureTaskService cabinFurnitureTasks;
   private final LogisticsAuthorizer access;
 
   @GetMapping("/returns")
@@ -177,6 +185,30 @@ public class LogisticsController {
             request));
   }
 
+  @GetMapping("/shipments/{documentId}/furniture-readiness")
+  public ShipmentFurnitureReadinessView getShipmentFurnitureReadiness(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID documentId) {
+    LogisticsDocumentView current = service.get(documentId, LogisticsDocumentType.SHIPMENT);
+    access.requireRead(jwt, current.warehouseId());
+    return shipmentFurnitureTasks.readiness(documentId);
+  }
+
+  @PostMapping("/shipments/{documentId}/furniture-tasks")
+  public ResponseEntity<ShipmentFurnitureTaskResult> createShipmentFurnitureTasks(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID documentId,
+      @RequestParam @Min(0) long expectedVersion,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey) {
+    LogisticsDocumentView current = service.get(documentId, LogisticsDocumentType.SHIPMENT);
+    access.requireEdit(jwt, current.warehouseId());
+    ShipmentFurnitureTaskResult result =
+        shipmentFurnitureTasks.createForShipment(
+            access.subjectId(jwt), idempotencyKey, documentId, expectedVersion);
+    return ResponseEntity.accepted()
+        .eTag(Long.toString(result.shipmentVersion()))
+        .body(result);
+  }
+
   @PostMapping("/shipments/{documentId}/confirm-preparation")
   public ResponseEntity<LogisticsDocumentView> confirmShipmentPreparation(
       @AuthenticationPrincipal Jwt jwt,
@@ -237,6 +269,28 @@ public class LogisticsController {
     LogisticsDocumentService.CreateResult result =
         service.createTransfer(access.subjectId(jwt), idempotencyKey, correlationId(servletRequest), request);
     return created(result);
+  }
+
+  /**
+   * Creates a server-side task that brings one cabin to its requested complete furniture
+   * composition. This is also used by repairs; the panel only sends the desired final state.
+   */
+  @PostMapping("/rental-items/{rentalItemId}/furniture-tasks")
+  public ResponseEntity<CabinFurnitureTaskResult> createCabinFurnitureTask(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID rentalItemId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody CreateCabinFurnitureTaskRequest request) {
+    access.requireEdit(jwt, request.warehouseId());
+    CabinFurnitureTaskResult result =
+        cabinFurnitureTasks.create(
+            access.subjectId(jwt),
+            idempotencyKey,
+            request.warehouseId(),
+            rentalItemId,
+            request.scheduledDate(),
+            request.contents());
+    return result.taskId() == null ? ResponseEntity.ok(result) : ResponseEntity.accepted().body(result);
   }
 
   @PostMapping("/transfers/{documentId}/lines/{lineId}/depart")

@@ -23,7 +23,7 @@ export type ReturnVersionedCommand = {
 
 export type ReturnPickupCommand = ReturnVersionedCommand & {
   driverSnapshot: string
-  scheduledAt: string
+  scheduledDate: string
 }
 
 export type ReturnAcceptUndamagedCommand = ReturnVersionedCommand & {

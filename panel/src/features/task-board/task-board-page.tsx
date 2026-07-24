@@ -18,7 +18,7 @@ import { sortableKeyboardCoordinates } from "@dnd-kit/sortable"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Add01Icon, Search01Icon } from "@hugeicons/core-free-icons"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link, useNavigate } from "react-router-dom"
+import { Link, useNavigate, useSearchParams } from "react-router-dom"
 
 import {
   PageToolbar,
@@ -194,6 +194,7 @@ function errorMessage(error: unknown, fallback: string) {
 export function TaskBoardPage() {
   const isMobile = useIsMobile()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const { accessToken, currentUser } = useAuth()
   const { selectedWarehouse } = useWarehouse()
@@ -219,6 +220,8 @@ export function TaskBoardPage() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
+  const focusedExternalTaskId = searchParams.get("externalTaskId")
+  const focusedTaskId = searchParams.get("taskId")
   const collapsedSettingsRef = useRef<{
     warehouseId: string
     values: Map<string, boolean>
@@ -355,6 +358,13 @@ export function TaskBoardPage() {
         queue,
         visibleEntries: queue.entries.filter((entry) => {
           if (!showFuture && entry.entryType === "SHADOW") return false
+          if (
+            focusedExternalTaskId &&
+            entry.externalTaskId !== focusedExternalTaskId
+          ) {
+            return false
+          }
+          if (focusedTaskId && entry.taskId !== focusedTaskId) return false
           if (!normalizedSearch) return true
           const haystack = [
             entry.unitNumber ?? "",
@@ -371,7 +381,13 @@ export function TaskBoardPage() {
           return haystack.includes(normalizedSearch)
         }),
       })),
-    [normalizedSearch, preview, showFuture]
+    [
+      focusedExternalTaskId,
+      focusedTaskId,
+      normalizedSearch,
+      preview,
+      showFuture,
+    ]
   )
   const activeEntry =
     activeEntryId && preview
@@ -564,6 +580,27 @@ export function TaskBoardPage() {
         <p role="status" className="text-xs text-muted-foreground">
           Во время поиска перенос и действия всей очереди отключены. Действия
           видимых карточек остаются доступны.
+        </p>
+      ) : null}
+      {focusedExternalTaskId || focusedTaskId ? (
+        <p
+          role="status"
+          className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
+        >
+          Открыто задание, связанное с отгрузкой.
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              const next = new URLSearchParams(searchParams)
+              next.delete("externalTaskId")
+              next.delete("taskId")
+              setSearchParams(next, { replace: true })
+            }}
+          >
+            Показать все задания
+          </Button>
         </p>
       ) : null}
       {!accessToken ? (

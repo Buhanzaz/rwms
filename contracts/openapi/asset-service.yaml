@@ -128,7 +128,7 @@ paths:
   /api/asset/v1/equipment:
     get:
       operationId: listWarehouseEquipment
-      description: Returns global catalog items with warehouse ledger totals. total = stock + non-rented cabin + rented cabin + written-off + lost. Each balance exposes its active holds and free quantity in availableStock; the aggregate availableStock is the free stock balance.
+      description: Returns global catalog items with warehouse ledger totals. total = stock + non-rented cabin + rented cabin + written-off + lost. reservedQuantity is the active order-wide reservation; availableQuantity is stock plus non-rented cabins after physical holds and all active order reservations.
       parameters: [ { $ref: '#/components/parameters/WarehouseIdQuery' } ]
       responses:
         '200': { description: Equipment and balance summaries., content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/EquipmentWarehouse' } } } } }
@@ -752,30 +752,68 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /api/internal/asset/v1/logistics/orders/{orderId}/units/{rentalItemId}/equipment/{equipmentId}:
+  /api/internal/asset/v1/logistics/orders/{orderId}/equipment-reservations:
     parameters:
       - { name: orderId, in: path, required: true, schema: { type: string, format: uuid } }
-      - { name: rentalItemId, in: path, required: true, schema: { type: string, format: uuid } }
-      - { name: equipmentId, in: path, required: true, schema: { type: string, format: uuid } }
       - { $ref: '#/components/parameters/IdempotencyKey' }
     put:
-      operationId: setOrderUnitEquipmentQuantity
+      operationId: replaceOrderEquipmentReservations
       description: >-
-        Atomically sets the required quantity through the canonical equipment ledger. The only
-        permitted locations are warehouse STOCK and the selected order unit; cabin-to-cabin
-        movement is not expressible on this boundary.
+        Replaces the order-wide catalogue reservation without choosing a source cabin. Availability
+        is stock plus non-rented cabins, less physical holds and reservations of other orders.
       requestBody:
         required: true
         content:
-          application/json:
-            schema: { $ref: '#/components/schemas/AdjustOrderEquipmentRequest' }
+          application/json: { schema: { $ref: '#/components/schemas/ReplaceOrderEquipmentReservationsRequest' } }
       responses:
         '200':
-          description: Applied ledger adjustment or original replay.
+          description: Active reservations after replacement or original replay.
           headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/OrderEquipmentAdjustment' }
+              schema: { type: array, items: { $ref: '#/components/schemas/OrderEquipmentReservation' } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/logistics/orders/{orderId}/equipment-movement-plan:
+    parameters:
+      - { name: orderId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: planOrderFurnitureMovements
+      description: >-
+        Computes the physical difference between one selected order cabin and its desired furniture.
+        It plans additions from stock or unreserved non-rented cabins and returns surplus to stock;
+        it does not move any ledger balance itself.
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/OrderFurnitureMovementPlanRequest' } }
+      responses:
+        '200':
+          description: Exact source-to-target worker movement plan.
+          content: { application/json: { schema: { $ref: '#/components/schemas/OrderFurnitureMovementPlan' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/logistics/rental-items/{rentalItemId}/furniture-movement-plan:
+    parameters:
+      - { name: rentalItemId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      operationId: planCabinFurnitureMovements
+      description: >-
+        Computes the complete desired furniture composition for one editable cabin. It selects
+        current source balances from additional equipment and returns a worker-task plan without
+        changing physical balances.
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/CabinFurnitureMovementPlanRequest' } }
+      responses:
+        '200':
+          description: Exact source-to-target worker movement plan.
+          content: { application/json: { schema: { $ref: '#/components/schemas/CabinFurnitureMovementPlan' } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -978,21 +1016,129 @@ components:
     ReserveOrderUnitRequest:
       type: object
       additionalProperties: false
-      required: [warehouseId, rentalItemId, actorSubjectId, actorRole]
+      required: [warehouseId, rentalItemId, clientId, tenantSnapshot, actorSubjectId, actorRole]
       properties:
         warehouseId: { type: string, format: uuid }
         rentalItemId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        tenantSnapshot: { type: string, minLength: 1, maxLength: 512 }
         actorSubjectId: { type: string, format: uuid }
         actorRole: { $ref: '#/components/schemas/OrderActorRole' }
-    AdjustOrderEquipmentRequest:
+    OrderEquipmentRequirement:
       type: object
       additionalProperties: false
-      required: [actorSubjectId, actorRole, expectedCurrentQuantity, requiredQuantity]
+      required: [equipmentId, quantity]
       properties:
+        equipmentId: { type: string, format: uuid }
+        quantity: { type: integer, format: int64, minimum: 1 }
+    ReplaceOrderEquipmentReservationsRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, actorSubjectId, actorRole, requirements]
+      properties:
+        warehouseId: { type: string, format: uuid }
         actorSubjectId: { type: string, format: uuid }
         actorRole: { $ref: '#/components/schemas/OrderActorRole' }
-        expectedCurrentQuantity: { type: integer, format: int64, minimum: 0 }
-        requiredQuantity: { type: integer, format: int64, minimum: 0 }
+        requirements:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/OrderEquipmentRequirement' }
+    OrderEquipmentReservation:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, equipmentCode, equipmentName, quantity, availableQuantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        equipmentCode: { type: string, minLength: 1, maxLength: 64 }
+        equipmentName: { type: string, minLength: 1, maxLength: 255 }
+        quantity: { type: integer, format: int64, minimum: 1 }
+        availableQuantity: { type: integer, format: int64, minimum: 0 }
+    OrderFurnitureMovementPlanRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, rentalItemId, requirements, orderRequirements]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        requirements:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/OrderEquipmentRequirement' }
+        orderRequirements:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/OrderEquipmentRequirement' }
+    OrderFurnitureMovementPlanLine:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, equipmentCode, equipmentName, sourceBalanceId, sourceWarehouseId, sourceRentalItemId, sourceLocationKind, expectedSourceBalanceVersion, targetWarehouseId, targetRentalItemId, targetLocationKind, quantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        equipmentCode: { type: string, minLength: 1, maxLength: 64 }
+        equipmentName: { type: string, minLength: 1, maxLength: 255 }
+        sourceBalanceId: { type: string, format: uuid }
+        sourceWarehouseId: { type: string, format: uuid }
+        sourceRentalItemId: { $ref: '#/components/schemas/NullableUuid' }
+        sourceLocationKind: { $ref: '#/components/schemas/BalanceLocationKind' }
+        expectedSourceBalanceVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        targetWarehouseId: { type: string, format: uuid }
+        targetRentalItemId: { $ref: '#/components/schemas/NullableUuid' }
+        targetLocationKind: { $ref: '#/components/schemas/BalanceLocationKind' }
+        quantity: { type: integer, format: int64, minimum: 1 }
+    OrderFurnitureMovementPlan:
+      type: object
+      additionalProperties: false
+      required: [orderId, rentalItemId, unitNumber, lines]
+      properties:
+        orderId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        unitNumber: { type: string, minLength: 1, maxLength: 64 }
+        lines: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/OrderFurnitureMovementPlanLine' } }
+    CabinFurnitureMovementPlanRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, requirements]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        requirements:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CabinFurnitureRequirement' }
+    CabinFurnitureRequirement:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, quantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        quantity: { type: integer, format: int64, minimum: 1 }
+    CabinFurnitureMovementPlanLine:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, equipmentCode, equipmentName, sourceBalanceId, sourceWarehouseId, sourceRentalItemId, sourceLocationKind, expectedSourceBalanceVersion, targetWarehouseId, targetRentalItemId, targetLocationKind, quantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        equipmentCode: { type: string, minLength: 1, maxLength: 64 }
+        equipmentName: { type: string, minLength: 1, maxLength: 255 }
+        sourceBalanceId: { type: string, format: uuid }
+        sourceWarehouseId: { type: string, format: uuid }
+        sourceRentalItemId: { $ref: '#/components/schemas/NullableUuid' }
+        sourceLocationKind: { $ref: '#/components/schemas/BalanceLocationKind' }
+        expectedSourceBalanceVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        targetWarehouseId: { type: string, format: uuid }
+        targetRentalItemId: { $ref: '#/components/schemas/NullableUuid' }
+        targetLocationKind: { $ref: '#/components/schemas/BalanceLocationKind' }
+        quantity: { type: integer, format: int64, minimum: 1 }
+    CabinFurnitureMovementPlan:
+      type: object
+      additionalProperties: false
+      required: [rentalItemId, unitNumber, lines]
+      properties:
+        rentalItemId: { type: string, format: uuid }
+        unitNumber: { type: string, minLength: 1, maxLength: 64 }
+        lines:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CabinFurnitureMovementPlanLine' }
     OrderEquipmentContent:
       type: object
       additionalProperties: false
@@ -1082,57 +1228,20 @@ components:
         size: { type: integer, format: int64, minimum: 1, maximum: 200 }
         totalElements: { type: integer, format: int64, minimum: 0 }
         totalPages: { type: integer, format: int64, minimum: 0 }
-    OrderEquipmentMovement:
+    ActiveOrderReservation:
       type: object
       additionalProperties: false
-      required:
-        - id
-        - version
-        - equipmentId
-        - sourceBalanceId
-        - targetBalanceId
-        - quantity
-        - kind
-        - occurredAt
+      required: [reservationId, orderId, clientId, tenantSnapshot, reservedAt]
       properties:
-        id: { type: string, format: uuid }
-        version: { $ref: '#/components/schemas/ExpectedVersion' }
-        equipmentId: { type: string, format: uuid }
-        sourceBalanceId: { type: string, format: uuid }
-        targetBalanceId: { type: string, format: uuid }
-        quantity: { type: integer, format: int64, minimum: 1 }
-        kind: { type: string, enum: [STOCK_TO_CABIN, CABIN_TO_STOCK] }
-        occurredAt: { type: string, format: date-time }
-    OrderEquipmentAdjustment:
-      type: object
-      additionalProperties: false
-      required:
-        - orderId
-        - rentalItemId
-        - equipmentId
-        - previousQuantity
-        - requiredQuantity
-        - delta
-        - availableStock
-        - movement
-        - unit
-      properties:
+        reservationId: { type: string, format: uuid }
         orderId: { type: string, format: uuid }
-        rentalItemId: { type: string, format: uuid }
-        equipmentId: { type: string, format: uuid }
-        previousQuantity: { type: integer, format: int64, minimum: 0 }
-        requiredQuantity: { type: integer, format: int64, minimum: 0 }
-        delta: { type: integer, format: int64 }
-        availableStock: { type: integer, format: int64, minimum: 0 }
-        movement:
-          oneOf:
-            - { $ref: '#/components/schemas/OrderEquipmentMovement' }
-            - { type: 'null' }
-        unit: { $ref: '#/components/schemas/OrderRentalItem' }
+        clientId: { $ref: '#/components/schemas/NullableUuid' }
+        tenantSnapshot: { type: [string, 'null'], maxLength: 512 }
+        reservedAt: { type: string, format: date-time }
     RentalItem:
       type: object
       additionalProperties: false
-      required: [id, version, warehouseId, number, status, passport, tags, contents, createdAt, updatedAt]
+      required: [id, version, warehouseId, number, status, passport, tags, contents, activeOrderReservation, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         version: { $ref: '#/components/schemas/ExpectedVersion' }
@@ -1149,6 +1258,10 @@ components:
         passport: { $ref: '#/components/schemas/Passport' }
         tags: { type: array, items: { type: string } }
         contents: { type: array, items: { $ref: '#/components/schemas/EquipmentContent' } }
+        activeOrderReservation:
+          oneOf:
+            - { $ref: '#/components/schemas/ActiveOrderReservation' }
+            - { type: 'null' }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     RentalItemPage:
@@ -1185,8 +1298,8 @@ components:
     EquipmentTotals:
       type: object
       additionalProperties: false
-      required: [equipmentId, warehouseId, totalQuantity, stockQuantity, nonRentedCabinQuantity, rentedCabinQuantity, writtenOffQuantity, lostQuantity, activeHeldQuantity, availableStock, balances]
-      properties: { equipmentId: { type: string, format: uuid }, warehouseId: { type: string, format: uuid }, totalQuantity: { type: integer, format: int64, minimum: 0 }, stockQuantity: { type: integer, format: int64, minimum: 0 }, nonRentedCabinQuantity: { type: integer, format: int64, minimum: 0 }, rentedCabinQuantity: { type: integer, format: int64, minimum: 0 }, writtenOffQuantity: { type: integer, format: int64, minimum: 0 }, lostQuantity: { type: integer, format: int64, minimum: 0 }, activeHeldQuantity: { type: integer, format: int64, minimum: 0 }, availableStock: { type: integer, format: int64, minimum: 0 }, balances: { type: array, items: { $ref: '#/components/schemas/EquipmentBalance' } } }
+      required: [equipmentId, warehouseId, totalQuantity, stockQuantity, nonRentedCabinQuantity, rentedCabinQuantity, writtenOffQuantity, lostQuantity, activeHeldQuantity, reservedQuantity, availableQuantity, availableStock, balances]
+      properties: { equipmentId: { type: string, format: uuid }, warehouseId: { type: string, format: uuid }, totalQuantity: { type: integer, format: int64, minimum: 0 }, stockQuantity: { type: integer, format: int64, minimum: 0 }, nonRentedCabinQuantity: { type: integer, format: int64, minimum: 0 }, rentedCabinQuantity: { type: integer, format: int64, minimum: 0 }, writtenOffQuantity: { type: integer, format: int64, minimum: 0 }, lostQuantity: { type: integer, format: int64, minimum: 0 }, activeHeldQuantity: { type: integer, format: int64, minimum: 0 }, reservedQuantity: { type: integer, format: int64, minimum: 0, description: Active saved-order catalogue reservation. }, availableQuantity: { type: integer, format: int64, minimum: 0, description: Stock plus non-rented cabins less active physical holds and all order reservations. }, availableStock: { type: integer, format: int64, minimum: 0, description: Free stock only; retained for operational transfer screens. }, balances: { type: array, items: { $ref: '#/components/schemas/EquipmentBalance' } } }
     EquipmentWarehouse:
       type: object
       additionalProperties: false
@@ -1640,7 +1753,7 @@ components:
     InventoryAssetSnapshot:
       type: object
       additionalProperties: false
-      required: [assetId, version, warehouseId, status, displayCanonicalNumber, identityMatchKey]
+      required: [assetId, version, warehouseId, status, displayCanonicalNumber, identityMatchKey, tenantSnapshot]
       properties:
         assetId: { type: string, format: uuid }
         version: { $ref: '#/components/schemas/ExpectedVersion' }
@@ -1648,6 +1761,7 @@ components:
         status: { $ref: '#/components/schemas/RentalItemStatus' }
         displayCanonicalNumber: { type: string }
         identityMatchKey: { type: string }
+        tenantSnapshot: { type: [string, 'null'], maxLength: 512 }
     InventoryNumberResolutionRequest:
       type: object
       additionalProperties: false
@@ -1673,13 +1787,16 @@ components:
     InventoryValidationItem:
       type: object
       additionalProperties: false
-      required: [assetId, found]
+      required: [assetId, found, version, warehouseId, status, displayCanonicalNumber, identityMatchKey, tenantSnapshot]
       properties:
         assetId: { type: string, format: uuid }
         found: { type: boolean }
         version: { type: [integer, 'null'], format: int64, minimum: 0 }
         warehouseId: { $ref: '#/components/schemas/NullableUuid' }
         status: { oneOf: [ { $ref: '#/components/schemas/RentalItemStatus' }, { type: 'null' } ] }
+        displayCanonicalNumber: { type: [string, 'null'], maxLength: 128 }
+        identityMatchKey: { type: [string, 'null'], maxLength: 128 }
+        tenantSnapshot: { type: [string, 'null'], maxLength: 512 }
     InventoryValidation:
       type: object
       additionalProperties: false

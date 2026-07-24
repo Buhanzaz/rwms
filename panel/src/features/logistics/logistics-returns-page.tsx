@@ -5,7 +5,7 @@ import {
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query"
-import { useSearchParams } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 
 import { OperationsListGrid } from "@/components/operations-list-grid"
 import {
@@ -46,6 +46,12 @@ import {
   type LogisticsDocumentFiltersState,
 } from "@/features/logistics/logistics-document-filters"
 import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
+import {
+  logisticsAssetLabel,
+  logisticsOrderLabel,
+  useLogisticsReferenceLabels,
+  type LogisticsReferenceLabels,
+} from "@/features/logistics/use-logistics-reference-labels"
 import { AcceptUndamagedDialog } from "@/features/logistics/returns/accept-undamaged-dialog"
 import {
   RETURNS_QUERY_KEY,
@@ -57,7 +63,6 @@ import {
   RETURN_STATE_LABELS,
   type ReturnDocument,
   type ReturnDocumentState,
-  type ReturnLine,
 } from "@/features/logistics/returns/model"
 import { RequestEstimateDialog } from "@/features/logistics/returns/request-estimate-dialog"
 import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
@@ -75,19 +80,10 @@ function commandIdentity() {
   return crypto.randomUUID()
 }
 
-function formatDateTime(value: string) {
+function formatDate(value: string) {
   return new Intl.DateTimeFormat("ru-RU", {
     dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value))
-}
-
-function toIsoDateTime(value: string) {
-  const date = new Date(value)
-  if (!value || !Number.isFinite(date.getTime())) {
-    throw new Error("Укажите корректную дату вывоза.")
-  }
-  return date.toISOString()
+  }).format(new Date(`${value}T00:00:00`))
 }
 
 function matchesDateRange(
@@ -97,17 +93,10 @@ function matchesDateRange(
   if (filters.schedule === "SCHEDULED" && value === null) return false
   if (filters.schedule === "UNSCHEDULED" && value !== null) return false
   if (!value) return !filters.dateFrom && !filters.dateTo
-  const timestamp = new Date(value).getTime()
-  if (
-    filters.dateFrom &&
-    timestamp < new Date(`${filters.dateFrom}T00:00:00.000`).getTime()
-  ) {
+  if (filters.dateFrom && value < filters.dateFrom) {
     return false
   }
-  if (
-    filters.dateTo &&
-    timestamp > new Date(`${filters.dateTo}T23:59:59.999`).getTime()
-  ) {
+  if (filters.dateTo && value > filters.dateTo) {
     return false
   }
   return true
@@ -149,10 +138,6 @@ function storeServiceProjection(
   )
 }
 
-function lineSummary(line: ReturnLine) {
-  return line.tenantSnapshot?.trim() || line.assetId
-}
-
 export function LogisticsReturnsPage() {
   const { selectedWarehouseId } = useWarehouse()
   const { accessToken, currentUser } = useAuth()
@@ -177,6 +162,10 @@ export function LogisticsReturnsPage() {
     enabled: Boolean(accessToken && selectedWarehouseId),
     refetchInterval: 5_000,
   })
+  const referenceLabels = useLogisticsReferenceLabels(
+    accessToken,
+    query.data ?? []
+  )
 
   const stateOptions = useMemo(
     () =>
@@ -202,24 +191,39 @@ export function LogisticsReturnsPage() {
       ) {
         return false
       }
-      if (!matchesDateRange(document.scheduledAt, filters)) return false
+      if (!matchesDateRange(document.scheduledDate, filters)) return false
       if (!needle) return true
       return [
         document.id,
         document.partySnapshot,
         document.driverSnapshot,
         document.rentalOrderId,
+        document.rentalOrderId
+          ? referenceLabels.orderNumbers.get(document.rentalOrderId)
+          : null,
         RETURN_STATE_LABELS[document.state],
         ...document.lines.flatMap((line) => [
           line.id,
           line.assetId,
+          referenceLabels.assetNumbers.get(line.assetId),
           line.tenantSnapshot,
+          line.rentalOrderId
+            ? referenceLabels.orderNumbers.get(line.rentalOrderId)
+            : null,
         ]),
       ]
         .filter(Boolean)
         .some((value) => String(value).toLocaleLowerCase("ru").includes(needle))
     })
-  }, [filters, query.data, search, selectedDocumentId, selectedLineId])
+  }, [
+    filters,
+    query.data,
+    referenceLabels.assetNumbers,
+    referenceLabels.orderNumbers,
+    search,
+    selectedDocumentId,
+    selectedLineId,
+  ])
 
   function refresh(warehouseId: string) {
     return queryClient.invalidateQueries({
@@ -239,19 +243,19 @@ export function LogisticsReturnsPage() {
     mutationFn: ({
       document,
       driverSnapshot,
-      scheduledAt,
+      scheduledDate,
     }: {
       document: ReturnDocument
       driverSnapshot: string
-      scheduledAt: string
+      scheduledDate: string
     }) => {
-      const signature = `pickup:${document.id}:${document.version}:${driverSnapshot}:${scheduledAt}`
+      const signature = `pickup:${document.id}:${document.version}:${driverSnapshot}:${scheduledDate}`
       return registerReturn({
         accessToken: accessToken!,
         documentId: document.id,
         expectedVersion: document.version,
         driverSnapshot,
-        scheduledAt,
+        scheduledDate,
         idempotencyKey: keyFor(signature),
       })
     },
@@ -264,7 +268,7 @@ export function LogisticsReturnsPage() {
     onError: (cause, variables) => {
       if (cause instanceof ApiError && cause.status === 409) {
         commandKeys.current.delete(
-          `pickup:${variables.document.id}:${variables.document.version}:${variables.driverSnapshot}:${variables.scheduledAt}`
+          `pickup:${variables.document.id}:${variables.document.version}:${variables.driverSnapshot}:${variables.scheduledDate}`
         )
         void refresh(variables.document.warehouseId)
       }
@@ -398,18 +402,19 @@ export function LogisticsReturnsPage() {
             renderExpandedRow={(document) => (
               <ReturnLines
                 document={document}
+                referenceLabels={referenceLabels}
                 selectedLineId={selectedLineId}
               />
             )}
             columns={[
               {
-                id: "scheduledAt",
+                id: "scheduledDate",
                 label: "Дата вывоза",
                 className: "w-48",
-                getSortValue: (document) => document.scheduledAt ?? "",
+                getSortValue: (document) => document.scheduledDate ?? "",
                 render: (document) =>
-                  document.scheduledAt
-                    ? formatDateTime(document.scheduledAt)
+                  document.scheduledDate
+                    ? formatDate(document.scheduledDate)
                     : "Не назначена",
               },
               {
@@ -461,8 +466,8 @@ export function LogisticsReturnsPage() {
               <CardHeader>
                 <CardTitle>{document.partySnapshot ?? "Возврат"}</CardTitle>
                 <CardDescription>
-                  {document.scheduledAt
-                    ? formatDateTime(document.scheduledAt)
+                  {document.scheduledDate
+                    ? formatDate(document.scheduledDate)
                     : "Дата вывоза не назначена"}
                   {` · ${document.driverSnapshot ?? "водитель не назначен"}`}
                 </CardDescription>
@@ -475,6 +480,7 @@ export function LogisticsReturnsPage() {
               <CardContent>
                 <ReturnLines
                   document={document}
+                  referenceLabels={referenceLabels}
                   selectedLineId={selectedLineId}
                 />
               </CardContent>
@@ -564,10 +570,10 @@ function ReturnPickupDialog({
   document: ReturnDocument
   pending: boolean
   onOpenChange: (open: boolean) => void
-  onSubmit: (input: { driverSnapshot: string; scheduledAt: string }) => void
+  onSubmit: (input: { driverSnapshot: string; scheduledDate: string }) => void
 }) {
   const [driver, setDriver] = useState<RepairTaskWorkerSnapshotDto | null>(null)
-  const [scheduledAt, setScheduledAt] = useState("")
+  const [scheduledDate, setScheduledDate] = useState("")
   const [error, setError] = useState<string | null>(null)
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -577,14 +583,11 @@ function ReturnPickupDialog({
       setError("Выберите водителя.")
       return
     }
-    try {
-      onSubmit({
-        driverSnapshot: driver.name.trim(),
-        scheduledAt: toIsoDateTime(scheduledAt),
-      })
-    } catch (cause) {
-      setError(errorMessage(cause, "Проверьте дату вывоза."))
+    if (!scheduledDate) {
+      setError("Укажите дату вывоза.")
+      return
     }
+    onSubmit({ driverSnapshot: driver.name.trim(), scheduledDate })
   }
 
   return (
@@ -607,15 +610,15 @@ function ReturnPickupDialog({
               onChange={setDriver}
             />
             <Field data-invalid={Boolean(error) || undefined}>
-              <FieldLabel htmlFor="return-scheduled-at">
-                Дата и время вывоза
+              <FieldLabel htmlFor="return-scheduled-date">
+                Дата вывоза
               </FieldLabel>
               <Input
-                id="return-scheduled-at"
-                type="datetime-local"
-                value={scheduledAt}
+                id="return-scheduled-date"
+                type="date"
+                value={scheduledDate}
                 aria-invalid={Boolean(error) || undefined}
-                onChange={(event) => setScheduledAt(event.target.value)}
+                onChange={(event) => setScheduledDate(event.target.value)}
               />
               {error ? <FieldError>{error}</FieldError> : null}
             </Field>
@@ -641,38 +644,52 @@ function ReturnPickupDialog({
 
 function ReturnLines({
   document,
+  referenceLabels,
   selectedLineId,
 }: {
   document: ReturnDocument
+  referenceLabels: LogisticsReferenceLabels
   selectedLineId: string | null
 }) {
   return (
     <div className="grid gap-2">
-      {document.lines.map((line) => (
-        <Card
-          key={line.id}
-          size="sm"
-          data-selected={line.id === selectedLineId}
-          className="data-[selected=true]:ring-2 data-[selected=true]:ring-ring"
-        >
-          <CardHeader>
-            <CardTitle>{lineSummary(line)}</CardTitle>
-            <CardDescription>Строка {line.lineNumber}</CardDescription>
-            <CardAction>
-              <Badge variant="outline">v{line.version}</Badge>
-            </CardAction>
-          </CardHeader>
-          <CardContent className="grid gap-1 text-sm">
-            <span>
-              Бытовка: <span className="font-mono text-xs">{line.assetId}</span>
-            </span>
-            <span>
-              Заказ:{" "}
-              {line.rentalOrderId ?? document.rentalOrderId ?? "не указан"}
-            </span>
-          </CardContent>
-        </Card>
-      ))}
+      {document.lines.map((line) => {
+        const orderId = line.rentalOrderId ?? document.rentalOrderId
+        return (
+          <Card
+            key={line.id}
+            size="sm"
+            data-selected={line.id === selectedLineId}
+            className="data-[selected=true]:ring-2 data-[selected=true]:ring-ring"
+          >
+            <CardHeader>
+              <CardTitle>
+                Бытовка {logisticsAssetLabel(referenceLabels, line.assetId)}
+              </CardTitle>
+              <CardDescription>
+                {orderId ? (
+                  <Link
+                    className="underline-offset-4 hover:underline"
+                    to={`/orders/${orderId}`}
+                  >
+                    Заказ {logisticsOrderLabel(referenceLabels, orderId)}
+                  </Link>
+                ) : (
+                  "Заказ не указан"
+                )}
+              </CardDescription>
+              <CardAction>
+                <Badge variant="outline">Строка {line.lineNumber}</Badge>
+              </CardAction>
+            </CardHeader>
+            {line.tenantSnapshot ? (
+              <CardContent className="text-sm text-muted-foreground">
+                Арендатор: {line.tenantSnapshot}
+              </CardContent>
+            ) : null}
+          </Card>
+        )
+      })}
     </div>
   )
 }

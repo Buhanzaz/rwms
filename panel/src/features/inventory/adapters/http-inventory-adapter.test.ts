@@ -26,6 +26,10 @@ const session = {
   warehouseId: "00000000-0000-0000-0000-000000000020",
   warehouseVersion: 2,
   warehouseTimeZone: "Europe/Moscow",
+  author: {
+    id: "00000000-0000-0000-0000-000000000021",
+    displayName: "Кладовщик",
+  },
   businessDate: "2026-07-17",
   lifecycle: "ACTIVE",
   expectedCount: 1,
@@ -102,7 +106,10 @@ describe("http inventory adapter", () => {
       equipmentObservation: { presence: "ABSENT", value: null },
       mutationState: "IDLE",
       planFingerprintSha256: null,
+      comment: "",
       expectedSnapshot: null,
+      currentSnapshot: null,
+      conflicts: [],
       frozenPlan: null,
       media: [],
       publication: null,
@@ -188,6 +195,7 @@ describe("http inventory adapter", () => {
       expectedSessionRevision: 3,
       expectedFindingRevision: 8,
       inspection: "WORK_STAGED",
+      comment: "Осмотрено",
       media: [
         {
           mediaId: "00000000-0000-4000-8000-000000000131",
@@ -277,6 +285,7 @@ describe("http inventory adapter", () => {
         aggregateLines: [],
       },
       risks: [],
+      validatedFindings: [],
     } as InventoryCompletionPreview
     const fetchMock = vi
       .fn()
@@ -521,6 +530,7 @@ describe("http inventory adapter", () => {
         expectedSessionRevision: 3,
         expectedFindingRevision: 8,
         inspection: "READY",
+        comment: "",
         media: [],
         planSelection: null,
       })

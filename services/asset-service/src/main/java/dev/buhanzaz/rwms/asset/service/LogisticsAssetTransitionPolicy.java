@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.asset.service;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsLeaseOwnerType;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsRentalItemAction;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -34,8 +35,12 @@ final class LogisticsAssetTransitionPolicy {
           source, RentalItemStatus.AFTER_RENT, RentalItemStatus.FREE);
       case RETURN_SETTLE_SHORTAGE -> require(ownerType, LogisticsLeaseOwnerType.LOGISTICS_RETURN,
           source, RentalItemStatus.AFTER_RENT, RentalItemStatus.WAITING_ESTIMATE_CONFIRMATION);
-      case SHIPMENT_CONFIRM -> require(ownerType, LogisticsLeaseOwnerType.LOGISTICS_SHIPMENT,
-          source, RentalItemStatus.FREE, RentalItemStatus.RENTED);
+      case SHIPMENT_CONFIRM -> requireAny(
+          ownerType,
+          LogisticsLeaseOwnerType.LOGISTICS_SHIPMENT,
+          source,
+          Set.of(RentalItemStatus.FREE, RentalItemStatus.BOOKED),
+          RentalItemStatus.RENTED);
       case TRANSFER_DEPART -> require(ownerType, LogisticsLeaseOwnerType.LOGISTICS_TRANSFER,
           source, RentalItemStatus.FREE, RentalItemStatus.IN_TRANSFER);
       case TRANSFER_ARRIVE -> require(ownerType, LogisticsLeaseOwnerType.LOGISTICS_TRANSFER,
@@ -53,6 +58,22 @@ final class LogisticsAssetTransitionPolicy {
       throw new AssetConflictException("Logistics action does not match the operation-lease owner");
     }
     if (source != expectedSource) {
+      throw new AssetConflictException(
+          "Logistics action is not allowed from rental-item status " + source);
+    }
+    return target;
+  }
+
+  private static RentalItemStatus requireAny(
+      LogisticsLeaseOwnerType actualOwner,
+      LogisticsLeaseOwnerType expectedOwner,
+      RentalItemStatus source,
+      Set<RentalItemStatus> expectedSources,
+      RentalItemStatus target) {
+    if (actualOwner != expectedOwner) {
+      throw new AssetConflictException("Logistics action does not match the operation-lease owner");
+    }
+    if (!expectedSources.contains(source)) {
       throw new AssetConflictException(
           "Logistics action is not allowed from rental-item status " + source);
     }

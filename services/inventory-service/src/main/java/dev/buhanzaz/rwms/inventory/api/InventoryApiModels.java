@@ -69,10 +69,30 @@ public final class InventoryApiModels {
       @Min(0) long expectedSessionRevision,
       @Min(0) long expectedFindingRevision,
       @NotNull InspectionState inspection,
+      @NotNull @Size(max = 2000) String comment,
       @NotNull @Valid Observation passportObservation,
       @NotNull @Valid Observation equipmentObservation,
       @NotNull @Size(max = 100) List<@Valid MediaReference> media,
-      @Valid PlanSelection planSelection) {}
+      @Valid PlanSelection planSelection) {
+    public SaveInspectionRequest(
+        long expectedSessionRevision,
+        long expectedFindingRevision,
+        InspectionState inspection,
+        Observation passportObservation,
+        Observation equipmentObservation,
+        List<MediaReference> media,
+        PlanSelection planSelection) {
+      this(
+          expectedSessionRevision,
+          expectedFindingRevision,
+          inspection,
+          "",
+          passportObservation,
+          equipmentObservation,
+          media,
+          planSelection);
+    }
+  }
 
   public record RevisionExpectation(
       @NotNull UUID findingId, @Min(0) long expectedFindingRevision) {}
@@ -120,6 +140,7 @@ public final class InventoryApiModels {
       UUID warehouseId,
       long warehouseVersion,
       String warehouseTimeZone,
+      InventoryActorView author,
       LocalDate businessDate,
       SessionLifecycle lifecycle,
       int expectedCount,
@@ -137,6 +158,7 @@ public final class InventoryApiModels {
       UUID warehouseId,
       long warehouseVersion,
       String warehouseTimeZone,
+      InventoryActorView author,
       LocalDate businessDate,
       SessionLifecycle lifecycle,
       int expectedCount,
@@ -145,6 +167,8 @@ public final class InventoryApiModels {
       OffsetDateTime startedAt,
       OffsetDateTime terminalAt,
       String publicationState) {}
+
+  public record InventoryActorView(UUID id, String displayName) {}
 
   public record CancellationAudit(String reason, OffsetDateTime cancelledAt) {}
 
@@ -163,7 +187,10 @@ public final class InventoryApiModels {
       Observation equipmentObservation,
       MutationState mutationState,
       String planFingerprintSha256,
+      String comment,
       ExpectedItemSnapshot expectedSnapshot,
+      CurrentItemSnapshot currentSnapshot,
+      List<ConflictView> conflicts,
       FrozenPlanView frozenPlan,
       List<MediaReference> media,
       PublicationView publication) {}
@@ -171,10 +198,22 @@ public final class InventoryApiModels {
   public record ExpectedItemSnapshot(
       UUID assetId,
       long assetVersion,
+      UUID warehouseId,
       String status,
       String displayCanonicalNumber,
+      String tenantSnapshot,
       JsonNode passportSnapshot,
       JsonNode contentsSnapshot) {}
+
+  public record CurrentItemSnapshot(
+      UUID assetId,
+      long assetVersion,
+      UUID warehouseId,
+      String status,
+      String displayCanonicalNumber,
+      String tenantSnapshot) {}
+
+  public record ConflictView(String code, String message, String expected, String actual) {}
 
   public record FrozenPlanView(
       String mode,
@@ -184,6 +223,7 @@ public final class InventoryApiModels {
       List<FrozenPlanStageView> stages) {}
 
   public record FrozenPlanLineView(
+      UUID id,
       String sourceKind,
       String lineType,
       UUID catalogVersionId,
@@ -193,16 +233,21 @@ public final class InventoryApiModels {
       String unit,
       String quantity,
       long unitPriceMinor,
-      String normativeMinutes) {}
+      String normativeMinutes,
+      String groupComment) {}
 
   public record FrozenPlanStageView(
+      UUID id,
       int order,
+      UUID catalogNodeId,
+      String catalogNodeCode,
       String kind,
       UUID routingQueueId,
       String routingQueueCode,
       String routingQueueKind,
       boolean movementRequired,
-      boolean photoRequired) {}
+      boolean photoRequired,
+      int normativeDurationMinutes) {}
 
   public record NumberResolutionView(
       String displayCanonicalNumber,
@@ -242,6 +287,9 @@ public final class InventoryApiModels {
 
   public record CompletionRisk(UUID findingId, String code) {}
 
+  public record ValidatedFinding(
+      UUID findingId, CurrentItemSnapshot currentSnapshot, List<ConflictView> conflicts) {}
+
   public record CompletionPreview(
       UUID inventoryId,
       long sessionRevision,
@@ -250,7 +298,8 @@ public final class InventoryApiModels {
       OffsetDateTime validatedAt,
       String acknowledgementSha256,
       FrozenStatistics statistics,
-      List<CompletionRisk> risks) {}
+      List<CompletionRisk> risks,
+      List<ValidatedFinding> validatedFindings) {}
 
   public record PublicationView(
       UUID id,

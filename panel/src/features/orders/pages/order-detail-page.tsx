@@ -76,12 +76,99 @@ import { ApiError } from "@/lib/api-client"
 
 const UNIT_PAGE_SIZE = 40
 const AVAILABLE_UNITS_REFETCH_INTERVAL_MS = 2_000
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+const ORDER_CHANGE_LABELS: Record<string, string> = {
+  clientId: "клиент",
+  warehouseId: "склад",
+  units: "бытовки",
+  desiredEquipment: "желаемое наполнение",
+  unitsAndDesiredEquipment: "бытовки и желаемое наполнение",
+  status: "статус заказа",
+}
+
+const RESERVATION_STATE_LABELS: Record<string, string> = {
+  ACTIVE: "активен",
+  RELEASED: "освобождён",
+}
+
+function isUuid(value: unknown) {
+  return typeof value === "string" && UUID_PATTERN.test(value)
+}
+
+function auditValue(key: string, value: unknown) {
+  if (isUuid(value) || value === null || value === undefined) return null
+
+  switch (key) {
+    case "number":
+      return `Номер заказа: ${String(value)}`
+    case "status":
+      return typeof value === "string" &&
+        Object.hasOwn(ORDER_STATUS_LABELS, value)
+        ? `Статус: ${ORDER_STATUS_LABELS[value as keyof typeof ORDER_STATUS_LABELS]}`
+        : null
+    case "displayName":
+      return `Клиент: ${String(value)}`
+    case "unitNumber":
+      return `Бытовка: ${String(value)}`
+    case "equipmentName":
+      return `Мебель: ${String(value)}`
+    case "quantity":
+      return typeof value === "number" ? `Количество: ${value}` : null
+    case "state":
+      return typeof value === "string" &&
+        Object.hasOwn(RESERVATION_STATE_LABELS, value)
+        ? `Статус резерва: ${RESERVATION_STATE_LABELS[value]}`
+        : null
+    case "changedField":
+      return typeof value === "string" &&
+        Object.hasOwn(ORDER_CHANGE_LABELS, value)
+        ? `Изменено: ${ORDER_CHANGE_LABELS[value]}`
+        : null
+    case "conflictCode":
+      return value === "UNIT_ALREADY_RESERVED"
+        ? "Бытовка уже занята другим заказом"
+        : null
+    default:
+      return null
+  }
+}
 
 function formatAuditValues(values: Record<string, unknown> | null) {
   if (!values || Object.keys(values).length === 0) return null
-  return Object.entries(values)
-    .map(([key, value]) => `${key}: ${String(value)}`)
+  const formatted = Object.entries(values)
+    .map(([key, value]) => auditValue(key, value))
+    .filter((value): value is string => value !== null)
     .join(" · ")
+  return formatted || null
+}
+
+function auditContext(
+  event: { eventType: string; subjectId: string },
+  order: OrderDetail,
+  warehouseLabel: string | null
+) {
+  if (
+    event.eventType === "CLIENT_CREATED" ||
+    event.eventType === "CLIENT_SELECTED"
+  ) {
+    return `Клиент: ${order.client.displayName}`
+  }
+  if (event.eventType === "WAREHOUSE_SELECTED" && warehouseLabel) {
+    return `Склад: ${warehouseLabel}`
+  }
+  if (
+    event.eventType === "UNIT_ADDED" ||
+    event.eventType === "UNIT_REMOVED" ||
+    event.eventType === "UNIT_ADD_CONFLICT"
+  ) {
+    const unit = order.units.find(
+      (candidate) => candidate.unit.id === event.subjectId
+    )
+    return unit ? `Бытовка: ${unit.unit.number}` : null
+  }
+  return null
 }
 
 export function OrderDetailPage() {
@@ -554,9 +641,7 @@ export function OrderDetailPage() {
       <Card size="sm">
         <CardHeader>
           <CardTitle>Основные данные</CardTitle>
-          <CardDescription>
-            Менеджер и автор сохранены независимо друг от друга.
-          </CardDescription>
+          <CardDescription>Ответственные за заказ.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <div>
@@ -569,14 +654,10 @@ export function OrderDetailPage() {
           <div>
             <p className="text-xs text-muted-foreground">Менеджер</p>
             <p className="font-medium">{order.managerDisplayName}</p>
-            {order.permissions.canViewOtherManagers ? (
-              <p className="text-xs text-muted-foreground">{order.managerId}</p>
-            ) : null}
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Автор</p>
             <p className="font-medium">{order.createdByDisplayName}</p>
-            <p className="text-xs text-muted-foreground">{order.createdBy}</p>
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Создан</p>
@@ -650,7 +731,7 @@ export function OrderDetailPage() {
           </CardHeader>
         </Card>
       ) : (
-        <Card className="min-h-[36rem]" size="sm">
+        <Card className="min-h-[36rem] min-w-0 overflow-hidden" size="sm">
           <CardHeader>
             <CardTitle>Выбор бытовок</CardTitle>
             <CardDescription>
@@ -658,7 +739,7 @@ export function OrderDetailPage() {
               заказа.
             </CardDescription>
           </CardHeader>
-          <CardContent className="flex min-h-0 flex-1 flex-col gap-4">
+          <CardContent className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-hidden">
             <Input
               type="search"
               value={unitSearch}
@@ -887,6 +968,13 @@ export function OrderDetailPage() {
             history.map((event) => {
               const previous = formatAuditValues(event.previousValues)
               const next = formatAuditValues(event.newValues)
+              const context = auditContext(
+                event,
+                order,
+                selectedWarehouse
+                  ? `${selectedWarehouse.code} · ${selectedWarehouse.name}`
+                  : null
+              )
               return (
                 <div
                   key={event.id}
@@ -900,12 +988,9 @@ export function OrderDetailPage() {
                       {formatOrderDateTime(event.occurredAt)}
                     </span>
                   </div>
-                  <span className="text-muted-foreground">
-                    Actor: {event.actorSubjectId} · {event.actorRole}
-                  </span>
-                  <span className="text-muted-foreground">
-                    {event.subjectType}: {event.subjectId}
-                  </span>
+                  {context ? (
+                    <span className="text-muted-foreground">{context}</span>
+                  ) : null}
                   {previous ? (
                     <span className="text-muted-foreground">
                       Было: {previous}

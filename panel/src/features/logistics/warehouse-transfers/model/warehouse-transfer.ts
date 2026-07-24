@@ -46,6 +46,9 @@ export type TransferDocument = {
   driverSnapshot: string | null
   clientId: null
   equipmentMovementTaskId: string | null
+  scheduledDate: string
+  /** Compatibility field returned as null by logistics-service. */
+  scheduledAt: null
   lines: TransferLine[]
   createdAt: string
   updatedAt: string
@@ -56,10 +59,14 @@ export type CreateTransferLine = {
   assetVersion: number
 }
 
-export type CreateTransferEquipmentLine = {
+export type CabinFurnitureRequirement = {
   equipmentId: string
-  expectedSourceBalanceVersion: number
   quantity: number
+}
+
+export type TransferFurnitureReplacement = {
+  assetId: string
+  contents: CabinFurnitureRequirement[]
 }
 
 export type TransferMediaReference = {

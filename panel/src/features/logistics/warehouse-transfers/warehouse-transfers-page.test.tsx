@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import {
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -10,6 +11,13 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { TransferDocument } from "@/features/logistics/warehouse-transfers/model/warehouse-transfer"
+
+Object.defineProperties(HTMLElement.prototype, {
+  hasPointerCapture: { configurable: true, value: () => false },
+  releasePointerCapture: { configurable: true, value: () => undefined },
+  scrollIntoView: { configurable: true, value: () => undefined },
+  setPointerCapture: { configurable: true, value: () => undefined },
+})
 
 const transferApi = vi.hoisted(() => ({
   arriveWarehouseTransferLine: vi.fn(),
@@ -25,6 +33,9 @@ const driverDirectoryApi = vi.hoisted(() => ({
 }))
 const rentalItemsApi = vi.hoisted(() => ({
   listAssetRentalItems: vi.fn(),
+}))
+const equipmentApi = vi.hoisted(() => ({
+  getEquipmentItems: vi.fn(),
 }))
 const authState = vi.hoisted(() => ({
   sourceLevel: "EDIT" as "VIEW" | "EDIT" | "MANAGE",
@@ -48,7 +59,7 @@ vi.mock("@/features/repair-tasks/api/repair-worker-directory-api", () => ({
 }))
 
 vi.mock("@/api/equipment-api", () => ({
-  getEquipmentItems: vi.fn().mockResolvedValue([]),
+  getEquipmentItems: equipmentApi.getEquipmentItems,
 }))
 
 vi.mock("@/features/rental-items/api/asset-rental-items-api", () => ({
@@ -149,6 +160,8 @@ const DOCUMENT_ID = "33333333-3333-4333-8333-333333333333"
 const TRANSIT_DOCUMENT_ID = "44444444-4444-4444-8444-444444444444"
 const LINE_ID = "55555555-5555-4555-8555-555555555555"
 const ASSET_ID = "66666666-6666-4666-8666-666666666666"
+const SECOND_ASSET_ID = "67676767-6767-4676-8676-676767676767"
+const EMPTY_ASSET_ID = "68686868-6868-4686-8686-686868686868"
 const EQUIPMENT_TASK_ID = "77777777-7777-4777-8777-777777777777"
 const IDEMPOTENCY_KEY = "99999999-9999-4999-8999-999999999999"
 const TRANSFER_CABIN = {
@@ -169,10 +182,40 @@ const TRANSFER_CABIN = {
   mainPhotoUrl: null,
   locationNodeId: null,
   contents: null,
-  contentsItems: [{ name: "Стол", quantity: 1 }],
+  contentsItems: [
+    {
+      equipmentId: EQUIPMENT_TASK_ID,
+      equipmentName: "Стол",
+      name: "Стол",
+      quantity: 1,
+    },
+  ],
   shipmentDate: null,
   tenant: null,
   price: null,
+}
+const SECOND_TRANSFER_CABIN = {
+  ...TRANSFER_CABIN,
+  id: SECOND_ASSET_ID,
+  version: 3,
+  number: "БЫТ-111",
+  contents: "Стул — 2",
+  contentsItems: [
+    {
+      equipmentId: EQUIPMENT_TASK_ID,
+      equipmentName: "Стул",
+      name: "Стул",
+      quantity: 2,
+    },
+  ],
+}
+const EMPTY_TRANSFER_CABIN = {
+  ...TRANSFER_CABIN,
+  id: EMPTY_ASSET_ID,
+  version: 2,
+  number: "БЫТ-222",
+  contents: null,
+  contentsItems: [],
 }
 
 function transferDocument(
@@ -194,6 +237,8 @@ function transferDocument(
     driverSnapshot: "Иванов Иван",
     clientId: null,
     equipmentMovementTaskId: EQUIPMENT_TASK_ID,
+    scheduledDate: "2026-07-19",
+    scheduledAt: null,
     lines: [
       {
         id: LINE_ID,
@@ -246,8 +291,17 @@ beforeEach(() => {
     },
   ])
   rentalItemsApi.listAssetRentalItems.mockResolvedValue({
-    content: [TRANSFER_CABIN],
+    content: [TRANSFER_CABIN, SECOND_TRANSFER_CABIN, EMPTY_TRANSFER_CABIN],
   })
+  equipmentApi.getEquipmentItems.mockResolvedValue([
+    {
+      id: EQUIPMENT_TASK_ID,
+      name: "Стол",
+      category: "FURNITURE",
+      active: true,
+      availableStock: 12,
+    },
+  ])
   const draft = transferDocument(DOCUMENT_ID, "DRAFT", 4)
   transferApi.listWarehouseTransfers.mockResolvedValue([draft])
   transferApi.getWarehouseTransfer.mockResolvedValue(draft)
@@ -281,7 +335,7 @@ describe("WarehouseTransfersPage", () => {
     ).toBeNull()
   })
 
-  it("opens the server-backed form with cabin and furniture sections", async () => {
+  it("opens the server-backed form with per-cabin furniture controls", async () => {
     const user = userEvent.setup()
     renderPage()
 
@@ -293,15 +347,106 @@ describe("WarehouseTransfersPage", () => {
       screen.getByRole("heading", { name: "Создать складское перемещение" })
     ).toBeTruthy()
     expect(screen.getByText("Бытовки и наполнение")).toBeTruthy()
-    expect(screen.getByText("Мебель")).toBeTruthy()
     expect(screen.getByRole("combobox", { name: "Водитель" })).toBeTruthy()
-    expect(screen.getByText(/отдельной серверной задачей/)).toBeTruthy()
+    expect(screen.getByLabelText("Дата задания")).toBeTruthy()
+    expect(screen.queryByText("Мебель")).toBeNull()
     expect(screen.queryByLabelText("Asset UUID")).toBeNull()
 
     await user.click(screen.getByLabelText("Номер бытовки"))
     await user.click(await screen.findByText(TRANSFER_CABIN.number))
 
     expect(await screen.findByText("Стол")).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "Изменить наполнение" })
+    ).toBeTruthy()
+  })
+
+  it("filters transfer cabins by the typed cabin number", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Создать перемещение" })
+    )
+    const cabinInput = screen.getByRole("combobox", {
+      name: "Номер бытовки",
+    })
+    await user.click(cabinInput)
+    await user.type(cabinInput, "111")
+
+    expect(
+      await screen.findByRole("option", { name: SECOND_TRANSFER_CABIN.number })
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("option", { name: TRANSFER_CABIN.number })
+    ).toBeNull()
+  })
+
+  it("offers furniture addition for an empty selected cabin", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Создать перемещение" })
+    )
+    await user.click(screen.getByLabelText("Номер бытовки"))
+    await user.click(await screen.findByText(EMPTY_TRANSFER_CABIN.number))
+
+    expect(screen.getByRole("button", { name: "Добавить мебель" })).toBeTruthy()
+  })
+
+  it("creates a transfer with a date and the selected cabin composition", async () => {
+    const user = userEvent.setup()
+    transferApi.createWarehouseTransfer.mockResolvedValue(
+      transferDocument(DOCUMENT_ID, "DRAFT", 4)
+    )
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Создать перемещение" })
+    )
+    const dialog = screen.getByRole("dialog")
+    await user.click(
+      within(dialog).getByRole("combobox", { name: "Склад назначения" })
+    )
+    await user.click(
+      await screen.findByRole("option", { name: "Петербург · Санкт-Петербург" })
+    )
+    fireEvent.change(within(dialog).getByLabelText("Дата задания"), {
+      target: { value: "2026-07-25" },
+    })
+    await user.click(within(dialog).getByLabelText("Номер бытовки"))
+    await user.click(await screen.findByText(TRANSFER_CABIN.number))
+    await user.click(
+      await within(dialog).findByRole("button", {
+        name: "Изменить наполнение",
+      })
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Сохранить наполнение" })
+    )
+    expect(transferApi.createWarehouseTransfer).not.toHaveBeenCalled()
+    await user.click(
+      within(dialog).getByRole("button", { name: "Создать перемещение" })
+    )
+
+    await waitFor(() =>
+      expect(transferApi.createWarehouseTransfer).toHaveBeenCalledWith({
+        accessToken: "transfer-token",
+        warehouseId: SOURCE_WAREHOUSE_ID,
+        destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
+        driverSnapshot: null,
+        scheduledDate: "2026-07-25",
+        lines: [{ assetId: ASSET_ID, assetVersion: 8 }],
+        furnitureReplacements: [
+          {
+            assetId: ASSET_ID,
+            contents: [{ equipmentId: EQUIPMENT_TASK_ID, quantity: 1 }],
+          },
+        ],
+        idempotencyKey: IDEMPOTENCY_KEY,
+      })
+    )
   })
 
   it("departs a cabin with both service-issued versions", async () => {

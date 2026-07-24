@@ -15,6 +15,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.NumberResolutionView;
+import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CompletionPreviewRequest;
+import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.RevisionExpectation;
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.StartSessionRequest;
 import dev.buhanzaz.rwms.inventory.eventing.InventoryEventStore;
 import dev.buhanzaz.rwms.inventory.integration.InventoryDependencyGateway;
@@ -161,6 +163,52 @@ class InventoryIdempotencyRecoveryIntegrationTest {
     JsonNode replayJson = mapper.valueToTree(replay);
     assertThat(replayJson).isEqualTo(originalJson);
     verify(dependencies, times(1)).resolveNumber(warehouseId, "AA-01");
+  }
+
+  @Test
+  void completionStatisticsUseTheValidatedRegistryProjection() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    UUID currentWarehouseId = UUID.randomUUID();
+    seedSession(inventoryId, warehouseId);
+    seedFinding(inventoryId, findingId, assetId, warehouseId);
+    InventoryDependencyGateway.ValidationItem item =
+        new InventoryDependencyGateway.ValidationItem(
+            assetId,
+            true,
+            2L,
+            currentWarehouseId,
+            "WAREHOUSE",
+            "AA-01",
+            "AA01",
+            null);
+    List<InventoryDependencyGateway.ValidationItem> items = List.of(item);
+    when(dependencies.validateAssets(List.of(assetId)))
+        .thenReturn(
+            new InventoryDependencyGateway.Validation(
+                OffsetDateTime.now(ZoneOffset.UTC), canonicalJson.sha256(items), items));
+
+    var preview =
+        application.preview(
+            jwt(),
+            inventoryId,
+            UUID.randomUUID(),
+            new CompletionPreviewRequest(
+                0, List.of(new RevisionExpectation(findingId, 0))));
+
+    assertThat(preview.statistics().missingCount()).isOne();
+    assertThat(preview.statistics().conflictCount()).isOne();
+    assertThat(preview.validatedFindings())
+        .singleElement()
+        .satisfies(
+            finding -> {
+              assertThat(finding.currentSnapshot().warehouseId()).isEqualTo(currentWarehouseId);
+              assertThat(finding.conflicts())
+                  .extracting(dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ConflictView::code)
+                  .contains("ADDED_AFTER_START", "OTHER_WAREHOUSE");
+            });
   }
 
   @Test
@@ -486,8 +534,8 @@ class InventoryIdempotencyRecoveryIntegrationTest {
           id,session_revision,warehouse_id,warehouse_version_snapshot,warehouse_time_zone,
           business_date,lifecycle,start_operation_id,start_idempotency_key,start_request_sha256,
           expected_population_count,expected_population_sha256,started_by_subject_id,
-          started_actor_ref,started_at,created_at,updated_at)
-        values (?,0,?,1,'Europe/Moscow',current_date,'ACTIVE',?,?,?,0,?,?,?::jsonb,?,?,?)
+          started_by_display_name,started_actor_ref,started_at,created_at,updated_at)
+        values (?,0,?,1,'Europe/Moscow',current_date,'ACTIVE',?,?,?,0,?,?,'Inventory operator',?::jsonb,?,?,?)
         """,
         inventoryId,
         warehouseId,
@@ -498,6 +546,28 @@ class InventoryIdempotencyRecoveryIntegrationTest {
         UUID.fromString(jwt().getSubject()),
         actorJson(),
         now,
+        now,
+        now);
+  }
+
+  private void seedFinding(
+      UUID inventoryId, UUID findingId, UUID assetId, UUID warehouseId) {
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    jdbc.update(
+        """
+        insert into inventory_finding(
+          id,inventory_id,finding_revision,origin,inspection,reconciliation,
+          asset_id,asset_version_snapshot,current_warehouse_id,current_status,
+          display_canonical_number,identity_match_key,passport_observation_state,
+          equipment_observation_state,mutation_state,actor_ref,created_at,updated_at)
+        values (?,?,0,'UNEXPECTED_EXISTING','READY','MATCHED',?,1,?,'WAREHOUSE',
+          'AA-01','AA01','ABSENT','ABSENT','IDLE',?::jsonb,?,?)
+        """,
+        findingId,
+        inventoryId,
+        assetId,
+        warehouseId,
+        actorJson(),
         now,
         now);
   }

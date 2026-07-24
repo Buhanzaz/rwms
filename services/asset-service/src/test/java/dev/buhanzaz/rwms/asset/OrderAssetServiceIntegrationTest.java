@@ -13,9 +13,11 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.MaintenanceLeaseOwnerType;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateWarehouseRequest;
-import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.AdjustOrderEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderActorRequest;
+import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderEquipmentRequirement;
+import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderFurnitureMovementPlanRequest;
 import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderUnitReservationView;
+import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.ReplaceOrderEquipmentReservationsRequest;
 import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.ReserveOrderUnitRequest;
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
@@ -133,6 +135,8 @@ class OrderAssetServiceIntegrationTest {
         .isEqualTo("UNIT_ALREADY_RESERVED");
     ReservationAttempt winner =
         attempts.stream().filter(value -> value.response() != null).findFirst().orElseThrow();
+    ReserveOrderUnitRequest winningRequest =
+        winner.orderId().equals(firstOrderId) ? firstRequest : secondRequest;
     UUID losingOrderId =
         winner.orderId().equals(firstOrderId) ? secondOrderId : firstOrderId;
     ReserveOrderUnitRequest losingRequest =
@@ -151,6 +155,17 @@ class OrderAssetServiceIntegrationTest {
         .extracting(OrderUnitReservationView::rentalItemId)
         .containsExactly(rentalItemId);
     assertThat(orders.units(losingOrderId)).isEmpty();
+    assertThat(assets.rentalItem(rentalItemId))
+        .satisfies(
+            booked -> {
+              assertThat(booked.status()).isEqualTo(RentalItemStatus.BOOKED);
+              assertThat(booked.activeOrderReservation()).isNotNull();
+              assertThat(booked.activeOrderReservation().orderId()).isEqualTo(winner.orderId());
+              assertThat(booked.activeOrderReservation().clientId())
+                  .isEqualTo(winningRequest.clientId());
+              assertThat(booked.activeOrderReservation().tenantSnapshot())
+                  .isEqualTo(winningRequest.tenantSnapshot());
+            });
     assertThat(orders.candidates(winner.orderId(), warehouseId, 0, 20, "").content())
         .anySatisfy(
             candidate -> {
@@ -175,12 +190,15 @@ class OrderAssetServiceIntegrationTest {
     assertThat(releaseReplay.response().reservationId())
         .isEqualTo(released.response().reservationId());
     assertThat(releaseReplay.response().replayed()).isTrue();
+    assertThat(assets.rentalItem(rentalItemId).status()).isEqualTo(RentalItemStatus.FREE);
+    assertThat(assets.rentalItem(rentalItemId).activeOrderReservation()).isNull();
 
     var readded =
         orders.reserve(UUID.randomUUID(), losingOrderId, losingRequest);
     assertThat(readded.replayed()).isFalse();
     assertThat(readded.response().reservationId())
         .isNotEqualTo(released.response().reservationId());
+    assertThat(assets.rentalItem(rentalItemId).status()).isEqualTo(RentalItemStatus.BOOKED);
     assertThat(
             jdbc.queryForObject(
                 """
@@ -211,11 +229,12 @@ class OrderAssetServiceIntegrationTest {
                 Integer.class,
                 rentalItemId))
         .isZero();
+    assertThat(assets.rentalItem(rentalItemId).status()).isEqualTo(RentalItemStatus.FREE);
   }
 
   @Test
   @Transactional
-  void requiredEquipmentQuantityUsesLedgerAndRejectsStaleOrInsufficientStock() {
+  void desiredEquipmentReservesTheCatalogueWithoutMovingItAndPlansOnlyTheDifference() {
     UUID actorSubjectId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
     RentalItemResponse rental = freeRental(actorSubjectId, warehouseId);
@@ -237,72 +256,123 @@ class OrderAssetServiceIntegrationTest {
             .response()
             .id();
     seedStockBalance(equipmentId, warehouseId, 8);
+    seedCabinBalance(equipmentId, warehouseId, rental.id(), 1);
 
-    UUID addKey = UUID.randomUUID();
-    AdjustOrderEquipmentRequest addRequest =
-        equipmentRequest(actorSubjectId, 0, 3);
-    var added =
-        orders.adjustEquipment(
-            addKey, orderId, rental.id(), equipmentId, addRequest);
-    var addReplay =
-        orders.adjustEquipment(
-            addKey, orderId, rental.id(), equipmentId, addRequest);
-    assertThat(added.replayed()).isFalse();
-    assertThat(added.response().previousQuantity()).isZero();
-    assertThat(added.response().requiredQuantity()).isEqualTo(3);
-    assertThat(added.response().delta()).isEqualTo(3);
-    assertThat(added.response().movement().kind()).isEqualTo("STOCK_TO_CABIN");
-    assertThat(addReplay.replayed()).isTrue();
-    assertThat(addReplay.response()).isEqualTo(added.response());
-
-    var increased =
-        orders.adjustEquipment(
-            UUID.randomUUID(),
-            orderId,
-            rental.id(),
-            equipmentId,
-            equipmentRequest(actorSubjectId, 3, 6));
-    var decreased =
-        orders.adjustEquipment(
-            UUID.randomUUID(),
-            orderId,
-            rental.id(),
-            equipmentId,
-            equipmentRequest(actorSubjectId, 6, 2));
-    assertThat(increased.response().delta()).isEqualTo(3);
-    assertThat(decreased.response().delta()).isEqualTo(-4);
-    assertThat(decreased.response().movement().kind()).isEqualTo("CABIN_TO_STOCK");
+    List<OrderEquipmentRequirement> requirements =
+        List.of(new OrderEquipmentRequirement(equipmentId, 3L));
+    ReplaceOrderEquipmentReservationsRequest request =
+        equipmentReservationRequest(actorSubjectId, warehouseId, requirements);
+    UUID reservationKey = UUID.randomUUID();
+    var reserved = orders.replaceEquipmentReservations(reservationKey, orderId, request);
+    var reservationReplay =
+        orders.replaceEquipmentReservations(reservationKey, orderId, request);
+    assertThat(reserved.replayed()).isFalse();
+    assertThat(reserved.response()).singleElement().satisfies(
+        value -> {
+          assertThat(value.equipmentId()).isEqualTo(equipmentId);
+          assertThat(value.quantity()).isEqualTo(3);
+          assertThat(value.availableQuantity()).isEqualTo(6);
+        });
+    assertThat(reservationReplay.replayed()).isTrue();
     assertThat(balance(equipmentId, warehouseId, rental.id(), "CABIN_NON_RENTED"))
-        .isEqualTo(2);
-    assertThat(balance(equipmentId, warehouseId, null, "STOCK")).isEqualTo(6);
+        .isEqualTo(1);
+    assertThat(balance(equipmentId, warehouseId, null, "STOCK")).isEqualTo(8);
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from equipment_movement where equipment_id=?",
                 Integer.class,
                 equipmentId))
-        .isEqualTo(3);
+        .isZero();
 
+    var plan =
+        orders.furnitureMovementPlan(
+            orderId,
+            new OrderFurnitureMovementPlanRequest(
+                warehouseId, rental.id(), requirements, requirements));
+    assertThat(plan.lines()).singleElement().satisfies(
+        line -> {
+          assertThat(line.quantity()).isEqualTo(2);
+          assertThat(line.sourceLocationKind()).isEqualTo(BalanceLocationKind.STOCK);
+          assertThat(line.targetLocationKind()).isEqualTo(BalanceLocationKind.CABIN_NON_RENTED);
+          assertThat(line.targetRentalItemId()).isEqualTo(rental.id());
+        });
+
+    jdbc.update(
+        """
+        update equipment_balance
+        set quantity=4
+        where equipment_id=? and warehouse_id=? and rental_item_id=?
+          and location_kind='CABIN_NON_RENTED'
+        """,
+        equipmentId,
+        warehouseId,
+        rental.id());
+    var surplusPlan =
+        orders.furnitureMovementPlan(
+            orderId,
+            new OrderFurnitureMovementPlanRequest(
+                warehouseId, rental.id(), requirements, requirements));
+    assertThat(surplusPlan.lines()).singleElement().satisfies(
+        line -> {
+          assertThat(line.quantity()).isEqualTo(1);
+          assertThat(line.sourceRentalItemId()).isEqualTo(rental.id());
+          assertThat(line.sourceLocationKind())
+              .isEqualTo(BalanceLocationKind.CABIN_NON_RENTED);
+          assertThat(line.targetRentalItemId()).isNull();
+          assertThat(line.targetLocationKind()).isEqualTo(BalanceLocationKind.STOCK);
+        });
+
+    RentalItemResponse otherRental = freeRental(actorSubjectId, warehouseId);
+    UUID otherOrderId = UUID.randomUUID();
+    orders.reserve(
+        UUID.randomUUID(),
+        otherOrderId,
+        reserveRequest(warehouseId, otherRental.id(), actorSubjectId));
     assertConflict(
-        "EQUIPMENT_QUANTITY_CONFLICT",
+        "INSUFFICIENT_EQUIPMENT",
         () ->
-            orders.adjustEquipment(
+            orders.replaceEquipmentReservations(
                 UUID.randomUUID(),
-                orderId,
-                rental.id(),
-                equipmentId,
-                equipmentRequest(actorSubjectId, 1, 2)));
-    assertConflict(
-        "INSUFFICIENT_STOCK",
-        () ->
-            orders.adjustEquipment(
-                UUID.randomUUID(),
-                orderId,
-                rental.id(),
-                equipmentId,
-                equipmentRequest(actorSubjectId, 2, 9)));
-    assertThat(balance(equipmentId, warehouseId, rental.id(), "CABIN_NON_RENTED"))
-        .isEqualTo(2);
-    assertThat(balance(equipmentId, warehouseId, null, "STOCK")).isEqualTo(6);
+                otherOrderId,
+                equipmentReservationRequest(
+                    actorSubjectId,
+                    warehouseId,
+                    List.of(new OrderEquipmentRequirement(equipmentId, 10L)))));
+  }
+
+  @Test
+  void semanticReserveRepairsLegacyFreeStatusAndMissingClientProjection() {
+    UUID actorSubjectId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    RentalItemResponse rental = freeRental(actorSubjectId, warehouseId);
+    ReserveOrderUnitRequest request =
+        reserveRequest(warehouseId, rental.id(), actorSubjectId);
+    var first = orders.reserve(UUID.randomUUID(), orderId, request);
+
+    jdbc.update(
+        "update rental_item set status='FREE' where id=?",
+        rental.id());
+    jdbc.update(
+        """
+        update order_unit_reservation
+        set client_id=null,tenant_snapshot=null
+        where id=?
+        """,
+        first.response().reservationId());
+
+    var repaired = orders.reserve(UUID.randomUUID(), orderId, request);
+
+    assertThat(repaired.replayed()).isTrue();
+    assertThat(assets.rentalItem(rental.id()))
+        .satisfies(
+            booked -> {
+              assertThat(booked.status()).isEqualTo(RentalItemStatus.BOOKED);
+              assertThat(booked.activeOrderReservation()).isNotNull();
+              assertThat(booked.activeOrderReservation().clientId()).isEqualTo(request.clientId());
+              assertThat(booked.activeOrderReservation().tenantSnapshot())
+                  .isEqualTo(request.tenantSnapshot());
+            });
   }
 
   @Test
@@ -420,6 +490,7 @@ class OrderAssetServiceIntegrationTest {
         UUID.randomUUID(),
         orderId,
         reserveRequest(warehouseId, rental.id(), actorSubjectId));
+    RentalItemResponse booked = assets.rentalItem(rental.id());
 
     assertReservedLeaseConflict(
         () ->
@@ -427,7 +498,7 @@ class OrderAssetServiceIntegrationTest {
                 actorSubjectId,
                 UUID.randomUUID(),
                 new AcquireOperationLeaseRequest(
-                    rental.id(), "ORDER_TEST", UUID.randomUUID().toString(), rental.version())));
+                    rental.id(), "ORDER_TEST", UUID.randomUUID().toString(), booked.version())));
     assertReservedLeaseConflict(
         () ->
             assets.acquireMaintenanceLease(
@@ -437,7 +508,7 @@ class OrderAssetServiceIntegrationTest {
                     rental.id(),
                     MaintenanceLeaseOwnerType.MAINTENANCE_ESTIMATE,
                     UUID.randomUUID(),
-                    rental.version())));
+                    booked.version())));
     assertReservedLeaseConflict(
         () ->
             assets.acquireLogisticsLease(
@@ -448,7 +519,7 @@ class OrderAssetServiceIntegrationTest {
                     LogisticsLeaseOwnerType.LOGISTICS_RETURN,
                     UUID.randomUUID(),
                     UUID.randomUUID(),
-                    rental.version())));
+                    booked.version())));
     assertThat(activeLeaseCount(rental.id())).isZero();
 
     orders.release(
@@ -456,12 +527,13 @@ class OrderAssetServiceIntegrationTest {
         orderId,
         rental.id(),
         new OrderActorRequest(actorSubjectId, "RENTAL_MANAGER"));
+    RentalItemResponse released = assets.rentalItem(rental.id());
     var acquired =
         assets.acquireLease(
             actorSubjectId,
             UUID.randomUUID(),
             new AcquireOperationLeaseRequest(
-                rental.id(), "ORDER_TEST", UUID.randomUUID().toString(), rental.version()));
+                rental.id(), "ORDER_TEST", UUID.randomUUID().toString(), released.version()));
 
     assertThat(acquired.replayed()).isFalse();
     assertThat(acquired.response().state()).isEqualTo("ACTIVE");
@@ -479,32 +551,41 @@ class OrderAssetServiceIntegrationTest {
         UUID.randomUUID(),
         orderId,
         reserveRequest(warehouseId, rental.id(), actorSubjectId));
+    RentalItemResponse booked = assets.rentalItem(rental.id());
 
     assertThatThrownBy(
             () ->
                 assets.updateWarehouse(
                     rental.id(),
-                    new UpdateWarehouseRequest(rental.version(), nextWarehouseId)))
+                    new UpdateWarehouseRequest(booked.version(), nextWarehouseId)))
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("cannot change warehouse");
     assertThatThrownBy(
             () ->
                 assets.updateStatus(
                     rental.id(),
-                    new UpdateStatusRequest(rental.version(), RentalItemStatus.RENTED)))
+                    new UpdateStatusRequest(booked.version(), RentalItemStatus.RENTED)))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("incompatible status");
+    assertThatThrownBy(
+            () ->
+                assets.updateStatus(
+                    rental.id(),
+                    new UpdateStatusRequest(booked.version(), RentalItemStatus.FREE)))
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("incompatible status");
     assertThat(assets.rentalItem(rental.id()).warehouseId()).isEqualTo(warehouseId);
-    assertThat(assets.rentalItem(rental.id()).status()).isEqualTo(RentalItemStatus.FREE);
+    assertThat(assets.rentalItem(rental.id()).status()).isEqualTo(RentalItemStatus.BOOKED);
 
     orders.release(
         UUID.randomUUID(),
         orderId,
         rental.id(),
         new OrderActorRequest(actorSubjectId, "RENTAL_MANAGER"));
+    RentalItemResponse released = assets.rentalItem(rental.id());
     RentalItemResponse moved =
         assets.updateWarehouse(
-            rental.id(), new UpdateWarehouseRequest(rental.version(), nextWarehouseId));
+            rental.id(), new UpdateWarehouseRequest(released.version(), nextWarehouseId));
     RentalItemResponse rented =
         assets.updateStatus(
             rental.id(),
@@ -565,13 +646,20 @@ class OrderAssetServiceIntegrationTest {
   private static ReserveOrderUnitRequest reserveRequest(
       UUID warehouseId, UUID rentalItemId, UUID actorSubjectId) {
     return new ReserveOrderUnitRequest(
-        warehouseId, rentalItemId, actorSubjectId, "RENTAL_MANAGER");
+        warehouseId,
+        rentalItemId,
+        UUID.randomUUID(),
+        "ООО Тестовый арендатор",
+        actorSubjectId,
+        "RENTAL_MANAGER");
   }
 
-  private static AdjustOrderEquipmentRequest equipmentRequest(
-      UUID actorSubjectId, long expected, long required) {
-    return new AdjustOrderEquipmentRequest(
-        actorSubjectId, "RENTAL_MANAGER", expected, required);
+  private static ReplaceOrderEquipmentReservationsRequest equipmentReservationRequest(
+      UUID actorSubjectId,
+      UUID warehouseId,
+      List<OrderEquipmentRequirement> requirements) {
+    return new ReplaceOrderEquipmentReservationsRequest(
+        warehouseId, actorSubjectId, "RENTAL_MANAGER", requirements);
   }
 
   private void saveLease(
@@ -601,17 +689,38 @@ class OrderAssetServiceIntegrationTest {
   }
 
   private void seedStockBalance(UUID equipmentId, UUID warehouseId, long quantity) {
+    seedBalance(equipmentId, warehouseId, null, BalanceLocationKind.STOCK, quantity);
+  }
+
+  private void seedCabinBalance(
+      UUID equipmentId, UUID warehouseId, UUID rentalItemId, long quantity) {
+    seedBalance(
+        equipmentId,
+        warehouseId,
+        rentalItemId,
+        BalanceLocationKind.CABIN_NON_RENTED,
+        quantity);
+  }
+
+  private void seedBalance(
+      UUID equipmentId,
+      UUID warehouseId,
+      UUID rentalItemId,
+      BalanceLocationKind locationKind,
+      long quantity) {
     UUID balanceId = UUID.randomUUID();
     jdbc.update(
         """
         insert into equipment_balance(
           id,version,equipment_id,warehouse_id,rental_item_id,location_kind,quantity,
           created_at,updated_at)
-        values (?,0,?,?,null,'STOCK',?,clock_timestamp(),clock_timestamp())
+        values (?,0,?,?,?,?,?,clock_timestamp(),clock_timestamp())
         """,
         balanceId,
         equipmentId,
         warehouseId,
+        rentalItemId,
+        locationKind.name(),
         quantity);
     events.initialize(
         AssetAggregateType.EQUIPMENT_BALANCE,
@@ -626,7 +735,7 @@ class OrderAssetServiceIntegrationTest {
             "warehouseId",
             warehouseId.toString(),
             "locationKind",
-            BalanceLocationKind.STOCK.name(),
+            locationKind.name(),
             "quantity",
             quantity),
         Map.of(
@@ -635,7 +744,7 @@ class OrderAssetServiceIntegrationTest {
             "version",
             0,
             "locationKind",
-            BalanceLocationKind.STOCK.name(),
+            locationKind.name(),
             "quantity",
             quantity));
   }

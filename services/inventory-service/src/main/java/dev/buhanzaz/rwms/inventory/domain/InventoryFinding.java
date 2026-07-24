@@ -59,6 +59,15 @@ public class InventoryFinding {
   @Column(name = "asset_version_snapshot")
   private Long assetVersion;
 
+  @Column(name = "current_warehouse_id")
+  private UUID currentWarehouseId;
+
+  @Column(name = "current_status", length = 48)
+  private String currentStatus;
+
+  @Column(name = "current_tenant_snapshot", length = 512)
+  private String currentTenantSnapshot;
+
   @Column(name = "display_canonical_number", nullable = false, length = 128)
   private String displayCanonicalNumber;
 
@@ -88,6 +97,9 @@ public class InventoryFinding {
   @Column(name = "maintenance_plan_fingerprint_sha256", length = 64)
   private String maintenancePlanFingerprintSha256;
 
+  @Column(name = "inspection_comment", nullable = false, length = 2000)
+  private String inspectionComment;
+
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(name = "actor_ref", nullable = false, columnDefinition = "jsonb")
   private String actorRef;
@@ -105,6 +117,9 @@ public class InventoryFinding {
       UUID expectedItemId,
       UUID assetId,
       long assetVersion,
+      UUID warehouseId,
+      String status,
+      String tenantSnapshot,
       String displayNumber,
       String matchKey,
       String actorRef) {
@@ -115,9 +130,33 @@ public class InventoryFinding {
         FindingOrigin.EXPECTED,
         assetId,
         assetVersion,
+        warehouseId,
+        status,
+        tenantSnapshot,
         displayNumber,
         matchKey,
         ReconciliationState.MISSING,
+        actorRef);
+  }
+
+  public static InventoryFinding expected(
+      UUID inventoryId,
+      UUID expectedItemId,
+      UUID assetId,
+      long assetVersion,
+      String displayNumber,
+      String matchKey,
+      String actorRef) {
+    return expected(
+        inventoryId,
+        expectedItemId,
+        assetId,
+        assetVersion,
+        null,
+        null,
+        null,
+        displayNumber,
+        matchKey,
         actorRef);
   }
 
@@ -126,6 +165,9 @@ public class InventoryFinding {
       FindingOrigin origin,
       UUID assetId,
       Long assetVersion,
+      UUID warehouseId,
+      String status,
+      String tenantSnapshot,
       String displayNumber,
       String matchKey,
       ReconciliationState reconciliation,
@@ -139,6 +181,32 @@ public class InventoryFinding {
         origin,
         assetId,
         assetVersion,
+        warehouseId,
+        status,
+        tenantSnapshot,
+        displayNumber,
+        matchKey,
+        reconciliation,
+        actorRef);
+  }
+
+  public static InventoryFinding unexpected(
+      UUID inventoryId,
+      FindingOrigin origin,
+      UUID assetId,
+      Long assetVersion,
+      String displayNumber,
+      String matchKey,
+      ReconciliationState reconciliation,
+      String actorRef) {
+    return unexpected(
+        inventoryId,
+        origin,
+        assetId,
+        assetVersion,
+        null,
+        null,
+        null,
         displayNumber,
         matchKey,
         reconciliation,
@@ -159,6 +227,9 @@ public class InventoryFinding {
             origin,
             null,
             null,
+            null,
+            null,
+            null,
             displayNumber,
             matchKey,
             ReconciliationState.CONFLICT,
@@ -174,14 +245,22 @@ public class InventoryFinding {
       FindingOrigin origin,
       UUID assetId,
       Long assetVersion,
+      UUID currentWarehouseId,
+      String currentStatus,
+      String currentTenantSnapshot,
       String displayNumber,
       String matchKey,
       ReconciliationState reconciliation,
       String actorRef) {
+    boolean emptyCurrentSnapshot =
+        currentWarehouseId == null && currentStatus == null && currentTenantSnapshot == null;
+    boolean completeCurrentSnapshot =
+        assetId != null && currentWarehouseId != null && currentStatus != null;
     if (inventoryId == null
         || origin == null
         || reconciliation == null
         || (assetId == null) != (assetVersion == null)
+        || (!emptyCurrentSnapshot && !completeCurrentSnapshot)
         || (assetVersion != null && assetVersion < 0)) {
       throw new IllegalArgumentException("Finding ownership and asset snapshot are invalid");
     }
@@ -193,11 +272,15 @@ public class InventoryFinding {
     value.reconciliation = reconciliation;
     value.assetId = assetId;
     value.assetVersion = assetVersion;
+    value.currentWarehouseId = currentWarehouseId;
+    value.currentStatus = nullableRequired(currentStatus, 48, "current status");
+    value.currentTenantSnapshot = nullable(currentTenantSnapshot, 512, "current tenant");
     value.displayCanonicalNumber = required(displayNumber, 128, "display number");
     value.identityMatchKey = required(matchKey, 128, "identity match key");
     value.passportObservationState = ObservationPresence.ABSENT;
     value.equipmentObservationState = ObservationPresence.ABSENT;
     value.mutationState = MutationState.IDLE;
+    value.inspectionComment = "";
     value.ownerProofActive = true;
     value.actorRef = required(actorRef, 2000, "actor reference");
     return value;
@@ -219,7 +302,12 @@ public class InventoryFinding {
     mutationState = MutationState.SOURCE_CREATE_PENDING;
   }
 
-  public void attachCreatedAsset(UUID createdAssetId, long createdAssetVersion) {
+  public void attachCreatedAsset(
+      UUID createdAssetId,
+      long createdAssetVersion,
+      UUID warehouseId,
+      String status,
+      String tenantSnapshot) {
     if (mutationState != MutationState.SOURCE_CREATE_PENDING
         || createdAssetId == null
         || createdAssetVersion < 0) {
@@ -227,8 +315,39 @@ public class InventoryFinding {
     }
     assetId = createdAssetId;
     assetVersion = createdAssetVersion;
+    currentWarehouseId = java.util.Objects.requireNonNull(warehouseId, "warehouseId");
+    currentStatus = required(status, 48, "current status");
+    currentTenantSnapshot = nullable(tenantSnapshot, 512, "current tenant");
     reconciliation = ReconciliationState.MATCHED;
     mutationState = MutationState.SOURCE_CREATED;
+  }
+
+  public void refreshCurrentAsset(
+      Long currentAssetVersion,
+      UUID warehouseId,
+      String status,
+      String tenantSnapshot,
+      ReconciliationState nextReconciliation) {
+    requireIdleOrCreated();
+    boolean missing =
+        currentAssetVersion == null
+            && warehouseId == null
+            && status == null
+            && tenantSnapshot == null;
+    boolean present =
+        assetId != null
+            && currentAssetVersion != null
+            && currentAssetVersion >= 0
+            && warehouseId != null
+            && status != null;
+    if ((!missing && !present) || nextReconciliation == null) {
+      throw new IllegalArgumentException("Current asset snapshot is invalid");
+    }
+    if (present) assetVersion = currentAssetVersion;
+    currentWarehouseId = warehouseId;
+    currentStatus = nullableRequired(status, 48, "current status");
+    currentTenantSnapshot = nullable(tenantSnapshot, 512, "current tenant");
+    reconciliation = nextReconciliation;
   }
 
   public void saveInspection(
@@ -239,6 +358,7 @@ public class InventoryFinding {
       ObservationPresence equipmentPresence,
       String equipmentJson,
       String planFingerprint,
+      String comment,
       String nextActorRef) {
     if (nextInspection == null || nextInspection == InspectionState.NOT_INSPECTED) {
       throw new IllegalArgumentException("Inspection must be READY or WORK_STAGED");
@@ -252,7 +372,30 @@ public class InventoryFinding {
     equipmentObservation = observation(equipmentPresence, equipmentJson, true);
     maintenancePlanFingerprintSha256 =
         nextInspection == InspectionState.WORK_STAGED ? sha256(planFingerprint) : null;
+    inspectionComment = normalizedComment(comment);
+    if (inspectionComment == null) inspectionComment = "";
     actorRef = required(nextActorRef, 2000, "actor reference");
+  }
+
+  public void saveInspection(
+      InspectionState nextInspection,
+      ReconciliationState nextReconciliation,
+      ObservationPresence passportPresence,
+      String passportJson,
+      ObservationPresence equipmentPresence,
+      String equipmentJson,
+      String planFingerprint,
+      String nextActorRef) {
+    saveInspection(
+        nextInspection,
+        nextReconciliation,
+        passportPresence,
+        passportJson,
+        equipmentPresence,
+        equipmentJson,
+        planFingerprint,
+        "",
+        nextActorRef);
   }
 
   public void markMissing(String nextActorRef) {
@@ -313,6 +456,28 @@ public class InventoryFinding {
     return normalized;
   }
 
+  private static String nullableRequired(String value, int maximum, String field) {
+    return value == null ? null : required(value, maximum, field);
+  }
+
+  private static String nullable(String value, int maximum, String field) {
+    if (value == null) return null;
+    String normalized = value.trim();
+    if (normalized.length() > maximum) {
+      throw new IllegalArgumentException(field + " is too long");
+    }
+    return normalized.isEmpty() ? null : normalized;
+  }
+
+  private static String normalizedComment(String value) {
+    if (value == null) throw new IllegalArgumentException("inspection comment is required");
+    String normalized = value.trim();
+    if (normalized.length() > 2000) {
+      throw new IllegalArgumentException("inspection comment is too long");
+    }
+    return normalized;
+  }
+
   @PrePersist
   void beforeInsert() {
     OffsetDateTime current = OffsetDateTime.now(ZoneOffset.UTC);
@@ -365,6 +530,18 @@ public class InventoryFinding {
     return assetVersion;
   }
 
+  public UUID getCurrentWarehouseId() {
+    return currentWarehouseId;
+  }
+
+  public String getCurrentStatus() {
+    return currentStatus;
+  }
+
+  public String getCurrentTenantSnapshot() {
+    return currentTenantSnapshot;
+  }
+
   public String getDisplayCanonicalNumber() {
     return displayCanonicalNumber;
   }
@@ -379,6 +556,10 @@ public class InventoryFinding {
 
   public String getMaintenancePlanFingerprintSha256() {
     return maintenancePlanFingerprintSha256;
+  }
+
+  public String getInspectionComment() {
+    return inspectionComment;
   }
 
   public ObservationPresence getPassportObservationState() {

@@ -19,6 +19,12 @@ const returnApi = vi.hoisted(() => ({
 const driverDirectoryApi = vi.hoisted(() => ({
   listRepairWorkerGroups: vi.fn(),
 }))
+const rentalItemsApi = vi.hoisted(() => ({
+  getAssetRentalItem: vi.fn(),
+}))
+const ordersApi = vi.hoisted(() => ({
+  getOrder: vi.fn(),
+}))
 const authState = vi.hoisted(() => ({
   level: "EDIT" as "VIEW" | "EDIT" | "MANAGE",
 }))
@@ -34,6 +40,15 @@ vi.mock("@/features/repair-tasks/api/repair-worker-directory-api", () => ({
     query,
   ],
   listRepairWorkerGroups: driverDirectoryApi.listRepairWorkerGroups,
+}))
+
+vi.mock("@/features/rental-items/api/asset-rental-items-api", () => ({
+  getAssetRentalItem: rentalItemsApi.getAssetRentalItem,
+}))
+
+vi.mock("@/features/orders/api/orders-api", () => ({
+  ORDERS_QUERY_KEY: ["orders"],
+  getOrder: ordersApi.getOrder,
 }))
 
 vi.mock("@/features/logistics/logistics-driver-picker", () => ({
@@ -140,6 +155,8 @@ const ASSET_ID = "55555555-5555-4555-8555-555555555555"
 const CLIENT_ID = "66666666-6666-4666-8666-666666666666"
 const ORDER_ID = "77777777-7777-4777-8777-777777777777"
 const IDEMPOTENCY_KEY = "99999999-9999-4999-8999-999999999999"
+const ASSET_NUMBER = "БЫТ-041"
+const ORDER_NUMBER = "ORD-000007"
 
 function returnLine(
   id: string,
@@ -175,7 +192,7 @@ function returnDocument(
     driverSnapshot: null,
     clientId: CLIENT_ID,
     equipmentMovementTaskId: null,
-    scheduledAt: state === "DRAFT" ? null : "2026-07-18T08:00:00Z",
+    scheduledDate: state === "DRAFT" ? null : "2026-07-18",
     rentalOrderId: ORDER_ID,
     lines,
     createdAt: "2026-07-18T08:00:00Z",
@@ -222,6 +239,15 @@ beforeEach(() => {
     returnDocument(DOCUMENT_ID, "DRAFT", 2),
     returnDocument(INSPECTION_ID, "INSPECTION_REQUIRED", 4),
   ])
+  rentalItemsApi.getAssetRentalItem.mockResolvedValue({
+    id: ASSET_ID,
+    number: ASSET_NUMBER,
+  })
+  ordersApi.getOrder.mockResolvedValue({
+    id: ORDER_ID,
+    number: ORDER_NUMBER,
+    units: [{ unit: { id: ASSET_ID, number: ASSET_NUMBER } }],
+  })
 })
 
 afterEach(() => {
@@ -231,6 +257,24 @@ afterEach(() => {
 })
 
 describe("LogisticsReturnsPage", () => {
+  it("shows cabin and order numbers in the return composition", async () => {
+    renderPage()
+
+    expect(
+      (await screen.findAllByText(`Бытовка ${ASSET_NUMBER}`)).length
+    ).toBeGreaterThan(0)
+    expect(
+      screen.getAllByRole("link", { name: `Заказ ${ORDER_NUMBER}` }).length
+    ).toBeGreaterThan(0)
+    expect(rentalItemsApi.getAssetRentalItem).toHaveBeenCalledWith(
+      "return-token",
+      ASSET_ID
+    )
+    expect(ordersApi.getOrder).toHaveBeenCalledWith("return-token", ORDER_ID)
+    expect(screen.queryByText(new RegExp(ASSET_ID))).toBeNull()
+    expect(screen.queryByText(new RegExp(ORDER_ID))).toBeNull()
+  })
+
   it("keeps VIEW access read-only while preserving service reads", async () => {
     authState.level = "VIEW"
     renderPage()
@@ -274,7 +318,7 @@ describe("LogisticsReturnsPage", () => {
     )
 
     expect(screen.getByRole("combobox", { name: "Водитель" })).toBeTruthy()
-    expect(screen.getByLabelText("Дата и время вывоза")).toBeTruthy()
+    expect(screen.getByLabelText("Дата вывоза")).toBeTruthy()
   })
 
   it("uses the server document version, driver and date for pickup", async () => {
@@ -291,8 +335,8 @@ describe("LogisticsReturnsPage", () => {
       screen.getByRole("combobox", { name: "Водитель" }),
       "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
     )
-    const scheduledAt = "2026-07-23T09:15"
-    await user.type(screen.getByLabelText("Дата и время вывоза"), scheduledAt)
+    const scheduledDate = "2026-07-23"
+    await user.type(screen.getByLabelText("Дата вывоза"), scheduledDate)
     await user.click(
       screen.getByRole("dialog").querySelector('button[type="submit"]')!
     )
@@ -303,7 +347,7 @@ describe("LogisticsReturnsPage", () => {
         documentId: DOCUMENT_ID,
         expectedVersion: 2,
         driverSnapshot: "Иванов Иван",
-        scheduledAt: new Date(scheduledAt).toISOString(),
+        scheduledDate,
         idempotencyKey: IDEMPOTENCY_KEY,
       })
     )

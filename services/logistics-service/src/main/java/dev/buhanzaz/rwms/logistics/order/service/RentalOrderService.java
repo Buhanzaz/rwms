@@ -4,8 +4,9 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AddOrderUnitRequest;
-import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AdjustOrderEquipmentRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDesiredEquipmentInput;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDesiredEquipmentResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDetailResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderEquipmentContentResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderHistoryEventResponse;
@@ -16,22 +17,27 @@ import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderSummaryResponse
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderUnitPageResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderUnitResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SelectWarehouseRequest;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SetOrderUnitDesiredEquipmentRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.UpdateOrderRequest;
 import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderAuditEventType;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderCommandReceipt;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import dev.buhanzaz.rwms.logistics.order.mapper.RentalOrderResponseMapper;
 import dev.buhanzaz.rwms.logistics.order.repository.OrderAuditEventRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.OrderCommandReceiptRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
+import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderEquipmentRequirementRepository;
 import dev.buhanzaz.rwms.logistics.order.security.OrderActor;
 import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
 import jakarta.persistence.criteria.Predicate;
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -66,11 +72,12 @@ public class RentalOrderService {
   private static final String CANCEL_ORDER = "CANCEL_ORDER";
   private static final String ADD_UNIT = "ADD_UNIT";
   private static final String REMOVE_UNIT = "REMOVE_UNIT";
-  private static final String ADJUST_EQUIPMENT = "ADJUST_EQUIPMENT";
+  private static final String SET_DESIRED_EQUIPMENT = "SET_DESIRED_EQUIPMENT";
 
   private final RentalOrderRepository orders;
   private final OrderCommandReceiptRepository receipts;
   private final OrderAuditEventRepository auditEvents;
+  private final RentalOrderEquipmentRequirementRepository equipmentRequirements;
   private final OrderClientService clientService;
   private final OrderAuditService audit;
   private final OrderAuthorizer access;
@@ -175,6 +182,8 @@ public class RentalOrderService {
       LogisticsDependencyGateway.OrderUnitCandidatePage result =
           dependencies.readOrderUnitCandidates(
               orderId, warehouseId, page, size, search == null ? "" : search.trim());
+      Map<UUID, List<OrderDesiredEquipmentResponse>> desiredByUnit =
+          desiredContentsByUnit(order);
       List<OrderUnitResponse> content =
           result.content().stream()
               .map(
@@ -189,7 +198,8 @@ public class RentalOrderService {
                     return new OrderUnitResponse(
                         candidate.reservationId(),
                         candidate.added(),
-                        rentalItem(candidate.unit()));
+                        rentalItem(candidate.unit()),
+                        desiredByUnit.getOrDefault(candidate.unit().id(), List.of()));
                   })
               .toList();
       return new OrderUnitPageResponse(
@@ -278,7 +288,7 @@ public class RentalOrderService {
         "CLIENT",
         client.getId().toString(),
         null,
-        Map.of("clientId", client.getId().toString()));
+        Map.of("displayName", client.getDisplayName()));
     audit.append(
         order.getId(),
         OrderAuditEventType.ORDER_CREATED,
@@ -288,8 +298,7 @@ public class RentalOrderService {
         null,
         Map.of(
             "number", number,
-            "status", order.getStatus().name(),
-            "managerId", managerId.toString()));
+            "status", order.getStatus().name()));
     return new CreateResult(detail(order, actor, List.of()), false);
   }
 
@@ -319,7 +328,7 @@ public class RentalOrderService {
     requireVersion(order, request.expectedVersion());
     order.requireDraft();
     OrderClient nextClient = clientService.required(request.clientId());
-    UUID previousClientId = order.getClient().getId();
+    OrderClient previousClient = order.getClient();
     if (!order.changeClient(nextClient)) {
       remember(actor, UPDATE_ORDER, idempotencyKey, checksum, order);
       return new MutationResult(detail(order, actor, readUnits(order)), false);
@@ -332,8 +341,8 @@ public class RentalOrderService {
         actor,
         "CLIENT",
         nextClient.getId().toString(),
-        Map.of("clientId", previousClientId.toString()),
-        Map.of("clientId", nextClient.getId().toString()));
+        Map.of("displayName", previousClient.getDisplayName()),
+        Map.of("displayName", nextClient.getDisplayName()));
     changed(order, actor, "clientId");
     remember(actor, UPDATE_ORDER, idempotencyKey, checksum, order);
     return new MutationResult(detail(order, actor, readUnits(order)), false);
@@ -442,6 +451,8 @@ public class RentalOrderService {
               orderId,
               warehouseId,
               request.unitId(),
+              order.getClient().getId(),
+              order.getClient().getDisplayName(),
               actor.subjectId(),
               actor.role());
       requireReservation(reservation, orderId, request.unitId(), warehouseId, "ACTIVE");
@@ -495,6 +506,10 @@ public class RentalOrderService {
     UUID warehouseId = requiredWarehouse(order);
     LogisticsDependencyGateway.OrderUnitReservation current =
         findCurrentUnit(orderId, unitId, readUnits(order));
+    List<RentalOrderEquipmentRequirement> existingRequirements =
+        equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentCodeAsc(orderId);
+    Map<UUID, Long> remainingRequirements =
+        aggregateRequirements(existingRequirements, unitId, Map.of());
     try {
       LogisticsDependencyGateway.OrderUnitReservation released =
           dependencies.releaseOrderUnit(
@@ -505,17 +520,38 @@ public class RentalOrderService {
           && !current.reservationId().equals(released.reservationId())) {
         throw invalidDependencyResponse();
       }
+      List<LogisticsDependencyGateway.OrderEquipmentReservation> furnitureReservations =
+          dependencies.replaceOrderEquipmentReservations(
+              idempotencyKey,
+              orderId,
+              warehouseId,
+              actor.subjectId(),
+              actor.role(),
+              dependencyRequirements(remainingRequirements));
+      Map<UUID, LogisticsDependencyGateway.OrderEquipmentReservation> reservationByEquipment =
+          requireEquipmentReservations(furnitureReservations, remainingRequirements);
+      boolean furnitureChanged =
+          applyDesiredRequirements(
+              order,
+              unitId,
+              released.unit().number(),
+              existingRequirements,
+              Map.of(),
+              reservationByEquipment,
+              actor);
       ensureUnitAddedEvidence(order, released, actor);
       boolean recorded =
           hasReservationEvidence(
               orderId,
               OrderAuditEventType.RESERVATION_RELEASED,
               released.reservationId());
-      if (!recorded) {
+      if (!recorded || furnitureChanged) {
         order.touch();
         orders.saveAndFlush(order);
-        appendUnitReleasedEvidence(orderId, released, actor);
-        changed(order, actor, "units");
+        if (!recorded) {
+          appendUnitReleasedEvidence(orderId, released, actor);
+        }
+        changed(order, actor, furnitureChanged ? "unitsAndDesiredEquipment" : "units");
       }
       remember(actor, REMOVE_UNIT, idempotencyKey, checksum, order);
       return new MutationResult(detail(order, actor, readUnits(order)), recorded);
@@ -525,86 +561,65 @@ public class RentalOrderService {
   }
 
   @Transactional
-  public EquipmentResult adjustEquipment(
+  public MutationResult setDesiredEquipment(
       OrderActor actor,
       UUID orderId,
       UUID unitId,
-      UUID equipmentId,
       UUID idempotencyKey,
-      AdjustOrderEquipmentRequest request) {
-    String checksum =
-        OrderCommandChecksum.sha256(
-            ADJUST_EQUIPMENT,
-            List.of(
-                orderId.toString(),
-                unitId.toString(),
-                equipmentId.toString(),
-                Long.toString(request.expectedVersion()),
-                Long.toString(request.expectedCurrentQuantity()),
-                Long.toString(request.requiredQuantity())));
-    OrderCommandReceipt replay = replay(actor, ADJUST_EQUIPMENT, idempotencyKey, checksum);
+      SetOrderUnitDesiredEquipmentRequest request) {
+    Map<UUID, Long> desired = desiredRequirements(request.requirements());
+    List<String> checksumValues = new ArrayList<>();
+    checksumValues.add(orderId.toString());
+    checksumValues.add(unitId.toString());
+    checksumValues.add(Long.toString(request.expectedVersion()));
+    desired.forEach(
+        (equipmentId, quantity) -> {
+          checksumValues.add(equipmentId.toString());
+          checksumValues.add(Long.toString(quantity));
+        });
+    String checksum = OrderCommandChecksum.sha256(SET_DESIRED_EQUIPMENT, checksumValues);
+    OrderCommandReceipt replay = replay(actor, SET_DESIRED_EQUIPMENT, idempotencyKey, checksum);
     if (replay != null) {
       RentalOrder replayedOrder = replay.getOrder();
       access.requireVisible(actor, replayedOrder);
-      return new EquipmentResult(
-          detail(replayedOrder, actor, readUnits(replayedOrder)),
-          true);
+      return new MutationResult(detail(replayedOrder, actor, readUnits(replayedOrder)), true);
     }
+
     RentalOrder order = lockedOrder(orderId);
     access.requireMutable(actor, order);
     requireVersion(order, request.expectedVersion());
     order.requireDraft();
-    requiredWarehouse(order);
-    requireCurrentUnit(orderId, unitId, readUnits(order));
+    UUID warehouseId = requiredWarehouse(order);
+    LogisticsDependencyGateway.OrderUnitReservation unit =
+        requireCurrentUnit(orderId, unitId, readUnits(order));
+    List<RentalOrderEquipmentRequirement> existing =
+        equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentCodeAsc(orderId);
+    Map<UUID, Long> aggregate = aggregateRequirements(existing, unitId, desired);
+    List<LogisticsDependencyGateway.OrderEquipmentReservation> reservations;
     try {
-      LogisticsDependencyGateway.OrderEquipmentAdjustment adjustment =
-          dependencies.adjustOrderEquipment(
+      reservations =
+          dependencies.replaceOrderEquipmentReservations(
               idempotencyKey,
               orderId,
-              unitId,
-              equipmentId,
+              warehouseId,
               actor.subjectId(),
               actor.role(),
-              request.expectedCurrentQuantity(),
-              request.requiredQuantity());
-      requireAdjustment(adjustment, orderId, unitId, equipmentId);
-      if (adjustment.delta() != 0) {
-        order.touch();
-        orders.saveAndFlush(order);
-        OrderAuditEventType eventType =
-            adjustment.previousQuantity() == 0
-                ? OrderAuditEventType.EQUIPMENT_ADDED
-                : adjustment.delta() > 0
-                    ? OrderAuditEventType.EQUIPMENT_INCREASED
-                    : OrderAuditEventType.EQUIPMENT_DECREASED;
-        audit.append(
-            orderId,
-            eventType,
-            actor,
-            "EQUIPMENT",
-            equipmentId.toString(),
-            Map.of("quantity", adjustment.previousQuantity()),
-            Map.of("quantity", adjustment.requiredQuantity()));
-        if (adjustment.movement() != null) {
-          audit.append(
-              orderId,
-              OrderAuditEventType.WAREHOUSE_OPERATION_CREATED,
-              actor,
-              "WAREHOUSE_OPERATION",
-              adjustment.movement().id().toString(),
-              null,
-              Map.of(
-                  "unitId", unitId.toString(),
-                  "equipmentId", equipmentId.toString(),
-                  "delta", adjustment.delta()));
-        }
-        changed(order, actor, "equipment");
-      }
-      remember(actor, ADJUST_EQUIPMENT, idempotencyKey, checksum, order);
-      return new EquipmentResult(detail(order, actor, readUnits(order)), false);
+              dependencyRequirements(aggregate));
     } catch (LogisticsDependencyException exception) {
       throw dependencyProblem(exception);
     }
+    Map<UUID, LogisticsDependencyGateway.OrderEquipmentReservation> reservationByEquipment =
+        requireEquipmentReservations(reservations, aggregate);
+    boolean changed =
+        applyDesiredRequirements(
+            order, unitId, unit.unit().number(), existing, desired, reservationByEquipment, actor);
+    if (changed) {
+      order.touch();
+      orders.saveAndFlush(order);
+      changed(order, actor, "desiredEquipment");
+    }
+    remember(actor, SET_DESIRED_EQUIPMENT, idempotencyKey, checksum, order);
+    return new MutationResult(detail(order, actor, readUnits(order)), false);
   }
 
   @Transactional
@@ -666,6 +681,46 @@ public class RentalOrderService {
         && released.stream().anyMatch(value -> !value.replayed())) {
       throw invalidDependencyResponse();
     }
+    List<RentalOrderEquipmentRequirement> existingRequirements =
+        equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentCodeAsc(orderId);
+    if (order.getWarehouseId() != null) {
+      List<LogisticsDependencyGateway.OrderEquipmentReservation> furnitureReservations;
+      try {
+        furnitureReservations =
+            dependencies.replaceOrderEquipmentReservations(
+                idempotencyKey,
+                orderId,
+                order.getWarehouseId(),
+                actor.subjectId(),
+                actor.role(),
+                List.of());
+      } catch (LogisticsDependencyException exception) {
+        throw dependencyProblem(exception);
+      }
+      requireEquipmentReservations(furnitureReservations, Map.of());
+    }
+    Map<UUID, String> unitNumbers =
+        released.stream()
+            .collect(
+                Collectors.toMap(
+                    LogisticsDependencyGateway.OrderUnitReservation::unitId,
+                    reservation -> reservation.unit().number(),
+                    (left, right) -> left,
+                    LinkedHashMap::new));
+    for (UUID unitId :
+        existingRequirements.stream()
+            .map(RentalOrderEquipmentRequirement::getRentalItemId)
+            .distinct()
+            .toList()) {
+      applyDesiredRequirements(
+          order,
+          unitId,
+          unitNumbers.getOrDefault(unitId, "Бытовка"),
+          existingRequirements,
+          Map.of(),
+          Map.of(),
+          actor);
+    }
     for (LogisticsDependencyGateway.OrderUnitReservation reservation : released) {
       LogisticsDependencyGateway.OrderUnitReservation current =
           findCurrentUnit(orderId, reservation.unitId(), active);
@@ -718,27 +773,260 @@ public class RentalOrderService {
     }
 
     RentalOrder order = lockedOrder(orderId);
-    access.requireMutable(actor, order);
+    access.requireVisible(actor, order);
+    boolean firstSave = order.getStatus() == RentalOrderStatus.DRAFT;
+    if (firstSave) {
+      access.requireMutable(actor, order);
+    } else if (order.getStatus() == RentalOrderStatus.SAVED) {
+      access.requireWarehouseEdit(actor, requiredWarehouse(order));
+    } else {
+      throw conflict("ORDER_NOT_EDITABLE", "Заказ больше нельзя сохранять");
+    }
     requireVersion(order, expectedVersion);
     List<LogisticsDependencyGateway.OrderUnitReservation> units = readUnits(order);
     if (units.isEmpty()) {
       throw conflict("ORDER_UNITS_REQUIRED", "Добавьте в заказ хотя бы одну бытовку");
     }
-    order.saveForFulfillment();
-    orders.saveAndFlush(order);
+    units = synchronizeOrderUnits(order, actor, units);
+    if (firstSave) {
+      order.saveForFulfillment();
+      orders.saveAndFlush(order);
+    }
     documents.createRentalOrderShipmentDraft(
         actor.subjectId(), correlationId, order, units);
-    audit.append(
-        orderId,
-        OrderAuditEventType.ORDER_SAVED,
-        actor,
-        "ORDER",
-        orderId.toString(),
-        Map.of("status", RentalOrderStatus.DRAFT.name()),
-        Map.of("status", RentalOrderStatus.SAVED.name()));
-    changed(order, actor, "status");
+    if (firstSave) {
+      audit.append(
+          orderId,
+          OrderAuditEventType.ORDER_SAVED,
+          actor,
+          "ORDER",
+          orderId.toString(),
+          Map.of("status", RentalOrderStatus.DRAFT.name()),
+          Map.of("status", RentalOrderStatus.SAVED.name()));
+      changed(order, actor, "status");
+    }
     remember(actor, SAVE_ORDER, idempotencyKey, checksum, order);
     return new MutationResult(detail(order, actor, units), false);
+  }
+
+  private List<LogisticsDependencyGateway.OrderUnitReservation> synchronizeOrderUnits(
+      RentalOrder order,
+      OrderActor actor,
+      List<LogisticsDependencyGateway.OrderUnitReservation> currentUnits) {
+    UUID warehouseId = requiredWarehouse(order);
+    List<LogisticsDependencyGateway.OrderUnitReservation> synchronizedUnits =
+        new ArrayList<>(currentUnits.size());
+    for (LogisticsDependencyGateway.OrderUnitReservation current : currentUnits) {
+      UUID synchronizationKey = UUID.nameUUIDFromBytes(
+          ("rental-order-reservation-v2:" + order.getId() + ":" + current.unitId())
+              .getBytes(StandardCharsets.UTF_8));
+      try {
+        LogisticsDependencyGateway.OrderUnitReservation synchronizedUnit =
+            dependencies.reserveOrderUnit(
+                synchronizationKey,
+                order.getId(),
+                warehouseId,
+                current.unitId(),
+                order.getClient().getId(),
+                order.getClient().getDisplayName(),
+                actor.subjectId(),
+                actor.role());
+        requireReservation(
+            synchronizedUnit,
+            order.getId(),
+            current.unitId(),
+            warehouseId,
+            "ACTIVE");
+        synchronizedUnits.add(synchronizedUnit);
+      } catch (LogisticsDependencyException exception) {
+        throw dependencyProblem(exception);
+      }
+    }
+    return List.copyOf(synchronizedUnits);
+  }
+
+  private static Map<UUID, Long> desiredRequirements(
+      List<OrderDesiredEquipmentInput> requirements) {
+    if (requirements == null) {
+      throw new IllegalArgumentException("Equipment requirements are required");
+    }
+    Map<UUID, Long> values = new LinkedHashMap<>();
+    for (OrderDesiredEquipmentInput requirement : requirements) {
+      if (requirement == null
+          || requirement.equipmentId() == null
+          || requirement.quantity() == null
+          || requirement.quantity() < 1
+          || values.putIfAbsent(requirement.equipmentId(), requirement.quantity()) != null) {
+        throw new IllegalArgumentException("Equipment requirements are invalid");
+      }
+    }
+    return values.entrySet().stream()
+        .sorted(Map.Entry.comparingByKey())
+        .collect(
+            Collectors.toMap(
+                Map.Entry::getKey,
+                Map.Entry::getValue,
+                (left, right) -> left,
+                LinkedHashMap::new));
+  }
+
+  private static Map<UUID, Long> aggregateRequirements(
+      List<RentalOrderEquipmentRequirement> existing,
+      UUID replacedUnitId,
+      Map<UUID, Long> desired) {
+    Map<UUID, Long> aggregate = new LinkedHashMap<>();
+    for (RentalOrderEquipmentRequirement requirement : existing) {
+      if (!replacedUnitId.equals(requirement.getRentalItemId())
+          && requirement.getQuantity() > 0) {
+        aggregate.merge(requirement.getEquipmentId(), requirement.getQuantity(), Math::addExact);
+      }
+    }
+    desired.forEach((equipmentId, quantity) -> aggregate.merge(equipmentId, quantity, Math::addExact));
+    return aggregate.entrySet().stream()
+        .sorted(Map.Entry.comparingByKey())
+        .collect(
+            Collectors.toMap(
+                Map.Entry::getKey,
+                Map.Entry::getValue,
+                (left, right) -> left,
+                LinkedHashMap::new));
+  }
+
+  private static List<LogisticsDependencyGateway.OrderEquipmentRequirement> dependencyRequirements(
+      Map<UUID, Long> requirements) {
+    return requirements.entrySet().stream()
+        .map(
+            entry ->
+                new LogisticsDependencyGateway.OrderEquipmentRequirement(
+                    entry.getKey(), entry.getValue()))
+        .toList();
+  }
+
+  private static Map<UUID, LogisticsDependencyGateway.OrderEquipmentReservation>
+      requireEquipmentReservations(
+          List<LogisticsDependencyGateway.OrderEquipmentReservation> reservations,
+          Map<UUID, Long> expected) {
+    if (reservations == null || reservations.size() != expected.size()) {
+      throw invalidDependencyResponse();
+    }
+    Map<UUID, LogisticsDependencyGateway.OrderEquipmentReservation> actual =
+        new LinkedHashMap<>();
+    for (LogisticsDependencyGateway.OrderEquipmentReservation reservation : reservations) {
+      if (reservation == null
+          || reservation.equipmentId() == null
+          || reservation.equipmentCode() == null
+          || reservation.equipmentCode().isBlank()
+          || reservation.equipmentName() == null
+          || reservation.equipmentName().isBlank()
+          || reservation.quantity() < 1
+          || reservation.availableQuantity() < 0
+          || actual.putIfAbsent(reservation.equipmentId(), reservation) != null
+          || !Objects.equals(expected.get(reservation.equipmentId()), reservation.quantity())) {
+        throw invalidDependencyResponse();
+      }
+    }
+    if (!actual.keySet().equals(expected.keySet())) {
+      throw invalidDependencyResponse();
+    }
+    return actual;
+  }
+
+  private boolean applyDesiredRequirements(
+      RentalOrder order,
+      UUID unitId,
+      String unitNumber,
+      List<RentalOrderEquipmentRequirement> existing,
+      Map<UUID, Long> desired,
+      Map<UUID, LogisticsDependencyGateway.OrderEquipmentReservation> reservations,
+      OrderActor actor) {
+    Map<UUID, RentalOrderEquipmentRequirement> current = new LinkedHashMap<>();
+    for (RentalOrderEquipmentRequirement requirement : existing) {
+      if (unitId.equals(requirement.getRentalItemId())
+          && current.putIfAbsent(requirement.getEquipmentId(), requirement) != null) {
+        throw new IllegalStateException("Duplicate order equipment requirement");
+      }
+    }
+    List<RentalOrderEquipmentRequirement> changedRequirements = new ArrayList<>();
+    for (RentalOrderEquipmentRequirement requirement : current.values()) {
+      long previousQuantity = requirement.getQuantity();
+      long nextQuantity = desired.getOrDefault(requirement.getEquipmentId(), 0L);
+      LogisticsDependencyGateway.OrderEquipmentReservation reservation =
+          reservations.get(requirement.getEquipmentId());
+      String nextCode = reservation == null ? requirement.getEquipmentCode() : reservation.equipmentCode();
+      String nextName = reservation == null ? requirement.getEquipmentName() : reservation.equipmentName();
+      if (requirement.change(nextCode, nextName, nextQuantity)) {
+        changedRequirements.add(requirement);
+        appendDesiredEquipmentEvidence(
+            order.getId(),
+            actor,
+            unitNumber,
+            nextName,
+            requirement.getEquipmentId(),
+            previousQuantity,
+            nextQuantity);
+      }
+    }
+    for (Map.Entry<UUID, Long> entry : desired.entrySet()) {
+      if (current.containsKey(entry.getKey())) {
+        continue;
+      }
+      LogisticsDependencyGateway.OrderEquipmentReservation reservation = reservations.get(entry.getKey());
+      if (reservation == null) {
+        throw invalidDependencyResponse();
+      }
+      RentalOrderEquipmentRequirement created =
+          RentalOrderEquipmentRequirement.create(
+              order,
+              unitId,
+              entry.getKey(),
+              reservation.equipmentCode(),
+              reservation.equipmentName(),
+              entry.getValue());
+      changedRequirements.add(created);
+      appendDesiredEquipmentEvidence(
+          order.getId(),
+          actor,
+          unitNumber,
+          reservation.equipmentName(),
+          entry.getKey(),
+          0,
+          entry.getValue());
+    }
+    if (!changedRequirements.isEmpty()) {
+      equipmentRequirements.saveAllAndFlush(changedRequirements);
+      return true;
+    }
+    return false;
+  }
+
+  private void appendDesiredEquipmentEvidence(
+      UUID orderId,
+      OrderActor actor,
+      String unitNumber,
+      String equipmentName,
+      UUID equipmentId,
+      long previousQuantity,
+      long nextQuantity) {
+    OrderAuditEventType eventType =
+        previousQuantity == 0
+            ? OrderAuditEventType.EQUIPMENT_ADDED
+            : nextQuantity > previousQuantity
+                ? OrderAuditEventType.EQUIPMENT_INCREASED
+                : OrderAuditEventType.EQUIPMENT_DECREASED;
+    audit.append(
+        orderId,
+        eventType,
+        actor,
+        "EQUIPMENT",
+        equipmentId.toString(),
+        Map.of(
+            "unitNumber", unitNumber,
+            "equipmentName", equipmentName,
+            "quantity", previousQuantity),
+        Map.of(
+            "unitNumber", unitNumber,
+            "equipmentName", equipmentName,
+            "quantity", nextQuantity));
   }
 
   private RentalOrder order(UUID orderId) {
@@ -827,9 +1115,7 @@ public class RentalOrderService {
         "RENTAL_ITEM",
         reservation.unitId().toString(),
         null,
-        Map.of(
-            "unitId", reservation.unitId().toString(),
-            "reservationId", reservation.reservationId().toString()));
+        Map.of("unitNumber", reservation.unit().number()));
     audit.appendForActor(
         orderId,
         OrderAuditEventType.RESERVATION_CREATED,
@@ -838,9 +1124,7 @@ public class RentalOrderService {
         "UNIT_RESERVATION",
         reservation.reservationId().toString(),
         null,
-        Map.of(
-            "reservationId", reservation.reservationId().toString(),
-            "unitId", reservation.unitId().toString()));
+        Map.of("unitNumber", reservation.unit().number(), "state", "ACTIVE"));
   }
 
   private void appendUnitReleasedEvidence(
@@ -853,9 +1137,7 @@ public class RentalOrderService {
         actor,
         "RENTAL_ITEM",
         reservation.unitId().toString(),
-        Map.of(
-            "unitId", reservation.unitId().toString(),
-            "reservationId", reservation.reservationId().toString()),
+        Map.of("unitNumber", reservation.unit().number()),
         null);
     audit.append(
         orderId,
@@ -863,8 +1145,8 @@ public class RentalOrderService {
         actor,
         "UNIT_RESERVATION",
         reservation.reservationId().toString(),
-        Map.of("state", "ACTIVE"),
-        Map.of("state", "RELEASED"));
+        Map.of("unitNumber", reservation.unit().number(), "state", "ACTIVE"),
+        Map.of("unitNumber", reservation.unit().number(), "state", "RELEASED"));
   }
 
   private void changed(RentalOrder order, OrderActor actor, String field) {
@@ -883,6 +1165,8 @@ public class RentalOrderService {
       OrderActor actor,
       List<LogisticsDependencyGateway.OrderUnitReservation> units) {
     OrderSummaryResponse summary = mapper.toSummaryResponse(order, units.size());
+    Map<UUID, List<OrderDesiredEquipmentResponse>> desiredByUnit =
+        desiredContentsByUnit(order);
     return new OrderDetailResponse(
         summary.id(),
         summary.version(),
@@ -897,15 +1181,35 @@ public class RentalOrderService {
         summary.unitCount(),
         summary.createdAt(),
         summary.updatedAt(),
-        units.stream().map(this::unit).toList(),
+        units.stream().map(unit -> unit(unit, desiredByUnit)).toList(),
         new OrderPermissions(
             access.canEdit(actor, order), actor.canViewOtherManagers()));
   }
 
   private OrderUnitResponse unit(
-      LogisticsDependencyGateway.OrderUnitReservation reservation) {
+      LogisticsDependencyGateway.OrderUnitReservation reservation,
+      Map<UUID, List<OrderDesiredEquipmentResponse>> desiredByUnit) {
     return new OrderUnitResponse(
-        reservation.reservationId(), true, rentalItem(reservation.unit()));
+        reservation.reservationId(),
+        true,
+        rentalItem(reservation.unit()),
+        desiredByUnit.getOrDefault(reservation.unitId(), List.of()));
+  }
+
+  private Map<UUID, List<OrderDesiredEquipmentResponse>> desiredContentsByUnit(
+      RentalOrder order) {
+    Map<UUID, List<OrderDesiredEquipmentResponse>> values = new LinkedHashMap<>();
+    for (RentalOrderEquipmentRequirement requirement :
+        equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentCodeAsc(order.getId())) {
+      if (requirement.getQuantity() < 1) {
+        continue;
+      }
+      values
+          .computeIfAbsent(requirement.getRentalItemId(), ignored -> new ArrayList<>())
+          .add(mapper.toDesiredEquipmentResponse(requirement));
+    }
+    values.replaceAll((ignored, requirements) -> List.copyOf(requirements));
+    return Map.copyOf(values);
   }
 
   private OrderRentalItemResponse rentalItem(
@@ -1013,24 +1317,6 @@ public class RentalOrderService {
         || reservation.unit() == null
         || !unitId.equals(reservation.unit().id())
         || !warehouseId.equals(reservation.unit().warehouseId())) {
-      throw invalidDependencyResponse();
-    }
-  }
-
-  private static void requireAdjustment(
-      LogisticsDependencyGateway.OrderEquipmentAdjustment adjustment,
-      UUID orderId,
-      UUID unitId,
-      UUID equipmentId) {
-    if (adjustment == null
-        || !orderId.equals(adjustment.orderId())
-        || !unitId.equals(adjustment.unitId())
-        || !equipmentId.equals(adjustment.equipmentId())
-        || adjustment.previousQuantity() < 0
-        || adjustment.requiredQuantity() < 0
-        || adjustment.delta()
-            != adjustment.requiredQuantity() - adjustment.previousQuantity()
-        || adjustment.unit() == null) {
       throw invalidDependencyResponse();
     }
   }
@@ -1162,5 +1448,4 @@ public class RentalOrderService {
 
   public record MutationResult(OrderDetailResponse response, boolean replayed) {}
 
-  public record EquipmentResult(OrderDetailResponse response, boolean replayed) {}
 }

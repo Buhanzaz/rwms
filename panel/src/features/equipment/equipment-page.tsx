@@ -267,6 +267,13 @@ function EquipmentDesktopGrid({
         ),
       },
       {
+        id: "reservedQuantity",
+        label: "Забронировано",
+        getSortValue: (item) => item.reservedQuantity,
+        cellClassName: "text-left",
+        render: (item) => <QuantityCell value={item.reservedQuantity} />,
+      },
+      {
         id: "rentedQuantity",
         label: "В аренде",
         getSortValue: (item) => item.rentedQuantity,
@@ -374,6 +381,10 @@ function EquipmentMobileList({
                     label="В бытовках"
                     value={item.cabinStockQuantity}
                     tone="stock"
+                  />
+                  <MobileQuantityStat
+                    label="Забронировано"
+                    value={item.reservedQuantity}
                   />
                   <MobileQuantityStat
                     label="В аренде"

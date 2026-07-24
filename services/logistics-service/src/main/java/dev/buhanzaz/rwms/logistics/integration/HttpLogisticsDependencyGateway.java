@@ -540,6 +540,19 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   }
 
   @Override
+  public PreparationTask completePreparationTask(
+      UUID externalTaskId, long expectedTaskVersion) {
+    PreparationTaskResponse response =
+        postWithoutIdempotency(
+            taskBoardBase + "/" + externalTaskId + "/complete",
+            new CompletePreparationTaskRequest(expectedTaskVersion),
+            PreparationTaskResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE);
+    return task(response);
+  }
+
+  @Override
   public PreparationTask cancelPreparationTask(UUID externalTaskId, long expectedTaskVersion) {
     PreparationTaskResponse response =
         postWithoutIdempotency(
@@ -729,6 +742,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID orderId,
       UUID warehouseId,
       UUID unitId,
+      UUID clientId,
+      String tenantSnapshot,
       UUID actorSubjectId,
       String actorRole) {
     return orderReservation(
@@ -736,7 +751,12 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
             assetBase + "/orders/" + orderId + "/units",
             idempotencyKey,
             new ReserveOrderUnitRequest(
-                warehouseId, unitId, actorSubjectId, actorRole),
+                warehouseId,
+                unitId,
+                clientId,
+                tenantSnapshot,
+                actorSubjectId,
+                actorRole),
             OrderUnitReservationResponse.class));
   }
 
@@ -768,44 +788,65 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   }
 
   @Override
-  public OrderEquipmentAdjustment adjustOrderEquipment(
+  public List<OrderEquipmentReservation> replaceOrderEquipmentReservations(
       UUID idempotencyKey,
       UUID orderId,
-      UUID unitId,
-      UUID equipmentId,
+      UUID warehouseId,
       UUID actorSubjectId,
       String actorRole,
-      long expectedCurrentQuantity,
-      long requiredQuantity) {
-    OrderEquipmentAdjustmentResponse response =
-        putOrder(
-            assetBase
-                + "/orders/"
-                + orderId
-                + "/units/"
-                + unitId
-                + "/equipment/"
-                + equipmentId,
+      List<OrderEquipmentRequirement> requirements) {
+    List<OrderEquipmentReservationResponse> response =
+        putOrderEquipmentReservationList(
+            assetBase + "/orders/" + orderId + "/equipment-reservations",
             idempotencyKey,
-            new AdjustOrderEquipmentRequest(
+            new ReplaceOrderEquipmentReservationsRequest(
+                warehouseId,
                 actorSubjectId,
                 actorRole,
-                expectedCurrentQuantity,
-                requiredQuantity),
-            OrderEquipmentAdjustmentResponse.class);
-    if (response.unit() == null) {
-      throw malformed("Asset-service returned an invalid order equipment adjustment");
-    }
-    return new OrderEquipmentAdjustment(
-        response.orderId(),
-        response.rentalItemId(),
-        response.equipmentId(),
-        response.previousQuantity(),
-        response.requiredQuantity(),
-        response.delta(),
-        response.availableStock(),
-        orderMovement(response.movement()),
-        orderRentalItem(response.unit()));
+                requirements == null
+                    ? null
+                    : requirements.stream()
+                        .map(
+                            requirement ->
+                                new OrderEquipmentRequirementRequest(
+                                    requirement.equipmentId(), requirement.quantity()))
+                        .toList()));
+    return orderEquipmentReservations(response);
+  }
+
+  @Override
+  public OrderFurnitureMovementPlan planOrderFurnitureMovements(
+      UUID orderId,
+      UUID warehouseId,
+      UUID unitId,
+      List<OrderEquipmentRequirement> unitRequirements,
+      List<OrderEquipmentRequirement> orderRequirements) {
+    OrderFurnitureMovementPlanResponse response =
+        postOrderWithoutIdempotency(
+            assetBase + "/orders/" + orderId + "/equipment-movement-plan",
+            new OrderFurnitureMovementPlanRequest(
+                warehouseId,
+                unitId,
+                orderEquipmentRequirementRequests(unitRequirements),
+                orderEquipmentRequirementRequests(orderRequirements)),
+            OrderFurnitureMovementPlanResponse.class);
+    return orderFurnitureMovementPlan(response);
+  }
+
+  @Override
+  public CabinFurnitureMovementPlan planCabinFurnitureMovements(
+      UUID warehouseId,
+      UUID rentalItemId,
+      List<CabinFurnitureRequirement> requirements) {
+    CabinFurnitureMovementPlanResponse response =
+        postWithoutIdempotency(
+            assetBase + "/rental-items/" + rentalItemId + "/furniture-movement-plan",
+            new CabinFurnitureMovementPlanRequest(
+                warehouseId, cabinFurnitureRequirementRequests(requirements)),
+            CabinFurnitureMovementPlanResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE);
+    return cabinFurnitureMovementPlan(response);
   }
 
   private <T> T get(String uri, Class<T> type, String registration, String scope) {
@@ -877,9 +918,10 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     }
   }
 
-  private <T> T putOrder(String uri, UUID key, Object body, Class<T> type) {
+  private List<OrderEquipmentReservationResponse> putOrderEquipmentReservationList(
+      String uri, UUID key, Object body) {
     try {
-      T response =
+      List<OrderEquipmentReservationResponse> response =
           client
               .put()
               .uri(uri)
@@ -887,8 +929,25 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
               .header(HttpHeaders.AUTHORIZATION, bearer(ASSET_CLIENT, ASSET_SCOPE))
               .body(body)
               .retrieve()
+              .body(new ParameterizedTypeReference<>() {});
+      if (response == null) throw malformed("Asset-service returned an empty order equipment response");
+      return response;
+    } catch (RuntimeException exception) {
+      throw orderDependencyFailure(exception);
+    }
+  }
+
+  private <T> T postOrderWithoutIdempotency(String uri, Object body, Class<T> type) {
+    try {
+      T response =
+          client
+              .post()
+              .uri(uri)
+              .header(HttpHeaders.AUTHORIZATION, bearer(ASSET_CLIENT, ASSET_SCOPE))
+              .body(body)
+              .retrieve()
               .body(type);
-      if (response == null) throw malformed("Asset-service returned an empty response");
+      if (response == null) throw malformed("Asset-service returned an empty order movement plan");
       return response;
     } catch (RuntimeException exception) {
       throw orderDependencyFailure(exception);
@@ -1213,19 +1272,156 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         response.updatedAt());
   }
 
-  private static OrderEquipmentMovement orderMovement(
-      OrderEquipmentMovementResponse response) {
-    return response == null
-        ? null
-        : new OrderEquipmentMovement(
-            response.id(),
-            response.version(),
-            response.equipmentId(),
-            response.sourceBalanceId(),
-            response.targetBalanceId(),
-            response.quantity(),
-            response.kind(),
-            response.occurredAt());
+  private static List<OrderEquipmentRequirementRequest> orderEquipmentRequirementRequests(
+      List<OrderEquipmentRequirement> requirements) {
+    if (requirements == null) {
+      throw malformed("Order equipment requirements are required");
+    }
+    return requirements.stream()
+        .map(
+            requirement -> {
+              if (requirement == null) {
+                throw malformed("Order equipment requirement is invalid");
+              }
+              return new OrderEquipmentRequirementRequest(
+                  requirement.equipmentId(), requirement.quantity());
+            })
+        .toList();
+  }
+
+  private static List<OrderEquipmentReservation> orderEquipmentReservations(
+      List<OrderEquipmentReservationResponse> response) {
+    if (response == null) {
+      throw malformed("Asset-service returned an empty order equipment reservation list");
+    }
+    java.util.HashSet<UUID> ids = new java.util.HashSet<>();
+    List<OrderEquipmentReservation> values = new java.util.ArrayList<>(response.size());
+    for (OrderEquipmentReservationResponse value : response) {
+      if (value == null
+          || value.equipmentId() == null
+          || value.equipmentCode() == null
+          || value.equipmentCode().isBlank()
+          || value.equipmentName() == null
+          || value.equipmentName().isBlank()
+          || value.quantity() < 1
+          || value.availableQuantity() < 0
+          || !ids.add(value.equipmentId())) {
+        throw malformed("Asset-service returned an invalid order equipment reservation");
+      }
+      values.add(
+          new OrderEquipmentReservation(
+              value.equipmentId(),
+              value.equipmentCode(),
+              value.equipmentName(),
+              value.quantity(),
+              value.availableQuantity()));
+    }
+    return List.copyOf(values);
+  }
+
+  private static OrderFurnitureMovementPlan orderFurnitureMovementPlan(
+      OrderFurnitureMovementPlanResponse response) {
+    if (response == null
+        || response.orderId() == null
+        || response.rentalItemId() == null
+        || response.unitNumber() == null
+        || response.lines() == null) {
+      throw malformed("Asset-service returned an invalid order furniture movement plan");
+    }
+    List<OrderFurnitureMovementPlanLine> lines = new java.util.ArrayList<>(response.lines().size());
+    for (OrderFurnitureMovementPlanLineResponse line : response.lines()) {
+      if (line == null
+          || line.equipmentId() == null
+          || line.equipmentCode() == null
+          || line.equipmentName() == null
+          || line.sourceBalanceId() == null
+          || line.sourceWarehouseId() == null
+          || line.sourceLocationKind() == null
+          || line.expectedSourceBalanceVersion() < 0
+          || line.targetWarehouseId() == null
+          || line.targetLocationKind() == null
+          || line.quantity() < 1) {
+        throw malformed("Asset-service returned an invalid order furniture movement line");
+      }
+      lines.add(
+          new OrderFurnitureMovementPlanLine(
+              line.equipmentId(),
+              line.equipmentCode(),
+              line.equipmentName(),
+              line.sourceBalanceId(),
+              line.sourceWarehouseId(),
+              line.sourceRentalItemId(),
+              line.sourceLocationKind(),
+              line.expectedSourceBalanceVersion(),
+              line.targetWarehouseId(),
+              line.targetRentalItemId(),
+              line.targetLocationKind(),
+              line.quantity()));
+    }
+    return new OrderFurnitureMovementPlan(
+        response.orderId(), response.rentalItemId(), response.unitNumber(), List.copyOf(lines));
+  }
+
+  private static List<CabinFurnitureRequirementRequest> cabinFurnitureRequirementRequests(
+      List<CabinFurnitureRequirement> requirements) {
+    if (requirements == null) {
+      throw malformed("Cabin furniture requirements are required");
+    }
+    return requirements.stream()
+        .map(
+            requirement -> {
+              if (requirement == null) {
+                throw malformed("Cabin furniture requirement is invalid");
+              }
+              return new CabinFurnitureRequirementRequest(
+                  requirement.equipmentId(), requirement.quantity());
+            })
+        .toList();
+  }
+
+  private static CabinFurnitureMovementPlan cabinFurnitureMovementPlan(
+      CabinFurnitureMovementPlanResponse response) {
+    if (response == null
+        || response.rentalItemId() == null
+        || response.unitNumber() == null
+        || response.unitNumber().isBlank()
+        || response.lines() == null) {
+      throw malformed("Asset-service returned an invalid cabin furniture movement plan");
+    }
+    List<CabinFurnitureMovementPlanLine> lines = new java.util.ArrayList<>(response.lines().size());
+    for (CabinFurnitureMovementPlanLineResponse line : response.lines()) {
+      if (line == null
+          || line.equipmentId() == null
+          || line.equipmentCode() == null
+          || line.equipmentCode().isBlank()
+          || line.equipmentName() == null
+          || line.equipmentName().isBlank()
+          || line.sourceBalanceId() == null
+          || line.sourceWarehouseId() == null
+          || line.sourceLocationKind() == null
+          || line.expectedSourceBalanceVersion() < 0
+          || line.targetWarehouseId() == null
+          || line.targetLocationKind() == null
+          || line.quantity() < 1) {
+        throw malformed("Asset-service returned an invalid cabin furniture movement line");
+      }
+      lines.add(
+          new CabinFurnitureMovementPlanLine(
+              line.equipmentId(),
+              line.equipmentCode(),
+              line.equipmentName(),
+              line.sourceBalanceId(),
+              line.sourceWarehouseId(),
+              line.sourceRentalItemId(),
+              line.sourceLocationKind(),
+              line.expectedSourceBalanceVersion(),
+              line.targetWarehouseId(),
+              line.targetRentalItemId(),
+              line.targetLocationKind(),
+              line.quantity()));
+    }
+    return new CabinFurnitureMovementPlan(
+        response.rentalItemId(), response.unitNumber(), List.copyOf(lines));
   }
 
   private static LogisticsDependencyException dependencyFailure(RuntimeException exception) {
@@ -1278,6 +1474,11 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
             "UNIT_NOT_EDITABLE",
             "EQUIPMENT_QUANTITY_CONFLICT",
             "INSUFFICIENT_STOCK",
+            "INSUFFICIENT_EQUIPMENT",
+            "INSUFFICIENT_EQUIPMENT_SOURCE",
+            "EQUIPMENT_NOT_AVAILABLE",
+            "ORDER_RESERVATION_MISMATCH",
+            "ORDER_WAREHOUSE_MISMATCH",
             "ASSET_NOT_FOUND")) {
       if (body.contains("\"code\":\"" + code + "\"")) return code;
     }
@@ -1440,6 +1641,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
 
   private record CancelPreparationTaskRequest(long expectedTaskVersion) {}
 
+  private record CompletePreparationTaskRequest(long expectedTaskVersion) {}
+
   private record PreparationTaskResponse(
       UUID taskId,
       long taskVersion,
@@ -1534,16 +1737,77 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   private record ReserveOrderUnitRequest(
       UUID warehouseId,
       UUID rentalItemId,
+      UUID clientId,
+      String tenantSnapshot,
       UUID actorSubjectId,
       String actorRole) {}
 
   private record OrderActorRequest(UUID actorSubjectId, String actorRole) {}
 
-  private record AdjustOrderEquipmentRequest(
+  private record OrderEquipmentRequirementRequest(UUID equipmentId, long quantity) {}
+
+  private record ReplaceOrderEquipmentReservationsRequest(
+      UUID warehouseId,
       UUID actorSubjectId,
       String actorRole,
-      long expectedCurrentQuantity,
-      long requiredQuantity) {}
+      List<OrderEquipmentRequirementRequest> requirements) {}
+
+  private record OrderEquipmentReservationResponse(
+      UUID equipmentId,
+      String equipmentCode,
+      String equipmentName,
+      long quantity,
+      long availableQuantity) {}
+
+  private record OrderFurnitureMovementPlanRequest(
+      UUID warehouseId,
+      UUID rentalItemId,
+      List<OrderEquipmentRequirementRequest> requirements,
+      List<OrderEquipmentRequirementRequest> orderRequirements) {}
+
+  private record OrderFurnitureMovementPlanLineResponse(
+      UUID equipmentId,
+      String equipmentCode,
+      String equipmentName,
+      UUID sourceBalanceId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      String sourceLocationKind,
+      long expectedSourceBalanceVersion,
+      UUID targetWarehouseId,
+      UUID targetRentalItemId,
+      String targetLocationKind,
+      long quantity) {}
+
+  private record OrderFurnitureMovementPlanResponse(
+      UUID orderId,
+      UUID rentalItemId,
+      String unitNumber,
+      List<OrderFurnitureMovementPlanLineResponse> lines) {}
+
+  private record CabinFurnitureRequirementRequest(UUID equipmentId, long quantity) {}
+
+  private record CabinFurnitureMovementPlanRequest(
+      UUID warehouseId, List<CabinFurnitureRequirementRequest> requirements) {}
+
+  private record CabinFurnitureMovementPlanLineResponse(
+      UUID equipmentId,
+      String equipmentCode,
+      String equipmentName,
+      UUID sourceBalanceId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      String sourceLocationKind,
+      long expectedSourceBalanceVersion,
+      UUID targetWarehouseId,
+      UUID targetRentalItemId,
+      String targetLocationKind,
+      long quantity) {}
+
+  private record CabinFurnitureMovementPlanResponse(
+      UUID rentalItemId,
+      String unitNumber,
+      List<CabinFurnitureMovementPlanLineResponse> lines) {}
 
   private record OrderEquipmentContentResponse(
       UUID equipmentId,
@@ -1593,24 +1857,4 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       long totalElements,
       long totalPages) {}
 
-  private record OrderEquipmentMovementResponse(
-      UUID id,
-      long version,
-      UUID equipmentId,
-      UUID sourceBalanceId,
-      UUID targetBalanceId,
-      long quantity,
-      String kind,
-      OffsetDateTime occurredAt) {}
-
-  private record OrderEquipmentAdjustmentResponse(
-      UUID orderId,
-      UUID rentalItemId,
-      UUID equipmentId,
-      long previousQuantity,
-      long requiredQuantity,
-      long delta,
-      long availableStock,
-      OrderEquipmentMovementResponse movement,
-      OrderRentalItemResponse unit) {}
 }

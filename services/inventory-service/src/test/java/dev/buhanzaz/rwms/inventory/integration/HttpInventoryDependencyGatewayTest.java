@@ -1,14 +1,12 @@
 package dev.buhanzaz.rwms.inventory.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
-import dev.buhanzaz.rwms.inventory.service.InventoryException;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -71,7 +69,7 @@ class HttpInventoryDependencyGatewayTest {
   }
 
   @Test
-  void sendsFrozenWarehouseScopedNumberRequestAndRejectsCrossWarehouseTruth()
+  void sendsFrozenWarehouseScopedNumberRequestAndPreservesCrossWarehouseTruth()
       throws Exception {
     UUID warehouseId = UUID.randomUUID();
     responseWarehouseId.set(warehouseId);
@@ -80,20 +78,18 @@ class HttpInventoryDependencyGatewayTest {
         gateway.resolveNumber(warehouseId, "БЫТ-001");
 
     assertThat(resolved.asset().assetId()).isEqualTo(cabinId);
+    assertThat(resolved.asset().tenantSnapshot()).isEqualTo("Арендатор А");
     assertThat(authorization.get()).isEqualTo("Bearer inventory-asset-token");
     JsonNode body = mapper.readTree(requestBody.get());
     assertThat(body.path("warehouseId").asText()).isEqualTo(warehouseId.toString());
     assertThat(body.path("number").asText()).isEqualTo("БЫТ-001");
     assertThat(body.size()).isEqualTo(2);
 
-    responseWarehouseId.set(UUID.randomUUID());
-    assertThatThrownBy(() -> gateway.resolveNumber(warehouseId, "БЫТ-001"))
-        .isInstanceOfSatisfying(
-            InventoryException.class,
-            exception -> {
-              assertThat(exception.status().value()).isEqualTo(503);
-              assertThat(exception.code()).isEqualTo("INVENTORY_DEPENDENCY_UNAVAILABLE");
-            });
+    UUID otherWarehouseId = UUID.randomUUID();
+    responseWarehouseId.set(otherWarehouseId);
+    InventoryDependencyGateway.NumberResolution crossWarehouse =
+        gateway.resolveNumber(warehouseId, "БЫТ-001");
+    assertThat(crossWarehouse.asset().warehouseId()).isEqualTo(otherWarehouseId);
   }
 
   private OAuth2AuthorizedClient authorizedClient(String base) {
@@ -120,7 +116,8 @@ class HttpInventoryDependencyGatewayTest {
     respond(exchange, 200, """
         {"displayCanonicalNumber":"БЫТ-001","identityMatchKey":"БЫТ001","found":true,
          "asset":{"assetId":"%s","version":0,"warehouseId":"%s","status":"FREE",
-          "displayCanonicalNumber":"БЫТ-001","identityMatchKey":"БЫТ001"}}
+          "displayCanonicalNumber":"БЫТ-001","identityMatchKey":"БЫТ001",
+          "tenantSnapshot":"Арендатор А"}}
         """.formatted(cabinId, warehouseId));
   }
 

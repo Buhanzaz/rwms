@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.logistics.domain;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -17,7 +18,7 @@ class LogisticsDocumentTest {
   void returnFollowsTheFencedIntakeAndAcceptanceLifecycle() {
     LogisticsDocument document = LogisticsDocument.createReturn(WAREHOUSE, SUBJECT, CORRELATION);
 
-    document.scheduleReturn("Водитель", OffsetDateTime.parse("2026-07-01T08:00:00Z"));
+    document.scheduleReturn("Водитель", LocalDate.parse("2026-07-01"));
     document.beginReturnRegistration();
     document.requireReturnInspection();
     document.beginReturnAcceptance();
@@ -25,6 +26,8 @@ class LogisticsDocumentTest {
 
     assertThat(document.getDocumentType()).isEqualTo(LogisticsDocumentType.RETURN);
     assertThat(document.getState()).isEqualTo(LogisticsDocumentState.ACCEPTED);
+    assertThat(document.getScheduledDate()).isEqualTo(LocalDate.parse("2026-07-01"));
+    assertThat(document.getScheduledAt()).isNull();
   }
 
   @Test
@@ -35,7 +38,7 @@ class LogisticsDocumentTest {
     assertThat(document.getPartySnapshot()).isEqualTo("Арендатор");
     assertThat(document.getDriverSnapshot()).isEqualTo("Водитель");
 
-    document.scheduleShipment("Водитель", OffsetDateTime.parse("2026-07-01T08:00:00Z"));
+    document.scheduleShipment("Водитель", LocalDate.parse("2026-07-01"));
     document.beginShipmentPreparation();
     document.awaitShipmentConfirmation();
     document.beginShipmentConfirmation();
@@ -51,7 +54,7 @@ class LogisticsDocumentTest {
         LogisticsDocument.createShipment(
             WAREHOUSE, "Арендатор", "Водитель", SUBJECT, CORRELATION);
     OffsetDateTime now = OffsetDateTime.parse("2026-07-22T08:00:00Z");
-    document.scheduleShipment("Водитель", now.plusDays(1));
+    document.scheduleShipment("Водитель", now.toLocalDate().plusDays(1));
     document.beginShipmentPreparation();
     document.awaitShipmentConfirmation();
 
@@ -59,20 +62,35 @@ class LogisticsDocumentTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("future");
 
-    document.scheduleShipment("Водитель", now.minusMinutes(1));
+    document.scheduleShipment("Водитель", now.toLocalDate());
     document.requireShipmentDepartureAllowed(now);
   }
 
   @Test
   void transferRejectsSameOriginAndDestination() {
-    assertThatThrownBy(() -> LogisticsDocument.createTransfer(WAREHOUSE, WAREHOUSE, SUBJECT, CORRELATION))
+    assertThatThrownBy(
+            () ->
+                LogisticsDocument.createTransfer(
+                    WAREHOUSE,
+                    WAREHOUSE,
+                    null,
+                    LocalDate.parse("2026-07-01"),
+                    SUBJECT,
+                    CORRELATION))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("differ from origin");
   }
 
   @Test
   void transferLineDoesNotPermitArrivalBeforeDeparture() {
-    LogisticsDocument document = LogisticsDocument.createTransfer(WAREHOUSE, DESTINATION, SUBJECT, CORRELATION);
+    LogisticsDocument document =
+        LogisticsDocument.createTransfer(
+            WAREHOUSE,
+            DESTINATION,
+            null,
+            LocalDate.parse("2026-07-01"),
+            SUBJECT,
+            CORRELATION);
     LogisticsDocumentLine line =
         LogisticsDocumentLine.create(
             document,

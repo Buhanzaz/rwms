@@ -5,14 +5,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ArriveTransferLineRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CabinFurnitureRequirement;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CreateTransferRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.MediaReferenceInput;
-import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferEquipmentLineRequest;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferFurnitureReplacementRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferLineRequest;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
@@ -26,6 +28,7 @@ import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.TransferProcessor;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -310,6 +313,8 @@ class TransferWorkflowSagaIntegrationTest {
                 String.class,
                 fixture.lineId()))
         .isEqualTo("REGISTERED");
+    verify(dependencies)
+        .registerPreparationTask(eq(ORIGIN), any(), eq(Integer.valueOf(0)), isNull());
 
     when(dependencies.cancelPreparationTask(any(), eq(1L)))
         .thenAnswer(
@@ -340,7 +345,29 @@ class TransferWorkflowSagaIntegrationTest {
   }
 
   @Test
-  void createsAndCancelsTheLinkedFurnitureTaskForTheDestinationWarehouse() {
+  void createsAndCancelsTheLinkedFurnitureTaskForTheSelectedCabin() {
+    LocalDate scheduledDate = OffsetDateTime.now(ZoneOffset.UTC).toLocalDate();
+    UUID sourceBalanceId = UUID.randomUUID();
+    when(dependencies.planCabinFurnitureMovements(
+            eq(ORIGIN), eq(ASSET), any()))
+        .thenReturn(
+            new LogisticsDependencyGateway.CabinFurnitureMovementPlan(
+                ASSET,
+                "БЫТ-001",
+                List.of(
+                    new LogisticsDependencyGateway.CabinFurnitureMovementPlanLine(
+                        EQUIPMENT,
+                        "FURN-001",
+                        "Стол",
+                        sourceBalanceId,
+                        ORIGIN,
+                        null,
+                        "STOCK",
+                        4,
+                        ORIGIN,
+                        ASSET,
+                        "CABIN_NON_RENTED",
+                        2))));
     var created =
         documents.createTransfer(
             SUBJECT,
@@ -350,12 +377,19 @@ class TransferWorkflowSagaIntegrationTest {
                 ORIGIN,
                 DESTINATION,
                 "Driver A",
-                OffsetDateTime.now(ZoneOffset.UTC).plusHours(1),
+                scheduledDate,
                 List.of(new TransferLineRequest(ASSET, 7)),
-                List.of(new TransferEquipmentLineRequest(EQUIPMENT, 4L, 2L))));
+                List.of(
+                    new TransferFurnitureReplacementRequest(
+                        ASSET, List.of(new CabinFurnitureRequirement(EQUIPMENT, 2L))))));
 
-    assertThat(created.response().equipmentMovementTaskId()).isNotNull();
-    var furnitureTask = equipmentTasks.get(created.response().equipmentMovementTaskId());
+    assertThat(created.response().equipmentMovementTaskId()).isNull();
+    UUID furnitureTaskId =
+        jdbc.queryForObject(
+            "select equipment_movement_task_id from transfer_furniture_movement_task where document_id=?",
+            UUID.class,
+            created.response().id());
+    var furnitureTask = equipmentTasks.get(furnitureTaskId);
     assertThat(furnitureTask.warehouseId()).isEqualTo(ORIGIN);
     assertThat(furnitureTask.state()).isEqualTo(EquipmentMovementTaskState.RESERVING);
     assertThat(furnitureTask.lines())
@@ -364,8 +398,10 @@ class TransferWorkflowSagaIntegrationTest {
             line -> {
               assertThat(line.sourceWarehouseId()).isEqualTo(ORIGIN);
               assertThat(line.sourceLocationKind()).isEqualTo(EquipmentMovementLocationKind.STOCK);
-              assertThat(line.targetWarehouseId()).isEqualTo(DESTINATION);
-              assertThat(line.targetLocationKind()).isEqualTo(EquipmentMovementLocationKind.STOCK);
+              assertThat(line.targetWarehouseId()).isEqualTo(ORIGIN);
+              assertThat(line.targetRentalItemId()).isEqualTo(ASSET);
+              assertThat(line.targetLocationKind())
+                  .isEqualTo(EquipmentMovementLocationKind.CABIN_NON_RENTED);
               assertThat(line.quantity()).isEqualTo(2L);
             });
 
@@ -382,12 +418,21 @@ class TransferWorkflowSagaIntegrationTest {
   }
 
   private TransferFixture createTransfer() {
+    LocalDate scheduledDate = OffsetDateTime.now(ZoneOffset.UTC).toLocalDate();
     LogisticsDocumentService.CreateResult created =
         documents.createTransfer(
             SUBJECT,
             UUID.randomUUID(),
             CORRELATION,
-            new CreateTransferRequest(ORIGIN, DESTINATION, List.of(new TransferLineRequest(ASSET, 7))));
+            new CreateTransferRequest(
+                ORIGIN,
+                DESTINATION,
+                null,
+                scheduledDate,
+                List.of(new TransferLineRequest(ASSET, 7)),
+                List.of()));
+    assertThat(created.response().scheduledDate()).isEqualTo(scheduledDate);
+    assertThat(created.response().scheduledAt()).isNull();
     return new TransferFixture(
         created.response().id(),
         created.response().version(),
@@ -454,5 +499,9 @@ class TransferWorkflowSagaIntegrationTest {
         OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
   }
 
-  private record TransferFixture(UUID documentId, long documentVersion, UUID lineId, long lineVersion) {}
+  private record TransferFixture(
+      UUID documentId,
+      long documentVersion,
+      UUID lineId,
+      long lineVersion) {}
 }

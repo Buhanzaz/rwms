@@ -36,6 +36,7 @@ type RepairEstimateLinesEditorProps = {
   readOnly: boolean
   mode?: "ESTIMATE" | "TASK"
   catalogOnly?: boolean
+  catalogValuesReadOnly?: boolean
   onChange: (lines: RepairEstimateLineDto[]) => void
 }
 
@@ -44,6 +45,7 @@ export function RepairEstimateLinesEditor({
   readOnly,
   mode = "ESTIMATE",
   catalogOnly = false,
+  catalogValuesReadOnly = false,
   onChange,
 }: RepairEstimateLinesEditorProps) {
   function updateLine(
@@ -129,7 +131,11 @@ export function RepairEstimateLinesEditor({
                       Тип
                     </FieldLabel>
                     <Select
-                      disabled={readOnly || catalogOnly}
+                      disabled={
+                        readOnly ||
+                        catalogOnly ||
+                        (catalogValuesReadOnly && line.catalogSnapshot !== null)
+                      }
                       value={line.lineType}
                       onValueChange={(value) =>
                         updateLine(line.id, (current) => ({
@@ -164,7 +170,10 @@ export function RepairEstimateLinesEditor({
                     <Input
                       id={`line-description-${line.id}`}
                       aria-label={`Работа или материал строки ${index + 1}`}
-                      disabled={readOnly}
+                      disabled={
+                        readOnly ||
+                        (catalogValuesReadOnly && line.catalogSnapshot !== null)
+                      }
                       value={line.description}
                       onChange={(event) =>
                         updateLine(line.id, (current) => ({
@@ -258,7 +267,11 @@ export function RepairEstimateLinesEditor({
                     <Input
                       id={`line-unit-${line.id}`}
                       aria-label={`Единица измерения строки ${index + 1}`}
-                      disabled={readOnly || catalogOnly}
+                      disabled={
+                        readOnly ||
+                        catalogOnly ||
+                        (catalogValuesReadOnly && line.catalogSnapshot !== null)
+                      }
                       value={line.unit}
                       onChange={(event) =>
                         replaceLine(line.id, (current) => ({
@@ -278,7 +291,10 @@ export function RepairEstimateLinesEditor({
                       id={`line-price-${line.id}`}
                       aria-label={`Цена строки ${index + 1}`}
                       inputMode="decimal"
-                      disabled={readOnly}
+                      disabled={
+                        readOnly ||
+                        (catalogValuesReadOnly && line.catalogSnapshot !== null)
+                      }
                       value={line.unitPrice}
                       onChange={(event) => {
                         const value = event.target.value.replace(",", ".")

@@ -2118,6 +2118,29 @@ function CatalogCanvasCategoryEditor({
               )}
               <Button
                 type="button"
+                variant="outline"
+                onClick={() =>
+                  setNodeDialogState({
+                    title: "Добавить блок",
+                    description: category.name,
+                    submitLabel: "Сохранить",
+                    allowTypeSelect: true,
+                    request,
+                    furnitureTree: category.furnitureCategory,
+                    value: createBlankNodeMutation({
+                      nodeType: "WORK",
+                      parentId: category.id,
+                    }),
+                    save: (input) =>
+                      saveRepairEstimateCatalogCanvasNode(request, input),
+                  })
+                }
+              >
+                <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+                Блок
+              </Button>
+              <Button
+                type="button"
                 disabled={
                   !hasPendingCanvasChanges || saveCanvasMutation.isPending
                 }
@@ -2143,29 +2166,6 @@ function CatalogCanvasCategoryEditor({
                   }
                 />
                 {saveCanvasMutation.isPending ? "Сохраняем…" : "Сохранить"}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() =>
-                  setNodeDialogState({
-                    title: "Добавить блок",
-                    description: category.name,
-                    submitLabel: "Сохранить",
-                    allowTypeSelect: true,
-                    request,
-                    furnitureTree: category.furnitureCategory,
-                    value: createBlankNodeMutation({
-                      nodeType: "WORK",
-                      parentId: category.id,
-                    }),
-                    save: (input) =>
-                      saveRepairEstimateCatalogCanvasNode(request, input),
-                  })
-                }
-              >
-                <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-                Блок
               </Button>
             </div>
           </div>

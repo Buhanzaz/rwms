@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.taskboard.api;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CancelLogisticsPreparationTaskRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CompleteLogisticsPreparationTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.LogisticsTaskSnapshot;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RegisterLogisticsPreparationTaskRequest;
 
@@ -45,6 +46,15 @@ public class LogisticsTaskController {
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID externalTaskId) {
     access.requireLogisticsTaskAccess(jwt);
     return service.logisticsPreparationTask(externalTaskId);
+  }
+
+  @PostMapping("/{externalTaskId}/complete")
+  public LogisticsTaskSnapshot complete(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID externalTaskId,
+      @Valid @RequestBody CompleteLogisticsPreparationTaskRequest request) {
+    access.requireLogisticsTaskAccess(jwt);
+    return service.completeLogisticsPreparationTask(externalTaskId, request);
   }
 
   @PostMapping("/{externalTaskId}/cancel")

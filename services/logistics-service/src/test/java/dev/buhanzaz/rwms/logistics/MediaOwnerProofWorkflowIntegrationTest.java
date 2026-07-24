@@ -19,6 +19,7 @@ import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.MediaOwnerProofProcessor;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -104,7 +105,10 @@ class MediaOwnerProofWorkflowIntegrationTest {
             new CreateTransferRequest(
                 ORIGIN,
                 DESTINATION,
-                List.of(new TransferLineRequest(TRANSFER_ASSET, 8))));
+                null,
+                futureTaskDate(),
+                List.of(new TransferLineRequest(TRANSFER_ASSET, 8)),
+                List.of()));
     var shipmentDocument =
         documents.createShipment(
             SUBJECT,
@@ -224,7 +228,10 @@ class MediaOwnerProofWorkflowIntegrationTest {
             new CreateTransferRequest(
                 ORIGIN,
                 DESTINATION,
-                List.of(new TransferLineRequest(TRANSFER_ASSET, 8))));
+                null,
+                futureTaskDate(),
+                List.of(new TransferLineRequest(TRANSFER_ASSET, 8)),
+                List.of()));
     UUID documentId = created.response().id();
     UUID lineId = created.response().lines().getFirst().id();
 
@@ -300,6 +307,10 @@ class MediaOwnerProofWorkflowIntegrationTest {
     when(dependencies.upsertMediaOwnerProof(
             any(), any(), any(), any(), anyLong(), anyLong(), any(), anyBoolean()))
         .thenAnswer(MediaOwnerProofWorkflowIntegrationTest::echoProof);
+  }
+
+  private static LocalDate futureTaskDate() {
+    return LocalDate.now().plusDays(1);
   }
 
   private static LogisticsDependencyGateway.MediaOwnerProof echoProof(

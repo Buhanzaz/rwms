@@ -11,6 +11,7 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
@@ -71,6 +72,9 @@ public class LogisticsDocument {
   /** Optional same-service worker task that moves transfer furniture. */
   @Column(name = "equipment_movement_task_id")
   private UUID equipmentMovementTaskId;
+
+  @Column(name = "scheduled_date")
+  private LocalDate scheduledDate;
 
   @Column(name = "scheduled_at")
   private OffsetDateTime scheduledAt;
@@ -197,21 +201,17 @@ public class LogisticsDocument {
   }
 
   public static LogisticsDocument createTransfer(
-      UUID warehouseId, UUID destinationWarehouseId, UUID subjectId, UUID correlationId) {
-    return createTransfer(warehouseId, destinationWarehouseId, null, subjectId, correlationId);
-  }
-
-  public static LogisticsDocument createTransfer(
       UUID warehouseId,
       UUID destinationWarehouseId,
       String driverSnapshot,
+      LocalDate scheduledDate,
       UUID subjectId,
       UUID correlationId) {
     requireId(destinationWarehouseId, "destinationWarehouseId");
     if (destinationWarehouseId.equals(warehouseId)) {
       throw new IllegalArgumentException("Transfer destination must differ from origin warehouse");
     }
-    return initialize(
+    LogisticsDocument document = initialize(
         LogisticsDocumentType.TRANSFER,
         warehouseId,
         destinationWarehouseId,
@@ -219,6 +219,8 @@ public class LogisticsDocument {
         optionalSnapshot(driverSnapshot, "driverSnapshot"),
         subjectId,
         correlationId);
+    document.scheduledDate = Objects.requireNonNull(scheduledDate, "scheduledDate");
+    return document;
   }
 
   public void linkEquipmentMovementTask(UUID taskId) {
@@ -236,12 +238,12 @@ public class LogisticsDocument {
     transition(LogisticsDocumentType.RETURN, LogisticsDocumentState.DRAFT, LogisticsDocumentState.REGISTERING);
   }
 
-  public void scheduleReturn(String driver, OffsetDateTime date) {
+  public void scheduleReturn(String driver, LocalDate date) {
     if (documentType != LogisticsDocumentType.RETURN || state != LogisticsDocumentState.DRAFT) {
       throw new IllegalStateException("Return pickup cannot be scheduled in its current state");
     }
     driverSnapshot = requiredSnapshot(driver, "driverSnapshot");
-    scheduledAt = Objects.requireNonNull(date, "scheduledAt");
+    scheduledDate = Objects.requireNonNull(date, "scheduledDate");
     touch();
   }
 
@@ -318,7 +320,7 @@ public class LogisticsDocument {
     transition(LogisticsDocumentType.SHIPMENT, LogisticsDocumentState.DRAFT, LogisticsDocumentState.PREPARING);
   }
 
-  public void scheduleShipment(String driver, OffsetDateTime date) {
+  public void scheduleShipment(String driver, LocalDate date) {
     boolean allowed =
         documentType == LogisticsDocumentType.SHIPMENT
             && (state == LogisticsDocumentState.DRAFT
@@ -327,15 +329,15 @@ public class LogisticsDocument {
       throw new IllegalStateException("Shipment cannot be scheduled in its current state");
     }
     driverSnapshot = requiredSnapshot(driver, "driverSnapshot");
-    scheduledAt = Objects.requireNonNull(date, "scheduledAt");
+    scheduledDate = Objects.requireNonNull(date, "scheduledDate");
     touch();
   }
 
   public void requireShipmentDepartureAllowed(OffsetDateTime currentTime) {
-    if (documentType != LogisticsDocumentType.SHIPMENT || scheduledAt == null) {
+    if (documentType != LogisticsDocumentType.SHIPMENT || scheduledDate == null) {
       throw new IllegalStateException("Shipment date is required");
     }
-    if (scheduledAt.isAfter(Objects.requireNonNull(currentTime, "currentTime"))) {
+    if (scheduledDate.isAfter(Objects.requireNonNull(currentTime, "currentTime").toLocalDate())) {
       throw new IllegalStateException("Shipment date is in the future");
     }
   }
@@ -545,7 +547,7 @@ public class LogisticsDocument {
   }
 
   private void requireSchedule(String subject) {
-    if (driverSnapshot == null || scheduledAt == null) {
+    if (driverSnapshot == null || scheduledDate == null) {
       throw new IllegalStateException(subject + " driver and date are required");
     }
   }

@@ -43,7 +43,7 @@ func TestKindForContentType(t *testing.T) {
 
 func TestImageVariantsKeepLegacyDefaultsWhenConfigurationIsUnset(t *testing.T) {
 	variants := (VariantConfiguration{}).ImageVariants()
-	if variants[0].LongEdge != 96 || variants[1].LongEdge != 320 || variants[2].LongEdge != 1280 {
+	if variants[0].LongEdge != 320 || variants[1].LongEdge != 640 || variants[2].LongEdge != 1280 {
 		t.Fatalf("unexpected default variants: %#v", variants)
 	}
 }

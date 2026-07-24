@@ -48,6 +48,8 @@ type AssetEquipmentTotalsDto = {
   writtenOffQuantity: number
   lostQuantity: number
   activeHeldQuantity: number
+  reservedQuantity: number
+  availableQuantity: number
   availableStock: number
   balances: EquipmentBalanceDto[]
 }
@@ -186,6 +188,8 @@ function parseEquipmentTotals(value: unknown): AssetEquipmentTotalsDto {
     writtenOffQuantity: nonNegativeInteger(source.writtenOffQuantity),
     lostQuantity: nonNegativeInteger(source.lostQuantity),
     activeHeldQuantity: nonNegativeInteger(source.activeHeldQuantity),
+    reservedQuantity: nonNegativeInteger(source.reservedQuantity),
+    availableQuantity: nonNegativeInteger(source.availableQuantity),
     availableStock: nonNegativeInteger(source.availableStock),
     balances: values(source.balances).map(parseEquipmentBalance),
   }
@@ -230,6 +234,8 @@ function parseEquipmentItem(value: unknown): EquipmentItemDto {
     writtenOffQuantity: totals.writtenOffQuantity,
     lostQuantity: totals.lostQuantity,
     activeHeldQuantity: totals.activeHeldQuantity,
+    reservedQuantity: totals.reservedQuantity,
+    availableQuantity: totals.availableQuantity,
     availableStock: totals.availableStock,
     balances: totals.balances,
     usages: [],

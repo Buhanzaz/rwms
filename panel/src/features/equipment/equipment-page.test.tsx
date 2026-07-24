@@ -81,6 +81,8 @@ function equipmentItem(
     writtenOffQuantity: 0,
     lostQuantity: 0,
     activeHeldQuantity: 0,
+    reservedQuantity: 0,
+    availableQuantity: 12,
     availableStock: 7,
     balances: [],
     usages,

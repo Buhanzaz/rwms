@@ -70,6 +70,8 @@ describe("rental-item contents source summary", () => {
       writtenOffQuantity: 0,
       lostQuantity: 0,
       activeHeldQuantity: 2,
+      reservedQuantity: 0,
+      availableQuantity: 0,
       availableStock: 0,
       usages: [],
       balances: [
