@@ -45,6 +45,7 @@ export function ServiceOwnerPhotos({
   maxItems = 20,
   title = "Фотографии",
   onReadyReferencesChange,
+  onReadyStateChange,
 }: {
   accessToken: string | null
   owner: ServiceMediaOwner | null
@@ -53,6 +54,7 @@ export function ServiceOwnerPhotos({
   maxItems?: number
   title?: string
   onReadyReferencesChange?: (references: ReadyMediaReference[]) => void
+  onReadyStateChange?: (ready: boolean) => void
 }) {
   if (owner === null) {
     return (
@@ -74,6 +76,7 @@ export function ServiceOwnerPhotos({
       maxItems={maxItems}
       title={title}
       onReadyReferencesChange={onReadyReferencesChange}
+      onReadyStateChange={onReadyStateChange}
     />
   )
 }
@@ -85,6 +88,7 @@ function OwnedServiceOwnerPhotos({
   maxItems,
   title,
   onReadyReferencesChange,
+  onReadyStateChange,
 }: {
   accessToken: string | null
   owner: ServiceMediaOwner
@@ -92,11 +96,13 @@ function OwnedServiceOwnerPhotos({
   maxItems: number
   title: string
   onReadyReferencesChange?: (references: ReadyMediaReference[]) => void
+  onReadyStateChange?: (ready: boolean) => void
 }) {
   const [managerOpen, setManagerOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const media = useServiceOwnerMedia({ accessToken, owner })
   const readyReferencesCallback = useRef(onReadyReferencesChange)
+  const readyStateCallback = useRef(onReadyStateChange)
   const photoById = useMemo(
     () => new Map(media.photos.map((photo) => [photo.id, photo])),
     [media.photos]
@@ -121,12 +127,28 @@ function OwnedServiceOwnerPhotos({
     readyReferencesCallback.current = onReadyReferencesChange
   }, [onReadyReferencesChange])
 
+  useEffect(() => {
+    readyStateCallback.current = onReadyStateChange
+  }, [onReadyStateChange])
+
   const readyReferencesKey = media.readyReferences
     .map((reference) => `${reference.mediaId}:${reference.generation}`)
     .join("|")
   useEffect(() => {
-    readyReferencesCallback.current?.([...media.readyReferences])
-  }, [media.readyReferences, readyReferencesKey])
+    if (media.query.isSuccess) {
+      readyReferencesCallback.current?.([...media.readyReferences])
+    }
+  }, [media.query.isSuccess, media.readyReferences, readyReferencesKey])
+
+  const ready =
+    media.query.isSuccess &&
+    !media.pending &&
+    !media.assets.some(
+      (asset) => asset.status === "UPLOADING" || asset.status === "PROCESSING"
+    )
+  useEffect(() => {
+    readyStateCallback.current?.(ready)
+  }, [ready])
 
   async function addFiles(files: File[]) {
     const remaining = Math.max(0, maxItems - media.logicalPhotoCount)

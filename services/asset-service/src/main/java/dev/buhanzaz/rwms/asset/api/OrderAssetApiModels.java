@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.asset.api;
 
 import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -26,6 +27,8 @@ public final class OrderAssetApiModels {
   public record ReserveOrderUnitRequest(
       @NotNull UUID warehouseId,
       @NotNull UUID rentalItemId,
+      @NotNull UUID clientId,
+      @NotBlank @Size(max = 512) String tenantSnapshot,
       @NotNull UUID actorSubjectId,
       @NotBlank
           @Size(max = 32)
@@ -34,7 +37,11 @@ public final class OrderAssetApiModels {
                   "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|VIEWER)$")
           String actorRole) {}
 
-  public record AdjustOrderEquipmentRequest(
+  public record OrderEquipmentRequirement(
+      @NotNull UUID equipmentId, @NotNull @Min(1) Long quantity) {}
+
+  public record ReplaceOrderEquipmentReservationsRequest(
+      @NotNull UUID warehouseId,
       @NotNull UUID actorSubjectId,
       @NotBlank
           @Size(max = 32)
@@ -42,8 +49,42 @@ public final class OrderAssetApiModels {
               regexp =
                   "^(SYSTEM_ADMIN|WMS_ADMIN|WAREHOUSE_MANAGER|RENTAL_MANAGER|VIEWER)$")
           String actorRole,
-      @NotNull @Min(0) Long expectedCurrentQuantity,
-      @NotNull @Min(0) Long requiredQuantity) {}
+      @NotNull @Size(max = 100) List<@NotNull @Valid OrderEquipmentRequirement> requirements) {}
+
+  public record OrderEquipmentReservationView(
+      UUID equipmentId,
+      String equipmentCode,
+      String equipmentName,
+      long quantity,
+      long availableQuantity) {}
+
+  public record OrderFurnitureMovementPlanRequest(
+      @NotNull UUID warehouseId,
+      @NotNull UUID rentalItemId,
+      @NotNull @Size(max = 100) List<@NotNull @Valid OrderEquipmentRequirement> requirements,
+      @NotNull
+          @Size(max = 100)
+          List<@NotNull @Valid OrderEquipmentRequirement> orderRequirements) {}
+
+  public record OrderFurnitureMovementPlanLine(
+      UUID equipmentId,
+      String equipmentCode,
+      String equipmentName,
+      UUID sourceBalanceId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      BalanceLocationKind sourceLocationKind,
+      long expectedSourceBalanceVersion,
+      UUID targetWarehouseId,
+      UUID targetRentalItemId,
+      BalanceLocationKind targetLocationKind,
+      long quantity) {}
+
+  public record OrderFurnitureMovementPlan(
+      UUID orderId,
+      UUID rentalItemId,
+      String unitNumber,
+      List<OrderFurnitureMovementPlanLine> lines) {}
 
   public record OrderEquipmentContent(
       UUID equipmentId,
@@ -95,24 +136,4 @@ public final class OrderAssetApiModels {
       long totalElements,
       long totalPages) {}
 
-  public record OrderEquipmentMovement(
-      UUID id,
-      long version,
-      UUID equipmentId,
-      UUID sourceBalanceId,
-      UUID targetBalanceId,
-      long quantity,
-      String kind,
-      OffsetDateTime occurredAt) {}
-
-  public record OrderEquipmentAdjustment(
-      UUID orderId,
-      UUID rentalItemId,
-      UUID equipmentId,
-      long previousQuantity,
-      long requiredQuantity,
-      long delta,
-      long availableStock,
-      OrderEquipmentMovement movement,
-      OrderRentalItem unit) {}
 }

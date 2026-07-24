@@ -31,12 +31,16 @@ class InventoryDomainStateMachineTest {
 
   @Test
   void findingKeepsObservationPresenceAndRequiresFrozenWorkPlan() {
+    UUID warehouseId = UUID.randomUUID();
     InventoryFinding finding =
         InventoryFinding.unexpected(
             UUID.randomUUID(),
             FindingOrigin.ADDED_NEW,
-            null,
-            null,
+            UUID.randomUUID(),
+            1L,
+            warehouseId,
+            "FREE",
+            "Арендатор А",
             "AB-12",
             "AB12",
             ReconciliationState.CONFLICT,
@@ -63,10 +67,15 @@ class InventoryDomainStateMachineTest {
         ObservationPresence.ABSENT,
         null,
         null,
+        "Осмотрена",
         ACTOR);
     assertThat(finding.getPassportObservationState()).isEqualTo(ObservationPresence.EXPLICIT_EMPTY);
     assertThat(finding.getPassportObservation()).isEqualTo("{}");
     assertThat(finding.getEquipmentObservationState()).isEqualTo(ObservationPresence.ABSENT);
+    assertThat(finding.getCurrentWarehouseId()).isEqualTo(warehouseId);
+    assertThat(finding.getCurrentStatus()).isEqualTo("FREE");
+    assertThat(finding.getCurrentTenantSnapshot()).isEqualTo("Арендатор А");
+    assertThat(finding.getInspectionComment()).isEqualTo("Осмотрена");
   }
 
   @Test
@@ -111,8 +120,10 @@ class InventoryDomainStateMachineTest {
             0,
             "1".repeat(64),
             UUID.randomUUID(),
+            "Кладовщик Иван",
             ACTOR);
     session.beforeInsert();
+    assertThat(session.getStartedByDisplayName()).isEqualTo("Кладовщик Иван");
     return session;
   }
 }

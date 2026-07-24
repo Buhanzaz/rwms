@@ -3,6 +3,8 @@ export const SHIPMENT_OPERATION_IDS = {
   getShipment: "getShipment",
   createShipment: "createShipment",
   replacePlan: "replaceShipmentPlan",
+  getFurnitureReadiness: "getShipmentFurnitureReadiness",
+  createFurnitureTasks: "createShipmentFurnitureTasks",
   confirmPreparation: "confirmShipmentPreparation",
   cancelShipment: "cancelShipment",
 } as const

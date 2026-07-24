@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/card"
 import {
   Combobox,
+  ComboboxCollection,
   ComboboxContent,
   ComboboxEmpty,
   ComboboxGroup,
@@ -73,10 +74,13 @@ import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
 import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
 import { listAssetRentalItems } from "@/features/rental-items/api/asset-rental-items-api"
-import type {
-  RentalItemContentsItemDto,
-  RentalItemDto,
-} from "@/features/rental-items/model/rental-item"
+import {
+  CabinFurnitureCompositionDialog,
+  CabinFurnitureContents,
+  furnitureEquipmentIds,
+  type CabinFurnitureRequirementInput,
+} from "@/features/rental-items/cabin-furniture-composition-dialog"
+import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 import {
   WAREHOUSE_TRANSFERS_QUERY_KEY,
   arriveWarehouseTransferLine,
@@ -90,9 +94,9 @@ import {
 import {
   TRANSFER_LINE_STATE_LABELS,
   TRANSFER_STATE_LABELS,
-  type CreateTransferEquipmentLine,
   type TransferDocument,
   type TransferDocumentState,
+  type TransferFurnitureReplacement,
   type TransferLine,
   type TransferMediaReference,
 } from "@/features/logistics/warehouse-transfers/model/warehouse-transfer"
@@ -118,12 +122,8 @@ type TransferLineTarget = {
 type TransferLineDraft = {
   key: string
   assetId: string | null
-}
-
-type TransferEquipmentDraft = {
-  key: string
-  equipmentId: string
-  quantity: number
+  /** null leaves the current cabin composition unchanged; [] clears it. */
+  contents: CabinFurnitureRequirementInput[] | null
 }
 
 type CommandAttempt = {
@@ -136,7 +136,7 @@ function commandIdentity() {
 }
 
 function emptyLine(): TransferLineDraft {
-  return { key: commandIdentity(), assetId: null }
+  return { key: commandIdentity(), assetId: null, contents: null }
 }
 
 function formatDateTime(value: string) {
@@ -144,6 +144,44 @@ function formatDateTime(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value))
+}
+
+function formatDate(value: string) {
+  const [year, month, day] = value.split("-").map(Number)
+  return new Intl.DateTimeFormat("ru-RU", {
+    dateStyle: "medium",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, month - 1, day)))
+}
+
+function localCalendarDate() {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, "0")
+  const day = String(now.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+function cabinFurnitureRequirements(
+  cabin: Pick<RentalItemDto, "contentsItems">,
+  furnitureIds?: ReadonlySet<string>
+): CabinFurnitureRequirementInput[] {
+  const totals = new Map<string, number>()
+  for (const item of cabin.contentsItems) {
+    if (
+      item.equipmentId &&
+      item.quantity > 0 &&
+      (!furnitureIds || furnitureIds.has(item.equipmentId))
+    ) {
+      totals.set(
+        item.equipmentId,
+        (totals.get(item.equipmentId) ?? 0) + item.quantity
+      )
+    }
+  }
+  return [...totals.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([equipmentId, quantity]) => ({ equipmentId, quantity }))
 }
 
 function errorMessage(cause: unknown, fallback: string) {
@@ -164,14 +202,6 @@ function statusVariant(state: TransferDocumentState) {
 
 function warehouseLabel(warehouse: WarehouseInfo | undefined, id: string) {
   return warehouse ? `${warehouse.name} · ${warehouse.city}` : id
-}
-
-function stockVersion(
-  item: Awaited<ReturnType<typeof getEquipmentItems>>[number]
-) {
-  return item.balances.find(
-    (balance) => balance.locationKind === "STOCK" && balance.availableStock > 0
-  )?.version
 }
 
 export function WarehouseTransfersPage() {
@@ -527,6 +557,13 @@ export function WarehouseTransfersPage() {
             }}
             columns={[
               {
+                id: "scheduledDate",
+                label: "Дата задания",
+                className: "w-48",
+                getSortValue: (document) => document.scheduledDate,
+                render: (document) => formatDate(document.scheduledDate),
+              },
+              {
                 id: "updatedAt",
                 label: "Обновлено",
                 className: "w-48",
@@ -564,21 +601,6 @@ export function WarehouseTransfersPage() {
                 className: "min-w-44",
                 getSortValue: (document) => document.driverSnapshot ?? "",
                 render: (document) => document.driverSnapshot ?? "Не указан",
-              },
-              {
-                id: "task",
-                label: "Задача мебели",
-                className: "min-w-44",
-                getSortValue: (document) =>
-                  document.equipmentMovementTaskId ?? "",
-                render: (document) =>
-                  document.equipmentMovementTaskId ? (
-                    <span className="font-mono text-xs">
-                      {document.equipmentMovementTaskId}
-                    </span>
-                  ) : (
-                    "—"
-                  ),
               },
               {
                 id: "state",
@@ -623,6 +645,7 @@ export function WarehouseTransfersPage() {
                     ),
                     document.destinationWarehouseId
                   )}
+                  {` · ${formatDate(document.scheduledDate)}`}
                 </CardDescription>
                 <CardAction>
                   <Badge variant={statusVariant(document.state)}>
@@ -657,11 +680,6 @@ export function WarehouseTransfersPage() {
                     })
                   }
                 />
-                {document.equipmentMovementTaskId ? (
-                  <FieldDescription className="mt-3">
-                    Задача мебели: {document.equipmentMovementTaskId}
-                  </FieldDescription>
-                ) : null}
               </CardContent>
               <CardFooter className="flex-wrap gap-2">
                 {actions(document)}
@@ -933,9 +951,9 @@ function CreateTransferDialog({
   )
   const [destinationWarehouseId, setDestinationWarehouseId] = useState("")
   const [driver, setDriver] = useState<RepairTaskWorkerSnapshotDto | null>(null)
-  const [equipmentDeadlineLocal, setEquipmentDeadlineLocal] = useState("")
+  const [scheduledDate, setScheduledDate] = useState("")
   const [lines, setLines] = useState<TransferLineDraft[]>(() => [emptyLine()])
-  const [equipment, setEquipment] = useState<TransferEquipmentDraft[]>([])
+  const [editingLineKey, setEditingLineKey] = useState<string | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
 
   const cabinsQuery = useQuery({
@@ -959,30 +977,27 @@ function CreateTransferDialog({
     queryKey: ["equipment", "transfer", warehouseId],
     queryFn: () => getEquipmentItems(accessToken, { warehouseId }),
   })
-  const furniture = (equipmentQuery.data ?? []).filter(
-    (item) =>
-      item.active && item.category === "FURNITURE" && item.availableStock > 0
-  )
+  const furnitureIds = furnitureEquipmentIds(equipmentQuery.data)
   const mutation = useMutation({
     mutationFn: ({
       idempotencyKey,
       commandLines,
-      commandEquipment,
-      equipmentDeadlineAt,
+      furnitureReplacements,
+      scheduledDate: commandScheduledDate,
     }: {
       idempotencyKey: string
       commandLines: Array<{ assetId: string; assetVersion: number }>
-      commandEquipment: CreateTransferEquipmentLine[]
-      equipmentDeadlineAt: string | null
+      furnitureReplacements: TransferFurnitureReplacement[]
+      scheduledDate: string
     }) =>
       createWarehouseTransfer({
         accessToken,
         warehouseId,
         destinationWarehouseId,
         driverSnapshot: driver?.name ?? null,
-        equipmentDeadlineAt,
+        scheduledDate: commandScheduledDate,
         lines: commandLines,
-        equipment: commandEquipment,
+        furnitureReplacements,
         idempotencyKey,
       }),
     onSuccess: (result) => {
@@ -999,29 +1014,22 @@ function CreateTransferDialog({
       onOpenChange(false)
     },
   })
+  const editingLine = lines.find((line) => line.key === editingLineKey) ?? null
+  const editingCabin = editingLine?.assetId
+    ? (cabinByAssetId.get(editingLine.assetId) ?? null)
+    : null
 
   function selectCabin(key: string, cabin: RentalItemDto | null) {
     setLines((current) =>
       current.map((line) =>
-        line.key === key ? { ...line, assetId: cabin?.id ?? null } : line
+        line.key === key
+          ? { ...line, assetId: cabin?.id ?? null, contents: null }
+          : line
       )
     )
-  }
-
-  function addEquipment() {
-    setEquipment((current) => [
-      ...current,
-      { key: commandIdentity(), equipmentId: "", quantity: 1 },
-    ])
-  }
-
-  function updateEquipment(
-    key: string,
-    update: Partial<Pick<TransferEquipmentDraft, "equipmentId" | "quantity">>
-  ) {
-    setEquipment((current) =>
-      current.map((item) => (item.key === key ? { ...item, ...update } : item))
-    )
+    if (editingLineKey === key) setEditingLineKey(null)
+    attempt.current = null
+    setValidationError(null)
   }
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -1047,70 +1055,41 @@ function CreateTransferDialog({
       return
     }
 
-    const totals = new Map<string, number>()
-    const commandEquipment: CreateTransferEquipmentLine[] = []
-    for (const item of equipment) {
-      const furnitureItem = furniture.find(
-        (candidate) => candidate.id === item.equipmentId
-      )
-      const expectedSourceBalanceVersion = furnitureItem
-        ? stockVersion(furnitureItem)
-        : undefined
-      if (
-        !furnitureItem ||
-        expectedSourceBalanceVersion === undefined ||
-        !Number.isSafeInteger(item.quantity) ||
-        item.quantity < 1 ||
-        totals.has(item.equipmentId)
-      ) {
-        setValidationError(
-          "Выберите уникальную мебель и корректное количество для перемещения."
-        )
-        return
-      }
-      totals.set(item.equipmentId, item.quantity)
-      commandEquipment.push({
-        equipmentId: item.equipmentId,
-        expectedSourceBalanceVersion,
-        quantity: item.quantity,
-      })
-    }
-    for (const [equipmentId, quantity] of totals) {
-      const available = furniture.find(
-        (item) => item.id === equipmentId
-      )?.availableStock
-      if (available === undefined || quantity > available) {
-        setValidationError("Количество мебели превышает доступный остаток.")
-        return
-      }
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(scheduledDate) ||
+      scheduledDate < localCalendarDate()
+    ) {
+      setValidationError("Для перемещения укажите дату, начиная с сегодняшней.")
+      return
     }
 
-    let equipmentDeadlineAt: string | null = null
-    if (commandEquipment.length > 0) {
-      const deadline = new Date(equipmentDeadlineLocal)
-      if (
-        !equipmentDeadlineLocal ||
-        !Number.isFinite(deadline.getTime()) ||
-        deadline <= new Date()
-      ) {
-        setValidationError(
-          "Для мебели укажите будущий срок выполнения задания."
-        )
-        return
-      }
-      equipmentDeadlineAt = deadline.toISOString()
-    }
     const commandLines = cabinsForCommand.map((cabin) => ({
       assetId: cabin.id,
       assetVersion: cabin.version,
     }))
+    const furnitureReplacements = lines
+      .filter(
+        (
+          line
+        ): line is TransferLineDraft & {
+          assetId: string
+          contents: CabinFurnitureRequirementInput[]
+        } => line.assetId !== null && line.contents !== null
+      )
+      .map((line) => ({
+        assetId: line.assetId,
+        contents: [...line.contents].sort((left, right) =>
+          left.equipmentId.localeCompare(right.equipmentId)
+        ),
+      }))
+      .sort((left, right) => left.assetId.localeCompare(right.assetId))
     const signature = JSON.stringify({
       warehouseId,
       destinationWarehouseId,
       driverSnapshot: driver?.name ?? null,
-      equipmentDeadlineAt,
+      scheduledDate,
       lines: commandLines,
-      equipment: commandEquipment,
+      furnitureReplacements,
     })
     const idempotencyKey =
       attempt.current?.signature === signature
@@ -1121,8 +1100,8 @@ function CreateTransferDialog({
     mutation.mutate({
       idempotencyKey,
       commandLines,
-      commandEquipment,
-      equipmentDeadlineAt,
+      furnitureReplacements,
+      scheduledDate,
     })
   }
 
@@ -1136,8 +1115,8 @@ function CreateTransferDialog({
           <DialogHeader>
             <DialogTitle>Создать складское перемещение</DialogTitle>
             <DialogDescription>
-              Выберите склад назначения, свободные бытовки и мебель исходного
-              склада. Сервер создаст соответствующие задания.
+              Выберите склад назначения и бытовки. Наполнение каждой бытовки
+              можно изменить отдельно — сервер создаст нужные задания.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup className="py-4">
@@ -1182,11 +1161,27 @@ function CreateTransferDialog({
                 setValidationError(null)
               }}
             />
+            <Field data-invalid={Boolean(validationError) || undefined}>
+              <FieldLabel htmlFor="transfer-scheduled-date">
+                Дата задания
+              </FieldLabel>
+              <Input
+                id="transfer-scheduled-date"
+                type="date"
+                required
+                value={scheduledDate}
+                onChange={(event) => {
+                  setScheduledDate(event.target.value)
+                  attempt.current = null
+                  setValidationError(null)
+                }}
+              />
+            </Field>
             <FieldSet disabled={mutation.isPending}>
               <FieldLegend variant="label">Бытовки и наполнение</FieldLegend>
               <FieldDescription>
-                Выберите свободные бытовки со склада-отправителя. Их текущее
-                наполнение перемещается вместе с бытовкой.
+                Выберите свободные бытовки со склада-отправителя. Для каждой
+                показывается текущее наполнение и доступно его изменение.
               </FieldDescription>
               <FieldGroup data-testid="transfer-cabin-list">
                 {lines.map((line, index) => {
@@ -1226,7 +1221,16 @@ function CreateTransferDialog({
                             Номер бытовки
                           </FieldLabel>
                           <Combobox<RentalItemDto>
-                            items={cabins}
+                            items={[
+                              {
+                                value: "available",
+                                items: cabins.filter(
+                                  (cabin) =>
+                                    cabin.id === line.assetId ||
+                                    !selectedAssetIds.includes(cabin.id)
+                                ),
+                              },
+                            ]}
                             value={selectedCabin}
                             itemToStringLabel={(cabin) => cabin.number}
                             itemToStringValue={(cabin) => cabin.id}
@@ -1249,17 +1253,44 @@ function CreateTransferDialog({
                                   : "Свободные бытовки не найдены"}
                               </ComboboxEmpty>
                               <ComboboxList>
-                                <TransferCabinCandidateGroup
-                                  cabins={cabins}
-                                  selectedAssetIds={selectedAssetIds}
-                                  currentAssetId={line.assetId}
-                                />
+                                {(group) => (
+                                  <ComboboxGroup
+                                    key={group.value}
+                                    items={group.items}
+                                  >
+                                    <ComboboxLabel>
+                                      Свободные на складе-отправителе
+                                    </ComboboxLabel>
+                                    <ComboboxCollection>
+                                      {(cabin) => (
+                                        <ComboboxItem
+                                          key={cabin.id}
+                                          value={cabin}
+                                        >
+                                          {cabin.number}
+                                        </ComboboxItem>
+                                      )}
+                                    </ComboboxCollection>
+                                  </ComboboxGroup>
+                                )}
                               </ComboboxList>
                             </ComboboxContent>
                           </Combobox>
                         </Field>
                         {selectedCabin ? (
-                          <TransferCabinContents cabin={selectedCabin} />
+                          <CabinFurnitureContents
+                            cabin={selectedCabin}
+                            disabled={
+                              mutation.isPending ||
+                              equipmentQuery.isFetching ||
+                              equipmentQuery.isError
+                            }
+                            furnitureIds={furnitureIds}
+                            onManage={() => {
+                              setEditingLineKey(line.key)
+                              setValidationError(null)
+                            }}
+                          />
                         ) : null}
                       </CardContent>
                     </Card>
@@ -1282,121 +1313,35 @@ function CreateTransferDialog({
                 </Button>
               </FieldGroup>
             </FieldSet>
-            <FieldSet disabled={mutation.isPending}>
-              <FieldLegend variant="label">Мебель</FieldLegend>
-              <FieldDescription>
-                Мебель списывается с доступного остатка исходного склада и
-                перемещается отдельной серверной задачей.
-              </FieldDescription>
-              <FieldGroup>
-                {equipment.map((item) => {
-                  const allowedFurniture = furniture.filter(
-                    (candidate) =>
-                      candidate.id === item.equipmentId ||
-                      !equipment.some(
-                        (other) =>
-                          other.key !== item.key &&
-                          other.equipmentId === candidate.id
-                      )
+            {equipmentQuery.isError ? (
+              <FieldError>
+                Не удалось загрузить дополнительное оборудование.
+              </FieldError>
+            ) : null}
+            {editingLine && editingCabin ? (
+              <CabinFurnitureCompositionDialog
+                cabin={editingCabin}
+                equipmentItems={equipmentQuery.data ?? []}
+                initialContents={
+                  editingLine.contents ??
+                  cabinFurnitureRequirements(editingCabin, furnitureIds)
+                }
+                open
+                pending={mutation.isPending}
+                onOpenChange={(open) => !open && setEditingLineKey(null)}
+                onSave={(contents) => {
+                  setLines((current) =>
+                    current.map((line) =>
+                      line.key === editingLine.key
+                        ? { ...line, contents }
+                        : line
+                    )
                   )
-                  return (
-                    <div
-                      key={item.key}
-                      className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_8rem_auto]"
-                    >
-                      <Field>
-                        <FieldLabel htmlFor={`transfer-equipment-${item.key}`}>
-                          Мебель
-                        </FieldLabel>
-                        <Select
-                          value={item.equipmentId}
-                          onValueChange={(equipmentId) =>
-                            updateEquipment(item.key, { equipmentId })
-                          }
-                        >
-                          <SelectTrigger id={`transfer-equipment-${item.key}`}>
-                            <SelectValue placeholder="Выберите мебель" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectGroup>
-                              {allowedFurniture.map((candidate) => (
-                                <SelectItem
-                                  key={candidate.id}
-                                  value={candidate.id}
-                                >
-                                  {candidate.name} · доступно{" "}
-                                  {candidate.availableStock}
-                                </SelectItem>
-                              ))}
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
-                      </Field>
-                      <Field>
-                        <FieldLabel htmlFor={`transfer-quantity-${item.key}`}>
-                          Количество
-                        </FieldLabel>
-                        <Input
-                          id={`transfer-quantity-${item.key}`}
-                          type="number"
-                          min={1}
-                          step={1}
-                          value={item.quantity}
-                          onChange={(event) =>
-                            updateEquipment(item.key, {
-                              quantity: Number(event.target.value),
-                            })
-                          }
-                        />
-                      </Field>
-                      <Button
-                        type="button"
-                        className="self-end"
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          setEquipment((current) =>
-                            current.filter(
-                              (candidate) => candidate.key !== item.key
-                            )
-                          )
-                        }
-                      >
-                        Удалить
-                      </Button>
-                    </div>
-                  )
-                })}
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={furniture.length === 0}
-                  onClick={addEquipment}
-                >
-                  Добавить мебель
-                </Button>
-                {equipment.length > 0 ? (
-                  <Field>
-                    <FieldLabel htmlFor="transfer-equipment-deadline">
-                      Срок выполнения задачи мебели
-                    </FieldLabel>
-                    <Input
-                      id="transfer-equipment-deadline"
-                      type="datetime-local"
-                      required
-                      value={equipmentDeadlineLocal}
-                      onChange={(event) =>
-                        setEquipmentDeadlineLocal(event.target.value)
-                      }
-                    />
-                  </Field>
-                ) : null}
-                {equipmentQuery.isError ? (
-                  <FieldError>Не удалось загрузить остатки мебели.</FieldError>
-                ) : null}
-              </FieldGroup>
-            </FieldSet>
+                  attempt.current = null
+                  setEditingLineKey(null)
+                }}
+              />
+            ) : null}
             {cabinsQuery.isError ? (
               <FieldError>Не удалось загрузить доступные бытовки.</FieldError>
             ) : null}
@@ -1427,63 +1372,6 @@ function CreateTransferDialog({
         </form>
       </DialogContent>
     </Dialog>
-  )
-}
-
-function TransferCabinCandidateGroup({
-  cabins,
-  selectedAssetIds,
-  currentAssetId,
-}: {
-  cabins: RentalItemDto[]
-  selectedAssetIds: string[]
-  currentAssetId: string | null
-}) {
-  const available = cabins.filter(
-    (cabin) =>
-      cabin.id === currentAssetId || !selectedAssetIds.includes(cabin.id)
-  )
-
-  return available.length ? (
-    <ComboboxGroup>
-      <ComboboxLabel>Свободные на складе-отправителе</ComboboxLabel>
-      {available.map((cabin) => (
-        <ComboboxItem key={cabin.id} value={cabin}>
-          {cabin.number}
-        </ComboboxItem>
-      ))}
-    </ComboboxGroup>
-  ) : null
-}
-
-function TransferCabinContents({
-  cabin,
-}: {
-  cabin: Pick<RentalItemDto, "contents" | "contentsItems">
-}) {
-  const contents: RentalItemContentsItemDto[] = cabin.contentsItems
-
-  return (
-    <FieldSet>
-      <FieldLegend variant="label">Наполнение</FieldLegend>
-      {contents.length ? (
-        <div className="flex flex-col gap-1 text-sm">
-          {contents.map((item) => (
-            <div
-              key={`${item.equipmentId ?? item.name}:${item.quantity}`}
-              className="flex items-center justify-between gap-4"
-            >
-              <span>{item.equipmentName ?? item.name}</span>
-              <span className="text-muted-foreground">{item.quantity} шт.</span>
-            </div>
-          ))}
-        </div>
-      ) : cabin.contents ? (
-        <FieldDescription>{cabin.contents}</FieldDescription>
-      ) : (
-        <FieldDescription>В бытовке нет наполнения.</FieldDescription>
-      )}
-    </FieldSet>
   )
 }
 

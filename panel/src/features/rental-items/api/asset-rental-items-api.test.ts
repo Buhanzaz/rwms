@@ -49,6 +49,7 @@ function rentalItemResponse(overrides: Record<string, unknown> = {}) {
         locationKind: "CABIN_NON_RENTED",
       },
     ],
+    activeOrderReservation: null,
     createdAt: "2026-07-18T10:00:00Z",
     updatedAt: "2026-07-18T11:00:00Z",
     ...overrides,
@@ -163,6 +164,34 @@ describe("asset rental-items HTTP adapter", () => {
       })
     ).resolves.toMatchObject({
       content: [{ warehouseId: CANONICAL_SEEDED_WAREHOUSE_ID }],
+    })
+  })
+
+  it("maps the active order reservation as the canonical tenant", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        rentalItemResponse({
+          status: "BOOKED",
+          passport: { tenant: "Устаревший клиент" },
+          activeOrderReservation: {
+            reservationId: "11111111-1111-1111-1111-111111111111",
+            orderId: "22222222-2222-2222-2222-222222222222",
+            clientId: "33333333-3333-3333-3333-333333333333",
+            tenantSnapshot: "ООО Новый клиент",
+            reservedAt: "2026-07-22T08:00:00Z",
+          },
+        })
+      )
+    )
+
+    await expect(
+      getAssetRentalItem("access-token", RENTAL_ITEM_ID)
+    ).resolves.toMatchObject({
+      status: "BOOKED",
+      tenant: "ООО Новый клиент",
+      activeOrderReservation: {
+        orderId: "22222222-2222-2222-2222-222222222222",
+      },
     })
   })
 

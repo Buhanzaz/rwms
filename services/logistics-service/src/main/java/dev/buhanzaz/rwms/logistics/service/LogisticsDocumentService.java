@@ -30,9 +30,6 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsTargetService;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsTaskReference;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsTaskReferenceState;
 import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.CancelEquipmentMovementTaskRequest;
-import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.CreateEquipmentMovementTaskRequest;
-import dev.buhanzaz.rwms.logistics.equipment.api.EquipmentMovementTaskApiModels.EquipmentMovementLineRequest;
-import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementLocationKind;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import dev.buhanzaz.rwms.logistics.equipment.service.EquipmentMovementTaskService;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventStore;
@@ -42,6 +39,7 @@ import dev.buhanzaz.rwms.logistics.mapper.LogisticsDocumentResponseMapper;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderAuditEventType;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
+import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderEquipmentRequirementRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.order.service.OrderAuditService;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsDocumentLineRepository;
@@ -60,6 +58,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -100,7 +99,7 @@ public class LogisticsDocumentService {
   static final String SHIPMENT_ASSET_SNAPSHOT = "SHIPMENT_ASSET_SNAPSHOT";
   static final String SHIPMENT_ASSET_LEASE_ACQUIRE = "SHIPMENT_ASSET_LEASE_ACQUIRE";
   static final String SHIPMENT_TASK_REGISTER = "SHIPMENT_TASK_REGISTER";
-  static final String SHIPMENT_TASK_STATUS = "SHIPMENT_TASK_STATUS";
+  static final String SHIPMENT_TASK_COMPLETE = "SHIPMENT_TASK_COMPLETE";
   static final String SHIPMENT_ASSET_CONFIRM = "SHIPMENT_ASSET_CONFIRM";
   static final String SHIPMENT_ASSET_LEASE_RELEASE = "SHIPMENT_ASSET_LEASE_RELEASE";
   static final String SHIPMENT_TASK_CANCEL = "SHIPMENT_TASK_CANCEL";
@@ -136,9 +135,13 @@ public class LogisticsDocumentService {
   private final LogisticsReturnShortageSnapshotRepository shortageSnapshotRepository;
   private final LogisticsTaskReferenceRepository taskReferenceRepository;
   private final LogisticsReconciliationRequestRepository reconciliationRequestRepository;
+  private final LogisticsDependencyGateway dependencies;
+  private final RentalOrderEquipmentRequirementRepository equipmentRequirements;
   private final RentalOrderRepository rentalOrders;
   private final OrderAuditService orderAudit;
   private final EquipmentMovementTaskService equipmentMovementTasks;
+  private final ShipmentFurnitureTaskService shipmentFurnitureTasks;
+  private final TransferFurnitureTaskService transferFurnitureTasks;
   private final LogisticsDocumentResponseMapper responseMapper;
   private final LogisticsIdempotencyProperties idempotencyProperties;
   private final LogisticsEventStore eventStore;
@@ -212,7 +215,7 @@ public class LogisticsDocumentService {
             request.driverSnapshot(),
             subjectId,
             correlationId);
-    document.scheduleShipment(request.driverSnapshot(), now());
+    document.scheduleShipment(request.driverSnapshot(), now().toLocalDate());
     document = documentRepository.saveAndFlush(document);
     List<LogisticsDocumentLine> lines =
         lineRepository.saveAllAndFlush(
@@ -227,7 +230,8 @@ public class LogisticsDocumentService {
   public CreateResult createTransfer(
       UUID subjectId, UUID idempotencyKey, UUID correlationId, CreateTransferRequest request) {
     requireRequest(request);
-    validateTransferEquipment(request);
+    validateTransferSchedule(request);
+    validateTransferFurnitureReplacements(request);
     String checksum =
         LogisticsCommandChecksum.sha256(
             CREATE_TRANSFER,
@@ -242,6 +246,7 @@ public class LogisticsDocumentService {
                 request.warehouseId(),
                 request.destinationWarehouseId(),
                 request.driverSnapshot(),
+                request.scheduledDate(),
                 subjectId,
                 correlationId));
     List<LogisticsDocumentLine> lines =
@@ -281,35 +286,11 @@ public class LogisticsDocumentService {
                   document.getWarehouseId().toString(),
                   taskReference.getExternalTaskId().toString(),
                   "0",
-                  "<null>")),
+                  document.getScheduledDate().toString())),
           proofCreatedAt);
     }
-    if (!request.equipment().isEmpty()) {
-      EquipmentMovementTaskService.CreateResult task =
-          equipmentMovementTasks.create(
-              subjectId,
-              transferEquipmentTaskIdempotencyKey(document.getId()),
-              new CreateEquipmentMovementTaskRequest(
-                  document.getWarehouseId(),
-                  document.getDestinationWarehouseId(),
-                  null,
-                  null,
-                  request.equipmentDeadlineAt(),
-                  request.equipment().stream()
-                      .map(
-                          equipment ->
-                              new EquipmentMovementLineRequest(
-                                  equipment.equipmentId(),
-                                  null,
-                                  EquipmentMovementLocationKind.STOCK,
-                                  equipment.expectedSourceBalanceVersion(),
-                                  null,
-                                  EquipmentMovementLocationKind.STOCK,
-                                  equipment.quantity()))
-                      .toList()));
-      document.linkEquipmentMovementTask(task.response().id());
-      documentRepository.saveAndFlush(document);
-    }
+    transferFurnitureTasks.createForTransfer(
+        subjectId, document, request.scheduledDate(), request.furnitureReplacements());
     eventStore.initialize(document, lines.size(), correlationId, subjectId);
     remember(subjectId, idempotencyKey, CREATE_TRANSFER, checksum, document);
     return new CreateResult(toView(document), false);
@@ -335,7 +316,12 @@ public class LogisticsDocumentService {
         documentRepository
             .findByDocumentTypeAndRentalOrderId(LogisticsDocumentType.SHIPMENT, order.getId())
             .orElse(null);
-    if (existing != null) return toView(existing);
+    if (existing != null) {
+      if (existing.getState() == LogisticsDocumentState.DRAFT) {
+        synchronizeRentalOrderShipmentDraft(existing, order, reservations);
+      }
+      return toView(existing);
+    }
     if (reservations == null || reservations.isEmpty() || reservations.size() > 100) {
       throw new LogisticsConflictException("Заказ должен содержать от 1 до 100 бытовок");
     }
@@ -369,7 +355,7 @@ public class LogisticsDocumentService {
               index + 1,
               reservation.unitId(),
               reservation.unit().version(),
-              null,
+              order.getClient().getDisplayName(),
               order.getId());
       line.captureSourceAllocations(emptyAllocationSnapshot());
       lines.add(line);
@@ -377,6 +363,49 @@ public class LogisticsDocumentService {
     lines = lineRepository.saveAllAndFlush(lines);
     eventStore.initialize(document, lines.size(), correlationId, subjectId);
     return toView(document);
+  }
+
+  private void synchronizeRentalOrderShipmentDraft(
+      LogisticsDocument document,
+      RentalOrder order,
+      List<LogisticsDependencyGateway.OrderUnitReservation> reservations) {
+    if (reservations == null || reservations.isEmpty() || reservations.size() > 100) {
+      throw new LogisticsConflictException("Заказ должен содержать от 1 до 100 бытовок");
+    }
+    Map<UUID, LogisticsDependencyGateway.OrderUnitReservation> reservationsByUnit =
+        new LinkedHashMap<>();
+    for (LogisticsDependencyGateway.OrderUnitReservation reservation : reservations) {
+      if (reservation == null
+          || reservation.unit() == null
+          || reservation.unitId() == null
+          || !reservation.unitId().equals(reservation.unit().id())
+          || !order.getId().equals(reservation.orderId())
+          || !order.getWarehouseId().equals(reservation.warehouseId())
+          || !"ACTIVE".equals(reservation.state())
+          || reservationsByUnit.putIfAbsent(reservation.unitId(), reservation) != null) {
+        throw new LogisticsConflictException("Order unit reservation is invalid");
+      }
+    }
+    List<LogisticsDocumentLine> lines = linesRequired(document.getId());
+    if (lines.size() != reservationsByUnit.size()) {
+      throw new LogisticsConflictException("Saved order units do not match shipment lines");
+    }
+    boolean changed = false;
+    for (LogisticsDocumentLine line : lines) {
+      LogisticsDependencyGateway.OrderUnitReservation reservation =
+          reservationsByUnit.remove(line.getAssetId());
+      if (reservation == null) {
+        throw new LogisticsConflictException("Saved order units do not match shipment lines");
+      }
+      changed |= line.synchronizeOrderReservation(
+          reservation.unit().version(), order.getClient().getDisplayName());
+    }
+    if (!reservationsByUnit.isEmpty()) {
+      throw new LogisticsConflictException("Saved order units do not match shipment lines");
+    }
+    if (changed) {
+      lineRepository.saveAllAndFlush(lines);
+    }
   }
 
   /** Advances the order and creates its date-less return after every cabin is shipped. */
@@ -395,6 +424,7 @@ public class LogisticsDocumentService {
     boolean fulfilled = order.fulfill();
     if (fulfilled) {
       rentalOrders.saveAndFlush(order);
+      releaseFulfilledOrderEquipmentReservations(order, shipment);
       orderAudit.appendForActor(
           order.getId(),
           OrderAuditEventType.ORDER_FULFILLED,
@@ -465,6 +495,34 @@ public class LogisticsDocumentService {
         shipment.getRequestedBySubjectId());
   }
 
+  private void releaseFulfilledOrderEquipmentReservations(
+      RentalOrder order, LogisticsDocument shipment) {
+    boolean hasFurnitureReservation =
+        equipmentRequirements
+            .findAllByOrder_IdOrderByRentalItemIdAscEquipmentCodeAsc(order.getId())
+            .stream()
+            .anyMatch(requirement -> requirement.getQuantity() > 0);
+    if (!hasFurnitureReservation) {
+      return;
+    }
+    UUID idempotencyKey =
+        UUID.nameUUIDFromBytes(
+            ("rental-order:equipment-release:v1:" + order.getId())
+                .getBytes(StandardCharsets.UTF_8));
+    List<LogisticsDependencyGateway.OrderEquipmentReservation> released =
+        dependencies.replaceOrderEquipmentReservations(
+            idempotencyKey,
+            order.getId(),
+            order.getWarehouseId(),
+            shipment.getRequestedBySubjectId(),
+            order.getCreatedByRole(),
+            List.of());
+    if (released == null || !released.isEmpty()) {
+      throw new LogisticsConflictException(
+          "Не удалось освободить резерв мебели отгруженного заказа");
+    }
+  }
+
   /** Closes a linked order after its return has reached either terminal inspection outcome. */
   @Transactional
   public void closeRentalOrderReturn(LogisticsDocument returnDocument) {
@@ -514,7 +572,7 @@ public class LogisticsDocumentService {
                 documentId.toString(),
                 Long.toString(expectedDocumentVersion),
                 request.driverSnapshot().trim(),
-                request.scheduledAt().toString()));
+                request.scheduledDate().toString()));
     acquireIdempotencyLock(subjectId, REGISTER_RETURN, idempotencyKey);
     CreateResult replay = replay(subjectId, idempotencyKey, REGISTER_RETURN, checksum);
     if (replay != null) return replay;
@@ -527,7 +585,7 @@ public class LogisticsDocumentService {
         lineRepository.findAllByDocument_IdOrderByLineNumber(documentId);
     if (lines.isEmpty()) throw new IllegalStateException("Return document has no lines");
 
-    document.scheduleReturn(request.driverSnapshot(), request.scheduledAt());
+    document.scheduleReturn(request.driverSnapshot(), request.scheduledDate());
     document.beginReturnRegistration();
     documentRepository.saveAndFlush(document);
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
@@ -731,9 +789,12 @@ public class LogisticsDocumentService {
     LogisticsDocument document = document(documentId, LogisticsDocumentType.SHIPMENT);
     requireExpectedVersion(document, expectedDocumentVersion, "Shipment document version changed concurrently");
     boolean startPreparation = document.getState() == LogisticsDocumentState.DRAFT;
+    if (startPreparation) {
+      shipmentFurnitureTasks.requireShipmentFurnitureReady(documentId);
+    }
     List<LogisticsDocumentLine> lines = linesRequired(documentId);
     try {
-      document.scheduleShipment(request.driverSnapshot(), request.scheduledAt());
+      document.scheduleShipment(request.driverSnapshot(), request.scheduledDate());
     } catch (IllegalStateException exception) {
       throw new LogisticsConflictException(
           "Shipment plan cannot be changed in its current lifecycle state");
@@ -802,6 +863,7 @@ public class LogisticsDocumentService {
     if (document.getState() != LogisticsDocumentState.AWAITING_CONFIRMATION) {
       throw new LogisticsConflictException("Shipment preparation is not awaiting confirmation");
     }
+    shipmentFurnitureTasks.requireShipmentFurnitureReady(documentId);
     try {
       document.requireShipmentDepartureAllowed(now());
     } catch (IllegalStateException exception) {
@@ -824,9 +886,12 @@ public class LogisticsDocumentService {
           document,
           line,
           LogisticsTargetService.TASK_BOARD,
-          SHIPMENT_TASK_STATUS,
+          SHIPMENT_TASK_COMPLETE,
           LogisticsCommandChecksum.sha256(
-              SHIPMENT_TASK_STATUS, List.of(task.getExternalTaskId().toString())),
+              SHIPMENT_TASK_COMPLETE,
+              List.of(
+                  task.getExternalTaskId().toString(),
+                  Long.toString(task.getTaskVersion()))),
           now);
     }
     eventStore.append(
@@ -993,6 +1058,7 @@ public class LogisticsDocumentService {
     if (line.getState() != LogisticsLineState.PENDING) {
       throw new LogisticsConflictException("Transfer line is not pending departure");
     }
+    transferFurnitureTasks.requireReadyForDeparture(document.getId(), line.getAssetId());
 
     UUID destinationWarehouseId = transferDestination(document);
     OffsetDateTime now = now();
@@ -1150,6 +1216,7 @@ public class LogisticsDocumentService {
     }
 
     cancelTransferEquipmentTask(subjectId, document);
+    transferFurnitureTasks.cancelForTransfer(subjectId, document.getId());
     document.beginTransferCancellation();
     documentRepository.saveAndFlush(document);
     List<LogisticsTaskReference> taskReferences =
@@ -1340,6 +1407,7 @@ public class LogisticsDocumentService {
         summary.driverSnapshot(),
         summary.clientId(),
         summary.equipmentMovementTaskId(),
+        summary.scheduledDate(),
         summary.scheduledAt(),
         summary.rentalOrderId(),
         responseMapper.toLineViews(lineRepository.findAllByDocument_IdOrderByLineNumber(summary.id())),
@@ -1704,7 +1772,7 @@ public class LogisticsDocumentService {
         documentId.toString(),
         Long.toString(expectedVersion),
         request.driverSnapshot().trim(),
-        request.scheduledAt().toString());
+        request.scheduledDate().toString());
   }
 
   static String holdAcquireOperation(UUID equipmentId) {
@@ -1909,42 +1977,65 @@ public class LogisticsDocumentService {
     values.add(request.warehouseId().toString());
     values.add(request.destinationWarehouseId().toString());
     values.add(request.driverSnapshot());
-    values.add(
-        request.equipmentDeadlineAt() == null ? null : request.equipmentDeadlineAt().toString());
+    values.add(request.scheduledDate().toString());
     for (var line : request.lines()) {
       values.add(line.assetId().toString());
       values.add(Long.toString(line.assetVersion()));
     }
-    request.equipment().stream()
-        .sorted(Comparator.comparing(value -> value.equipmentId().toString()))
+    request.furnitureReplacements().stream()
+        .sorted(Comparator.comparing(value -> value.assetId().toString()))
         .forEach(
-            equipment -> {
-              values.add(equipment.equipmentId().toString());
-              values.add(Long.toString(equipment.expectedSourceBalanceVersion()));
-              values.add(Long.toString(equipment.quantity()));
+            replacement -> {
+              values.add(replacement.assetId().toString());
+              replacement.contents().stream()
+                  .sorted(Comparator.comparing(value -> value.equipmentId().toString()))
+                  .forEach(
+                      furniture -> {
+                        values.add(furniture.equipmentId().toString());
+                        values.add(Long.toString(furniture.quantity()));
+                      });
             });
     return values;
   }
 
-  private static void validateTransferEquipment(CreateTransferRequest request) {
-    if (request.equipment() == null || request.equipment().size() > 100) {
-      throw new IllegalArgumentException("Transfer equipment lines are invalid");
+  private static void validateTransferSchedule(CreateTransferRequest request) {
+    if (request.scheduledDate() == null || request.scheduledDate().isBefore(now().toLocalDate())) {
+      throw new IllegalArgumentException("Transfer task date cannot be in the past");
     }
-    if (request.equipment().isEmpty()) return;
-    if (request.equipmentDeadlineAt() == null || !request.equipmentDeadlineAt().isAfter(now())) {
-      throw new IllegalArgumentException(
-          "A future equipment task deadline is required for transfer furniture");
+  }
+
+  private static void validateTransferFurnitureReplacements(CreateTransferRequest request) {
+    if (request.lines() == null || request.lines().isEmpty() || request.lines().size() > 100) {
+      throw new IllegalArgumentException("Transfer cabin lines are invalid");
     }
-    HashSet<UUID> equipmentIds = new HashSet<>();
-    for (var equipment : request.equipment()) {
-      if (equipment == null
-          || equipment.equipmentId() == null
-          || equipment.expectedSourceBalanceVersion() == null
-          || equipment.expectedSourceBalanceVersion() < 0
-          || equipment.quantity() == null
-          || equipment.quantity() < 1
-          || !equipmentIds.add(equipment.equipmentId())) {
-        throw new IllegalArgumentException("Transfer equipment line is invalid");
+    Set<UUID> transferCabins = new HashSet<>();
+    for (var line : request.lines()) {
+      if (line == null || line.assetId() == null || !transferCabins.add(line.assetId())) {
+        throw new IllegalArgumentException("Transfer cabin line is invalid");
+      }
+    }
+    if (request.furnitureReplacements() == null || request.furnitureReplacements().size() > 100) {
+      throw new IllegalArgumentException("Transfer furniture replacements are invalid");
+    }
+    Set<UUID> replacementCabins = new HashSet<>();
+    for (var replacement : request.furnitureReplacements()) {
+      if (replacement == null
+          || replacement.assetId() == null
+          || !transferCabins.contains(replacement.assetId())
+          || !replacementCabins.add(replacement.assetId())
+          || replacement.contents() == null
+          || replacement.contents().size() > 100) {
+        throw new IllegalArgumentException("Transfer furniture replacement is invalid");
+      }
+      Set<UUID> equipmentIds = new HashSet<>();
+      for (var furniture : replacement.contents()) {
+        if (furniture == null
+            || furniture.equipmentId() == null
+            || furniture.quantity() == null
+            || furniture.quantity() < 1
+            || !equipmentIds.add(furniture.equipmentId())) {
+          throw new IllegalArgumentException("Transfer furniture requirement is invalid");
+        }
       }
     }
   }
@@ -1954,11 +2045,6 @@ public class LogisticsDocumentService {
     return UUID.nameUUIDFromBytes(
         ("rwms:transfer:" + document.getId() + ":" + line.getId())
             .getBytes(StandardCharsets.UTF_8));
-  }
-
-  private static UUID transferEquipmentTaskIdempotencyKey(UUID documentId) {
-    return UUID.nameUUIDFromBytes(
-        ("rwms:transfer-equipment:" + documentId).getBytes(StandardCharsets.UTF_8));
   }
 
   private static UUID transferEquipmentCancellationIdempotencyKey(UUID documentId) {

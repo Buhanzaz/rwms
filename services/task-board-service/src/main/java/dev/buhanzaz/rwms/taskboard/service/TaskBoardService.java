@@ -423,6 +423,129 @@ public class TaskBoardService {
         ownedLogisticsPreparationTask(externalTaskId));
   }
 
+  /**
+   * Closes a logistics-owned preparation task when the shipment operator
+   * confirms the physical departure.  This source command is intentionally
+   * narrow: it cannot complete arbitrary task-board work.
+   */
+  @Transactional
+  public LogisticsTaskSnapshot completeLogisticsPreparationTask(
+      UUID externalTaskId, CompleteLogisticsPreparationTaskRequest request) {
+    lock("external-task:" + externalTaskId);
+    BoardTask task = ownedLogisticsPreparationTask(externalTaskId);
+    if (task.getStatus() == TaskStatus.DONE) {
+      return logisticsTaskMapper.toLogisticsTaskSnapshot(task);
+    }
+    if (task.getStatus() == TaskStatus.CANCELLED) {
+      throw new ConflictException("Отмененную задачу завершить нельзя");
+    }
+    checkVersion(task.getVersion(), request.expectedTaskVersion(), "Задача");
+    UUID warehouseId = task.getWarehouseId();
+    lockQueueMutation(warehouseId);
+    List<QueueEntry> taskEntries =
+        entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId());
+    Set<QueueEntry> unfinishedEntries =
+        taskEntries.stream()
+            .filter(entry -> UNFINISHED.contains(entry.getStatus()))
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    Set<QueueEntry> interruptionNeighbours = interruptionNeighbours(taskEntries);
+    Set<WorkQueue> affectedQueues =
+        unfinishedEntries.stream()
+            .map(QueueEntry::getQueue)
+            .filter(Objects::nonNull)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    boolean affectedUnassigned =
+        unfinishedEntries.stream().anyMatch(entry -> entry.getQueue() == null);
+    Set<QueueEntry> positionCandidates = new LinkedHashSet<>();
+    affectedQueues.forEach(
+        queue -> positionCandidates.addAll(orderedEntries(warehouseId, queue)));
+    if (affectedUnassigned) {
+      positionCandidates.addAll(orderedEntries(warehouseId, null));
+    }
+    Map<UUID, QueueEntryPosition> positionsBefore = positionsOf(positionCandidates);
+    Set<QueueEntry> streamsToLock = new LinkedHashSet<>(taskEntries);
+    streamsToLock.addAll(interruptionNeighbours);
+    streamsToLock.addAll(positionCandidates);
+    lockQueuePositions(
+        warehouseId, taskEntries.stream().map(QueueEntry::getQueue).toList());
+    var streamVersions = lockTaskAndEntryStreams(task, streamsToLock);
+    long taskStreamVersion =
+        streamVersion(streamVersions, TaskBoardAggregateType.BOARD_TASK, task.getId());
+    OffsetDateTime completedAt = now();
+    Set<UUID> completedEntryIds =
+        unfinishedEntries.stream()
+            .map(QueueEntry::getId)
+            .collect(java.util.stream.Collectors.toSet());
+    for (QueueEntry entry : unfinishedEntries) {
+      stopTimer(entry, completedAt);
+      entry.setStatus(EntryStatus.DONE);
+      entry.setDoneAt(completedAt);
+      entry.setPausedAt(null);
+      entry.setPauseOrigin(null);
+      List<TaskAssignment> activeAssignments =
+          assignments.findAllByQueueEntryIdAndStatusIn(
+              entry.getId(), Set.of(AssignmentStatus.ACTIVE, AssignmentStatus.PAUSED));
+      if (activeAssignments.isEmpty()) {
+        event(
+            entry,
+            null,
+            null,
+            TimeEventType.FINISHED,
+            "LOGISTICS_SHIPMENT_CONFIRMED",
+            null,
+            completedAt);
+      } else {
+        for (TaskAssignment assignment : activeAssignments) {
+          assignment.setStatus(AssignmentStatus.DONE);
+          assignment.setPausedAt(null);
+          assignment.setFinishedAt(completedAt);
+          projectionWriter.save(assignments, assignment);
+          event(
+              entry,
+              assignment.getWorker(),
+              assignment.getWorkerGroup(),
+              TimeEventType.FINISHED,
+              "LOGISTICS_SHIPMENT_CONFIRMED",
+              null,
+              completedAt);
+        }
+      }
+      projectionWriter.save(entries, entry);
+      resolveInterruptions(entry, completedAt);
+      closeInterruptedLinks(entry, completedAt);
+    }
+    affectedQueues.forEach(queue -> normalizePositions(warehouseId, queue));
+    if (affectedUnassigned) normalizePositions(warehouseId, null);
+    task.setStatus(TaskStatus.DONE);
+    task.setDoneAt(completedAt);
+    task = projectionWriter.saveAndFlush(tasks, task);
+    projectionWriter.flush();
+    Set<UUID> changedNeighbourIds =
+        interruptionNeighbours.stream()
+            .map(QueueEntry::getId)
+            .collect(java.util.stream.Collectors.toSet());
+    Set<UUID> repositionedIds = changedPositionIds(positionCandidates, positionsBefore);
+    for (QueueEntry entry : streamsToLock) {
+      String eventType =
+          completedEntryIds.contains(entry.getId())
+              ? TaskBoardEventTypes.QUEUE_ENTRY_COMPLETED
+              : changedNeighbourIds.contains(entry.getId())
+                      || repositionedIds.contains(entry.getId())
+                  ? TaskBoardEventTypes.QUEUE_ENTRY_CHANGED
+                  : null;
+      if (eventType != null) {
+        eventSourcing.entryChanged(
+            entry,
+            streamVersion(
+                streamVersions, TaskBoardAggregateType.QUEUE_ENTRY, entry.getId()),
+            eventType);
+      }
+    }
+    eventSourcing.taskChanged(
+        task, taskStreamVersion, TaskBoardEventTypes.BOARD_TASK_COMPLETED);
+    return logisticsTaskMapper.toLogisticsTaskSnapshot(task);
+  }
+
   @Transactional(readOnly = true)
   public LogisticsTaskSnapshot logisticsEquipmentMovementTask(UUID externalTaskId) {
     return logisticsTaskMapper.toLogisticsTaskSnapshot(

@@ -347,6 +347,32 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /internal/task-board/v1/logistics/preparation-tasks/{externalTaskId}/complete:
+    parameters:
+      - $ref: '#/components/parameters/ExternalTaskId'
+    post:
+      operationId: completeLogisticsPreparationTask
+      description: >-
+        Completes only the matching unfinished logistics preparation task when
+        logistics confirms physical shipment. The task version provides CAS;
+        an identical retry returns the current DONE snapshot without a second
+        completion event.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompleteLogisticsPreparationTaskRequest' }
+      responses:
+        '200':
+          description: Current source-owned logistics task snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LogisticsTaskSnapshot' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /internal/task-board/v1/logistics/preparation-tasks/{externalTaskId}/cancel:
     parameters:
       - $ref: '#/components/parameters/ExternalTaskId'
@@ -1277,6 +1303,12 @@ components:
         deadlineAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
       additionalProperties: false
     CancelLogisticsPreparationTaskRequest:
+      type: object
+      required: [expectedTaskVersion]
+      properties:
+        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
+      additionalProperties: false
+    CompleteLogisticsPreparationTaskRequest:
       type: object
       required: [expectedTaskVersion]
       properties:

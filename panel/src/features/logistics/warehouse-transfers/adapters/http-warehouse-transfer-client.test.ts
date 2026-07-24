@@ -24,6 +24,8 @@ const document: TransferDocument = {
   driverSnapshot: null,
   clientId: null,
   equipmentMovementTaskId: EQUIPMENT_TASK_ID,
+  scheduledDate: "2026-07-19",
+  scheduledAt: null,
   lines: [
     {
       id: LINE_ID,
@@ -96,14 +98,13 @@ describe("HttpWarehouseTransferClient", () => {
       warehouseId: SOURCE_WAREHOUSE_ID,
       destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
       driverSnapshot: "Иванов Иван",
-      equipmentDeadlineAt: "2026-07-19T08:00:00Z",
+      scheduledDate: "2026-07-19",
       idempotencyKey: IDEMPOTENCY_KEY,
       lines: [{ assetId: ASSET_ID, assetVersion: 8 }],
-      equipment: [
+      furnitureReplacements: [
         {
-          equipmentId: EQUIPMENT_ID,
-          expectedSourceBalanceVersion: 3,
-          quantity: 2,
+          assetId: ASSET_ID,
+          contents: [{ equipmentId: EQUIPMENT_ID, quantity: 2 }],
         },
       ],
     }
@@ -125,9 +126,9 @@ describe("HttpWarehouseTransferClient", () => {
         warehouseId: SOURCE_WAREHOUSE_ID,
         destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
         driverSnapshot: command.driverSnapshot,
-        equipmentDeadlineAt: command.equipmentDeadlineAt,
+        scheduledDate: command.scheduledDate,
         lines: command.lines,
-        equipment: command.equipment,
+        furnitureReplacements: command.furnitureReplacements,
       })
     }
   })

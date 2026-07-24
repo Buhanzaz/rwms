@@ -34,4 +34,5 @@ public class InventoryValidationSnapshot {
   public String getValidationSha256() { return validationSha256; }
   public String getAcknowledgementSha256() { return acknowledgementSha256; }
   public String getSnapshotBody() { return snapshotBody; }
+  public UUID getInventoryId() { return inventoryId; }
 }

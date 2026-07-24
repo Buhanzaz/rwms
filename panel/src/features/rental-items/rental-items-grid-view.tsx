@@ -284,7 +284,7 @@ export function RentalItemsGridView({
     <div
       ref={parentRef}
       data-grid-format={`${columnCount}x${visibleRowCount}`}
-      className="min-h-0 flex-1 overflow-auto"
+      className="min-h-0 min-w-0 flex-1 overflow-auto"
     >
       <div
         className="relative"

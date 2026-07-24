@@ -154,6 +154,9 @@ public interface LogisticsDependencyGateway {
 
   PreparationTask readPreparationTask(UUID externalTaskId);
 
+  PreparationTask completePreparationTask(
+      UUID externalTaskId, long expectedTaskVersion);
+
   PreparationTask cancelPreparationTask(UUID externalTaskId, long expectedTaskVersion);
 
   EquipmentMovementReservation acquireEquipmentMovementReservation(
@@ -201,6 +204,8 @@ public interface LogisticsDependencyGateway {
       UUID orderId,
       UUID warehouseId,
       UUID unitId,
+      UUID clientId,
+      String tenantSnapshot,
       UUID actorSubjectId,
       String actorRole);
 
@@ -214,15 +219,25 @@ public interface LogisticsDependencyGateway {
   List<OrderUnitReservation> releaseAllOrderUnits(
       UUID idempotencyKey, UUID orderId, UUID actorSubjectId, String actorRole);
 
-  OrderEquipmentAdjustment adjustOrderEquipment(
+  List<OrderEquipmentReservation> replaceOrderEquipmentReservations(
       UUID idempotencyKey,
       UUID orderId,
-      UUID unitId,
-      UUID equipmentId,
+      UUID warehouseId,
       UUID actorSubjectId,
       String actorRole,
-      long expectedCurrentQuantity,
-      long requiredQuantity);
+      List<OrderEquipmentRequirement> requirements);
+
+  OrderFurnitureMovementPlan planOrderFurnitureMovements(
+      UUID orderId,
+      UUID warehouseId,
+      UUID unitId,
+      List<OrderEquipmentRequirement> unitRequirements,
+      List<OrderEquipmentRequirement> orderRequirements);
+
+  CabinFurnitureMovementPlan planCabinFurnitureMovements(
+      UUID warehouseId,
+      UUID rentalItemId,
+      List<CabinFurnitureRequirement> requirements);
 
   record WarehouseIdentity(UUID id, long version, boolean active, String timeZone) {}
 
@@ -420,24 +435,52 @@ public interface LogisticsDependencyGateway {
       long totalElements,
       long totalPages) {}
 
-  record OrderEquipmentMovement(
-      UUID id,
-      long version,
-      UUID equipmentId,
-      UUID sourceBalanceId,
-      UUID targetBalanceId,
-      long quantity,
-      String kind,
-      OffsetDateTime occurredAt) {}
+  record OrderEquipmentRequirement(UUID equipmentId, long quantity) {}
 
-  record OrderEquipmentAdjustment(
+  record OrderEquipmentReservation(
+      UUID equipmentId,
+      String equipmentCode,
+      String equipmentName,
+      long quantity,
+      long availableQuantity) {}
+
+  record OrderFurnitureMovementPlanLine(
+      UUID equipmentId,
+      String equipmentCode,
+      String equipmentName,
+      UUID sourceBalanceId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      String sourceLocationKind,
+      long expectedSourceBalanceVersion,
+      UUID targetWarehouseId,
+      UUID targetRentalItemId,
+      String targetLocationKind,
+      long quantity) {}
+
+  record OrderFurnitureMovementPlan(
       UUID orderId,
       UUID unitId,
+      String unitNumber,
+      List<OrderFurnitureMovementPlanLine> lines) {}
+
+  record CabinFurnitureRequirement(UUID equipmentId, long quantity) {}
+
+  record CabinFurnitureMovementPlanLine(
       UUID equipmentId,
-      long previousQuantity,
-      long requiredQuantity,
-      long delta,
-      long availableStock,
-      OrderEquipmentMovement movement,
-      OrderRentalItem unit) {}
+      String equipmentCode,
+      String equipmentName,
+      UUID sourceBalanceId,
+      UUID sourceWarehouseId,
+      UUID sourceRentalItemId,
+      String sourceLocationKind,
+      long expectedSourceBalanceVersion,
+      UUID targetWarehouseId,
+      UUID targetRentalItemId,
+      String targetLocationKind,
+      long quantity) {}
+
+  record CabinFurnitureMovementPlan(
+      UUID rentalItemId, String unitNumber, List<CabinFurnitureMovementPlanLine> lines) {}
+
 }

@@ -50,6 +50,13 @@ export type OrderEquipmentContent = {
   locationKind: string
 }
 
+export type OrderDesiredEquipment = {
+  equipmentId: string
+  equipmentCode: string
+  equipmentName: string
+  quantity: number
+}
+
 export type OrderRentalUnit = {
   id: string
   version: number
@@ -72,6 +79,7 @@ export type OrderUnitCandidate = {
   reservationId: string | null
   added: boolean
   unit: OrderRentalUnit
+  desiredContents: OrderDesiredEquipment[]
 }
 
 export type OrderSummary = {

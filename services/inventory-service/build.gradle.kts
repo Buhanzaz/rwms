@@ -1,5 +1,6 @@
 plugins {
     id("rwms.spring-service")
+    id("rwms.mapstruct")
 }
 
 description = "RWMS inventory sessions, findings, completion and publication service"

@@ -138,7 +138,8 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
                     .displayCanonicalNumber()
                     .equals(response.asset().displayCanonicalNumber())
                 || !response.identityMatchKey().equals(response.asset().identityMatchKey())
-                || !warehouseId.equals(response.asset().warehouseId())))) {
+                || response.asset().warehouseId() == null
+                || response.asset().version() < 0))) {
       throw malformed("Asset-service returned malformed number resolution truth");
     }
     return response;
@@ -191,7 +192,9 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
                         || (item.found()
                             != (item.version() != null
                                 && item.warehouseId() != null
-                                && item.status() != null)))) {
+                                && item.status() != null
+                                && item.displayCanonicalNumber() != null
+                                && item.identityMatchKey() != null)))) {
       throw malformed("Asset-service returned malformed validation truth");
     }
     return response;

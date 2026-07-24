@@ -11,6 +11,8 @@ const EQUIPMENT_ID = "55555555-5555-4555-8555-555555555555"
 const IDEMPOTENCY_KEY = "66666666-6666-4666-8666-666666666666"
 const CLIENT_ID = "77777777-7777-4777-8777-777777777777"
 const RENTAL_ORDER_ID = "88888888-8888-4888-8888-888888888888"
+const FURNITURE_TASK_ID = "99999999-9999-4999-8999-999999999999"
+const EXTERNAL_FURNITURE_TASK_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
 const document: ShipmentDocument = {
   id: DOCUMENT_ID,
@@ -23,7 +25,7 @@ const document: ShipmentDocument = {
   driverSnapshot: "Иванов Иван",
   clientId: CLIENT_ID,
   equipmentMovementTaskId: null,
-  scheduledAt: null,
+  scheduledDate: null,
   rentalOrderId: RENTAL_ORDER_ID,
   lines: [
     {
@@ -95,6 +97,18 @@ describe("HttpShipmentClient", () => {
     }
   })
 
+  it("accepts the canonical seed warehouse UUID in shipment projections", async () => {
+    const seedWarehouseId = "00000000-0000-0000-0000-000000000001"
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(json([{ ...document, warehouseId: seedWarehouseId }]))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      new HttpShipmentClient().list("shipment-token", seedWarehouseId)
+    ).resolves.toEqual([{ ...document, warehouseId: seedWarehouseId }])
+  })
+
   it("keeps caller-owned create identity stable for duplicate submission", async () => {
     const fetchMock = vi
       .fn()
@@ -148,7 +162,7 @@ describe("HttpShipmentClient", () => {
       documentId: DOCUMENT_ID,
       expectedVersion: 4,
       driverSnapshot: document.driverSnapshot!,
-      scheduledAt: "2026-07-22T08:00:00Z",
+      scheduledDate: "2026-07-22",
       idempotencyKey: IDEMPOTENCY_KEY,
     })
 
@@ -162,8 +176,44 @@ describe("HttpShipmentClient", () => {
     )
     expect(JSON.parse(init.body)).toEqual({
       driverSnapshot: document.driverSnapshot,
-      scheduledAt: "2026-07-22T08:00:00Z",
+      scheduledDate: "2026-07-22",
     })
+  })
+
+  it("reads the service-owned furniture readiness through the gateway", async () => {
+    const response = {
+      shipmentId: DOCUMENT_ID,
+      shipmentVersion: 4,
+      state: "AWAITING_TASK_COMPLETION",
+      tasks: [
+        {
+          rentalItemId: ASSET_ID,
+          unitNumber: "БЫТ-041",
+          taskId: FURNITURE_TASK_ID,
+          externalTaskId: EXTERNAL_FURNITURE_TASK_ID,
+          taskBoardTaskId: null,
+          taskState: "AWAITING_WORKER",
+          lineCount: 2,
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(json(response))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      new HttpShipmentClient().getFurnitureReadiness(
+        "shipment-token",
+        DOCUMENT_ID
+      )
+    ).resolves.toEqual(response)
+
+    const [rawUrl, init] = fetchMock.mock.calls[0]
+    expect(new URL(rawUrl).pathname).toBe(
+      `/api/logistics/v1/shipments/${DOCUMENT_ID}/furniture-readiness`
+    )
+    expect(new Headers(init.headers).get("Authorization")).toBe(
+      "Bearer shipment-token"
+    )
   })
 
   it("confirms preparation with the current server version", async () => {

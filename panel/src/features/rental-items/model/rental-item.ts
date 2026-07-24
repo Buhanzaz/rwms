@@ -64,6 +64,14 @@ export type RentalItemPhotoDto = {
   capturedAtKnown?: boolean
 }
 
+export type RentalItemActiveOrderReservationDto = {
+  reservationId: string
+  orderId: string
+  clientId: string | null
+  tenantSnapshot: string | null
+  reservedAt: string
+}
+
 type RentalItemCoreDto = {
   id: string
   /** Optimistic concurrency token for cabin-level commands. */
@@ -95,6 +103,7 @@ type RentalItemCoreDto = {
   shipmentDate: string | null
   tenant: string | null
   price: number | null
+  activeOrderReservation?: RentalItemActiveOrderReservationDto | null
 }
 
 export type RentalItemDto = RentalItemCoreDto & Record<string, unknown>

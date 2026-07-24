@@ -67,6 +67,28 @@ public class OrderAssetController {
     return response.body(result.response());
   }
 
+  @PutMapping("/{orderId}/equipment-reservations")
+  public ResponseEntity<List<OrderEquipmentReservationView>> replaceEquipmentReservations(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID orderId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody ReplaceOrderEquipmentReservationsRequest request) {
+    access.requireLogisticsAssetAccess(jwt);
+    var result = service.replaceEquipmentReservations(idempotencyKey, orderId, request);
+    ResponseEntity.BodyBuilder response = ResponseEntity.ok();
+    if (result.replayed()) response.header("Idempotency-Replayed", "true");
+    return response.body(result.response());
+  }
+
+  @PostMapping("/{orderId}/equipment-movement-plan")
+  public OrderFurnitureMovementPlan furnitureMovementPlan(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID orderId,
+      @Valid @RequestBody OrderFurnitureMovementPlanRequest request) {
+    access.requireLogisticsAssetAccess(jwt);
+    return service.furnitureMovementPlan(orderId, request);
+  }
+
   @PostMapping("/{orderId}/units/{rentalItemId}/release")
   public ResponseEntity<OrderUnitReservationView> release(
       @AuthenticationPrincipal Jwt jwt,
@@ -94,19 +116,4 @@ public class OrderAssetController {
     return response.body(result.response());
   }
 
-  @PutMapping("/{orderId}/units/{rentalItemId}/equipment/{equipmentId}")
-  public ResponseEntity<OrderEquipmentAdjustment> adjustEquipment(
-      @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID orderId,
-      @PathVariable UUID rentalItemId,
-      @PathVariable UUID equipmentId,
-      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
-      @Valid @RequestBody AdjustOrderEquipmentRequest request) {
-    access.requireLogisticsAssetAccess(jwt);
-    var result =
-        service.adjustEquipment(idempotencyKey, orderId, rentalItemId, equipmentId, request);
-    ResponseEntity.BodyBuilder response = ResponseEntity.ok();
-    if (result.replayed()) response.header("Idempotency-Replayed", "true");
-    return response.body(result.response());
-  }
 }

@@ -25,6 +25,7 @@ import dev.buhanzaz.rwms.inventory.domain.SessionLifecycle;
 import dev.buhanzaz.rwms.inventory.eventing.InventoryEventChecksum;
 import dev.buhanzaz.rwms.inventory.eventing.InventoryEventStore;
 import dev.buhanzaz.rwms.inventory.integration.InventoryDependencyGateway;
+import dev.buhanzaz.rwms.inventory.mapper.InventorySessionMapper;
 import dev.buhanzaz.rwms.inventory.repository.InventoryFindingRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationIntentRepository;
 import dev.buhanzaz.rwms.inventory.repository.InventoryPublicationAttemptRepository;
@@ -122,6 +123,7 @@ public class InventoryApplicationService {
   private final InventoryDependencyGateway dependencies;
   private final InventoryEventStore events;
   private final InventoryAuthorizer authorizer;
+  private final InventorySessionMapper sessionMapper;
   private final InventoryIdempotencyPort idempotency;
   private final InventoryStartPersistencePort startPersistence;
   private final InventoryCanonicalJsonPort canonicalJson;
@@ -148,6 +150,7 @@ public class InventoryApplicationService {
       InventoryDependencyGateway dependencies,
       InventoryEventStore events,
       InventoryAuthorizer authorizer,
+      InventorySessionMapper sessionMapper,
       InventoryIdempotencyPort idempotency,
       InventoryStartPersistencePort startPersistence,
       InventoryCanonicalJsonPort canonicalJson,
@@ -172,6 +175,7 @@ public class InventoryApplicationService {
     this.dependencies = dependencies;
     this.events = events;
     this.authorizer = authorizer;
+    this.sessionMapper = sessionMapper;
     this.idempotency = idempotency;
     this.startPersistence = startPersistence;
     this.canonicalJson = canonicalJson;
@@ -235,6 +239,7 @@ public class InventoryApplicationService {
                             members.size(),
                             capture.membershipDigest(),
                             subjectId,
+                            authorizer.displayName(jwt),
                             actorJson));
                 copyExpectedPopulation(session, members, actorJson, actor);
                 ObjectNode payload = sessionPayload(session, members.size(), null);
@@ -453,11 +458,13 @@ public class InventoryApplicationService {
             .findByInventoryIdAndIdentityMatchKey(inventoryId, resolved.identityMatchKey())
             .orElse(null);
     if (existing != null) {
+      CurrentItemSnapshot current = currentItemSnapshot(resolved.asset());
+      ValidatedFinding validation = validatedFinding(session, existing, current);
       return new NumberResolutionView(
           resolved.displayCanonicalNumber(),
           resolved.identityMatchKey(),
-          "MATCHED",
-          findingView(existing));
+          numberResolutionOutcome(session.getWarehouseId(), current, true),
+          findingView(existing, validation));
     }
     if (!resolved.found() || resolved.asset() == null) {
       return new NumberResolutionView(
@@ -468,10 +475,10 @@ public class InventoryApplicationService {
     ReconciliationState reconciliation;
     if (!session.getWarehouseId().equals(asset.warehouseId())) {
       outcome = "CROSS_WAREHOUSE_CONFLICT";
-      reconciliation = ReconciliationState.CONFLICT;
-    } else if (!CAPTURE_STATUSES.contains(asset.status())) {
+      reconciliation = ReconciliationState.MISSING;
+    } else if ("WRITTEN_OFF".equals(asset.status())) {
       outcome = "EXCLUDED_STATUS_CONFLICT";
-      reconciliation = ReconciliationState.CONFLICT;
+      reconciliation = ReconciliationState.MISSING;
     } else {
       outcome = "MATCHED";
       reconciliation = ReconciliationState.MATCHED;
@@ -492,6 +499,9 @@ public class InventoryApplicationService {
                             FindingOrigin.UNEXPECTED_EXISTING,
                             asset.assetId(),
                             asset.version(),
+                            asset.warehouseId(),
+                            asset.status(),
+                            asset.tenantSnapshot(),
                             asset.displayCanonicalNumber(),
                             asset.identityMatchKey(),
                             reconciliation,
@@ -636,7 +646,12 @@ public class InventoryApplicationService {
                     != dev.buhanzaz.rwms.inventory.domain.MutationState.SOURCE_CREATE_PENDING) {
                   throw InventoryException.conflict("Finding source-create state is inconsistent");
                 }
-                finding.attachCreatedAsset(remote.asset().assetId(), remote.asset().version());
+                finding.attachCreatedAsset(
+                    remote.asset().assetId(),
+                    remote.asset().version(),
+                    remote.asset().warehouseId(),
+                    remote.asset().status(),
+                    remote.asset().tenantSnapshot());
                 findings.saveAndFlush(finding);
               }
               InventorySourceAttachment attachment =
@@ -669,6 +684,14 @@ public class InventoryApplicationService {
     expectRevision(session.getRevision(), request.expectedSessionRevision());
     InventoryFinding finding = requireFinding(inventoryId, findingId);
     expectRevision(finding.getRevision(), request.expectedFindingRevision());
+    InventoryDependencyGateway.Validation currentValidation = validateAssets(List.of(finding));
+    ValidatedFinding currentTruth =
+        validatedFindings(session, List.of(finding), currentValidation).getFirst();
+    ConflictView blockingConflict = blockingInspectionConflict(currentTruth.conflicts());
+    if (blockingConflict != null) {
+      throw InventoryException.conflict(
+          "Нельзя сохранить осмотр: " + blockingConflict.message());
+    }
     validateObservation(request.passportObservation(), false);
     validateObservation(request.equipmentObservation(), true);
     validatePlanSelection(request.inspection(), request.planSelection());
@@ -695,6 +718,13 @@ public class InventoryApplicationService {
               InventoryFinding lockedFinding = requireFinding(inventoryId, findingId);
               expectRevision(lockedSession.getRevision(), request.expectedSessionRevision());
               expectRevision(lockedFinding.getRevision(), request.expectedFindingRevision());
+              CurrentItemSnapshot current = currentTruth.currentSnapshot();
+              lockedFinding.refreshCurrentAsset(
+                  current == null ? null : current.assetVersion(),
+                  current == null ? null : current.warehouseId(),
+                  current == null ? null : current.status(),
+                  current == null ? null : current.tenantSnapshot(),
+                  current == null ? ReconciliationState.MISSING : ReconciliationState.MATCHED);
               lockedFinding.saveInspection(
                   request.inspection(),
                   lockedFinding.getReconciliation(),
@@ -703,6 +733,7 @@ public class InventoryApplicationService {
                   request.equipmentObservation().presence(),
                   json(request.equipmentObservation().value()),
                   frozenPlan == null ? null : frozenPlan.fingerprint(),
+                  request.comment(),
                   actorJson(jwt));
               InventoryFinding result = findings.saveAndFlush(lockedFinding);
               persistMedia(result, request.media());
@@ -711,7 +742,7 @@ public class InventoryApplicationService {
                   result, lockedSession, actor(jwt), "inventory.finding.inspection-saved.v1");
               return result;
             });
-    return findingView(saved);
+    return findingView(saved, currentTruth);
   }
 
   public CompletionPreview preview(
@@ -735,10 +766,14 @@ public class InventoryApplicationService {
         revisionState(session, request.expectedSessionRevision(), request.findingRevisions());
     InventoryDependencyGateway.Validation validation = validateAssets(revisions.findings());
     List<CompletionRisk> risks = risks(session, revisions.findings(), validation);
-    FrozenStatistics statistics = calculateStatistics(session, revisions.findings());
+    List<ValidatedFinding> validatedFindings =
+        validatedFindings(session, revisions.findings(), validation);
+    FrozenStatistics statistics =
+        calculateStatistics(session, revisions.findings(), validatedFindings);
     String acknowledgement =
         canonicalHash(
-            acknowledgementFacts(session, revisions, validation, statistics, risks));
+            acknowledgementFacts(
+                session, revisions, validation, statistics, risks, validatedFindings));
     CompletionPreview response =
         new CompletionPreview(
             inventoryId,
@@ -748,7 +783,8 @@ public class InventoryApplicationService {
             validation.validatedAt(),
             acknowledgement,
             statistics,
-            risks);
+            risks,
+            validatedFindings);
     transactions.executeWithoutResult(
         status -> persistValidation(session, validation, acknowledgement, response));
     return response;
@@ -786,6 +822,8 @@ public class InventoryApplicationService {
           "Inventory preview acknowledgement is stale");
     }
     List<CompletionRisk> risks = risks(session, revisions.findings(), fresh);
+    List<ValidatedFinding> validatedFindings =
+        validatedFindings(session, revisions.findings(), fresh);
     if (!risks.equals(preview.preview().risks())) {
       throw new InventoryException(
           HttpStatus.CONFLICT,
@@ -793,7 +831,11 @@ public class InventoryApplicationService {
           "Inventory completion risks changed after preview");
     }
     if (risks.stream()
-        .anyMatch(risk -> !"MISSING".equals(risk.code()) && !"CONFLICT".equals(risk.code()))) {
+        .anyMatch(
+            risk ->
+                !"MISSING".equals(risk.code())
+                    && !"CONFLICT".equals(risk.code())
+                    && !"ASSET_CHANGED".equals(risk.code()))) {
       throw new InventoryException(
           HttpStatus.UNPROCESSABLE_ENTITY,
           "INVENTORY_VALIDATION_FAILED",
@@ -815,7 +857,8 @@ public class InventoryApplicationService {
                       fresh.validatedAt(),
                       request.acknowledgementSha256(),
                       previewStatistics,
-                      risks);
+                      risks,
+                      validatedFindings);
               persistValidation(
                   locked, fresh, request.acknowledgementSha256(), completionSnapshot);
               locked.complete(
@@ -825,7 +868,7 @@ public class InventoryApplicationService {
                   actorJson(jwt));
               InventorySession result = sessions.saveAndFlush(locked);
               FrozenStatistics finalStatistics =
-                  calculateStatistics(result, lockedRevisions.findings());
+                  calculateStatistics(result, lockedRevisions.findings(), validatedFindings);
               persistStatistics(result, finalStatistics);
               createPublicationIntents(result, revisions.findings(), actor(jwt));
               events.append(
@@ -1156,6 +1199,9 @@ public class InventoryApplicationService {
                   expectedId,
                   member.assetId(),
                   member.version(),
+                  member.warehouseId(),
+                  member.status(),
+                  tenantSnapshot(member.passportSnapshot()),
                   member.displayCanonicalNumber(),
                   member.identityMatchKey(),
                   actorJson));
@@ -1591,7 +1637,8 @@ public class InventoryApplicationService {
       RevisionState revisions,
       InventoryDependencyGateway.Validation validation,
       FrozenStatistics statistics,
-      List<CompletionRisk> risks) {
+      List<CompletionRisk> risks,
+      List<ValidatedFinding> validatedFindings) {
     List<Map<String, Object>> findingFacts = new ArrayList<>();
     for (InventoryFinding finding : revisions.findings()) {
       Map<String, Object> fact = new LinkedHashMap<>();
@@ -1636,6 +1683,7 @@ public class InventoryApplicationService {
     result.put("validationAssets", validation.assets());
     result.put("statistics", statistics);
     result.put("risks", risks);
+    result.put("validatedFindings", validatedFindings);
     return result;
   }
 
@@ -1713,8 +1761,214 @@ public class InventoryApplicationService {
         .toList();
   }
 
+  private List<ValidatedFinding> validatedFindings(
+      InventorySession session,
+      List<InventoryFinding> all,
+      InventoryDependencyGateway.Validation validation) {
+    Map<UUID, InventoryDependencyGateway.ValidationItem> currentByAsset =
+        new LinkedHashMap<>();
+    for (InventoryDependencyGateway.ValidationItem item : validation.assets()) {
+      currentByAsset.put(item.assetId(), item);
+    }
+    Set<UUID> findingIds =
+        all.stream()
+            .map(InventoryFinding::getId)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    Map<UUID, ExpectedItemSnapshot> expectedByFinding = new LinkedHashMap<>();
+    for (InventoryExpectedItem expected :
+        expectedItems.findAllByFindingIdInOrderByFindingId(findingIds)) {
+      expectedByFinding.put(
+          expected.getFindingId(), expectedItemSnapshot(expected, session.getWarehouseId()));
+    }
+    return all.stream()
+        .map(
+            finding -> {
+              InventoryDependencyGateway.ValidationItem item =
+                  finding.getAssetId() == null
+                      ? null
+                      : currentByAsset.get(finding.getAssetId());
+              CurrentItemSnapshot current = currentItemSnapshot(item);
+              ExpectedItemSnapshot expected = expectedByFinding.get(finding.getId());
+              return new ValidatedFinding(
+                  finding.getId(),
+                  current,
+                  conflictViews(
+                      finding.getOrigin(), session.getWarehouseId(), expected, current));
+            })
+        .toList();
+  }
+
+  private CurrentItemSnapshot currentItemSnapshot(
+      InventoryDependencyGateway.ValidationItem item) {
+    if (item == null || !item.found()) return null;
+    return new CurrentItemSnapshot(
+        item.assetId(),
+        item.version(),
+        item.warehouseId(),
+        item.status(),
+        item.displayCanonicalNumber(),
+        item.tenantSnapshot());
+  }
+
+  private CurrentItemSnapshot currentItemSnapshot(
+      InventoryDependencyGateway.AssetSnapshot item) {
+    if (item == null) return null;
+    return new CurrentItemSnapshot(
+        item.assetId(),
+        item.version(),
+        item.warehouseId(),
+        item.status(),
+        item.displayCanonicalNumber(),
+        item.tenantSnapshot());
+  }
+
+  private ValidatedFinding validatedFinding(
+      InventorySession session, InventoryFinding finding, CurrentItemSnapshot current) {
+    ExpectedItemSnapshot expected =
+        expectedItems.findAllByFindingIdInOrderByFindingId(Set.of(finding.getId())).stream()
+            .findFirst()
+            .map(value -> expectedItemSnapshot(value, session.getWarehouseId()))
+            .orElse(null);
+    return new ValidatedFinding(
+        finding.getId(),
+        current,
+        conflictViews(
+            finding.getOrigin(), session.getWarehouseId(), expected, current));
+  }
+
+  private String numberResolutionOutcome(
+      UUID inventoryWarehouseId, CurrentItemSnapshot current, boolean existingFinding) {
+    if (current == null) return existingFinding ? "MISSING_CONFLICT" : "NOT_FOUND";
+    if (!inventoryWarehouseId.equals(current.warehouseId())) {
+      return "CROSS_WAREHOUSE_CONFLICT";
+    }
+    if ("WRITTEN_OFF".equals(current.status())) return "EXCLUDED_STATUS_CONFLICT";
+    return "MATCHED";
+  }
+
+  private List<ConflictView> conflictViews(
+      FindingOrigin origin,
+      UUID inventoryWarehouseId,
+      ExpectedItemSnapshot expected,
+      CurrentItemSnapshot current) {
+    return conflictViews(origin, inventoryWarehouseId, expected, current, true);
+  }
+
+  private List<ConflictView> conflictViews(
+      FindingOrigin origin,
+      UUID inventoryWarehouseId,
+      ExpectedItemSnapshot expected,
+      CurrentItemSnapshot current,
+      boolean compareTenant) {
+    List<ConflictView> conflicts = new ArrayList<>();
+    if (origin == FindingOrigin.UNEXPECTED_EXISTING && expected == null) {
+      conflicts.add(
+          new ConflictView(
+              "ADDED_AFTER_START",
+              "Бытовка отсутствовала в снимке на начало инвентаризации",
+              null,
+              current == null ? null : current.assetId().toString()));
+    }
+    if (current == null) {
+      conflicts.add(
+          new ConflictView(
+              "RENTAL_ITEM_MISSING",
+              "Бытовка отсутствует в актуальном реестре",
+              expected == null ? null : expected.assetId().toString(),
+              null));
+      return List.copyOf(conflicts);
+    }
+    if (!inventoryWarehouseId.equals(current.warehouseId())) {
+      conflicts.add(
+          new ConflictView(
+              "OTHER_WAREHOUSE",
+              "Бытовка относится к другому складу",
+              inventoryWarehouseId.toString(),
+              current.warehouseId().toString()));
+    }
+    if ("RENTED".equals(current.status())) {
+      conflicts.add(
+          new ConflictView(
+              "RENTED",
+              "Бытовка числится в аренде",
+              expected == null ? null : expected.status(),
+              current.status()));
+    }
+    if ("WRITTEN_OFF".equals(current.status())) {
+      conflicts.add(
+          new ConflictView(
+              "WRITTEN_OFF",
+              "Бытовка списана",
+              expected == null ? null : expected.status(),
+              current.status()));
+    }
+    if (expected != null && !expected.warehouseId().equals(current.warehouseId())) {
+      conflicts.add(
+          new ConflictView(
+              "WAREHOUSE_CHANGED",
+              "Склад бытовки изменился после начала инвентаризации",
+              expected.warehouseId().toString(),
+              current.warehouseId().toString()));
+    }
+    if (expected != null && !expected.status().equals(current.status())) {
+      conflicts.add(
+          new ConflictView(
+              "STATUS_CHANGED",
+              "Статус бытовки изменился после начала инвентаризации",
+              expected.status(),
+              current.status()));
+    }
+    if (compareTenant
+        && expected != null
+        && !java.util.Objects.equals(expected.tenantSnapshot(), current.tenantSnapshot())) {
+      conflicts.add(
+          new ConflictView(
+              "TENANT_CHANGED",
+              "Арендатор бытовки изменился после начала инвентаризации",
+              expected.tenantSnapshot(),
+              current.tenantSnapshot()));
+    }
+    if (expected != null && expected.assetVersion() != current.assetVersion()) {
+      conflicts.add(
+          new ConflictView(
+              "ASSET_CHANGED",
+              "Бытовка изменилась после начала инвентаризации",
+              Long.toString(expected.assetVersion()),
+              Long.toString(current.assetVersion())));
+    }
+    return conflicts.stream()
+        .distinct()
+        .sorted(Comparator.comparing(ConflictView::code))
+        .toList();
+  }
+
+  private ConflictView blockingInspectionConflict(List<ConflictView> conflicts) {
+    return conflicts.stream()
+        .filter(
+            conflict ->
+                "RENTAL_ITEM_MISSING".equals(conflict.code())
+                    || "OTHER_WAREHOUSE".equals(conflict.code())
+                    || "WRITTEN_OFF".equals(conflict.code()))
+        .findFirst()
+        .orElse(null);
+  }
+
   private FrozenStatistics calculateStatistics(
-      InventorySession session, List<InventoryFinding> all) {
+      InventorySession session,
+      List<InventoryFinding> all,
+      List<ValidatedFinding> validatedFindings) {
+    Map<UUID, ValidatedFinding> validatedByFinding = new LinkedHashMap<>();
+    for (ValidatedFinding finding : validatedFindings) {
+      if (validatedByFinding.put(finding.findingId(), finding) != null) {
+        throw new IllegalStateException("Inventory validation contains duplicate findings");
+      }
+    }
+    if (!validatedByFinding.keySet().equals(
+        all.stream()
+            .map(InventoryFinding::getId)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new)))) {
+      throw new IllegalStateException("Inventory validation does not cover every finding");
+    }
     int inspected =
         (int)
             all.stream()
@@ -1723,7 +1977,15 @@ public class InventoryApplicationService {
     int missing =
         (int)
             all.stream()
-                .filter(value -> value.getReconciliation() == ReconciliationState.MISSING)
+                .filter(
+                    value -> {
+                      ValidatedFinding validated = validatedByFinding.get(value.getId());
+                      return validatedReconciliation(
+                              value,
+                              validated.currentSnapshot(),
+                              validated.conflicts())
+                          == ReconciliationState.MISSING;
+                    })
                 .count();
     int ready =
         (int) all.stream().filter(value -> value.getInspection() == InspectionState.READY).count();
@@ -1747,9 +2009,7 @@ public class InventoryApplicationService {
                 .count();
     int conflicts =
         (int)
-            all.stream()
-                .filter(value -> value.getReconciliation() == ReconciliationState.CONFLICT)
-                .count();
+            validatedFindings.stream().filter(value -> !value.conflicts().isEmpty()).count();
     List<FindingPlanLine> activeLines = planLines.findActiveByInventoryId(session.getId());
     List<PlanTotal> totals =
         List.of(
@@ -2298,6 +2558,7 @@ public class InventoryApplicationService {
         value.getWarehouseId(),
         value.getWarehouseVersion(),
         value.getWarehouseTimeZone(),
+        sessionMapper.toInventoryActorView(value),
         value.getBusinessDate(),
         value.getLifecycle(),
         value.getExpectedPopulationCount(),
@@ -2318,6 +2579,7 @@ public class InventoryApplicationService {
         value.getWarehouseId(),
         value.getWarehouseVersion(),
         value.getWarehouseTimeZone(),
+        sessionMapper.toInventoryActorView(value),
         value.getBusinessDate(),
         value.getLifecycle(),
         value.getExpectedPopulationCount(),
@@ -2332,16 +2594,47 @@ public class InventoryApplicationService {
     return findingViews(List.of(value)).getFirst();
   }
 
+  private FindingView findingView(InventoryFinding value, ValidatedFinding validation) {
+    return findingViews(List.of(value), Map.of(value.getId(), validation)).getFirst();
+  }
+
   private List<FindingView> findingViews(List<InventoryFinding> values) {
+    return findingViews(values, Map.of());
+  }
+
+  private List<FindingView> findingViews(
+      List<InventoryFinding> values, Map<UUID, ValidatedFinding> currentOverrides) {
     if (values.isEmpty()) return List.of();
     Set<UUID> findingIds =
         values.stream()
             .map(InventoryFinding::getId)
             .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    Set<UUID> inventoryIds =
+        values.stream()
+            .map(InventoryFinding::getInventoryId)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    Map<UUID, UUID> warehouseByInventory = new LinkedHashMap<>();
+    Set<UUID> completedInventoryIds = new LinkedHashSet<>();
+    for (InventorySession session : sessions.findAllById(inventoryIds)) {
+      warehouseByInventory.put(session.getId(), session.getWarehouseId());
+      if (session.getLifecycle() == SessionLifecycle.COMPLETED) {
+        completedInventoryIds.add(session.getId());
+      }
+    }
     Map<UUID, ExpectedItemSnapshot> expectedByFinding = new LinkedHashMap<>();
     for (InventoryExpectedItem expected :
         expectedItems.findAllByFindingIdInOrderByFindingId(findingIds)) {
-      expectedByFinding.put(expected.getFindingId(), expectedItemSnapshot(expected));
+      InventoryFinding finding =
+          values.stream()
+              .filter(value -> value.getId().equals(expected.getFindingId()))
+              .findFirst()
+              .orElseThrow();
+      UUID warehouseId = warehouseByInventory.get(finding.getInventoryId());
+      if (warehouseId == null) {
+        throw new IllegalStateException("Finding session is missing");
+      }
+      expectedByFinding.put(
+          expected.getFindingId(), expectedItemSnapshot(expected, warehouseId));
     }
     Map<UUID, List<MediaReference>> mediaByFinding = new LinkedHashMap<>();
     for (FindingMediaReference reference : mediaReferences.findActiveByFindingIds(findingIds)) {
@@ -2371,36 +2664,165 @@ public class InventoryApplicationService {
               linesByFinding.getOrDefault(snapshot.getFindingId(), List.of()),
               stagesByFinding.getOrDefault(snapshot.getFindingId(), List.of())));
     }
+    Map<UUID, ValidatedFinding> validatedByFinding =
+        completedValidatedFindings(completedInventoryIds);
+    validatedByFinding.putAll(currentOverrides);
     return values.stream()
         .map(
             value ->
                 findingView(
                     value,
+                    warehouseByInventory.get(value.getInventoryId()),
                     expectedByFinding.get(value.getId()),
                     planByFinding.get(value.getId()),
                     mediaByFinding.getOrDefault(value.getId(), List.of()),
-                    publicationByFinding.get(value.getId())))
+                    publicationByFinding.get(value.getId()),
+                    validatedByFinding.get(value.getId())))
         .toList();
+  }
+
+  private Map<UUID, ValidatedFinding> completedValidatedFindings(
+      Set<UUID> completedInventoryIds) {
+    Map<UUID, ValidatedFinding> result = new LinkedHashMap<>();
+    if (completedInventoryIds.isEmpty()) return result;
+    for (InventoryValidationSnapshot snapshot :
+        validationSnapshots.findAllById(completedInventoryIds)) {
+      JsonNode body = read(snapshot.getSnapshotBody());
+      JsonNode values = body.path("preview").path("validatedFindings");
+      if (!values.isArray()) {
+        result.putAll(legacyValidatedFindings(snapshot.getInventoryId(), body));
+        continue;
+      }
+      for (JsonNode value : values) {
+        ValidatedFinding finding = convert(value, ValidatedFinding.class);
+        if (result.put(finding.findingId(), finding) != null) {
+          throw new IllegalStateException("Completed inventory validation projection is duplicated");
+        }
+      }
+    }
+    return result;
+  }
+
+  private Map<UUID, ValidatedFinding> legacyValidatedFindings(
+      UUID inventoryId, JsonNode snapshotBody) {
+    InventorySession session = requireSession(inventoryId);
+    List<InventoryFinding> inventoryFindings =
+        findings.findAllByInventoryIdOrderById(inventoryId);
+    Set<UUID> findingIds =
+        inventoryFindings.stream()
+            .map(InventoryFinding::getId)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+    Map<UUID, ExpectedItemSnapshot> expectedByFinding = new LinkedHashMap<>();
+    for (InventoryExpectedItem expected :
+        expectedItems.findAllByFindingIdInOrderByFindingId(findingIds)) {
+      expectedByFinding.put(
+          expected.getFindingId(), expectedItemSnapshot(expected, session.getWarehouseId()));
+    }
+    Map<UUID, JsonNode> validationByAsset = new LinkedHashMap<>();
+    JsonNode assets = snapshotBody.path("validation").path("assets");
+    if (!assets.isArray()) {
+      throw new IllegalStateException("Legacy inventory validation truth is missing");
+    }
+    for (JsonNode asset : assets) {
+      UUID assetId = requiredUuid(asset, "assetId", "legacy validation asset id");
+      if (validationByAsset.put(assetId, asset) != null) {
+        throw new IllegalStateException("Legacy inventory validation truth is duplicated");
+      }
+    }
+    Map<UUID, ValidatedFinding> result = new LinkedHashMap<>();
+    for (InventoryFinding finding : inventoryFindings) {
+      JsonNode validation =
+          finding.getAssetId() == null ? null : validationByAsset.get(finding.getAssetId());
+      CurrentItemSnapshot current = legacyCurrentItemSnapshot(finding, validation);
+      ExpectedItemSnapshot expected = expectedByFinding.get(finding.getId());
+      result.put(
+          finding.getId(),
+          new ValidatedFinding(
+              finding.getId(),
+              current,
+              conflictViews(
+                  finding.getOrigin(),
+                  session.getWarehouseId(),
+                  expected,
+                  current,
+                  false)));
+    }
+    return result;
+  }
+
+  private CurrentItemSnapshot legacyCurrentItemSnapshot(
+      InventoryFinding finding, JsonNode validation) {
+    if (finding.getAssetId() == null) return null;
+    if (validation == null || validation.isMissingNode()) {
+      throw new IllegalStateException("Legacy inventory validation asset is missing");
+    }
+    if (!validation.path("found").asBoolean(false)) return null;
+    long version = validation.path("version").asLong(-1);
+    String status = validation.path("status").asText();
+    if (version < 0 || status.isBlank()) {
+      throw new IllegalStateException("Legacy inventory validation asset is malformed");
+    }
+    String display = validation.path("displayCanonicalNumber").asText();
+    if (display.isBlank()) display = finding.getDisplayCanonicalNumber();
+    String tenant =
+        validation.has("tenantSnapshot")
+            ? nullableText(validation.get("tenantSnapshot"))
+            : null;
+    return new CurrentItemSnapshot(
+        requiredUuid(validation, "assetId", "legacy validation asset id"),
+        version,
+        requiredUuid(validation, "warehouseId", "legacy validation warehouse id"),
+        status,
+        display,
+        tenant);
+  }
+
+  private ReconciliationState validatedReconciliation(
+      InventoryFinding finding,
+      CurrentItemSnapshot currentSnapshot,
+      List<ConflictView> conflicts) {
+    if (finding.getOrigin() == FindingOrigin.EXPECTED
+        && finding.getInspection() == InspectionState.NOT_INSPECTED) {
+      return ReconciliationState.MISSING;
+    }
+    if (currentSnapshot == null || blockingInspectionConflict(conflicts) != null) {
+      return ReconciliationState.MISSING;
+    }
+    return ReconciliationState.MATCHED;
   }
 
   private FindingView findingView(
       InventoryFinding value,
+      UUID inventoryWarehouseId,
       ExpectedItemSnapshot expectedSnapshot,
       FrozenPlanView frozenPlan,
       List<MediaReference> media,
-      PublicationView publication) {
+      PublicationView publication,
+      ValidatedFinding validatedFinding) {
     if (value.getOrigin() != FindingOrigin.EXPECTED) expectedSnapshot = null;
     if (value.getInspection() == InspectionState.WORK_STAGED && frozenPlan == null) {
       throw new IllegalStateException("WORK_STAGED finding is missing its frozen plan");
     }
     if (value.getInspection() != InspectionState.WORK_STAGED) frozenPlan = null;
+    CurrentItemSnapshot currentSnapshot =
+        validatedFinding == null
+            ? currentItemSnapshot(value)
+            : validatedFinding.currentSnapshot();
+    List<ConflictView> conflicts =
+        validatedFinding == null
+            ? conflictViews(value.getOrigin(), inventoryWarehouseId, expectedSnapshot, currentSnapshot)
+            : List.copyOf(validatedFinding.conflicts());
+    ReconciliationState reconciliation =
+        validatedFinding == null
+            ? value.getReconciliation()
+            : validatedReconciliation(value, currentSnapshot, conflicts);
     return new FindingView(
         value.getId(),
         value.getInventoryId(),
         value.getRevision(),
         value.getOrigin(),
         value.getInspection(),
-        value.getReconciliation(),
+        reconciliation,
         value.getAssetId(),
         value.getAssetVersion(),
         value.getDisplayCanonicalNumber(),
@@ -2409,31 +2831,58 @@ public class InventoryApplicationService {
         observation(value.getEquipmentObservationState(), value.getEquipmentObservation()),
         value.getMutationState(),
         value.getMaintenancePlanFingerprintSha256(),
+        value.getInspectionComment(),
         expectedSnapshot,
+        currentSnapshot,
+        conflicts,
         frozenPlan,
         List.copyOf(media),
         publication);
   }
 
-  private ExpectedItemSnapshot expectedItemSnapshot(InventoryExpectedItem value) {
+  private ExpectedItemSnapshot expectedItemSnapshot(
+      InventoryExpectedItem value, UUID warehouseId) {
+    JsonNode passport = boundedSafeSnapshot(value.getPassportSnapshot(), false, "passport");
     return new ExpectedItemSnapshot(
         value.getAssetId(),
         value.getAssetVersion(),
+        warehouseId,
         value.getAssetStatus(),
         value.getDisplayCanonicalNumber(),
-        boundedSafeSnapshot(value.getPassportSnapshot(), false, "passport"),
+        tenantSnapshot(passport),
+        passport,
         boundedSafeSnapshot(value.getContentsSnapshot(), true, "contents"));
+  }
+
+  private CurrentItemSnapshot currentItemSnapshot(InventoryFinding value) {
+    if (value.getAssetId() == null) return null;
+    if (value.getCurrentWarehouseId() == null || value.getCurrentStatus() == null) {
+      return null;
+    }
+    return new CurrentItemSnapshot(
+        value.getAssetId(),
+        value.getAssetVersion(),
+        value.getCurrentWarehouseId(),
+        value.getCurrentStatus(),
+        value.getDisplayCanonicalNumber(),
+        value.getCurrentTenantSnapshot());
   }
 
   private FrozenPlanView frozenPlanView(
       FindingPlanSnapshot snapshot,
       List<FindingPlanLine> lines,
       List<FindingPlanStage> stages) {
+    JsonNode source = read(snapshot.getSourceSnapshot());
+    JsonNode sourceLines = source.path("lines");
+    JsonNode sourceStages = source.path("stages");
     List<FrozenPlanLineView> lineViews =
         lines.stream()
             .map(
-                line ->
+                line -> {
+                  JsonNode sourceLine = sourceLines.path(line.getLineNo());
+                  return
                     new FrozenPlanLineView(
+                        line.getId(),
                         line.getSourceKind(),
                         line.getLineType(),
                         line.getCatalogVersionId(),
@@ -2443,20 +2892,31 @@ public class InventoryApplicationService {
                         line.getUnit(),
                         exactDecimal(line.getQuantity()),
                         line.getUnitPriceMinor(),
-                        exactDecimal(line.getNormativeMinutes())))
+                        exactDecimal(line.getNormativeMinutes()),
+                        nullableText(sourceLine.get("groupComment")));
+                })
             .toList();
     List<FrozenPlanStageView> stageViews =
         stages.stream()
             .map(
-                stage ->
+                stage -> {
+                  JsonNode sourceStage = sourceStages.path(stage.getStageNo());
+                  return
                     new FrozenPlanStageView(
+                        requiredUuid(sourceStage, "id", "frozen plan stage id"),
                         stage.getStageNo(),
+                        requiredUuid(
+                            sourceStage, "catalogNodeId", "frozen plan stage catalog node"),
+                        requiredText(
+                            sourceStage, "catalogNodeCode", "frozen plan stage catalog code"),
                         stage.getStageKind(),
                         stage.getRoutingQueueId(),
                         stage.getRoutingQueueCode(),
                         stage.getRoutingQueueKind(),
                         stage.isMovementRequired(),
-                        stage.isPhotoRequired()))
+                        stage.isPhotoRequired(),
+                        sourceStage.path("normativeDurationMinutes").asInt(0));
+                })
             .toList();
     return new FrozenPlanView(
         snapshot.getPlanMode(),
@@ -2464,6 +2924,31 @@ public class InventoryApplicationService {
         snapshot.getFingerprint(),
         lineViews,
         stageViews);
+  }
+
+  private UUID requiredUuid(JsonNode value, String field, String name) {
+    try {
+      return UUID.fromString(requiredText(value, field, name));
+    } catch (IllegalArgumentException exception) {
+      throw new IllegalStateException("Persisted " + name + " is invalid", exception);
+    }
+  }
+
+  private String requiredText(JsonNode value, String field, String name) {
+    String result = value.path(field).asText();
+    if (result.isBlank()) {
+      throw new IllegalStateException("Persisted " + name + " is missing");
+    }
+    return result;
+  }
+
+  private String nullableText(JsonNode value) {
+    return value == null || value.isNull() ? null : value.asText();
+  }
+
+  private String tenantSnapshot(JsonNode passportSnapshot) {
+    if (passportSnapshot == null || !passportSnapshot.isObject()) return null;
+    return nullableText(passportSnapshot.get("tenant"));
   }
 
   private JsonNode boundedSafeSnapshot(String value, boolean arrayAllowed, String name) {

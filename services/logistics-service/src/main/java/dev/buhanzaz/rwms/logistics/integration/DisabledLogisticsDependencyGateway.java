@@ -158,6 +158,12 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
   }
 
   @Override
+  public PreparationTask completePreparationTask(
+      UUID externalTaskId, long expectedTaskVersion) {
+    throw unavailable();
+  }
+
+  @Override
   public PreparationTask cancelPreparationTask(UUID externalTaskId, long expectedTaskVersion) {
     throw unavailable();
   }
@@ -234,6 +240,8 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
       UUID orderId,
       UUID warehouseId,
       UUID unitId,
+      UUID clientId,
+      String tenantSnapshot,
       UUID actorSubjectId,
       String actorRole) {
     throw unavailable();
@@ -256,15 +264,31 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
   }
 
   @Override
-  public OrderEquipmentAdjustment adjustOrderEquipment(
+  public java.util.List<OrderEquipmentReservation> replaceOrderEquipmentReservations(
       UUID idempotencyKey,
       UUID orderId,
-      UUID unitId,
-      UUID equipmentId,
+      UUID warehouseId,
       UUID actorSubjectId,
       String actorRole,
-      long expectedCurrentQuantity,
-      long requiredQuantity) {
+      java.util.List<OrderEquipmentRequirement> requirements) {
+    throw unavailable();
+  }
+
+  @Override
+  public OrderFurnitureMovementPlan planOrderFurnitureMovements(
+      UUID orderId,
+      UUID warehouseId,
+      UUID unitId,
+      java.util.List<OrderEquipmentRequirement> unitRequirements,
+      java.util.List<OrderEquipmentRequirement> orderRequirements) {
+    throw unavailable();
+  }
+
+  @Override
+  public CabinFurnitureMovementPlan planCabinFurnitureMovements(
+      UUID warehouseId,
+      UUID rentalItemId,
+      java.util.List<CabinFurnitureRequirement> requirements) {
     throw unavailable();
   }
 

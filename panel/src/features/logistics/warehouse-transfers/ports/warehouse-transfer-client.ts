@@ -1,7 +1,7 @@
 import type {
-  CreateTransferEquipmentLine,
   CreateTransferLine,
   TransferDocument,
+  TransferFurnitureReplacement,
   TransferMediaReference,
 } from "@/features/logistics/warehouse-transfers/model/warehouse-transfer"
 
@@ -10,9 +10,9 @@ export type TransferCreateCommand = {
   warehouseId: string
   destinationWarehouseId: string
   driverSnapshot: string | null
-  equipmentDeadlineAt: string | null
+  scheduledDate: string
   lines: CreateTransferLine[]
-  equipment: CreateTransferEquipmentLine[]
+  furnitureReplacements: TransferFurnitureReplacement[]
   idempotencyKey: string
 }
 

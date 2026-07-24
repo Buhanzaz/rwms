@@ -25,7 +25,7 @@ function mediaValue(overrides: Record<string, unknown> = {}) {
     photos: [],
     logicalPhotoCount: 0,
     readyReferences: [],
-    query: { isError: false, isLoading: false },
+    query: { isError: false, isLoading: false, isSuccess: true },
     requestFullscreen: vi.fn(),
     upload: vi.fn(),
     rotate: vi.fn(),
@@ -57,7 +57,7 @@ describe("ServiceOwnerPhotos", () => {
     expect(screen.getByText("Нет фото")).toBeTruthy()
 
     mediaState.value = mediaValue({
-      query: { isError: true, isLoading: false },
+      query: { isError: true, isLoading: false, isSuccess: false },
     })
     view.rerender(
       <ServiceOwnerPhotos
@@ -101,5 +101,52 @@ describe("ServiceOwnerPhotos", () => {
         generation: 4,
       },
     ])
+  })
+
+  it("does not clear persisted references before the owner query succeeds", () => {
+    const onReadyReferencesChange = vi.fn()
+    const onReadyStateChange = vi.fn()
+    mediaState.value = mediaValue({
+      query: { isError: false, isLoading: true, isSuccess: false },
+    })
+
+    const view = render(
+      <ServiceOwnerPhotos
+        accessToken="token"
+        owner={owner}
+        readOnly
+        onReadyReferencesChange={onReadyReferencesChange}
+        onReadyStateChange={onReadyStateChange}
+      />
+    )
+
+    expect(onReadyReferencesChange).not.toHaveBeenCalled()
+    expect(onReadyStateChange).toHaveBeenLastCalledWith(false)
+
+    mediaState.value = mediaValue({
+      readyReferences: [
+        {
+          mediaId: "44444444-4444-4444-8444-444444444444",
+          generation: 3,
+        },
+      ],
+    })
+    view.rerender(
+      <ServiceOwnerPhotos
+        accessToken="token"
+        owner={owner}
+        readOnly
+        onReadyReferencesChange={onReadyReferencesChange}
+        onReadyStateChange={onReadyStateChange}
+      />
+    )
+
+    expect(onReadyReferencesChange).toHaveBeenLastCalledWith([
+      {
+        mediaId: "44444444-4444-4444-8444-444444444444",
+        generation: 3,
+      },
+    ])
+    expect(onReadyStateChange).toHaveBeenLastCalledWith(true)
   })
 })

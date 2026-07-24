@@ -256,6 +256,9 @@ public final class ApiModels {
   public record CancelLogisticsPreparationTaskRequest(
       @NotNull @Min(0) Long expectedTaskVersion) {}
 
+  public record CompleteLogisticsPreparationTaskRequest(
+      @NotNull @Min(0) Long expectedTaskVersion) {}
+
   /**
    * Logistics supplies immutable equipment facts only. Task-board owns the title,
    * description, queue and route generated from these facts.

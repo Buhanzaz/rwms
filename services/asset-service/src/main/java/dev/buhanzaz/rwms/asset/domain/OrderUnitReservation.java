@@ -42,6 +42,12 @@ public class OrderUnitReservation {
   @Column(name = "warehouse_id", nullable = false)
   private UUID warehouseId;
 
+  @Column(name = "client_id")
+  private UUID clientId;
+
+  @Column(name = "tenant_snapshot", length = 512)
+  private String tenantSnapshot;
+
   @Enumerated(EnumType.STRING)
   @Column(name = "state", nullable = false, length = 16)
   private OrderUnitReservationState state;
@@ -73,16 +79,61 @@ public class OrderUnitReservation {
       UUID warehouseId,
       UUID actorSubjectId,
       String actorRole) {
+    return createInternal(
+        orderId, rentalItemId, warehouseId, null, null, actorSubjectId, actorRole);
+  }
+
+  public static OrderUnitReservation create(
+      UUID orderId,
+      UUID rentalItemId,
+      UUID warehouseId,
+      UUID clientId,
+      String tenantSnapshot,
+      UUID actorSubjectId,
+      String actorRole) {
+    return createInternal(
+        orderId,
+        rentalItemId,
+        warehouseId,
+        Objects.requireNonNull(clientId, "clientId"),
+        requireTenantSnapshot(tenantSnapshot),
+        actorSubjectId,
+        actorRole);
+  }
+
+  private static OrderUnitReservation createInternal(
+      UUID orderId,
+      UUID rentalItemId,
+      UUID warehouseId,
+      UUID clientId,
+      String tenantSnapshot,
+      UUID actorSubjectId,
+      String actorRole) {
     OrderUnitReservation reservation = new OrderUnitReservation();
     reservation.orderId = Objects.requireNonNull(orderId, "orderId");
     reservation.rentalItemId = Objects.requireNonNull(rentalItemId, "rentalItemId");
     reservation.warehouseId = Objects.requireNonNull(warehouseId, "warehouseId");
+    reservation.clientId = clientId;
+    reservation.tenantSnapshot = tenantSnapshot;
     reservation.state = OrderUnitReservationState.ACTIVE;
     reservation.addedBySubjectId = Objects.requireNonNull(actorSubjectId, "actorSubjectId");
     reservation.addedByRole = requireRole(actorRole);
     reservation.createdAt = now();
     reservation.updatedAt = reservation.createdAt;
     return reservation;
+  }
+
+  public boolean updateClientProjection(UUID nextClientId, String nextTenantSnapshot) {
+    UUID requiredClientId = Objects.requireNonNull(nextClientId, "clientId");
+    String requiredTenantSnapshot = requireTenantSnapshot(nextTenantSnapshot);
+    if (Objects.equals(clientId, requiredClientId)
+        && Objects.equals(tenantSnapshot, requiredTenantSnapshot)) {
+      return false;
+    }
+    clientId = requiredClientId;
+    tenantSnapshot = requiredTenantSnapshot;
+    updatedAt = now();
+    return true;
   }
 
   public boolean release(UUID actorSubjectId, String actorRole) {
@@ -111,6 +162,14 @@ public class OrderUnitReservation {
       throw new IllegalArgumentException("actorRole is invalid");
     }
     return value;
+  }
+
+  private static String requireTenantSnapshot(String value) {
+    String normalized = value == null ? "" : value.trim();
+    if (normalized.isEmpty() || normalized.length() > 512) {
+      throw new IllegalArgumentException("tenantSnapshot is invalid");
+    }
+    return normalized;
   }
 
   private static OffsetDateTime now() {

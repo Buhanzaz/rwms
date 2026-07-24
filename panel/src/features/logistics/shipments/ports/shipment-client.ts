@@ -1,5 +1,7 @@
 import type {
   ShipmentDocument,
+  ShipmentFurnitureReadiness,
+  ShipmentFurnitureTaskResult,
   ShipmentPlanLine,
 } from "@/features/logistics/shipments/model"
 
@@ -19,7 +21,7 @@ export type ShipmentPlanCommand = {
   documentId: string
   expectedVersion: number
   driverSnapshot: string
-  scheduledAt: string
+  scheduledDate: string
   idempotencyKey: string
 }
 
@@ -33,8 +35,15 @@ export type ShipmentVersionedCommand = {
 export interface ShipmentClient {
   list(accessToken: string, warehouseId: string): Promise<ShipmentDocument[]>
   get(accessToken: string, documentId: string): Promise<ShipmentDocument>
+  getFurnitureReadiness(
+    accessToken: string,
+    documentId: string
+  ): Promise<ShipmentFurnitureReadiness>
   create(input: ShipmentCreateCommand): Promise<ShipmentDocument>
   replacePlan(input: ShipmentPlanCommand): Promise<ShipmentDocument>
+  createFurnitureTasks(
+    input: ShipmentVersionedCommand
+  ): Promise<ShipmentFurnitureTaskResult>
   confirmPreparation(input: ShipmentVersionedCommand): Promise<ShipmentDocument>
   cancel(input: ShipmentVersionedCommand): Promise<ShipmentDocument>
 }

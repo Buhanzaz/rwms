@@ -16,6 +16,7 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.ReturnRegistrationProcessor;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -126,7 +127,7 @@ class ReturnRegistrationSagaIntegrationTest {
             documentId,
             0,
             new ReturnPickupRequest(
-                "Driver snapshot", OffsetDateTime.parse("2026-07-01T08:00:00Z")));
+                "Driver snapshot", LocalDate.parse("2026-07-01")));
     LogisticsDocumentService.CreateResult replayed =
         documents.registerReturn(
             SUBJECT,
@@ -135,7 +136,7 @@ class ReturnRegistrationSagaIntegrationTest {
             documentId,
             0,
             new ReturnPickupRequest(
-                "Driver snapshot", OffsetDateTime.parse("2026-07-01T08:00:00Z")));
+                "Driver snapshot", LocalDate.parse("2026-07-01")));
 
     assertThat(started.replayed()).isFalse();
     assertThat(replayed.replayed()).isTrue();
@@ -200,7 +201,7 @@ class ReturnRegistrationSagaIntegrationTest {
         documentId,
         0,
         new ReturnPickupRequest(
-            "Driver snapshot", OffsetDateTime.parse("2026-07-01T08:00:00Z")));
+            "Driver snapshot", LocalDate.parse("2026-07-01")));
     processor.processUntilIdle(documentId);
 
     assertThat(documents.get(documentId, LogisticsDocumentType.RETURN).state())
@@ -259,7 +260,7 @@ class ReturnRegistrationSagaIntegrationTest {
         documentId,
         0,
         new ReturnPickupRequest(
-            "Driver snapshot", OffsetDateTime.parse("2026-07-01T08:00:00Z")));
+            "Driver snapshot", LocalDate.parse("2026-07-01")));
     processor.processUntilIdle(documentId);
     UUID persistedKey =
         jdbc.queryForObject(

@@ -26,6 +26,8 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsReturnEquipmentReceip
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.TransferEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest;
+import dev.buhanzaz.rwms.asset.api.LogisticsFurnitureMovementApiModels.CabinFurnitureMovementPlanRequest;
+import dev.buhanzaz.rwms.asset.api.LogisticsFurnitureMovementApiModels.CabinFurnitureRequirement;
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
 import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
@@ -35,6 +37,7 @@ import dev.buhanzaz.rwms.asset.eventing.AssetEventStore;
 import dev.buhanzaz.rwms.asset.eventing.AssetReplayVerifier;
 import dev.buhanzaz.rwms.asset.service.AssetConflictException;
 import dev.buhanzaz.rwms.asset.service.AssetService;
+import dev.buhanzaz.rwms.asset.service.LogisticsFurnitureMovementPlanService;
 import jakarta.persistence.EntityManager;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -75,6 +78,7 @@ class LogisticsAssetBoundaryIntegrationTest {
   }
 
   @Autowired AssetService service;
+  @Autowired LogisticsFurnitureMovementPlanService furniturePlans;
   @Autowired AssetEventStore events;
   @Autowired AssetReplayVerifier replay;
   @Autowired JdbcTemplate jdbc;
@@ -363,6 +367,80 @@ class LogisticsAssetBoundaryIntegrationTest {
         equipmentId))
         .isEqualTo(2);
     assertThat(replay.rebuildAndVerify().aggregateCount()).isGreaterThanOrEqualTo(6);
+  }
+
+  @Test
+  @Transactional
+  void cabinFurniturePlanReplacesTheCompleteFurnitureCompositionWithoutMovingBalances() {
+    UUID subject = UUID.randomUUID();
+    UUID warehouse = UUID.randomUUID();
+    RentalItemResponse cabin = rental(subject, warehouse, RentalItemStatus.FREE);
+    UUID table = service.createEquipment(
+        subject,
+        UUID.randomUUID(),
+        new CreateEquipmentRequest(
+            "PLAN-TABLE-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
+            "Current table",
+            EquipmentCategory.FURNITURE,
+            null))
+        .response()
+        .id();
+    UUID bed = service.createEquipment(
+        subject,
+        UUID.randomUUID(),
+        new CreateEquipmentRequest(
+            "PLAN-BED-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
+            "Requested bed",
+            EquipmentCategory.FURNITURE,
+            null))
+        .response()
+        .id();
+    seedStockBalance(table, warehouse, 4);
+    seedStockBalance(bed, warehouse, 4);
+    service.transfer(
+        subject,
+        UUID.randomUUID(),
+        new TransferEquipmentRequest(
+            table,
+            warehouse,
+            null,
+            BalanceLocationKind.STOCK,
+            0L,
+            warehouse,
+            cabin.id(),
+            BalanceLocationKind.CABIN_NON_RENTED,
+            0L,
+            4L));
+
+    var plan = furniturePlans.plan(
+        cabin.id(),
+        new CabinFurnitureMovementPlanRequest(
+            warehouse, List.of(new CabinFurnitureRequirement(bed, 4L))));
+
+    assertThat(plan.rentalItemId()).isEqualTo(cabin.id());
+    assertThat(plan.lines()).hasSize(2);
+    assertThat(plan.lines()).anySatisfy(line -> {
+      assertThat(line.equipmentId()).isEqualTo(table);
+      assertThat(line.sourceRentalItemId()).isEqualTo(cabin.id());
+      assertThat(line.sourceLocationKind()).isEqualTo(BalanceLocationKind.CABIN_NON_RENTED);
+      assertThat(line.targetRentalItemId()).isNull();
+      assertThat(line.targetLocationKind()).isEqualTo(BalanceLocationKind.STOCK);
+      assertThat(line.quantity()).isEqualTo(4L);
+    });
+    assertThat(plan.lines()).anySatisfy(line -> {
+      assertThat(line.equipmentId()).isEqualTo(bed);
+      assertThat(line.sourceRentalItemId()).isNull();
+      assertThat(line.sourceLocationKind()).isEqualTo(BalanceLocationKind.STOCK);
+      assertThat(line.targetRentalItemId()).isEqualTo(cabin.id());
+      assertThat(line.targetLocationKind()).isEqualTo(BalanceLocationKind.CABIN_NON_RENTED);
+      assertThat(line.quantity()).isEqualTo(4L);
+    });
+    assertThat(service.equipmentTotals(table, warehouse).balances())
+        .filteredOn(balance -> cabin.id().equals(balance.rentalItemId()))
+        .singleElement()
+        .extracting(balance -> balance.quantity())
+        .isEqualTo(4L);
+    assertThat(service.equipmentTotals(bed, warehouse).stockQuantity()).isEqualTo(4L);
   }
 
   @Test

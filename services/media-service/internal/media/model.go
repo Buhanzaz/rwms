@@ -227,8 +227,8 @@ type VariantConfiguration struct {
 
 func (configuration VariantConfiguration) ImageVariants() []VariantSpec {
 	return []VariantSpec{
-		{Variant: VariantSmall, LongEdge: positiveOr(configuration.SmallLongEdge, 96), Quality: 78},
-		{Variant: VariantMedium, LongEdge: positiveOr(configuration.MediumLongEdge, 320), Quality: 80},
+		{Variant: VariantSmall, LongEdge: positiveOr(configuration.SmallLongEdge, 320), Quality: 78},
+		{Variant: VariantMedium, LongEdge: positiveOr(configuration.MediumLongEdge, 640), Quality: 80},
 		{Variant: VariantLarge, LongEdge: positiveOr(configuration.LargeLongEdge, 1280), Quality: 82},
 	}
 }

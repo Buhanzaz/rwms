@@ -4,7 +4,10 @@ import { MemoryRouter } from "react-router-dom"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { CurrentUser } from "@/features/auth/auth-model"
-import type { TaskBoardSnapshotDto } from "@/features/task-board/model/task-board"
+import type {
+  TaskBoardEntryDto,
+  TaskBoardSnapshotDto,
+} from "@/features/task-board/model/task-board"
 import { TaskBoardPage } from "@/features/task-board/task-board-page"
 
 const mocks = vi.hoisted(() => ({
@@ -30,15 +33,22 @@ vi.mock("@/features/task-board/task-board-column", () => ({
     dragDisabled,
     actionPending,
     queueActionsDisabled,
+    visibleEntries,
   }: {
     dragDisabled: boolean
     actionPending: boolean
     queueActionsDisabled: boolean
+    visibleEntries: TaskBoardEntryDto[]
   }) => (
     <div data-testid="task-board-command-state">
       {dragDisabled && actionPending && queueActionsDisabled
         ? "read-only"
         : "editable"}
+      <span data-testid="visible-task-external-ids">
+        {visibleEntries
+          .map((entry) => entry.externalTaskId ?? entry.taskId)
+          .join(",")}
+      </span>
     </div>
   ),
 }))
@@ -77,7 +87,42 @@ function user(level: "VIEW" | "EDIT"): CurrentUser {
   }
 }
 
-function renderPage(level: "VIEW" | "EDIT") {
+function taskEntry(externalTaskId: string, title: string): TaskBoardEntryDto {
+  return {
+    id: `entry-${externalTaskId}`,
+    version: 1,
+    warehouseId: WAREHOUSE_ID,
+    queueKey: "repair",
+    queueId: "00000000-0000-4000-8000-000000000002",
+    queueCode: "REPAIR",
+    entryType: "REAL",
+    routeIndex: 0,
+    routeLength: 1,
+    queuePosition: 1,
+    taskId: `task-${externalTaskId}`,
+    externalTaskId,
+    taskVersion: 1,
+    title,
+    unitNumber: "БЫТ-001",
+    taskStatus: "ACTIVE",
+    status: "WAITING",
+    taskText: null,
+    plannedDurationMinutes: null,
+    activeStartedAt: null,
+    pausedAt: null,
+    activeWorkSeconds: 0,
+    assignments: [],
+    detailsHref: null,
+  }
+}
+
+function renderPage(
+  level: "VIEW" | "EDIT",
+  {
+    currentBoard = board,
+    initialEntry = "/",
+  }: { currentBoard?: TaskBoardSnapshotDto; initialEntry?: string } = {}
+) {
   mocks.useAuth.mockReturnValue({
     accessToken: "task-board-token",
     currentUser: user(level),
@@ -96,10 +141,10 @@ function renderPage(level: "VIEW" | "EDIT") {
       sortOrder: 0,
     },
   })
-  mocks.getTaskBoard.mockResolvedValue(board)
+  mocks.getTaskBoard.mockResolvedValue(currentBoard)
 
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <QueryClientProvider
         client={
           new QueryClient({
@@ -140,5 +185,36 @@ describe("task board warehouse access", () => {
         "editable"
       )
     })
+  })
+
+  it("shows only the task opened from a shipment furniture blocker", async () => {
+    const furnitureTaskId = "furniture-task-1"
+    const otherTaskId = "other-task-2"
+    const currentBoard: TaskBoardSnapshotDto = {
+      ...board,
+      totalEntries: 2,
+      realEntries: 2,
+      queues: [
+        {
+          ...board.queues[0]!,
+          entries: [
+            taskEntry(furnitureTaskId, "Переместить мебель"),
+            taskEntry(otherTaskId, "Другое задание"),
+          ],
+        },
+      ],
+    }
+
+    renderPage("EDIT", {
+      currentBoard,
+      initialEntry: `/?externalTaskId=${furnitureTaskId}`,
+    })
+
+    expect(
+      await screen.findByText("Открыто задание, связанное с отгрузкой.")
+    ).toBeTruthy()
+    expect(
+      (await screen.findByTestId("visible-task-external-ids")).textContent
+    ).toBe(furnitureTaskId)
   })
 })

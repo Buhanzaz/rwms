@@ -37,6 +37,8 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/returns/{documentId}/register",
             "/api/logistics/v1/shipments",
             "/api/logistics/v1/shipments/{documentId}",
+            "/api/logistics/v1/shipments/{documentId}/furniture-readiness",
+            "/api/logistics/v1/shipments/{documentId}/furniture-tasks",
             "/api/logistics/v1/transfers",
             "/api/logistics/v1/transfers/{documentId}",
             "/api/logistics/v1/equipment-movement-tasks",
@@ -46,12 +48,15 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/orders/{orderId}/save",
             "/api/logistics/v1/orders/{orderId}/available-units",
             "/api/logistics/v1/orders/{orderId}/units",
+            "/api/logistics/v1/orders/{orderId}/units/{unitId}/desired-equipment",
             "/api/logistics/v1/clients",
             "/api/logistics/v1/{documentType}/{documentId}/reconcile");
     assertThat(child(child(document, "components"), "schemas"))
         .containsKeys(
             "CreateReturnRequest",
             "CreateShipmentRequest",
+            "ShipmentFurnitureTaskResult",
+            "ShipmentFurnitureReadiness",
             "CreateTransferRequest",
             "CreateEquipmentMovementTaskRequest",
             "EquipmentMovementTask",
@@ -59,6 +64,8 @@ class LogisticsContractFoundationTest {
             "CreateOrderRequest",
             "OrderDetail",
             "OrderUnit",
+            "OrderDesiredEquipment",
+            "SetOrderUnitDesiredEquipmentRequest",
             "OrderHistoryEvent",
             "LogisticsDocument",
             "LogisticsLine",
@@ -90,6 +97,8 @@ class LogisticsContractFoundationTest {
             "createShipment",
             "getShipment",
             "replaceShipmentPlan",
+            "getShipmentFurnitureReadiness",
+            "createShipmentFurnitureTasks",
             "confirmShipmentPreparation",
             "cancelShipment",
             "listTransfers",
@@ -98,6 +107,7 @@ class LogisticsContractFoundationTest {
             "departTransferLine",
             "arriveTransferLine",
             "cancelTransfer",
+            "createCabinFurnitureTask",
             "createEquipmentMovementTask",
             "getEquipmentMovementTask",
             "cancelEquipmentMovementTask",
@@ -113,7 +123,7 @@ class LogisticsContractFoundationTest {
             "listOrderUnitCandidates",
             "addOrderUnit",
             "removeOrderUnit",
-            "adjustOrderUnitEquipment",
+            "setOrderUnitDesiredEquipment",
             "getOrderHistory",
             "reconcileDocument");
     assertThat(paths.keySet())
@@ -147,6 +157,41 @@ class LogisticsContractFoundationTest {
   }
 
   @Test
+  void schedulingUsesDatesForReturnsShipmentsAndTransfers() throws Exception {
+    Map<String, Object> schemas = child(child(openApi(), "components"), "schemas");
+    Map<String, Object> returnPickup = child(schemas, "ReturnPickupRequest");
+    Map<String, Object> shipmentPlan = child(schemas, "ShipmentPlanRequest");
+    Map<String, Object> createTransfer = child(schemas, "CreateTransferRequest");
+    Map<String, Object> cabinFurnitureTask = child(schemas, "CreateCabinFurnitureTaskRequest");
+    Map<String, Object> document = child(schemas, "LogisticsDocument");
+
+    assertThat(returnPickup.get("required"))
+        .isEqualTo(List.of("driverSnapshot", "scheduledDate"));
+    assertThat(child(child(returnPickup, "properties"), "scheduledDate").get("format"))
+        .isEqualTo("date");
+    assertThat(child(returnPickup, "properties")).doesNotContainKey("scheduledAt");
+    assertThat(shipmentPlan.get("required"))
+        .isEqualTo(List.of("driverSnapshot", "scheduledDate"));
+    assertThat(child(child(shipmentPlan, "properties"), "scheduledDate").get("format"))
+        .isEqualTo("date");
+    assertThat(child(shipmentPlan, "properties")).doesNotContainKey("scheduledAt");
+    List<String> transferRequired =
+        ((List<?>) createTransfer.get("required")).stream().map(String.class::cast).toList();
+    assertThat(transferRequired).contains("scheduledDate", "furnitureReplacements");
+    assertThat(child(createTransfer, "properties")).doesNotContainKey("scheduledAt");
+    assertThat(child(child(createTransfer, "properties"), "scheduledDate").get("format"))
+        .isEqualTo("date");
+    assertThat(cabinFurnitureTask.get("required"))
+        .isEqualTo(List.of("warehouseId", "scheduledDate", "contents"));
+    assertThat(child(child(cabinFurnitureTask, "properties"), "scheduledDate").get("format"))
+        .isEqualTo("date");
+    assertThat(child(child(document, "properties"), "scheduledDate").get("format"))
+        .isEqualTo("date");
+    assertThat(child(child(document, "properties"), "scheduledAt").get("format"))
+        .isEqualTo("date-time");
+  }
+
+  @Test
   void orderCreationCannotAssignAnArbitraryManagerAndUnitsKeepTheAssetShape()
       throws Exception {
     Map<String, Object> schemas = child(child(openApi(), "components"), "schemas");
@@ -171,7 +216,7 @@ class LogisticsContractFoundationTest {
 
     Map<String, Object> orderUnit = child(schemas, "OrderUnit");
     assertThat(child(orderUnit, "properties"))
-        .containsOnlyKeys("reservationId", "added", "unit");
+        .containsOnlyKeys("reservationId", "added", "unit", "desiredContents");
     Map<String, Object> history = child(schemas, "OrderHistoryEvent");
     assertThat(child(history, "properties"))
         .containsKeys("actorSubjectId", "occurredAt")

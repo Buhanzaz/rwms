@@ -33,6 +33,7 @@ import { RepairEstimateCompletedWorkspace } from "@/features/repair-estimates/re
 import { RepairEstimateLinesEditor } from "@/features/repair-estimates/repair-estimate-lines-editor"
 import { RepairEstimateWorkspaceLayout } from "@/features/repair-estimates/repair-estimate-workspace-layout"
 import { RepairWorkInformationFields } from "@/features/repair-estimates/repair-work-information-fields"
+import { CabinFurniturePanel } from "@/features/rental-items/cabin-furniture-panel"
 import { REPAIR_TASKS_QUERY_KEY } from "@/features/repair-tasks/api/repair-tasks-api"
 import {
   maintenanceEstimateMediaOwner,
@@ -290,33 +291,43 @@ function RepairEstimateEditorContent({
   )
 
   const information = (
-    <RepairWorkInformationFields
-      warehouseId={warehouseId}
-      rentalItemId={draft.rentalItemId}
-      rentalItemNumber={estimate?.cabinNumber}
-      contextLabel="От кого"
-      contextValue={draft.sourceParty}
-      dispatchDate={draft.dispatchDate}
-      comment={draft.comment}
-      showComment={false}
-      disabled={interactionDisabled}
-      readOnly={readOnly}
-      rentalItemInvalid={Boolean(error && !draft.rentalItemId)}
-      onRentalItemChange={(rentalItem) =>
-        setDraft((current) =>
-          applyEstimateRentalItemSelection(current, rentalItem)
-        )
-      }
-      onContextChange={(sourceParty) =>
-        setDraft((current) => ({ ...current, sourceParty }))
-      }
-      onDispatchDateChange={(dispatchDate) =>
-        setDraft((current) => ({ ...current, dispatchDate }))
-      }
-      onCommentChange={(comment) =>
-        setDraft((current) => ({ ...current, comment }))
-      }
-    />
+    <div className="flex flex-col gap-4">
+      <RepairWorkInformationFields
+        warehouseId={warehouseId}
+        rentalItemId={draft.rentalItemId}
+        rentalItemNumber={estimate?.cabinNumber}
+        contextLabel="От кого"
+        contextValue={draft.sourceParty}
+        dispatchDate={draft.dispatchDate}
+        comment={draft.comment}
+        showComment={false}
+        disabled={interactionDisabled}
+        readOnly={readOnly}
+        rentalItemInvalid={Boolean(error && !draft.rentalItemId)}
+        onRentalItemChange={(rentalItem) =>
+          setDraft((current) =>
+            applyEstimateRentalItemSelection(current, rentalItem)
+          )
+        }
+        onContextChange={(sourceParty) =>
+          setDraft((current) => ({ ...current, sourceParty }))
+        }
+        onDispatchDateChange={(dispatchDate) =>
+          setDraft((current) => ({ ...current, dispatchDate }))
+        }
+        onCommentChange={(comment) =>
+          setDraft((current) => ({ ...current, comment }))
+        }
+      />
+      {accessToken && draft.rentalItemId ? (
+        <CabinFurniturePanel
+          accessToken={accessToken}
+          warehouseId={warehouseId}
+          rentalItemId={draft.rentalItemId}
+          disabled={interactionDisabled}
+        />
+      ) : null}
+    </div>
   )
 
   const estimateLines = (

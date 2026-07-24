@@ -159,6 +159,27 @@ public class LogisticsDocumentLine {
     state = LogisticsLineState.CANCELLED;
   }
 
+  /** Refreshes the mutable draft projection after asset-side order reservation. */
+  public boolean synchronizeOrderReservation(long nextAssetVersion, String nextTenantSnapshot) {
+    if (rentalOrderId == null || state != LogisticsLineState.PENDING) {
+      throw new IllegalStateException("Only a pending rental-order line can be synchronized");
+    }
+    if (nextAssetVersion < assetVersion) {
+      throw new IllegalArgumentException("assetVersion must not move backwards");
+    }
+    String requiredTenantSnapshot = optionalSnapshot(nextTenantSnapshot);
+    if (requiredTenantSnapshot == null) {
+      throw new IllegalArgumentException("tenantSnapshot is required");
+    }
+    if (assetVersion == nextAssetVersion
+        && java.util.Objects.equals(tenantSnapshot, requiredTenantSnapshot)) {
+      return false;
+    }
+    assetVersion = nextAssetVersion;
+    tenantSnapshot = requiredTenantSnapshot;
+    return true;
+  }
+
   public void captureExpectedContents(JsonNode snapshot) {
     expectedContentsSnapshot = captureImmutable(expectedContentsSnapshot, snapshot, "expectedContentsSnapshot");
   }

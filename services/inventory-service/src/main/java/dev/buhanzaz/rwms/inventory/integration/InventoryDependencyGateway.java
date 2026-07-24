@@ -71,7 +71,25 @@ public interface InventoryDependencyGateway {
       UUID warehouseId,
       String status,
       String displayCanonicalNumber,
-      String identityMatchKey) {}
+      String identityMatchKey,
+      String tenantSnapshot) {
+    public AssetSnapshot(
+        UUID assetId,
+        long version,
+        UUID warehouseId,
+        String status,
+        String displayCanonicalNumber,
+        String identityMatchKey) {
+      this(
+          assetId,
+          version,
+          warehouseId,
+          status,
+          displayCanonicalNumber,
+          identityMatchKey,
+          null);
+    }
+  }
 
   record NumberResolution(
       String displayCanonicalNumber, String identityMatchKey, boolean found, AssetSnapshot asset) {}
@@ -79,7 +97,14 @@ public interface InventoryDependencyGateway {
   record SourceAsset(UUID inventoryId, UUID findingId, AssetSnapshot asset) {}
 
   record ValidationItem(
-      UUID assetId, boolean found, Long version, UUID warehouseId, String status) {}
+      UUID assetId,
+      boolean found,
+      Long version,
+      UUID warehouseId,
+      String status,
+      String displayCanonicalNumber,
+      String identityMatchKey,
+      String tenantSnapshot) {}
 
   record Validation(
       OffsetDateTime validatedAt, String validationDigest, List<ValidationItem> assets) {}

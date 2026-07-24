@@ -39,6 +39,8 @@ export type EquipmentItemDto = {
   writtenOffQuantity: number
   lostQuantity: number
   activeHeldQuantity: number
+  reservedQuantity: number
+  availableQuantity: number
   availableStock: number
   balances: EquipmentBalanceDto[]
 

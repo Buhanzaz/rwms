@@ -8,6 +8,7 @@ import {
   type OrderClientSearchItem,
   type OrderClientType,
   type OrderDetail,
+  type OrderDesiredEquipment,
   type OrderEquipmentContent,
   type OrderPage,
   type OrderRentalUnit,
@@ -188,6 +189,19 @@ function parseEquipmentContent(value: unknown): OrderEquipmentContent {
   }
 }
 
+function parseDesiredEquipment(value: unknown): OrderDesiredEquipment {
+  const source = record(value)
+  const quantity = nonNegativeInteger(source.quantity)
+  if (quantity < 1) invalidResponse()
+
+  return {
+    equipmentId: uuid(source.equipmentId),
+    equipmentCode: text(source.equipmentCode),
+    equipmentName: text(source.equipmentName),
+    quantity,
+  }
+}
+
 function parseRentalUnit(value: unknown): OrderRentalUnit {
   const source = record(value)
   const status = text(source.status)
@@ -223,6 +237,7 @@ function parseOrderUnitCandidate(value: unknown): OrderUnitCandidate {
     reservationId,
     added,
     unit: parseRentalUnit(source.unit),
+    desiredContents: list(source.desiredContents).map(parseDesiredEquipment),
   }
 }
 
@@ -528,6 +543,38 @@ export async function removeOrderUnit(params: {
       method: "DELETE",
       headers: idempotencyHeaders(params.idempotencyKey),
     })
+  )
+}
+
+export async function setOrderUnitDesiredEquipment(params: {
+  accessToken: string
+  orderId: string
+  expectedVersion: number
+  unitId: string
+  requirements: Array<{ equipmentId: string; quantity: number }>
+  idempotencyKey: string
+}): Promise<OrderDetail> {
+  return parseOrderDetail(
+    await bearerRequest<unknown>(
+      params.accessToken,
+      ordersEndpoint(
+        orderPath(
+          params.orderId,
+          `/units/${encodeURIComponent(uuid(params.unitId))}/desired-equipment`
+        )
+      ),
+      {
+        method: "PUT",
+        headers: idempotencyHeaders(params.idempotencyKey),
+        body: JSON.stringify({
+          expectedVersion: params.expectedVersion,
+          requirements: params.requirements.map((requirement) => ({
+            equipmentId: uuid(requirement.equipmentId),
+            quantity: requirement.quantity,
+          })),
+        }),
+      }
+    )
   )
 }
 

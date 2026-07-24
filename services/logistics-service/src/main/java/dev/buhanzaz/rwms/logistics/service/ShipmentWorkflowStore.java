@@ -225,8 +225,10 @@ class ShipmentWorkflowStore {
   }
 
   @Transactional
-  public void confirmTaskStatus(UUID operationId, LogisticsDependencyGateway.PreparationTask task) {
-    LogisticsExternalAttempt attempt = attempt(operationId, LogisticsDocumentService.SHIPMENT_TASK_STATUS);
+  public void confirmTaskCompletion(
+      UUID operationId, LogisticsDependencyGateway.PreparationTask task) {
+    LogisticsExternalAttempt attempt =
+        attempt(operationId, LogisticsDocumentService.SHIPMENT_TASK_COMPLETE);
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
     LogisticsDocumentLine line = requiredLine(attempt);
@@ -236,7 +238,7 @@ class ShipmentWorkflowStore {
     requireDoneTask(document, reference, task);
 
     OffsetDateTime completedAt = now();
-    attempt.confirm(taskDigest("SHIPMENT_TASK_STATUS_RESPONSE", task), completedAt);
+    attempt.confirm(taskDigest("SHIPMENT_TASK_COMPLETE_RESPONSE", task), completedAt);
     reference.markDone(task.taskVersion(), task.doneAt());
     List<LogisticsEquipmentHoldReference> holds = holds(line);
     if (holds.isEmpty()) {
@@ -434,10 +436,14 @@ class ShipmentWorkflowStore {
 
   private Optional<Work> confirmationWork(
       LogisticsExternalAttempt attempt, LogisticsDocument document, LogisticsDocumentLine line) {
-    if (LogisticsDocumentService.SHIPMENT_TASK_STATUS.equals(attempt.getOperationType())) {
+    if (LogisticsDocumentService.SHIPMENT_TASK_COMPLETE.equals(attempt.getOperationType())) {
       LogisticsTaskReference task =
           taskRepository.findByLine_Id(line.getId()).orElseThrow(() -> malformed("Shipment confirmation has no task"));
-      return Optional.of(Work.taskStatus(attempt.getOperationId(), task.getExternalTaskId()));
+      return Optional.of(
+          Work.taskComplete(
+              attempt.getOperationId(),
+              task.getExternalTaskId(),
+              task.getTaskVersion()));
     }
     if (attempt.getOperationType().startsWith(LogisticsDocumentService.SHIPMENT_HOLD_COMMIT_PREFIX)) {
       LogisticsEquipmentHoldReference hold =
@@ -748,10 +754,13 @@ class ShipmentWorkflowStore {
       LogisticsDocumentLine line,
       LogisticsDependencyGateway.RentalItemSnapshot snapshot) {
     requireSnapshotShape(snapshot);
+    boolean allowedStatus =
+        "FREE".equals(snapshot.status())
+            || (line.getRentalOrderId() != null && "BOOKED".equals(snapshot.status()));
     if (!line.getAssetId().equals(snapshot.assetId())
         || snapshot.version() != line.getAssetVersion()
         || !document.getWarehouseId().equals(snapshot.warehouseId())
-        || !"FREE".equals(snapshot.status())) {
+        || !allowedStatus) {
       throw new LogisticsDependencyException(
           LogisticsDependencyException.FailureKind.PERMANENT_REJECTION,
           "Asset-service rejected the shipment preconditions");
@@ -1237,9 +1246,10 @@ class ShipmentWorkflowStore {
           null);
     }
 
-    static Work taskStatus(UUID operationId, UUID externalTaskId) {
+    static Work taskComplete(
+        UUID operationId, UUID externalTaskId, long expectedTaskVersion) {
       return new Work(
-          WorkType.TASK_STATUS,
+          WorkType.TASK_COMPLETE,
           operationId,
           null,
           null,
@@ -1255,7 +1265,7 @@ class ShipmentWorkflowStore {
           null,
           null,
           externalTaskId,
-          -1,
+          expectedTaskVersion,
           null);
     }
 
@@ -1374,7 +1384,7 @@ class ShipmentWorkflowStore {
     LEASE,
     HOLD_ACQUIRE,
     TASK_REGISTER,
-    TASK_STATUS,
+    TASK_COMPLETE,
     HOLD_COMMAND,
     EFFECT,
     TASK_CANCEL,

@@ -40,6 +40,7 @@ public class FindingPlanLine {
   }
 
   public String getSourceKind() { return sourceKind; }
+  public UUID getId() { return id; }
   public String getLineType() { return lineType; }
   public UUID getFindingId() { return findingId; }
   public long getFindingRevision() { return findingRevision; }

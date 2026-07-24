@@ -17,6 +17,7 @@ import dev.buhanzaz.rwms.asset.eventing.AssetEventStore;
 import dev.buhanzaz.rwms.asset.integration.warehouse.WarehouseRegistryClient;
 import dev.buhanzaz.rwms.asset.mapper.AssetLogisticsResponseMapper;
 import dev.buhanzaz.rwms.asset.mapper.EquipmentCatalogItemMapper;
+import dev.buhanzaz.rwms.asset.mapper.OrderAssetResponseMapper;
 import dev.buhanzaz.rwms.asset.repository.EquipmentCatalogItemRepository;
 import dev.buhanzaz.rwms.asset.repository.OperationLeaseRepository;
 import dev.buhanzaz.rwms.asset.repository.OrderUnitReservationRepository;
@@ -62,6 +63,7 @@ public class AssetService {
   private final WarehouseRegistryClient warehouses;
   private final AssetLogisticsResponseMapper logisticsMapper;
   private final EquipmentCatalogItemMapper equipmentMapper;
+  private final OrderAssetResponseMapper orderAssetMapper;
   private final ObjectMapper mapper;
   private final Duration holdTtl;
   private final Duration leaseTtl;
@@ -77,6 +79,7 @@ public class AssetService {
       WarehouseRegistryClient warehouses,
       AssetLogisticsResponseMapper logisticsMapper,
       EquipmentCatalogItemMapper equipmentMapper,
+      OrderAssetResponseMapper orderAssetMapper,
       ObjectMapper mapper,
       @Value("${rwms.asset.equipment-hold.ttl:15m}") Duration holdTtl,
       @Value("${rwms.asset.operation-lease.ttl:15m}") Duration leaseTtl) {
@@ -90,6 +93,7 @@ public class AssetService {
     this.warehouses = warehouses;
     this.logisticsMapper = logisticsMapper;
     this.equipmentMapper = equipmentMapper;
+    this.orderAssetMapper = orderAssetMapper;
     this.mapper = mapper;
     this.holdTtl = requireTtl(holdTtl, "equipment hold");
     this.leaseTtl = requireTtl(leaseTtl, "operation lease");
@@ -1172,8 +1176,10 @@ public class AssetService {
     List<EquipmentBalanceResponse> values = rows.stream()
         .map(row -> balanceResponse(row, heldByBalance.get(row.id())))
         .toList();
+    long reserved = activeOrderReserved(equipmentId, warehouseId);
+    long available = Math.max(0, Math.subtractExact(Math.subtractExact(Math.addExact(stock, nonRented), activeHeld), reserved));
     return new EquipmentTotalsResponse(equipmentId, warehouseId, Math.addExact(Math.addExact(Math.addExact(stock, nonRented), Math.addExact(rented, writtenOff)), lost),
-        stock, nonRented, rented, writtenOff, lost, activeHeld, Math.max(0, stock - heldAtStock), values);
+        stock, nonRented, rented, writtenOff, lost, activeHeld, reserved, available, Math.max(0, stock - heldAtStock), values);
   }
 
   @Transactional(readOnly = true)
@@ -1208,6 +1214,34 @@ public class AssetService {
    */
   void lockOrderRentalItemForOrder(UUID rentalItemId) {
     assertNoActiveLease(rentalItemId);
+  }
+
+  /**
+   * Applies the asset-owned order booking status after the caller has joined
+   * the canonical rental-item/lease lock order.
+   */
+  RentalItemResponse bookOrderRentalItem(UUID rentalItemId) {
+    RentalItem item = rentalItems
+        .findByIdForUpdate(rentalItemId)
+        .orElseThrow(() -> new AssetNotFoundException("Rental item was not found"));
+    if (item.getStatus() == RentalItemStatus.BOOKED) {
+      return rentalResponse(item);
+    }
+    if (item.getStatus() != RentalItemStatus.FREE) {
+      throw new AssetConflictException("Only a free rental item can be booked for an order");
+    }
+    return changeOrderBookingStatus(item, RentalItemStatus.BOOKED);
+  }
+
+  /** Releases only the order-owned booking state; later lifecycle states stay fenced. */
+  RentalItemResponse releaseOrderBooking(UUID rentalItemId) {
+    RentalItem item = rentalItems
+        .findByIdForUpdate(rentalItemId)
+        .orElseThrow(() -> new AssetNotFoundException("Rental item was not found"));
+    if (item.getStatus() != RentalItemStatus.BOOKED) {
+      return rentalResponse(item);
+    }
+    return changeOrderBookingStatus(item, RentalItemStatus.FREE);
   }
 
   private CreateResult<MovementResponse> move(
@@ -1787,9 +1821,7 @@ public class AssetService {
     advisoryLock(rentalItemLockKey(id));
     if (!fenced) {
       assertNoActiveLease(id);
-      if (status != null
-          && status != RentalItemStatus.FREE
-          && status != RentalItemStatus.WAREHOUSE) {
+      if (status != null) {
         assertNoActiveOrderReservation(
             id, "Reserved order unit cannot change to an incompatible status");
       }
@@ -1807,6 +1839,23 @@ public class AssetService {
     RentalItem saved = rentalItems.saveAndFlush(item);
     events.append(AssetAggregateType.RENTAL_ITEM, saved.getId(), expectedVersion, AssetEventType.RENTAL_ITEM_STATUS_CHANGED,
         rentalFact(saved), rentalSnapshot(saved));
+    reclassifyCabinBalances(saved, previous);
+    return rentalResponse(saved);
+  }
+
+  private RentalItemResponse changeOrderBookingStatus(
+      RentalItem item, RentalItemStatus targetStatus) {
+    long expectedVersion = item.getVersion();
+    RentalItemStatus previous = item.getStatus();
+    item.changeStatusUnderLease(targetStatus);
+    RentalItem saved = rentalItems.saveAndFlush(item);
+    events.append(
+        AssetAggregateType.RENTAL_ITEM,
+        saved.getId(),
+        expectedVersion,
+        AssetEventType.RENTAL_ITEM_STATUS_CHANGED,
+        rentalFact(saved),
+        rentalSnapshot(saved));
     reclassifyCabinBalances(saved, previous);
     return rentalResponse(saved);
   }
@@ -1832,9 +1881,14 @@ public class AssetService {
   private OffsetDateTime now() { return OffsetDateTime.now(ZoneOffset.UTC); }
 
   private RentalItemResponse rentalResponse(RentalItem item) {
+    ActiveOrderReservationResponse activeOrderReservation = orderUnitReservations
+        .findByRentalItemIdAndState(item.getId(), OrderUnitReservationState.ACTIVE)
+        .map(orderAssetMapper::toActiveOrderReservation)
+        .orElse(null);
     return new RentalItemResponse(item.getId(), item.getVersion(), item.getWarehouseId(), item.getNumber(), item.getStatus(), item.getRentalType(),
         item.getDimensions(), item.getFinishing(), item.getCategory(), item.getCharacteristics(), item.getLinoleum(), item.getGeneralComment(),
-        map(item.getPassportJson()), strings(item.getTagsJson()), contents(item.getId()), item.getCreatedAt(), item.getUpdatedAt());
+        map(item.getPassportJson()), strings(item.getTagsJson()), contents(item.getId()), activeOrderReservation,
+        item.getCreatedAt(), item.getUpdatedAt());
   }
   private EquipmentResponse equipmentResponse(EquipmentCatalogItem item) {
     return equipmentMapper.toResponse(item);
@@ -1986,6 +2040,19 @@ public class AssetService {
    */
   private long activeHeld(BalanceRow source) {
     return activeHeldExcluding(source, Set.of());
+  }
+
+  private long activeOrderReserved(UUID equipmentId, UUID warehouseId) {
+    Long result = jdbc.queryForObject(
+        """
+        select coalesce(sum(quantity), 0)
+        from order_equipment_reservation
+        where equipment_id=? and warehouse_id=? and state='ACTIVE'
+        """,
+        Long.class,
+        equipmentId,
+        warehouseId);
+    return result == null ? 0 : result;
   }
   private long activeHeldExcluding(BalanceRow source, Set<UUID> excludedReservationIds) {
     List<HoldQuantity> holds = jdbc.query("""

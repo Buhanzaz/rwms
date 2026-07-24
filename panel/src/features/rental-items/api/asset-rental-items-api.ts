@@ -4,6 +4,7 @@ import {
   formatRentalItemContents,
   type PageResponse,
   type RentalItemContentsItemDto,
+  type RentalItemActiveOrderReservationDto,
   type RentalItemDto,
   type RentalItemPhotoDto,
   type RentalItemStatus,
@@ -63,6 +64,7 @@ type AssetRentalItem = {
   passport: UnknownRecord
   tags: string[]
   contents: AssetEquipmentContent[]
+  activeOrderReservation: RentalItemActiveOrderReservationDto | null
   createdAt: string
   updatedAt: string
 }
@@ -178,6 +180,26 @@ function parseEquipmentContent(value: unknown): AssetEquipmentContent {
   }
 }
 
+function parseActiveOrderReservation(
+  value: unknown
+): RentalItemActiveOrderReservationDto | null {
+  if (value === null) return null
+  if (!isRecord(value)) {
+    throw new Error(INVALID_RESPONSE_MESSAGE)
+  }
+  const { reservationId, orderId, clientId, tenantSnapshot, reservedAt } = value
+  if (
+    !isUuid(reservationId) ||
+    !isUuid(orderId) ||
+    (clientId !== null && !isUuid(clientId)) ||
+    !isNullableString(tenantSnapshot) ||
+    !isIsoDateTime(reservedAt)
+  ) {
+    throw new Error(INVALID_RESPONSE_MESSAGE)
+  }
+  return { reservationId, orderId, clientId, tenantSnapshot, reservedAt }
+}
+
 function parseAssetRentalItem(value: unknown): AssetRentalItem {
   if (!isRecord(value)) {
     throw new Error(INVALID_RESPONSE_MESSAGE)
@@ -199,6 +221,7 @@ function parseAssetRentalItem(value: unknown): AssetRentalItem {
     passport,
     tags,
     contents,
+    activeOrderReservation,
     createdAt,
     updatedAt,
   } = value
@@ -244,6 +267,7 @@ function parseAssetRentalItem(value: unknown): AssetRentalItem {
     passport,
     tags,
     contents: contents.map(parseEquipmentContent),
+    activeOrderReservation: parseActiveOrderReservation(activeOrderReservation),
     createdAt,
     updatedAt,
   }
@@ -372,8 +396,11 @@ export function mapAssetRentalItem(value: unknown): RentalItemDto {
     contents: formatRentalItemContents(contentsItems),
     contentsItems,
     shipmentDate: passportString(item.passport, "shipmentDate"),
-    tenant: passportString(item.passport, "tenant"),
+    tenant:
+      item.activeOrderReservation?.tenantSnapshot ??
+      passportString(item.passport, "tenant"),
     price,
+    activeOrderReservation: item.activeOrderReservation,
     passport: item.passport,
     tags: item.tags,
     createdAt: item.createdAt,
