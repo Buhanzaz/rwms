@@ -223,6 +223,45 @@ class HttpLogisticsDependencyGatewayTest {
   }
 
   @Test
+  void completesThePreparationTaskThroughTheNarrowTaskBoardRoute() {
+    UUID externalTaskId = UUID.randomUUID();
+    UUID taskId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://task-board.test/api/internal/task-board/v1/logistics/preparation-tasks/"
+                    + externalTaskId
+                    + "/complete"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer test-task-board.logistics"))
+        .andExpect(jsonPath("$.expectedTaskVersion").value(4))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "taskId":"%s",
+                  "taskVersion":5,
+                  "warehouseId":"%s",
+                  "externalTaskId":"%s",
+                  "status":"DONE",
+                  "doneAt":"2026-07-22T12:30:00Z"
+                }
+                """
+                    .formatted(taskId, warehouseId, externalTaskId),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.PreparationTask completed =
+        gateway.completePreparationTask(externalTaskId, 4);
+
+    assertThat(completed.taskId()).isEqualTo(taskId);
+    assertThat(completed.taskVersion()).isEqualTo(5);
+    assertThat(completed.status()).isEqualTo("DONE");
+    assertThat(completed.doneAt()).isNotNull();
+    server.verify();
+  }
+
+  @Test
   void rejectsACombinedOrBroaderClientTokenBeforeSendingARequest() {
     OAuth2AuthorizedClient combined = mock(OAuth2AuthorizedClient.class);
     when(combined.getAccessToken())
@@ -248,6 +287,8 @@ class HttpLogisticsDependencyGatewayTest {
     UUID orderId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
     UUID unitId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    String tenantSnapshot = "ООО Тестовый клиент";
     UUID actorId = UUID.randomUUID();
     UUID reservationId = UUID.randomUUID();
     UUID equipmentId = UUID.randomUUID();
@@ -262,6 +303,8 @@ class HttpLogisticsDependencyGatewayTest {
         .andExpect(header("Idempotency-Key", key.toString()))
         .andExpect(jsonPath("$.warehouseId").value(warehouseId.toString()))
         .andExpect(jsonPath("$.rentalItemId").value(unitId.toString()))
+        .andExpect(jsonPath("$.clientId").value(clientId.toString()))
+        .andExpect(jsonPath("$.tenantSnapshot").value(tenantSnapshot))
         .andExpect(jsonPath("$.actorSubjectId").value(actorId.toString()))
         .andExpect(jsonPath("$.actorRole").value("RENTAL_MANAGER"))
         .andRespond(
@@ -321,6 +364,8 @@ class HttpLogisticsDependencyGatewayTest {
             orderId,
             warehouseId,
             unitId,
+            clientId,
+            tenantSnapshot,
             actorId,
             "RENTAL_MANAGER");
 
@@ -344,6 +389,7 @@ class HttpLogisticsDependencyGatewayTest {
     UUID orderId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
     UUID unitId = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
     UUID actorId = UUID.randomUUID();
     server
         .expect(
@@ -366,6 +412,8 @@ class HttpLogisticsDependencyGatewayTest {
                     orderId,
                     warehouseId,
                     unitId,
+                    clientId,
+                    "ООО Тестовый клиент",
                     actorId,
                     "RENTAL_MANAGER"))
         .isInstanceOf(LogisticsDependencyException.class)

@@ -68,6 +68,16 @@ public class InventoryAuthorizer {
     return claim instanceof String value ? value : null;
   }
 
+  public String displayName(Jwt jwt) {
+    if (developmentBypass) return "Development user";
+    subjectId(jwt);
+    String preferredUsername = jwt.getClaimAsString("preferred_username");
+    if (preferredUsername != null && !preferredUsername.isBlank()) {
+      return preferredUsername.trim();
+    }
+    return jwt.getSubject();
+  }
+
   private void requireUserScope(Jwt jwt, String requiredScope) {
     if (developmentBypass) return;
     if (jwt == null

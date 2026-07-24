@@ -71,6 +71,8 @@ function equipment(): EquipmentItemDto {
     writtenOffQuantity: 0,
     lostQuantity: 0,
     activeHeldQuantity: 0,
+    reservedQuantity: 0,
+    availableQuantity: 8,
     availableStock: 3,
     balances: [
       {

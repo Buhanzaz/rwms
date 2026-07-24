@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.buhanzaz.rwms.taskboard.api.ApiModels.CancelLogisticsPreparationTaskRequest;
+import dev.buhanzaz.rwms.taskboard.api.ApiModels.CompleteLogisticsPreparationTaskRequest;
 import dev.buhanzaz.rwms.taskboard.api.ApiModels.RegisterExternalTaskRequest;
 import dev.buhanzaz.rwms.taskboard.api.ApiModels.RegisterLogisticsPreparationTaskRequest;
 import dev.buhanzaz.rwms.taskboard.api.ApiModels.RouteStepRequest;
@@ -130,6 +131,61 @@ class LogisticsTaskPrerequisiteIntegrationTest extends PostgresIntegrationTestSu
                 "select count(*) from outbox_event where event_type=?",
                 Integer.class,
                 TaskBoardEventTypes.BOARD_TASK_CANCELLED))
+        .isOne();
+  }
+
+  @Test
+  void completesTheSourceOwnedPreparationTaskWithTaskVersionCas() throws Exception {
+    UUID externalTaskId = UUID.randomUUID();
+    RegisterLogisticsPreparationTaskRequest register =
+        new RegisterLogisticsPreparationTaskRequest(
+            WAREHOUSE, externalTaskId, 0, null);
+    JsonNode created =
+        response(
+            mvc.perform(
+                    post(BASE_PATH)
+                        .with(
+                            logisticsJwt(
+                                "logistics-service",
+                                "logistics-service",
+                                List.of("task-board.logistics")))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(register)))
+                .andExpect(status().isCreated()));
+    CompleteLogisticsPreparationTaskRequest complete =
+        new CompleteLogisticsPreparationTaskRequest(
+            created.required("taskVersion").longValue());
+
+    for (int replay = 0; replay < 2; replay++) {
+      mvc.perform(
+              post(BASE_PATH + "/{externalTaskId}/complete", externalTaskId)
+                  .with(
+                      logisticsJwt(
+                          "logistics-service",
+                          "logistics-service",
+                          List.of("task-board.logistics")))
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(objectMapper.writeValueAsString(complete)))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.status").value("DONE"))
+          .andExpect(jsonPath("$.doneAt").isNotEmpty());
+    }
+
+    assertThat(jdbc.queryForObject("select status from board_task", String.class))
+        .isEqualTo("DONE");
+    assertThat(jdbc.queryForObject("select status from queue_entry", String.class))
+        .isEqualTo("DONE");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from outbox_event where event_type=?",
+                Integer.class,
+                TaskBoardEventTypes.BOARD_TASK_COMPLETED))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from outbox_event where event_type=?",
+                Integer.class,
+                TaskBoardEventTypes.QUEUE_ENTRY_COMPLETED))
         .isOne();
   }
 

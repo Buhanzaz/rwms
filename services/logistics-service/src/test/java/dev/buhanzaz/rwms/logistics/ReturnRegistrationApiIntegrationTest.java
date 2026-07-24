@@ -88,7 +88,7 @@ class ReturnRegistrationApiIntegrationTest {
                     """
                     {
                       "driverSnapshot": "Водитель возврата",
-                      "scheduledAt": "2026-07-22T08:00:00Z"
+                      "scheduledDate": "2026-07-22"
                     }
                     """)
                 .with(
@@ -110,7 +110,9 @@ class ReturnRegistrationApiIntegrationTest {
         .andExpect(header().string("ETag", "\"1\""))
         .andExpect(jsonPath("$.id").value(created.response().id().toString()))
         .andExpect(jsonPath("$.version").value(1))
-        .andExpect(jsonPath("$.state").value("REGISTERING"));
+        .andExpect(jsonPath("$.state").value("REGISTERING"))
+        .andExpect(jsonPath("$.scheduledDate").value("2026-07-22"))
+        .andExpect(jsonPath("$.scheduledAt").isEmpty());
 
     assertThat(
             jdbc.queryForObject(

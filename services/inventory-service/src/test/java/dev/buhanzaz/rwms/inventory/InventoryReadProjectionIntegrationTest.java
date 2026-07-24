@@ -4,6 +4,7 @@ import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CancelSessionRe
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ClosePublicationRequest;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CompleteSessionRequest;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CompletionPreviewRequest;
+import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ConflictView;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CreateFindingAssetRequest;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.FindingView;
 import static dev.buhanzaz.rwms.inventory.api.InventoryApiModels.PageResponse;
@@ -127,7 +128,7 @@ class InventoryReadProjectionIntegrationTest {
         new TransactionTemplate(transactionManager)
             .execute(
                 status ->
-                    seedFindings(activeInventoryId, cancelledInventoryId));
+                    seedFindings(activeInventoryId, cancelledInventoryId, warehouseId));
 
     PageResponse<SessionSummary> activeHistory =
         service.sessions(
@@ -170,6 +171,7 @@ class InventoryReadProjectionIntegrationTest {
     SessionView detail = service.session(jwt(), activeInventoryId);
     assertThat(detail.findingCount()).isEqualTo(3);
     assertThat(detail.inspectedCount()).isEqualTo(2);
+    assertThat(detail.author().displayName()).isEqualTo("Inventory operator");
 
     Statistics statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
     statistics.clear();
@@ -182,10 +184,15 @@ class InventoryReadProjectionIntegrationTest {
     assertThat(expected.expectedSnapshot()).isNotNull();
     assertThat(expected.expectedSnapshot().assetId()).isEqualTo(fixture.expectedAssetId());
     assertThat(expected.expectedSnapshot().assetVersion()).isEqualTo(7);
+    assertThat(expected.expectedSnapshot().warehouseId()).isEqualTo(warehouseId);
     assertThat(expected.expectedSnapshot().status()).isEqualTo("WAREHOUSE");
     assertThat(expected.expectedSnapshot().displayCanonicalNumber()).isEqualTo("AA-01");
     assertThat(expected.expectedSnapshot().passportSnapshot().isObject()).isTrue();
     assertThat(expected.expectedSnapshot().contentsSnapshot().isArray()).isTrue();
+    assertThat(expected.currentSnapshot()).isNotNull();
+    assertThat(expected.currentSnapshot().warehouseId()).isEqualTo(warehouseId);
+    assertThat(expected.comment()).isEmpty();
+    assertThat(expected.conflicts()).isEmpty();
     assertThat(expected.frozenPlan()).isNotNull();
     assertThat(expected.frozenPlan().mode()).isEqualTo("MANUAL");
     assertThat(expected.frozenPlan().fingerprintSha256()).isEqualTo(FINGERPRINT);
@@ -211,14 +218,100 @@ class InventoryReadProjectionIntegrationTest {
     assertThat(exact.required("frozenPlan").required("lines").get(0).required("quantity").asText())
         .isEqualTo("1.25");
     assertThat(exact.toString())
-        .doesNotContain(
-            "sourceSnapshot",
-            "safeSnapshot",
-            "actor",
-            "author",
-            "tenant",
-            "company",
-            "comment");
+        .doesNotContain("sourceSnapshot", "safeSnapshot", "actor", "company");
+
+    OffsetDateTime completedAt = OffsetDateTime.now(ZoneOffset.UTC);
+    jdbc.update(
+        """
+        update inventory_session
+        set lifecycle='COMPLETED',completion_validation_sha256=?,
+            completion_acknowledgement_sha256=?,validated_at=?,
+            completed_by_actor_ref=?::jsonb,completed_at=?,updated_at=?
+        where id=?
+        """,
+        "2".repeat(64),
+        "3".repeat(64),
+        completedAt,
+        ACTOR,
+        completedAt,
+        completedAt,
+        activeInventoryId);
+    String completedSnapshot =
+        """
+        {"preview":{"validatedFindings":[{
+          "findingId":"%s",
+          "currentSnapshot":{
+            "assetId":"%s","assetVersion":8,"warehouseId":"%s",
+            "status":"RENTED","displayCanonicalNumber":"AA-01",
+            "tenantSnapshot":"Арендатор А"
+          },
+          "conflicts":[{
+            "code":"RENTED","message":"Бытовка числится в аренде",
+            "expected":"WAREHOUSE","actual":"RENTED"
+          }]
+        }]}}
+        """
+            .formatted(fixture.expectedFindingId(), fixture.expectedAssetId(), warehouseId);
+    jdbc.update(
+        """
+        insert into inventory_validation_snapshot(
+          inventory_id,session_revision,validation_sha256,acknowledgement_sha256,
+          validated_at,snapshot_body)
+        values (?,0,?,?,?,?::jsonb)
+        """,
+        activeInventoryId,
+        "2".repeat(64),
+        "3".repeat(64),
+        completedAt,
+        completedSnapshot);
+    FindingView completedFinding =
+        find(
+            service.findings(jwt(), activeInventoryId, 0, 20, "createdAt,asc")
+                .content(),
+            fixture.expectedFindingId());
+    assertThat(completedFinding.currentSnapshot().status()).isEqualTo("RENTED");
+    assertThat(completedFinding.currentSnapshot().tenantSnapshot()).isEqualTo("Арендатор А");
+    assertThat(completedFinding.reconciliation()).isEqualTo(ReconciliationState.MATCHED);
+    assertThat(completedFinding.conflicts())
+        .extracting(ConflictView::code)
+        .containsExactly("RENTED");
+
+    String legacyCompletedSnapshot =
+        """
+        {"preview":{},"validation":{"assets":[{
+          "assetId":"%s","found":true,"version":8,
+          "warehouseId":"%s","status":"RENTED"
+        },{
+          "assetId":"%s","found":true,"version":1,
+          "warehouseId":"%s","status":"WAREHOUSE"
+        },{
+          "assetId":"%s","found":true,"version":1,
+          "warehouseId":"%s","status":"WAREHOUSE"
+        }]}}
+        """
+            .formatted(
+                fixture.expectedAssetId(),
+                warehouseId,
+                fixture.readyAssetId(),
+                warehouseId,
+                fixture.untouchedAssetId(),
+                warehouseId);
+    jdbc.update(
+        "update inventory_validation_snapshot set snapshot_body=?::jsonb where inventory_id=?",
+        legacyCompletedSnapshot,
+        activeInventoryId);
+    FindingView legacyCompletedFinding =
+        find(
+            service.findings(jwt(), activeInventoryId, 0, 20, "createdAt,asc")
+                .content(),
+            fixture.expectedFindingId());
+    assertThat(legacyCompletedFinding.currentSnapshot().status()).isEqualTo("RENTED");
+    assertThat(legacyCompletedFinding.currentSnapshot().displayCanonicalNumber())
+        .isEqualTo("AA-01");
+    assertThat(legacyCompletedFinding.conflicts())
+        .extracting(ConflictView::code)
+        .contains("ASSET_CHANGED", "RENTED", "STATUS_CHANGED")
+        .doesNotContain("TENANT_CHANGED");
 
     String oversized = "{\"value\":\"" + "x".repeat(65_536) + "\"}";
     jdbc.update(
@@ -338,7 +431,8 @@ class InventoryReadProjectionIntegrationTest {
                 new ClosePublicationRequest(0, "reviewed")));
   }
 
-  private Fixture seedFindings(UUID activeInventoryId, UUID cancelledInventoryId) {
+  private Fixture seedFindings(
+      UUID activeInventoryId, UUID cancelledInventoryId, UUID warehouseId) {
     UUID expectedItemId = UUID.randomUUID();
     UUID expectedAssetId = UUID.randomUUID();
     InventoryFinding expected =
@@ -348,6 +442,9 @@ class InventoryReadProjectionIntegrationTest {
                 expectedItemId,
                 expectedAssetId,
                 7,
+                warehouseId,
+                "WAREHOUSE",
+                null,
                 "AA-01",
                 "AA01",
                 ACTOR));
@@ -383,7 +480,13 @@ class InventoryReadProjectionIntegrationTest {
             "MANUAL",
             catalogVersionId,
             FINGERPRINT,
-            "{}"));
+            "{\"stages\":["
+                + "{\"id\":\"00000000-0000-0000-0000-000000000811\","
+                + "\"catalogNodeId\":\"00000000-0000-0000-0000-000000000812\","
+                + "\"catalogNodeCode\":\"REPAIR_A\",\"normativeDurationMinutes\":150},"
+                + "{\"id\":\"00000000-0000-0000-0000-000000000813\","
+                + "\"catalogNodeId\":\"00000000-0000-0000-0000-000000000814\","
+                + "\"catalogNodeCode\":\"MOVE_A\",\"normativeDurationMinutes\":30}]}"));
     planLines.saveAllAndFlush(
         List.of(
             new FindingPlanLine(
@@ -439,11 +542,12 @@ class InventoryReadProjectionIntegrationTest {
                 true,
                 "{}")));
 
+    UUID readyAssetId = UUID.randomUUID();
     InventoryFinding ready =
         InventoryFinding.unexpected(
             activeInventoryId,
             FindingOrigin.UNEXPECTED_EXISTING,
-            UUID.randomUUID(),
+            readyAssetId,
             1L,
             "BB-02",
             "BB02",
@@ -459,12 +563,13 @@ class InventoryReadProjectionIntegrationTest {
         null,
         ACTOR);
     ready = findings.saveAndFlush(ready);
+    UUID untouchedAssetId = UUID.randomUUID();
     InventoryFinding untouched =
         findings.saveAndFlush(
             InventoryFinding.unexpected(
                 activeInventoryId,
                 FindingOrigin.UNEXPECTED_EXISTING,
-                UUID.randomUUID(),
+                untouchedAssetId,
                 1L,
                 "CC-03",
                 "CC03",
@@ -491,7 +596,13 @@ class InventoryReadProjectionIntegrationTest {
         null,
         ACTOR);
     findings.saveAndFlush(cancelledReady);
-    return new Fixture(expected.getId(), expectedAssetId, ready.getId(), untouched.getId());
+    return new Fixture(
+        expected.getId(),
+        expectedAssetId,
+        ready.getId(),
+        readyAssetId,
+        untouched.getId(),
+        untouchedAssetId);
   }
 
   private FindingView find(List<FindingView> values, UUID findingId) {
@@ -507,8 +618,8 @@ class InventoryReadProjectionIntegrationTest {
           id,session_revision,warehouse_id,warehouse_version_snapshot,warehouse_time_zone,
           business_date,lifecycle,start_operation_id,start_idempotency_key,start_request_sha256,
           expected_population_count,expected_population_sha256,started_by_subject_id,
-          started_actor_ref,started_at,created_at,updated_at)
-        values (?,0,?,0,'Europe/Moscow',current_date,'ACTIVE',?,?,?,0,?,?,?::jsonb,?,?,?)
+          started_by_display_name,started_actor_ref,started_at,created_at,updated_at)
+        values (?,0,?,0,'Europe/Moscow',current_date,'ACTIVE',?,?,?,0,?,?,'Inventory operator',?::jsonb,?,?,?)
         """,
         inventoryId,
         warehouseId,
@@ -599,5 +710,7 @@ class InventoryReadProjectionIntegrationTest {
       UUID expectedFindingId,
       UUID expectedAssetId,
       UUID readyFindingId,
-      UUID untouchedFindingId) {}
+      UUID readyAssetId,
+      UUID untouchedFindingId,
+      UUID untouchedAssetId) {}
 }

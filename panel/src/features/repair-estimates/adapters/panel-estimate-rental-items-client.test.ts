@@ -66,6 +66,8 @@ function returnDocument(
     driverSnapshot: null,
     clientId: null,
     equipmentMovementTaskId: null,
+    scheduledDate: null,
+    rentalOrderId: null,
     lines: [
       {
         id: "7d244fd4-4e41-4a7e-8f57-7ccfbff7b0f3",

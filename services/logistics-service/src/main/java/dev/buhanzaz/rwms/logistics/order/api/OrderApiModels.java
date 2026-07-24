@@ -40,10 +40,14 @@ public final class OrderApiModels {
   public record AddOrderUnitRequest(
       @NotNull @Min(0) Long expectedVersion, @NotNull UUID unitId) {}
 
-  public record AdjustOrderEquipmentRequest(
+  public record OrderDesiredEquipmentInput(
+      @NotNull UUID equipmentId, @NotNull @Min(1) Long quantity) {}
+
+  public record SetOrderUnitDesiredEquipmentRequest(
       @NotNull @Min(0) Long expectedVersion,
-      @NotNull @Min(0) Long expectedCurrentQuantity,
-      @NotNull @Min(0) Long requiredQuantity) {}
+      @NotNull
+          @Size(max = 100)
+          List<@NotNull @Valid OrderDesiredEquipmentInput> requirements) {}
 
   public record ClientResponse(
       UUID id,
@@ -91,6 +95,9 @@ public final class OrderApiModels {
       long quantity,
       String locationKind) {}
 
+  public record OrderDesiredEquipmentResponse(
+      UUID equipmentId, String equipmentCode, String equipmentName, long quantity) {}
+
   public record OrderRentalItemResponse(
       UUID id,
       long version,
@@ -109,7 +116,10 @@ public final class OrderApiModels {
       OffsetDateTime updatedAt) {}
 
   public record OrderUnitResponse(
-      UUID reservationId, boolean added, OrderRentalItemResponse unit) {}
+      UUID reservationId,
+      boolean added,
+      OrderRentalItemResponse unit,
+      List<OrderDesiredEquipmentResponse> desiredContents) {}
 
   public record OrderUnitPageResponse(
       List<OrderUnitResponse> content,

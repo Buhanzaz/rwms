@@ -54,7 +54,7 @@ public class TransferProcessor {
             store.confirmTaskRegistration(
                 work.operationId(),
                 dependencies.registerPreparationTask(
-                    work.warehouseId(), work.externalTaskId(), 0, null));
+                    work.warehouseId(), work.externalTaskId(), 0, work.deadlineAt()));
         case TASK_CANCEL ->
             store.confirmTaskCancellation(
                 work.operationId(),

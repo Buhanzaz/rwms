@@ -1,8 +1,16 @@
 import {
   SHIPMENT_DOCUMENT_STATES,
+  SHIPMENT_FURNITURE_READINESS_STATES,
+  SHIPMENT_FURNITURE_TASK_STATES,
   SHIPMENT_LINE_STATES,
   type ShipmentDocument,
   type ShipmentDocumentState,
+  type ShipmentFurnitureReadiness,
+  type ShipmentFurnitureReadinessState,
+  type ShipmentFurnitureTask,
+  type ShipmentFurnitureTaskResult,
+  type ShipmentFurnitureTaskState,
+  type ShipmentFurnitureTaskStatus,
   type ShipmentLine,
   type ShipmentLineState,
 } from "@/features/logistics/shipments/model"
@@ -18,7 +26,8 @@ import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 type JsonObject = Record<string, unknown>
 
 const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const LOCAL_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
 function invalidResponse(): never {
   throw new Error("Сервис логистики вернул некорректную отгрузку.")
@@ -72,8 +81,16 @@ function timestamp(value: unknown): string {
   return candidate
 }
 
-function nullableTimestamp(value: unknown): string | null {
-  return value === null ? null : timestamp(value)
+function localDate(value: unknown): string {
+  const candidate = text(value)
+  if (!LOCAL_DATE_PATTERN.test(candidate)) invalidResponse()
+  const date = new Date(`${candidate}T00:00:00.000Z`)
+  if (date.toISOString().slice(0, 10) !== candidate) invalidResponse()
+  return candidate
+}
+
+function nullableLocalDate(value: unknown): string | null {
+  return value === null ? null : localDate(value)
 }
 
 function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T {
@@ -98,6 +115,62 @@ function shipmentLine(value: unknown): ShipmentLine {
   }
 }
 
+function shipmentFurnitureTask(value: unknown): ShipmentFurnitureTask {
+  const source = object(value)
+  return {
+    rentalItemId: uuid(source.rentalItemId),
+    unitNumber: nonBlankText(source.unitNumber),
+    taskId: nullableUuid(source.taskId),
+    lineCount: integer(source.lineCount),
+  }
+}
+
+function parseShipmentFurnitureTaskResult(
+  value: unknown
+): ShipmentFurnitureTaskResult {
+  const source = object(value)
+  return {
+    shipmentId: uuid(source.shipmentId),
+    shipmentVersion: integer(source.shipmentVersion),
+    tasks: list(source.tasks).map(shipmentFurnitureTask),
+  }
+}
+
+function shipmentFurnitureTaskStatus(
+  value: unknown
+): ShipmentFurnitureTaskStatus {
+  const source = object(value)
+  const lineCount = integer(source.lineCount)
+  if (lineCount < 1) invalidResponse()
+  return {
+    rentalItemId: uuid(source.rentalItemId),
+    unitNumber: nonBlankText(source.unitNumber),
+    taskId: uuid(source.taskId),
+    externalTaskId: uuid(source.externalTaskId),
+    taskBoardTaskId: nullableUuid(source.taskBoardTaskId),
+    taskState: oneOf<ShipmentFurnitureTaskState>(
+      source.taskState,
+      SHIPMENT_FURNITURE_TASK_STATES
+    ),
+    lineCount,
+  }
+}
+
+function parseShipmentFurnitureReadiness(
+  value: unknown
+): ShipmentFurnitureReadiness {
+  const source = object(value)
+  return {
+    shipmentId: uuid(source.shipmentId),
+    shipmentVersion: integer(source.shipmentVersion),
+    state: oneOf<ShipmentFurnitureReadinessState>(
+      source.state,
+      SHIPMENT_FURNITURE_READINESS_STATES
+    ),
+    tasks: list(source.tasks).map(shipmentFurnitureTaskStatus),
+  }
+}
+
 export function parseShipmentDocument(value: unknown): ShipmentDocument {
   const source = object(value)
   const lines = list(source.lines).map(shipmentLine)
@@ -119,7 +192,7 @@ export function parseShipmentDocument(value: unknown): ShipmentDocument {
         : nonBlankText(source.driverSnapshot),
     clientId: nullableUuid(source.clientId),
     equipmentMovementTaskId: nullableUuid(source.equipmentMovementTaskId),
-    scheduledAt: nullableTimestamp(source.scheduledAt),
+    scheduledDate: nullableLocalDate(source.scheduledDate),
     rentalOrderId: nullableUuid(source.rentalOrderId),
     lines,
     createdAt: timestamp(source.createdAt),
@@ -161,6 +234,17 @@ export class HttpShipmentClient implements ShipmentClient {
     )
   }
 
+  async getFurnitureReadiness(accessToken: string, documentId: string) {
+    return parseShipmentFurnitureReadiness(
+      await bearerRequest<unknown>(
+        accessToken,
+        shipmentsEndpoint(
+          `/${encodeURIComponent(documentId)}/furniture-readiness`
+        )
+      )
+    )
+  }
+
   create(input: ShipmentCreateCommand) {
     return parsedRequest(input.accessToken, shipmentsEndpoint(), {
       method: "POST",
@@ -187,9 +271,24 @@ export class HttpShipmentClient implements ShipmentClient {
         headers: commandHeaders(input.idempotencyKey),
         body: JSON.stringify({
           driverSnapshot: input.driverSnapshot,
-          scheduledAt: input.scheduledAt,
+          scheduledDate: input.scheduledDate,
         }),
       }
+    )
+  }
+
+  async createFurnitureTasks(input: ShipmentVersionedCommand) {
+    return parseShipmentFurnitureTaskResult(
+      await bearerRequest<unknown>(
+        input.accessToken,
+        shipmentsEndpoint(
+          `/${encodeURIComponent(input.documentId)}/furniture-tasks?expectedVersion=${input.expectedVersion}`
+        ),
+        {
+          method: "POST",
+          headers: commandHeaders(input.idempotencyKey),
+        }
+      )
     )
   }
 

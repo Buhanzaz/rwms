@@ -6,16 +6,19 @@ import static org.mockito.Mockito.doAnswer;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateRentalItemRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryCaptureRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryNumberResolutionRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.InventoryValidationRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.TransferEquipmentRequest;
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
 import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
+import dev.buhanzaz.rwms.asset.domain.OrderUnitReservation;
 import dev.buhanzaz.rwms.asset.domain.RentalItem;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.eventing.AssetEventStore;
 import dev.buhanzaz.rwms.asset.repository.EquipmentCatalogItemRepository;
+import dev.buhanzaz.rwms.asset.repository.OrderUnitReservationRepository;
 import dev.buhanzaz.rwms.asset.repository.RentalItemRepository;
 import dev.buhanzaz.rwms.asset.service.AssetService;
 import dev.buhanzaz.rwms.asset.service.AssetConflictException;
@@ -60,6 +63,7 @@ class InventoryAssetCaptureSnapshotIntegrationTest {
 
   @MockitoSpyBean RentalItemRepository rentalItems;
   @Autowired EquipmentCatalogItemRepository equipment;
+  @Autowired OrderUnitReservationRepository orderReservations;
   @Autowired AssetService service;
   @Autowired InventoryAssetService inventory;
   @Autowired AssetEventStore events;
@@ -80,6 +84,67 @@ class InventoryAssetCaptureSnapshotIntegrationTest {
   @AfterAll
   static void stopDatabase() {
     POSTGRES.stop();
+  }
+
+  @Test
+  void exposesTenantAndCurrentIdentityForInventoryReconciliation() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID otherWarehouseId = UUID.randomUUID();
+    var rental =
+        service
+            .createRentalItem(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                new CreateRentalItemRequest(
+                    warehouseId,
+                    "TENANT-" + UUID.randomUUID(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    Map.of(),
+                    List.of()))
+            .response();
+    orderReservations.saveAndFlush(
+        OrderUnitReservation.create(
+            UUID.randomUUID(),
+            rental.id(),
+            warehouseId,
+            UUID.randomUUID(),
+            "Арендатор А",
+            UUID.randomUUID(),
+            "WMS_ADMIN"));
+
+    var capture =
+        inventory.createCapture(
+            new InventoryCaptureRequest(UUID.randomUUID(), 1L, "c".repeat(64), warehouseId));
+    assertThat(inventory.capturePage(capture.captureId(), null, 10).content())
+        .singleElement()
+        .satisfies(
+            member ->
+                assertThat(member.passportSnapshot())
+                    .containsEntry("tenant", "Арендатор А"));
+
+    assertThat(
+            inventory
+                .validateAssets(new InventoryValidationRequest(List.of(rental.id())))
+                .assets())
+        .singleElement()
+        .satisfies(
+            current -> {
+              assertThat(current.displayCanonicalNumber()).isEqualTo(rental.number());
+              assertThat(current.identityMatchKey()).isNotBlank();
+              assertThat(current.tenantSnapshot()).isEqualTo("Арендатор А");
+            });
+
+    var crossWarehouse =
+        inventory.resolveNumber(
+            new InventoryNumberResolutionRequest(otherWarehouseId, rental.number()));
+    assertThat(crossWarehouse.found()).isTrue();
+    assertThat(crossWarehouse.asset().warehouseId()).isEqualTo(warehouseId);
+    assertThat(crossWarehouse.asset().tenantSnapshot()).isEqualTo("Арендатор А");
   }
 
   @Test

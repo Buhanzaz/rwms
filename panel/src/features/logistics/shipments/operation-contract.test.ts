@@ -14,6 +14,8 @@ describe("shipment UI contract mapping", () => {
       getShipment: "getShipment",
       createShipment: "createShipment",
       replacePlan: "replaceShipmentPlan",
+      getFurnitureReadiness: "getShipmentFurnitureReadiness",
+      createFurnitureTasks: "createShipmentFurnitureTasks",
       confirmPreparation: "confirmShipmentPreparation",
       cancelShipment: "cancelShipment",
     })
@@ -43,6 +45,9 @@ describe("shipment UI contract mapping", () => {
         driverSnapshot: "Иванов",
         clientId: null,
         equipmentMovementTaskId: null,
+        scheduledDate: null,
+        scheduledAt: null,
+        rentalOrderId: null,
         lines: [
           {
             id: "33333333-3333-4333-8333-333333333333",

@@ -94,6 +94,7 @@ class InventoryContractSchemaTest {
               "expectedSessionRevision":2,
               "expectedFindingRevision":3,
               "inspection":"READY",
+              "comment":"Осмотр завершён",
               "passportObservation":{"presence":"EXPLICIT_EMPTY","value":{}},
               "equipmentObservation":{"presence":"ABSENT","value":null},
               "media":[],
@@ -166,6 +167,7 @@ class InventoryContractSchemaTest {
             {"id":"00000000-0000-0000-0000-000000000721","sessionRevision":0,
              "warehouseId":"00000000-0000-0000-0000-000000000722","warehouseVersion":1,
              "warehouseTimeZone":"Europe/Moscow","businessDate":"2026-07-17",
+             "author":{"id":"00000000-0000-0000-0000-000000000723","displayName":"Inventory operator"},
              "lifecycle":"ACTIVE","expectedCount":0,"findingCount":0,"inspectedCount":0,
              "startedAt":"2026-07-17T12:00:00Z","terminalAt":null,
              "publicationState":"NOT_REQUESTED","statistics":null,"cancellation":null}
@@ -191,25 +193,38 @@ class InventoryContractSchemaTest {
               "equipmentObservation":{"presence":"ABSENT","value":null},
               "mutationState":"IDLE",
               "planFingerprintSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "comment":"Требуется ремонт",
               "expectedSnapshot":{
                 "assetId":"00000000-0000-0000-0000-000000000733","assetVersion":7,
-                "status":"WAREHOUSE","displayCanonicalNumber":"AA-01",
+                "warehouseId":"00000000-0000-0000-0000-000000000732",
+                "status":"WAREHOUSE","displayCanonicalNumber":"AA-01","tenantSnapshot":null,
                 "passportSnapshot":{"serial":"SAFE"},"contentsSnapshot":[{"name":"safe"}]
               },
+              "currentSnapshot":{
+                "assetId":"00000000-0000-0000-0000-000000000733","assetVersion":7,
+                "warehouseId":"00000000-0000-0000-0000-000000000732",
+                "status":"WAREHOUSE","displayCanonicalNumber":"AA-01","tenantSnapshot":null
+              },
+              "conflicts":[],
               "frozenPlan":{
                 "mode":"MANUAL","catalogVersionId":"00000000-0000-0000-0000-000000000734",
                 "fingerprintSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "lines":[{
+                  "id":"00000000-0000-0000-0000-000000000736",
                   "sourceKind":"MANUAL","lineType":"WORK","catalogVersionId":null,
                   "catalogNodeId":null,"description":"Work","normalizedDescription":"work",
                   "unit":"HOUR","quantity":"1.25","unitPriceMinor":1234,
-                  "normativeMinutes":"2.5"
+                  "normativeMinutes":"2.5","groupComment":null
                 }],
                 "stages":[{
+                  "id":"00000000-0000-0000-0000-000000000737",
                   "order":0,"kind":"REPAIR_WORK",
+                  "catalogNodeId":"00000000-0000-0000-0000-000000000738",
+                  "catalogNodeCode":"REPAIR_WORK",
                   "routingQueueId":"00000000-0000-0000-0000-000000000735",
                   "routingQueueCode":"REPAIR","routingQueueKind":"MAINTENANCE",
-                  "movementRequired":false,"photoRequired":true
+                  "movementRequired":false,"photoRequired":true,
+                  "normativeDurationMinutes":150
                 }]
               },
               "media":[],"publication":null

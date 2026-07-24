@@ -7,6 +7,7 @@ import jakarta.persistence.EntityManagerFactory;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.flywaydb.core.Flyway;
@@ -45,8 +46,10 @@ class LogisticsFlywayMigrationIntegrationTest {
   @Test
   void cleanInstallIsRepeatSafeAndCreatesOnlyLogisticsOwnedState() {
     Flyway flyway = flyway(MIGRATIONS);
+    int pendingMigrations = flyway.info().pending().length;
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(12);
+    assertThat(pendingMigrations).isPositive();
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(pendingMigrations);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -117,8 +120,113 @@ class LogisticsFlywayMigrationIntegrationTest {
             jdbc.queryForObject(
                 "select envelope_body from inbox_message where event_id=?", String.class, eventId))
         .isNull();
-    assertThat(flyway(MIGRATIONS).migrate().migrationsExecuted).isEqualTo(6);
-    flyway(MIGRATIONS).validate();
+    Flyway latest = flyway(MIGRATIONS);
+    int pendingMigrations = latest.info().pending().length;
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(pendingMigrations);
+    latest.validate();
+  }
+
+  @Test
+  void v13AndV17UpgradeConvertsEveryLogisticsScheduleToCalendarDate() {
+    Flyway beforeV13 = configuration(MIGRATIONS).target("12").load();
+    assertThat(beforeV13.migrate().migrationsExecuted).isEqualTo(12);
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID destinationWarehouseId = UUID.randomUUID();
+    UUID subjectId = UUID.randomUUID();
+    UUID returnId = UUID.randomUUID();
+    UUID shipmentId = UUID.randomUUID();
+    OffsetDateTime returnTime = OffsetDateTime.parse("2026-07-22T08:00:00Z");
+    OffsetDateTime shipmentTime = OffsetDateTime.parse("2026-07-23T17:30:00Z");
+    jdbc.update(
+        """
+        insert into logistics_document(
+          id,version,document_type,state,warehouse_id,party_snapshot,driver_snapshot,
+          requested_by_subject_id,correlation_id,scheduled_at,created_at,updated_at)
+        values (?,0,'RETURN','DRAFT',?,null,?,?,?, ?,clock_timestamp(),clock_timestamp())
+        """,
+        returnId,
+        warehouseId,
+        "Return driver",
+        subjectId,
+        UUID.randomUUID(),
+        returnTime);
+    jdbc.update(
+        """
+        insert into logistics_document(
+          id,version,document_type,state,warehouse_id,party_snapshot,driver_snapshot,
+          requested_by_subject_id,correlation_id,scheduled_at,created_at,updated_at)
+        values (?,0,'SHIPMENT','DRAFT',?,?,?, ?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        shipmentId,
+        warehouseId,
+        "Shipment party",
+        "Shipment driver",
+        subjectId,
+        UUID.randomUUID(),
+        shipmentTime);
+
+    assertThat(configuration(MIGRATIONS).target("13").load().migrate().migrationsExecuted).isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select scheduled_date::text from logistics_document where id=?",
+                String.class,
+                returnId))
+        .isEqualTo("2026-07-22");
+    assertThat(
+            jdbc.queryForObject(
+                "select scheduled_date::text from logistics_document where id=?",
+                String.class,
+                shipmentId))
+        .isEqualTo("2026-07-23");
+    assertThat(
+            jdbc.queryForObject(
+                "select scheduled_at from logistics_document where id=?",
+                OffsetDateTime.class,
+                returnId))
+        .isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select scheduled_at from logistics_document where id=?",
+                OffsetDateTime.class,
+                shipmentId))
+        .isNull();
+
+    UUID transferId = UUID.randomUUID();
+    OffsetDateTime transferTaskTime = OffsetDateTime.parse("2026-07-24T09:45:00Z");
+    jdbc.update(
+        """
+        insert into logistics_document(
+          id,version,document_type,state,warehouse_id,destination_warehouse_id,
+          requested_by_subject_id,correlation_id,scheduled_at,created_at,updated_at)
+        values (?,0,'TRANSFER','DRAFT',?,?,?,?,?,clock_timestamp(),clock_timestamp())
+        """,
+        transferId,
+        warehouseId,
+        destinationWarehouseId,
+        subjectId,
+        UUID.randomUUID(),
+        transferTaskTime);
+    assertThat(
+            jdbc.queryForObject(
+                "select scheduled_at from logistics_document where id=?",
+                OffsetDateTime.class,
+                transferId))
+        .isEqualTo(transferTaskTime);
+
+    assertThat(configuration(MIGRATIONS).target("17").load().migrate().migrationsExecuted).isPositive();
+    assertThat(
+            jdbc.queryForObject(
+                "select scheduled_date::text from logistics_document where id=?",
+                String.class,
+                transferId))
+        .isEqualTo("2026-07-24");
+    assertThat(
+            jdbc.queryForObject(
+                "select scheduled_at from logistics_document where id=?",
+                OffsetDateTime.class,
+                transferId))
+        .isNull();
   }
 
   @Test

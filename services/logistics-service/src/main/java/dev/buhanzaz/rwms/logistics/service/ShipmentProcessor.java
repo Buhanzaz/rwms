@@ -71,9 +71,11 @@ public class ShipmentProcessor {
             store.confirmTaskRegistration(
                 work.operationId(),
                 dependencies.registerPreparationTask(work.warehouseId(), work.externalTaskId(), 0, null));
-        case TASK_STATUS ->
-            store.confirmTaskStatus(
-                work.operationId(), dependencies.readPreparationTask(work.externalTaskId()));
+        case TASK_COMPLETE ->
+            store.confirmTaskCompletion(
+                work.operationId(),
+                dependencies.completePreparationTask(
+                    work.externalTaskId(), work.expectedTaskVersion()));
         case HOLD_COMMAND ->
             confirmHoldCommand(work);
         case EFFECT ->

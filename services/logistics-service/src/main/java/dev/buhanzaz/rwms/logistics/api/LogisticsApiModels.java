@@ -3,12 +3,13 @@ package dev.buhanzaz.rwms.logistics.api;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsLineState;
+import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
-import jakarta.validation.constraints.Future;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -59,11 +60,42 @@ public final class LogisticsApiModels {
 
   public record ShipmentPlanRequest(
       @NotBlank @Size(max = 512) String driverSnapshot,
-      @NotNull OffsetDateTime scheduledAt) {}
+      @NotNull LocalDate scheduledDate) {}
+
+  public record ShipmentFurnitureTaskView(
+      UUID rentalItemId, String unitNumber, UUID taskId, int lineCount) {}
+
+  public record ShipmentFurnitureTaskResult(
+      UUID shipmentId,
+      long shipmentVersion,
+      List<ShipmentFurnitureTaskView> tasks) {}
+
+  public enum ShipmentFurnitureReadinessState {
+    NOT_REQUIRED,
+    READY,
+    REQUIRES_TASK_CREATION,
+    AWAITING_TASK_COMPLETION,
+    BLOCKED
+  }
+
+  public record ShipmentFurnitureTaskStatusView(
+      UUID rentalItemId,
+      String unitNumber,
+      UUID taskId,
+      UUID externalTaskId,
+      UUID taskBoardTaskId,
+      EquipmentMovementTaskState taskState,
+      int lineCount) {}
+
+  public record ShipmentFurnitureReadinessView(
+      UUID shipmentId,
+      long shipmentVersion,
+      ShipmentFurnitureReadinessState state,
+      List<ShipmentFurnitureTaskStatusView> tasks) {}
 
   public record ReturnPickupRequest(
       @NotBlank @Size(max = 512) String driverSnapshot,
-      @NotNull OffsetDateTime scheduledAt) {}
+      @NotNull LocalDate scheduledDate) {}
 
   public record EquipmentAllocationRequest(
       @NotNull UUID equipmentId, @Min(1) long quantity, @Min(0) long expectedStockVersion) {}
@@ -77,30 +109,50 @@ public final class LogisticsApiModels {
     }
   }
 
+  /** One desired furniture total. Omitting a current item removes it from the selected cabin. */
+  public record CabinFurnitureRequirement(
+      @NotNull UUID equipmentId, @NotNull @Min(1) Long quantity) {}
+
+  public record CreateCabinFurnitureTaskRequest(
+      @NotNull UUID warehouseId,
+      @NotNull LocalDate scheduledDate,
+      @NotNull
+          @Size(max = 100)
+          List<@NotNull @Valid CabinFurnitureRequirement> contents) {
+    public CreateCabinFurnitureTaskRequest {
+      contents = contents == null ? List.of() : contents;
+    }
+  }
+
+  public record CabinFurnitureTaskResult(
+      UUID rentalItemId, String unitNumber, UUID taskId, int lineCount) {}
+
   public record CreateTransferRequest(
       @NotNull UUID warehouseId,
       @NotNull UUID destinationWarehouseId,
       @Size(max = 512) String driverSnapshot,
-      @Future OffsetDateTime equipmentDeadlineAt,
+      @NotNull LocalDate scheduledDate,
       @NotNull @Size(min = 1, max = 100) List<@Valid TransferLineRequest> lines,
-      @NotNull @Size(max = 100) List<@Valid TransferEquipmentLineRequest> equipment) {
+      @NotNull
+          @Size(max = 100)
+          List<@NotNull @Valid TransferFurnitureReplacementRequest> furnitureReplacements) {
     public CreateTransferRequest {
-      equipment = equipment == null ? List.of() : equipment;
-    }
-
-    public CreateTransferRequest(
-        UUID warehouseId, UUID destinationWarehouseId, List<TransferLineRequest> lines) {
-      this(warehouseId, destinationWarehouseId, null, null, lines, List.of());
+      furnitureReplacements = furnitureReplacements == null ? List.of() : furnitureReplacements;
     }
   }
 
   public record TransferLineRequest(@NotNull UUID assetId, @Min(0) long assetVersion) {}
 
-  /** Furniture is picked from the origin warehouse's available STOCK balance. */
-  public record TransferEquipmentLineRequest(
-      @NotNull UUID equipmentId,
-      @NotNull @Min(0) Long expectedSourceBalanceVersion,
-      @NotNull @Min(1) Long quantity) {}
+  /** The selected complete furniture composition for one cabin in this transfer. */
+  public record TransferFurnitureReplacementRequest(
+      @NotNull UUID assetId,
+      @NotNull
+          @Size(max = 100)
+          List<@NotNull @Valid CabinFurnitureRequirement> contents) {
+    public TransferFurnitureReplacementRequest {
+      contents = contents == null ? List.of() : contents;
+    }
+  }
 
   public record ArriveTransferLineRequest(
       @NotNull @Size(min = 1, max = 20) List<@Valid MediaReferenceInput> references) {}
@@ -149,6 +201,7 @@ public final class LogisticsApiModels {
       String driverSnapshot,
       UUID clientId,
       UUID equipmentMovementTaskId,
+      LocalDate scheduledDate,
       OffsetDateTime scheduledAt,
       UUID rentalOrderId,
       OffsetDateTime createdAt,
@@ -175,6 +228,7 @@ public final class LogisticsApiModels {
       String driverSnapshot,
       UUID clientId,
       UUID equipmentMovementTaskId,
+      LocalDate scheduledDate,
       OffsetDateTime scheduledAt,
       UUID rentalOrderId,
       List<LogisticsLineView> lines,

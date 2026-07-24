@@ -64,6 +64,9 @@ public class InventorySession {
   @Column(name = "started_by_subject_id", nullable = false)
   private UUID startedBySubjectId;
 
+  @Column(name = "started_by_display_name", nullable = false, length = 255)
+  private String startedByDisplayName;
+
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(name = "started_actor_ref", nullable = false, columnDefinition = "jsonb")
   private String startedActorRef;
@@ -116,6 +119,7 @@ public class InventorySession {
       int expectedPopulationCount,
       String expectedPopulationSha256,
       UUID subjectId,
+      String displayName,
       String actorRef) {
     if (warehouseId == null
         || warehouseVersion < 0
@@ -140,8 +144,36 @@ public class InventorySession {
     value.expectedPopulationCount = expectedPopulationCount;
     value.expectedPopulationSha256 = requireSha256(expectedPopulationSha256);
     value.startedBySubjectId = subjectId;
+    value.startedByDisplayName = required(displayName, 255, "started by display name");
     value.startedActorRef = requireActor(actorRef);
     return value;
+  }
+
+  public static InventorySession start(
+      UUID warehouseId,
+      long warehouseVersion,
+      String warehouseTimeZone,
+      LocalDate businessDate,
+      UUID operationId,
+      UUID idempotencyKey,
+      String requestSha256,
+      int expectedPopulationCount,
+      String expectedPopulationSha256,
+      UUID subjectId,
+      String actorRef) {
+    return start(
+        warehouseId,
+        warehouseVersion,
+        warehouseTimeZone,
+        businessDate,
+        operationId,
+        idempotencyKey,
+        requestSha256,
+        expectedPopulationCount,
+        expectedPopulationSha256,
+        subjectId,
+        subjectId.toString(),
+        actorRef);
   }
 
   public void complete(
@@ -206,6 +238,17 @@ public class InventorySession {
     return value;
   }
 
+  private static String required(String value, int maximum, String field) {
+    if (value == null || value.isBlank()) {
+      throw new IllegalArgumentException(field + " is required");
+    }
+    String normalized = value.trim();
+    if (normalized.length() > maximum) {
+      throw new IllegalArgumentException(field + " is too long");
+    }
+    return normalized;
+  }
+
   private static OffsetDateTime requireTime(OffsetDateTime value) {
     if (value == null) throw new IllegalArgumentException("Validation time is required");
     return value;
@@ -245,6 +288,14 @@ public class InventorySession {
 
   public int getExpectedPopulationCount() {
     return expectedPopulationCount;
+  }
+
+  public UUID getStartedBySubjectId() {
+    return startedBySubjectId;
+  }
+
+  public String getStartedByDisplayName() {
+    return startedByDisplayName;
   }
 
   public OffsetDateTime getStartedAt() {

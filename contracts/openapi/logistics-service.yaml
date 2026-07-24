@@ -165,6 +165,48 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/logistics/v1/shipments/{documentId}/furniture-readiness:
+    parameters:
+      - $ref: "#/components/parameters/DocumentId"
+    get:
+      operationId: getShipmentFurnitureReadiness
+      description: >-
+        Reports whether an order shipment can start or finish departure. Readiness is based on the
+        current asset-side furniture delta and the durable worker task state.
+      responses:
+        "200":
+          description: Current furniture readiness for the shipment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ShipmentFurnitureReadiness" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/shipments/{documentId}/furniture-tasks:
+    parameters:
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/ExpectedVersion"
+      - $ref: "#/components/parameters/IdempotencyKey"
+    post:
+      operationId: createShipmentFurnitureTasks
+      description: >-
+        For a saved order shipment, compares each order cabin's desired catalogue furniture with
+        its current asset contents and creates worker tasks only for the difference. No browser
+        movement orchestration or user-entered reservation deadline is involved.
+      responses:
+        "202":
+          description: Furniture movement tasks created or existing idempotent task links returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ShipmentFurnitureTaskResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/shipments/{documentId}/confirm-preparation:
     parameters:
       - $ref: "#/components/parameters/DocumentId"
@@ -218,6 +260,38 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
+  /api/logistics/v1/rental-items/{rentalItemId}/furniture-tasks:
+    parameters:
+      - { name: rentalItemId, in: path, required: true, schema: { type: string, format: uuid } }
+      - $ref: "#/components/parameters/IdempotencyKey"
+    post:
+      operationId: createCabinFurnitureTask
+      description: >-
+        Replaces the selected cabin's complete furniture composition with the requested total.
+        Logistics derives source balances from the asset-owned additional-equipment ledger and
+        creates a worker task only for the physical difference.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCabinFurnitureTaskRequest" }
+      responses:
+        "200":
+          description: The cabin already matches the requested composition; no task was necessary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CabinFurnitureTaskResult" }
+        "202":
+          description: A server-side furniture movement task was created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CabinFurnitureTaskResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/transfers/{documentId}:
     parameters:
       - $ref: "#/components/parameters/DocumentId"
@@ -643,23 +717,22 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
-  /api/logistics/v1/orders/{orderId}/units/{unitId}/equipment/{equipmentId}:
+  /api/logistics/v1/orders/{orderId}/units/{unitId}/desired-equipment:
     parameters:
       - $ref: "#/components/parameters/OrderId"
       - $ref: "#/components/parameters/UnitId"
-      - $ref: "#/components/parameters/EquipmentId"
     put:
-      operationId: adjustOrderUnitEquipment
+      operationId: setOrderUnitDesiredEquipment
       description: >-
-        Sets required quantity using only the stock-to-selected-unit or
-        selected-unit-to-stock asset operation. Arbitrary unit-to-unit movement is impossible.
+        Replaces the desired catalogue furniture for one draft order cabin. This creates an
+        order-wide reservation, not an immediate physical movement or a time-limited cabin hold.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/AdjustOrderEquipmentRequest" }
+            schema: { $ref: "#/components/schemas/SetOrderUnitDesiredEquipmentRequest" }
       responses:
         "200": { $ref: "#/components/responses/OrderDetail" }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -782,6 +855,7 @@ components:
           driverSnapshot,
           clientId,
           equipmentMovementTaskId,
+          scheduledDate,
           scheduledAt,
           rentalOrderId,
           lines,
@@ -844,11 +918,17 @@ components:
             format: uuid,
             description: Server-created task that moves transfer furniture between warehouses.,
           }
+        scheduledDate:
+          {
+            type: [string, "null"],
+            format: date,
+            description: Assigned shipment, return pickup, or transfer task date; absent while waiting for scheduling.,
+          }
         scheduledAt:
           {
             type: [string, "null"],
             format: date-time,
-            description: Assigned shipment or return pickup date; absent while waiting for scheduling.,
+            description: Deprecated compatibility field. It is always null; logistics schedules by calendar date only.,
           }
         rentalOrderId:
           {
@@ -1101,10 +1181,10 @@ components:
     ReturnPickupRequest:
       type: object
       additionalProperties: false
-      required: [driverSnapshot, scheduledAt]
+      required: [driverSnapshot, scheduledDate]
       properties:
         driverSnapshot: { type: string, minLength: 1, maxLength: 512 }
-        scheduledAt: { type: string, format: date-time }
+        scheduledDate: { type: string, format: date }
     ReturnLineRequest:
       type: object
       additionalProperties: false
@@ -1210,10 +1290,55 @@ components:
     ShipmentPlanRequest:
       type: object
       additionalProperties: false
-      required: [driverSnapshot, scheduledAt]
+      required: [driverSnapshot, scheduledDate]
       properties:
         driverSnapshot: { type: string, minLength: 1, maxLength: 512 }
-        scheduledAt: { type: string, format: date-time }
+        scheduledDate: { type: string, format: date }
+    ShipmentFurnitureTaskView:
+      type: object
+      additionalProperties: false
+      required: [rentalItemId, unitNumber, taskId, lineCount]
+      properties:
+        rentalItemId: { type: string, format: uuid }
+        unitNumber: { type: string, minLength: 1, maxLength: 64 }
+        taskId: { type: [string, "null"], format: uuid, description: Null when the actual furniture already matches the order. }
+        lineCount: { type: integer, minimum: 0 }
+    ShipmentFurnitureTaskResult:
+      type: object
+      additionalProperties: false
+      required: [shipmentId, shipmentVersion, tasks]
+      properties:
+        shipmentId: { type: string, format: uuid }
+        shipmentVersion: { type: integer, format: int64, minimum: 0 }
+        tasks: { type: array, items: { $ref: "#/components/schemas/ShipmentFurnitureTaskView" } }
+    ShipmentFurnitureReadinessState:
+      type: string
+      enum:
+        [NOT_REQUIRED, READY, REQUIRES_TASK_CREATION, AWAITING_TASK_COMPLETION, BLOCKED]
+    ShipmentFurnitureTaskStatus:
+      type: object
+      additionalProperties: false
+      required:
+        [rentalItemId, unitNumber, taskId, externalTaskId, taskBoardTaskId, taskState, lineCount]
+      properties:
+        rentalItemId: { type: string, format: uuid }
+        unitNumber: { type: string, minLength: 1, maxLength: 64 }
+        taskId: { type: string, format: uuid }
+        externalTaskId: { type: string, format: uuid }
+        taskBoardTaskId: { type: [string, "null"], format: uuid }
+        taskState: { $ref: "#/components/schemas/EquipmentMovementTaskState" }
+        lineCount: { type: integer, minimum: 1 }
+    ShipmentFurnitureReadiness:
+      type: object
+      additionalProperties: false
+      required: [shipmentId, shipmentVersion, state, tasks]
+      properties:
+        shipmentId: { type: string, format: uuid }
+        shipmentVersion: { type: integer, format: int64, minimum: 0 }
+        state: { $ref: "#/components/schemas/ShipmentFurnitureReadinessState" }
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/ShipmentFurnitureTaskStatus" }
     ShipmentLineRequest:
       type: object
       additionalProperties: false
@@ -1241,24 +1366,25 @@ components:
           warehouseId,
           destinationWarehouseId,
           driverSnapshot,
-          equipmentDeadlineAt,
+          scheduledDate,
           lines,
-          equipment,
+          furnitureReplacements,
         ]
       properties:
         warehouseId: { type: string, format: uuid }
         destinationWarehouseId: { type: string, format: uuid }
         driverSnapshot: { type: [string, "null"], maxLength: 512 }
-        equipmentDeadlineAt: { type: [string, "null"], format: date-time }
+        scheduledDate: { type: string, format: date }
         lines:
           type: array
           minItems: 1
           maxItems: 100
           items: { $ref: "#/components/schemas/TransferLineRequest" }
-        equipment:
+        furnitureReplacements:
           type: array
           maxItems: 100
-          items: { $ref: "#/components/schemas/TransferEquipmentLineRequest" }
+          description: Desired total furniture composition for selected cabins. Omitting a cabin leaves it unchanged.
+          items: { $ref: "#/components/schemas/TransferFurnitureReplacementRequest" }
     TransferLineRequest:
       type: object
       additionalProperties: false
@@ -1266,15 +1392,45 @@ components:
       properties:
         assetId: { type: string, format: uuid }
         assetVersion: { type: integer, minimum: 0 }
-    TransferEquipmentLineRequest:
+    CabinFurnitureRequirement:
       type: object
       additionalProperties: false
-      required: [equipmentId, expectedSourceBalanceVersion, quantity]
+      required: [equipmentId, quantity]
       properties:
         equipmentId: { type: string, format: uuid }
-        expectedSourceBalanceVersion:
-          { type: integer, format: int64, minimum: 0 }
         quantity: { type: integer, format: int64, minimum: 1 }
+    TransferFurnitureReplacementRequest:
+      type: object
+      additionalProperties: false
+      required: [assetId, contents]
+      properties:
+        assetId: { type: string, format: uuid }
+        contents:
+          type: array
+          maxItems: 100
+          description: Complete selected furniture total. An empty list clears the cabin furniture.
+          items: { $ref: "#/components/schemas/CabinFurnitureRequirement" }
+    CreateCabinFurnitureTaskRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, scheduledDate, contents]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        scheduledDate: { type: string, format: date }
+        contents:
+          type: array
+          maxItems: 100
+          description: Complete selected furniture total. An empty list clears the cabin furniture.
+          items: { $ref: "#/components/schemas/CabinFurnitureRequirement" }
+    CabinFurnitureTaskResult:
+      type: object
+      additionalProperties: false
+      required: [rentalItemId, unitNumber, taskId, lineCount]
+      properties:
+        rentalItemId: { type: string, format: uuid }
+        unitNumber: { type: string, minLength: 1, maxLength: 64 }
+        taskId: { type: [string, "null"], format: uuid }
+        lineCount: { type: integer, minimum: 0 }
     ArriveTransferLineRequest:
       type: object
       additionalProperties: false
@@ -1340,14 +1496,23 @@ components:
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         unitId: { type: string, format: uuid }
-    AdjustOrderEquipmentRequest:
+    OrderDesiredEquipmentInput:
       type: object
       additionalProperties: false
-      required: [expectedVersion, expectedCurrentQuantity, requiredQuantity]
+      required: [equipmentId, quantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        quantity: { type: integer, format: int64, minimum: 1 }
+    SetOrderUnitDesiredEquipmentRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, requirements]
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
-        expectedCurrentQuantity: { type: integer, format: int64, minimum: 0 }
-        requiredQuantity: { type: integer, format: int64, minimum: 0 }
+        requirements:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/OrderDesiredEquipmentInput" }
     OrderClient:
       type: object
       additionalProperties: false
@@ -1428,6 +1593,15 @@ components:
         equipmentName: { type: [string, "null"] }
         quantity: { type: integer, format: int64, minimum: 0 }
         locationKind: { type: string }
+    OrderDesiredEquipment:
+      type: object
+      additionalProperties: false
+      required: [equipmentId, equipmentCode, equipmentName, quantity]
+      properties:
+        equipmentId: { type: string, format: uuid }
+        equipmentCode: { type: string, minLength: 1, maxLength: 128 }
+        equipmentName: { type: string, minLength: 1, maxLength: 512 }
+        quantity: { type: integer, format: int64, minimum: 1 }
     OrderRentalItem:
       type: object
       additionalProperties: false
@@ -1470,11 +1644,14 @@ components:
     OrderUnit:
       type: object
       additionalProperties: false
-      required: [reservationId, added, unit]
+      required: [reservationId, added, unit, desiredContents]
       properties:
         reservationId: { type: [string, "null"], format: uuid }
         added: { type: boolean }
         unit: { $ref: "#/components/schemas/OrderRentalItem" }
+        desiredContents:
+          type: array
+          items: { $ref: "#/components/schemas/OrderDesiredEquipment" }
     OrderUnitPage:
       type: object
       additionalProperties: false

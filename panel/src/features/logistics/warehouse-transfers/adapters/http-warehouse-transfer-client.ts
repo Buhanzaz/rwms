@@ -20,7 +20,7 @@ import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 type JsonObject = Record<string, unknown>
 
 const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const DOCUMENT_KEYS = [
   "id",
   "version",
@@ -32,6 +32,8 @@ const DOCUMENT_KEYS = [
   "driverSnapshot",
   "clientId",
   "equipmentMovementTaskId",
+  "scheduledDate",
+  "scheduledAt",
   "lines",
   "createdAt",
   "updatedAt",
@@ -101,6 +103,19 @@ function timestamp(value: unknown): string {
   return candidate
 }
 
+function calendarDate(value: unknown): string {
+  const candidate = text(value)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(candidate)) invalidResponse()
+  const date = new Date(`${candidate}T00:00:00Z`)
+  if (
+    !Number.isFinite(date.getTime()) ||
+    date.toISOString().slice(0, 10) !== candidate
+  ) {
+    invalidResponse()
+  }
+  return candidate
+}
+
 function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T {
   const candidate = text(value)
   if (!allowed.includes(candidate as T)) invalidResponse()
@@ -152,6 +167,13 @@ export function parseTransferDocument(value: unknown): TransferDocument {
     driverSnapshot: nullableText(source.driverSnapshot),
     clientId: null,
     equipmentMovementTaskId: nullableUuid(source.equipmentMovementTaskId),
+    scheduledDate: (() => {
+      return calendarDate(source.scheduledDate)
+    })(),
+    scheduledAt: (() => {
+      if (source.scheduledAt !== null) invalidResponse()
+      return null
+    })(),
     lines,
     createdAt: timestamp(source.createdAt),
     updatedAt: timestamp(source.updatedAt),
@@ -206,9 +228,9 @@ export class HttpWarehouseTransferClient implements WarehouseTransferClient {
         warehouseId: input.warehouseId,
         destinationWarehouseId: input.destinationWarehouseId,
         driverSnapshot: input.driverSnapshot,
-        equipmentDeadlineAt: input.equipmentDeadlineAt,
+        scheduledDate: input.scheduledDate,
         lines: input.lines,
-        equipment: input.equipment,
+        furnitureReplacements: input.furnitureReplacements,
       }),
     })
   }

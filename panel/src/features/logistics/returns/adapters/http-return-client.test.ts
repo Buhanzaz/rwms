@@ -24,7 +24,7 @@ const document: ReturnDocument = {
   driverSnapshot: "Иванов Иван",
   clientId: CLIENT_ID,
   equipmentMovementTaskId: null,
-  scheduledAt: "2026-07-22T08:00:00Z",
+  scheduledDate: "2026-07-22",
   rentalOrderId: RENTAL_ORDER_ID,
   lines: [
     {
@@ -136,7 +136,7 @@ describe("HttpReturnClient", () => {
       documentId: DOCUMENT_ID,
       expectedVersion: 4,
       driverSnapshot: "Иванов Иван",
-      scheduledAt: "2026-07-22T08:00:00Z",
+      scheduledDate: "2026-07-22",
       idempotencyKey: IDEMPOTENCY_KEY,
     })
 
@@ -152,7 +152,7 @@ describe("HttpReturnClient", () => {
     )
     expect(JSON.parse(init.body)).toEqual({
       driverSnapshot: "Иванов Иван",
-      scheduledAt: "2026-07-22T08:00:00Z",
+      scheduledDate: "2026-07-22",
     })
   })
 
@@ -270,7 +270,7 @@ describe("HttpReturnClient", () => {
         documentId: DOCUMENT_ID,
         expectedVersion: 4,
         driverSnapshot: "Иванов Иван",
-        scheduledAt: "2026-07-22T08:00:00Z",
+        scheduledDate: "2026-07-22",
         idempotencyKey: IDEMPOTENCY_KEY,
       })
     ).rejects.toMatchObject({ status: 409, message: "Версия устарела" })

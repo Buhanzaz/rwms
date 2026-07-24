@@ -3,7 +3,6 @@ package dev.buhanzaz.rwms.logistics;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
@@ -102,6 +101,8 @@ class OrderApiIntegrationTest {
       releaseReceipts = new ConcurrentHashMap<>();
   private final Map<UUID, List<LogisticsDependencyGateway.OrderUnitReservation>>
       releaseAllReceipts = new ConcurrentHashMap<>();
+  private final Map<UUID, LinkedHashMap<UUID, LogisticsDependencyGateway.OrderEquipmentReservation>>
+      equipmentReservations = new ConcurrentHashMap<>();
 
   @BeforeEach
   void resetState() {
@@ -118,6 +119,7 @@ class OrderApiIntegrationTest {
     activeUnitOwners.clear();
     releaseReceipts.clear();
     releaseAllReceipts.clear();
+    equipmentReservations.clear();
     reset(dependencies);
     when(dependencies.readWarehouseIdentity(any()))
         .thenAnswer(
@@ -135,15 +137,16 @@ class OrderApiIntegrationTest {
         .thenReturn(
             new LogisticsDependencyGateway.OrderUnitCandidatePage(
                 List.of(), 0, 50, 0, 0));
-    when(dependencies.reserveOrderUnit(any(), any(), any(), any(), any(), anyString()))
+    when(dependencies.reserveOrderUnit(
+            any(), any(), any(), any(), any(), anyString(), any(), anyString()))
         .thenAnswer(
             invocation ->
                 reserveRemotely(
                     invocation.getArgument(1),
                     invocation.getArgument(2),
                     invocation.getArgument(3),
-                    invocation.getArgument(4),
-                    invocation.getArgument(5)));
+                    invocation.getArgument(6),
+                    invocation.getArgument(7)));
     when(dependencies.releaseOrderUnit(any(), any(), any(), any(), anyString()))
         .thenAnswer(
             invocation ->
@@ -156,47 +159,14 @@ class OrderApiIntegrationTest {
             invocation ->
                 releaseAllRemotely(
                     invocation.getArgument(0), invocation.getArgument(1)));
-    when(
-            dependencies.adjustOrderEquipment(
-                any(), any(), any(), any(), any(), anyString(), anyLong(), anyLong()))
+    when(dependencies.replaceOrderEquipmentReservations(
+            any(), any(), any(), any(), anyString(), any()))
         .thenAnswer(
             invocation -> {
               UUID orderId = invocation.getArgument(1);
-              UUID unitId = invocation.getArgument(2);
-              UUID equipmentId = invocation.getArgument(3);
-              long previous = invocation.getArgument(6);
-              long required = invocation.getArgument(7);
-              LogisticsDependencyGateway.OrderUnitReservation current =
-                  reservations.get(orderId).get(unitId);
-              List<LogisticsDependencyGateway.OrderEquipmentContent> contents =
-                  required == 0
-                      ? List.of()
-                      : List.of(
-                          new LogisticsDependencyGateway.OrderEquipmentContent(
-                              equipmentId, "CHAIR", "Стул", required, "CABIN_NON_RENTED"));
-              LogisticsDependencyGateway.OrderRentalItem changedUnit =
-                  withContents(current.unit(), contents);
-              reservations
-                  .get(orderId)
-                  .put(unitId, withUnit(current, changedUnit));
-              return new LogisticsDependencyGateway.OrderEquipmentAdjustment(
-                  orderId,
-                  unitId,
-                  equipmentId,
-                  previous,
-                  required,
-                  required - previous,
-                  10,
-                  new LogisticsDependencyGateway.OrderEquipmentMovement(
-                      UUID.randomUUID(),
-                      0,
-                      equipmentId,
-                      UUID.randomUUID(),
-                      UUID.randomUUID(),
-                      Math.abs(required - previous),
-                      "TRANSFER",
-                      now()),
-                  changedUnit);
+              List<LogisticsDependencyGateway.OrderEquipmentRequirement> requirements =
+                  invocation.getArgument(5);
+              return replaceEquipmentReservationsRemotely(orderId, requirements);
             });
   }
 
@@ -341,6 +311,25 @@ class OrderApiIntegrationTest {
         .andExpect(status().isOk())
         .andExpect(header().string("Idempotency-Replayed", "true"))
         .andExpect(jsonPath("$.version").value(3));
+    jdbc.update(
+        """
+        update logistics_document_line
+        set tenant_snapshot=null
+        where document_id=(
+          select id from logistics_document
+          where rental_order_id=? and document_type='SHIPMENT'
+        )
+        """,
+        orderId);
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "3")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(header().string("ETag", "\"3\""))
+        .andExpect(jsonPath("$.version").value(3))
+        .andExpect(jsonPath("$.status").value("SAVED"));
 
     mvc.perform(
             get("/api/logistics/v1/shipments")
@@ -353,7 +342,10 @@ class OrderApiIntegrationTest {
         .andExpect(jsonPath("$[0].driverSnapshot").isEmpty())
         .andExpect(jsonPath("$[0].rentalOrderId").value(orderId.toString()))
         .andExpect(jsonPath("$[0].lines.length()").value(1))
-        .andExpect(jsonPath("$[0].lines[0].assetId").value(UNIT_1.toString()));
+        .andExpect(jsonPath("$[0].lines[0].assetId").value(UNIT_1.toString()))
+        .andExpect(
+            jsonPath("$[0].lines[0].tenantSnapshot")
+                .value("Клиент сохранённого заказа"));
 
     mvc.perform(
             get("/api/logistics/v1/orders")
@@ -424,7 +416,8 @@ class OrderApiIntegrationTest {
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isBadRequest());
     verify(dependencies, never())
-        .reserveOrderUnit(any(), any(), any(), any(), any(), anyString());
+        .reserveOrderUnit(
+            any(), any(), any(), any(), any(), anyString(), any(), anyString());
   }
 
   @Test
@@ -462,7 +455,6 @@ class OrderApiIntegrationTest {
   @Test
   void updateOrderChangesClientAuditsAndReplaysExactlyOnce() throws Exception {
     UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент до изменения");
-    UUID previousClientId = orderClientId(orderId);
     UUID nextClientId = createClient(MANAGER_1, "manager-one", "Клиент после изменения");
     UUID key = UUID.randomUUID();
     String body = updateOrderBody(0, nextClientId);
@@ -505,23 +497,23 @@ class OrderApiIntegrationTest {
     assertThat(
             jdbc.queryForObject(
                 """
-                select previous_values ->> 'clientId'
+                select previous_values ->> 'displayName'
                 from rental_order_audit_event
                 where order_id=? and event_type='CLIENT_SELECTED' and previous_values is not null
                 """,
                 String.class,
                 orderId))
-        .isEqualTo(previousClientId.toString());
+        .isEqualTo("Клиент до изменения");
     assertThat(
             jdbc.queryForObject(
                 """
-                select new_values ->> 'clientId'
+                select new_values ->> 'displayName'
                 from rental_order_audit_event
                 where order_id=? and event_type='CLIENT_SELECTED' and previous_values is not null
                 """,
                 String.class,
                 orderId))
-        .isEqualTo(nextClientId.toString());
+        .isEqualTo("Клиент после изменения");
     assertAuditCount(orderId, "ORDER_CHANGED", 1);
     assertThat(
             jdbc.queryForObject(
@@ -725,25 +717,28 @@ class OrderApiIntegrationTest {
         .andExpect(status().isConflict())
         .andExpect(jsonPath("$.code").value("ORDER_WAREHOUSE_LOCKED"));
 
-    MvcResult adjusted =
+    MvcResult desiredEquipment =
         mvc.perform(
                 put(
-                        "/api/logistics/v1/orders/{orderId}/units/{unitId}/equipment/{equipmentId}",
+                        "/api/logistics/v1/orders/{orderId}/units/{unitId}/desired-equipment",
                         orderId,
-                        UNIT_1,
-                        EQUIPMENT)
+                        UNIT_1)
                     .header("Idempotency-Key", UUID.randomUUID())
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(
                         """
-                        {"expectedVersion":2,"expectedCurrentQuantity":0,"requiredQuantity":2}
-                        """)
+                        {
+                          "expectedVersion": 2,
+                          "requirements": [{"equipmentId":"%s","quantity":2}]
+                        }
+                        """
+                            .formatted(EQUIPMENT))
                     .with(manager(MANAGER_1, "manager-one")))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.version").value(3))
-            .andExpect(jsonPath("$.units[0].unit.contents[0].quantity").value(2))
+            .andExpect(jsonPath("$.units[0].desiredContents[0].quantity").value(2))
             .andReturn();
-    assertThat(json(adjusted).get("version").longValue()).isEqualTo(3);
+    assertThat(json(desiredEquipment).get("version").longValue()).isEqualTo(3);
 
     mvc.perform(
             delete("/api/logistics/v1/orders/{orderId}/units/{unitId}", orderId, UNIT_1)
@@ -799,7 +794,8 @@ class OrderApiIntegrationTest {
         .andExpect(jsonPath("$.unitCount").value(1));
 
     verify(dependencies, times(1))
-        .reserveOrderUnit(any(), any(), any(), any(), any(), anyString());
+        .reserveOrderUnit(
+            any(), any(), any(), any(), any(), anyString(), any(), anyString());
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from rental_order_audit_event where order_id=? and event_type='UNIT_ADDED'",
@@ -831,13 +827,14 @@ class OrderApiIntegrationTest {
                       invocation.getArgument(1),
                       invocation.getArgument(2),
                       invocation.getArgument(3),
-                      invocation.getArgument(4),
-                      invocation.getArgument(5));
+                      invocation.getArgument(6),
+                      invocation.getArgument(7));
               if (failAfterEffect.getAndSet(false)) throw transientDependencyFailure();
               return reserved;
             })
         .when(dependencies)
-        .reserveOrderUnit(any(), any(), any(), any(), any(), anyString());
+        .reserveOrderUnit(
+            any(), any(), any(), any(), any(), anyString(), any(), anyString());
 
     String body =
         """
@@ -868,7 +865,8 @@ class OrderApiIntegrationTest {
         .andExpect(jsonPath("$.version").value(2))
         .andExpect(jsonPath("$.unitCount").value(1));
     verify(dependencies, times(1))
-        .reserveOrderUnit(any(), any(), any(), any(), any(), anyString());
+        .reserveOrderUnit(
+            any(), any(), any(), any(), any(), anyString(), any(), anyString());
     assertAuditCount(orderId, "UNIT_ADDED", 1);
     assertAuditCount(orderId, "RESERVATION_CREATED", 1);
   }
@@ -1009,7 +1007,8 @@ class OrderApiIntegrationTest {
                 "conflict",
                 null))
         .when(dependencies)
-        .reserveOrderUnit(any(), any(), any(), any(), any(), anyString());
+        .reserveOrderUnit(
+            any(), any(), any(), any(), any(), anyString(), any(), anyString());
 
     long started = System.nanoTime();
     mvc.perform(
@@ -1068,7 +1067,7 @@ class OrderApiIntegrationTest {
   }
 
   @Test
-  void equipmentEndpointRejectsAUnitFromAnotherOrderBeforeCallingAssetMutation()
+  void desiredEquipmentEndpointRejectsAUnitFromAnotherOrderBeforeCallingAssetMutation()
       throws Exception {
     UUID first = createOrder(MANAGER_1, "manager-one", "Клиент A");
     selectWarehouse(first, MANAGER_1, WAREHOUSE_1, 0);
@@ -1078,21 +1077,24 @@ class OrderApiIntegrationTest {
 
     mvc.perform(
             put(
-                    "/api/logistics/v1/orders/{orderId}/units/{unitId}/equipment/{equipmentId}",
+                    "/api/logistics/v1/orders/{orderId}/units/{unitId}/desired-equipment",
                     first,
-                    UNIT_2,
-                    EQUIPMENT)
+                    UNIT_2)
                 .header("Idempotency-Key", UUID.randomUUID())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
                     """
-                    {"expectedVersion":1,"expectedCurrentQuantity":0,"requiredQuantity":1}
-                    """)
+                    {
+                      "expectedVersion": 1,
+                      "requirements": [{"equipmentId":"%s","quantity":1}]
+                    }
+                    """
+                        .formatted(EQUIPMENT))
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isNotFound())
         .andExpect(jsonPath("$.code").value("ORDER_UNIT_NOT_FOUND"));
     verify(dependencies, never())
-        .adjustOrderEquipment(any(), any(), any(), any(), any(), anyString(), anyLong(), anyLong());
+        .replaceOrderEquipmentReservations(any(), any(), any(), any(), anyString(), any());
   }
 
   private UUID createOrder(UUID subjectId, String username, String clientName)
@@ -1325,6 +1327,25 @@ class OrderApiIntegrationTest {
     current.clear();
     releaseAllReceipts.put(idempotencyKey, List.copyOf(released));
     return released;
+  }
+
+  private List<LogisticsDependencyGateway.OrderEquipmentReservation>
+      replaceEquipmentReservationsRemotely(
+          UUID orderId, List<LogisticsDependencyGateway.OrderEquipmentRequirement> requirements) {
+    LinkedHashMap<UUID, LogisticsDependencyGateway.OrderEquipmentReservation> current =
+        equipmentReservations.computeIfAbsent(orderId, ignored -> new LinkedHashMap<>());
+    current.clear();
+    for (LogisticsDependencyGateway.OrderEquipmentRequirement requirement : requirements) {
+      current.put(
+          requirement.equipmentId(),
+          new LogisticsDependencyGateway.OrderEquipmentReservation(
+              requirement.equipmentId(),
+              "CHAIR",
+              "Стул",
+              requirement.quantity(),
+              10));
+    }
+    return List.copyOf(current.values());
   }
 
   private static LogisticsDependencyGateway.OrderUnitReservation reservation(

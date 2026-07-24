@@ -68,6 +68,9 @@ type RepairWorkCompletionDialogProps = {
   emptyCompleteLabel?: string
   initialCompletionMode?: RepairEstimateCompletionMode
   initialMovementRequired?: boolean
+  movementAvailable?: boolean
+  routingSelectionAvailable?: boolean
+  planStructureEditingAvailable?: boolean
   reconcileInitialPlans?: (
     preparedPlans: RepairEstimateTaskPlanDto[]
   ) => RepairEstimateTaskPlanDto[]
@@ -115,6 +118,9 @@ export function RepairWorkCompletionDialog({
   emptyCompleteLabel = "Завершить и освободить",
   initialCompletionMode,
   initialMovementRequired,
+  movementAvailable = true,
+  routingSelectionAvailable = true,
+  planStructureEditingAvailable = true,
   reconcileInitialPlans,
   onOpenChange,
   onComplete,
@@ -174,7 +180,7 @@ export function RepairWorkCompletionDialog({
           </p>
         ) : (
           <RepairWorkCompletionForm
-            key={`${initialCompletionMode ?? "MANUAL"}:${initialMovementRequired ? "movement" : "no-movement"}:${previewQuery.data.taskPlans.map((plan) => `${plan.id}:${plan.sortOrder}`).join(":")}`}
+            key={`${initialCompletionMode ?? "MANUAL"}:${movementAvailable && initialMovementRequired ? "movement" : "no-movement"}:${previewQuery.data.taskPlans.map((plan) => `${plan.id}:${plan.sortOrder}`).join(":")}`}
             lines={lines}
             initialPlans={previewQuery.data.taskPlans}
             autoIssues={previewQuery.data.issues}
@@ -187,6 +193,9 @@ export function RepairWorkCompletionDialog({
             emptyCompleteLabel={emptyCompleteLabel}
             initialCompletionMode={initialCompletionMode}
             initialMovementRequired={initialMovementRequired}
+            movementAvailable={movementAvailable}
+            routingSelectionAvailable={routingSelectionAvailable}
+            planStructureEditingAvailable={planStructureEditingAvailable}
             onCancel={() => onOpenChange(false)}
             onComplete={onComplete}
           />
@@ -209,6 +218,9 @@ function RepairWorkCompletionForm({
   emptyCompleteLabel,
   initialCompletionMode,
   initialMovementRequired,
+  movementAvailable,
+  routingSelectionAvailable,
+  planStructureEditingAvailable,
   onCancel,
   onComplete,
 }: {
@@ -224,13 +236,17 @@ function RepairWorkCompletionForm({
   emptyCompleteLabel: string
   initialCompletionMode?: RepairEstimateCompletionMode
   initialMovementRequired?: boolean
+  movementAvailable: boolean
+  routingSelectionAvailable: boolean
+  planStructureEditingAvailable: boolean
   onCancel: () => void
   onComplete: (result: RepairWorkCompletionResult) => void
 }) {
   const [completionMode, setCompletionMode] =
     useState<RepairEstimateCompletionMode>(initialCompletionMode ?? "MANUAL")
   const empty = allowEmpty && lines.length === 0
-  const initialMovement = empty ? false : (initialMovementRequired ?? true)
+  const initialMovement =
+    empty || !movementAvailable ? false : (initialMovementRequired ?? true)
   const [movementRequired, setMovementRequired] = useState(initialMovement)
   const [movementPlans] = useState(() => [
     createRepairEstimateMovementTaskPlan("MOVE_TO_REPAIR"),
@@ -327,12 +343,15 @@ function RepairWorkCompletionForm({
             </Select>
           </Field>
 
-          <Field orientation="horizontal" data-disabled={pending}>
+          <Field
+            orientation="horizontal"
+            data-disabled={pending || !movementAvailable}
+          >
             <Checkbox
               id="repair-work-movement-required"
               aria-label="Создать перемещение на ремонт и возврат"
               checked={movementRequired}
-              disabled={pending}
+              disabled={pending || !movementAvailable}
               onCheckedChange={(checked) => {
                 const required = checked === true
                 setMovementRequired(required)
@@ -350,8 +369,9 @@ function RepairWorkCompletionForm({
                 Создать перемещение на ремонт и возврат
               </FieldLabel>
               <FieldDescription>
-                Отметьте, если бытовку нужно отправить на ремонт и вернуть после
-                завершения.
+                {movementAvailable
+                  ? "Отметьте, если бытовку нужно отправить на ремонт и вернуть после завершения."
+                  : "Недоступно: маршрут локаций для инвентаризации не задан."}
               </FieldDescription>
             </div>
           </Field>
@@ -433,12 +453,15 @@ function RepairWorkCompletionForm({
                     </p>
 
                     <div className="grid gap-3 md:grid-cols-[14rem_minmax(0,1fr)_auto] md:items-end">
-                      <Field className="md:self-start" data-disabled={pending}>
+                      <Field
+                        className="md:self-start"
+                        data-disabled={pending || !routingSelectionAvailable}
+                      >
                         <FieldLabel htmlFor={`plan-route-${plan.id}`}>
                           Маршрут очереди
                         </FieldLabel>
                         <Select
-                          disabled={pending}
+                          disabled={pending || !routingSelectionAvailable}
                           value={routeSelection}
                           onValueChange={(value) =>
                             updatePlan(plan.id, (current) => {
@@ -481,6 +504,11 @@ function RepairWorkCompletionForm({
                             </SelectGroup>
                           </SelectContent>
                         </Select>
+                        {!routingSelectionAvailable ? (
+                          <FieldDescription>
+                            Маршрут зафиксирован выбранным узлом каталога.
+                          </FieldDescription>
+                        ) : null}
                       </Field>
 
                       <Field data-disabled={pending}>
@@ -527,7 +555,11 @@ function RepairWorkCompletionForm({
                           size="icon-sm"
                           variant="outline"
                           aria-label="Дублировать план"
-                          disabled={pending || plan.kind !== "REPAIR_WORK"}
+                          disabled={
+                            pending ||
+                            !planStructureEditingAvailable ||
+                            plan.kind !== "REPAIR_WORK"
+                          }
                           onClick={() => duplicatePlan(plan, index)}
                         >
                           <HugeiconsIcon icon={Copy01Icon} />
@@ -537,7 +569,11 @@ function RepairWorkCompletionForm({
                           size="icon-sm"
                           variant="ghost"
                           aria-label="Удалить план"
-                          disabled={pending || plan.kind !== "REPAIR_WORK"}
+                          disabled={
+                            pending ||
+                            !planStructureEditingAvailable ||
+                            plan.kind !== "REPAIR_WORK"
+                          }
                           onClick={() =>
                             setPlans((current) =>
                               current.filter((item) => item.id !== plan.id)

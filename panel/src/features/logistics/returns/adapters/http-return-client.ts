@@ -19,7 +19,8 @@ import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 type JsonObject = Record<string, unknown>
 
 const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const LOCAL_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
 function invalidResponse(): never {
   throw new Error("Сервис логистики вернул некорректный ответ.")
@@ -67,8 +68,16 @@ function timestamp(value: unknown): string {
   return candidate
 }
 
-function nullableTimestamp(value: unknown): string | null {
-  return value === null ? null : timestamp(value)
+function localDate(value: unknown): string {
+  const candidate = text(value)
+  if (!LOCAL_DATE_PATTERN.test(candidate)) invalidResponse()
+  const date = new Date(`${candidate}T00:00:00.000Z`)
+  if (date.toISOString().slice(0, 10) !== candidate) invalidResponse()
+  return candidate
+}
+
+function nullableLocalDate(value: unknown): string | null {
+  return value === null ? null : localDate(value)
 }
 
 function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T {
@@ -111,7 +120,7 @@ export function parseReturnDocument(value: unknown): ReturnDocument {
     driverSnapshot: nullableText(source.driverSnapshot),
     clientId: nullableUuid(source.clientId),
     equipmentMovementTaskId: nullableUuid(source.equipmentMovementTaskId),
-    scheduledAt: nullableTimestamp(source.scheduledAt),
+    scheduledDate: nullableLocalDate(source.scheduledDate),
     rentalOrderId: nullableUuid(source.rentalOrderId),
     lines,
     createdAt: timestamp(source.createdAt),
@@ -177,7 +186,7 @@ export class HttpReturnClient implements ReturnClient {
         headers: commandHeaders(input.idempotencyKey),
         body: JSON.stringify({
           driverSnapshot: input.driverSnapshot,
-          scheduledAt: input.scheduledAt,
+          scheduledDate: input.scheduledDate,
         }),
       }
     )

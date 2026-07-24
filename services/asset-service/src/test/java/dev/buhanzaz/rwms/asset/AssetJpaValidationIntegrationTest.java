@@ -152,9 +152,12 @@ class AssetJpaValidationIntegrationTest {
     assertThat(inventoryAssetService.resolveNumber(
         new InventoryNumberResolutionRequest(secondWarehouseId, number)).asset().assetId())
         .isEqualTo(second.id());
-    assertThat(inventoryAssetService.resolveNumber(
-        new InventoryNumberResolutionRequest(absentWarehouseId, number)).found())
-        .isFalse();
+    var crossWarehouse =
+        inventoryAssetService.resolveNumber(
+            new InventoryNumberResolutionRequest(absentWarehouseId, number));
+    assertThat(crossWarehouse.found()).isTrue();
+    assertThat(crossWarehouse.asset().warehouseId())
+        .isIn(firstWarehouseId, secondWarehouseId);
     assertThatThrownBy(() -> service.createRentalItem(
         UUID.randomUUID(),
         UUID.randomUUID(),

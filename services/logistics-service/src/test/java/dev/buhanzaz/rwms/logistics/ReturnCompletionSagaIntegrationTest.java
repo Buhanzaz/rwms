@@ -30,6 +30,7 @@ import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.ReturnCompletionProcessor;
 import dev.buhanzaz.rwms.logistics.service.ReturnRegistrationProcessor;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -357,7 +358,7 @@ class ReturnCompletionSagaIntegrationTest {
             SUBJECT,
             CORRELATION);
     returnDocument.scheduleReturn(
-        "Driver linked", OffsetDateTime.now(ZoneOffset.UTC));
+        "Driver linked", OffsetDateTime.now(ZoneOffset.UTC).toLocalDate());
     returnDocument.beginReturnRegistration();
     returnDocument.requireReturnInspection();
     returnDocument.beginReturnAcceptance();
@@ -405,7 +406,7 @@ class ReturnCompletionSagaIntegrationTest {
         documentId,
         0,
         new ReturnPickupRequest(
-            "Driver snapshot", OffsetDateTime.parse("2026-07-01T08:00:00Z")));
+            "Driver snapshot", LocalDate.parse("2026-07-01")));
     registration.processUntilIdle(documentId);
     long version = documents.get(documentId, LogisticsDocumentType.RETURN).version();
     assertThat(documents.get(documentId, LogisticsDocumentType.RETURN).state())

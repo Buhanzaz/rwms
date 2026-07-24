@@ -180,6 +180,7 @@ export function saveInventoryInspection(input: {
   expectedSessionRevision: number
   expectedFindingRevision: number
   inspection: "READY" | "WORK_STAGED"
+  comment: string
   media: InventoryMediaReference[]
   planSelection: InventoryPlanSelection
 }) {
@@ -194,6 +195,7 @@ export function saveInventoryInspection(input: {
         expectedSessionRevision: input.expectedSessionRevision,
         expectedFindingRevision: input.expectedFindingRevision,
         inspection: input.inspection,
+        comment: input.comment,
         passportObservation: { presence: "ABSENT", value: null },
         equipmentObservation: { presence: "ABSENT", value: null },
         media: input.media,

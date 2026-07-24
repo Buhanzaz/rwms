@@ -15,6 +15,8 @@ import dev.buhanzaz.rwms.asset.domain.InventoryAssetNumberClaim;
 import dev.buhanzaz.rwms.asset.domain.InventoryAssetSource;
 import dev.buhanzaz.rwms.asset.domain.InventoryAssetSourceId;
 import dev.buhanzaz.rwms.asset.domain.InventoryAssetSourceOperation;
+import dev.buhanzaz.rwms.asset.domain.OrderUnitReservation;
+import dev.buhanzaz.rwms.asset.domain.OrderUnitReservationState;
 import dev.buhanzaz.rwms.asset.domain.RentalItem;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.eventing.AssetEventStore;
@@ -27,6 +29,7 @@ import dev.buhanzaz.rwms.asset.repository.InventoryAssetCaptureRepository;
 import dev.buhanzaz.rwms.asset.repository.InventoryAssetNumberClaimRepository;
 import dev.buhanzaz.rwms.asset.repository.InventoryAssetSourceOperationRepository;
 import dev.buhanzaz.rwms.asset.repository.InventoryAssetSourceRepository;
+import dev.buhanzaz.rwms.asset.repository.OrderUnitReservationRepository;
 import dev.buhanzaz.rwms.asset.repository.RentalItemRepository;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
@@ -85,6 +88,7 @@ public class InventoryAssetService {
   private final InventoryAssetSourceOperationRepository sourceOperations;
   private final InventoryAssetSourceRepository sources;
   private final InventoryAssetNumberClaimRepository numberClaims;
+  private final OrderUnitReservationRepository orderReservations;
   private final InventoryAssetBoundaryRegistrar registrar;
   private final AssetEventStore events;
   private final WarehouseRegistryClient warehouses;
@@ -101,6 +105,7 @@ public class InventoryAssetService {
       InventoryAssetSourceOperationRepository sourceOperations,
       InventoryAssetSourceRepository sources,
       InventoryAssetNumberClaimRepository numberClaims,
+      OrderUnitReservationRepository orderReservations,
       InventoryAssetBoundaryRegistrar registrar,
       AssetEventStore events,
       WarehouseRegistryClient warehouses,
@@ -115,6 +120,7 @@ public class InventoryAssetService {
     this.sourceOperations = sourceOperations;
     this.sources = sources;
     this.numberClaims = numberClaims;
+    this.orderReservations = orderReservations;
     this.registrar = registrar;
     this.events = events;
     this.warehouses = warehouses;
@@ -225,8 +231,11 @@ public class InventoryAssetService {
   public InventoryNumberResolutionResponse resolveNumber(InventoryNumberResolutionRequest request) {
     String display = RentalItem.canonicalNumber(request.number());
     String key = RentalItem.identityMatchKey(display);
-    return rentalItems.findByWarehouseIdAndIdentityMatchKey(request.warehouseId(), key)
-        .map(item -> new InventoryNumberResolutionResponse(display, key, true, snapshot(item)))
+    RentalItem item = rentalItems.findByWarehouseIdAndIdentityMatchKey(request.warehouseId(), key)
+        .or(() -> rentalItems.findFirstByIdentityMatchKeyOrderByIdAsc(key))
+        .orElse(null);
+    return java.util.Optional.ofNullable(item)
+        .map(value -> new InventoryNumberResolutionResponse(display, key, true, snapshot(value)))
         .orElseGet(() -> new InventoryNumberResolutionResponse(display, key, false, null));
   }
 
@@ -238,13 +247,21 @@ public class InventoryAssetService {
     List<UUID> ids = request.assetIds().stream().sorted().toList();
     Map<UUID, RentalItem> current = rentalItems.findAllById(ids).stream()
         .collect(Collectors.toMap(RentalItem::getId, Function.identity()));
+    Map<UUID, String> tenants = activeTenantSnapshots(ids);
     List<InventoryValidationItem> values = ids.stream()
         .map(id -> {
           RentalItem item = current.get(id);
           return item == null
-              ? new InventoryValidationItem(id, false, null, null, null)
+              ? new InventoryValidationItem(id, false, null, null, null, null, null, null)
               : new InventoryValidationItem(
-                  id, true, item.getVersion(), item.getWarehouseId(), item.getStatus());
+                  id,
+                  true,
+                  item.getVersion(),
+                  item.getWarehouseId(),
+                  item.getStatus(),
+                  item.getNumber(),
+                  item.getIdentityMatchKey(),
+                  tenants.get(id));
         })
         .toList();
     return new InventoryValidationResponse(now(), canonicalHash(values), values);
@@ -338,6 +355,7 @@ public class InventoryAssetService {
         .findAllByWarehouseIdAndStatusInOrderByIdentityMatchKeyAscIdAsc(
             warehouseId, CAPTURE_STATUSES);
     List<UUID> rentalItemIds = items.stream().map(RentalItem::getId).toList();
+    Map<UUID, String> tenants = activeTenantSnapshots(rentalItemIds);
     List<EquipmentBalance> balances = rentalItemIds.isEmpty()
         ? List.of()
         : equipmentBalances.findAllByRentalItemIdInAndQuantityGreaterThanAndLocationKindIn(
@@ -377,7 +395,7 @@ public class InventoryAssetService {
           item.getStatus(),
           item.getNumber(),
           item.getIdentityMatchKey(),
-          passportSnapshot(item),
+          passportSnapshot(item, tenants.get(item.getId())),
           List.copyOf(contentsByRentalItem.getOrDefault(item.getId(), List.of()))));
     }
     return List.copyOf(result);
@@ -392,7 +410,7 @@ public class InventoryAssetService {
     return value;
   }
 
-  private Map<String, Object> passportSnapshot(RentalItem item) {
+  private Map<String, Object> passportSnapshot(RentalItem item, String tenantSnapshot) {
     Map<String, Object> value = new LinkedHashMap<>();
     value.put("rentalType", item.getRentalType());
     value.put("dimensions", item.getDimensions());
@@ -402,7 +420,21 @@ public class InventoryAssetService {
     value.put("linoleum", item.getLinoleum());
     value.put("passport", read(item.getPassportJson(), new TypeReference<Map<String, Object>>() {}));
     value.put("tags", read(item.getTagsJson(), new TypeReference<List<String>>() {}));
+    value.put("tenant", tenantSnapshot);
     return value;
+  }
+
+  private Map<UUID, String> activeTenantSnapshots(List<UUID> rentalItemIds) {
+    if (rentalItemIds.isEmpty()) return Map.of();
+    return orderReservations
+        .findAllByRentalItemIdInAndState(rentalItemIds, OrderUnitReservationState.ACTIVE)
+        .stream()
+        .filter(reservation -> reservation.getTenantSnapshot() != null)
+        .collect(
+            Collectors.toMap(
+                OrderUnitReservation::getRentalItemId,
+                OrderUnitReservation::getTenantSnapshot,
+                (left, right) -> left));
   }
 
   private InventoryCaptureMember memberResponse(InventoryAssetCaptureMember member) {
@@ -436,14 +468,20 @@ public class InventoryAssetService {
         capture.getExpiresAt());
   }
 
-  private static InventoryAssetSnapshot snapshot(RentalItem item) {
+  private InventoryAssetSnapshot snapshot(RentalItem item) {
+    String tenant =
+        orderReservations
+            .findByRentalItemIdAndState(item.getId(), OrderUnitReservationState.ACTIVE)
+            .map(OrderUnitReservation::getTenantSnapshot)
+            .orElse(null);
     return new InventoryAssetSnapshot(
         item.getId(),
         item.getVersion(),
         item.getWarehouseId(),
         item.getStatus(),
         item.getNumber(),
-        item.getIdentityMatchKey());
+        item.getIdentityMatchKey(),
+        tenant);
   }
 
   private Map<String, ?> sourceFingerprint(InventorySourceAssetRequest request, RentalItem item) {

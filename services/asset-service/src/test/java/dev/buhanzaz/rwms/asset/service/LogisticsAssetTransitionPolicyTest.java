@@ -28,6 +28,9 @@ class LogisticsAssetTransitionPolicyTest {
         RentalItemStatus.FREE, SHIPMENT_CONFIRM, LOGISTICS_SHIPMENT, null))
         .isEqualTo(RentalItemStatus.RENTED);
     assertThat(LogisticsAssetTransitionPolicy.target(
+        RentalItemStatus.BOOKED, SHIPMENT_CONFIRM, LOGISTICS_SHIPMENT, null))
+        .isEqualTo(RentalItemStatus.RENTED);
+    assertThat(LogisticsAssetTransitionPolicy.target(
         RentalItemStatus.FREE, TRANSFER_DEPART, LOGISTICS_TRANSFER, null))
         .isEqualTo(RentalItemStatus.IN_TRANSFER);
     assertThat(LogisticsAssetTransitionPolicy.target(

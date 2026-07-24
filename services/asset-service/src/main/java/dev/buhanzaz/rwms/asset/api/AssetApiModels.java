@@ -51,7 +51,17 @@ public final class AssetApiModels {
       UUID id, long version, UUID warehouseId, String number, RentalItemStatus status,
       String rentalType, String dimensions, String finishing, String category, String characteristics,
       Boolean linoleum, String generalComment, Map<String, Object> passport, List<String> tags,
-      List<EquipmentContentResponse> contents, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
+      List<EquipmentContentResponse> contents,
+      ActiveOrderReservationResponse activeOrderReservation,
+      OffsetDateTime createdAt,
+      OffsetDateTime updatedAt) {}
+
+  public record ActiveOrderReservationResponse(
+      UUID reservationId,
+      UUID orderId,
+      UUID clientId,
+      String tenantSnapshot,
+      OffsetDateTime reservedAt) {}
 
   public record RentalItemPage(List<RentalItemResponse> content, long page, long size, long totalElements, long totalPages) {}
   /** Text remains in the service-local append-only store and is never a Kafka fact. */
@@ -74,7 +84,7 @@ public final class AssetApiModels {
       BalanceLocationKind locationKind, long quantity, long activeHeldQuantity, long availableStock) {}
   public record EquipmentTotalsResponse(UUID equipmentId, UUID warehouseId, long totalQuantity, long stockQuantity,
       long nonRentedCabinQuantity, long rentedCabinQuantity, long writtenOffQuantity, long lostQuantity, long activeHeldQuantity,
-      long availableStock, List<EquipmentBalanceResponse> balances) {}
+      long reservedQuantity, long availableQuantity, long availableStock, List<EquipmentBalanceResponse> balances) {}
   public record EquipmentWarehouseResponse(EquipmentResponse equipment, EquipmentTotalsResponse totals) {}
 
   public record TransferEquipmentRequest(
@@ -432,7 +442,8 @@ public final class AssetApiModels {
       UUID warehouseId,
       RentalItemStatus status,
       String displayCanonicalNumber,
-      String identityMatchKey) {}
+      String identityMatchKey,
+      String tenantSnapshot) {}
   public record InventoryNumberResolutionResponse(
       String displayCanonicalNumber,
       String identityMatchKey,
@@ -446,7 +457,10 @@ public final class AssetApiModels {
       boolean found,
       Long version,
       UUID warehouseId,
-      RentalItemStatus status) {}
+      RentalItemStatus status,
+      String displayCanonicalNumber,
+      String identityMatchKey,
+      String tenantSnapshot) {}
   public record InventoryValidationResponse(
       OffsetDateTime validatedAt,
       String validationDigest,

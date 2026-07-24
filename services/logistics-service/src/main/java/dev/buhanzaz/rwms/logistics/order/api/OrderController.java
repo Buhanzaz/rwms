@@ -1,7 +1,6 @@
 package dev.buhanzaz.rwms.logistics.order.api;
 
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AddOrderUnitRequest;
-import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AdjustOrderEquipmentRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ClientPageResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ClientResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateClientRequest;
@@ -10,6 +9,7 @@ import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDetailResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderHistoryEventResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderPageResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderUnitPageResponse;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SetOrderUnitDesiredEquipmentRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.SelectWarehouseRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.UpdateOrderRequest;
 import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
@@ -202,22 +202,16 @@ public class OrderController {
     return response(result.response(), result.replayed(), HttpStatus.OK);
   }
 
-  @PutMapping("/orders/{orderId}/units/{unitId}/equipment/{equipmentId}")
-  public ResponseEntity<OrderDetailResponse> adjustEquipment(
+  @PutMapping("/orders/{orderId}/units/{unitId}/desired-equipment")
+  public ResponseEntity<OrderDetailResponse> setDesiredEquipment(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID orderId,
       @PathVariable UUID unitId,
-      @PathVariable UUID equipmentId,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
-      @Valid @RequestBody AdjustOrderEquipmentRequest request) {
-    RentalOrderService.EquipmentResult result =
-        orders.adjustEquipment(
-            access.writeActor(jwt),
-            orderId,
-            unitId,
-            equipmentId,
-            idempotencyKey,
-            request);
+      @Valid @RequestBody SetOrderUnitDesiredEquipmentRequest request) {
+    RentalOrderService.MutationResult result =
+        orders.setDesiredEquipment(
+            access.writeActor(jwt), orderId, unitId, idempotencyKey, request);
     return response(result.response(), result.replayed(), HttpStatus.OK);
   }
 

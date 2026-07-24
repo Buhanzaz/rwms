@@ -22,6 +22,7 @@ import {
   type RepairWorkCompletionResult,
 } from "@/features/repair-estimates/repair-work-completion-dialog"
 import { RepairWorkInformationFields } from "@/features/repair-estimates/repair-work-information-fields"
+import { CabinFurniturePanel } from "@/features/rental-items/cabin-furniture-panel"
 import {
   REPAIR_TASKS_QUERY_KEY,
   queueRepairTask,
@@ -335,32 +336,42 @@ function RepairTaskEditorContent({
   )
 
   const information = (
-    <RepairWorkInformationFields
-      warehouseId={warehouseId}
-      rentalItemId={draft.rentalItemId}
-      rentalItemScope="REPAIR"
-      contextLabel={draft.kind === "REWORK" ? "Причина" : "Источник"}
-      contextValue={draft.reason}
-      dispatchDate={draft.dispatchDate}
-      comment={draft.comment}
-      showComment={false}
-      disabled={interactionDisabled || Boolean(task)}
-      readOnly={readOnly}
-      rentalItemDisabled={Boolean(task) || draft.kind === "REWORK"}
-      rentalItemInvalid={Boolean(error && !draft.rentalItemId)}
-      onRentalItemChange={(rentalItem) =>
-        setDraft((current) => ({ ...current, rentalItemId: rentalItem.id }))
-      }
-      onContextChange={(reason) =>
-        setDraft((current) => ({ ...current, reason }))
-      }
-      onDispatchDateChange={(dispatchDate) =>
-        setDraft((current) => ({ ...current, dispatchDate }))
-      }
-      onCommentChange={(comment) =>
-        setDraft((current) => ({ ...current, comment }))
-      }
-    />
+    <div className="flex flex-col gap-4">
+      <RepairWorkInformationFields
+        warehouseId={warehouseId}
+        rentalItemId={draft.rentalItemId}
+        rentalItemScope="REPAIR"
+        contextLabel={draft.kind === "REWORK" ? "Причина" : "Источник"}
+        contextValue={draft.reason}
+        dispatchDate={draft.dispatchDate}
+        comment={draft.comment}
+        showComment={false}
+        disabled={interactionDisabled || Boolean(task)}
+        readOnly={readOnly}
+        rentalItemDisabled={Boolean(task) || draft.kind === "REWORK"}
+        rentalItemInvalid={Boolean(error && !draft.rentalItemId)}
+        onRentalItemChange={(rentalItem) =>
+          setDraft((current) => ({ ...current, rentalItemId: rentalItem.id }))
+        }
+        onContextChange={(reason) =>
+          setDraft((current) => ({ ...current, reason }))
+        }
+        onDispatchDateChange={(dispatchDate) =>
+          setDraft((current) => ({ ...current, dispatchDate }))
+        }
+        onCommentChange={(comment) =>
+          setDraft((current) => ({ ...current, comment }))
+        }
+      />
+      {accessToken && draft.rentalItemId ? (
+        <CabinFurniturePanel
+          accessToken={accessToken}
+          warehouseId={warehouseId}
+          rentalItemId={draft.rentalItemId}
+          disabled={interactionDisabled}
+        />
+      ) : null}
+    </div>
   )
 
   const taskLines = (

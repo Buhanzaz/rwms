@@ -488,8 +488,8 @@ class InventoryEventingIntegrationTest {
           id,session_revision,warehouse_id,warehouse_version_snapshot,warehouse_time_zone,
           business_date,lifecycle,start_operation_id,start_idempotency_key,start_request_sha256,
           expected_population_count,expected_population_sha256,started_by_subject_id,
-          started_actor_ref,started_at,created_at,updated_at)
-        values (?,0,?,0,'Europe/Moscow',current_date,'ACTIVE',?,?,?,0,?,?,?::jsonb,?,?,?)
+          started_by_display_name,started_actor_ref,started_at,created_at,updated_at)
+        values (?,0,?,0,'Europe/Moscow',current_date,'ACTIVE',?,?,?,0,?,?,'Inventory operator',?::jsonb,?,?,?)
         """,
         inventoryId,
         warehouseId,

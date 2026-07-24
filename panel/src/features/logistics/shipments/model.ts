@@ -46,7 +46,7 @@ export type ShipmentDocument = {
   driverSnapshot: string | null
   clientId: string | null
   equipmentMovementTaskId: string | null
-  scheduledAt: string | null
+  scheduledDate: string | null
   rentalOrderId: string | null
   lines: ShipmentLine[]
   createdAt: string
@@ -57,6 +57,63 @@ export type ShipmentEquipmentAllocation = {
   equipmentId: string
   quantity: number
   expectedStockVersion: number
+}
+
+export type ShipmentFurnitureTask = {
+  rentalItemId: string
+  unitNumber: string
+  taskId: string | null
+  lineCount: number
+}
+
+export type ShipmentFurnitureTaskResult = {
+  shipmentId: string
+  shipmentVersion: number
+  tasks: ShipmentFurnitureTask[]
+}
+
+export const SHIPMENT_FURNITURE_READINESS_STATES = [
+  "NOT_REQUIRED",
+  "READY",
+  "REQUIRES_TASK_CREATION",
+  "AWAITING_TASK_COMPLETION",
+  "BLOCKED",
+] as const
+
+export type ShipmentFurnitureReadinessState =
+  (typeof SHIPMENT_FURNITURE_READINESS_STATES)[number]
+
+export const SHIPMENT_FURNITURE_TASK_STATES = [
+  "RESERVING",
+  "REGISTERING_TASK",
+  "AWAITING_WORKER",
+  "EXECUTING",
+  "CANCELLING",
+  "COMPLETED",
+  "CANCELLED",
+  "EXPIRED",
+  "CONFLICT",
+  "RECONCILIATION_REQUIRED",
+] as const
+
+export type ShipmentFurnitureTaskState =
+  (typeof SHIPMENT_FURNITURE_TASK_STATES)[number]
+
+export type ShipmentFurnitureTaskStatus = {
+  rentalItemId: string
+  unitNumber: string
+  taskId: string
+  externalTaskId: string
+  taskBoardTaskId: string | null
+  taskState: ShipmentFurnitureTaskState
+  lineCount: number
+}
+
+export type ShipmentFurnitureReadiness = {
+  shipmentId: string
+  shipmentVersion: number
+  state: ShipmentFurnitureReadinessState
+  tasks: ShipmentFurnitureTaskStatus[]
 }
 
 export type ShipmentPlanLine = {

@@ -450,7 +450,10 @@ class TransferWorkflowStore {
             .orElseThrow(() -> malformed("Transfer task registration has no local reference"));
     return Optional.of(
         Work.taskRegister(
-            attempt.getOperationId(), document.getWarehouseId(), reference.getExternalTaskId()));
+            attempt.getOperationId(),
+            document.getWarehouseId(),
+            reference.getExternalTaskId(),
+            null));
   }
 
   private Optional<Work> cancellationWork(
@@ -1154,7 +1157,8 @@ class TransferWorkflowStore {
       long fencingToken,
       LogisticsDependencyGateway.AssetEffect assetEffect,
       List<LogisticsDependencyGateway.MediaReference> references,
-      UUID externalTaskId) {
+      UUID externalTaskId,
+      OffsetDateTime deadlineAt) {
     Work(
         WorkType type,
         UUID operationId,
@@ -1181,10 +1185,15 @@ class TransferWorkflowStore {
           fencingToken,
           assetEffect,
           references,
+          null,
           null);
     }
 
-    static Work taskRegister(UUID operationId, UUID warehouseId, UUID externalTaskId) {
+    static Work taskRegister(
+        UUID operationId,
+        UUID warehouseId,
+        UUID externalTaskId,
+        OffsetDateTime deadlineAt) {
       return new Work(
           WorkType.TASK_REGISTER,
           operationId,
@@ -1198,7 +1207,8 @@ class TransferWorkflowStore {
           -1,
           null,
           List.of(),
-          externalTaskId);
+          externalTaskId,
+          deadlineAt);
     }
 
     static Work taskCancel(UUID operationId, UUID externalTaskId, long expectedTaskVersion) {
@@ -1215,7 +1225,8 @@ class TransferWorkflowStore {
           -1,
           null,
           List.of(),
-          externalTaskId);
+          externalTaskId,
+          null);
     }
 
     static Work warehouse(UUID operationId, UUID documentId, UUID lineId, UUID warehouseId) {

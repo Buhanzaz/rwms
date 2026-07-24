@@ -19,6 +19,9 @@ public interface OrderUnitReservationRepository
   Optional<OrderUnitReservation> findByRentalItemIdAndState(
       UUID rentalItemId, OrderUnitReservationState state);
 
+  List<OrderUnitReservation> findAllByRentalItemIdInAndState(
+      List<UUID> rentalItemIds, OrderUnitReservationState state);
+
   List<OrderUnitReservation> findAllByOrderIdAndStateOrderByCreatedAtAscIdAsc(
       UUID orderId, OrderUnitReservationState state);
 

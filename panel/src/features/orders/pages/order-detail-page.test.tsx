@@ -145,6 +145,7 @@ const detail = {
 const candidate = {
   reservationId: null,
   added: false,
+  desiredContents: [],
   unit: {
     id: UNIT_ID,
     version: 1,
@@ -388,6 +389,64 @@ describe("OrderDetailPage reservation conflict", () => {
 })
 
 describe("OrderDetailPage draft actions", () => {
+  it("shows only human-readable order data and history", async () => {
+    const actorId = "66666666-6666-4666-8666-666666666666"
+    const equipmentId = "77777777-7777-4777-8777-777777777777"
+    ordersApi.listOrderHistory.mockResolvedValue([
+      {
+        id: "88888888-8888-4888-8888-888888888888",
+        orderId: ORDER_ID,
+        eventType: "ORDER_CREATED",
+        actorSubjectId: actorId,
+        actorRole: "RENTAL_MANAGER",
+        subjectType: "ORDER",
+        subjectId: ORDER_ID,
+        previousValues: null,
+        newValues: {
+          number: "ORD-000001",
+          status: "DRAFT",
+          managerId: actorId,
+        },
+        occurredAt: "2026-07-19T08:00:00Z",
+      },
+      {
+        id: "99999999-9999-4999-8999-999999999999",
+        orderId: ORDER_ID,
+        eventType: "EQUIPMENT_INCREASED",
+        actorSubjectId: actorId,
+        actorRole: "RENTAL_MANAGER",
+        subjectType: "EQUIPMENT",
+        subjectId: equipmentId,
+        previousValues: {
+          unitNumber: "БЫТ-001",
+          equipmentName: "Стол",
+          quantity: 1,
+        },
+        newValues: {
+          unitNumber: "БЫТ-001",
+          equipmentName: "Стол",
+          quantity: 2,
+          equipmentId,
+        },
+        occurredAt: "2026-07-19T09:00:00Z",
+      },
+    ])
+
+    renderPage()
+
+    expect((await screen.findAllByText("Менеджер")).length).toBeGreaterThan(0)
+    expect(await screen.findByText("Заказ создан")).toBeTruthy()
+    expect(screen.getByText("Автор")).toBeTruthy()
+    expect(screen.getAllByText(/Номер заказа: ORD-000001/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Статус: Черновик/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Бытовка: БЫТ-001/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Мебель: Стол/).length).toBeGreaterThan(0)
+    expect(screen.queryByText(actorId)).toBeNull()
+    expect(screen.queryByText(equipmentId)).toBeNull()
+    expect(screen.queryByText("Manager ID")).toBeNull()
+    expect(screen.queryByText("Actor:")).toBeNull()
+  })
+
   it("saves a populated order and locks its editing controls", async () => {
     const selectedCandidate = {
       ...candidate,

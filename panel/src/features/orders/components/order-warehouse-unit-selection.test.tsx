@@ -78,6 +78,7 @@ import type { OrderUnitCandidate } from "@/features/orders/domain/orders"
 const candidate: OrderUnitCandidate = {
   reservationId: null,
   added: false,
+  desiredContents: [],
   unit: {
     id: "11111111-1111-4111-8111-111111111111",
     version: 1,

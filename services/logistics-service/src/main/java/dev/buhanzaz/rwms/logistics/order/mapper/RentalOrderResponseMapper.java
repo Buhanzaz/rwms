@@ -2,10 +2,12 @@ package dev.buhanzaz.rwms.logistics.order.mapper;
 
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.ClientResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderHistoryEventResponse;
+import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderDesiredEquipmentResponse;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.OrderSummaryResponse;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderAuditEvent;
 import dev.buhanzaz.rwms.logistics.order.domain.OrderClient;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
+import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderEquipmentRequirement;
 import org.mapstruct.InjectionStrategy;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
@@ -37,4 +39,7 @@ public interface RentalOrderResponseMapper {
 
   @Mapping(source = "eventType", target = "eventType")
   OrderHistoryEventResponse toHistoryResponse(OrderAuditEvent event);
+
+  OrderDesiredEquipmentResponse toDesiredEquipmentResponse(
+      RentalOrderEquipmentRequirement requirement);
 }

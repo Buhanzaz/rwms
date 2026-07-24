@@ -21,6 +21,7 @@ public interface RentalItemRepository extends JpaRepository<RentalItem, UUID> {
       UUID warehouseId, String identityMatchKey, UUID id);
   Optional<RentalItem> findByWarehouseIdAndIdentityMatchKey(
       UUID warehouseId, String identityMatchKey);
+  Optional<RentalItem> findFirstByIdentityMatchKeyOrderByIdAsc(String identityMatchKey);
   List<RentalItem> findAllByWarehouseIdOrderByNumber(UUID warehouseId);
   Optional<RentalItem> findByIdAndWarehouseId(UUID id, UUID warehouseId);
   List<RentalItem> findAllByWarehouseIdAndStatusInOrderByIdentityMatchKeyAscIdAsc(
