@@ -136,23 +136,33 @@ class MaintenanceKafkaRecoveryIntegrationTest {
     assertThat(outboxState(outageEvent)).isEqualTo("PUBLISHED");
 
     UUID mediaId = UUID.randomUUID();
-    byte[] versionZero = mediaEnvelope(mediaId, UUID.randomUUID(), 0, "media.media.uploaded.v1");
-    UUID versionZeroEvent = eventUuid(versionZero);
-    publish(MaintenanceTransportTopics.MEDIA, mediaId.toString().getBytes(StandardCharsets.UTF_8), versionZero);
-    await("media event committed to inbox", () -> inboxCount(versionZeroEvent) == 1);
-    publish(MaintenanceTransportTopics.MEDIA, mediaId.toString().getBytes(StandardCharsets.UTF_8), versionZero);
-    await("duplicate remains one inbox row", () -> inboxCount(versionZeroEvent) == 1);
+    byte[] versionTwo = mediaEnvelope(mediaId, UUID.randomUUID(), 2, "media.media.uploaded.v1");
+    UUID versionTwoEvent = eventUuid(versionTwo);
+    publish(MaintenanceTransportTopics.MEDIA, mediaId.toString().getBytes(StandardCharsets.UTF_8), versionTwo);
+    await("media event committed to inbox", () -> inboxCount(versionTwoEvent) == 1);
+    publish(MaintenanceTransportTopics.MEDIA, mediaId.toString().getBytes(StandardCharsets.UTF_8), versionTwo);
+    await("duplicate remains one inbox row", () -> inboxCount(versionTwoEvent) == 1);
 
-    byte[] gap = mediaEnvelope(mediaId, UUID.randomUUID(), 2, "media.media.ready.v1");
-    publish(MaintenanceTransportTopics.MEDIA, mediaId.toString().getBytes(StandardCharsets.UTF_8), gap);
+    byte[] versionFour = mediaEnvelope(mediaId, UUID.randomUUID(), 4, "media.media.ready.v1");
+    publish(MaintenanceTransportTopics.MEDIA, mediaId.toString().getBytes(StandardCharsets.UTF_8), versionFour);
     await(
-        "aggregate version gap quarantined",
+        "media projection accepts source-owned aggregate version gaps",
         () ->
             jdbc.queryForObject(
-                    "select count(*) from version_gap_quarantine where aggregate_id=? and status='OPEN'",
-                    Integer.class,
+                    """
+                    select last_aggregate_version from consumer_aggregate_checkpoint
+                     where consumer_group=? and aggregate_type='MEDIA' and aggregate_id=?
+                    """,
+                    Long.class,
+                    MaintenanceTransportTopics.CONSUMER_GROUP,
                     mediaId.toString())
-                == 1);
+                == 4L);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from version_gap_quarantine where aggregate_id=? and status='OPEN'",
+                Integer.class,
+                mediaId.toString()))
+        .isZero();
 
     byte[] invalid = "password=never-publish kafka-canary@example.test".getBytes(StandardCharsets.UTF_8);
     String invalidHash = MaintenanceChecksum.sha256(invalid);
@@ -368,6 +378,8 @@ class MaintenanceKafkaRecoveryIntegrationTest {
             "ownerId",
             UUID.randomUUID().toString(),
             "warehouseId",
+            UUID.randomUUID().toString(),
+            "folderId",
             UUID.randomUUID().toString(),
             "kind",
             "IMAGE",

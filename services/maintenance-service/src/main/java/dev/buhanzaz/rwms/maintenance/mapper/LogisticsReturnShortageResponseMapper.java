@@ -29,6 +29,7 @@ public interface LogisticsReturnShortageResponseMapper {
       UUID warehouseId,
       UUID rentalItemId,
       long rentalItemVersion,
+      UUID estimateId,
       String sourceSha256,
       String snapshotSha256,
       String shortageSnapshot,

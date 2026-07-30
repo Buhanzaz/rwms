@@ -9,6 +9,8 @@ public interface WorkerCredentialGateway {
 
   void disable(UUID workerId);
 
+  void enable(UUID workerId);
+
   void delete(UUID workerId);
 
   WorkerCredentialSnapshot status(UUID workerId, UUID expectedWarehouseId);

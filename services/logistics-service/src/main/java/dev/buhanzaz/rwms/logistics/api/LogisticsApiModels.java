@@ -5,6 +5,8 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsLineState;
 import dev.buhanzaz.rwms.logistics.equipment.domain.EquipmentMovementTaskState;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -143,6 +145,28 @@ public final class LogisticsApiModels {
 
   public record TransferLineRequest(@NotNull UUID assetId, @Min(0) long assetVersion) {}
 
+  public enum TransferFurnitureReadinessState {
+    NOT_REQUIRED,
+    READY,
+    AWAITING_TASK_COMPLETION,
+    BLOCKED
+  }
+
+  public record TransferFurnitureTaskStatusView(
+      UUID rentalItemId,
+      String unitNumber,
+      UUID taskId,
+      UUID externalTaskId,
+      UUID taskBoardTaskId,
+      EquipmentMovementTaskState taskState,
+      int lineCount) {}
+
+  public record TransferFurnitureReadinessView(
+      UUID transferId,
+      long transferVersion,
+      TransferFurnitureReadinessState state,
+      List<TransferFurnitureTaskStatusView> tasks) {}
+
   /** The selected complete furniture composition for one cabin in this transfer. */
   public record TransferFurnitureReplacementRequest(
       @NotNull UUID assetId,
@@ -155,7 +179,17 @@ public final class LogisticsApiModels {
   }
 
   public record ArriveTransferLineRequest(
-      @NotNull @Size(min = 1, max = 20) List<@Valid MediaReferenceInput> references) {}
+      @NotNull @Size(min = 1, max = 20) List<@Valid MediaReferenceInput> references,
+      @Min(1) @Max(5) Integer priority,
+      @NotNull Boolean movementToShipment) {}
+
+  public record TransferArrivalPreflightView(
+      UUID transferId,
+      UUID lineId,
+      UUID activeRepairId,
+      boolean priorityRequired,
+      boolean movementToShipmentAvailable,
+      List<UUID> missingQueueDefinitionIds) {}
 
   public record MediaReferenceInput(@NotNull UUID mediaId, @Min(1) long generation) {}
 
@@ -165,14 +199,11 @@ public final class LogisticsApiModels {
   public record ReturnMediaLineRequest(
       @NotNull UUID lineId,
       @NotNull @Size(min = 1, max = 20) List<@Valid MediaReferenceInput> references,
+      @NotNull @AssertTrue Boolean equipmentConfirmed,
       @NotNull @Size(max = 100) List<@Valid ReturnAdditionalEquipmentRequest>
           additionalEquipment) {
     public ReturnMediaLineRequest {
       additionalEquipment = additionalEquipment == null ? List.of() : additionalEquipment;
-    }
-
-    public ReturnMediaLineRequest(UUID lineId, List<MediaReferenceInput> references) {
-      this(lineId, references, List.of());
     }
   }
 
@@ -183,6 +214,7 @@ public final class LogisticsApiModels {
 
   public record ReturnShortageLineRequest(
       @NotNull UUID lineId,
+      @NotNull @Size(min = 1, max = 20) List<@Valid MediaReferenceInput> references,
       @NotNull @Size(min = 1, max = 100) List<@Valid EquipmentShortageRequest> shortages) {}
 
   public record RequestReturnEstimateRequest(

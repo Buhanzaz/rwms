@@ -20,6 +20,7 @@ import java.security.PrivateKey;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -63,6 +64,7 @@ import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationConsentService;
 import org.springframework.security.oauth2.server.authorization.OAuth2AuthorizationService;
@@ -71,13 +73,22 @@ import org.springframework.security.oauth2.server.authorization.authentication.O
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientCredentialsAuthenticationProvider;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientCredentialsAuthenticationToken;
 import org.springframework.security.oauth2.server.authorization.authentication.OAuth2ClientCredentialsAuthenticationValidator;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeRequestAuthenticationContext;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeRequestAuthenticationException;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeRequestAuthenticationProvider;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeRequestAuthenticationToken;
+import org.springframework.security.oauth2.server.authorization.authentication.OAuth2AuthorizationCodeRequestAuthenticationValidator;
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationConsentService;
 import org.springframework.security.oauth2.server.authorization.JdbcOAuth2AuthorizationService;
 import org.springframework.security.oauth2.server.authorization.client.JdbcRegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.settings.AuthorizationServerSettings;
+import org.springframework.security.oauth2.server.authorization.token.DelegatingOAuth2TokenGenerator;
+import org.springframework.security.oauth2.server.authorization.token.JwtGenerator;
 import org.springframework.security.oauth2.server.authorization.token.JwtEncodingContext;
+import org.springframework.security.oauth2.server.authorization.token.OAuth2AccessTokenGenerator;
 import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenCustomizer;
+import org.springframework.security.oauth2.server.authorization.token.OAuth2TokenGenerator;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
@@ -143,7 +154,10 @@ public class AuthorizationServerConfiguration {
     private JsonMapper authorizationJsonMapper() {
         var allowedTypes = BasicPolymorphicTypeValidator.builder()
                 .allowIfSubType("java.util.ImmutableCollections$List12")
-                .allowIfSubType("java.util.ImmutableCollections$ListN");
+                .allowIfSubType("java.util.ImmutableCollections$ListN")
+                // Older authorization rows used Map.of(...) for warehouse_access entries.
+                // Retain only this precise legacy collection type for refresh-token reads.
+                .allowIfSubType("java.util.ImmutableCollections$MapN");
         return JsonMapper.builder()
                 .addModules(SecurityJacksonModules.getModules(
                         AuthorizationServerConfiguration.class.getClassLoader(), allowedTypes))
@@ -158,11 +172,19 @@ public class AuthorizationServerConfiguration {
 
     @Bean
     @Order(Ordered.HIGHEST_PRECEDENCE)
-    SecurityFilterChain authorizationServerChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain authorizationServerChain(
+            HttpSecurity http, RegisteredClientRepository clients) throws Exception {
         var authorizationServer = new OAuth2AuthorizationServerConfigurer();
         RequestMatcher endpoints = authorizationServer.getEndpointsMatcher();
         http.securityMatcher(endpoints)
                 .with(authorizationServer, server -> server
+                        .clientAuthentication(clientAuthentication -> clientAuthentication
+                                .authenticationConverters(converters -> converters.add(
+                                        0, new PublicPkceClientAuthenticationConverter()))
+                                .authenticationProviders(providers -> providers.add(
+                                        0, new PublicPkceClientAuthenticationProvider(clients))))
+                        .authorizationEndpoint(endpoint -> endpoint.authenticationProviders(
+                                publicMobileAuthorizationCodeValidators()))
                         .tokenEndpoint(tokenEndpoint -> tokenEndpoint.authenticationProviders(
                                 downstreamClientCredentialsValidators()))
                         .oidc(Customizer.withDefaults()))
@@ -175,12 +197,48 @@ public class AuthorizationServerConfiguration {
         return http.build();
     }
 
+    private Consumer<List<AuthenticationProvider>> publicMobileAuthorizationCodeValidators() {
+        return providers -> providers.forEach(provider -> {
+            if (provider
+                    instanceof OAuth2AuthorizationCodeRequestAuthenticationProvider authorizationCode) {
+                authorizationCode.setAuthenticationValidator(
+                        new OAuth2AuthorizationCodeRequestAuthenticationValidator()
+                                .andThen(AuthorizationServerConfiguration::validateWorkerPkceS256));
+            }
+        });
+    }
+
+    static void validateWorkerPkceS256(
+            OAuth2AuthorizationCodeRequestAuthenticationContext context) {
+        String clientId = context.getRegisteredClient().getClientId();
+        if (!OAuthClientProperties.WORKER_ANDROID_CLIENT_ID.equals(clientId)
+                && !OAuthClientProperties.MANAGER_ANDROID_CLIENT_ID.equals(clientId)) {
+            return;
+        }
+        OAuth2AuthorizationCodeRequestAuthenticationToken authentication =
+                context.getAuthentication();
+        Object method = context.getAuthorizationRequest() == null
+                ? authentication.getAdditionalParameters().get("code_challenge_method")
+                : context.getAuthorizationRequest()
+                        .getAdditionalParameters()
+                        .get("code_challenge_method");
+        if (!"S256".equals(method)) {
+            throw new OAuth2AuthorizationCodeRequestAuthenticationException(
+                    new OAuth2Error(
+                            OAuth2ErrorCodes.INVALID_REQUEST,
+                            clientId + " requires PKCE S256",
+                            null),
+                    authentication);
+        }
+    }
+
     private Consumer<List<AuthenticationProvider>> downstreamClientCredentialsValidators() {
         return providers -> providers.forEach(provider -> {
             if (provider instanceof OAuth2ClientCredentialsAuthenticationProvider clientCredentials) {
                 clientCredentials.setAuthenticationValidator(
                         OAuth2ClientCredentialsAuthenticationValidator.DEFAULT_SCOPE_VALIDATOR
                                 .andThen(AuthorizationServerConfiguration::validateMaintenanceDownstreamScope)
+                                .andThen(AuthorizationServerConfiguration::validateAssetDownstreamRequest)
                                 .andThen(AuthorizationServerConfiguration::validateInventoryDownstreamRequest)
                                 .andThen(AuthorizationServerConfiguration::validateLogisticsDownstreamRequest));
             }
@@ -200,6 +258,14 @@ public class AuthorizationServerConfiguration {
                     "maintenance-service must request exactly one approved downstream scope",
                     null));
         }
+    }
+
+    static void validateAssetDownstreamRequest(OAuth2ClientCredentialsAuthenticationContext context) {
+        validateExactDownstreamRequest(
+                context,
+                OAuthClientProperties.ASSET_CLIENT_ID,
+                OAuthClientProperties.ASSET_SCOPES,
+                OAuthClientProperties.ASSET_AUDIENCE);
     }
 
     static void validateInventoryDownstreamRequest(OAuth2ClientCredentialsAuthenticationContext context) {
@@ -405,11 +471,19 @@ public class AuthorizationServerConfiguration {
                 context.getClaims().claim("client_id", clientId);
                 return;
             }
-            if (!AuthorizationGrantType.AUTHORIZATION_CODE.equals(context.getAuthorizationGrantType())) {
+            boolean authorizationCode =
+                    AuthorizationGrantType.AUTHORIZATION_CODE.equals(context.getAuthorizationGrantType());
+            boolean refreshToken =
+                    AuthorizationGrantType.REFRESH_TOKEN.equals(context.getAuthorizationGrantType());
+            if (!authorizationCode && !refreshToken) {
                 return;
             }
             Authentication principal = context.getPrincipal();
-            String username = principal == null ? null : principal.getName();
+            String username = authorizationCode
+                    ? principal == null ? null : principal.getName()
+                    : context.getAuthorization() == null
+                            ? null
+                            : context.getAuthorization().getPrincipalName();
             if (username == null) {
                 throw new OAuth2AuthenticationException(
                         new OAuth2Error("access_denied"), "Authenticated subject is missing", null);
@@ -428,26 +502,50 @@ public class AuthorizationServerConfiguration {
             }
             validateClientPrincipal(
                     clientId, subject.getPrincipalType(), oauthClients);
+            if (OAuthClientProperties.MANAGER_ANDROID_CLIENT_ID.equals(clientId)
+                    && (subject.getPrincipalType() != PrincipalType.USER
+                            || !subject.getGlobalRole().isManagerAppEligible()
+                            || !subject.isMobileAppAccess())) {
+                throw new OAuth2AuthenticationException(
+                        new OAuth2Error("access_denied"),
+                        "Manager app access is not allowed for this user",
+                        null);
+            }
             context.getClaims().subject(subject.getId().toString());
             context.getClaims().claim("preferred_username", profile.username());
             context.getClaims().claim("principal_type", subject.getPrincipalType().name());
             if (subject.getPrincipalType() == PrincipalType.USER) {
                 context.getClaims().claim("global_role", subject.getGlobalRole().name());
+                context.getClaims().claim("rentalAccess", subject.isRentalAccess());
                 context.getClaims().claim("warehouse_access_all",
                         subject.getGlobalRole() == dev.buhanzaz.rwms.auth.domain.UserGlobalRole.SYSTEM_ADMIN
                                 || subject.getGlobalRole() == dev.buhanzaz.rwms.auth.domain.UserGlobalRole.WMS_ADMIN);
-                var warehouseClaims = accesses.findAllByUserIdAndActiveTrueOrderByWarehouseId(subject.getId())
-                        .stream()
-                        .map(access -> java.util.Map.of(
-                                "warehouseId", access.getWarehouseId(),
-                                "level", access.getAccessLevel().effectiveFor(subject.getGlobalRole()).name()))
-                        .toList();
+                var warehouseClaims = new ArrayList<java.util.Map<String, Object>>();
+                for (var access : accesses.findAllByUserIdAndActiveTrueOrderByWarehouseId(subject.getId())) {
+                    var warehouseClaim = new LinkedHashMap<String, Object>();
+                    warehouseClaim.put("warehouseId", access.getWarehouseId());
+                    warehouseClaim.put(
+                            "level", access.getAccessLevel().effectiveFor(subject.getGlobalRole()).name());
+                    warehouseClaims.add(warehouseClaim);
+                }
                 context.getClaims().claim("warehouse_access", warehouseClaims);
             } else {
                 context.getClaims().claim("worker_id", profile.externalWorkerId());
                 context.getClaims().claim("warehouse_id", subject.getWarehouseId());
             }
         };
+    }
+
+    @Bean
+    OAuth2TokenGenerator<?> tokenGenerator(
+            JWKSource<SecurityContext> jwkSource,
+            OAuth2TokenCustomizer<JwtEncodingContext> tokenCustomizer) {
+        var jwtGenerator = new JwtGenerator(new NimbusJwtEncoder(jwkSource));
+        jwtGenerator.setJwtCustomizer(tokenCustomizer);
+        return new DelegatingOAuth2TokenGenerator(
+                jwtGenerator,
+                new OAuth2AccessTokenGenerator(),
+                new PublicPkceRefreshTokenGenerator());
     }
 
     @Bean

@@ -1,0 +1,11 @@
+package dev.buhanzaz.rwms.analytics.domain;
+
+public enum AnalyticsDltFailureCode {
+  INVALID_ENVELOPE,
+  INVALID_PAYLOAD,
+  RECORD_KEY_MISMATCH,
+  EVENT_IDENTITY_CONFLICT,
+  SOURCE_COORDINATE_CONFLICT,
+  MISSING_AGGREGATE_VERSION,
+  PROCESSING_FAILED
+}

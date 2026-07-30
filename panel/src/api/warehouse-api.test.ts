@@ -14,7 +14,6 @@ const IDEMPOTENCY_KEY = "00000000-0000-4000-8000-000000000002"
 const warehouseResponse = {
   id: WAREHOUSE_ID,
   version: 3,
-  code: "WH_NORTH",
   name: "Северный склад",
   city: "Санкт-Петербург",
   address: null,
@@ -46,7 +45,7 @@ describe("warehouse HTTP API", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     await expect(listWarehouses("access-token")).resolves.toEqual([
-      { ...warehouseResponse, serviceId: WAREHOUSE_ID },
+      warehouseResponse,
     ])
 
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
@@ -82,7 +81,6 @@ describe("warehouse HTTP API", () => {
     vi.stubGlobal("fetch", fetchMock)
 
     await createWarehouse("access-token", IDEMPOTENCY_KEY, {
-      code: "WH_NORTH",
       name: "Северный склад",
       city: "Санкт-Петербург",
       address: null,
@@ -97,7 +95,6 @@ describe("warehouse HTTP API", () => {
       IDEMPOTENCY_KEY
     )
     expect(JSON.parse(String(createRequest.body))).toEqual({
-      code: "WH_NORTH",
       name: "Северный склад",
       city: "Санкт-Петербург",
       address: null,

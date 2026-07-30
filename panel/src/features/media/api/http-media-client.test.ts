@@ -497,7 +497,9 @@ describe("HttpMediaClient", () => {
 
     await expect(
       client.rotate("access-token", owner, MEDIA_ID, 90, 2, FINALIZE_KEY)
-    ).rejects.toEqual(new ApiError("Версия медиа уже изменилась", 409))
+    ).rejects.toEqual(
+      new ApiError("Версия медиа уже изменилась", 409, "MEDIA_CONFLICT")
+    )
     expect(fetch).toHaveBeenCalledOnce()
   })
 })

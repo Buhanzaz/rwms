@@ -19,7 +19,7 @@ public final class EquipmentMovementTaskApiModels {
       @NotNull UUID warehouseId,
       UUID targetWarehouseId,
       @Size(max = 64) String unitNumber,
-      @Min(1) Integer plannedDurationMinutes,
+      @NotNull @Min(1) Integer plannedDurationMinutes,
       @NotNull @Future OffsetDateTime deadlineAt,
       @NotNull @Size(min = 1, max = 100) List<@Valid EquipmentMovementLineRequest> lines) {
     public CreateEquipmentMovementTaskRequest(
@@ -48,7 +48,6 @@ public final class EquipmentMovementTaskApiModels {
       long version,
       int lineNumber,
       UUID equipmentId,
-      String equipmentCode,
       String equipmentName,
       UUID sourceWarehouseId,
       UUID sourceRentalItemId,

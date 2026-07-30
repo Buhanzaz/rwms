@@ -248,17 +248,7 @@ class ReturnRegistrationWorkflowStore {
             .orElseThrow(() -> malformed("Return intake did not retain its asset guard"));
     guard.recordObservedAssetVersion(snapshot.version());
 
-    if (everyReturnIntakeConfirmed(document)) {
-      document.requireReturnInspection();
-      documentRepository.saveAndFlush(document);
-      eventStore.append(
-          document,
-          lines(document.getId()).size(),
-          document.getCorrelationId(),
-          document.getRequestedBySubjectId(),
-          LogisticsEventType.RETURN_INSPECTION_REQUIRED,
-          null);
-    }
+    finishRegistrationIfReady(document);
   }
 
   @Transactional
@@ -369,6 +359,22 @@ class ReturnRegistrationWorkflowStore {
       }
     }
     return true;
+  }
+
+  private void finishRegistrationIfReady(LogisticsDocument document) {
+    if (document.getState() != LogisticsDocumentState.REGISTERING
+        || !everyReturnIntakeConfirmed(document)) {
+      return;
+    }
+    document.requireReturnInspection();
+    documentRepository.saveAndFlush(document);
+    eventStore.append(
+        document,
+        lines(document.getId()).size(),
+        document.getCorrelationId(),
+        document.getRequestedBySubjectId(),
+        LogisticsEventType.RETURN_INSPECTION_REQUIRED,
+        null);
   }
 
   private List<LogisticsDocumentLine> lines(UUID documentId) {

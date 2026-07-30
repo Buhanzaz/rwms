@@ -13,6 +13,9 @@ public interface TaskAssignmentRepository extends JpaRepository<TaskAssignment, 
   List<TaskAssignment> findAllByWorkerIdAndStatusIn(
       UUID workerId, Collection<AssignmentStatus> statuses);
 
+  List<TaskAssignment> findAllByWorkerGroupIdAndStatusIn(
+      UUID workerGroupId, Collection<AssignmentStatus> statuses);
+
   boolean existsByWorkerId(UUID workerId);
 
   boolean existsByWorkerGroupId(UUID groupId);

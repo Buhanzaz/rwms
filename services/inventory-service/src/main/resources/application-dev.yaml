@@ -12,7 +12,7 @@ spring:
 rwms:
   platform:
     kafka:
-      enabled: ${INVENTORY_KAFKA_ENABLED:false}
+      enabled: ${INVENTORY_KAFKA_ENABLED:true}
   inventory:
     dependencies:
       enabled: ${INVENTORY_DEPENDENCIES_ENABLED:false}

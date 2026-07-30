@@ -4,6 +4,7 @@ import type {
   MaintenanceMediaReferenceDto,
   RepairEstimateLineDto,
   RepairEstimateMediaRefDto,
+  RepairPriority,
 } from "@/features/repair-estimates/model/repair-estimate"
 
 export type RepairTaskStatus =
@@ -40,19 +41,41 @@ export type RepairTaskAssignmentDto = {
   status: RepairTaskAssignmentStatus
 }
 
+export type RepairTaskEvidenceDto = {
+  evidenceId: string
+  entryId: string
+  workerId: string
+  workerDisplayName: string | null
+  workerGroupId: string | null
+  workerGroupName: string | null
+  mediaId: string
+  mediaGeneration: number
+  capturedAt: string
+  recordedAt: string
+  state: "READY" | "REVIEW_REQUIRED"
+}
+
 export type RepairTaskSubtaskDto = {
   id: string
   externalTaskId?: string | null
+  taskTitle?: string | null
+  taskText?: string | null
   kind: RepairTaskSubtaskKind
   status: RepairTaskSubtaskStatus
   workLines: RepairEstimateLineDto[]
   materialLines: RepairEstimateLineDto[]
+  primaryLineId?: string | null
   groupComment: string
-  queueCode: string | null
+  evidence?: RepairTaskEvidenceDto[]
+  queueName: string | null
   queueId?: string | null
   routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
   sortOrder: number
+  entryType?: "REAL" | "SHADOW"
   queuePosition: number
+  scheduledDate?: string
+  priority?: RepairPriority
+  pinned?: boolean
   plannedDurationMinutes: number | null
   startedAt: string | null
   completedAt: string | null
@@ -77,7 +100,9 @@ export type RepairTaskDto = {
   actorId: string
   sourceParty?: string | null
   dispatchDate: string | null
+  priority?: RepairPriority
   maintenanceMediaReferences?: Array<{ mediaId: string; generation: number }>
+  coverMediaId?: string | null
   subtasks: RepairTaskSubtaskDto[]
   sourceEstimateId: string | null
   sourceEstimateVersion: number | null
@@ -109,6 +134,7 @@ export type RepairTaskEditorDraft = {
   lines: RepairEstimateLineDto[]
   media: RepairEstimateMediaRefDto[]
   maintenanceMediaReferences: MaintenanceMediaReferenceDto[]
+  coverMediaId: string | null
   pendingUploads: PendingEstimateMediaUpload[]
 }
 
@@ -128,7 +154,9 @@ export type RepairTaskWriteCommand = {
   comment: string
   media: RepairEstimateMediaRefDto[]
   maintenanceMediaReferences: MaintenanceMediaReferenceDto[]
+  coverMediaId: string | null
   subtasks: RepairTaskSubtaskDto[]
+  priority?: RepairPriority
 }
 
 export type RepairTaskReworkSeed = {

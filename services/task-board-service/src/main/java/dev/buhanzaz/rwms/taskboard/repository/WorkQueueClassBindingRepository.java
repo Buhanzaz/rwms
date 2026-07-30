@@ -10,6 +10,10 @@ public interface WorkQueueClassBindingRepository
     extends JpaRepository<WorkQueueClassBinding, UUID> {
   List<WorkQueueClassBinding> findAllByQueueId(UUID queueId);
 
+  List<WorkQueueClassBinding> findAllByQueueIdOrderByBindingOrderAscIdAsc(UUID queueId);
+
+  List<WorkQueueClassBinding> findAllByWorkerClassId(UUID workerClassId);
+
   boolean existsByWorkerClassId(UUID classId);
 
   Optional<WorkQueueClassBinding> findByQueueIdAndWorkerClassId(

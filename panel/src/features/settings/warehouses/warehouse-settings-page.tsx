@@ -34,7 +34,6 @@ import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -47,14 +46,6 @@ import {
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { useAuth } from "@/features/auth/use-auth"
 import {
   getWarehouseMutationError,
@@ -65,11 +56,19 @@ import {
   parseWarehouseForm,
   type WarehouseFormValues,
 } from "@/features/settings/warehouses/warehouse-settings-form"
+import {
+  createEmptyWarehouseFilters,
+  filterWarehouses,
+  getWarehouseFilterOptions,
+} from "@/features/settings/warehouses/warehouse-settings-filtering"
+import {
+  WarehouseFiltersToggle,
+  WarehouseSettingsFilters,
+} from "@/features/settings/warehouses/warehouse-settings-filters"
+import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import { useWarehouse } from "@/hooks/use-warehouse"
 
 const WAREHOUSES_QUERY_KEY = ["warehouse-settings"] as const
-
-type ActivityFilter = "all" | "active" | "inactive"
 
 function WarehouseEditorDialog({
   warehouse,
@@ -115,26 +114,10 @@ function WarehouseEditorDialog({
       <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{warehouse ? "Склад" : "Новый склад"}</DialogTitle>
-          <DialogDescription>
-            Идентичность, метаданные и временная зона. Топология склада здесь не
-            редактируется.
-          </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={(event) => void submit(event)}>
           <FieldGroup className="grid gap-4 md:grid-cols-2">
-            <Field data-invalid={formError !== null || undefined}>
-              <FieldLabel htmlFor="warehouse-code">Код</FieldLabel>
-              <Input
-                id="warehouse-code"
-                value={values.code}
-                maxLength={64}
-                onChange={(event) => updateValue("code", event.target.value)}
-                placeholder="WH_NORTH"
-                required
-                aria-invalid={formError !== null}
-              />
-            </Field>
             <Field data-invalid={formError !== null || undefined}>
               <FieldLabel htmlFor="warehouse-name">Название</FieldLabel>
               <Input
@@ -295,7 +278,8 @@ export function WarehouseSettingsPage() {
   const { accessToken, currentUser } = useAuth()
   const { reloadWarehouses } = useWarehouse()
   const [search, setSearch] = useState("")
-  const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all")
+  const [filters, setFilters] = useState(createEmptyWarehouseFilters)
+  const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
   const [editor, setEditor] = useState<WarehouseInfo | "new" | null>(null)
   const [deactivating, setDeactivating] = useState<WarehouseInfo | null>(null)
   const [serverError, setServerError] = useState<string | null>(null)
@@ -328,7 +312,6 @@ export function WarehouseSettingsPage() {
 
       if (editor === "new") {
         const createInput: WarehouseCreateInput = {
-          code: input.code,
           name: input.name,
           city: input.city,
           address: input.address,
@@ -401,7 +384,6 @@ export function WarehouseSettingsPage() {
       }
 
       return replaceWarehouse(accessToken, warehouse.id, warehouse.version, {
-        code: warehouse.code,
         name: warehouse.name,
         city: warehouse.city,
         address: warehouse.address,
@@ -428,28 +410,18 @@ export function WarehouseSettingsPage() {
     },
   })
 
-  const visibleWarehouses = useMemo(() => {
-    const normalizedSearch = search.trim().toLocaleLowerCase("ru")
-
-    return (warehousesQuery.data ?? []).filter((warehouse) => {
-      const matchesActivity =
-        activityFilter === "all" ||
-        (activityFilter === "active" && warehouse.active) ||
-        (activityFilter === "inactive" && !warehouse.active)
-      const matchesSearch =
-        !normalizedSearch ||
-        [
-          warehouse.code,
-          warehouse.name,
-          warehouse.city,
-          warehouse.timeZone,
-        ].some((value) =>
-          value.toLocaleLowerCase("ru").includes(normalizedSearch)
-        )
-
-      return matchesActivity && matchesSearch
-    })
-  }, [activityFilter, search, warehousesQuery.data])
+  const warehouses = useMemo(
+    () => warehousesQuery.data ?? [],
+    [warehousesQuery.data]
+  )
+  const filterOptions = useMemo(
+    () => getWarehouseFilterOptions(warehouses),
+    [warehouses]
+  )
+  const visibleWarehouses = useMemo(
+    () => filterWarehouses(warehouses, search, filters),
+    [filters, search, warehouses]
+  )
 
   if (!canManage) {
     return (
@@ -477,47 +449,32 @@ export function WarehouseSettingsPage() {
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
       <PageToolbar>
-        <PageToolbarContent>
-          <h1 className="text-lg font-semibold">Склады</h1>
-          <p className="text-sm text-muted-foreground">
-            Идентичность, метаданные и временная зона. Топология склада пока не
-            определена.
-          </p>
+        <PageToolbarContent className="max-w-xl">
+          <Input
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Поиск по названию или городу"
+            aria-label="Поиск складов"
+          />
         </PageToolbarContent>
-        <PageToolbarActions>
+        <PageToolbarActions className="w-full sm:w-auto">
+          <WarehouseFiltersToggle
+            open={filtersOpen}
+            controls="warehouse-settings-filters"
+            onOpenChange={setFiltersOpen}
+          />
           <Button type="button" onClick={() => openEditor("new")}>
             Создать склад
           </Button>
         </PageToolbarActions>
       </PageToolbar>
-
-      <div className="flex flex-col gap-3 sm:flex-row">
-        <Input
-          type="search"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Поиск по коду, названию или городу"
-          aria-label="Поиск складов"
-          className="sm:max-w-md"
+      <div id="warehouse-settings-filters" hidden={!filtersOpen}>
+        <WarehouseSettingsFilters
+          filters={filters}
+          options={filterOptions}
+          onChange={setFilters}
         />
-        <Select
-          value={activityFilter}
-          onValueChange={(value) => setActivityFilter(value as ActivityFilter)}
-        >
-          <SelectTrigger
-            aria-label="Статус склада"
-            className="sm:ml-auto sm:w-48"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectItem value="all">Все статусы</SelectItem>
-              <SelectItem value="active">Активные</SelectItem>
-              <SelectItem value="inactive">Неактивные</SelectItem>
-            </SelectGroup>
-          </SelectContent>
-        </Select>
       </div>
 
       {warehousesQuery.isLoading ? (
@@ -546,12 +503,6 @@ export function WarehouseSettingsPage() {
             className="hidden min-h-0 flex-1 overflow-auto md:block"
             items={visibleWarehouses}
             columns={[
-              {
-                id: "code",
-                label: "Код",
-                getSortValue: (warehouse) => warehouse.code,
-                render: (warehouse) => warehouse.code,
-              },
               {
                 id: "name",
                 label: "Название",
@@ -615,12 +566,7 @@ export function WarehouseSettingsPage() {
               <Card key={warehouse.id} size="sm">
                 <CardHeader>
                   <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <CardTitle>{warehouse.name}</CardTitle>
-                      <p className="text-sm text-muted-foreground">
-                        {warehouse.code}
-                      </p>
-                    </div>
+                    <CardTitle>{warehouse.name}</CardTitle>
                     <Badge variant={warehouse.active ? "secondary" : "outline"}>
                       {warehouse.active ? "Активен" : "Неактивен"}
                     </Badge>
@@ -681,7 +627,7 @@ export function WarehouseSettingsPage() {
             <AlertDialogHeader>
               <AlertDialogTitle>Деактивировать склад?</AlertDialogTitle>
               <AlertDialogDescription>
-                Склад {deactivating.code} исчезнет из обычного выбора.
+                Склад «{deactivating.name}» исчезнет из обычного выбора.
                 Реактивировать его можно из этого списка.
               </AlertDialogDescription>
             </AlertDialogHeader>

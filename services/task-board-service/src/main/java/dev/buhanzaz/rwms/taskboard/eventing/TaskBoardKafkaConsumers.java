@@ -60,6 +60,17 @@ public class TaskBoardKafkaConsumers {
     return consumer(TaskBoardAggregateType.QUEUE_ENTRY, processor, dlt);
   }
 
+  @Bean
+  Consumer<Message<byte[]>> taskBoardMediaEvents(WorkerMediaEventProcessor processor) {
+    return message -> processor.process(message.getPayload());
+  }
+
+  @Bean
+  Consumer<Message<byte[]>> taskBoardWarehouseEvents(
+      WarehouseMetadataEventProcessor processor) {
+    return message -> processor.process(message.getPayload());
+  }
+
   private Consumer<Message<byte[]>> consumer(TaskBoardAggregateType type,
       TaskBoardInboxProcessor processor, TaskBoardSanitizedDltPublisher dlt) {
     return message -> processWithBoundedRetry(message.getPayload(), type, processor, dlt);

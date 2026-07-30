@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.taskboard.eventing;
 
 import dev.buhanzaz.rwms.taskboard.domain.BoardTask;
+import dev.buhanzaz.rwms.taskboard.domain.GroupKpiDayState;
 import dev.buhanzaz.rwms.taskboard.domain.QueueEntry;
 import dev.buhanzaz.rwms.taskboard.domain.QueueUsageReference;
 import dev.buhanzaz.rwms.taskboard.domain.WorkQueue;
@@ -10,6 +11,7 @@ import dev.buhanzaz.rwms.taskboard.domain.WorkerGroup;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.AssignmentFact;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.BoardTaskFact;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.GroupMemberFact;
+import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.GroupKpiDayFact;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.InterruptionFact;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.QualificationFact;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.QueueBindingFact;
@@ -44,8 +46,7 @@ public class TaskBoardEventFactFactory {
 
   public WorkerClassFact workerClass(WorkerClass value, boolean deleted) {
     return new WorkerClassFact(
-        value.getId(), value.getRevisionMarker(), value.getCode(),
-        value.getSortOrder(), value.isActive(), deleted);
+        value.getId(), value.getRevisionMarker(), value.getSortOrder(), value.isActive(), deleted);
   }
 
   @Transactional(readOnly = true)
@@ -56,7 +57,13 @@ public class TaskBoardEventFactFactory {
             q.getId(), q.getVersion(), q.getWorkerClass().getId(), q.isActive()))
         .toList();
     return new WorkerFact(
-        value.getId(), value.getWarehouseId(), value.isActive(), value.getRevisionMarker(), facts, deleted);
+        value.getId(),
+        value.getWarehouseId(),
+        value.isActive(),
+        value.getRevisionMarker(),
+        value.getCurrentGroup() == null ? null : value.getCurrentGroup().getId(),
+        facts,
+        deleted);
   }
 
   @Transactional(readOnly = true)
@@ -68,28 +75,35 @@ public class TaskBoardEventFactFactory {
         .toList();
     return new WorkerGroupFact(
         value.getId(), value.getRevisionMarker(), value.getWarehouseId(),
-        value.getWorkerClass().getId(), value.isActive(),
+        value.getWorkerClass().getId(), value.isActive(), value.getOperationalStatus(),
         memberFacts, deleted);
   }
 
   @Transactional(readOnly = true)
   public WorkQueueFact workQueue(WorkQueue value, boolean deleted) {
-    var bindingFacts = bindings.findAllByQueueId(value.getId()).stream()
-        .sorted(Comparator.comparing(binding -> binding.getId().toString()))
+    var bindingFacts = bindings.findAllByQueueIdOrderByBindingOrderAscIdAsc(value.getId()).stream()
         .map(binding -> new QueueBindingFact(
             binding.getId(), binding.getVersion(), binding.getWorkerClass().getId(),
-            binding.isStopTaskOnTake()))
+            binding.getBindingOrder(), binding.isStopTaskOnTake(), binding.isNotifyUrgent()))
         .toList();
     return new WorkQueueFact(
-        value.getId(), value.getRevisionMarker(), value.getWarehouseId(), value.getCode(),
-        value.getType(), value.getSortOrder(), value.isActive(), value.isHidden(),
+        value.getId(),
+        value.getRevisionMarker(),
+        value.getWarehouseId(),
+        value.getDefinition().getId(),
+        value.getType(),
+        value.getSortOrder(), value.isActive(), value.isHidden(),
         value.isCollapsed(), value.getHoldingPeriodMinutes(), value.getNotificationThreshold(),
-        value.isNotifyWhenThresholdReached(), bindingFacts, deleted);
+        value.isNotifyWhenThresholdReached(), value.getResultPhotoMinCount(),
+        bindingFacts, deleted);
   }
 
   public QueueUsageReferenceFact queueUsageReference(QueueUsageReference value, boolean deleted) {
     return new QueueUsageReferenceFact(
-        value.getId(), value.getRevisionMarker(), value.getQueue().getId(), value.getReferenceType(),
+        value.getId(),
+        value.getRevisionMarker(),
+        value.getDefinition().getId(),
+        value.getReferenceType(),
         TaskBoardEventStore.sha256(
             ("task-board-queue-reference:v1\u0000" + value.getExternalReferenceId())
                 .getBytes(StandardCharsets.UTF_8)),
@@ -99,6 +113,7 @@ public class TaskBoardEventFactFactory {
   public BoardTaskFact boardTask(BoardTask value, boolean deleted) {
     return new BoardTaskFact(
         value.getId(), value.getWarehouseId(), value.getExternalTaskId(), value.getStatus(),
+        value.getScheduledDate(), value.getPriority(), value.isPinned(),
         value.getPlannedDurationMinutes(), value.getDeadlineAt(), value.getDoneAt(), deleted);
   }
 
@@ -134,9 +149,30 @@ public class TaskBoardEventFactFactory {
         .toList();
     return new QueueEntryFact(
         value.getId(), value.getTask().getId(), value.getQueue() == null ? null : value.getQueue().getId(),
-        value.getQueueCode(), value.getRouteIndex(), value.getQueuePosition(), value.getEntryType(),
+        value.getRouteIndex(), value.getQueuePosition(), value.getEntryType(),
         value.getStatus(), value.getPlannedDurationMinutes(),
         value.getActiveStartedAt(), value.getPausedAt(), value.getDoneAt(), value.getActiveWorkSeconds(),
-        value.getPauseOrigin(), assignmentFacts, timeEventFacts, interruptionFacts, deleted);
+        value.getOriginalBudgetSeconds(), value.getCurrentBudgetSeconds(), value.getPauseOrigin(),
+        assignmentFacts, timeEventFacts, interruptionFacts, deleted);
+  }
+
+  public GroupKpiDayFact groupKpiDay(GroupKpiDayState value) {
+    return new GroupKpiDayFact(
+        value.getId(),
+        value.getWarehouseId(),
+        value.getWorkerGroupId(),
+        value.getLocalDate(),
+        value.getDataAvailableFrom(),
+        value.getFormulaVersion(),
+        value.getCompletedBudgetSeconds(),
+        value.getEarnedRemainingSeconds(),
+        value.getActiveSeconds(),
+        value.getPenalizedIdleSeconds(),
+        value.getCompletedTaskCount(),
+        value.getOpenState(),
+        value.getOpenStateStartedAt(),
+        value.getPenaltyStartsAt(),
+        value.getNextTransitionAt(),
+        value.getAsOf());
   }
 }

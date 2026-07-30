@@ -79,6 +79,36 @@ class MaintenanceEventPayloadPolicyTest {
         .hasMessageContaining("identity mismatch");
   }
 
+  @Test
+  void repairPriorityOutsideSupportedRangeIsRejected() {
+    FactCase repair = MaintenanceEventContractFixtures.fact(MaintenanceEventType.REPAIR_QUEUED);
+    var payload = mapper.valueToTree(repair.payload()).deepCopy();
+    ((tools.jackson.databind.node.ObjectNode) payload).put("priority", 0);
+
+    assertThatThrownBy(() -> policy.validateNode(
+            MaintenanceEventType.REPAIR_QUEUED.value(),
+            MaintenanceAggregateType.REPAIR,
+            repair.aggregateId(),
+            payload))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("typed semantic validation");
+  }
+
+  @Test
+  void repairWithoutPriorityIsRejectedAfterTheOneTimeDataMigration() {
+    FactCase repair = MaintenanceEventContractFixtures.fact(MaintenanceEventType.REPAIR_QUEUED);
+    var payload = mapper.valueToTree(repair.payload()).deepCopy();
+    ((tools.jackson.databind.node.ObjectNode) payload).remove("priority");
+
+    assertThatThrownBy(() -> policy.validateNode(
+            MaintenanceEventType.REPAIR_QUEUED.value(),
+            MaintenanceAggregateType.REPAIR,
+            repair.aggregateId(),
+            payload))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("exact schema");
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {
       "login",
@@ -96,19 +126,33 @@ class MaintenanceEventPayloadPolicyTest {
       "token",
       "jwt"
   })
-  void piiSecretsBusinessTextAndStorageLocationsNeverPassEvenCompatibilityValidation(
+  void piiSecretsBusinessTextAndStorageLocationsCannotExtendTheExactContract(
       String forbiddenField) {
-    assertThatThrownBy(() -> policy.validate(Map.of(
-            "repairId", MaintenanceEventContractFixtures.REPAIR_ID.toString(),
-            forbiddenField, "sensitive-value")))
+    FactCase repair = MaintenanceEventContractFixtures.fact(MaintenanceEventType.REPAIR_QUEUED);
+    var payload = mapper.valueToTree(repair.payload()).deepCopy();
+    ((tools.jackson.databind.node.ObjectNode) payload).put(forbiddenField, "sensitive-value");
+
+    assertThatThrownBy(() -> policy.validateNode(
+            MaintenanceEventType.REPAIR_QUEUED.value(),
+            MaintenanceAggregateType.REPAIR,
+            repair.aggregateId(),
+            payload))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("forbidden field");
+        .hasMessageContaining("exact schema");
   }
 
   @Test
   void sensitiveTechnicalValuesAreRejectedEvenUnderAnUnknownBenignFieldName() {
-    assertThatThrownBy(() -> policy.validate(Map.of(
-            "aggregateReference", "operator@example.test")))
+    FactCase repair = MaintenanceEventContractFixtures.fact(MaintenanceEventType.REPAIR_QUEUED);
+    var payload = mapper.valueToTree(repair.payload()).deepCopy();
+    ((tools.jackson.databind.node.ObjectNode) payload)
+        .put("rootRepairId", "operator@example.test");
+
+    assertThatThrownBy(() -> policy.validateNode(
+            MaintenanceEventType.REPAIR_QUEUED.value(),
+            MaintenanceAggregateType.REPAIR,
+            repair.aggregateId(),
+            payload))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("sensitive technical value");
   }

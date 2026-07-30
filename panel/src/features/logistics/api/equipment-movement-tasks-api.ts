@@ -73,7 +73,6 @@ export type EquipmentMovementTaskLine = {
   version: number
   lineNumber: number
   equipmentId: string
-  equipmentCode: string | null
   equipmentName: string | null
   sourceWarehouseId: string
   sourceRentalItemId: string | null
@@ -347,7 +346,6 @@ function parseLine(value: unknown): EquipmentMovementTaskLine {
     version: requireInteger(value.version, message),
     lineNumber: requireInteger(value.lineNumber, message, 1),
     equipmentId: requireUuid(value.equipmentId, message),
-    equipmentCode: nullableText(value.equipmentCode, message),
     equipmentName: nullableText(value.equipmentName, message),
     sourceWarehouseId: requireUuid(value.sourceWarehouseId, message),
     sourceRentalItemId: nullableUuid(value.sourceRentalItemId, message),
@@ -411,7 +409,7 @@ export async function createEquipmentMovementTask(params: {
 }): Promise<EquipmentMovementTask> {
   const idempotencyKey = requireUuid(
     params.idempotencyKey,
-    "Для задания нужен UUID Idempotency-Key."
+    "Не удалось подготовить безопасный ключ команды."
   )
   const input = validateCreateInput(params.input)
 
@@ -421,6 +419,22 @@ export async function createEquipmentMovementTask(params: {
       headers: { "Idempotency-Key": idempotencyKey },
       body: JSON.stringify(input),
     })
+  )
+}
+
+export async function getEquipmentMovementTask(
+  accessToken: string,
+  taskId: string
+): Promise<EquipmentMovementTask> {
+  const id = requireUuid(
+    taskId,
+    "Некорректный идентификатор задания на перемещение."
+  )
+  return parseTask(
+    await bearerRequest<unknown>(
+      accessToken,
+      endpoint(`/${encodeURIComponent(id)}`)
+    )
   )
 }
 

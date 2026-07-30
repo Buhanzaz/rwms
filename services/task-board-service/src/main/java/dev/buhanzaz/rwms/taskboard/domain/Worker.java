@@ -5,6 +5,10 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Index;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.ForeignKey;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
@@ -72,6 +76,12 @@ public class Worker extends AbstractVersionedEntity {
 
   @Column(name = "credential_operation_started_at")
   private OffsetDateTime credentialOperationStartedAt;
+
+  @ManyToOne(fetch = FetchType.LAZY)
+  @JoinColumn(
+      name = "current_group_id",
+      foreignKey = @ForeignKey(name = "fk_worker_current_group"))
+  private WorkerGroup currentGroup;
 
   @PrePersist
   @PreUpdate
@@ -195,6 +205,14 @@ public class Worker extends AbstractVersionedEntity {
 
   public void setCredentialOperationStartedAt(OffsetDateTime credentialOperationStartedAt) {
     this.credentialOperationStartedAt = credentialOperationStartedAt;
+  }
+
+  public WorkerGroup getCurrentGroup() {
+    return currentGroup;
+  }
+
+  public void setCurrentGroup(WorkerGroup currentGroup) {
+    this.currentGroup = currentGroup;
   }
 
   public void touch() {

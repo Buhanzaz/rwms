@@ -122,7 +122,7 @@ describe("CreateOrderDialog", () => {
     await user.click(createClient)
     expect(
       await screen.findByText(
-        "Новый клиент «Новый клиент» будет создан в базе после успешного создания заказа."
+        "Новый клиент «Новый клиент» будет создан в базе после успешного создания бронирования."
       )
     ).toBeTruthy()
     expect(ordersApi.createOrder).not.toHaveBeenCalled()
@@ -167,11 +167,17 @@ describe("CreateOrderDialog", () => {
     )
     expect(
       await screen.findByText(
-        "Новый клиент «Новый клиент» будет создан в базе после успешного создания заказа."
+        "Новый клиент «Новый клиент» будет создан в базе после успешного создания бронирования."
       )
     ).toBeTruthy()
     expect(ordersApi.createOrder).not.toHaveBeenCalled()
-    await user.click(screen.getByRole("button", { name: "Создать заказ" }))
+    await user.type(
+      screen.getByPlaceholderText("+7 999 000-00-00"),
+      "+7 999 123-45-67"
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Создать бронирование" })
+    )
 
     await waitFor(() =>
       expect(ordersApi.createOrder).toHaveBeenCalledWith({
@@ -181,6 +187,8 @@ describe("CreateOrderDialog", () => {
           newClient: {
             clientType: "LEGAL_ENTITY",
             displayName: "Новый клиент",
+            phone: "+7 999 123-45-67",
+            email: null,
           },
         },
       })
@@ -195,7 +203,9 @@ describe("CreateOrderDialog", () => {
     await user.type(input, "Петров")
     const existingClient = await screen.findByText("ООО Петров")
     await user.click(existingClient)
-    await user.click(screen.getByRole("button", { name: "Создать заказ" }))
+    await user.click(
+      screen.getByRole("button", { name: "Создать бронирование" })
+    )
 
     await waitFor(() =>
       expect(ordersApi.createOrder).toHaveBeenCalledWith({
@@ -221,7 +231,13 @@ describe("CreateOrderDialog", () => {
       })
     )
     expect(ordersApi.createOrder).not.toHaveBeenCalled()
-    await user.click(screen.getByRole("button", { name: "Создать заказ" }))
+    await user.type(
+      screen.getByPlaceholderText("+7 999 000-00-00"),
+      "+7 999 765-43-21"
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Создать бронирование" })
+    )
 
     await waitFor(() =>
       expect(ordersApi.createOrder).toHaveBeenCalledWith({
@@ -231,6 +247,8 @@ describe("CreateOrderDialog", () => {
           newClient: {
             clientType: "LEGAL_ENTITY",
             displayName: "ООО Новый клиент",
+            phone: "+7 999 765-43-21",
+            email: null,
           },
         },
       })
@@ -249,9 +267,13 @@ describe("CreateOrderDialog", () => {
       "Петров"
     )
     await user.click(await screen.findByText("ООО Петров"))
-    await user.click(screen.getByRole("button", { name: "Создать заказ" }))
+    await user.click(
+      screen.getByRole("button", { name: "Создать бронирование" })
+    )
     await screen.findByText("Failed to fetch")
-    await user.click(screen.getByRole("button", { name: "Создать заказ" }))
+    await user.click(
+      screen.getByRole("button", { name: "Создать бронирование" })
+    )
 
     await waitFor(() => expect(ordersApi.createOrder).toHaveBeenCalledTimes(2))
     expect(ordersApi.createOrder.mock.calls[0][0].idempotencyKey).toBe(

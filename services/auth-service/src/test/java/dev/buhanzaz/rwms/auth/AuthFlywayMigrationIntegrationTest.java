@@ -59,7 +59,7 @@ class AuthFlywayMigrationIntegrationTest {
     void cumulativeBaselineMigratesCleanDatabaseAndRepeatIsNoOp() {
         Flyway flyway = flyway(MIGRATION_LOCATION);
 
-        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
+        assertThat(flyway.migrate().migrationsExecuted).isEqualTo(5);
         flyway.validate();
         assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -88,7 +88,7 @@ class AuthFlywayMigrationIntegrationTest {
                         "user_warehouse_access_note",
                         "version_gap_quarantine");
         assertThat(columnCounts()).containsAllEntriesOf(Map.of(
-                "auth_subject", 15,
+                "auth_subject", 17,
                 "user_warehouse_access", 9,
                 "oauth2_registered_client", 13,
                 "oauth2_authorization", 33,
@@ -107,11 +107,150 @@ class AuthFlywayMigrationIntegrationTest {
                 .containsEntry("description", "auth event sourcing")
                 .containsEntry("script", "V3__auth_event_sourcing.sql")
                 .containsEntry("success", true);
+        assertThat(jdbc.queryForMap(
+                        "select version, description, script, success from flyway_schema_history "
+                                + "where version='4'"))
+                .containsEntry("version", "4")
+                .containsEntry("description", "worker android oauth client")
+                .containsEntry("script", "V4__worker_android_oauth_client.sql")
+                .containsEntry("success", true);
+        assertThat(jdbc.queryForMap(
+                        "select version, description, script, success from flyway_schema_history "
+                                + "where version='5'"))
+                .containsEntry("version", "5")
+                .containsEntry("description", "manager mobile app access")
+                .containsEntry("script", "V5__manager_mobile_app_access.sql")
+                .containsEntry("success", true);
+        assertThat(jdbc.queryForMap(
+                        "select version, description, script, success from flyway_schema_history "
+                                + "where version='6'"))
+                .containsEntry("version", "6")
+                .containsEntry("description", "rental access")
+                .containsEntry("script", "V6__rental_access.sql")
+                .containsEntry("success", true);
         assertV3Schema();
         assertThat(jdbc.queryForObject("select count(*) from auth_subject", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("select count(*) from domain_event", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("select count(*) from outbox_event", Integer.class)).isZero();
+    }
+
+    @Test
+    void workerAndroidClientUpgradeRenamesClientAndRevokesExistingAuthorizations() {
+        configuration(MIGRATION_LOCATION).target("3").load().migrate();
+        var clients = new JdbcRegisteredClientRepository(jdbc);
+        RegisteredClient legacy = RegisteredClient.withId("rwms-worker-id")
+                .clientId("rwms-worker")
+                .clientName("RWMS Worker")
+                .clientAuthenticationMethod(
+                        org.springframework.security.oauth2.core.ClientAuthenticationMethod.NONE)
+                .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
+                .redirectUri("https://example.test/auth/callback")
+                .scope("worker.tasks")
+                .clientSettings(ClientSettings.builder().requireProofKey(true).build())
+                .tokenSettings(TokenSettings.builder().build())
+                .build();
+        clients.save(legacy);
+        var authorizations = new JdbcOAuth2AuthorizationService(jdbc, clients);
+        Instant issuedAt = Instant.parse("2026-07-24T00:00:00Z");
+        OAuth2Authorization authorization = OAuth2Authorization.withRegisteredClient(legacy)
+                .id("rwms-worker-authorization")
+                .principalName("worker.legacy")
+                .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
+                .authorizedScopes(Set.of("worker.tasks"))
+                .accessToken(new OAuth2AccessToken(
+                        OAuth2AccessToken.TokenType.BEARER,
+                        "legacy-access-token",
+                        issuedAt,
+                        issuedAt.plusSeconds(300),
+                        Set.of("worker.tasks")))
+                .build();
+        authorizations.save(authorization);
+        var consents = new JdbcOAuth2AuthorizationConsentService(jdbc, clients);
+        consents.save(OAuth2AuthorizationConsent.withId(legacy.getId(), "worker.legacy")
+                .authority(new SimpleGrantedAuthority("SCOPE_worker.tasks"))
+                .build());
+
+        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(3);
+
+        assertThat(clients.findByClientId("rwms-worker")).isNull();
+        assertThat(clients.findByClientId("rwms-worker-android")).isNotNull();
+        assertThat(authorizations.findById(authorization.getId())).isNull();
+        assertThat(consents.findById(legacy.getId(), "worker.legacy")).isNull();
+    }
+
+    @Test
+    void managerMobileAccessBackfillEnablesEligibleUsersAndAdvancesEventTruth() {
+        configuration(MIGRATION_LOCATION).target("2").load().migrate();
+        UUID managerId = UUID.fromString("10000000-0000-0000-0000-000000000051");
+        insertUser(managerId, "warehouse.manager");
+        jdbc.update(
+                "update auth_subject set global_role='WAREHOUSE_MANAGER' where id=?",
+                managerId);
+
+        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isEqualTo(4);
+
+        assertThat(jdbc.queryForMap(
+                        "select version, mobile_app_access from auth_subject where id=?",
+                        managerId))
+                .containsEntry("version", 1)
+                .containsEntry("mobile_app_access", true);
+        assertThat(jdbc.queryForMap(
+                        "select current_version, last_event_id from event_stream_head "
+                                + "where aggregate_type='USER_AUTHORIZATION' and aggregate_id=?",
+                        managerId.toString()))
+                .containsEntry("current_version", 1L);
+        assertThat(jdbc.queryForObject(
+                        "select count(*) from domain_event "
+                                + "where aggregate_type='USER_AUTHORIZATION' and aggregate_id=?",
+                        Integer.class,
+                        managerId.toString()))
+                .isEqualTo(2);
+        assertThat(jdbc.queryForObject(
+                        "select payload->>'mobileAppAccess' from domain_event "
+                                + "where aggregate_type='USER_AUTHORIZATION' and aggregate_id=? "
+                                + "order by aggregate_version desc limit 1",
+                        String.class,
+                        managerId.toString()))
+                .isEqualTo("true");
+        assertThat(jdbc.queryForObject(
+                        "select count(*) from outbox_event "
+                                + "where aggregate_type='USER_AUTHORIZATION' and aggregate_id=? "
+                                + "and status='PENDING'",
+                        Integer.class,
+                        managerId.toString()))
+                .isOne();
+        assertThatThrownBy(() -> jdbc.update(
+                        "update auth_subject set global_role='VIEWER' where id=?",
+                        managerId))
+                .hasMessageContaining("ck_auth_subject_mobile_app_access");
+    }
+
+    @Test
+    void rentalAccessBackfillUsesRoleDefaultsForExistingUsers() {
+        configuration(MIGRATION_LOCATION).target("5").load().migrate();
+        UUID systemAdminId = UUID.fromString("10000000-0000-0000-0000-000000000061");
+        UUID wmsAdminId = UUID.fromString("10000000-0000-0000-0000-000000000062");
+        UUID rentalManagerId = UUID.fromString("10000000-0000-0000-0000-000000000063");
+        UUID warehouseManagerId = UUID.fromString("10000000-0000-0000-0000-000000000064");
+        UUID viewerId = UUID.fromString("10000000-0000-0000-0000-000000000065");
+        insertUser(systemAdminId, "rental.system-admin");
+        insertUser(wmsAdminId, "rental.wms-admin");
+        insertUser(rentalManagerId, "rental.manager");
+        insertUser(warehouseManagerId, "rental.warehouse-manager");
+        insertUser(viewerId, "rental.viewer");
+        jdbc.update("update auth_subject set global_role='SYSTEM_ADMIN', active=false where id=?", systemAdminId);
+        jdbc.update("update auth_subject set global_role='WMS_ADMIN' where id=?", wmsAdminId);
+        jdbc.update("update auth_subject set global_role='RENTAL_MANAGER' where id=?", rentalManagerId);
+        jdbc.update("update auth_subject set global_role='WAREHOUSE_MANAGER' where id=?", warehouseManagerId);
+
+        assertThat(flyway(MIGRATION_LOCATION).migrate().migrationsExecuted).isOne();
+
+        assertThat(rentalAccess(systemAdminId)).isTrue();
+        assertThat(rentalAccess(wmsAdminId)).isTrue();
+        assertThat(rentalAccess(rentalManagerId)).isTrue();
+        assertThat(rentalAccess(warehouseManagerId)).isFalse();
+        assertThat(rentalAccess(viewerId)).isFalse();
     }
 
     @Test
@@ -245,7 +384,7 @@ class AuthFlywayMigrationIntegrationTest {
                 .baselineDescription("Auth post-F1C schema")
                 .load();
         adopted.baseline();
-        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(1);
+        assertThat(adopted.migrate().migrationsExecuted).isEqualTo(4);
         adopted.validate();
         assertThat(adopted.migrate().migrationsExecuted).isZero();
 
@@ -393,7 +532,6 @@ class AuthFlywayMigrationIntegrationTest {
 
     private Map<String, String> retainedLegacyContentDigests() {
         return Map.of(
-                "auth_subject", digest("auth_subject"),
                 "user_warehouse_access", digest("user_warehouse_access"),
                 "oauth2_registered_client", digest("oauth2_registered_client"),
                 "oauth2_authorization", digest("oauth2_authorization"),
@@ -484,7 +622,6 @@ class AuthFlywayMigrationIntegrationTest {
                            and checkpoint.aggregate_id=event.aggregate_id
                            and checkpoint.aggregate_version=event.aggregate_version
                            and checkpoint.projection_sha256=event.payload_sha256
-                         where event.baseline and event.occurred_at is null
                         """,
                         Integer.class))
                 .isEqualTo(2);
@@ -496,7 +633,12 @@ class AuthFlywayMigrationIntegrationTest {
                         "select coalesce(string_agg(payload::text, ''), '') from domain_event",
                         String.class))
                 .doesNotContain("migration.user", "migration.worker", "worker-12", "{noop}password");
-        assertThat(jdbc.queryForObject("select count(*) from outbox_event", Integer.class)).isZero();
+        assertThat(jdbc.queryForObject(
+                        "select count(*) from outbox_event "
+                                + "where event_type='auth.user-authorization.changed.v1' "
+                                + "and status='PENDING'",
+                        Integer.class))
+                .isOne();
     }
 
     private String digest(String table) {
@@ -519,6 +661,11 @@ class AuthFlywayMigrationIntegrationTest {
                     }
                     return counts;
                 });
+    }
+
+    private boolean rentalAccess(UUID subjectId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+                "select rental_access from auth_subject where id=?", Boolean.class, subjectId));
     }
 
     private void apply(String resource) throws Exception {

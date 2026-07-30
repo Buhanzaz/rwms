@@ -291,7 +291,7 @@ public final class DossierEnvelopeValidator {
     for (String suffix : Set.of("created", "changed", "completed", "cancelled")) {
       add(result, "rwms.task-board.board-task.v1", "BOARD_TASK", SubjectKind.NONE, boardTask, boardTask, "boardTaskId", null, "task-board.board-task." + suffix + ".v1");
     }
-    Set<String> queueEntry = Set.of("queueEntryId", "taskId", "queueId", "queueCode", "routeIndex", "queuePosition", "entryType", "status", "plannedDurationMinutes", "activeStartedAt", "pausedAt", "doneAt", "activeWorkSeconds", "pauseOrigin", "assignments", "timeEvents", "interruptions", "deleted");
+    Set<String> queueEntry = Set.of("queueEntryId", "taskId", "queueId", "routeIndex", "queuePosition", "entryType", "status", "plannedDurationMinutes", "activeStartedAt", "pausedAt", "doneAt", "activeWorkSeconds", "pauseOrigin", "assignments", "timeEvents", "interruptions", "deleted");
     for (String suffix : Set.of("created", "changed", "taken", "paused", "resumed", "completed", "moved", "cancelled", "interrupted", "returning")) {
       add(result, "rwms.task-board.queue-entry.v1", "QUEUE_ENTRY", SubjectKind.NONE, queueEntry, queueEntry, "queueEntryId", null, "task-board.queue-entry." + suffix + ".v1");
     }

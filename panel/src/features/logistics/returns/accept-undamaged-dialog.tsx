@@ -3,13 +3,8 @@ import { useMutation, useQuery } from "@tanstack/react-query"
 
 import { getEquipmentItems } from "@/api/equipment-api"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -55,6 +50,7 @@ type ReturnMediaLineDraft = {
   lineId: string
   lineNumber: number
   references: MediaReference[]
+  equipmentCompletenessConfirmed: boolean
   additionalEquipment: Array<ReturnAdditionalEquipment & { key: string }>
 }
 
@@ -63,6 +59,7 @@ function initialLines(document: ReturnDocument): ReturnMediaLineDraft[] {
     lineId: line.id,
     lineNumber: line.lineNumber,
     references: [],
+    equipmentCompletenessConfirmed: false,
     additionalEquipment: [],
   }))
 }
@@ -152,6 +149,19 @@ export function AcceptUndamagedDialog({
     )
   }
 
+  function updateEquipmentCompletenessConfirmation(
+    lineId: string,
+    equipmentCompletenessConfirmed: boolean
+  ) {
+    setLines((current) =>
+      current.map((line) =>
+        line.lineId === lineId
+          ? { ...line, equipmentCompletenessConfirmed }
+          : line
+      )
+    )
+  }
+
   function updateAdditionalEquipment(
     lineId: string,
     key: string,
@@ -207,6 +217,12 @@ export function AcceptUndamagedDialog({
         }
         mediaIds.add(reference.mediaId)
       }
+      if (!line.equipmentCompletenessConfirmed) {
+        setValidationError(
+          "Подтвердите проверку комплектности мебели и оборудования для каждой строки."
+        )
+        return
+      }
       const equipmentIds = new Set<string>()
       for (const equipment of line.additionalEquipment) {
         if (
@@ -225,6 +241,7 @@ export function AcceptUndamagedDialog({
       commandLines.push({
         lineId: line.lineId,
         references: line.references,
+        equipmentConfirmed: true,
         additionalEquipment: line.additionalEquipment.map(
           ({ equipmentId, quantity }) => ({ equipmentId, quantity })
         ),
@@ -269,9 +286,6 @@ export function AcceptUndamagedDialog({
                   <Card key={line.lineId} size="sm">
                     <CardHeader>
                       <CardTitle>Строка {line.lineNumber}</CardTitle>
-                      <CardDescription className="font-mono text-xs">
-                        {line.lineId}
-                      </CardDescription>
                     </CardHeader>
                     <CardContent>
                       <ServiceOwnerPhotos
@@ -288,6 +302,31 @@ export function AcceptUndamagedDialog({
                           updateReferences(line.lineId, references)
                         }
                       />
+                      <Field orientation="horizontal" className="mt-4">
+                        <Checkbox
+                          id={`return-equipment-confirmed-${line.lineId}`}
+                          checked={line.equipmentCompletenessConfirmed}
+                          disabled={mutation.isPending}
+                          onCheckedChange={(checked) =>
+                            updateEquipmentCompletenessConfirmation(
+                              line.lineId,
+                              checked === true
+                            )
+                          }
+                        />
+                        <div className="flex flex-col gap-1">
+                          <FieldLabel
+                            htmlFor={`return-equipment-confirmed-${line.lineId}`}
+                          >
+                            Комплектность мебели и оборудования проверена
+                          </FieldLabel>
+                          <FieldDescription>
+                            Подтверждаю проверку ожидаемого комплекта строки{" "}
+                            {line.lineNumber}. Не найденное оборудование требует
+                            создания сметы.
+                          </FieldDescription>
+                        </div>
+                      </Field>
                       <FieldSet className="mt-4">
                         <FieldLegend variant="label">
                           Дополнительная мебель

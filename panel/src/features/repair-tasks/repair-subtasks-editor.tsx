@@ -157,6 +157,24 @@ export function RepairSubtasksEditor({
                 <Badge variant="outline">
                   {repairSubtaskStatusLabel(subtask.status)}
                 </Badge>
+                <Badge
+                  variant={
+                    (subtask.priority ?? task.priority ?? 3) <= 2
+                      ? "default"
+                      : "secondary"
+                  }
+                >
+                  Приоритет {subtask.priority ?? task.priority ?? 3}
+                </Badge>
+                <Badge variant="outline">
+                  Очередь {subtask.queuePosition + 1}
+                </Badge>
+                {subtask.scheduledDate ? (
+                  <Badge variant="outline">{subtask.scheduledDate}</Badge>
+                ) : null}
+                {subtask.pinned ? (
+                  <Badge variant="secondary">Закреплено</Badge>
+                ) : null}
               </CardTitle>
               <CardDescription>
                 {movementTitle

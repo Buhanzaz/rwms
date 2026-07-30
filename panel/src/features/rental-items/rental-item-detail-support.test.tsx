@@ -9,16 +9,24 @@ import {
 afterEach(cleanup)
 
 describe("rental item detail support", () => {
-  it("keeps compound characteristics and highlights sanitary characteristics", () => {
+  it("keeps compound characteristics in neutral rounded tags", () => {
     render(
-      <CharacteristicTags value="Электрика КК, Душевая, Металлическая дверь, кондиционер" />
+      <CharacteristicTags
+        values={[
+          { id: "electricity", name: "Электрика КК" },
+          { id: "shower", name: "Душевая" },
+          { id: "door", name: "Металлическая дверь" },
+          { id: "air-conditioner", name: "кондиционер" },
+        ]}
+      />
     )
 
     expect(screen.getByText("Электрика КК").className).toContain("bg-secondary")
-    expect(screen.getByText("Душевая").className).toContain("bg-primary")
-    expect(
-      screen.getByText("Металлическая дверь, кондиционер").className
-    ).toContain("bg-secondary")
+    expect(screen.getByText("Душевая").className).toContain("bg-secondary")
+    expect(screen.getByText("Металлическая дверь").className).toContain(
+      "bg-secondary"
+    )
+    expect(screen.getByText("кондиционер").className).toContain("bg-secondary")
   })
 
   it("shows an honest empty register with the transferred columns", () => {

@@ -2,6 +2,9 @@ package dev.buhanzaz.rwms.asset;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.DIMENSION_24_X_6;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.FINISHING_DVP;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.TYPE_BK_1;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireMaintenanceOperationLeaseRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateEquipmentRequest;
@@ -93,7 +96,7 @@ class MaintenanceFurnitureLossIntegrationTest {
         rental,
         lease,
         estimateId,
-        List.of(new MaintenanceFurnitureLoss(furniture.id(), furniture.code(), 2)));
+        List.of(new MaintenanceFurnitureLoss(furniture.id(), 2)));
     UUID idempotencyKey = UUID.randomUUID();
 
     var queued = service.maintenanceFencedStatus(
@@ -154,7 +157,6 @@ class MaintenanceFurnitureLossIntegrationTest {
         inactive.id(),
         new UpdateEquipmentRequest(
             inactive.version(),
-            inactive.code(),
             inactive.name(),
             inactive.category(),
             false,
@@ -170,18 +172,7 @@ class MaintenanceFurnitureLossIntegrationTest {
             rental,
             lease,
             estimateId,
-            List.of(new MaintenanceFurnitureLoss(furniture.id(), "STALE-CODE", 1)))))
-        .isInstanceOf(AssetConflictException.class)
-        .hasMessageContaining("code is stale");
-    assertThatThrownBy(() -> service.maintenanceFencedStatus(
-        subjectId,
-        UUID.randomUUID(),
-        rental.id(),
-        queueRequest(
-            rental,
-            lease,
-            estimateId,
-            List.of(new MaintenanceFurnitureLoss(electrical.id(), electrical.code(), 1)))))
+            List.of(new MaintenanceFurnitureLoss(electrical.id(), 1)))))
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("active FURNITURE");
     assertThatThrownBy(() -> service.maintenanceFencedStatus(
@@ -192,8 +183,7 @@ class MaintenanceFurnitureLossIntegrationTest {
             rental,
             lease,
             estimateId,
-            List.of(new MaintenanceFurnitureLoss(
-                finalInactive.id(), finalInactive.code(), 1)))))
+            List.of(new MaintenanceFurnitureLoss(finalInactive.id(), 1)))))
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("active FURNITURE");
     assertThatThrownBy(() -> service.maintenanceFencedStatus(
@@ -209,7 +199,7 @@ class MaintenanceFurnitureLossIntegrationTest {
             estimateId,
             null,
             estimateId,
-            List.of(new MaintenanceFurnitureLoss(furniture.id(), furniture.code(), 1)))))
+            List.of(new MaintenanceFurnitureLoss(furniture.id(), 1)))))
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("estimate-owned queue action");
     assertThatThrownBy(() -> service.maintenanceFencedStatus(
@@ -225,7 +215,7 @@ class MaintenanceFurnitureLossIntegrationTest {
             estimateId,
             null,
             UUID.randomUUID(),
-            List.of(new MaintenanceFurnitureLoss(furniture.id(), furniture.code(), 1)))))
+            List.of(new MaintenanceFurnitureLoss(furniture.id(), 1)))))
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("matching estimateId");
     UUID anotherEstimateId = UUID.randomUUID();
@@ -242,7 +232,7 @@ class MaintenanceFurnitureLossIntegrationTest {
             anotherEstimateId,
             null,
             anotherEstimateId,
-            List.of(new MaintenanceFurnitureLoss(furniture.id(), furniture.code(), 1)))))
+            List.of(new MaintenanceFurnitureLoss(furniture.id(), 1)))))
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("another maintenance owner");
     assertThatThrownBy(() -> service.maintenanceFencedStatus(
@@ -254,8 +244,8 @@ class MaintenanceFurnitureLossIntegrationTest {
             lease,
             estimateId,
             List.of(
-                new MaintenanceFurnitureLoss(furniture.id(), furniture.code(), 1),
-                new MaintenanceFurnitureLoss(furniture.id(), furniture.code(), 1)))))
+                new MaintenanceFurnitureLoss(furniture.id(), 1),
+                new MaintenanceFurnitureLoss(furniture.id(), 1)))))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessageContaining("unique equipment");
 
@@ -276,7 +266,7 @@ class MaintenanceFurnitureLossIntegrationTest {
             directRepairId,
             null,
             estimateId,
-            List.of(new MaintenanceFurnitureLoss(furniture.id(), furniture.code(), 1)))))
+            List.of(new MaintenanceFurnitureLoss(furniture.id(), 1)))))
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("estimate-owned queue action");
 
@@ -310,10 +300,8 @@ class MaintenanceFurnitureLossIntegrationTest {
             lease,
             estimateId,
             List.of(
-                new MaintenanceFurnitureLoss(
-                    furniture.get(0).id(), furniture.get(0).code(), 1),
-                new MaintenanceFurnitureLoss(
-                    furniture.get(1).id(), furniture.get(1).code(), 2)))))
+                new MaintenanceFurnitureLoss(furniture.get(0).id(), 1),
+                new MaintenanceFurnitureLoss(furniture.get(1).id(), 2)))))
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("insufficient furniture");
 
@@ -347,10 +335,8 @@ class MaintenanceFurnitureLossIntegrationTest {
             lease,
             estimateId,
             List.of(
-                new MaintenanceFurnitureLoss(
-                    furniture.get(0).id(), furniture.get(0).code(), 1),
-                new MaintenanceFurnitureLoss(
-                    furniture.get(1).id(), furniture.get(1).code(), 1)))))
+                new MaintenanceFurnitureLoss(furniture.get(0).id(), 1),
+                new MaintenanceFurnitureLoss(furniture.get(1).id(), 1)))))
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("does not contain");
 
@@ -368,11 +354,12 @@ class MaintenanceFurnitureLossIntegrationTest {
   }
 
   private EquipmentResponse createEquipment(UUID subjectId, EquipmentCategory category) {
-    String code = category.name() + '-' + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+    String name = "Equipment " + category.name() + ' '
+        + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
     return service.createEquipment(
         subjectId,
         UUID.randomUUID(),
-        new CreateEquipmentRequest(code, "Equipment " + code, category, null)).response();
+        new CreateEquipmentRequest(name, category, null)).response();
   }
 
   private RentalItemResponse createFreeRental(UUID subjectId, UUID warehouseId) {
@@ -382,12 +369,12 @@ class MaintenanceFurnitureLossIntegrationTest {
         new CreateRentalItemRequest(
             warehouseId,
             "cabin-" + UUID.randomUUID(),
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
             null,
-            null,
-            null,
-            null,
-            null,
-            null,
+            List.of(),
+            false,
             Map.of(),
             List.of())).response();
     return service.updateStatus(

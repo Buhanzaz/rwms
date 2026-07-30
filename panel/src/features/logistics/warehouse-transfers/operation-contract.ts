@@ -3,6 +3,7 @@ export const TRANSFER_OPERATION_IDS = {
   getTransfer: "getTransfer",
   createTransfer: "createTransfer",
   departLine: "departTransferLine",
+  arrivalPreflight: "getTransferArrivalPreflight",
   arriveLine: "arriveTransferLine",
   cancelTransfer: "cancelTransfer",
   reconcileDocument: "reconcileDocument",

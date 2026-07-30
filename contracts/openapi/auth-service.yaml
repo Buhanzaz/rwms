@@ -1,0 +1,278 @@
+openapi: 3.1.0
+info:
+  title: RWMS Auth Service API
+  version: 1.0.0
+  description: >-
+    Canonical public administration and current-user projection API for
+    auth-service. OAuth2/OIDC authorization endpoints remain standards-based;
+    user access tokens and ID tokens expose the UserTokenClaims projection.
+servers:
+  - url: /
+security:
+  - bearerJwt: []
+x-rwms-user-token-claims:
+  type: object
+  additionalProperties: true
+  required: [sub, preferred_username, principal_type, global_role, rentalAccess]
+  properties:
+    sub: { type: string, format: uuid }
+    preferred_username: { type: string }
+    principal_type: { type: string, const: USER }
+    global_role: { $ref: '#/components/schemas/UserGlobalRole' }
+    rentalAccess:
+      type: boolean
+      description: >-
+        Exact camel-case JWT claim emitted for every user access token and ID token.
+paths:
+  /api/admin/users:
+    get:
+      operationId: listAdminUsers
+      summary: List users for administration
+      description: >-
+        Requires a USER JWT with global_role SYSTEM_ADMIN or WMS_ADMIN.
+        Results include the persisted rentalAccess entitlement.
+      responses:
+        '200':
+          description: Users ordered case-insensitively by username.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AdminUser' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createAdminUser
+      summary: Create an administrable user
+      description: >-
+        Requires a USER JWT with global_role SYSTEM_ADMIN or WMS_ADMIN.
+        SYSTEM_ADMIN is the only role allowed to create a SYSTEM_ADMIN account.
+        If rentalAccess is omitted, it defaults to true for SYSTEM_ADMIN,
+        WMS_ADMIN, and RENTAL_MANAGER; it defaults to false for every other
+        role. An explicit boolean is persisted as supplied.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateUserRequest' }
+      responses:
+        '201':
+          description: User created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/admin/users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/UserId'
+    get:
+      operationId: getAdminUser
+      summary: Get an administrable user
+      description: >-
+        Requires a USER JWT with global_role SYSTEM_ADMIN or WMS_ADMIN.
+      responses:
+        '200':
+          description: User administration projection.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: updateAdminUser
+      summary: Update an administrable user
+      description: >-
+        Requires a USER JWT with global_role SYSTEM_ADMIN or WMS_ADMIN.
+        expectedVersion is required for optimistic concurrency. WMS_ADMIN cannot
+        manage a SYSTEM_ADMIN account. Omitted rentalAccess preserves the stored
+        value; SYSTEM_ADMIN and WMS_ADMIN may explicitly set it for accounts
+        they are permitted to manage.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateUserRequest' }
+      responses:
+        '200':
+          description: User updated, or an unchanged projection for a semantic no-op.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/users/me:
+    get:
+      operationId: getCurrentUser
+      summary: Get the current user projection
+      description: >-
+        Requires a USER bearer JWT. rentalAccess is the current persisted
+        entitlement projection; callers may instead read the boolean claim of
+        the same name from a user access token or ID token.
+      responses:
+        '200':
+          description: Current active user and effective warehouse access projection.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentUser' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+components:
+  securitySchemes:
+    bearerJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    UserId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  schemas:
+    UserGlobalRole:
+      type: string
+      enum: [SYSTEM_ADMIN, WMS_ADMIN, WAREHOUSE_MANAGER, RENTAL_MANAGER, VIEWER]
+    PrincipalType:
+      type: string
+      enum: [USER, WORKER]
+    WarehouseAccessLevel:
+      type: string
+      enum: [VIEW, EDIT, MANAGE]
+    WarehouseAccess:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, accessLevel, active]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        accessLevel: { $ref: '#/components/schemas/WarehouseAccessLevel' }
+        comment: { type: [string, 'null'], maxLength: 1000 }
+        active: { type: boolean }
+    WarehouseAccessRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, accessLevel]
+      properties:
+        warehouseId: { type: string, minLength: 1, maxLength: 128 }
+        accessLevel: { $ref: '#/components/schemas/WarehouseAccessLevel' }
+        comment: { type: [string, 'null'], maxLength: 1000 }
+        active: { type: [boolean, 'null'], default: true }
+    EffectiveWarehouseAccess:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, level]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        level: { $ref: '#/components/schemas/WarehouseAccessLevel' }
+    AdminUser:
+      type: object
+      additionalProperties: false
+      required:
+        [id, version, username, active, globalRole, mobileAppAccess, rentalAccess, warehouseAccesses]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, minimum: 0 }
+        username: { type: string, minLength: 1, maxLength: 128 }
+        firstName: { type: [string, 'null'], maxLength: 128 }
+        lastName: { type: [string, 'null'], maxLength: 128 }
+        email: { type: [string, 'null'], format: email, maxLength: 255 }
+        timeZoneId: { type: [string, 'null'], maxLength: 64 }
+        active: { type: boolean }
+        globalRole: { $ref: '#/components/schemas/UserGlobalRole' }
+        mobileAppAccess: { type: boolean }
+        rentalAccess:
+          type: boolean
+          description: Persisted rental entitlement; not inferred by callers from the role.
+        warehouseAccesses:
+          type: array
+          items: { $ref: '#/components/schemas/WarehouseAccess' }
+    CreateUserRequest:
+      type: object
+      additionalProperties: false
+      required: [username, password, globalRole]
+      properties:
+        username: { type: string, minLength: 1, maxLength: 128 }
+        password: { type: string, minLength: 8, maxLength: 200, writeOnly: true }
+        firstName: { type: [string, 'null'], maxLength: 128 }
+        lastName: { type: [string, 'null'], maxLength: 128 }
+        email: { type: [string, 'null'], format: email, maxLength: 255 }
+        timeZoneId: { type: [string, 'null'], maxLength: 64 }
+        globalRole: { $ref: '#/components/schemas/UserGlobalRole' }
+        active: { type: [boolean, 'null'], default: true }
+        mobileAppAccess: { type: [boolean, 'null'] }
+        rentalAccess:
+          type: [boolean, 'null']
+          description: >-
+            When absent, defaults by globalRole: true for SYSTEM_ADMIN,
+            WMS_ADMIN, RENTAL_MANAGER; false otherwise.
+        warehouseAccesses:
+          type: array
+          items: { $ref: '#/components/schemas/WarehouseAccessRequest' }
+    UpdateUserRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, username, active, globalRole]
+      properties:
+        expectedVersion: { type: integer, minimum: 0 }
+        username: { type: string, minLength: 1, maxLength: 128 }
+        firstName: { type: [string, 'null'], maxLength: 128 }
+        lastName: { type: [string, 'null'], maxLength: 128 }
+        email: { type: [string, 'null'], format: email, maxLength: 255 }
+        timeZoneId: { type: [string, 'null'], maxLength: 64 }
+        active: { type: boolean }
+        globalRole: { $ref: '#/components/schemas/UserGlobalRole' }
+        mobileAppAccess: { type: [boolean, 'null'] }
+        rentalAccess:
+          type: [boolean, 'null']
+          description: Omitted preserves the persisted value; explicit value updates it.
+    CurrentUser:
+      type: object
+      additionalProperties: false
+      required:
+        [id, username, displayName, principalType, globalRole, rentalAccess, warehouseAccessAll, warehouseAccesses]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string, minLength: 1, maxLength: 128 }
+        displayName: { type: string, minLength: 1, maxLength: 257 }
+        firstName: { type: [string, 'null'], maxLength: 128 }
+        lastName: { type: [string, 'null'], maxLength: 128 }
+        email: { type: [string, 'null'], format: email, maxLength: 255 }
+        principalType: { $ref: '#/components/schemas/PrincipalType' }
+        globalRole: { $ref: '#/components/schemas/UserGlobalRole' }
+        rentalAccess: { type: boolean }
+        warehouseAccessAll: { type: boolean }
+        warehouseAccesses:
+          type: array
+          items: { $ref: '#/components/schemas/EffectiveWarehouseAccess' }
+    ApiProblem:
+      type: object
+      additionalProperties: true
+      required: [status]
+      properties:
+        type: { type: string, format: uri-reference }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string, format: uri-reference }
+  responses:
+    BadRequest:
+      description: Invalid request.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
+    Unauthorized:
+      description: Missing, expired, or invalid bearer token.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
+    Forbidden:
+      description: Authenticated caller lacks the required role or principal type.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
+    NotFound:
+      description: User does not exist.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }
+    Conflict:
+      description: Stale version or a protected SYSTEM_ADMIN invariant.
+      content: { application/problem+json: { schema: { $ref: '#/components/schemas/ApiProblem' } } }

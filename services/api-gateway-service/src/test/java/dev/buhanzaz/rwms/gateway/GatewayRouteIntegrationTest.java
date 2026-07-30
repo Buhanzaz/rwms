@@ -27,6 +27,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpHeaders;
 import org.springframework.context.annotation.Primary;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -36,6 +37,9 @@ import org.springframework.test.web.servlet.MockMvc;
 @SpringBootTest
 @org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc
 class GatewayRouteIntegrationTest {
+  private static final String RELEASE_CERT_SHA256 =
+      "AA:01:02:03:04:05:06:07:08:09:0A:0B:0C:0D:0E:0F:"
+          + "10:11:12:13:14:15:16:17:18:19:1A:1B:1C:1D:1E:1F";
 
   private static HttpServer auth;
   private static HttpServer taskBoard;
@@ -46,6 +50,8 @@ class GatewayRouteIntegrationTest {
   private static HttpServer inventory;
   private static HttpServer logistics;
   private static HttpServer dossier;
+  private static HttpServer analytics;
+  private static HttpServer assistant;
   private static final List<CapturedRequest> AUTH_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> TASK_BOARD_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> WAREHOUSE_REQUESTS = new CopyOnWriteArrayList<>();
@@ -56,6 +62,8 @@ class GatewayRouteIntegrationTest {
   private static final List<CapturedRequest> INVENTORY_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> LOGISTICS_REQUESTS = new CopyOnWriteArrayList<>();
   private static final List<CapturedRequest> DOSSIER_REQUESTS = new CopyOnWriteArrayList<>();
+  private static final List<CapturedRequest> ANALYTICS_REQUESTS = new CopyOnWriteArrayList<>();
+  private static final List<CapturedRequest> ASSISTANT_REQUESTS = new CopyOnWriteArrayList<>();
 
   @Autowired MockMvc mvc;
 
@@ -70,6 +78,8 @@ class GatewayRouteIntegrationTest {
     inventory = server(INVENTORY_REQUESTS);
     logistics = server(LOGISTICS_REQUESTS);
     dossier = server(DOSSIER_REQUESTS);
+    analytics = server(ANALYTICS_REQUESTS);
+    assistant = server(ASSISTANT_REQUESTS);
   }
 
   @AfterAll
@@ -83,6 +93,8 @@ class GatewayRouteIntegrationTest {
     inventory.stop(0);
     logistics.stop(0);
     dossier.stop(0);
+    analytics.stop(0);
+    assistant.stop(0);
   }
 
   @DynamicPropertySource
@@ -96,11 +108,37 @@ class GatewayRouteIntegrationTest {
     registry.add("rwms.gateway.routes.inventory-uri", () -> origin(inventory));
     registry.add("rwms.gateway.routes.logistics-uri", () -> origin(logistics));
     registry.add("rwms.gateway.routes.dossier-uri", () -> origin(dossier));
+    registry.add("rwms.gateway.routes.analytics-uri", () -> origin(analytics));
+    registry.add("rwms.gateway.routes.assistant-uri", () -> origin(assistant));
     registry.add("rwms.gateway.public-base-uri", () -> "https://panel.example");
     registry.add("rwms.gateway.cors.allowed-origins", () -> "https://panel.example");
     registry.add("rwms.gateway.security.issuer", () -> "https://panel.example/auth");
     registry.add("rwms.gateway.security.audience", () -> "rwms-services");
     registry.add("rwms.gateway.security.jwk-set-uri", () -> origin(auth) + "/oauth2/jwks");
+    registry.add(
+        "rwms.gateway.app-links.sha256-cert-fingerprints[0]",
+        () -> RELEASE_CERT_SHA256);
+  }
+
+  @Test
+  void publishesAndroidAssetLinksWithoutAuthenticationOrRuntimeSecrets() throws Exception {
+    mvc.perform(publicGet("/.well-known/assetlinks.json"))
+        .andExpect(status().isOk())
+        .andExpect(
+            header()
+                .string(
+                    HttpHeaders.CACHE_CONTROL,
+                    org.hamcrest.Matchers.allOf(
+                        org.hamcrest.Matchers.containsString("max-age=3600"),
+                        org.hamcrest.Matchers.containsString("public"),
+                        org.hamcrest.Matchers.containsString("no-transform"))))
+        .andExpect(jsonPath("$[0].relation[0]").value("delegate_permission/common.handle_all_urls"))
+        .andExpect(jsonPath("$[0].target.namespace").value("android_app"))
+        .andExpect(
+            jsonPath("$[0].target.package_name").value("dev.buhanzaz.rwms.worker"))
+        .andExpect(
+            jsonPath("$[0].target.sha256_cert_fingerprints[0]")
+                .value(RELEASE_CERT_SHA256));
   }
 
   @Test
@@ -166,6 +204,33 @@ class GatewayRouteIntegrationTest {
       assertThat(request.path()).isEqualTo("/api/warehouses/warehouse-1/task-board");
       assertThat(request.authorization()).isEqualTo("Bearer original-token");
     });
+  }
+
+  @Test
+  void workerTaskBoardSurfaceRequiresDedicatedScopeAtTheGateway() throws Exception {
+    TASK_BOARD_REQUESTS.clear();
+
+    mvc.perform(
+            publicGet("/api/task-board/worker/v1/feed")
+                .with(
+                    jwt()
+                        .jwt(token -> token.audience(List.of("rwms-services")))
+                        .authorities(new SimpleGrantedAuthority("SCOPE_rwms.read"))))
+        .andExpect(status().isForbidden());
+    assertThat(TASK_BOARD_REQUESTS).isEmpty();
+
+    mvc.perform(
+            publicGet("/api/task-board/worker/v1/feed")
+                .with(
+                    jwt()
+                        .jwt(token -> token.audience(List.of("rwms-services")))
+                        .authorities(new SimpleGrantedAuthority("SCOPE_worker.tasks"))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.path").value("/api/worker/v1/feed"));
+    assertThat(TASK_BOARD_REQUESTS)
+        .singleElement()
+        .extracting(CapturedRequest::path)
+        .isEqualTo("/api/worker/v1/feed");
   }
 
   @Test
@@ -301,6 +366,47 @@ class GatewayRouteIntegrationTest {
                 .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
         .andExpect(status().isForbidden());
     assertThat(LOGISTICS_REQUESTS).isEmpty();
+
+    mvc.perform(
+            publicGet("/api/logistics/public/v1/client-presentations/public-token")
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret"))
+        .andExpect(status().isOk())
+        .andExpect(
+            jsonPath("$.path")
+                .value("/api/logistics/public/v1/client-presentations/public-token"));
+    assertThat(LOGISTICS_REQUESTS).singleElement().satisfies(request -> {
+      assertThat(request.authorization()).isNull();
+      assertThat(request.cookie()).isNull();
+    });
+  }
+
+  @Test
+  void proxiesAssistantPathsAndRejectsPrivateSurfaces() throws Exception {
+    ASSISTANT_REQUESTS.clear();
+
+    mvc.perform(
+            publicGet("/api/assistant/v1/conversations")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer original-token")
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.path").value("/api/assistant/v1/conversations"));
+
+    assertThat(ASSISTANT_REQUESTS).singleElement().satisfies(request -> {
+      assertThat(request.authorization()).isEqualTo("Bearer original-token");
+      assertThat(request.cookie()).isNull();
+    });
+
+    ASSISTANT_REQUESTS.clear();
+    mvc.perform(
+            publicGet("/api/assistant/internal/conversations")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            publicGet("/api/assistant/private/conversations")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isForbidden());
+    assertThat(ASSISTANT_REQUESTS).isEmpty();
   }
 
   @Test
@@ -344,6 +450,49 @@ class GatewayRouteIntegrationTest {
                 .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
         .andExpect(status().is4xxClientError());
     assertThat(DOSSIER_REQUESTS).isEmpty();
+  }
+
+  @Test
+  void forwardsAuthenticatedAnalyticsReadsToTheVersionedInternalApi() throws Exception {
+    ANALYTICS_REQUESTS.clear();
+    String warehouseId = "b81706f4-9b19-4cca-92a8-ece9afbf16a1";
+
+    mvc.perform(
+            publicGet(
+                    "/api/analytics/v1/warehouses/"
+                        + warehouseId
+                        + "/group-kpi?periodType=DAY&year=2026&month=7&day=30")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer original-token")
+                .header(HttpHeaders.COOKIE, "AUTH_SESSION=secret")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isOk())
+        .andExpect(
+            jsonPath("$.path")
+                .value("/api/v1/warehouses/" + warehouseId + "/group-kpi"));
+
+    assertThat(ANALYTICS_REQUESTS)
+        .singleElement()
+        .satisfies(
+            request -> {
+              assertThat(request.path())
+                  .isEqualTo("/api/v1/warehouses/" + warehouseId + "/group-kpi");
+              assertThat(request.query().split("&"))
+                  .containsExactlyInAnyOrder(
+                      "periodType=DAY", "year=2026", "month=7", "day=30");
+              assertThat(request.authorization()).isEqualTo("Bearer original-token");
+              assertThat(request.cookie()).isNull();
+            });
+
+    ANALYTICS_REQUESTS.clear();
+    mvc.perform(
+            publicPost("/api/analytics/v1/warehouses/" + warehouseId + "/group-kpi")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().is4xxClientError());
+    mvc.perform(
+            publicGet("/api/analytics/%2e%2e/task-board/worker-classes")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().is4xxClientError());
+    assertThat(ANALYTICS_REQUESTS).isEmpty();
   }
 
   @Test
@@ -494,6 +643,8 @@ class GatewayRouteIntegrationTest {
     INVENTORY_REQUESTS.clear();
     LOGISTICS_REQUESTS.clear();
     DOSSIER_REQUESTS.clear();
+    ANALYTICS_REQUESTS.clear();
+    ASSISTANT_REQUESTS.clear();
 
     mvc.perform(
             publicGet("/api/task-board/internal/work-queues")
@@ -539,6 +690,16 @@ class GatewayRouteIntegrationTest {
                 .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
         .andExpect(status().isForbidden())
         .andExpect(jsonPath("$.code").value("GATEWAY_FORBIDDEN"));
+    mvc.perform(
+            publicGet("/api/analytics/internal/replay")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.code").value("GATEWAY_FORBIDDEN"));
+    mvc.perform(
+            publicGet("/api/assistant/internal/conversations")
+                .with(jwt().jwt(token -> token.audience(List.of("rwms-services")))))
+        .andExpect(status().isForbidden())
+        .andExpect(jsonPath("$.code").value("GATEWAY_FORBIDDEN"));
 
     assertThat(TASK_BOARD_REQUESTS).isEmpty();
     assertThat(AUTH_REQUESTS).isEmpty();
@@ -548,6 +709,8 @@ class GatewayRouteIntegrationTest {
     assertThat(INVENTORY_REQUESTS).isEmpty();
     assertThat(LOGISTICS_REQUESTS).isEmpty();
     assertThat(DOSSIER_REQUESTS).isEmpty();
+    assertThat(ANALYTICS_REQUESTS).isEmpty();
+    assertThat(ASSISTANT_REQUESTS).isEmpty();
   }
 
   @Test
@@ -571,7 +734,8 @@ class GatewayRouteIntegrationTest {
                 .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "GET")
                 .header(
                     HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS,
-                    "authorization,x-correlation-id,x-xsrf-token,idempotency-key"))
+                    "authorization,x-correlation-id,x-xsrf-token,idempotency-key,"
+                        + "if-none-match,last-event-id"))
         .andExpect(status().isOk())
         .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "https://panel.example"))
         .andExpect(
@@ -599,7 +763,14 @@ class GatewayRouteIntegrationTest {
         .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "https://panel.example"))
         .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"))
         .andExpect(header().stringValues(HttpHeaders.VARY, "Origin", "Access-Control-Request-Method", "Access-Control-Request-Headers"))
-        .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS, "X-Correlation-Id"));
+        .andExpect(
+            header()
+                .string(
+                    HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS,
+                    org.hamcrest.Matchers.allOf(
+                        org.hamcrest.Matchers.containsString("X-Correlation-Id"),
+                        org.hamcrest.Matchers.containsString("ETag"),
+                        org.hamcrest.Matchers.containsString("Retry-After"))));
   }
 
   @Test

@@ -90,7 +90,7 @@ function TaskBoardTakeForm({
       "eligible-groups",
     ],
     queryFn: () => listEligibleTaskBoardGroups(accessToken!, entry),
-    enabled: Boolean(accessToken && entry.queueId),
+    enabled: Boolean(accessToken),
   })
   const [groupId, setGroupId] = useState("")
   const [workerId, setWorkerId] = useState("ALL")
@@ -184,10 +184,6 @@ function TaskBoardTakeForm({
       {groupsQuery.isError ? (
         <p role="alert" className="text-xs text-destructive">
           Не удалось загрузить доступные рабочие группы.
-        </p>
-      ) : !entry.queueId ? (
-        <p role="alert" className="text-xs text-destructive">
-          Сначала назначьте этап в реальную очередь.
         </p>
       ) : groups.length === 0 && !groupsQuery.isLoading ? (
         <p role="alert" className="text-xs text-destructive">

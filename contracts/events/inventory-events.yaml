@@ -35,6 +35,15 @@ channels:
       READY generations matching INVENTORY_FINDING owner and warehouse can be frozen.
     messages:
       mediaFactV1: { $ref: '#/components/messages/MediaFactV1' }
+  rentalItemFacts:
+    address: rwms.asset.rental-item.v1
+    description: >-
+      Authoritative rental-item lifecycle invalidations consumed to keep each
+      active inventory population aligned with the live warehouse and append a
+      separate movement journal for arrivals, departures and transfers.
+      Inventory re-reads the current asset snapshot and never blocks logistics.
+    messages:
+      rentalItemFactV1: { $ref: '#/components/messages/RentalItemFactV1' }
   sanitizedDlt:
     address: rwms.inventory.dlt.v1
     description: >-
@@ -52,6 +61,9 @@ operations:
   consumeMediaFacts:
     action: receive
     channel: { $ref: '#/channels/mediaFacts' }
+  consumeRentalItemFacts:
+    action: receive
+    channel: { $ref: '#/channels/rentalItemFacts' }
   publishSanitizedConsumerFailure:
     action: send
     channel: { $ref: '#/channels/sanitizedDlt' }
@@ -114,6 +126,9 @@ components:
     MediaFactV1:
       name: inventory.input.media.fact.v1
       payload: { $ref: './media/media-facts-v1.schema.json' }
+    RentalItemFactV1:
+      name: inventory.input.rental-item.fact.v1
+      payload: { $ref: './asset/asset-events-v1.schema.json' }
     SanitizedDltV1:
       name: inventory.sanitized-dlt.v1
       payload:

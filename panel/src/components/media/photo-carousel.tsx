@@ -14,6 +14,8 @@ import {
   Cancel01Icon,
   Home01Icon,
   RotateLeft01Icon,
+  ZoomInAreaIcon,
+  ZoomOutAreaIcon,
 } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
@@ -156,25 +158,12 @@ function getPhotoFullscreenUrl(
   )
 }
 
-function buildItemFallbackPhotos(item?: RentalItemDto): PhotoCarouselPhoto[] {
-  if (!item) return []
-
-  const urls = [...(item.previewPhotoUrls ?? []), item.mainPhotoUrl].filter(
-    (url): url is string => Boolean(url)
-  )
-  if (urls.length > 0) {
-    return urls.map((url, index) => ({
-      id: `${item.id}-preview-${index}`,
-      url,
-      variants: {
-        small: { url },
-        medium: { url },
-        large: { url },
-      },
-    }))
-  }
-
-  return []
+function hasRequestedFullscreenUrl(
+  photo: PhotoCarouselPhoto,
+  quality: "preview" | "original"
+) {
+  if (quality === "original" && photo.variants?.original?.url) return true
+  return Boolean(photo.variants?.large?.url ?? photo.variants?.largeWebp?.url)
 }
 
 function useCarouselIndex(
@@ -272,7 +261,7 @@ export function PhotoCarousel({
     const normalized = photos
       .map((photo, index) => normalizePhotoSource(photo, index, item))
       .filter((photo): photo is PhotoCarouselPhoto => photo !== null)
-    return normalized.length > 0 ? normalized : buildItemFallbackPhotos(item)
+    return normalized
   }, [item, photos])
   const requestedIndex = controlledActiveIndex ?? internalActiveIndex
   const safeActiveIndex =
@@ -375,7 +364,7 @@ export function PhotoCarousel({
             const fullscreenPending =
               imageVariant === "fullscreen" &&
               onRequestFullscreen !== undefined &&
-              !photo.variants?.large?.url
+              !hasRequestedFullscreenUrl(photo, fullscreenQuality)
             const image = fullscreenPending ? (
               <div className="flex h-full w-full items-center justify-center text-sm text-white/70">
                 Загрузка полноэкранной фотографии...
@@ -522,9 +511,20 @@ function PhotoFullscreenViewer({
   const [orientationById, setOrientationById] = useState<
     Record<string, Orientation>
   >({})
+  const [zoomedPhotoId, setZoomedPhotoId] = useState<string | null>(null)
   const safeIndex =
     activeIndex >= 0 && activeIndex < photos.length ? activeIndex : 0
-  useCarouselIndex(api, safeIndex, onActiveIndexChange)
+  const activePhotoId = photos[safeIndex]?.id ?? null
+  const zoomed = activePhotoId === zoomedPhotoId
+
+  const handleActiveIndexChange = useCallback(
+    (index: number) => {
+      setZoomedPhotoId(null)
+      onActiveIndexChange(index)
+    },
+    [onActiveIndexChange]
+  )
+  useCarouselIndex(api, safeIndex, handleActiveIndexChange)
 
   useEffect(() => {
     if (!open) return
@@ -532,8 +532,29 @@ function PhotoFullscreenViewer({
     if (activePhoto) void onRequestPhoto?.(activePhoto)
   }, [onRequestPhoto, open, photos, safeIndex])
 
-  const goPrev = useCallback(() => api?.scrollPrev(), [api])
-  const goNext = useCallback(() => api?.scrollNext(), [api])
+  const goPrev = useCallback(() => {
+    setZoomedPhotoId(null)
+    api?.scrollPrev()
+  }, [api])
+  const goNext = useCallback(() => {
+    setZoomedPhotoId(null)
+    api?.scrollNext()
+  }, [api])
+
+  const toggleZoom = useCallback(() => {
+    if (!activePhotoId) return
+    setZoomedPhotoId((current) =>
+      current === activePhotoId ? null : activePhotoId
+    )
+  }, [activePhotoId])
+
+  const handleOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (!nextOpen) setZoomedPhotoId(null)
+      onOpenChange(nextOpen)
+    },
+    [onOpenChange]
+  )
 
   function rotateCurrentPhoto() {
     const photo = photos[safeIndex]
@@ -548,7 +569,7 @@ function PhotoFullscreenViewer({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         showCloseButton={false}
         className="!fixed !inset-0 !top-0 !left-0 !h-dvh !max-h-dvh !w-screen !max-w-none !translate-x-0 !translate-y-0 overflow-hidden rounded-none border-0 bg-black p-0 text-white"
@@ -580,7 +601,7 @@ function PhotoFullscreenViewer({
           variant="ghost"
           aria-label="Закрыть"
           className="absolute top-4 right-4 z-40 rounded-full bg-white/15 text-white hover:bg-white/25 hover:text-white"
-          onClick={() => onOpenChange(false)}
+          onClick={() => handleOpenChange(false)}
         >
           <HugeiconsIcon icon={Cancel01Icon} />
         </Button>
@@ -588,7 +609,7 @@ function PhotoFullscreenViewer({
         <Carousel
           setApi={setApi}
           opts={{ loop: photos.length > 1, watchDrag: photos.length > 1 }}
-          className="h-dvh w-screen"
+          className="group/fullscreen-carousel h-dvh w-screen"
           aria-label={title}
         >
           <CarouselContent className="-ml-0 h-dvh">
@@ -598,21 +619,33 @@ function PhotoFullscreenViewer({
                 aria-label={`${index + 1} из ${photos.length}`}
                 className="flex h-dvh items-center justify-center p-12"
               >
-                {onRequestPhoto && !photo.variants?.large?.url ? (
+                {onRequestPhoto &&
+                !hasRequestedFullscreenUrl(photo, quality) ? (
                   <div className="text-sm text-white/70">
                     Загрузка полноэкранной фотографии...
                   </div>
                 ) : (
-                  <img
-                    src={getPhotoFullscreenUrl(photo, quality)}
-                    alt={`${title}, фото ${index + 1} из ${photos.length}`}
-                    draggable={false}
-                    className="max-h-full max-w-full object-contain select-none"
-                    style={{
-                      transform: `rotate(${orientationById[photo.id] ?? 0}deg)`,
-                      transformOrigin: "center center",
-                    }}
-                  />
+                  <button
+                    type="button"
+                    aria-label={zoomed ? "Уменьшить фото" : "Увеличить фото"}
+                    className={cn(
+                      "flex h-full w-full touch-pan-y items-center justify-center",
+                      zoomed ? "cursor-zoom-out" : "cursor-zoom-in"
+                    )}
+                    onClick={toggleZoom}
+                  >
+                    <img
+                      data-slot="photo-fullscreen-image"
+                      src={getPhotoFullscreenUrl(photo, quality)}
+                      alt={`${title}, фото ${index + 1} из ${photos.length}`}
+                      draggable={false}
+                      className="max-h-full max-w-full object-contain transition-transform duration-200 select-none"
+                      style={{
+                        transform: `rotate(${orientationById[photo.id] ?? 0}deg) scale(${zoomed ? 2 : 1})`,
+                        transformOrigin: "center center",
+                      }}
+                    />
+                  </button>
                 )}
               </CarouselItem>
             ))}
@@ -623,25 +656,33 @@ function PhotoFullscreenViewer({
               <button
                 type="button"
                 aria-label="Предыдущее фото"
-                aria-hidden="true"
-                tabIndex={-1}
-                className="absolute inset-y-0 left-0 w-1/4 cursor-w-resize"
+                data-slot="photo-fullscreen-previous"
+                className="pointer-events-auto absolute inset-y-0 left-0 z-30 flex w-1/5 items-center justify-start bg-gradient-to-r from-black/70 via-black/30 to-transparent pl-5 text-white opacity-100 transition-opacity focus-visible:pointer-events-auto focus-visible:opacity-100 lg:pointer-events-none lg:opacity-0 lg:group-focus-within/fullscreen-carousel:pointer-events-auto lg:group-focus-within/fullscreen-carousel:opacity-100 lg:group-hover/fullscreen-carousel:pointer-events-auto lg:group-hover/fullscreen-carousel:opacity-100"
                 onClick={(event) => {
                   event.stopPropagation()
                   goPrev()
                 }}
-              />
+              >
+                <HugeiconsIcon
+                  icon={ArrowLeft01Icon}
+                  className="size-9 drop-shadow-md"
+                />
+              </button>
               <button
                 type="button"
                 aria-label="Следующее фото"
-                aria-hidden="true"
-                tabIndex={-1}
-                className="absolute inset-y-0 right-0 w-1/4 cursor-e-resize"
+                data-slot="photo-fullscreen-next"
+                className="pointer-events-auto absolute inset-y-0 right-0 z-30 flex w-1/5 items-center justify-end bg-gradient-to-l from-black/70 via-black/30 to-transparent pr-5 text-white opacity-100 transition-opacity focus-visible:pointer-events-auto focus-visible:opacity-100 lg:pointer-events-none lg:opacity-0 lg:group-focus-within/fullscreen-carousel:pointer-events-auto lg:group-focus-within/fullscreen-carousel:opacity-100 lg:group-hover/fullscreen-carousel:pointer-events-auto lg:group-hover/fullscreen-carousel:opacity-100"
                 onClick={(event) => {
                   event.stopPropagation()
                   goNext()
                 }}
-              />
+              >
+                <HugeiconsIcon
+                  icon={ArrowRight01Icon}
+                  className="size-9 drop-shadow-md"
+                />
+              </button>
             </>
           ) : null}
         </Carousel>
@@ -693,6 +734,21 @@ function PhotoFullscreenViewer({
                 onClick={rotateCurrentPhoto}
               >
                 <HugeiconsIcon icon={RotateLeft01Icon} />
+              </Button>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                aria-label={zoomed ? "Уменьшить фото" : "Увеличить фото"}
+                className="rounded-full text-white hover:bg-white/20 hover:text-white"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  toggleZoom()
+                }}
+              >
+                <HugeiconsIcon
+                  icon={zoomed ? ZoomOutAreaIcon : ZoomInAreaIcon}
+                />
               </Button>
             </div>
           ) : null}

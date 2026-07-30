@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
 
+import { PhotoCarousel } from "@/components/media/photo-carousel"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -46,15 +47,17 @@ import {
 } from "@/features/repair-tasks/api/repair-tasks-api"
 import type {
   RepairTaskDto,
+  RepairTaskEvidenceDto,
   RepairTaskSubtaskDto,
 } from "@/features/repair-tasks/model/repair-task"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
 import {
   maintenanceAcceptanceMediaOwner,
-  maintenanceRepairMediaOwner,
   type ReadyMediaReference,
+  type ServiceMediaOwner,
 } from "@/features/media/media-service"
 import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
+import { useServiceOwnerMedia } from "@/features/media/use-service-owner-media"
 
 import {
   formatAcceptanceDateTime,
@@ -68,6 +71,7 @@ import {
 import { RepairReworkWizardDialog } from "./repair-rework-wizard-dialog"
 
 type DossierMode = "ACCEPTANCE" | "WRITE_OFF"
+const EMPTY_TASK_EVIDENCE: RepairTaskEvidenceDto[] = []
 
 type RepairAcceptanceDossierProps = {
   accessToken?: string | null
@@ -75,6 +79,8 @@ type RepairAcceptanceDossierProps = {
   mode: DossierMode
   canEdit: boolean
   canManage: boolean
+  actorName?: string
+  decisionActorName?: string
   onDecision?: () => void
 }
 
@@ -100,9 +106,13 @@ function InfoRow({ label, children }: { label: string; children: ReactNode }) {
 function TaskInformation({
   task,
   mode,
+  actorName,
+  decisionActorName,
 }: {
   task: RepairTaskDto
   mode: DossierMode
+  actorName: string
+  decisionActorName: string
 }) {
   return (
     <dl className="flex flex-col gap-1 text-sm">
@@ -111,7 +121,7 @@ function TaskInformation({
         {repairTaskOriginLabel(task.origin, task.kind)}
       </InfoRow>
       <InfoRow label="От кого">{task.sourceParty || "—"}</InfoRow>
-      <InfoRow label="Идентификатор автора">{task.actorId || "—"}</InfoRow>
+      <InfoRow label="Автор">{actorName}</InfoRow>
       <InfoRow label="Дата прибытия">
         {formatAcceptanceDateTime(task.dispatchDate)}
       </InfoRow>
@@ -124,9 +134,7 @@ function TaskInformation({
 
       {mode === "WRITE_OFF" ? (
         <>
-          <InfoRow label="Решение принял">
-            {task.decisionActorId || "—"}
-          </InfoRow>
+          <InfoRow label="Решение принял">{decisionActorName}</InfoRow>
           <InfoRow label="Дата списания">
             {formatAcceptanceDateTime(task.writtenOffAt ?? null)}
           </InfoRow>
@@ -217,70 +225,447 @@ function AssignmentTable({ subtask }: { subtask: RepairTaskSubtaskDto }) {
   )
 }
 
-function SubtaskCard({
+function stageComments(subtask: RepairTaskSubtaskDto) {
+  const comments: Array<{ id: string; source: string; text: string }> = []
+  const groupComment = subtask.groupComment.trim()
+  if (groupComment) {
+    comments.push({
+      id: `${subtask.id}:stage`,
+      source: "Этап",
+      text: groupComment,
+    })
+  }
+  const lines = [...subtask.workLines, ...subtask.materialLines]
+  lines.forEach((line) => {
+    const text = line.lineComment.trim()
+    if (!text) return
+    comments.push({
+      id: `${subtask.id}:line:${line.id}`,
+      source: line.description,
+      text,
+    })
+  })
+  return comments
+}
+
+function StageComments({ subtask }: { subtask: RepairTaskSubtaskDto }) {
+  const comments = stageComments(subtask)
+  const titleId = `stage-comments-${subtask.id}`
+  return (
+    <section aria-labelledby={titleId} className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <h4 id={titleId} className="text-sm font-medium">
+          Комментарии
+        </h4>
+        <Badge
+          variant="secondary"
+          aria-label={`Комментариев: ${comments.length}`}
+        >
+          {comments.length}
+        </Badge>
+      </div>
+      {comments.length > 0 ? (
+        <ul className="flex flex-col gap-2 text-sm">
+          {comments.map((comment) => (
+            <li
+              key={comment.id}
+              className="grid grid-cols-[minmax(7.5rem,0.8fr)_minmax(0,1.2fr)] gap-3"
+            >
+              <span className="text-muted-foreground">{comment.source}</span>
+              <span className="min-w-0 break-words">{comment.text}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Комментарии по этапу не добавлены.
+        </p>
+      )}
+    </section>
+  )
+}
+
+function StageContent({ subtask }: { subtask: RepairTaskSubtaskDto }) {
+  const lines = [
+    ...subtask.workLines.map((line) => ({ kind: "Работа", line })),
+    ...subtask.materialLines.map((line) => ({ kind: "Материал", line })),
+  ]
+  if (lines.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Для этого этапа состав работ и материалов не задан.
+      </p>
+    )
+  }
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      <h4 className="text-sm font-medium">Работы и материалы</h4>
+      <div className="w-full max-w-full overflow-x-auto rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Тип</TableHead>
+              <TableHead>Наименование</TableHead>
+              <TableHead>Количество</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {lines.map(({ kind, line }) => (
+              <TableRow key={`${kind}:${line.id}`}>
+                <TableCell>{kind}</TableCell>
+                <TableCell>
+                  <div className="flex min-w-48 items-center gap-2">
+                    <span>{line.description}</span>
+                    {line.id === subtask.primaryLineId ? (
+                      <Badge variant="secondary">Основная</Badge>
+                    ) : null}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  {line.quantity} {line.unit}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  )
+}
+
+function taskBoardEntryMediaOwner(
+  entryId: string,
+  warehouseId: string
+): ServiceMediaOwner {
+  // The shared read helper is structurally compatible with the worker-result
+  // owner scope; upload commands remain unavailable from the acceptance UI.
+  return {
+    ownerType: "TASK_BOARD_ENTRY",
+    ownerId: entryId,
+    warehouseId,
+    context: "WORK_RESULT",
+  } as unknown as ServiceMediaOwner
+}
+
+function EvidencePhotoGallery({
+  accessToken,
+  warehouseId,
+  evidence,
+  label,
+}: {
+  accessToken: string | null
+  warehouseId: string
+  evidence: RepairTaskEvidenceDto[]
+  label: string
+}) {
+  const [activeIndex, setActiveIndex] = useState(0)
+  const owner = useMemo(
+    () => taskBoardEntryMediaOwner(evidence[0].entryId, warehouseId),
+    [evidence, warehouseId]
+  )
+  const media = useServiceOwnerMedia({ accessToken, owner })
+  const expectedGenerationByMediaId = useMemo(
+    () => new Map(evidence.map((item) => [item.mediaId, item.mediaGeneration])),
+    [evidence]
+  )
+  const projectedReadyAssetIds = useMemo(
+    () =>
+      new Set(
+        media.assets
+          .filter(
+            (asset) =>
+              asset.kind === "IMAGE" &&
+              asset.status === "READY" &&
+              expectedGenerationByMediaId.get(asset.id) === asset.generation
+          )
+          .map((asset) => asset.id)
+      ),
+    [expectedGenerationByMediaId, media.assets]
+  )
+  const photos = useMemo(() => {
+    const photoById = new Map(media.photos.map((photo) => [photo.id, photo]))
+    const seen = new Set<string>()
+    return evidence.flatMap((item) => {
+      if (seen.has(item.mediaId) || !projectedReadyAssetIds.has(item.mediaId)) {
+        return []
+      }
+      seen.add(item.mediaId)
+      const photo = photoById.get(item.mediaId)
+      return photo ? [photo] : []
+    })
+  }, [evidence, media.photos, projectedReadyAssetIds])
+  const expectedPhotoCount = expectedGenerationByMediaId.size
+  const unavailableCount = expectedPhotoCount - projectedReadyAssetIds.size
+  const previewsLoading =
+    projectedReadyAssetIds.size > photos.length && !media.previewUnavailable
+  const mediaUnavailable =
+    !accessToken ||
+    media.previewUnavailable ||
+    (media.query.isError && media.assets.length === 0)
+
+  if (mediaUnavailable) {
+    return (
+      <div className="flex min-h-72 flex-1 flex-col gap-2">
+        <span className="text-sm font-medium">{label}</span>
+        <div
+          role="status"
+          className="flex min-h-64 flex-1 items-center justify-center rounded-lg border bg-muted px-4 text-center text-sm text-muted-foreground"
+        >
+          Сервис фото результата недоступен
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex min-h-72 min-w-0 flex-1 flex-col gap-2">
+      <span className="text-sm font-medium">{label}</span>
+      <PhotoCarousel
+        photos={photos}
+        title={label}
+        loading={media.query.isLoading || previewsLoading}
+        photoCount={photos.length}
+        showPhotoCount
+        activeIndex={activeIndex}
+        onActiveIndexChange={setActiveIndex}
+        onRequestFullscreen={media.requestFullscreen}
+        className="min-h-64 flex-1 rounded-lg border"
+        imageVariant="preview"
+        fit="contain"
+        controlsVisibility="mobile-visible"
+        fullscreenQuality="preview"
+        emptyLabel="Спроецированные фото результата не найдены."
+      />
+      {unavailableCount > 0 && media.query.isSuccess ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          {unavailableCount}{" "}
+          {unavailableCount === 1
+            ? "фото ещё недоступно"
+            : "фото ещё недоступны"}{" "}
+          в media-service.
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+function StagePhotos({
+  accessToken,
+  warehouseId,
+  subtask,
+}: {
+  accessToken: string | null
+  warehouseId: string
+  subtask: RepairTaskSubtaskDto
+}) {
+  const evidence = subtask.evidence ?? EMPTY_TASK_EVIDENCE
+  const evidenceByEntry = useMemo(() => {
+    const groups = new Map<string, RepairTaskEvidenceDto[]>()
+    evidence.forEach((item) => {
+      const current = groups.get(item.entryId)
+      if (current) current.push(item)
+      else groups.set(item.entryId, [item])
+    })
+    return [...groups.values()]
+  }, [evidence])
+
+  if (evidence.length === 0) {
+    return (
+      <PhotoCarousel
+        photos={[]}
+        title="Фото результата этапа"
+        photoCount={0}
+        showPhotoCount
+        className="min-h-72 flex-1 rounded-lg border"
+        imageVariant="preview"
+        fit="contain"
+        controlsVisibility="mobile-visible"
+        emptyLabel="Фото результата по этапу не зафиксированы."
+      />
+    )
+  }
+
+  return (
+    <div className="flex min-h-72 flex-1 flex-col gap-3">
+      {evidenceByEntry.map((items, entryIndex) => (
+        <EvidencePhotoGallery
+          key={items[0].entryId}
+          accessToken={accessToken}
+          warehouseId={warehouseId}
+          evidence={items}
+          label={
+            evidenceByEntry.length === 1
+              ? "Фото результата"
+              : `Фото результата ${entryIndex + 1}`
+          }
+        />
+      ))}
+    </div>
+  )
+}
+
+function StageEvidenceInformation({
+  subtask,
+}: {
+  subtask: RepairTaskSubtaskDto
+}) {
+  const evidence = subtask.evidence ?? EMPTY_TASK_EVIDENCE
+  if (evidence.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Подтверждение результата рабочим не зафиксировано.
+      </p>
+    )
+  }
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      <h4 className="text-sm font-medium">Подтверждение результата</h4>
+      <div className="w-full max-w-full overflow-x-auto rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Исполнитель</TableHead>
+              <TableHead>Группа</TableHead>
+              <TableHead>Снято</TableHead>
+              <TableHead>Записано</TableHead>
+              <TableHead>Состояние</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {evidence.map((item) => (
+              <TableRow key={item.evidenceId}>
+                <TableCell>
+                  {item.workerDisplayName ?? "Исполнитель недоступен"}
+                </TableCell>
+                <TableCell>
+                  {item.workerGroupName ?? "Без рабочей группы"}
+                </TableCell>
+                <TableCell>
+                  {formatAcceptanceDateTime(item.capturedAt)}
+                </TableCell>
+                <TableCell>
+                  {formatAcceptanceDateTime(item.recordedAt)}
+                </TableCell>
+                <TableCell>
+                  <Badge
+                    variant={
+                      item.state === "REVIEW_REQUIRED"
+                        ? "destructive"
+                        : "secondary"
+                    }
+                  >
+                    {item.state === "REVIEW_REQUIRED"
+                      ? "Требует проверки"
+                      : "Готово"}
+                  </Badge>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  )
+}
+
+function RepairStageSection({
+  accessToken,
+  warehouseId,
   subtask,
   index,
   taskBoardAvailable,
 }: {
+  accessToken: string | null
+  warehouseId: string
   subtask: RepairTaskSubtaskDto
   index: number
   taskBoardAvailable: boolean
 }) {
+  const title = subtaskTitle(subtask, index)
+  const titleId = `repair-stage-${subtask.id}`
   return (
-    <Card size="sm" className="min-w-0">
-      <CardHeader className="min-w-0">
-        <CardTitle>{subtaskTitle(subtask, index)}</CardTitle>
-        <CardDescription>
-          Очередь: {subtask.queueCode || subtask.queueId || "—"}
-        </CardDescription>
-        <CardAction>
-          {taskBoardAvailable ? (
-            <RemainingTimeBadge
-              plannedDurationMinutes={subtask.plannedDurationMinutes}
-              activeWorkSeconds={subtask.activeWorkSeconds}
-            />
-          ) : (
-            <Badge variant="secondary">Task-board недоступен</Badge>
-          )}
-        </CardAction>
-      </CardHeader>
-      <CardContent className="flex min-w-0 flex-col gap-4">
-        <dl className="grid grid-cols-2 gap-2 text-sm">
-          <dt className="text-muted-foreground">Статус этапа</dt>
-          <dd>{subtask.status}</dd>
-          <dt className="text-muted-foreground">Начато</dt>
-          <dd>{formatAcceptanceDateTime(subtask.startedAt)}</dd>
-          <dt className="text-muted-foreground">Завершено</dt>
-          <dd>{formatAcceptanceDateTime(subtask.completedAt)}</dd>
-          {taskBoardAvailable ? (
-            <>
-              <dt className="text-muted-foreground">Норматив</dt>
-              <dd>
-                {subtask.plannedDurationMinutes === null
-                  ? "—"
-                  : `${subtask.plannedDurationMinutes} мин`}
-              </dd>
-              <dt className="text-muted-foreground">Активное время</dt>
-              <dd>{formatActiveTime(subtask.activeWorkSeconds)}</dd>
-            </>
-          ) : null}
-        </dl>
+    <section
+      aria-labelledby={titleId}
+      className="grid min-w-0 grid-cols-1 items-stretch gap-3 xl:min-h-[32rem] xl:grid-cols-[minmax(0,12fr)_minmax(0,8fr)]"
+    >
+      <Card className="h-full min-h-96 min-w-0 ring-inset">
+        <CardHeader>
+          <CardTitle>Фото этапа {index + 1}</CardTitle>
+          <CardDescription>
+            Фотографии результата, прикреплённые рабочими.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex min-h-72 flex-1 flex-col">
+          <StagePhotos
+            accessToken={accessToken}
+            warehouseId={warehouseId}
+            subtask={subtask}
+          />
+        </CardContent>
+      </Card>
 
-        {taskBoardAvailable ? (
-          <AssignmentTable subtask={subtask} />
-        ) : (
-          <p role="status" className="text-sm text-muted-foreground">
-            Исполнители и время не показаны, потому что публичная проекция
-            task-board недоступна.
-          </p>
-        )}
+      <Card className="h-full min-h-96 min-w-0 ring-inset">
+        <CardHeader className="min-w-0">
+          <CardTitle id={titleId}>{title}</CardTitle>
+          <CardDescription>Очередь: {subtask.queueName || "—"}</CardDescription>
+          <CardAction>
+            {taskBoardAvailable ? (
+              <RemainingTimeBadge
+                plannedDurationMinutes={subtask.plannedDurationMinutes}
+                activeWorkSeconds={subtask.activeWorkSeconds}
+              />
+            ) : (
+              <Badge variant="secondary">Task-board недоступен</Badge>
+            )}
+          </CardAction>
+        </CardHeader>
+        <CardContent className="flex min-w-0 flex-col gap-4">
+          <dl className="flex flex-col gap-1 text-sm">
+            <InfoRow label="Статус этапа">{subtask.status}</InfoRow>
+            <InfoRow label="Начато">
+              {formatAcceptanceDateTime(subtask.startedAt)}
+            </InfoRow>
+            <InfoRow label="Завершено">
+              {formatAcceptanceDateTime(subtask.completedAt)}
+            </InfoRow>
+            <InfoRow label="Норматив">
+              {subtask.plannedDurationMinutes === null
+                ? "—"
+                : `${subtask.plannedDurationMinutes} мин`}
+            </InfoRow>
+            <InfoRow label="Активное время">
+              {taskBoardAvailable
+                ? formatActiveTime(subtask.activeWorkSeconds)
+                : "Недоступно"}
+            </InfoRow>
+          </dl>
 
-        <p className="text-sm text-muted-foreground">
-          Состав строк этапа не входит в публичную проекцию ремонта
-          maintenance-service.
-        </p>
-      </CardContent>
-    </Card>
+          <Separator />
+
+          <div className="flex min-w-0 flex-col gap-2">
+            <h4 className="text-sm font-medium">Исполнители</h4>
+            {taskBoardAvailable ? (
+              <AssignmentTable subtask={subtask} />
+            ) : (
+              <p role="status" className="text-sm text-muted-foreground">
+                Исполнители и время не показаны, потому что публичная проекция
+                task-board недоступна.
+              </p>
+            )}
+          </div>
+
+          <StageEvidenceInformation subtask={subtask} />
+
+          <Separator />
+
+          <StageContent subtask={subtask} />
+
+          <Separator />
+
+          <StageComments subtask={subtask} />
+        </CardContent>
+      </Card>
+    </section>
   )
 }
 
@@ -304,6 +689,7 @@ function DecisionDialogs({
   const [acceptComment, setAcceptComment] = useState("")
   const [writeOffReason, setWriteOffReason] = useState("")
   const [writeOffSubmitted, setWriteOffSubmitted] = useState(false)
+  const canAcceptWithMedia = acceptanceMediaReferences.length > 0
 
   function handleDecisionSuccess(updated: RepairTaskDto) {
     queryClient.setQueryData(
@@ -319,6 +705,11 @@ function DecisionDialogs({
       if (!canEdit) {
         throw new Error(
           "Недостаточно прав для решения по приёмке на выбранном складе."
+        )
+      }
+      if (!canAcceptWithMedia) {
+        throw new Error(
+          "Для приёмки добавьте хотя бы одну готовую фотографию."
         )
       }
       return acceptRepairTask({
@@ -360,18 +751,31 @@ function DecisionDialogs({
           </Button>
         ) : null}
         {canEdit ? (
-          <div className="ml-auto flex flex-wrap justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setReworkOpen(true)}
-            >
-              Переделать
-            </Button>
-            <Button type="button" size="sm" onClick={() => setAcceptOpen(true)}>
-              Принять
-            </Button>
+          <div className="ml-auto flex flex-col items-end gap-2">
+            {!canAcceptWithMedia ? (
+              <p role="status" className="text-xs text-muted-foreground">
+                Для приёмки добавьте хотя бы одну фотографию. На доработку
+                можно отправить без нового фото.
+              </p>
+            ) : null}
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setReworkOpen(true)}
+              >
+                Переделать
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={!canAcceptWithMedia}
+                onClick={() => setAcceptOpen(true)}
+              >
+                Принять
+              </Button>
+            </div>
           </div>
         ) : null}
       </div>
@@ -424,7 +828,7 @@ function DecisionDialogs({
             </Button>
             <Button
               type="button"
-              disabled={acceptMutation.isPending}
+              disabled={acceptMutation.isPending || !canAcceptWithMedia}
               onClick={() => {
                 if (canEdit) {
                   acceptMutation.mutate()
@@ -502,6 +906,8 @@ export function RepairAcceptanceDossier({
   mode,
   canEdit,
   canManage,
+  actorName = "Автор недоступен",
+  decisionActorName = "Автор недоступен",
   onDecision,
 }: RepairAcceptanceDossierProps) {
   const [acceptanceMediaReferences, setAcceptanceMediaReferences] = useState<
@@ -521,34 +927,27 @@ export function RepairAcceptanceDossier({
       ariaLabel={`${mode === "WRITE_OFF" ? "Списание" : "Приёмка"} бытовки ${task.cabinNumber}`}
       mobileContentFlow
       photos={
-        <div className="flex h-full min-h-0 flex-col gap-5 overflow-y-auto">
-          <div className="flex min-h-72 flex-col gap-2">
-            <h3 className="text-sm font-medium">Фото ремонта</h3>
-            <ServiceOwnerPhotos
-              accessToken={accessToken}
-              owner={maintenanceRepairMediaOwner(task.id, task.warehouseId)}
-              readOnly
-              title="Фотографии ремонта"
-            />
-          </div>
-          {mode === "ACCEPTANCE" ? (
-            <div className="flex min-h-72 flex-col gap-2">
-              <h3 className="text-sm font-medium">Фото приёмки</h3>
-              <ServiceOwnerPhotos
-                accessToken={accessToken}
-                owner={maintenanceAcceptanceMediaOwner(
-                  task.id,
-                  task.warehouseId
-                )}
-                readOnly={!canEdit}
-                title="Фотографии приёмки"
-                onReadyReferencesChange={setAcceptanceMediaReferences}
-              />
-            </div>
-          ) : null}
+        <div className="flex h-full min-h-72 flex-col gap-2 overflow-y-auto">
+          <h3 className="text-sm font-medium">Фото приёмки</h3>
+          <ServiceOwnerPhotos
+            accessToken={accessToken}
+            owner={maintenanceAcceptanceMediaOwner(task.id, task.warehouseId)}
+            readOnly={mode !== "ACCEPTANCE" || !canEdit}
+            title="Фотографии приёмки"
+            onReadyReferencesChange={
+              mode === "ACCEPTANCE" ? setAcceptanceMediaReferences : undefined
+            }
+          />
         </div>
       }
-      information={<TaskInformation task={task} mode={mode} />}
+      information={
+        <TaskInformation
+          task={task}
+          mode={mode}
+          actorName={actorName}
+          decisionActorName={decisionActorName}
+        />
+      }
       informationDescription={
         mode === "WRITE_OFF"
           ? "Сведения из maintenance write-off projection."
@@ -557,13 +956,16 @@ export function RepairAcceptanceDossier({
       informationAction={<SourceLink task={task} />}
       lowerTitle="Этапы ремонта"
       lowerDescription="Этапы maintenance-service и доступные данные публичной проекции task-board."
+      bareLowerContent
       lowerContent={
-        <div className="flex min-h-full flex-col gap-3">
+        <div className="flex min-h-full flex-col gap-4">
           {orderedSubtasks.length > 0 ? (
-            <div className="flex min-w-0 flex-col gap-3">
+            <div className="flex min-w-0 flex-col gap-4">
               {orderedSubtasks.map((subtask, index) => (
-                <SubtaskCard
+                <RepairStageSection
                   key={subtask.id}
+                  accessToken={accessToken}
+                  warehouseId={task.warehouseId}
                   subtask={subtask}
                   index={index}
                   taskBoardAvailable={taskBoardAvailable}

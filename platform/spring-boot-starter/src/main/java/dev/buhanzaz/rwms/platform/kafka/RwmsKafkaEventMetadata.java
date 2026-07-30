@@ -27,6 +27,12 @@ public record RwmsKafkaEventMetadata(
     private static final Pattern PRODUCER = Pattern.compile("^[a-z0-9]+(?:-[a-z0-9]+)*$");
     private static final Pattern AGGREGATE_TYPE = Pattern.compile("^[A-Z][A-Z0-9_]{0,127}$");
     private static final Pattern AGGREGATE_ID = Pattern.compile("^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$");
+    // This is a frozen cross-service contract: its compact event segment is intentionally
+    // different from the stable technical aggregate name consumed by media-service.
+    private static final String TASK_BOARD_OWNER_PROOF_PRODUCER = "task-board-service";
+    private static final String TASK_BOARD_OWNER_PROOF_EVENT_TYPE = "task-board.entry-owner-proof.changed.v1";
+    private static final String TASK_BOARD_OWNER_PROOF_AGGREGATE_TYPE = "TASK_BOARD_ENTRY_OWNER_PROOF";
+    private static final String TASK_BOARD_OWNER_PROOF_DESTINATION = "rwms.task-board.entry-owner-proof.v1";
 
     public RwmsKafkaEventMetadata {
         if (envelopeVersion != 2) {
@@ -57,8 +63,14 @@ public record RwmsKafkaEventMetadata(
         if (Integer.parseInt(eventTypeMatcher.group(4)) != eventVersion) {
             throw new IllegalArgumentException("eventVersion must match the eventType version suffix");
         }
+        boolean taskBoardOwnerProof = isTaskBoardOwnerProof(producer, eventType, aggregateType);
+        if ((TASK_BOARD_OWNER_PROOF_EVENT_TYPE.equals(eventType)
+                        || TASK_BOARD_OWNER_PROOF_AGGREGATE_TYPE.equals(aggregateType))
+                && !taskBoardOwnerProof) {
+            throw new IllegalArgumentException("task-board entry owner proof must use its frozen producer/eventType/aggregateType contract");
+        }
         String canonicalAggregateType = aggregateType.toLowerCase(Locale.ROOT).replace('_', '-');
-        if (!eventTypeMatcher.group(2).equals(canonicalAggregateType)) {
+        if (!eventTypeMatcher.group(2).equals(canonicalAggregateType) && !taskBoardOwnerProof) {
             throw new IllegalArgumentException("aggregateType must match the eventType aggregate segment");
         }
     }
@@ -69,6 +81,17 @@ public record RwmsKafkaEventMetadata(
             throw new IllegalStateException("validated eventType no longer matches its contract");
         }
         return "rwms.%s.%s.v%s".formatted(matcher.group(1), matcher.group(2), matcher.group(4));
+    }
+
+    boolean matchesDestination(String destination) {
+        if (isTaskBoardOwnerProof(producer, eventType, aggregateType)) {
+            return TASK_BOARD_OWNER_PROOF_DESTINATION.equals(destination);
+        }
+        return aggregateFamilyDestination().equals(destination);
+    }
+
+    boolean isFrozenTaskBoardOwnerProof() {
+        return isTaskBoardOwnerProof(producer, eventType, aggregateType);
     }
 
     public static RwmsKafkaEventMetadata from(DomainEventEnvelopeV2<?> envelope) {
@@ -86,5 +109,11 @@ public record RwmsKafkaEventMetadata(
                 envelope.recordedAt(),
                 envelope.correlation().correlationId(),
                 envelope.correlation().causationId());
+    }
+
+    private static boolean isTaskBoardOwnerProof(String producer, String eventType, String aggregateType) {
+        return TASK_BOARD_OWNER_PROOF_PRODUCER.equals(producer)
+                && TASK_BOARD_OWNER_PROOF_EVENT_TYPE.equals(eventType)
+                && TASK_BOARD_OWNER_PROOF_AGGREGATE_TYPE.equals(aggregateType);
     }
 }

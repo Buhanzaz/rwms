@@ -16,9 +16,7 @@ vi.mock("@/hooks/use-warehouse", () => ({
     warehouses: [
       {
         id: "22222222-2222-4222-8222-222222222222",
-        serviceId: "22222222-2222-4222-8222-222222222222",
         version: 3,
-        code: "MSK",
         name: "Москва",
         city: "Москва",
         address: "Складская, 1",
@@ -40,7 +38,7 @@ function RuntimeProbe() {
   return (
     <output data-testid="orders-runtime">
       {runtime.accessToken}|{runtime.currentUser?.id}|
-      {runtime.currentUser?.globalRole}|{runtime.warehouses[0]?.code}|
+      {runtime.currentUser?.globalRole}|{runtime.warehouses[0]?.name}|
       {runtime.warehouses[0]?.address}
     </output>
   )
@@ -55,7 +53,7 @@ describe("VaultPanelOrdersModuleAdapter", () => {
     )
 
     expect(screen.getByTestId("orders-runtime").textContent).toBe(
-      "orders-token|11111111-1111-4111-8111-111111111111|WMS_ADMIN|MSK|Складская, 1"
+      "orders-token|11111111-1111-4111-8111-111111111111|WMS_ADMIN|Москва|Складская, 1"
     )
   })
 })

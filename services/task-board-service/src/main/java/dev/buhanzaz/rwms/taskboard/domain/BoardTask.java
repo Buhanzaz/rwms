@@ -9,6 +9,7 @@ import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.hibernate.annotations.Check;
@@ -25,6 +26,7 @@ import org.hibernate.annotations.Check;
 @Check(
     name = "ck_board_task_request_fingerprint",
     constraints = "request_fingerprint is null or request_fingerprint ~ '^[0-9a-f]{64}$'")
+@Check(name = "ck_board_task_priority", constraints = "priority between 1 and 5")
 public class BoardTask extends AbstractVersionedEntity {
   @NotNull
   @Column(name = "warehouse_id", nullable = false)
@@ -55,6 +57,16 @@ public class BoardTask extends AbstractVersionedEntity {
 
   @Column(name = "deadline_at")
   private OffsetDateTime deadlineAt;
+
+  @NotNull
+  @Column(name = "scheduled_date", nullable = false)
+  private LocalDate scheduledDate;
+
+  @Column(name = "priority", nullable = false)
+  private int priority = 3;
+
+  @Column(name = "pinned", nullable = false)
+  private boolean pinned;
 
   @Column(name = "completion_deadline_enforced", nullable = false)
   private boolean completionDeadlineEnforced;
@@ -132,6 +144,34 @@ public class BoardTask extends AbstractVersionedEntity {
 
   public void setDeadlineAt(OffsetDateTime v) {
     deadlineAt = v;
+  }
+
+  public LocalDate getScheduledDate() {
+    return scheduledDate;
+  }
+
+  public void setScheduledDate(LocalDate v) {
+    if (v == null) throw new IllegalArgumentException("Scheduled date is required");
+    scheduledDate = v;
+  }
+
+  public int getPriority() {
+    return priority;
+  }
+
+  public void setPriority(int v) {
+    if (v < 1 || v > 5) {
+      throw new IllegalArgumentException("Task priority must be between 1 and 5");
+    }
+    priority = v;
+  }
+
+  public boolean isPinned() {
+    return pinned;
+  }
+
+  public void setPinned(boolean v) {
+    pinned = v;
   }
 
   public boolean isCompletionDeadlineEnforced() {

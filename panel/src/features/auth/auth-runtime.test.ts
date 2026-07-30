@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { AUTHORITY, AUTH_SCOPE } from "@/features/auth/auth-config"
+import {
+  getUserManager,
+  hasRenewablePanelSession,
+} from "@/features/auth/oidc-client"
 import { bearerRequest } from "@/lib/api-client"
 
 const ORDINARY_DEVELOPMENT_TOKEN = "removed-development-bypass-token"
@@ -15,10 +19,29 @@ describe("panel authentication runtime", () => {
     expect(AUTH_SCOPE.split(" ")).toEqual([
       "openid",
       "profile",
+      "offline_access",
       "rwms.read",
       "rwms.write",
       "warehouse.read",
     ])
+  })
+
+  it("renews the panel session from its refresh token without a redirect", () => {
+    expect(getUserManager().settings.automaticSilentRenew).toBe(true)
+  })
+
+  it("recognizes only offline panel sessions with a refresh token as renewable", () => {
+    expect(
+      hasRenewablePanelSession({
+        refresh_token: "refresh-token",
+        scopes: ["openid", "profile", "offline_access"],
+      } as never)
+    ).toBe(true)
+    expect(
+      hasRenewablePanelSession({
+        scopes: ["openid", "profile"],
+      } as never)
+    ).toBe(false)
   })
 
   it("does not suppress ordinary bearer values in development", async () => {

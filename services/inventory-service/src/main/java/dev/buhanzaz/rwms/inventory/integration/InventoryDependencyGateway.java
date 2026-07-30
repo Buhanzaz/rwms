@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.inventory.integration;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import tools.jackson.databind.JsonNode;
 
@@ -16,9 +17,13 @@ public interface InventoryDependencyGateway {
 
   NumberResolution resolveNumber(UUID warehouseId, String number);
 
+  Optional<LiveAssetSnapshot> currentAsset(UUID assetId);
+
   SourceAsset createSourceAsset(UUID idempotencyKey, JsonNode request);
 
   Validation validateAssets(List<UUID> assetIds);
+
+  RepairSnapshots repairSnapshots(List<UUID> assetIds);
 
   FrozenPlan freezePlan(UUID idempotencyKey, JsonNode request);
 
@@ -91,6 +96,17 @@ public interface InventoryDependencyGateway {
     }
   }
 
+  record LiveAssetSnapshot(
+      UUID assetId,
+      long version,
+      UUID warehouseId,
+      String status,
+      String displayCanonicalNumber,
+      String identityMatchKey,
+      String tenantSnapshot,
+      JsonNode passportSnapshot,
+      JsonNode contentsSnapshot) {}
+
   record NumberResolution(
       String displayCanonicalNumber, String identityMatchKey, boolean found, AssetSnapshot asset) {}
 
@@ -104,10 +120,25 @@ public interface InventoryDependencyGateway {
       String status,
       String displayCanonicalNumber,
       String identityMatchKey,
-      String tenantSnapshot) {}
+      String tenantSnapshot,
+      JsonNode passportSnapshot,
+      JsonNode contentsSnapshot) {}
 
   record Validation(
       OffsetDateTime validatedAt, String validationDigest, List<ValidationItem> assets) {}
+
+  record RepairRegistryFact(
+      UUID repairId,
+      UUID rootRepairId,
+      String origin,
+      String kind,
+      String executionState,
+      String acceptanceState,
+      String planFingerprintSha256) {}
+
+  record RepairAssetSnapshot(UUID assetId, List<RepairRegistryFact> repairs) {}
+
+  record RepairSnapshots(List<RepairAssetSnapshot> assets) {}
 
   record FrozenPlan(
       UUID warehouseId,

@@ -42,7 +42,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTheAuthoritativeMaintenanceSchema() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(9);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(22);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -55,19 +55,37 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "rental_item_fact_projection", "operation_lease_fact_projection",
         "maintenance_idempotency_record", "integration_reconciliation",
         "inventory_repair_source_operation", "inventory_repair_source",
-        "logistics_return_shortage");
+        "logistics_return_shortage", "repair_capacity_settings", "repair_task_evidence",
+        "repair_complexity_colors");
     assertThat(columnCount("maintenance_estimate", "rental_item_version_snapshot")).isOne();
     assertThat(columnCount("maintenance_repair", "rental_item_version_snapshot")).isOne();
     assertThat(columnCount("maintenance_repair", "dispatch_date")).isOne();
+    assertThat(columnCount("maintenance_repair", "priority")).isOne();
+    assertThat(columns("maintenance_repair")).contains(
+        "movement_to_shipment", "transfer_state", "transfer_document_id",
+        "transfer_line_id", "transfer_target_warehouse_id");
+    assertThat(columnCount("maintenance_estimate", "cover_media_id")).isOne();
+    assertThat(columnCount("maintenance_repair", "cover_media_id")).isOne();
+    assertThat(columns("repair_capacity_settings")).containsExactlyInAnyOrder(
+        "warehouse_id", "version", "max_repairs_per_day", "created_at", "updated_at");
+    assertThat(columnDefault("repair_capacity_settings", "max_repairs_per_day")).contains("6");
+    assertThat(constraintDefinition(
+        "repair_capacity_settings", "ck_repair_capacity_settings_max"))
+        .contains("max_repairs_per_day > 0");
     assertThat(columnCount("repair_stage", "external_queue_entry_id")).isOne();
     assertThat(columns("catalog_node")).contains(
         "active", "parent_node_id", "furniture_category", "furniture_equipment_id",
-        "furniture_equipment_code", "furniture_equipment_name", "unit", "include_in_estimate",
+        "furniture_equipment_name", "unit", "include_in_estimate",
         "common_item",
-        "show_in_main_menu", "routing_queue_id", "routing_queue_code",
-        "routing_queue_kind", "opaque_references", "comment", "canvas_x", "canvas_y")
-        .doesNotContain("media_references", "photo_required");
+        "show_in_main_menu", "routing_queue_id", "routing_queue_name",
+        "routing_queue_type", "comment", "canvas_x", "canvas_y", "display_color",
+        "forces_capital_repair", "characteristic_id", "characteristic_name")
+        .doesNotContain(
+            "media_references", "photo_required", "code", "furniture_equipment_code",
+            "routing_queue_code", "routing_queue_kind", "opaque_references");
     assertThat(columns("catalog_link")).contains("source_anchor", "target_anchor");
+    assertThat(constraintDefinition("catalog_node", "ck_catalog_node_display_color"))
+        .contains("#[0-9A-F]{6}");
     assertThat(constraintDefinition("catalog_link", "ck_catalog_link_anchors"))
         .contains("source_anchor", "target_anchor", "TOP", "BOTTOM");
     assertThat(constraintDefinition(
@@ -78,11 +96,24 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "integration_reconciliation", "ck_reconciliation_media_identity"))
         .doesNotContain("MAINTENANCE_CATALOG_NODE");
     assertThat(columns("estimate_line")).contains(
-        "catalog_snapshot", "comment", "media_references");
+        "catalog_snapshot", "comment", "media_references", "unit");
+    assertThat(columnType("estimate_line", "unit")).isEqualTo("character varying(32)");
     assertThat(columns("estimate_plan_stage")).contains(
-        "routing_queue_id", "routing_queue_code", "routing_queue_kind", "task_deadline");
+        "routing_queue_id", "routing_queue_name", "routing_queue_type", "included_line_ids",
+        "primary_line_id", "group_comment", "task_deadline");
     assertThat(columns("repair_stage")).contains(
-        "routing_queue_id", "routing_queue_code", "routing_queue_kind", "task_deadline");
+        "routing_queue_id", "routing_queue_name", "routing_queue_type", "work_lines",
+        "material_lines", "primary_line_id", "group_comment", "task_deadline");
+    assertThat(columns("repair_task_evidence")).containsExactlyInAnyOrder(
+        "evidence_id", "aggregate_version", "repair_id", "repair_stage_id", "entry_id",
+        "task_id", "route_index", "worker_id", "worker_group_id", "media_id",
+        "media_generation", "captured_at", "recorded_at", "evidence_state", "updated_at");
+    assertThat(constraintDefinition(
+        "repair_task_evidence", "ck_repair_task_evidence_state"))
+        .contains("READY", "REVIEW_REQUIRED");
+    assertThat(constraintDefinition(
+        "repair_task_evidence", "ck_repair_task_evidence_generation"))
+        .contains("media_generation >= 1");
     assertThat(columns("integration_reconciliation")).contains(
         "media_owner_type", "media_owner_id", "media_warehouse_id",
         "media_owner_revision", "media_aggregate_version", "media_source_id",
@@ -100,8 +131,12 @@ class MaintenanceFlywayMigrationIntegrationTest {
             "catalog_version_id IS NOT NULL",
             "catalog_node_id IS NOT NULL",
             "catalog_queue_id IS NOT NULL");
-    assertThat(indexDefinition("uk_reconciliation_catalog_operation"))
-        .contains("UNIQUE INDEX", "operation_type", "catalog_version_id", "catalog_node_id");
+    assertThat(indexDefinition("idx_reconciliation_catalog_operation_history"))
+        .contains("catalog_version_id", "catalog_node_id", "operation_type", "created_at")
+        .doesNotContain("UNIQUE INDEX");
+    assertThat(indexDefinition("uk_catalog_version_active_global"))
+        .contains("UNIQUE INDEX", "catalog_version", "WHERE", "state", "ACTIVE")
+        .doesNotContain("warehouse_id");
     assertThat(columns("inventory_repair_source")).contains(
         "inventory_id", "finding_id", "source_revision", "catalog_version_id",
         "plan_request_sha256", "plan_fingerprint", "plan_snapshot", "media_snapshot",
@@ -122,12 +157,229 @@ class MaintenanceFlywayMigrationIntegrationTest {
         .contains("enforce_inventory_repair_source_immutability");
     assertThat(columns("logistics_return_shortage")).contains(
         "return_id", "line_id", "rental_item_id", "rental_item_version_snapshot",
-        "source_sha256", "snapshot_sha256", "shortage_snapshot");
+        "estimate_id", "source_sha256", "snapshot_sha256", "shortage_snapshot");
+    assertThat(constraintDefinition(
+        "logistics_return_shortage", "ck_logistics_return_shortage_estimate_required"))
+        .contains("estimate_id IS NOT NULL", "NOT VALID");
+    assertThat(constraintDefinition(
+        "logistics_return_shortage", "fk_logistics_return_shortage_estimate"))
+        .contains("FOREIGN KEY (estimate_id)", "maintenance_estimate(id)");
+    assertThat(constraintDefinition(
+        "logistics_return_shortage", "uk_logistics_return_shortage_estimate"))
+        .contains("UNIQUE (estimate_id)");
     assertThat(constraintDefinition(
         "logistics_return_shortage", "ck_logistics_return_shortage_snapshot"))
         .contains("jsonb_typeof");
     assertThat(jdbc.queryForObject("select count(*) from catalog_version", Integer.class)).isZero();
     assertThat(jdbc.queryForObject("select count(*) from maintenance_repair", Integer.class)).isZero();
+  }
+
+  @Test
+  void v18UpgradesCatalogIdentityToWarehouseScopedUuidSnapshots() {
+    Flyway beforeV18 = Flyway.configure()
+        .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        .locations(MIGRATIONS)
+        .target("17")
+        .baselineOnMigrate(false)
+        .cleanDisabled(true)
+        .validateOnMigrate(true)
+        .validateMigrationNaming(true)
+        .outOfOrder(false)
+        .load();
+    assertThat(beforeV18.migrate().migrationsExecuted).isEqualTo(17);
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID catalogId = UUID.randomUUID();
+    UUID nodeId = UUID.randomUUID();
+    UUID queueId = UUID.randomUUID();
+    insertCatalogVersion(catalogId, warehouseId, "a".repeat(64));
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,code,node_type,name,active,unit,price_minor,
+          duration_minutes,include_in_estimate,common_item,show_in_main_menu,routing_queue_id,
+          routing_queue_code,routing_queue_kind,opaque_references)
+        values (?,?,?,'WORK_A','WORK','Repair work',true,'piece',10000,15,true,false,true,?,
+          'REPAIR','REPAIR','[{"referenceId":"legacy","code":"obsolete"}]')
+        """,
+        UUID.randomUUID(), nodeId, catalogId, queueId);
+
+    Flyway upgraded = Flyway.configure()
+        .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        .locations(MIGRATIONS)
+        .target("18")
+        .baselineOnMigrate(false)
+        .cleanDisabled(true)
+        .validateOnMigrate(true)
+        .validateMigrationNaming(true)
+        .outOfOrder(false)
+        .load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+    assertThat(columns("catalog_node"))
+        .contains("routing_queue_name", "routing_queue_type")
+        .doesNotContain(
+            "code", "furniture_equipment_code", "routing_queue_code", "routing_queue_kind",
+            "opaque_references");
+    assertThat(jdbc.queryForMap(
+        "select routing_queue_name,routing_queue_type from catalog_node where node_id=?", nodeId))
+        .containsEntry("routing_queue_name", "Очередь недоступна")
+        .containsEntry("routing_queue_type", "REPAIR");
+
+    jdbc.update("update catalog_version set state='ACTIVE' where id=?", catalogId);
+    UUID secondWarehouseId = UUID.randomUUID();
+    insertCatalogVersion(UUID.randomUUID(), secondWarehouseId, "b".repeat(64));
+    jdbc.update(
+        "update catalog_version set state='ACTIVE' where warehouse_id=?", secondWarehouseId);
+    assertThatThrownBy(() -> {
+      UUID duplicate = UUID.randomUUID();
+      insertCatalogVersion(duplicate, warehouseId, "c".repeat(64));
+      jdbc.update("update catalog_version set state='ACTIVE' where id=?", duplicate);
+    }).hasMessageContaining("uk_catalog_version_active");
+  }
+
+  @Test
+  void v19ThroughV22UpgradeWithoutRebuildingExistingAggregates() {
+    Flyway beforeV19 = Flyway.configure()
+        .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        .locations(MIGRATIONS)
+        .target("18")
+        .baselineOnMigrate(false)
+        .cleanDisabled(true)
+        .validateOnMigrate(true)
+        .validateMigrationNaming(true)
+        .outOfOrder(false)
+        .load();
+    assertThat(beforeV19.migrate().migrationsExecuted).isEqualTo(18);
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID catalogId = UUID.randomUUID();
+    insertCatalogVersion(catalogId, warehouseId, "d".repeat(64));
+
+    Flyway upgraded = flyway(MIGRATIONS);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
+    upgraded.validate();
+    assertThat(columns("catalog_node")).contains("display_color");
+    assertThat(constraintDefinition("catalog_node", "ck_catalog_node_display_color"))
+        .contains("#[0-9A-F]{6}");
+    assertThat(columnCount("maintenance_estimate", "cover_media_id")).isOne();
+    assertThat(columnCount("maintenance_repair", "cover_media_id")).isOne();
+    assertThat(jdbc.queryForObject(
+        "select count(*) from catalog_version where id=?", Integer.class, catalogId)).isOne();
+  }
+
+  @Test
+  void v20ToV22GloballyConsolidatesCatalogsAndCanonicalizesLegacySnapshots() {
+    Flyway beforeV21 = Flyway.configure()
+        .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+        .locations(MIGRATIONS)
+        .target("20")
+        .baselineOnMigrate(false)
+        .cleanDisabled(true)
+        .validateOnMigrate(true)
+        .validateMigrationNaming(true)
+        .outOfOrder(false)
+        .load();
+    assertThat(beforeV21.migrate().migrationsExecuted).isEqualTo(20);
+
+    UUID spbWarehouseId = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    UUID otherWarehouseId = UUID.randomUUID();
+    UUID spbCatalogId = UUID.randomUUID();
+    UUID otherCatalogId = UUID.randomUUID();
+    UUID spbNodeId = UUID.randomUUID();
+    UUID otherNodeId = UUID.randomUUID();
+    UUID spbQueueId = UUID.randomUUID();
+    UUID otherQueueId = UUID.randomUUID();
+    insertCatalogVersion(spbCatalogId, spbWarehouseId, "a".repeat(64));
+    jdbc.update("update catalog_version set state='ACTIVE',activated_at=clock_timestamp() where id=?",
+        spbCatalogId);
+
+    // V15 had already installed a global unique index.  This is a deliberately controlled
+    // representation of the pre-cutover inconsistent production state which V21 must merge.
+    jdbc.execute("drop index if exists uk_catalog_version_active_global");
+    jdbc.execute("drop index if exists uk_catalog_version_active");
+    insertCatalogVersion(otherCatalogId, otherWarehouseId, "b".repeat(64));
+    jdbc.update("update catalog_version set state='ACTIVE',activated_at=clock_timestamp() where id=?",
+        otherCatalogId);
+    insertV20WorkNode(spbCatalogId, spbNodeId, spbQueueId, "SPB work");
+    insertV20WorkNode(otherCatalogId, otherNodeId, otherQueueId, "Other work");
+
+    UUID estimateId = UUID.randomUUID();
+    insertEstimateWithRevision(estimateId, spbCatalogId, spbWarehouseId);
+    jdbc.update(
+        """
+        insert into estimate_line(
+          row_id,line_id,estimate_id,estimate_revision,line_no,catalog_node_id,line_type,title,
+          unit,quantity,unit_price_minor,duration_minutes,catalog_snapshot,media_references)
+        values (?,?,?,1,0,?,'WORK','Legacy work','   ',1,10000,0,?::jsonb,'[]')
+        """,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        estimateId,
+        spbNodeId,
+        legacyCatalogSnapshot(spbCatalogId, spbNodeId, spbQueueId));
+
+    insertV20CatalogStreamArtifacts(spbCatalogId, spbNodeId, "ACTIVE");
+    insertV20CatalogStreamArtifacts(otherCatalogId, otherNodeId, "ACTIVE");
+
+    Flyway upgraded = flyway(MIGRATIONS);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(2);
+    upgraded.validate();
+
+    assertThat(jdbc.queryForObject(
+        "select id from catalog_version where state='ACTIVE'", UUID.class)).isEqualTo(spbCatalogId);
+    assertThat(jdbc.queryForObject(
+        "select state from catalog_version where id=?", String.class, otherCatalogId))
+        .isEqualTo("SUPERSEDED");
+    assertThat(jdbc.queryForObject("select count(*) from catalog_version", Integer.class)).isEqualTo(2);
+    assertThat(jdbc.queryForObject("select count(*) from catalog_node", Integer.class)).isEqualTo(2);
+    assertThat(indexDefinition("uk_catalog_version_active_global"))
+        .contains("UNIQUE INDEX", "WHERE", "state", "ACTIVE")
+        .doesNotContain("warehouse_id");
+
+    assertThat(jdbc.queryForMap(
+        "select unit,duration_minutes,catalog_snapshot from estimate_line where estimate_id=?",
+        estimateId))
+        .containsEntry("unit", "piece")
+        .containsEntry("duration_minutes", 60);
+    assertThat(jdbc.queryForObject(
+        """
+        select jsonb_exists(catalog_snapshot, 'code')
+          or not jsonb_exists(catalog_snapshot, 'forcesCapitalRepair')
+          or catalog_snapshot #>> '{routing,queueName}' <> 'External works'
+        from estimate_line where estimate_id=?
+        """, Boolean.class, estimateId)).isFalse();
+
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from domain_event event
+        join event_stream_head head
+          on head.aggregate_type=event.aggregate_type and head.aggregate_id=event.aggregate_id
+         and head.current_version=event.aggregate_version and head.last_event_id=event.event_id
+        join aggregate_snapshot snapshot
+          on snapshot.aggregate_type=event.aggregate_type and snapshot.aggregate_id=event.aggregate_id
+         and snapshot.aggregate_version=event.aggregate_version
+        join projection_checkpoint checkpoint
+          on checkpoint.aggregate_type=event.aggregate_type and checkpoint.aggregate_id=event.aggregate_id
+         and checkpoint.aggregate_version=event.aggregate_version
+        join outbox_event outbox on outbox.event_id=event.event_id
+        where event.aggregate_type='CATALOG_VERSION'
+          and event.aggregate_id=?
+          and event.event_type='maintenance.catalog-version.superseded.v1'
+          and encode(sha256(convert_to(event.payload::text, 'UTF8')),'hex')=event.payload_sha256
+          and encode(sha256(convert_to(snapshot.state::text, 'UTF8')),'hex')=snapshot.state_sha256
+          and checkpoint.projection_sha256=snapshot.state_sha256
+          and encode(sha256(convert_to(outbox.envelope_body::text, 'UTF8')),'hex')=outbox.envelope_sha256
+        """, Integer.class, otherCatalogId.toString())).isOne();
+    assertThat(jdbc.queryForObject(
+        "select current_version from event_stream_head where aggregate_type='CATALOG_VERSION' and aggregate_id=?",
+        Long.class,
+        otherCatalogId.toString())).isEqualTo(1L);
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from domain_event
+        where aggregate_type='CATALOG_VERSION' and aggregate_id=?
+        """, Integer.class, spbCatalogId.toString())).isOne();
   }
 
   @Test
@@ -143,6 +395,66 @@ class MaintenanceFlywayMigrationIntegrationTest {
     assertThatThrownBy(() -> flyway(location).validate())
         .isInstanceOf(FlywayValidateException.class)
         .hasMessageContaining("checksum");
+  }
+
+  @Test
+  void existingV15EstimateLinesBackfillTrimmedCatalogUnits(@TempDir Path directory)
+      throws IOException {
+    for (String migration : List.of(
+        "V1__maintenance_schema.sql",
+        "V2__inventory_source.sql",
+        "V3__logistics_return_shortage.sql",
+        "V4__catalog_furniture_equipment.sql",
+        "V5__media_owner_proof_reconciliation.sql",
+        "V6__catalog_routing_reconciliation.sql",
+        "V7__correct_initial_media_owner_proof_version.sql",
+        "V8__catalog_canvas_and_remove_catalog_media.sql",
+        "V9__remove_catalog_photo_requirement.sql",
+        "V10__repair_priority.sql",
+        "V11__repair_capacity_settings.sql",
+        "V12__repair_stage_content.sql",
+        "V13__repair_task_evidence_projection.sql",
+        "V14__allow_catalog_route_replacement.sql",
+        "V15__global_catalog_scope.sql")) {
+      copyMigration(directory, migration);
+    }
+    String location = "filesystem:" + directory.toAbsolutePath().toString().replace('\\', '/');
+    Flyway upgraded = flyway(location);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(15);
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID catalogId = UUID.randomUUID();
+    UUID estimateId = UUID.randomUUID();
+    insertCatalogVersion(catalogId, warehouseId, "4".repeat(64));
+    insertEstimateWithRevision(estimateId, catalogId, warehouseId);
+    UUID trimmedLineId = UUID.randomUUID();
+    UUID blankLineId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into estimate_line(
+          row_id,line_id,estimate_id,estimate_revision,line_no,line_type,title,
+          quantity,unit_price_minor,duration_minutes,catalog_snapshot,media_references)
+        values (?,?,?,1,0,'WORK','Trimmed unit',1,0,0,?::jsonb,'[]'),
+               (?,?,?,1,1,'MATERIAL','Blank unit',1,0,0,?::jsonb,'[]')
+        """,
+        UUID.randomUUID(),
+        trimmedLineId,
+        estimateId,
+        "{\"unit\":\"  piece  \"}",
+        UUID.randomUUID(),
+        blankLineId,
+        estimateId,
+        "{\"unit\":\"   \"}");
+
+    copyMigration(directory, "V16__estimate_line_unit.sql");
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+    assertThat(jdbc.queryForObject(
+        "select unit from estimate_line where line_id=?", String.class, trimmedLineId))
+        .isEqualTo("piece");
+    assertThat(jdbc.queryForObject(
+        "select unit from estimate_line where line_id=?", String.class, blankLineId))
+        .isNull();
   }
 
   @Test
@@ -694,8 +1006,8 @@ class MaintenanceFlywayMigrationIntegrationTest {
                     """
                     insert into estimate_line(
                       row_id,line_id,estimate_id,estimate_revision,line_no,line_type,title,
-                      quantity,unit_price_minor,media_references)
-                    values (?,?,?,2,0,'WORK','orphan revision',1,0,'[]')
+                      quantity,unit_price_minor,duration_minutes,unit,media_references)
+                    values (?,?,?,2,0,'WORK','orphan revision',1,0,1,'piece','[]')
                     """,
                     UUID.randomUUID(),
                     UUID.randomUUID(),
@@ -707,8 +1019,8 @@ class MaintenanceFlywayMigrationIntegrationTest {
                     """
                     insert into estimate_plan_stage(
                       row_id,stage_id,estimate_id,estimate_revision,stage_no,stage_kind,
-                      routing_queue_id,routing_queue_code,routing_queue_kind)
-                    values (?,?,?,2,0,'REPAIR_WORK',?,'REPAIR','REPAIR')
+                      routing_queue_id,routing_queue_name,routing_queue_type)
+                    values (?,?,?,2,0,'REPAIR_WORK',?,'Repair','REPAIR')
                     """,
                     UUID.randomUUID(),
                     UUID.randomUUID(),
@@ -988,6 +1300,95 @@ class MaintenanceFlywayMigrationIntegrationTest {
         origin,
         kind,
         UUID.randomUUID());
+  }
+
+  private void insertV20WorkNode(
+      UUID catalogId, UUID nodeId, UUID queueId, String name) {
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,unit,price_minor,
+          duration_minutes,include_in_estimate,common_item,show_in_main_menu,
+          routing_queue_id,routing_queue_name,routing_queue_type)
+        values (?,?,?,'WORK',?,true,'piece',10000,0,true,false,true,?,'External works','REPAIR')
+        """,
+        UUID.randomUUID(),
+        nodeId,
+        catalogId,
+        name,
+        queueId);
+  }
+
+  private String legacyCatalogSnapshot(UUID catalogId, UUID nodeId, UUID queueId) {
+    return """
+        {"catalogVersionId":"%s","nodeId":"%s","code":"LEGACY_WORK",
+         "nodeType":"WORK","name":"Legacy work","unit":"piece","unitPrice":"100.00",
+         "durationMinutes":0,"routing":{"queueId":"%s"}}
+        """.formatted(catalogId, nodeId, queueId);
+  }
+
+  private void insertV20CatalogStreamArtifacts(UUID catalogId, UUID nodeId, String lifecycle) {
+    UUID eventId = UUID.randomUUID();
+    UUID correlationId = UUID.randomUUID();
+    String state = """
+        {"id":"%s","version":0,"lifecycle":"%s","nodes":[
+          {"id":"%s","nodeType":"WORK","name":"Legacy work","durationMinutes":0,
+           "routingQueueCode":"REPAIR","photoRequired":true}]}
+        """.formatted(catalogId, lifecycle, nodeId);
+    String payload = "{\"model\":\"maintenance-full-state-v1\",\"state\":" + state + "}";
+    String envelope = "{\"payload\":{}}";
+    String hash = "c".repeat(64);
+    jdbc.update(
+        """
+        insert into event_stream_head(
+          aggregate_type,aggregate_id,current_version,last_event_id,updated_at)
+        values ('CATALOG_VERSION',?,0,?,clock_timestamp())
+        """,
+        catalogId.toString(),
+        eventId);
+    jdbc.update(
+        """
+        insert into domain_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,event_version,
+          occurred_at,recorded_at,correlation_id,payload,payload_sha256,baseline)
+        values (?,'CATALOG_VERSION',?,0,'maintenance.catalog-version.activated.v1',1,
+          clock_timestamp(),clock_timestamp(),?,?::jsonb,?,false)
+        """,
+        eventId,
+        catalogId.toString(),
+        correlationId,
+        payload,
+        hash);
+    jdbc.update(
+        """
+        insert into aggregate_snapshot(
+          aggregate_type,aggregate_id,aggregate_version,state,state_sha256,recorded_at)
+        values ('CATALOG_VERSION',?,0,?::jsonb,?,clock_timestamp())
+        """,
+        catalogId.toString(),
+        state,
+        hash);
+    jdbc.update(
+        """
+        insert into projection_checkpoint(
+          projection_name,aggregate_type,aggregate_id,aggregate_version,projection_sha256,updated_at)
+        values ('maintenance-live-v1','CATALOG_VERSION',?,0,?,clock_timestamp())
+        """,
+        catalogId.toString(),
+        hash);
+    jdbc.update(
+        """
+        insert into outbox_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,topic,
+          envelope_body,envelope_sha256,status,attempt_count,next_attempt_at,created_at)
+        values (?,'CATALOG_VERSION',?,0,'maintenance.catalog-version.activated.v1',
+          'rwms.maintenance.catalog-version.v1',?::jsonb,?,'PENDING',0,clock_timestamp(),
+          clock_timestamp())
+        """,
+        eventId,
+        catalogId.toString(),
+        envelope,
+        hash);
   }
 
   private void insertMediaProof(

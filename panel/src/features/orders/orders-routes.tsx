@@ -1,6 +1,7 @@
 import { useMemo, type ReactNode } from "react"
 import { Route, Routes } from "react-router-dom"
 
+import { ManagerBookingAlertDialog } from "@/features/assistant/components/manager-booking-alert-dialog"
 import { useAuth } from "@/features/auth/use-auth"
 import type { OrdersModuleRuntime } from "@/features/orders/domain/orders-module"
 import { OrdersModuleProvider } from "@/features/orders/orders-module-provider"
@@ -21,7 +22,6 @@ export function VaultPanelOrdersModuleAdapter({
       currentUser,
       warehouses: warehouses.map((warehouse) => ({
         id: warehouse.id,
-        code: warehouse.code,
         name: warehouse.name,
         city: warehouse.city,
         address: warehouse.address,
@@ -36,6 +36,7 @@ export function VaultPanelOrdersModuleAdapter({
 export function OrdersRoutes() {
   return (
     <VaultPanelOrdersModuleAdapter>
+      <ManagerBookingAlertDialog />
       <Routes>
         <Route index element={<OrdersListPage />} />
         <Route path="new" element={<OrdersListPage />} />

@@ -2,6 +2,8 @@ package dev.buhanzaz.rwms.taskboard.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
@@ -28,6 +30,10 @@ import org.hibernate.proxy.HibernateProxy;
 @Check(
     name = "ck_task_sync_source_client",
     constraints = "source_client_id = btrim(source_client_id) and source_client_id <> ''")
+@Check(
+    name = "ck_task_sync_source_reference",
+    constraints =
+        "(source_type is null and source_id is null) or (source_type = 'MAINTENANCE_REPAIR' and source_id is not null)")
 public class TaskSyncSource {
   @Id
   @NotNull
@@ -42,15 +48,36 @@ public class TaskSyncSource {
   @Column(name = "source_client_id", nullable = false, length = 100)
   private String sourceClientId;
 
+  @Enumerated(EnumType.STRING)
+  @Column(name = "source_type", length = 32)
+  private TaskSourceType sourceType;
+
+  @Column(name = "source_id")
+  private UUID sourceId;
+
   @Column(name = "created_at", nullable = false, insertable = false, updatable = false)
   private OffsetDateTime createdAt;
 
   protected TaskSyncSource() {}
 
   public TaskSyncSource(UUID boardTaskId, UUID externalTaskId, String sourceClientId) {
+    this(boardTaskId, externalTaskId, sourceClientId, null, null);
+  }
+
+  public TaskSyncSource(
+      UUID boardTaskId,
+      UUID externalTaskId,
+      String sourceClientId,
+      TaskSourceType sourceType,
+      UUID sourceId) {
+    if ((sourceType == null) != (sourceId == null)) {
+      throw new IllegalArgumentException("Task source type and id must be set together");
+    }
     this.boardTaskId = Objects.requireNonNull(boardTaskId);
     this.externalTaskId = Objects.requireNonNull(externalTaskId);
     this.sourceClientId = Objects.requireNonNull(sourceClientId);
+    this.sourceType = sourceType;
+    this.sourceId = sourceId;
   }
 
   public UUID getBoardTaskId() {
@@ -63,6 +90,22 @@ public class TaskSyncSource {
 
   public String getSourceClientId() {
     return sourceClientId;
+  }
+
+  public TaskSourceType getSourceType() {
+    return sourceType;
+  }
+
+  public UUID getSourceId() {
+    return sourceId;
+  }
+
+  public boolean hasSourceReference() {
+    return sourceType != null;
+  }
+
+  public boolean hasSourceReference(TaskSourceType type, UUID id) {
+    return sourceType == type && Objects.equals(sourceId, id);
   }
 
   public OffsetDateTime getCreatedAt() {

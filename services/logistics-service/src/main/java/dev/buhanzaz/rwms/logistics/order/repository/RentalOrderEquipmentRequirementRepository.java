@@ -7,9 +7,10 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface RentalOrderEquipmentRequirementRepository
     extends JpaRepository<RentalOrderEquipmentRequirement, UUID> {
-  List<RentalOrderEquipmentRequirement> findAllByOrder_IdOrderByRentalItemIdAscEquipmentCodeAsc(
+  List<RentalOrderEquipmentRequirement> findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(
       UUID orderId);
 
   List<RentalOrderEquipmentRequirement>
-      findAllByOrder_IdAndRentalItemIdOrderByEquipmentCodeAsc(UUID orderId, UUID rentalItemId);
+      findAllByOrder_IdAndRentalItemIdOrderByEquipmentNameAscEquipmentIdAsc(
+          UUID orderId, UUID rentalItemId);
 }

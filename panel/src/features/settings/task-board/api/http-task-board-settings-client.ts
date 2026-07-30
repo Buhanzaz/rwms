@@ -3,6 +3,8 @@ import type {
   TaskBoardSettingsClient,
 } from "@/features/settings/task-board/api/task-board-settings-client"
 import type {
+  QueueDefinitionDto,
+  QueueDefinitionRequest,
   WorkerClassDto,
   WorkerClassRequest,
   WorkerDto,
@@ -11,7 +13,6 @@ import type {
   WorkerRequest,
   WorkQueueDto,
   WorkQueueRequest,
-  ReviewedTaskBoardBootstrapResult,
 } from "@/features/settings/task-board/model/task-board-settings"
 import { bearerRequest } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
@@ -27,15 +28,35 @@ function json(method: string, body: unknown): RequestInit {
 }
 
 export class HttpTaskBoardSettingsClient implements TaskBoardSettingsClient {
-  bootstrapReviewedData(
-    token: string,
-    warehouseId: string,
-    idempotencyKey: string
-  ) {
-    return bearerRequest<ReviewedTaskBoardBootstrapResult>(
+  listQueueDefinitions(token: string) {
+    return bearerRequest<QueueDefinitionDto[]>(
       token,
-      `${warehouseEndpoint(warehouseId)}/reviewed-bootstrap`,
-      { method: "POST", headers: { "Idempotency-Key": idempotencyKey } }
+      `${TASK_BOARD_API}/queue-definitions`
+    )
+  }
+  createQueueDefinition(token: string, request: QueueDefinitionRequest) {
+    return bearerRequest<QueueDefinitionDto>(
+      token,
+      `${TASK_BOARD_API}/queue-definitions`,
+      json("POST", request)
+    )
+  }
+  updateQueueDefinition(
+    token: string,
+    id: string,
+    request: QueueDefinitionRequest
+  ) {
+    return bearerRequest<QueueDefinitionDto>(
+      token,
+      `${TASK_BOARD_API}/queue-definitions/${encodeURIComponent(id)}`,
+      json("PUT", request)
+    )
+  }
+  deleteQueueDefinition(token: string, id: string, expectedVersion: number) {
+    return bearerRequest<void>(
+      token,
+      `${TASK_BOARD_API}/queue-definitions/${encodeURIComponent(id)}?expectedVersion=${expectedVersion}`,
+      { method: "DELETE" }
     )
   }
 
@@ -174,6 +195,31 @@ export class HttpTaskBoardSettingsClient implements TaskBoardSettingsClient {
       json("POST", { expectedVersion })
     )
   }
+  enableWorkerCredentials(
+    token: string,
+    warehouseId: string,
+    id: string,
+    expectedVersion: number
+  ) {
+    return bearerRequest<WorkerDto>(
+      token,
+      `${warehouseEndpoint(warehouseId)}/workers/${encodeURIComponent(id)}/credentials/enable`,
+      json("POST", { expectedVersion })
+    )
+  }
+  setWorkerCurrentGroup(
+    token: string,
+    warehouseId: string,
+    id: string,
+    expectedVersion: number,
+    workerGroupId: string | null
+  ) {
+    return bearerRequest<WorkerDto>(
+      token,
+      `${warehouseEndpoint(warehouseId)}/workers/${encodeURIComponent(id)}/current-group`,
+      json("PUT", { expectedVersion, workerGroupId })
+    )
+  }
 
   listGroups(token: string, warehouseId: string) {
     return bearerRequest<WorkerGroupDto[]>(
@@ -210,6 +256,32 @@ export class HttpTaskBoardSettingsClient implements TaskBoardSettingsClient {
       token,
       `${warehouseEndpoint(warehouseId)}/worker-groups/${encodeURIComponent(id)}?expectedVersion=${expectedVersion}`,
       { method: "DELETE" }
+    )
+  }
+  disableGroup(
+    token: string,
+    warehouseId: string,
+    id: string,
+    expectedVersion: number,
+    reason: string
+  ) {
+    return bearerRequest<WorkerGroupDto>(
+      token,
+      `${warehouseEndpoint(warehouseId)}/worker-groups/${encodeURIComponent(id)}/disable`,
+      json("POST", { expectedVersion, reason })
+    )
+  }
+  enableGroup(
+    token: string,
+    warehouseId: string,
+    id: string,
+    expectedVersion: number,
+    reason: string | null
+  ) {
+    return bearerRequest<WorkerGroupDto>(
+      token,
+      `${warehouseEndpoint(warehouseId)}/worker-groups/${encodeURIComponent(id)}/enable`,
+      json("POST", { expectedVersion, reason })
     )
   }
 }

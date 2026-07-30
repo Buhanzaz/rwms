@@ -11,6 +11,7 @@ import {
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import type { KpiPalette } from "@/features/settings/kpi/api/kpi-settings-api"
 import { cn } from "@/lib/utils"
 import type {
   TaskBoardEntryDto,
@@ -20,44 +21,53 @@ import { TaskBoardCard } from "@/features/task-board/task-board-card"
 
 function queueKindLabel(queue: TaskBoardQueueDto) {
   if (queue.kind === "MOVEMENT") return "Перемещение"
+  if (queue.kind === "FURNITURE_MOVEMENT") return "Перемещение мебели"
   if (queue.kind === "HOLDING") return "Ожидание"
-  if (queue.kind === "UNASSIGNED") return "Без маршрута"
   return "Ремонт"
 }
-
-// Header, list padding and gaps, plus three 20rem mobile cards.
-const mobileQueueThreeCardHeightClassName = "max-h-[70.125rem]"
 
 export const TaskBoardColumn = memo(function TaskBoardColumn({
   queue,
   visibleEntries,
   now,
   mobile,
+  canEdit,
   collapsed,
   dragDisabled,
   actionPending,
   queueActionsDisabled,
   onToggleCollapsed,
   onDetails,
+  onEdit,
   onTake,
   onPause,
   onResume,
+  onPin,
+  isEntryCollapsed,
+  onToggleEntryCollapsed,
   onComplete,
+  palette,
 }: {
   queue: TaskBoardQueueDto
   visibleEntries: TaskBoardEntryDto[]
   now: number
   mobile: boolean
+  canEdit: boolean
   collapsed: boolean
   dragDisabled: boolean
   actionPending: boolean
   queueActionsDisabled: boolean
   onToggleCollapsed: (queueKey: string) => void
   onDetails: (entry: TaskBoardEntryDto) => void
+  onEdit: (entry: TaskBoardEntryDto) => void
   onTake: (entry: TaskBoardEntryDto) => void
   onPause: (entry: TaskBoardEntryDto) => void
   onResume: (entry: TaskBoardEntryDto) => void
+  onPin: (entry: TaskBoardEntryDto, pinned: boolean) => void
+  isEntryCollapsed: (entryId: string) => boolean
+  onToggleEntryCollapsed: (entryId: string) => void
   onComplete: (entry: TaskBoardEntryDto) => void
+  palette: KpiPalette | null
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: `queue:${queue.key}`,
@@ -104,7 +114,6 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
       className={cn(
         "flex min-h-0 shrink-0 flex-col overflow-hidden rounded-lg bg-muted/35 ring-1 ring-foreground/10",
         mobile ? "h-auto w-full" : "h-full w-80",
-        mobile && mobileQueueThreeCardHeightClassName,
         isOver && "ring-2 ring-primary/40"
       )}
       aria-label={`Очередь ${queue.label}`}
@@ -163,8 +172,10 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
       >
         <div
           className={cn(
-            "flex min-h-0 flex-1 touch-pan-y flex-col gap-3 overflow-y-auto p-3",
-            mobile ? "overscroll-y-auto" : "overscroll-contain"
+            "flex min-h-0 flex-1 touch-pan-y flex-col gap-3 p-3",
+            mobile
+              ? "overflow-visible"
+              : "[scrollbar-width:none] overflow-y-auto overscroll-contain [&::-webkit-scrollbar]:hidden"
           )}
         >
           {visibleEntries.map((entry) => (
@@ -173,11 +184,21 @@ export const TaskBoardColumn = memo(function TaskBoardColumn({
               entry={entry}
               now={now}
               mobile={mobile}
-              dragDisabled={dragDisabled || entry.status === "IN_PROGRESS"}
+              canEdit={canEdit}
+              collapsed={isEntryCollapsed(entry.id)}
+              dragDisabled={
+                dragDisabled ||
+                entry.status === "IN_PROGRESS" ||
+                entry.status === "PAUSED"
+              }
               actionPending={actionPending}
               onDetails={onDetails}
+              onEdit={onEdit}
               onPause={onPause}
               onResume={onResume}
+              onPin={onPin}
+              onToggleCollapsed={onToggleEntryCollapsed}
+              palette={palette}
             />
           ))}
         </div>

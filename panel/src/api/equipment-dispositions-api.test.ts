@@ -18,7 +18,6 @@ const equipmentWarehouse = {
   equipment: {
     id: equipmentId,
     version: 4,
-    code: "CHAIR",
     name: "Стул",
     category: "FURNITURE",
     active: true,
@@ -36,6 +35,8 @@ const equipmentWarehouse = {
     writtenOffQuantity: 1,
     lostQuantity: 0,
     activeHeldQuantity: 1,
+    reservedQuantity: 0,
+    availableQuantity: 11,
     availableStock: 7,
     balances: [
       {
@@ -64,7 +65,6 @@ const disposition = {
     kind: "EQUIPMENT_WRITTEN_OFF",
     occurredAt: "2026-07-18T11:00:00Z",
   },
-  equipmentCode: "CHAIR",
   equipmentName: "Стул",
 }
 

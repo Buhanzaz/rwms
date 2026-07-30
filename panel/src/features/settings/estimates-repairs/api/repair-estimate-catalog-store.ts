@@ -1,5 +1,5 @@
 import {
-  bootstrapMaintenanceCatalog,
+  createMaintenanceCatalog,
   listMaintenanceCatalogLinks,
   listMaintenanceCatalogNodes,
   listMaintenanceCatalogVersions,
@@ -20,18 +20,46 @@ import type {
   RepairEstimateCatalogNodeDto,
   RepairEstimateCatalogNodeMutation,
   RepairEstimateCatalogRequest,
+  RepairEstimateCatalogRouteQueueKind,
+  RepairEstimateCatalogRoutingDto,
   RepairEstimateCatalogSectionDto,
   RepairEstimateCatalogSectionKind,
   RepairEstimateCatalogSnapshotDto,
   RepairEstimateCatalogVersionDto,
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
 
-const CODE_PATTERN = /^[A-Z0-9][A-Z0-9_-]{0,63}$/
 const MONEY_PATTERN = /^(?:0|[1-9][0-9]*)(?:\.[0-9]{2})$/
+const DISPLAY_COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/
+
+export type RepairEstimateCatalogDisplayColorGroup =
+  | "CATEGORY"
+  | "SUBCATEGORY"
+  | "WORK"
+  | "MATERIAL"
+  | "FURNITURE"
+  | "OPTION"
+  | "LOCATION"
+
+export const REPAIR_ESTIMATE_CATALOG_DISPLAY_COLOR_GROUPS = [
+  "CATEGORY",
+  "SUBCATEGORY",
+  "WORK",
+  "MATERIAL",
+  "FURNITURE",
+  "OPTION",
+  "LOCATION",
+] as const satisfies readonly RepairEstimateCatalogDisplayColorGroup[]
+
+export type RepairEstimateCatalogDisplayColors = Record<
+  RepairEstimateCatalogDisplayColorGroup,
+  string | null
+>
 
 function idempotencyKey() {
   if (typeof crypto === "undefined" || !("randomUUID" in crypto)) {
-    throw new Error("Браузер не поддерживает безопасные UUID для команды.")
+    throw new Error(
+      "Браузер не поддерживает создание безопасного ключа команды."
+    )
   }
   return crypto.randomUUID()
 }
@@ -85,7 +113,7 @@ async function catalogState(request: RepairEstimateCatalogRequest) {
     (candidate) => candidate.id === request.catalogVersionId
   )
   if (!version) {
-    throw new Error("Текущий каталог не найден для выбранного склада.")
+    throw new Error("Текущая версия единого каталога не найдена.")
   }
 
   const [nodes, links] = await Promise.all([
@@ -107,40 +135,40 @@ function toSnapshot(
   _request: RepairEstimateCatalogRequest,
   state: Awaited<ReturnType<typeof catalogState>>
 ): RepairEstimateCatalogSnapshotDto {
-  const nodeById = new Map(state.nodes.map((node) => [node.id, node]))
-
   const nodes = state.nodes
     .map((node): RepairEstimateCatalogNodeDto => {
-      const queueKind = node.routing?.queueKind
+      const queueKind = node.routing?.queueType
+      const routeQueueKind: RepairEstimateCatalogRouteQueueKind | null =
+        queueKind === "MOVEMENT" ||
+        queueKind === "REPAIR" ||
+        queueKind === "HOLDING"
+          ? queueKind
+          : null
+      const routing: RepairEstimateCatalogRoutingDto | null =
+        routeQueueKind !== null && node.routing !== null
+          ? { ...node.routing, queueType: routeQueueKind }
+          : null
       return {
         id: node.id,
         catalogVersionId: node.catalogVersionId,
-        code: node.code,
         name: node.name,
+        displayColor: node.displayColor ?? null,
         nodeType: node.nodeType,
         parentId: node.parentNodeId,
-        parentCode: node.parentNodeId
-          ? (nodeById.get(node.parentNodeId)?.code ?? null)
-          : null,
         active: node.active,
         unit: node.unit,
         unitPrice: node.unitPrice,
         durationMinutes: node.nodeType === "WORK" ? node.durationMinutes : null,
         showInMainMenu: node.showInMainMenu,
-        routeQueueKind:
-          queueKind === "MOVEMENT" ||
-          queueKind === "REPAIR" ||
-          queueKind === "HOLDING"
-            ? queueKind
-            : null,
-        workQueueId: node.routing?.queueId ?? null,
-        workQueueCode: node.routing?.queueCode ?? null,
-        routing: node.routing,
+        routeQueueKind,
+        queueDefinitionId: routing?.queueId ?? null,
+        routing,
         includeInEstimate: node.includeInEstimate,
         commonItem: node.commonItem,
         furnitureCategory: Boolean(node.furnitureCategory),
         furnitureEquipment: node.furnitureEquipment ?? null,
-        references: node.references,
+        forcesCapitalRepair: node.forcesCapitalRepair,
+        characteristic: node.characteristic,
         canvasX: node.canvasX,
         canvasY: node.canvasY,
         comment: node.comment,
@@ -259,14 +287,26 @@ function normalizeMoney(value: string | null) {
   return withScale
 }
 
+function normalizeDisplayColor(value: string | null | undefined) {
+  if (value === null || value === undefined || value.trim() === "") {
+    return null
+  }
+
+  const normalized = value.trim().toUpperCase()
+  if (!DISPLAY_COLOR_PATTERN.test(normalized)) {
+    throw new Error("Цвет кнопки должен быть в формате #RRGGBB.")
+  }
+  return normalized
+}
+
 function toNodeInput(
   node: MaintenanceCatalogNode
 ): MaintenanceCatalogNodeInput {
   return {
     id: node.id,
-    code: node.code,
     nodeType: node.nodeType,
     name: node.name,
+    displayColor: node.displayColor ?? null,
     active: node.active,
     parentNodeId: node.parentNodeId,
     unit: node.unit,
@@ -277,12 +317,70 @@ function toNodeInput(
     showInMainMenu: node.showInMainMenu,
     furnitureCategory: Boolean(node.furnitureCategory),
     furnitureEquipment: node.furnitureEquipment ?? null,
-    routing: node.routing,
-    references: node.references,
+    forcesCapitalRepair: node.forcesCapitalRepair,
+    characteristicId: node.characteristic?.characteristicId ?? null,
+    routing: node.routing
+      ? { queueId: node.routing.queueId, queueType: node.routing.queueType }
+      : null,
     canvasX: node.canvasX,
     canvasY: node.canvasY,
     comment: node.comment,
   }
+}
+
+function maintenanceNodeIsInFurnitureTree(
+  node: MaintenanceCatalogNode,
+  nodesById: ReadonlyMap<string, MaintenanceCatalogNode>
+) {
+  const visited = new Set<string>()
+  let current: MaintenanceCatalogNode | undefined = node
+
+  while (current) {
+    if (current.furnitureCategory) return true
+    if (!current.parentNodeId || visited.has(current.id)) return false
+    visited.add(current.id)
+    current = nodesById.get(current.parentNodeId)
+  }
+
+  return false
+}
+
+function catalogDisplayColorGroup(
+  node: MaintenanceCatalogNode,
+  nodesById: ReadonlyMap<string, MaintenanceCatalogNode>
+): RepairEstimateCatalogDisplayColorGroup {
+  if (maintenanceNodeIsInFurnitureTree(node, nodesById)) {
+    return "FURNITURE"
+  }
+
+  return node.nodeType
+}
+
+export async function saveRepairEstimateCatalogDisplayColors(
+  request: RepairEstimateCatalogRequest,
+  colors: RepairEstimateCatalogDisplayColors
+) {
+  const normalizedColors = {} as RepairEstimateCatalogDisplayColors
+  for (const group of REPAIR_ESTIMATE_CATALOG_DISPLAY_COLOR_GROUPS) {
+    normalizedColors[group] = normalizeDisplayColor(colors[group])
+  }
+
+  const state = await catalogState(request)
+  const nodesById = new Map(state.nodes.map((node) => [node.id, node]))
+  const nodes = state.nodes.map((node) => ({
+    ...toNodeInput(node),
+    displayColor: normalizedColors[catalogDisplayColorGroup(node, nodesById)],
+  }))
+
+  await replaceMaintenanceCatalogNodes(
+    request.accessToken,
+    request.warehouseId,
+    state.version.id,
+    state.version.version,
+    nodes
+  )
+
+  return getRepairEstimateCatalogSnapshot(request)
 }
 
 function nodeInput(
@@ -290,17 +388,6 @@ function nodeInput(
   existing: MaintenanceCatalogNode | undefined,
   nodes: MaintenanceCatalogNode[]
 ): MaintenanceCatalogNodeInput {
-  const code = input.code.trim().toUpperCase()
-  if (!CODE_PATTERN.test(code)) {
-    throw new Error("Код должен быть задан латиницей, цифрами, _ или -.")
-  }
-  if (
-    nodes.some(
-      (node) => node.code === code && node.id !== (existing?.id ?? input.id)
-    )
-  ) {
-    throw new Error("Код уже существует.")
-  }
   const name = input.name.trim()
   if (!name) throw new Error("Заполните название.")
   if (input.parentId && !nodes.some((node) => node.id === input.parentId)) {
@@ -331,9 +418,12 @@ function nodeInput(
 
   return {
     id: existing?.id ?? input.id ?? idempotencyKey(),
-    code,
     nodeType: input.nodeType,
     name,
+    displayColor:
+      input.displayColor === undefined
+        ? (existing?.displayColor ?? null)
+        : normalizeDisplayColor(input.displayColor),
     active: input.active,
     parentNodeId: input.nodeType === "CATEGORY" ? null : input.parentId,
     unit: input.unit?.trim() || null,
@@ -348,8 +438,24 @@ function nodeInput(
     furnitureCategory:
       input.nodeType === "CATEGORY" && Boolean(input.furnitureCategory),
     furnitureEquipment: furnitureMaterial ? furnitureEquipment : null,
-    routing: existing?.routing ?? input.routing ?? null,
-    references: existing?.references ?? input.references ?? [],
+    forcesCapitalRepair:
+      input.nodeType === "WORK" && Boolean(input.forcesCapitalRepair),
+    characteristicId:
+      input.nodeType === "MATERIAL" ? input.characteristicId : null,
+    routing:
+      input.routing === undefined
+        ? existing?.routing
+          ? {
+              queueId: existing.routing.queueId,
+              queueType: existing.routing.queueType,
+            }
+          : null
+        : input.routing
+          ? {
+              queueId: input.routing.queueId,
+              queueType: input.routing.queueType,
+            }
+          : null,
     canvasX: input.canvasX ?? existing?.canvasX ?? null,
     canvasY: input.canvasY ?? existing?.canvasY ?? null,
     comment: input.comment?.trim() || null,
@@ -558,12 +664,12 @@ export async function saveRepairEstimateCatalogCanvasChanges(
   return getRepairEstimateCatalogCanvas(request)
 }
 
-export function bootstrapRepairEstimateCatalog(
+export function createRepairEstimateCatalog(
   accessToken: string,
   warehouseId: string,
   commandKey: string = idempotencyKey()
 ) {
-  return bootstrapMaintenanceCatalog(accessToken, commandKey, {
+  return createMaintenanceCatalog(accessToken, commandKey, {
     warehouseId,
   }).then(toVersion)
 }

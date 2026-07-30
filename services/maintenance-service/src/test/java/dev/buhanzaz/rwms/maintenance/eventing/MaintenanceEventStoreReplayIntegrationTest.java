@@ -127,9 +127,16 @@ class MaintenanceEventStoreReplayIntegrationTest {
         where aggregate_type='ESTIMATE' and aggregate_id=? and aggregate_version=2
         """, String.class, fixture.estimateId().toString())).isEqualTo("Amended material");
     assertThat(jdbc.queryForObject("""
-        select payload #>> '{state,nodes,0,canvasX}'
-        from domain_event where aggregate_type='CATALOG_VERSION' and aggregate_id=?
-        """, String.class, fixture.catalogId().toString())).isEqualTo("128");
+        select node ->> 'canvasX'
+        from domain_event
+        cross join lateral jsonb_array_elements(payload #> '{state,nodes}') as node
+        where aggregate_type='CATALOG_VERSION'
+          and aggregate_id=?
+          and node ->> 'id'=?
+        """,
+        String.class,
+        fixture.catalogId().toString(),
+        fixture.catalogNodeId().toString())).isEqualTo("128");
     assertThat(jdbc.queryForObject("""
         select payload #>> '{state,links,0,sourceAnchor}'
         from domain_event where aggregate_type='CATALOG_VERSION' and aggregate_id=?
@@ -142,67 +149,6 @@ class MaintenanceEventStoreReplayIntegrationTest {
         select payload #>> '{state,media,0,safeMetadata,sha256}' from domain_event
         where aggregate_type='REPAIR' and aggregate_id=? and aggregate_version=0
         """, String.class, fixture.primaryRepairId().toString())).isEqualTo("c".repeat(64));
-  }
-
-  @Test
-  void replayIgnoresRetiredPhotoFieldInExistingCatalogFactsAfterV9() {
-    Fixture fixture = createCompleteFixture();
-
-    jdbc.update(
-        """
-        update domain_event
-        set payload=jsonb_set(payload,'{state,nodes,0,photoRequired}','true'::jsonb)
-        where aggregate_type='CATALOG_VERSION' and aggregate_id=? and aggregate_version=0
-        """,
-        fixture.catalogId().toString());
-    String payload = jdbc.queryForObject(
-        """
-        select payload::text from domain_event
-        where aggregate_type='CATALOG_VERSION' and aggregate_id=? and aggregate_version=0
-        """,
-        String.class,
-        fixture.catalogId().toString());
-    jdbc.update(
-        """
-        update domain_event set payload_sha256=?
-        where aggregate_type='CATALOG_VERSION' and aggregate_id=? and aggregate_version=0
-        """,
-        MaintenanceChecksum.sha256(payload.getBytes(StandardCharsets.UTF_8)),
-        fixture.catalogId().toString());
-
-    jdbc.update(
-        """
-        update aggregate_snapshot
-        set state=jsonb_set(state,'{nodes,0,photoRequired}','true'::jsonb)
-        where aggregate_type='CATALOG_VERSION' and aggregate_id=? and aggregate_version=0
-        """,
-        fixture.catalogId().toString());
-    String state = jdbc.queryForObject(
-        """
-        select state::text from aggregate_snapshot
-        where aggregate_type='CATALOG_VERSION' and aggregate_id=? and aggregate_version=0
-        """,
-        String.class,
-        fixture.catalogId().toString());
-    String legacyStateHash =
-        MaintenanceChecksum.sha256(state.getBytes(StandardCharsets.UTF_8));
-    jdbc.update(
-        """
-        update aggregate_snapshot set state_sha256=?
-        where aggregate_type='CATALOG_VERSION' and aggregate_id=? and aggregate_version=0
-        """,
-        legacyStateHash,
-        fixture.catalogId().toString());
-    jdbc.update(
-        """
-        update projection_checkpoint set projection_sha256=?
-        where projection_name='maintenance-live-v1'
-          and aggregate_type='CATALOG_VERSION' and aggregate_id=?
-        """,
-        legacyStateHash,
-        fixture.catalogId().toString());
-
-    assertThat(replay.rebuildAndVerify().streamCount()).isEqualTo(5);
   }
 
   @Test
@@ -226,14 +172,19 @@ class MaintenanceEventStoreReplayIntegrationTest {
         "update estimate_line set title='Amended material' where estimate_id=? and estimate_revision=2",
         new Object[] {fixture.estimateId()});
     assertDrift(
-        "update estimate_plan_stage set routing_queue_code='DRIFT' where estimate_id=? and estimate_revision=2",
+        "update estimate_plan_stage set routing_queue_name='DRIFT' where estimate_id=? and estimate_revision=2",
         new Object[] {fixture.estimateId()},
-        "update estimate_plan_stage set routing_queue_code='REPAIR-2' where estimate_id=? and estimate_revision=2",
+        "update estimate_plan_stage set routing_queue_name='REPAIR-2' where estimate_id=? and estimate_revision=2",
         new Object[] {fixture.estimateId()});
     assertDrift(
-        "update repair_stage set routing_queue_code='DRIFT' where repair_id=? and stage_no=0",
+        "update repair_stage set routing_queue_name='DRIFT' where repair_id=? and stage_no=0",
         new Object[] {fixture.primaryRepairId()},
-        "update repair_stage set routing_queue_code='MOVE-IN' where repair_id=? and stage_no=0",
+        "update repair_stage set routing_queue_name='MOVE-IN' where repair_id=? and stage_no=0",
+        new Object[] {fixture.primaryRepairId()});
+    assertDrift(
+        "update maintenance_repair set priority=5 where id=?",
+        new Object[] {fixture.primaryRepairId()},
+        "update maintenance_repair set priority=1 where id=?",
         new Object[] {fixture.primaryRepairId()});
     assertDrift(
         "update maintenance_media_reference set safe_metadata='{}'::jsonb where aggregate_type='REPAIR' and aggregate_id=?",
@@ -437,13 +388,11 @@ class MaintenanceEventStoreReplayIntegrationTest {
       CatalogNode parent = new CatalogNode(
           parentNodeId,
           catalog.getId(),
-          "CATEGORY-A",
           "CATEGORY",
           "Structural work",
           true,
           null,
           false,
-          null,
           null,
           null,
           "piece",
@@ -455,20 +404,17 @@ class MaintenanceEventStoreReplayIntegrationTest {
           128,
           64,
           queueId,
-          "REPAIR",
+          "Repair",
           "GENERAL",
-          "[{\"kind\":\"equipment\",\"id\":\"EQ-1\"}]",
           "catalog-local comment");
       CatalogNode childNode = new CatalogNode(
           childNodeId,
           catalog.getId(),
-          "WORK-A",
           "WORK",
           "Panel repair",
           true,
           parentNodeId,
           false,
-          null,
           null,
           null,
           "hour",
@@ -482,7 +428,6 @@ class MaintenanceEventStoreReplayIntegrationTest {
           null,
           null,
           null,
-          "[]",
           null);
       catalogNodes.saveAllAndFlush(List.of(parent, childNode));
       catalogLinks.saveAndFlush(new CatalogLink(
@@ -528,6 +473,7 @@ class MaintenanceEventStoreReplayIntegrationTest {
           childNodeId,
           "WORK",
           "Initial work",
+          "pcs",
           new BigDecimal("2.500000"),
           200,
           30,
@@ -562,7 +508,7 @@ class MaintenanceEventStoreReplayIntegrationTest {
           eventFacts.estimatePayload(MaintenanceEventType.ESTIMATE_CREATED, estimate, 1),
           projectionSnapshots.estimate(estimate));
 
-      MaintenanceRepair primary = repairs.saveAndFlush(MaintenanceRepair.primary(
+      MaintenanceRepair primary = MaintenanceRepair.primary(
           warehouseId,
           rentalItemId,
           7,
@@ -570,7 +516,9 @@ class MaintenanceEventStoreReplayIntegrationTest {
           RepairOrigin.ESTIMATE,
           estimate.getDispatchDate(),
           estimate.getSourceParty(),
-          ACTOR));
+          ACTOR);
+      primary.selectPriority(1);
+      primary = repairs.saveAndFlush(primary);
       stages.saveAllAndFlush(List.of(
           new RepairStage(
               UUID.randomUUID(),
@@ -742,9 +690,10 @@ class MaintenanceEventStoreReplayIntegrationTest {
           childNodeId,
           "MATERIAL",
           "Amended material",
+          "pcs",
           new BigDecimal("3.000000"),
           300,
-          20,
+          0,
           "REPAIR-2",
           "{\"catalogVersionId\":\"" + catalog.getId() + "\",\"nodeCode\":\"WORK-A\"}",
           "revision two",
@@ -907,6 +856,7 @@ class MaintenanceEventStoreReplayIntegrationTest {
     result.put("executionState", "DRAFT");
     result.put("acceptanceState", "NOT_READY");
     result.put("dispatchDate", "2026-07-18");
+    result.put("priority", 3);
     result.put("stages", List.of());
     return result;
   }

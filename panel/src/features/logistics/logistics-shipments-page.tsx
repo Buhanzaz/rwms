@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type FormEvent } from "react"
+import { useId, useMemo, useRef, useState, type FormEvent } from "react"
 import {
   useMutation,
   useQueries,
@@ -50,10 +50,17 @@ import {
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Separator } from "@/components/ui/separator"
+import { Skeleton } from "@/components/ui/skeleton"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
 import {
+  getEquipmentMovementTask,
+  type EquipmentMovementTask,
+} from "@/features/logistics/api/equipment-movement-tasks-api"
+import {
   LogisticsDocumentFilters,
+  LogisticsFiltersToggle,
   type LogisticsDocumentFiltersState,
 } from "@/features/logistics/logistics-document-filters"
 import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
@@ -78,9 +85,11 @@ import {
   SHIPMENT_STATE_LABELS,
   type ShipmentDocument,
   type ShipmentFurnitureReadiness,
+  type ShipmentFurnitureTaskStatus,
   type ShipmentDocumentState,
 } from "@/features/logistics/shipments/model"
 import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
+import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
 
@@ -90,11 +99,18 @@ const CANCELLABLE_STATES = new Set<ShipmentDocumentState>([
   "AWAITING_CONFIRMATION",
 ])
 
-const EMPTY_FILTERS: LogisticsDocumentFiltersState<ShipmentDocumentState> = {
+type ShipmentFilters = LogisticsDocumentFiltersState<ShipmentDocumentState> & {
+  counterparties: string[]
+  drivers: string[]
+}
+
+const EMPTY_FILTERS: ShipmentFilters = {
   states: [],
   schedule: "ALL",
   dateFrom: "",
   dateTo: "",
+  counterparties: [],
+  drivers: [],
 }
 
 function commandIdentity() {
@@ -125,6 +141,16 @@ function matchesDateRange(
     return false
   }
   return true
+}
+
+function textFilterOptions(values: Iterable<string | null | undefined>) {
+  return [
+    ...new Set(
+      [...values].filter((value): value is string => Boolean(value?.trim()))
+    ),
+  ]
+    .sort((left, right) => left.localeCompare(right, "ru"))
+    .map((value) => ({ value, label: value }))
 }
 
 function statusVariant(state: ShipmentDocumentState) {
@@ -164,14 +190,20 @@ function furnitureTaskHref(readiness: ShipmentFurnitureReadiness | undefined) {
     : null
 }
 
+type ShipmentFurnitureMovementTaskReference =
+  | { status: "loading" }
+  | { status: "unavailable" }
+  | { status: "available"; task: EquipmentMovementTask }
+
 export function LogisticsShipmentsPage() {
   const { selectedWarehouseId } = useWarehouse()
   const { accessToken, currentUser } = useAuth()
   const navigate = useNavigate()
-  const [searchParams, setSearchParams] = useSearchParams()
+  const [searchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState("")
   const [filters, setFilters] = useState(EMPTY_FILTERS)
+  const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [scheduleTarget, setScheduleTarget] = useState<{
     document: ShipmentDocument
@@ -231,6 +263,39 @@ export function LogisticsShipmentsPage() {
       ),
     [furnitureReadinessQueries, furnitureReadinessShipments]
   )
+  const furnitureTaskReferences = useMemo(() => {
+    const tasks = new Map<string, ShipmentFurnitureTaskStatus>()
+    furnitureReadinessByShipmentId.forEach((readiness) => {
+      readiness.tasks.forEach((task) => tasks.set(task.taskId, task))
+    })
+    return [...tasks.values()]
+  }, [furnitureReadinessByShipmentId])
+  const furnitureTaskQueries = useQueries({
+    queries: furnitureTaskReferences.map((task) => ({
+      queryKey: [
+        "logistics",
+        "shipment-composition-furniture-task",
+        currentUser?.id ?? "unknown-user",
+        task.taskId,
+      ],
+      queryFn: () => getEquipmentMovementTask(accessToken!, task.taskId),
+      enabled: Boolean(accessToken),
+      refetchInterval: 3_000,
+    })),
+  })
+  const furnitureMovementTasksById = useMemo(() => {
+    const tasks = new Map<string, ShipmentFurnitureMovementTaskReference>()
+    furnitureTaskReferences.forEach((task, index) => {
+      const query = furnitureTaskQueries[index]
+      const reference: ShipmentFurnitureMovementTaskReference = query?.data
+        ? { status: "available", task: query.data }
+        : query?.isLoading
+          ? { status: "loading" }
+          : { status: "unavailable" }
+      tasks.set(task.taskId, reference)
+    })
+    return tasks
+  }, [furnitureTaskQueries, furnitureTaskReferences])
   const referenceLabels = useLogisticsReferenceLabels(
     accessToken,
     query.data ?? []
@@ -244,6 +309,20 @@ export function LogisticsShipmentsPage() {
       })),
     []
   )
+  const counterpartyOptions = useMemo(
+    () =>
+      textFilterOptions(
+        (query.data ?? []).map((shipment) => shipment.partySnapshot)
+      ),
+    [query.data]
+  )
+  const driverOptions = useMemo(
+    () =>
+      textFilterOptions(
+        (query.data ?? []).map((shipment) => shipment.driverSnapshot)
+      ),
+    [query.data]
+  )
   const rows = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru")
     return (query.data ?? []).filter((shipment) => {
@@ -251,6 +330,18 @@ export function LogisticsShipmentsPage() {
       if (
         filters.states.length > 0 &&
         !filters.states.includes(shipment.state)
+      ) {
+        return false
+      }
+      if (
+        filters.counterparties.length > 0 &&
+        !filters.counterparties.includes(shipment.partySnapshot ?? "")
+      ) {
+        return false
+      }
+      if (
+        filters.drivers.length > 0 &&
+        !filters.drivers.includes(shipment.driverSnapshot ?? "")
       ) {
         return false
       }
@@ -437,12 +528,6 @@ export function LogisticsShipmentsPage() {
       setCommandError(errorMessage(cause, "Не удалось отменить отгрузку"))
     },
   })
-
-  function clearSelection() {
-    const next = new URLSearchParams(searchParams)
-    next.delete("shipmentId")
-    setSearchParams(next, { replace: true })
-  }
 
   function requestConfirmation(shipment: ShipmentDocument) {
     const futureDateWarning =
@@ -652,7 +737,7 @@ export function LogisticsShipmentsPage() {
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       <PageToolbar>
-        <PageToolbarContent>
+        <PageToolbarContent className="max-w-xl">
           <Input
             aria-label="Поиск отгрузок"
             placeholder="Заказ, бытовка, контрагент или водитель"
@@ -661,28 +746,41 @@ export function LogisticsShipmentsPage() {
           />
         </PageToolbarContent>
         <PageToolbarActions>
-          {selectedShipmentId ? (
-            <Button type="button" variant="outline" onClick={clearSelection}>
-              Показать все документы
-            </Button>
-          ) : null}
-          <Button
-            type="button"
-            variant="outline"
-            disabled={!accessToken || !selectedWarehouseId || query.isFetching}
-            onClick={() => void query.refetch()}
-          >
-            {query.isFetching ? "Обновляется…" : "Обновить"}
-          </Button>
+          <LogisticsFiltersToggle
+            open={filtersOpen}
+            controls="logistics-shipment-filters"
+            onOpenChange={setFiltersOpen}
+          />
         </PageToolbarActions>
       </PageToolbar>
 
-      <LogisticsDocumentFilters
-        filters={filters}
-        stateOptions={stateOptions}
-        dateLabel="Отгрузка"
-        onChange={setFilters}
-      />
+      <div id="logistics-shipment-filters" hidden={!filtersOpen}>
+        <LogisticsDocumentFilters
+          filters={filters}
+          stateOptions={stateOptions}
+          dateLabel="Отгрузка"
+          extraFilters={[
+            {
+              label: "Контрагент",
+              options: counterpartyOptions,
+              selected: filters.counterparties,
+              onApply: (counterparties) =>
+                setFilters((current) => ({ ...current, counterparties })),
+            },
+            {
+              label: "Водитель",
+              options: driverOptions,
+              selected: filters.drivers,
+              onApply: (drivers) =>
+                setFilters((current) => ({ ...current, drivers })),
+            },
+          ]}
+          onChange={(nextFilters) =>
+            setFilters((current) => ({ ...current, ...nextFilters }))
+          }
+          onReset={() => setFilters(EMPTY_FILTERS)}
+        />
+      </div>
 
       {!accessToken ? (
         <FieldError>Для просмотра отгрузок требуется авторизация.</FieldError>
@@ -710,6 +808,10 @@ export function LogisticsShipmentsPage() {
               <ShipmentLines
                 shipment={shipment}
                 referenceLabels={referenceLabels}
+                furnitureReadiness={furnitureReadinessByShipmentId.get(
+                  shipment.id
+                )}
+                furnitureMovementTasksById={furnitureMovementTasksById}
               />
             )}
             columns={[
@@ -784,12 +886,18 @@ export function LogisticsShipmentsPage() {
                   </Badge>
                 </CardAction>
               </CardHeader>
-              <CardContent>
-                <ShipmentLines
-                  shipment={shipment}
-                  referenceLabels={referenceLabels}
-                />
-              </CardContent>
+              {expandedId === shipment.id ? (
+                <CardContent>
+                  <ShipmentLines
+                    shipment={shipment}
+                    referenceLabels={referenceLabels}
+                    furnitureReadiness={furnitureReadinessByShipmentId.get(
+                      shipment.id
+                    )}
+                    furnitureMovementTasksById={furnitureMovementTasksById}
+                  />
+                </CardContent>
+              ) : null}
               <CardFooter className="flex-wrap gap-2">
                 {actions(shipment)}
               </CardFooter>
@@ -960,14 +1068,49 @@ function ShipmentScheduleDialog({
 function ShipmentLines({
   shipment,
   referenceLabels,
+  furnitureReadiness,
+  furnitureMovementTasksById,
 }: {
   shipment: ShipmentDocument
   referenceLabels: LogisticsReferenceLabels
+  furnitureReadiness: ShipmentFurnitureReadiness | undefined
+  furnitureMovementTasksById: ReadonlyMap<
+    string,
+    ShipmentFurnitureMovementTaskReference
+  >
 }) {
   return (
     <div className="grid gap-2">
       {shipment.lines.map((line) => {
         const orderId = line.rentalOrderId ?? shipment.rentalOrderId
+        const assetReference = referenceLabels.assets.get(line.assetId)
+        const actualContents =
+          assetReference?.status === "available"
+            ? assetReference.asset.contentsItems
+            : []
+        const orderReference = orderId
+          ? referenceLabels.orders.get(orderId)
+          : undefined
+        const desiredUnit =
+          orderReference?.status === "available"
+            ? orderReference.order.units.find(
+                (candidate) => candidate.unit.id === line.assetId
+              )
+            : undefined
+        const furnitureTasks = (furnitureReadiness?.tasks ?? []).filter(
+          (task) => {
+            const movementTask = furnitureMovementTasksById.get(task.taskId)
+            if (movementTask?.status !== "available") {
+              return task.rentalItemId === line.assetId
+            }
+            return movementTask.task.lines.some(
+              (taskLine) =>
+                taskLine.sourceRentalItemId === line.assetId ||
+                taskLine.targetRentalItemId === line.assetId
+            )
+          }
+        )
+
         return (
           <Card key={line.id} size="sm">
             <CardHeader>
@@ -990,14 +1133,229 @@ function ShipmentLines({
                 <Badge variant="outline">Строка {line.lineNumber}</Badge>
               </CardAction>
             </CardHeader>
-            {line.tenantSnapshot ? (
-              <CardContent className="text-sm text-muted-foreground">
-                Арендатор: {line.tenantSnapshot}
-              </CardContent>
-            ) : null}
+            <CardContent className="flex flex-col gap-4">
+              {line.tenantSnapshot ? (
+                <p className="text-sm text-muted-foreground">
+                  Арендатор: {line.tenantSnapshot}
+                </p>
+              ) : null}
+              <EquipmentComposition
+                title="Фактический состав сейчас"
+                status={assetReference?.status ?? "unavailable"}
+                items={actualContents}
+                emptyMessage="Бытовка сейчас пуста."
+                unavailableMessage="Актуальный состав бытовки недоступен."
+              />
+              {orderId ? (
+                <>
+                  <Separator />
+                  <EquipmentComposition
+                    title="Сохранённый состав по заказу"
+                    status={orderReference?.status ?? "unavailable"}
+                    items={desiredUnit?.desiredContents ?? []}
+                    emptyMessage={
+                      desiredUnit
+                        ? "По заказу дополнительное оборудование не требуется."
+                        : "Бытовка отсутствует в сохранённом заказе."
+                    }
+                    unavailableMessage="Состав сохранённого заказа недоступен."
+                  />
+                </>
+              ) : null}
+              {furnitureTasks.length > 0 ? (
+                <>
+                  <Separator />
+                  <FurnitureMovementTasks
+                    assetId={line.assetId}
+                    furnitureTasks={furnitureTasks}
+                    referenceLabels={referenceLabels}
+                    movementTasksById={furnitureMovementTasksById}
+                  />
+                </>
+              ) : null}
+            </CardContent>
           </Card>
         )
       })}
     </div>
   )
+}
+
+type EquipmentCompositionItem = {
+  equipmentId?: string
+  equipmentName?: string | null
+  name?: string
+  quantity: number
+}
+
+type CompositionStatus = "loading" | "available" | "unavailable"
+
+function EquipmentComposition({
+  title,
+  status,
+  items,
+  emptyMessage,
+  unavailableMessage,
+}: {
+  title: string
+  status: CompositionStatus
+  items: readonly EquipmentCompositionItem[]
+  emptyMessage: string
+  unavailableMessage: string
+}) {
+  const titleId = useId()
+
+  return (
+    <section aria-labelledby={titleId} className="flex flex-col gap-2">
+      <h3 id={titleId} className="text-sm font-medium">
+        {title}
+      </h3>
+      {status === "loading" ? (
+        <div aria-live="polite" className="flex flex-col gap-2">
+          <Skeleton className="h-4 w-3/4" />
+          <Skeleton className="h-4 w-1/2" />
+        </div>
+      ) : null}
+      {status === "unavailable" ? (
+        <p className="text-sm text-muted-foreground">{unavailableMessage}</p>
+      ) : null}
+      {status === "available" && items.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+      ) : null}
+      {status === "available" && items.length > 0 ? (
+        <EquipmentCompositionRows items={items} />
+      ) : null}
+    </section>
+  )
+}
+
+function EquipmentCompositionRows({
+  items,
+}: {
+  items: readonly EquipmentCompositionItem[]
+}) {
+  return (
+    <ul className="flex flex-col gap-1 text-sm">
+      {items.map((item, index) => (
+        <li
+          key={`${item.equipmentId ?? item.name ?? "equipment"}-${index}`}
+          className="flex items-baseline justify-between gap-3"
+        >
+          <span>{equipmentLabel(item)}</span>
+          <span className="shrink-0 text-muted-foreground">
+            × {item.quantity}
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function FurnitureMovementTasks({
+  assetId,
+  furnitureTasks,
+  referenceLabels,
+  movementTasksById,
+}: {
+  assetId: string
+  furnitureTasks: readonly ShipmentFurnitureTaskStatus[]
+  referenceLabels: LogisticsReferenceLabels
+  movementTasksById: ReadonlyMap<string, ShipmentFurnitureMovementTaskReference>
+}) {
+  return (
+    <section className="flex flex-col gap-2">
+      <h3 className="text-sm font-medium">Задание на перемещение</h3>
+      {furnitureTasks.map((furnitureTask) => {
+        const reference = movementTasksById.get(furnitureTask.taskId)
+        if (reference?.status === "loading") {
+          return (
+            <div
+              key={furnitureTask.taskId}
+              aria-live="polite"
+              className="flex flex-col gap-2"
+            >
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="h-4 w-1/2" />
+            </div>
+          )
+        }
+        if (reference?.status !== "available") {
+          return (
+            <p
+              key={furnitureTask.taskId}
+              className="text-sm text-muted-foreground"
+            >
+              Строки задания на перемещение недоступны.
+            </p>
+          )
+        }
+
+        const taskLines = reference.task.lines.filter(
+          (taskLine) =>
+            taskLine.sourceRentalItemId === assetId ||
+            taskLine.targetRentalItemId === assetId
+        )
+        if (taskLines.length === 0) {
+          return (
+            <p
+              key={furnitureTask.taskId}
+              className="text-sm text-muted-foreground"
+            >
+              В задании нет строк для этой бытовки.
+            </p>
+          )
+        }
+
+        return (
+          <ul
+            key={furnitureTask.taskId}
+            aria-label="Строки задания на перемещение"
+            className="flex flex-col gap-1 text-sm"
+          >
+            {taskLines.map((taskLine) => (
+              <li
+                key={taskLine.id}
+                className="flex items-baseline justify-between gap-3"
+              >
+                <span>
+                  {equipmentLabel(taskLine)} ·{" "}
+                  {movementLocationLabel(
+                    taskLine.sourceLocationKind,
+                    taskLine.sourceRentalItemId,
+                    referenceLabels
+                  )}{" "}
+                  →{" "}
+                  {movementLocationLabel(
+                    taskLine.targetLocationKind,
+                    taskLine.targetRentalItemId,
+                    referenceLabels
+                  )}
+                </span>
+                <span className="shrink-0 text-muted-foreground">
+                  × {taskLine.quantity}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )
+      })}
+    </section>
+  )
+}
+
+function equipmentLabel(item: EquipmentCompositionItem) {
+  const name = item.equipmentName?.trim() || item.name?.trim() || "Оборудование"
+  return name
+}
+
+function movementLocationLabel(
+  locationKind: "STOCK" | "CABIN_NON_RENTED" | "CABIN_RENTED",
+  rentalItemId: string | null,
+  referenceLabels: LogisticsReferenceLabels
+) {
+  if (locationKind === "STOCK") return "Склад"
+  if (rentalItemId) {
+    return `Бытовка ${logisticsAssetLabel(referenceLabels, rentalItemId)}`
+  }
+  return locationKind === "CABIN_RENTED" ? "Бытовка в аренде" : "Бытовка"
 }

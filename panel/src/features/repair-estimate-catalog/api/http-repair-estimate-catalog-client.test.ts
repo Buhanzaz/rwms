@@ -18,6 +18,7 @@ vi.mock("@/features/auth/oidc-client", () => ({
 }))
 
 const warehouseId = "00000000-0000-4000-8000-000000000001"
+const catalogOwnerWarehouseId = "00000000-0000-4000-8000-000000000005"
 const versionId = "00000000-0000-4000-8000-000000000002"
 const nodeId = "00000000-0000-4000-8000-000000000003"
 const linkId = "00000000-0000-4000-8000-000000000004"
@@ -46,8 +47,8 @@ describe("operational maintenance catalog adapter", () => {
       {
         id: nodeId,
         catalogVersionId: versionId,
-        code: "WORK",
         name: "Работа",
+        displayColor: "#336699",
         nodeType: "WORK",
         parentNodeId: null,
         active: true,
@@ -75,7 +76,7 @@ describe("operational maintenance catalog adapter", () => {
     ])
   })
 
-  it("loads only the active service version for the selected warehouse", async () => {
+  it("loads the one global active catalog through the selected warehouse context", async () => {
     const snapshot =
       await httpRepairEstimateCatalogClient.getOperationalCatalog()
 
@@ -88,6 +89,7 @@ describe("operational maintenance catalog adapter", () => {
       id: nodeId,
       catalogVersionId: versionId,
       nodeType: "WORK",
+      displayColor: "#336699",
       furnitureCategory: false,
       furnitureEquipment: null,
     })
@@ -104,6 +106,37 @@ describe("operational maintenance catalog adapter", () => {
       linkType: "FOLLOW_UP",
       sortOrder: 10,
     })
+  })
+
+  it("uses the same global catalog when its recorded warehouse differs from the selected warehouse", async () => {
+    maintenance.listMaintenanceCatalogVersions.mockResolvedValue({
+      items: [
+        {
+          id: versionId,
+          warehouseId: catalogOwnerWarehouseId,
+          version: 17,
+          lifecycle: "ACTIVE",
+          sourceSha256: "a".repeat(64),
+          counts: { nodes: 1, links: 1 },
+        },
+      ],
+    })
+
+    const snapshot =
+      await httpRepairEstimateCatalogClient.getOperationalCatalog()
+
+    expect(maintenance.listMaintenanceCatalogNodes).toHaveBeenCalledWith(
+      "catalog-token",
+      warehouseId,
+      versionId
+    )
+    expect(maintenance.listMaintenanceCatalogLinks).toHaveBeenCalledWith(
+      "catalog-token",
+      warehouseId,
+      versionId
+    )
+    expect(snapshot.nodes).toHaveLength(1)
+    expect(snapshot.nodes[0]?.catalogVersionId).toBe(versionId)
   })
 
   it("fails closed without an authenticated OIDC session", async () => {

@@ -7,7 +7,7 @@ import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface CatalogNodeRepository extends JpaRepository<CatalogNode, UUID> {
-  List<CatalogNode> findAllByCatalogVersionIdOrderByCode(UUID catalogVersionId);
+  List<CatalogNode> findAllByCatalogVersionIdOrderByNameAscIdAsc(UUID catalogVersionId);
   Optional<CatalogNode> findByCatalogVersionIdAndId(UUID catalogVersionId, UUID id);
   long countById(UUID id);
   void deleteAllByCatalogVersionId(UUID catalogVersionId);

@@ -1,6 +1,11 @@
 package dev.buhanzaz.rwms.asset;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.DIMENSION_24_X_6;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.FINISHING_DVP;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.CATEGORY_NEW;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.TYPE_BK_1;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.plasticWindow;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -65,7 +70,7 @@ class MaintenanceAssetSnapshotIntegrationTest {
   }
 
   @Test
-  void returnsTheLatestCommentOnlyVersionWithoutPrivateAssetFields() throws Exception {
+  void returnsCanonicalNumberAndLatestVersionWithoutPrivateAssetFields() throws Exception {
     UUID warehouseId = UUID.randomUUID();
     RentalItemResponse rental = rental(warehouseId);
     String privateComment = "operator@example.test / maintenance must not receive this";
@@ -85,6 +90,7 @@ class MaintenanceAssetSnapshotIntegrationTest {
             .andExpect(jsonPath("$.id").value(rental.id().toString()))
             .andExpect(jsonPath("$.version").value(commented.version()))
             .andExpect(jsonPath("$.warehouseId").value(warehouseId.toString()))
+            .andExpect(jsonPath("$.number").value(rental.number()))
             .andExpect(jsonPath("$.status").value(rental.status().name()))
             .andReturn()
             .getResponse()
@@ -92,8 +98,11 @@ class MaintenanceAssetSnapshotIntegrationTest {
 
     assertThat(commented.version()).isGreaterThan(rental.version());
     assertThat(Set.copyOf(objectMapper.readTree(response).propertyNames()))
-        .containsExactlyInAnyOrder("id", "version", "warehouseId", "status");
-    assertThat(response).doesNotContain(privateComment, "number", "passport", "contents");
+        .containsExactlyInAnyOrder("id", "version", "warehouseId", "number", "status");
+    assertThat(response)
+        .contains(rental.number())
+        .doesNotContain(privateComment, "privatePassportValue", "private characteristics",
+            "passport", "contents", "generalComment");
   }
 
   @Test
@@ -148,11 +157,11 @@ class MaintenanceAssetSnapshotIntegrationTest {
             new CreateRentalItemRequest(
                 warehouseId,
                 "MAINT-SNAPSHOT-" + UUID.randomUUID(),
-                "Office",
-                "6 x 2.4",
-                "PVC",
-                "Cabin",
-                "Private characteristics",
+                TYPE_BK_1,
+                DIMENSION_24_X_6,
+                FINISHING_DVP,
+                CATEGORY_NEW,
+                plasticWindow(),
                 true,
                 Map.of("privatePassportValue", "local-only"),
                 List.of("private-tag")))

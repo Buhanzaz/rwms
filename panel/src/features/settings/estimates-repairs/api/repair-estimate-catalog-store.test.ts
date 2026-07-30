@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
-  bootstrapRepairEstimateCatalog,
+  createRepairEstimateCatalog,
   getRepairEstimateCatalogSection,
   getRepairEstimateCatalogSectionItems,
   getRepairEstimateCatalogSnapshot,
   moveRepairEstimateCatalogCanvasNode,
+  saveRepairEstimateCatalogDisplayColors,
   saveRepairEstimateCatalogCanvasChanges,
   saveRepairEstimateCatalogLink,
   saveRepairEstimateCatalogNode,
@@ -13,10 +14,11 @@ import {
 import type {
   RepairEstimateCatalogNodeMutation,
   RepairEstimateCatalogRequest,
+  RepairEstimateCatalogRoutingDto,
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
 
 const http = vi.hoisted(() => ({
-  bootstrapMaintenanceCatalog: vi.fn(),
+  createMaintenanceCatalog: vi.fn(),
   listMaintenanceCatalogLinks: vi.fn(),
   listMaintenanceCatalogNodes: vi.fn(),
   listMaintenanceCatalogVersions: vi.fn(),
@@ -63,21 +65,21 @@ const version = {
 const node = {
   id: nodeId,
   catalogVersionId: versionId,
-  code: "WINDOWS",
   nodeType: "CATEGORY" as const,
   name: "Окна",
   active: true,
   parentNodeId: null,
   furnitureCategory: false,
   furnitureEquipment: null,
+  forcesCapitalRepair: false,
+  characteristic: null,
   unit: null,
   unitPrice: null,
   durationMinutes: 0,
   includeInEstimate: false,
   commonItem: false,
   showInMainMenu: true,
-  routing: { queueId, queueCode: "REPAIR", queueKind: "REPAIR" },
-  references: [{ referenceId: "legacy", code: "WINDOWS" }],
+  routing: { queueId, queueName: "Ремонт", queueType: "REPAIR" },
   canvasX: 120,
   canvasY: 240,
   comment: null,
@@ -92,7 +94,6 @@ function mutation(
 ): RepairEstimateCatalogNodeMutation {
   return {
     id: nodeId,
-    code: "WINDOWS",
     name: "Окна",
     nodeType: "CATEGORY",
     parentId: null,
@@ -106,6 +107,8 @@ function mutation(
     commonItem: false,
     furnitureCategory: false,
     furnitureEquipment: null,
+    forcesCapitalRepair: false,
+    characteristicId: null,
     canvasX: 120,
     canvasY: 240,
     comment: null,
@@ -156,7 +159,7 @@ describe("maintenance-backed repair catalog store", () => {
       id: nodeId,
       canvasX: 120,
       canvasY: 240,
-      workQueueId: queueId,
+      queueDefinitionId: queueId,
     })
     expect(snapshot.nodes[0]).not.toHaveProperty("mediaOwnerId")
     expect(snapshot.nodes[0]).not.toHaveProperty("mediaReferences")
@@ -164,6 +167,27 @@ describe("maintenance-backed repair catalog store", () => {
     expect(snapshot.links[0]?.canvasAnchors).toEqual({
       source: "TOP",
       target: "BOTTOM",
+    })
+  })
+
+  it("rejects the furniture-movement queue kind as repair catalog routing", async () => {
+    http.listMaintenanceCatalogNodes.mockResolvedValue([
+      {
+        ...node,
+        routing: {
+          queueId,
+          queueName: "Перемещение мебели",
+          queueType: "FURNITURE_MOVEMENT",
+        },
+      },
+    ])
+
+    const snapshot = await getRepairEstimateCatalogSnapshot(request)
+
+    expect(snapshot.nodes[0]).toMatchObject({
+      routeQueueKind: null,
+      queueDefinitionId: null,
+      routing: null,
     })
   })
 
@@ -189,14 +213,59 @@ describe("maintenance-backed repair catalog store", () => {
         expect.objectContaining({
           id: nodeId,
           name: "Новые окна",
-          routing: node.routing,
-          references: node.references,
+          routing: { queueId, queueType: "REPAIR" },
           canvasX: 120,
           canvasY: 240,
         }),
       ]
     )
     expect(saved.name).toBe("Новые окна")
+  })
+
+  it("replaces an existing category routing with the selected exact queue", async () => {
+    const replacementRouting = {
+      queueId: "00000000-0000-4000-8000-000000000007",
+      queueName: "Электрики",
+      queueType: "REPAIR",
+    } satisfies RepairEstimateCatalogRoutingDto
+
+    await saveRepairEstimateCatalogNode(
+      request,
+      mutation({ routing: replacementRouting })
+    )
+
+    expect(http.replaceMaintenanceCatalogNodes).toHaveBeenCalledWith(
+      "catalog-token",
+      warehouseId,
+      versionId,
+      7,
+      [
+        expect.objectContaining({
+          id: nodeId,
+          routing: {
+            queueId: replacementRouting.queueId,
+            queueType: replacementRouting.queueType,
+          },
+        }),
+      ]
+    )
+  })
+
+  it("clears an existing category routing when null is submitted explicitly", async () => {
+    await saveRepairEstimateCatalogNode(request, mutation({ routing: null }))
+
+    expect(http.replaceMaintenanceCatalogNodes).toHaveBeenCalledWith(
+      "catalog-token",
+      warehouseId,
+      versionId,
+      7,
+      [
+        expect.objectContaining({
+          id: nodeId,
+          routing: null,
+        }),
+      ]
+    )
   })
 
   it("persists a moved block and typed link anchors through CAS commands", async () => {
@@ -218,7 +287,7 @@ describe("maintenance-backed repair catalog store", () => {
       .mockResolvedValueOnce(page({ ...version, version: 8 }))
     http.listMaintenanceCatalogNodes.mockResolvedValue([
       node,
-      { ...node, id: commandId, code: "WINDOW_REPAIR" },
+      { ...node, id: commandId, name: "Ремонт окон" },
     ])
     http.listMaintenanceCatalogLinks
       .mockResolvedValueOnce([])
@@ -263,7 +332,7 @@ describe("maintenance-backed repair catalog store", () => {
     const targetNode = {
       ...node,
       id: commandId,
-      code: "WINDOW_REPAIR",
+      name: "Ремонт окон",
       nodeType: "WORK" as const,
       parentNodeId: nodeId,
     }
@@ -320,20 +389,17 @@ describe("maintenance-backed repair catalog store", () => {
     const furnitureRoot = {
       ...node,
       id: "00000000-0000-4000-8000-000000000010",
-      code: "FURNITURE",
       name: "Мебель",
       furnitureCategory: true,
     }
     const regularRoot = {
       ...node,
       id: "00000000-0000-4000-8000-000000000011",
-      code: "GENERAL",
       name: "Общее",
     }
     const furnitureMaterial = {
       ...node,
       id: "00000000-0000-4000-8000-000000000012",
-      code: "CHAIR",
       name: "Стул",
       nodeType: "MATERIAL" as const,
       parentNodeId: furnitureRoot.id,
@@ -346,14 +412,12 @@ describe("maintenance-backed repair catalog store", () => {
     const regularMaterial = {
       ...furnitureMaterial,
       id: "00000000-0000-4000-8000-000000000013",
-      code: "PAINT",
       name: "Краска",
       parentNodeId: regularRoot.id,
     }
     const regularWork = {
       ...regularMaterial,
       id: "00000000-0000-4000-8000-000000000014",
-      code: "PAINTING",
       name: "Покраска",
       nodeType: "WORK" as const,
     }
@@ -386,19 +450,16 @@ describe("maintenance-backed repair catalog store", () => {
     const furnitureRoot = {
       ...node,
       id: "00000000-0000-4000-8000-000000000020",
-      code: "FURNITURE",
       name: "Мебель",
       furnitureCategory: true,
     }
     const equipment = {
       equipmentId: "00000000-0000-4000-8000-000000000021",
-      equipmentCode: "TABLE",
       equipmentName: "Стол",
     }
     const savedNode = {
       ...node,
       id: commandId,
-      code: "TABLE",
       name: "Стол",
       nodeType: "MATERIAL" as const,
       parentNodeId: furnitureRoot.id,
@@ -419,7 +480,6 @@ describe("maintenance-backed repair catalog store", () => {
       request,
       mutation({
         id: undefined,
-        code: "table",
         name: "Стол",
         nodeType: "MATERIAL",
         parentId: furnitureRoot.id,
@@ -442,7 +502,7 @@ describe("maintenance-backed repair catalog store", () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: commandId,
-          code: "TABLE",
+          name: "Стол",
           furnitureEquipment: null,
         }),
       ])
@@ -450,18 +510,81 @@ describe("maintenance-backed repair catalog store", () => {
     expect(saved.furnitureEquipment).toEqual(equipment)
   })
 
-  it("bootstraps the server-owned current catalog idempotently", async () => {
-    http.bootstrapMaintenanceCatalog.mockResolvedValue({
+  it("applies semantic button colours to matching nodes in one versioned replacement", async () => {
+    const furnitureRoot = {
+      ...node,
+      id: "00000000-0000-4000-8000-000000000030",
+      name: "Мебель",
+      furnitureCategory: true,
+    }
+    const furnitureWork = {
+      ...node,
+      id: "00000000-0000-4000-8000-000000000031",
+      name: "Собрать кровать",
+      nodeType: "WORK" as const,
+      parentNodeId: furnitureRoot.id,
+      furnitureCategory: false,
+    }
+    const material = {
+      ...node,
+      id: "00000000-0000-4000-8000-000000000032",
+      name: "Краска",
+      nodeType: "MATERIAL" as const,
+      parentNodeId: nodeId,
+      furnitureCategory: false,
+    }
+    http.listMaintenanceCatalogNodes.mockResolvedValue([
+      node,
+      furnitureRoot,
+      furnitureWork,
+      material,
+    ])
+
+    await saveRepairEstimateCatalogDisplayColors(request, {
+      CATEGORY: "#1166CC",
+      SUBCATEGORY: "#7711CC",
+      WORK: "#CC6611",
+      MATERIAL: "#1A8B5E",
+      FURNITURE: "#A62D73",
+      OPTION: "#794D1F",
+      LOCATION: "#2458A6",
+    })
+
+    expect(http.replaceMaintenanceCatalogNodes).toHaveBeenCalledWith(
+      "catalog-token",
+      warehouseId,
+      versionId,
+      7,
+      expect.arrayContaining([
+        expect.objectContaining({ id: nodeId, displayColor: "#1166CC" }),
+        expect.objectContaining({
+          id: furnitureRoot.id,
+          displayColor: "#A62D73",
+        }),
+        expect.objectContaining({
+          id: furnitureWork.id,
+          displayColor: "#A62D73",
+        }),
+        expect.objectContaining({
+          id: material.id,
+          displayColor: "#1A8B5E",
+        }),
+      ])
+    )
+  })
+
+  it("creates the empty server-owned catalog idempotently", async () => {
+    http.createMaintenanceCatalog.mockResolvedValue({
       ...version,
       version: 1,
     })
 
-    const result = await bootstrapRepairEstimateCatalog(
+    const result = await createRepairEstimateCatalog(
       "catalog-token",
       warehouseId
     )
 
-    expect(http.bootstrapMaintenanceCatalog).toHaveBeenCalledWith(
+    expect(http.createMaintenanceCatalog).toHaveBeenCalledWith(
       "catalog-token",
       commandId,
       { warehouseId }

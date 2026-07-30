@@ -171,6 +171,7 @@ describe("HttpReturnClient", () => {
         {
           lineId: LINE_ID,
           references: [{ mediaId: MEDIA_ID, generation: 3 }],
+          equipmentConfirmed: true as const,
           additionalEquipment: [{ equipmentId: EQUIPMENT_ID, quantity: 2 }],
         },
       ],
@@ -187,6 +188,7 @@ describe("HttpReturnClient", () => {
         {
           lineId: LINE_ID,
           references: [{ mediaId: MEDIA_ID, generation: 3 }],
+          equipmentConfirmed: true,
           additionalEquipment: [{ equipmentId: EQUIPMENT_ID, quantity: 2 }],
         },
       ],
@@ -207,6 +209,7 @@ describe("HttpReturnClient", () => {
       lines: [
         {
           lineId: LINE_ID,
+          references: [{ mediaId: MEDIA_ID, generation: 3 }],
           shortages: [{ equipmentId: EQUIPMENT_ID, missingQuantity: 2 }],
         },
       ],
@@ -225,6 +228,7 @@ describe("HttpReturnClient", () => {
       lines: [
         {
           lineId: LINE_ID,
+          references: [{ mediaId: MEDIA_ID, generation: 3 }],
           shortages: [{ equipmentId: EQUIPMENT_ID, missingQuantity: 2 }],
         },
       ],

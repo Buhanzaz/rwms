@@ -20,6 +20,10 @@ type CarouselProps = {
   setApi?: (api: CarouselApi) => void
 }
 
+type CarouselDotsProps = Omit<React.ComponentProps<"div">, "children"> & {
+  getDotLabel?: (index: number, count: number) => string
+}
+
 type CarouselContextProps = {
   carouselRef: ReturnType<typeof useEmblaCarousel>[0]
   api: CarouselApi
@@ -239,10 +243,118 @@ function CarouselNext({
   )
 }
 
+function CarouselDots({
+  className,
+  getDotLabel,
+  "aria-label": ariaLabel = "Навигация по слайдам",
+  ...props
+}: CarouselDotsProps) {
+  const { api } = useCarousel()
+  const [current, setCurrent] = React.useState(0)
+  const [count, setCount] = React.useState(0)
+  const viewportRef = React.useRef<HTMLDivElement>(null)
+  const dotRefs = React.useRef<Array<HTMLButtonElement | null>>([])
+
+  const update = React.useCallback((nextApi: CarouselApi) => {
+    if (!nextApi) return
+    setCurrent(nextApi.selectedScrollSnap())
+    setCount(nextApi.scrollSnapList().length)
+  }, [])
+
+  React.useEffect(() => {
+    if (!api) return
+    let active = true
+    const updateIfActive = () => {
+      if (active) update(api)
+    }
+
+    queueMicrotask(updateIfActive)
+    api.on("reInit", updateIfActive)
+    api.on("select", updateIfActive)
+
+    return () => {
+      active = false
+      api.off("reInit", updateIfActive)
+      api.off("select", updateIfActive)
+    }
+  }, [api, update])
+
+  React.useEffect(() => {
+    const viewport = viewportRef.current
+    const dot = dotRefs.current[current]
+    if (!viewport || !dot || viewport.clientWidth === 0) return
+
+    const dotStart = dot.offsetLeft
+    const dotEnd = dotStart + dot.offsetWidth
+    const viewportStart = viewport.scrollLeft
+    const viewportEnd = viewportStart + viewport.clientWidth
+    if (dotStart >= viewportStart && dotEnd <= viewportEnd) return
+
+    viewport.scrollTo({
+      left: Math.max(
+        0,
+        dotStart - (viewport.clientWidth - dot.offsetWidth) / 2
+      ),
+      behavior: "smooth",
+    })
+  }, [count, current])
+
+  if (count <= 1) return null
+
+  return (
+    <div
+      ref={viewportRef}
+      role="group"
+      aria-label={ariaLabel}
+      data-slot="carousel-dots"
+      className={cn(
+        "[scrollbar-width:none] overflow-x-auto overscroll-x-contain py-1 [&::-webkit-scrollbar]:hidden",
+        className
+      )}
+      {...props}
+    >
+      <div className="mx-auto flex w-max min-w-full items-center justify-center gap-1 px-2">
+        {Array.from({ length: count }, (_, index) => {
+          const active = index === current
+          return (
+            <Button
+              key={index}
+              ref={(node) => {
+                dotRefs.current[index] = node
+              }}
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              aria-label={
+                getDotLabel?.(index, count) ??
+                `Перейти к слайду ${index + 1} из ${count}`
+              }
+              aria-current={active ? "true" : undefined}
+              className="rounded-full hover:bg-transparent"
+              onClick={(event) => {
+                event.stopPropagation()
+                api?.scrollTo(index)
+              }}
+            >
+              <span
+                className={cn(
+                  "size-1.5 rounded-full bg-muted-foreground/40 transition-[width,height,background-color]",
+                  active && "size-2 bg-primary"
+                )}
+              />
+            </Button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export {
   type CarouselApi,
   Carousel,
   CarouselContent,
+  CarouselDots,
   CarouselItem,
   CarouselNext,
   CarouselPrevious,

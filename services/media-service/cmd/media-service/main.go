@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"dev.buhanzaz.rwms/media-service/internal/api"
+	"dev.buhanzaz.rwms/media-service/internal/assetimport"
 	"dev.buhanzaz.rwms/media-service/internal/auth"
 	"dev.buhanzaz.rwms/media-service/internal/config"
 	"dev.buhanzaz.rwms/media-service/internal/eventing"
@@ -26,7 +27,7 @@ import (
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if err := run(logger); err != nil {
-		logger.Error("media service stopped", "failureType", "RUNTIME_FAILURE")
+		logger.Error("media service stopped", "failureType", "RUNTIME_FAILURE", "error", err)
 		os.Exit(1)
 	}
 }
@@ -81,6 +82,19 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	repository := persistence.NewRepository(database.Pool)
+	assetImportService, err := assetimport.NewService(repository)
+	if err != nil {
+		return err
+	}
+	yandexClient, err := assetimport.NewYandexClient()
+	if err != nil {
+		return err
+	}
+	assetImportWorker, err := assetimport.NewWorker(repository, yandexClient, objectStore,
+		configuration.InstanceID+":asset-import", configuration.MaxUploadBytes, logger)
+	if err != nil {
+		return err
+	}
 	producer, err := eventing.NewProducer(configuration.KafkaBrokers)
 	if err != nil {
 		return err
@@ -106,6 +120,16 @@ func run(logger *slog.Logger) error {
 		producer.Close()
 		return err
 	}
+	taskBoardOwnerProofConsumerClient, err := worker.NewTaskBoardEntryOwnerProofKafkaConsumer(
+		configuration.KafkaBrokers, configuration.TaskBoardEntryOwnerProofGroup,
+		configuration.TaskBoardEntryOwnerProofTopic)
+	if err != nil {
+		cabinOwnerConsumerClient.Close()
+		ownerConsumerClient.Close()
+		consumerClient.Close()
+		producer.Close()
+		return err
+	}
 	limits := media.ProcessingLimits{
 		MaxImageBytes: configuration.MaxUploadBytes, MaxImageOutputBytes: configuration.MaxImageOutputBytes,
 		MaxDecodedPixels: configuration.MaxDecodedPixels, MaxVideoBytes: configuration.MaxUploadBytes,
@@ -118,11 +142,14 @@ func run(logger *slog.Logger) error {
 	}, configuration.InstanceID+":worker", configuration.ProcessingTimeout, logger)
 	ownerConsumer := worker.NewInventoryOwnerConsumer(repository, ownerConsumerClient, logger)
 	cabinOwnerConsumer := worker.NewCabinOwnerConsumer(repository, cabinOwnerConsumerClient, logger)
+	taskBoardOwnerProofConsumer := worker.NewTaskBoardEntryOwnerProofConsumer(
+		repository, taskBoardOwnerProofConsumerClient, logger)
 	apiServer, err := api.NewServer(repository, database, validator, objectStore, api.Configuration{
 		MaxUploadBytes: configuration.MaxUploadBytes, AllowedMIMETypes: configuration.AllowedMIMETypes,
-		UploadExpiry: configuration.UploadExpiry,
+		UploadExpiry: configuration.UploadExpiry, AssetImports: assetImportService,
 	}, logger)
 	if err != nil {
+		taskBoardOwnerProofConsumerClient.Close()
 		cabinOwnerConsumerClient.Close()
 		ownerConsumerClient.Close()
 		consumerClient.Close()
@@ -143,6 +170,8 @@ func run(logger *slog.Logger) error {
 		{name: "processing-consumer", run: processingConsumer.Run},
 		{name: "inventory-owner-consumer", run: ownerConsumer.Run},
 		{name: "cabin-owner-consumer", run: cabinOwnerConsumer.Run},
+		{name: "task-board-entry-owner-proof-consumer", run: taskBoardOwnerProofConsumer.Run},
+		{name: "asset-import-worker", run: assetImportWorker.Run},
 		{name: "http-server", run: func(context.Context) error {
 			err := httpServer.ListenAndServe()
 			if errors.Is(err, http.ErrServerClosed) {
@@ -162,6 +191,7 @@ func run(logger *slog.Logger) error {
 			}
 			ownerConsumer.Close()
 			cabinOwnerConsumer.Close()
+			taskBoardOwnerProofConsumer.Close()
 			if closeErr := relay.Close(shutdownContext); closeErr != nil && shutdownError == nil {
 				shutdownError = closeErr
 			}
@@ -190,10 +220,12 @@ func superviseMediaRuntime(
 	required := map[string]bool{
 		"outbox-relay": false, "processing-consumer": false,
 		"inventory-owner-consumer": false, "cabin-owner-consumer": false,
-		"http-server": false,
+		"task-board-entry-owner-proof-consumer": false,
+		"asset-import-worker":                   false,
+		"http-server":                           false,
 	}
 	if signalContext == nil || shutdownTimeout <= 0 || shutdown == nil || len(processes) != len(required) {
-		return errors.New("media runtime requires all five supervised processes")
+		return errors.New("media runtime requires all required supervised processes")
 	}
 	for _, process := range processes {
 		if process.run == nil {

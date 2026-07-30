@@ -14,16 +14,13 @@ import jakarta.validation.constraints.NotNull;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
-import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.regex.Pattern;
 import org.hibernate.proxy.HibernateProxy;
 
 @Entity
 @Table(name = "warehouse")
 public class Warehouse {
-  private static final Pattern CODE = Pattern.compile("^[A-Z0-9][A-Z0-9_-]{0,63}$");
 
   @Id
   @GeneratedValue(strategy = GenerationType.UUID)
@@ -33,10 +30,6 @@ public class Warehouse {
   @Version
   @Column(name = "version", nullable = false)
   private long version;
-
-  @NotBlank
-  @Column(name = "code", nullable = false, length = 64)
-  private String code;
 
   @NotBlank
   @Column(name = "name", nullable = false, length = 255)
@@ -70,26 +63,23 @@ public class Warehouse {
   protected Warehouse() {}
 
   public static Warehouse create(
-      String code,
       String name,
       String city,
       String address,
       ZoneId timeZone,
       Integer sortOrder) {
     Warehouse warehouse = new Warehouse();
-    warehouse.assign(code, name, city, address, timeZone, true, sortOrder);
+    warehouse.assign(name, city, address, timeZone, true, sortOrder);
     return warehouse;
   }
 
   public Mutation replace(
-      String code,
       String name,
       String city,
       String address,
       ZoneId timeZone,
       boolean active,
       Integer sortOrder) {
-    String normalizedCode = canonicalCode(code);
     String normalizedName = normalizeRequired(name, "name", 255);
     String normalizedCity = normalizeRequired(city, "city", 255);
     String normalizedAddress = normalizeOptional(address, 1000);
@@ -97,15 +87,13 @@ public class Warehouse {
     validateSortOrder(sortOrder);
     boolean deactivating = this.active && !active;
     boolean changed =
-        !Objects.equals(this.code, normalizedCode)
-            || !Objects.equals(this.name, normalizedName)
+        !Objects.equals(this.name, normalizedName)
             || !Objects.equals(this.city, normalizedCity)
             || !Objects.equals(this.address, normalizedAddress)
             || !Objects.equals(this.timeZone, normalizedTimeZone)
             || this.active != active
             || !Objects.equals(this.sortOrder, sortOrder);
     if (!changed) return Mutation.NONE;
-    this.code = normalizedCode;
     this.name = normalizedName;
     this.city = normalizedCity;
     this.address = normalizedAddress;
@@ -136,14 +124,12 @@ public class Warehouse {
   }
 
   private void assign(
-      String code,
       String name,
       String city,
       String address,
       ZoneId timeZone,
       boolean active,
       Integer sortOrder) {
-    this.code = canonicalCode(code);
     this.name = normalizeRequired(name, "name", 255);
     this.city = normalizeRequired(city, "city", 255);
     this.address = normalizeOptional(address, 1000);
@@ -154,20 +140,11 @@ public class Warehouse {
   }
 
   private void normalizePersistedState() {
-    code = canonicalCode(code);
     name = normalizeRequired(name, "name", 255);
     city = normalizeRequired(city, "city", 255);
     address = normalizeOptional(address, 1000);
     timeZone = normalizeTimeZone(ZoneId.of(timeZone));
     validateSortOrder(sortOrder);
-  }
-
-  public static String canonicalCode(String value) {
-    String normalized = normalizeRequired(value, "code", 64).toUpperCase(Locale.ROOT);
-    if (!CODE.matcher(normalized).matches()) {
-      throw new IllegalArgumentException("code must use the approved uppercase technical format");
-    }
-    return normalized;
   }
 
   private static String normalizeTimeZone(ZoneId value) {
@@ -201,10 +178,6 @@ public class Warehouse {
 
   public long getVersion() {
     return version;
-  }
-
-  public String getCode() {
-    return code;
   }
 
   public String getName() {

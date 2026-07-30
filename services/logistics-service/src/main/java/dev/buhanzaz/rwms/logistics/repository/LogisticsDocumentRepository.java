@@ -21,6 +21,18 @@ public interface LogisticsDocumentRepository extends JpaRepository<LogisticsDocu
   Optional<LogisticsDocument> findByDocumentTypeAndRentalOrderId(
       LogisticsDocumentType documentType, UUID rentalOrderId);
 
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select document
+      from LogisticsDocument document
+      where document.documentType = :documentType
+        and document.rentalOrderId = :rentalOrderId
+      """)
+  Optional<LogisticsDocument> findByDocumentTypeAndRentalOrderIdForUpdate(
+      @Param("documentType") LogisticsDocumentType documentType,
+      @Param("rentalOrderId") UUID rentalOrderId);
+
   List<LogisticsDocument> findAllByDocumentTypeAndWarehouseIdOrderByCreatedAtDescIdDesc(
       LogisticsDocumentType documentType, UUID warehouseId);
 }

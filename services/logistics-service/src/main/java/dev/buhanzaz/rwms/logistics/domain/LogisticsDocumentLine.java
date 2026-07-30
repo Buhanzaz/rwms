@@ -92,6 +92,32 @@ public class LogisticsDocumentLine {
   @Column(name = "return_additional_contents_snapshot", columnDefinition = "jsonb")
   private JsonNode returnAdditionalContentsSnapshot;
 
+  /**
+   * Canonical source status captured from maintenance-service before departure.
+   * It is deliberately persisted because an in-transit asset no longer exposes
+   * whether arrival must restore FREE or REPAIR.
+   */
+  @Column(name = "transfer_asset_status", length = 16)
+  private String transferAssetStatus;
+
+  @Column(name = "active_repair_id")
+  private UUID activeRepairId;
+
+  @Column(name = "active_repair_version")
+  private Long activeRepairVersion;
+
+  @Column(name = "repair_continuation_priority")
+  private Integer repairContinuationPriority;
+
+  @Column(name = "movement_to_shipment")
+  private Boolean movementToShipment;
+
+  @Column(name = "maintenance_prepared_at")
+  private OffsetDateTime maintenancePreparedAt;
+
+  @Column(name = "maintenance_arrival_completed_at")
+  private OffsetDateTime maintenanceArrivalCompletedAt;
+
   @Column(name = "created_at", nullable = false)
   private OffsetDateTime createdAt;
 
@@ -199,6 +225,65 @@ public class LogisticsDocumentLine {
             returnAdditionalContentsSnapshot, snapshot, "returnAdditionalContentsSnapshot");
   }
 
+  public void captureMaintenanceDeparture(
+      UUID repairId, Long repairVersion, String assetStatus, OffsetDateTime preparedAt) {
+    String requiredStatus = requiredTransferAssetStatus(assetStatus);
+    if (preparedAt == null) throw new IllegalArgumentException("preparedAt is required");
+    if ("REPAIR".equals(requiredStatus)) {
+      if (repairId == null || repairVersion == null || repairVersion < 0) {
+        throw new IllegalArgumentException("Active repair identity and version are required");
+      }
+    } else if (repairId != null || repairVersion != null) {
+      throw new IllegalArgumentException("FREE transfer truth cannot reference an active repair");
+    }
+    if (maintenancePreparedAt != null
+        && (!java.util.Objects.equals(activeRepairId, repairId)
+            || !java.util.Objects.equals(activeRepairVersion, repairVersion)
+            || !java.util.Objects.equals(transferAssetStatus, requiredStatus))) {
+      throw new IllegalStateException("Maintenance departure truth is immutable");
+    }
+    activeRepairId = repairId;
+    activeRepairVersion = repairVersion;
+    transferAssetStatus = requiredStatus;
+    maintenancePreparedAt = preparedAt;
+  }
+
+  public void configureRepairContinuation(Integer priority, boolean movementRequired) {
+    if (activeRepairId == null) {
+      if (priority != null || movementRequired) {
+        throw new IllegalArgumentException("A transfer without an active repair has no continuation");
+      }
+      repairContinuationPriority = null;
+      movementToShipment = false;
+      return;
+    }
+    if (priority == null || priority < 1 || priority > 5) {
+      throw new IllegalArgumentException("Repair priority must be between 1 and 5");
+    }
+    if (repairContinuationPriority != null
+        && (!repairContinuationPriority.equals(priority)
+            || !java.util.Objects.equals(movementToShipment, movementRequired))) {
+      throw new IllegalStateException("Repair continuation settings are immutable");
+    }
+    repairContinuationPriority = priority;
+    movementToShipment = movementRequired;
+  }
+
+  public void completeMaintenanceArrival(long repairVersion, OffsetDateTime completedAt) {
+    if (activeRepairId == null || repairVersion < 0 || completedAt == null) {
+      throw new IllegalArgumentException("Maintenance arrival completion is invalid");
+    }
+    if (activeRepairVersion != null && repairVersion < activeRepairVersion) {
+      throw new IllegalArgumentException("Repair version must not move backwards");
+    }
+    activeRepairVersion = repairVersion;
+    maintenanceArrivalCompletedAt = completedAt;
+  }
+
+  public boolean hasActiveRepair() {
+    return activeRepairId != null;
+  }
+
   @PrePersist
   void beforeInsert() {
     OffsetDateTime now = currentTime();
@@ -232,6 +317,13 @@ public class LogisticsDocumentLine {
       throw new IllegalStateException(field + " is immutable once captured");
     }
     return incoming.deepCopy();
+  }
+
+  private static String requiredTransferAssetStatus(String value) {
+    if (!"FREE".equals(value) && !"REPAIR".equals(value)) {
+      throw new IllegalArgumentException("transferAssetStatus must be FREE or REPAIR");
+    }
+    return value;
   }
 
   private static OffsetDateTime currentTime() {

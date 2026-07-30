@@ -4,6 +4,7 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 
 import dev.buhanzaz.rwms.taskboard.security.*;
 import dev.buhanzaz.rwms.taskboard.service.WorkforceService;
+import dev.buhanzaz.rwms.taskboard.service.WorkerGroupAvailabilityService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import java.util.List;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.*;
 @Validated
 public class WorkforceController {
   private final WorkforceService service;
+  private final WorkerGroupAvailabilityService groupAvailability;
   private final WarehouseAccessAuthorizer access;
 
   @GetMapping("/workers")
@@ -50,6 +52,16 @@ public class WorkforceController {
     return service.updateWorker(warehouseId, id, request);
   }
 
+  @PutMapping("/workers/{id}/current-group")
+  public WorkerDto setCurrentGroup(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID warehouseId,
+      @PathVariable UUID id,
+      @Valid @RequestBody SetCurrentGroupRequest request) {
+    write(jwt, warehouseId);
+    return service.setCurrentGroup(warehouseId, id, request);
+  }
+
   @PostMapping("/workers/{id}/credentials/reset")
   public WorkerDto reset(
       @AuthenticationPrincipal Jwt jwt,
@@ -68,6 +80,16 @@ public class WorkforceController {
       @Valid @RequestBody VersionCommand request) {
     write(jwt, warehouseId);
     return service.disableCredentials(warehouseId, id, request.expectedVersion());
+  }
+
+  @PostMapping("/workers/{id}/credentials/enable")
+  public WorkerDto enable(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID warehouseId,
+      @PathVariable UUID id,
+      @Valid @RequestBody VersionCommand request) {
+    write(jwt, warehouseId);
+    return service.enableCredentials(warehouseId, id, request.expectedVersion());
   }
 
   @PostMapping("/workers/{id}/credentials/reconcile-disable")
@@ -127,6 +149,26 @@ public class WorkforceController {
       @Valid @RequestBody WorkerGroupRequest request) {
     write(jwt, warehouseId);
     return service.updateGroup(warehouseId, id, request);
+  }
+
+  @PostMapping("/worker-groups/{id}/disable")
+  public WorkerGroupDto disableGroup(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID warehouseId,
+      @PathVariable UUID id,
+      @Valid @RequestBody GroupAvailabilityRequest request) {
+    write(jwt, warehouseId);
+    return groupAvailability.disable(warehouseId, id, request);
+  }
+
+  @PostMapping("/worker-groups/{id}/enable")
+  public WorkerGroupDto enableGroup(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID warehouseId,
+      @PathVariable UUID id,
+      @Valid @RequestBody GroupAvailabilityRequest request) {
+    write(jwt, warehouseId);
+    return groupAvailability.enable(warehouseId, id, request);
   }
 
   @DeleteMapping("/worker-groups/{id}")

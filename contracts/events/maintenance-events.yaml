@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: RWMS Maintenance Domain Events
-  version: 1.0.0
+  version: 1.1.0
   description: >-
     Stage 6 sanitized maintenance facts. PostgreSQL service-local event streams
     are authoritative; Kafka is at-least-once transport. Aggregate-family
@@ -48,6 +48,14 @@ channels:
       only completed/cancelled facts are actionable for matching repair stages.
     messages:
       queueEntryFactV1: { $ref: '#/components/messages/QueueEntryFactV1' }
+  taskBoardEvidenceFacts:
+    address: rwms.task-board.task-evidence.v1
+    description: >-
+      READY and REVIEW_REQUIRED result evidence keyed by evidenceId. Maintenance
+      projects only facts whose immutable sourceType/sourceId identify a repair
+      it owns; worker and group IDs remain opaque and names stay out of Kafka.
+    messages:
+      taskEvidenceFactV1: { $ref: '#/components/messages/TaskEvidenceFactV1' }
   mediaFacts:
     address: rwms.media.media.v1
     description: >-
@@ -91,6 +99,9 @@ operations:
   consumeQueueEntryOutcomes:
     action: receive
     channel: { $ref: '#/channels/taskBoardQueueEntryFacts' }
+  consumeTaskEvidence:
+    action: receive
+    channel: { $ref: '#/channels/taskBoardEvidenceFacts' }
   consumeMediaFacts:
     action: receive
     channel: { $ref: '#/channels/mediaFacts' }
@@ -164,6 +175,8 @@ components:
                   - maintenance.repair.stage-completed.v1
                   - maintenance.repair.pending-acceptance.v1
                   - maintenance.repair.rework-created.v1
+                  - maintenance.repair.transfer-prepared.v1
+                  - maintenance.repair.transferred.v1
                   - maintenance.repair.accepted.v1
                   - maintenance.repair.written-off.v1
     BoardTaskFactV1:
@@ -190,6 +203,20 @@ components:
       x-rwms-actionable-event-types:
         - task-board.queue-entry.completed.v1
         - task-board.queue-entry.cancelled.v1
+    TaskEvidenceFactV1:
+      name: maintenance.input.task-board.task-evidence-fact.v1
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - type: object
+            required: [aggregateType, eventType]
+            properties:
+              aggregateType: { const: TASK_EVIDENCE }
+              eventType:
+                enum:
+                  - task-board.task-evidence.ready.v1
+                  - task-board.task-evidence.review-required.v1
+      x-rwms-accepted-aggregate-type: TASK_EVIDENCE
     MediaFactV1:
       name: maintenance.input.media.fact.v1
       payload: { $ref: './media/media-events-v1.schema.json' }

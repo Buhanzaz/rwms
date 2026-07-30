@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: RWMS Task Board Kafka Facts
-  version: 1.1.0
+  version: 1.2.0
   description: >-
     Canonical version-one facts published by task-board-service in
     DomainEventEnvelopeV2 through its PostgreSQL transactional outbox. The V2
@@ -43,6 +43,29 @@ channels:
       queueEntryCancelledV1: { $ref: '#/components/messages/QueueEntryCancelledV1' }
       queueEntryInterruptedV1: { $ref: '#/components/messages/QueueEntryInterruptedV1' }
       queueEntryReturningV1: { $ref: '#/components/messages/QueueEntryReturningV1' }
+  entryOwnerProofFacts:
+    address: rwms.task-board.entry-owner-proof.v1
+    description: >-
+      Monotonic media authorization proof keyed by task-board entry ID. Media
+      service rejects WORKER access unless the current proof is active and
+      contains the authenticated worker ID.
+    messages:
+      entryOwnerProofChangedV1: { $ref: '#/components/messages/EntryOwnerProofChangedV1' }
+  taskEvidenceFacts:
+    address: rwms.task-board.task-evidence.v1
+    description: >-
+      Server-attributed result evidence projected by downstream owning
+      services. Human-readable worker and group names are intentionally absent.
+    messages:
+      taskEvidenceReadyV1: { $ref: '#/components/messages/TaskEvidenceReadyV1' }
+      taskEvidenceReviewRequiredV1: { $ref: '#/components/messages/TaskEvidenceReviewRequiredV1' }
+  groupKpiDayFacts:
+    address: rwms.task-board.group-kpi-day.v1
+    description: >-
+      Replaceable warehouse-local daily KPI evidence keyed by evidenceId and
+      consumed asynchronously by analytics-service.
+    messages:
+      groupKpiDayChangedV1: { $ref: '#/components/messages/GroupKpiDayChangedV1' }
 operations:
   publishBoardTaskFacts:
     action: send
@@ -50,6 +73,15 @@ operations:
   publishQueueEntryFacts:
     action: send
     channel: { $ref: '#/channels/queueEntryFacts' }
+  publishEntryOwnerProofFacts:
+    action: send
+    channel: { $ref: '#/channels/entryOwnerProofFacts' }
+  publishTaskEvidenceFacts:
+    action: send
+    channel: { $ref: '#/channels/taskEvidenceFacts' }
+  publishGroupKpiDayFacts:
+    action: send
+    channel: { $ref: '#/channels/groupKpiDayFacts' }
 components:
   messages:
     BoardTaskCreatedV1:
@@ -144,6 +176,36 @@ components:
         allOf:
           - { $ref: './task-board/task-board-events-v1.schema.json' }
           - { $ref: '#/components/schemas/QueueEntryReturningDiscriminator' }
+    EntryOwnerProofChangedV1:
+      name: task-board.entry-owner-proof.changed.v1
+      title: Task-board entry media owner proof changed
+      correlationId: { location: $message.payload#/correlation/correlationId }
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/EntryOwnerProofChangedDiscriminator' }
+    TaskEvidenceReadyV1:
+      name: task-board.task-evidence.ready.v1
+      title: Worker result evidence became ready
+      correlationId: { location: $message.payload#/correlation/correlationId }
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/TaskEvidenceReadyDiscriminator' }
+    TaskEvidenceReviewRequiredV1:
+      name: task-board.task-evidence.review-required.v1
+      title: Late worker result evidence requires review
+      correlationId: { location: $message.payload#/correlation/correlationId }
+      payload:
+        allOf:
+          - { $ref: './task-board/task-board-events-v1.schema.json' }
+          - { $ref: '#/components/schemas/TaskEvidenceReviewRequiredDiscriminator' }
+    GroupKpiDayChangedV1:
+      name: task-board.group-kpi-day.changed.v1
+      title: Worker-group KPI day evidence changed
+      correlationId: { location: $message.payload#/correlation/correlationId }
+      payload:
+        $ref: './analytics/group-kpi-day-v1.schema.json'
   schemas:
     BoardTaskCreatedDiscriminator:
       type: object
@@ -215,3 +277,18 @@ components:
       properties:
         eventType: { const: task-board.queue-entry.returning.v1 }
         aggregateType: { const: QUEUE_ENTRY }
+    EntryOwnerProofChangedDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.entry-owner-proof.changed.v1 }
+        aggregateType: { const: TASK_BOARD_ENTRY_OWNER_PROOF }
+    TaskEvidenceReadyDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.task-evidence.ready.v1 }
+        aggregateType: { const: TASK_EVIDENCE }
+    TaskEvidenceReviewRequiredDiscriminator:
+      type: object
+      properties:
+        eventType: { const: task-board.task-evidence.review-required.v1 }
+        aggregateType: { const: TASK_EVIDENCE }

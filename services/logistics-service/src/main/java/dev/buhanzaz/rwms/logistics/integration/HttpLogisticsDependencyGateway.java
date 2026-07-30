@@ -1,12 +1,17 @@
 package dev.buhanzaz.rwms.logistics.integration;
 
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.oauth2.client.OAuth2AuthorizeRequest;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
 import org.springframework.web.client.RestClient;
@@ -35,7 +40,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   private final String warehouseBase;
   private final String maintenanceBase;
   private final String mediaBase;
-  private final String taskBoardBase;
   private final String taskBoardEquipmentMovementBase;
 
   HttpLogisticsDependencyGateway(
@@ -48,11 +52,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     warehouseBase =
         strip(properties.warehouseBaseUrl().toString()) + "/api/internal/warehouse/v1/warehouses/logistics";
     maintenanceBase =
-        strip(properties.maintenanceBaseUrl().toString()) + "/api/internal/maintenance/v1/logistics/returns";
+        strip(properties.maintenanceBaseUrl().toString()) + "/api/internal/maintenance/v1/logistics";
     mediaBase = strip(properties.mediaBaseUrl().toString()) + "/api/internal/media/v1";
-    taskBoardBase =
-        strip(properties.taskBoardBaseUrl().toString())
-            + "/api/internal/task-board/v1/logistics/preparation-tasks";
     taskBoardEquipmentMovementBase =
         strip(properties.taskBoardBaseUrl().toString())
             + "/api/internal/task-board/v1/logistics/equipment-movement-tasks";
@@ -67,7 +68,44 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
             WAREHOUSE_CLIENT,
             WAREHOUSE_SCOPE);
     if (response == null) throw malformed("Warehouse-service returned an empty identity");
-    return new WarehouseIdentity(response.id(), response.version(), response.active(), response.timeZone());
+    return new WarehouseIdentity(
+        response.id(),
+        response.version(),
+        response.active(),
+        response.name(),
+        response.city(),
+        response.timeZone());
+  }
+
+  @Override
+  public List<WarehouseIdentity> listWarehouseIdentities() {
+    try {
+      List<WarehouseIdentityResponse> response =
+          client
+              .get()
+              .uri(warehouseBase)
+              .header(
+                  HttpHeaders.AUTHORIZATION,
+                  bearer(WAREHOUSE_CLIENT, WAREHOUSE_SCOPE))
+              .retrieve()
+              .body(new ParameterizedTypeReference<>() {});
+      if (response == null) {
+        throw malformed("Warehouse-service returned an empty identity list");
+      }
+      return response.stream()
+          .map(
+              value ->
+                  new WarehouseIdentity(
+                      value.id(),
+                      value.version(),
+                      value.active(),
+                      value.name(),
+                      value.city(),
+                      value.timeZone()))
+          .toList();
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
   }
 
   @Override
@@ -183,6 +221,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
                 "LOGISTICS_RETURN",
                 documentId,
                 lineId,
+                null,
                 null),
             RentalItemSnapshotResponse.class,
             ASSET_CLIENT,
@@ -212,6 +251,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
                 LogisticsOwnerType.LOGISTICS_RETURN.name(),
                 documentId,
                 lineId,
+                null,
                 null),
             RentalItemSnapshotResponse.class,
             ASSET_CLIENT,
@@ -284,6 +324,33 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID documentId,
       UUID lineId,
       UUID destinationWarehouseId) {
+    return applyFencedEffect(
+        idempotencyKey,
+        action,
+        assetId,
+        expectedAssetVersion,
+        leaseId,
+        fencingToken,
+        ownerType,
+        documentId,
+        lineId,
+        destinationWarehouseId,
+        null);
+  }
+
+  @Override
+  public RentalItemSnapshot applyFencedEffect(
+      UUID idempotencyKey,
+      AssetEffect action,
+      UUID assetId,
+      long expectedAssetVersion,
+      UUID leaseId,
+      long fencingToken,
+      LogisticsOwnerType ownerType,
+      UUID documentId,
+      UUID lineId,
+      UUID destinationWarehouseId,
+      String transferAssetStatus) {
     if (action == null || ownerType == null) {
       throw malformed("Logistics asset effect action and owner type are required");
     }
@@ -299,11 +366,76 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
                 ownerType.name(),
                 documentId,
                 lineId,
-                destinationWarehouseId),
+                destinationWarehouseId,
+                transferAssetStatus),
             RentalItemSnapshotResponse.class,
             ASSET_CLIENT,
             ASSET_SCOPE);
     return snapshot(response);
+  }
+
+  @Override
+  public TransferRepairDeparture prepareTransferDeparture(
+      UUID idempotencyKey,
+      UUID transferId,
+      UUID lineId,
+      UUID rentalItemId,
+      UUID sourceWarehouseId,
+      UUID targetWarehouseId) {
+    TransferRepairDepartureResponse response =
+        post(
+            maintenanceTransferLineBase(transferId, lineId) + "/prepare-departure",
+            idempotencyKey,
+            new TransferRepairContextRequest(
+                rentalItemId, sourceWarehouseId, targetWarehouseId),
+            TransferRepairDepartureResponse.class,
+            MAINTENANCE_CLIENT,
+            MAINTENANCE_SCOPE);
+    return transferRepairDeparture(response);
+  }
+
+  @Override
+  public TransferRepairArrivalPreflight preflightTransferArrival(
+      UUID transferId,
+      UUID lineId,
+      UUID rentalItemId,
+      UUID sourceWarehouseId,
+      UUID targetWarehouseId) {
+    TransferRepairArrivalPreflightResponse response =
+        postWithoutIdempotency(
+            maintenanceTransferLineBase(transferId, lineId) + "/arrival-preflight",
+            new TransferRepairContextRequest(
+                rentalItemId, sourceWarehouseId, targetWarehouseId),
+            TransferRepairArrivalPreflightResponse.class,
+            MAINTENANCE_CLIENT,
+            MAINTENANCE_SCOPE);
+    return transferRepairArrivalPreflight(response);
+  }
+
+  @Override
+  public TransferRepairArrivalCompletion completeTransferArrival(
+      UUID idempotencyKey,
+      UUID transferId,
+      UUID lineId,
+      UUID rentalItemId,
+      UUID sourceWarehouseId,
+      UUID targetWarehouseId,
+      Integer priority,
+      boolean movementToShipment) {
+    TransferRepairArrivalCompletionResponse response =
+        post(
+            maintenanceTransferLineBase(transferId, lineId) + "/complete-arrival",
+            idempotencyKey,
+            new CompleteTransferRepairArrivalRequest(
+                rentalItemId,
+                sourceWarehouseId,
+                targetWarehouseId,
+                priority,
+                movementToShipment),
+            TransferRepairArrivalCompletionResponse.class,
+            MAINTENANCE_CLIENT,
+            MAINTENANCE_SCOPE);
+    return transferRepairArrivalCompletion(response);
   }
 
   @Override
@@ -438,14 +570,23 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID warehouseId,
       UUID rentalItemId,
       long rentalItemVersion,
+      LocalDate dispatchDate,
+      List<MediaReference> mediaReferences,
       List<EquipmentShortage> shortages) {
     ReturnShortageSourceResponse response =
         putWithoutIdempotency(
-            maintenanceBase + "/" + returnId + "/lines/" + lineId + "/shortage",
+            maintenanceBase + "/returns/" + returnId + "/lines/" + lineId + "/shortage",
             new UpsertReturnShortageRequest(
                 warehouseId,
                 rentalItemId,
                 rentalItemVersion,
+                dispatchDate,
+                mediaReferences.stream()
+                    .map(
+                        reference ->
+                            new MediaReferenceRequest(
+                                reference.mediaId(), reference.generation()))
+                    .toList(),
                 shortages.stream().map(value -> new EquipmentShortageRequest(value.equipmentId(), value.missingQuantity())).toList()),
             ReturnShortageSourceResponse.class,
             MAINTENANCE_CLIENT,
@@ -460,6 +601,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         response.warehouseId(),
         response.rentalItemId(),
         response.rentalItemVersion(),
+        response.estimateId(),
         response.shortages().stream().map(value -> new EquipmentShortage(value.equipmentId(), value.missingQuantity())).toList(),
         response.snapshotSha256(),
         response.receivedAt());
@@ -512,56 +654,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
             ASSET_CLIENT,
             ASSET_SCOPE);
     return hold(response);
-  }
-
-  @Override
-  public PreparationTask registerPreparationTask(
-      UUID warehouseId, UUID externalTaskId, Integer plannedDurationMinutes, OffsetDateTime deadlineAt) {
-    PreparationTaskResponse response =
-        postWithoutIdempotency(
-            taskBoardBase,
-            new RegisterPreparationTaskRequest(
-                warehouseId, externalTaskId, plannedDurationMinutes, deadlineAt),
-            PreparationTaskResponse.class,
-            TASK_BOARD_CLIENT,
-            TASK_BOARD_SCOPE);
-    return task(response);
-  }
-
-  @Override
-  public PreparationTask readPreparationTask(UUID externalTaskId) {
-    PreparationTaskResponse response =
-        get(
-            taskBoardBase + "/" + externalTaskId,
-            PreparationTaskResponse.class,
-            TASK_BOARD_CLIENT,
-            TASK_BOARD_SCOPE);
-    return task(response);
-  }
-
-  @Override
-  public PreparationTask completePreparationTask(
-      UUID externalTaskId, long expectedTaskVersion) {
-    PreparationTaskResponse response =
-        postWithoutIdempotency(
-            taskBoardBase + "/" + externalTaskId + "/complete",
-            new CompletePreparationTaskRequest(expectedTaskVersion),
-            PreparationTaskResponse.class,
-            TASK_BOARD_CLIENT,
-            TASK_BOARD_SCOPE);
-    return task(response);
-  }
-
-  @Override
-  public PreparationTask cancelPreparationTask(UUID externalTaskId, long expectedTaskVersion) {
-    PreparationTaskResponse response =
-        postWithoutIdempotency(
-            taskBoardBase + "/" + externalTaskId + "/cancel",
-            new CancelPreparationTaskRequest(expectedTaskVersion),
-            PreparationTaskResponse.class,
-            TASK_BOARD_CLIENT,
-            TASK_BOARD_SCOPE);
-    return task(response);
   }
 
   @Override
@@ -649,6 +741,10 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       Integer plannedDurationMinutes,
       OffsetDateTime deadlineAt,
       List<EquipmentMovementOperation> operations) {
+    if (plannedDurationMinutes == null || plannedDurationMinutes < 1) {
+      throw new IllegalArgumentException(
+          "Equipment movement task requires a positive planned duration");
+    }
     EquipmentMovementBoardTaskResponse response =
         postWithoutIdempotency(
             taskBoardEquipmentMovementBase,
@@ -663,7 +759,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
                         operation ->
                             new EquipmentMovementOperationRequest(
                                 operation.direction(),
-                                operation.equipmentCode(),
+                                operation.equipmentId(),
                                 operation.equipmentName(),
                                 operation.quantity()))
                     .toList()),
@@ -744,6 +840,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID unitId,
       UUID clientId,
       String tenantSnapshot,
+      OffsetDateTime draftReservationExpiresAt,
       UUID actorSubjectId,
       String actorRole) {
     return orderReservation(
@@ -755,6 +852,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
                 unitId,
                 clientId,
                 tenantSnapshot,
+                draftReservationExpiresAt,
                 actorSubjectId,
                 actorRole),
             OrderUnitReservationResponse.class));
@@ -847,6 +945,276 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
             ASSET_CLIENT,
             ASSET_SCOPE);
     return cabinFurnitureMovementPlan(response);
+  }
+
+  @Override
+  public CabinFacets readAvailableCabinFacets(UUID warehouseId, UUID holdScopeId) {
+    String uri =
+        UriComponentsBuilder.fromUriString(assetBase + "/cabin-facets")
+            .queryParam("warehouseId", warehouseId)
+            .queryParam("holdScopeId", holdScopeId)
+            .build()
+            .encode()
+            .toUriString();
+    CabinFacetsResponse response =
+        get(uri, CabinFacetsResponse.class, ASSET_CLIENT, ASSET_SCOPE);
+    return new CabinFacets(
+        response.warehouseId(),
+        List.copyOf(response.cabinTypes()),
+        List.copyOf(response.finishes()),
+        List.copyOf(response.dimensions()),
+        List.copyOf(response.categories()));
+  }
+
+  @Override
+  public CabinSearchResult searchAvailableCabins(
+      UUID warehouseId,
+      UUID holdScopeId,
+      OffsetDateTime expiresAt,
+      UUID actorSubjectId,
+      String actorRole,
+      List<CabinSearchGroup> groups) {
+    CabinSearchResponse response =
+        postWithoutIdempotency(
+            assetBase + "/cabin-searches",
+            new CabinSearchRequest(
+                warehouseId,
+                holdScopeId,
+                expiresAt,
+                actorSubjectId,
+                actorRole,
+                groups.stream()
+                    .map(
+                        group ->
+                            new CabinSearchGroupRequest(
+                                group.cabinType(),
+                                group.finish(),
+                                group.dimensions(),
+                                group.category(),
+                                group.characteristics(),
+                                group.linoleum(),
+                                group.quantity()))
+                    .toList()),
+            CabinSearchResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE);
+    if (response == null
+        || response.warehouseId() == null
+        || response.expiresAt() == null
+        || response.groups() == null) {
+      throw malformed("Asset-service returned an invalid cabin search result");
+    }
+    return new CabinSearchResult(
+        response.warehouseId(),
+        response.expiresAt(),
+        response.groups().stream()
+            .map(
+                group ->
+                    new CabinSearchGroupResult(
+                        new CabinSearchGroup(
+                            group.group().cabinType(),
+                            group.group().finish(),
+                            group.group().dimensions(),
+                            group.group().category(),
+                            group.group().characteristics(),
+                            group.group().linoleum(),
+                            group.group().quantity()),
+                        group.cabins().stream()
+                            .map(HttpLogisticsDependencyGateway::availableCabin)
+                            .toList()))
+            .toList());
+  }
+
+  @Override
+  public List<AvailableCabin> readCabinSnapshots(
+      UUID warehouseId, List<UUID> rentalItemIds) {
+    CabinSnapshotsResponse response =
+        postWithoutIdempotency(
+            assetBase + "/cabin-snapshots",
+            new CabinIdsRequest(warehouseId, rentalItemIds),
+            CabinSnapshotsResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE);
+    return response.items().stream()
+        .map(HttpLogisticsDependencyGateway::availableCabin)
+        .toList();
+  }
+
+  @Override
+  public CabinAvailability readCabinAvailability(
+      UUID warehouseId, List<UUID> rentalItemIds) {
+    CabinAvailabilityResponse response =
+        postWithoutIdempotency(
+            assetBase + "/cabin-availability",
+            new CabinIdsRequest(warehouseId, rentalItemIds),
+            CabinAvailabilityResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE);
+    return new CabinAvailability(
+        response.warehouseId(),
+        response.items().stream()
+            .map(
+                item ->
+                    new CabinAvailabilityItem(
+                        item.rentalItemId(), item.available(), item.reason()))
+            .toList());
+  }
+
+  @Override
+  public PresentationHolds replacePresentationHolds(
+      UUID idempotencyKey,
+      UUID presentationId,
+      UUID warehouseId,
+      List<UUID> rentalItemIds,
+      OffsetDateTime expiresAt,
+      UUID actorSubjectId,
+      String actorRole) {
+    PresentationHoldsResponse response =
+        put(
+            assetBase + "/presentations/" + presentationId + "/holds",
+            idempotencyKey,
+            new ReplacePresentationHoldsRequest(
+                warehouseId,
+                rentalItemIds,
+                expiresAt,
+                actorSubjectId,
+                actorRole),
+            PresentationHoldsResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE);
+    return presentationHolds(response);
+  }
+
+  @Override
+  public PresentationHolds readPresentationHolds(UUID presentationId) {
+    PresentationHoldsResponse response =
+        get(
+            assetBase + "/presentations/" + presentationId + "/holds",
+            PresentationHoldsResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE);
+    return presentationHolds(response);
+  }
+
+  @Override
+  public PresentationHolds releasePresentationHolds(
+      UUID idempotencyKey,
+      UUID presentationId,
+      UUID actorSubjectId,
+      String actorRole) {
+    PresentationHoldsResponse response =
+        post(
+            assetBase + "/presentations/" + presentationId + "/holds/release",
+            idempotencyKey,
+            new OrderActorRequest(actorSubjectId, actorRole),
+            PresentationHoldsResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE);
+    return presentationHolds(response);
+  }
+
+  @Override
+  public ConvertedPresentationHolds convertPresentationHolds(
+      UUID idempotencyKey,
+      UUID presentationId,
+      UUID orderId,
+      UUID warehouseId,
+      List<UUID> selectedRentalItemIds,
+      UUID clientId,
+      String tenantSnapshot,
+      UUID actorSubjectId,
+      String actorRole) {
+    ConvertedPresentationHoldsResponse response =
+        post(
+            assetBase + "/presentations/" + presentationId + "/holds/convert",
+            idempotencyKey,
+            new ConvertPresentationHoldsRequest(
+                orderId,
+                warehouseId,
+                selectedRentalItemIds,
+                clientId,
+                tenantSnapshot,
+                actorSubjectId,
+                actorRole),
+            ConvertedPresentationHoldsResponse.class,
+            ASSET_CLIENT,
+            ASSET_SCOPE);
+    return new ConvertedPresentationHolds(
+        response.presentationId(),
+        response.orderId(),
+        response.reservations().stream()
+            .map(HttpLogisticsDependencyGateway::orderReservation)
+            .toList(),
+        List.copyOf(response.releasedRentalItemIds()));
+  }
+
+  @Override
+  public List<CabinMediaSnapshot> readCabinMediaSnapshots(
+      UUID warehouseId, List<UUID> cabinIds) {
+    CabinMediaSnapshotsResponse response =
+        postWithoutIdempotency(
+            mediaBase + "/logistics/cabin-presentations/snapshots",
+            new CabinMediaSnapshotsRequest(warehouseId, cabinIds),
+            CabinMediaSnapshotsResponse.class,
+            MEDIA_CLIENT,
+            MEDIA_SCOPE);
+    return response.items().stream()
+        .map(
+            item ->
+                new CabinMediaSnapshot(
+                    item.cabinId(),
+                    item.photos().stream()
+                        .map(
+                            photo ->
+                                new CabinMediaPhoto(
+                                    photo.mediaId(),
+                                    photo.generation(),
+                                    photo.sortOrder(),
+                                    List.copyOf(photo.availableVariants())))
+                        .toList()))
+        .toList();
+  }
+
+  @Override
+  public MediaContent readCabinPresentationMedia(
+      UUID warehouseId,
+      UUID cabinId,
+      UUID mediaId,
+      long generation,
+      String variant) {
+    String uri =
+        UriComponentsBuilder.fromUriString(
+                mediaBase
+                    + "/logistics/cabin-presentations/assets/"
+                    + mediaId
+                    + "/variants/"
+                    + variant
+                    + "/content")
+            .queryParam("warehouseId", warehouseId)
+            .queryParam("cabinId", cabinId)
+            .queryParam("generation", generation)
+            .build()
+            .encode()
+            .toUriString();
+    try {
+      ResponseEntity<byte[]> response =
+          client
+              .get()
+              .uri(uri)
+              .header(HttpHeaders.AUTHORIZATION, bearer(MEDIA_CLIENT, MEDIA_SCOPE))
+              .retrieve()
+              .toEntity(byte[].class);
+      if (response.getBody() == null) {
+        throw malformed("Media-service returned empty presentation content");
+      }
+      String contentType =
+          response.getHeaders().getContentType() == null
+              ? "application/octet-stream"
+              : response.getHeaders().getContentType().toString();
+      return new MediaContent(response.getBody(), contentType);
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
   }
 
   private <T> T get(String uri, Class<T> type, String registration, String scope) {
@@ -1070,24 +1438,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         response.holdId(), response.version(), response.state(), response.expiresAt(), response.committedAt());
   }
 
-  private static PreparationTask task(PreparationTaskResponse response) {
-    if (response == null
-        || response.taskId() == null
-        || response.taskVersion() < 0
-        || response.warehouseId() == null
-        || response.externalTaskId() == null
-        || response.status() == null) {
-      throw malformed("Task-board returned an invalid logistics preparation task");
-    }
-    return new PreparationTask(
-        response.taskId(),
-        response.taskVersion(),
-        response.warehouseId(),
-        response.externalTaskId(),
-        response.status(),
-        response.doneAt());
-  }
-
   private static EquipmentMovementReservation movementReservation(
       EquipmentMovementReservationResponse response) {
     if (response == null
@@ -1097,8 +1447,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         || response.movementId() == null
         || response.lineId() == null
         || response.equipmentId() == null
-        || response.equipmentCode() == null
-        || response.equipmentCode().isBlank()
         || response.equipmentName() == null
         || response.equipmentName().isBlank()
         || response.sourceBalanceId() == null
@@ -1116,7 +1464,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         response.movementId(),
         response.lineId(),
         response.equipmentId(),
-        response.equipmentCode(),
         response.equipmentName(),
         response.sourceBalanceId(),
         response.sourceWarehouseId(),
@@ -1263,7 +1610,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
                 content ->
                     new OrderEquipmentContent(
                         content.equipmentId(),
-                        content.equipmentCode(),
                         content.equipmentName(),
                         content.quantity(),
                         content.locationKind()))
@@ -1299,8 +1645,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     for (OrderEquipmentReservationResponse value : response) {
       if (value == null
           || value.equipmentId() == null
-          || value.equipmentCode() == null
-          || value.equipmentCode().isBlank()
           || value.equipmentName() == null
           || value.equipmentName().isBlank()
           || value.quantity() < 1
@@ -1311,7 +1655,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       values.add(
           new OrderEquipmentReservation(
               value.equipmentId(),
-              value.equipmentCode(),
               value.equipmentName(),
               value.quantity(),
               value.availableQuantity()));
@@ -1332,7 +1675,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     for (OrderFurnitureMovementPlanLineResponse line : response.lines()) {
       if (line == null
           || line.equipmentId() == null
-          || line.equipmentCode() == null
           || line.equipmentName() == null
           || line.sourceBalanceId() == null
           || line.sourceWarehouseId() == null
@@ -1346,7 +1688,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       lines.add(
           new OrderFurnitureMovementPlanLine(
               line.equipmentId(),
-              line.equipmentCode(),
               line.equipmentName(),
               line.sourceBalanceId(),
               line.sourceWarehouseId(),
@@ -1392,8 +1733,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     for (CabinFurnitureMovementPlanLineResponse line : response.lines()) {
       if (line == null
           || line.equipmentId() == null
-          || line.equipmentCode() == null
-          || line.equipmentCode().isBlank()
           || line.equipmentName() == null
           || line.equipmentName().isBlank()
           || line.sourceBalanceId() == null
@@ -1408,7 +1747,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       lines.add(
           new CabinFurnitureMovementPlanLine(
               line.equipmentId(),
-              line.equipmentCode(),
               line.equipmentName(),
               line.sourceBalanceId(),
               line.sourceWarehouseId(),
@@ -1422,6 +1760,64 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     }
     return new CabinFurnitureMovementPlan(
         response.rentalItemId(), response.unitNumber(), List.copyOf(lines));
+  }
+
+  private static AvailableCabin availableCabin(AvailableCabinResponse response) {
+    if (response == null
+        || response.id() == null
+        || response.version() < 0
+        || response.warehouseId() == null
+        || !isAvailableCabinStatus(response.status())
+        || response.number() == null
+        || response.passport() == null
+        || response.tags() == null
+        || response.updatedAt() == null) {
+      throw malformed("Asset-service returned an invalid available cabin");
+    }
+    return new AvailableCabin(
+        response.id(),
+        response.version(),
+        response.warehouseId(),
+        response.status(),
+        response.number(),
+        response.rentalType(),
+        response.dimensions(),
+        response.finishing(),
+        response.category(),
+        response.characteristics(),
+        response.linoleum(),
+        Collections.unmodifiableMap(new LinkedHashMap<>(response.passport())),
+        List.copyOf(response.tags()),
+        response.updatedAt());
+  }
+
+  private static boolean isAvailableCabinStatus(String status) {
+    return "FREE".equals(status);
+  }
+
+  private static PresentationHolds presentationHolds(
+      PresentationHoldsResponse response) {
+    if (response == null || response.presentationId() == null || response.holds() == null) {
+      throw malformed("Asset-service returned invalid presentation holds");
+    }
+    return new PresentationHolds(
+        response.presentationId(),
+        response.expiresAt(),
+        response.holds().stream()
+            .map(
+                hold ->
+                    new PresentationHold(
+                        hold.holdId(),
+                        hold.version(),
+                        hold.presentationId(),
+                        hold.rentalItemId(),
+                        hold.warehouseId(),
+                        hold.state(),
+                        hold.expiresAt(),
+                        hold.orderId(),
+                        hold.createdAt(),
+                        hold.endedAt()))
+            .toList());
   }
 
   private static LogisticsDependencyException dependencyFailure(RuntimeException exception) {
@@ -1490,11 +1886,74 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         LogisticsDependencyException.FailureKind.CONFIGURATION, message);
   }
 
+  private String maintenanceTransferLineBase(UUID transferId, UUID lineId) {
+    if (transferId == null || lineId == null) {
+      throw malformed("Transfer repair context identifiers are required");
+    }
+    return maintenanceBase + "/transfers/" + transferId + "/lines/" + lineId;
+  }
+
+  private static TransferRepairDeparture transferRepairDeparture(
+      TransferRepairDepartureResponse response) {
+    if (response == null
+        || (!"FREE".equals(response.assetStatus()) && !"REPAIR".equals(response.assetStatus()))
+        || ("FREE".equals(response.assetStatus())
+            && (response.activeRepairId() != null || response.activeRepairVersion() != null))
+        || ("REPAIR".equals(response.assetStatus())
+            && (response.activeRepairId() == null
+                || response.activeRepairVersion() == null
+                || response.activeRepairVersion() < 0))) {
+      throw malformed("Maintenance-service returned invalid transfer departure truth");
+    }
+    return new TransferRepairDeparture(
+        response.activeRepairId(), response.activeRepairVersion(), response.assetStatus());
+  }
+
+  private static TransferRepairArrivalPreflight transferRepairArrivalPreflight(
+      TransferRepairArrivalPreflightResponse response) {
+    if (response == null
+        || response.missingQueueDefinitionIds() == null
+        || response.missingQueueDefinitionIds().stream().anyMatch(java.util.Objects::isNull)
+        || response.missingQueueDefinitionIds().size()
+            != Set.copyOf(response.missingQueueDefinitionIds()).size()
+        || (response.activeRepairId() == null
+            && (response.priorityRequired()
+                || response.movementToShipmentAvailable()
+                || !response.missingQueueDefinitionIds().isEmpty()))
+        || (response.activeRepairId() != null && !response.priorityRequired())) {
+      throw malformed("Maintenance-service returned invalid transfer arrival preflight");
+    }
+    return new TransferRepairArrivalPreflight(
+        response.activeRepairId(),
+        response.priorityRequired(),
+        response.movementToShipmentAvailable(),
+        List.copyOf(response.missingQueueDefinitionIds()));
+  }
+
+  private static TransferRepairArrivalCompletion transferRepairArrivalCompletion(
+      TransferRepairArrivalCompletionResponse response) {
+    if (response == null
+        || response.activeRepairId() == null
+        || response.repairVersion() == null
+        || response.repairVersion() < 0
+        || response.warehouseId() == null) {
+      throw malformed("Maintenance-service returned invalid transfer arrival completion");
+    }
+    return new TransferRepairArrivalCompletion(
+        response.activeRepairId(), response.repairVersion(), response.warehouseId());
+  }
+
   private static String strip(String value) {
     return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
   }
 
-  private record WarehouseIdentityResponse(UUID id, long version, boolean active, String timeZone) {}
+  private record WarehouseIdentityResponse(
+      UUID id,
+      long version,
+      boolean active,
+      String name,
+      String city,
+      String timeZone) {}
 
   private record EquipmentContentResponse(UUID equipmentId, long quantity) {}
 
@@ -1529,7 +1988,30 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       String ownerType,
       UUID documentId,
       UUID lineId,
-      UUID destinationWarehouseId) {}
+      UUID destinationWarehouseId,
+      String transferAssetStatus) {}
+
+  private record TransferRepairContextRequest(
+      UUID rentalItemId, UUID sourceWarehouseId, UUID targetWarehouseId) {}
+
+  private record CompleteTransferRepairArrivalRequest(
+      UUID rentalItemId,
+      UUID sourceWarehouseId,
+      UUID targetWarehouseId,
+      Integer priority,
+      boolean movementToShipment) {}
+
+  private record TransferRepairDepartureResponse(
+      UUID activeRepairId, Long activeRepairVersion, String assetStatus) {}
+
+  private record TransferRepairArrivalPreflightResponse(
+      UUID activeRepairId,
+      boolean priorityRequired,
+      boolean movementToShipmentAvailable,
+      List<UUID> missingQueueDefinitionIds) {}
+
+  private record TransferRepairArrivalCompletionResponse(
+      UUID activeRepairId, Long repairVersion, UUID warehouseId) {}
 
   private record ReturnEquipmentReceiptLineRequest(UUID equipmentId, long quantity) {}
 
@@ -1602,6 +2084,8 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID warehouseId,
       UUID rentalItemId,
       long rentalItemVersion,
+      LocalDate dispatchDate,
+      List<MediaReferenceRequest> mediaReferences,
       List<EquipmentShortageRequest> shortages) {}
 
   private record ReturnShortageSourceResponse(
@@ -1611,6 +2095,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID warehouseId,
       UUID rentalItemId,
       long rentalItemVersion,
+      UUID estimateId,
       List<EquipmentShortageRequest> shortages,
       String snapshotSha256,
       OffsetDateTime receivedAt) {}
@@ -1633,24 +2118,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       OffsetDateTime expiresAt,
       OffsetDateTime committedAt) {}
 
-  private record RegisterPreparationTaskRequest(
-      UUID warehouseId,
-      UUID externalTaskId,
-      Integer plannedDurationMinutes,
-      OffsetDateTime deadlineAt) {}
-
-  private record CancelPreparationTaskRequest(long expectedTaskVersion) {}
-
-  private record CompletePreparationTaskRequest(long expectedTaskVersion) {}
-
-  private record PreparationTaskResponse(
-      UUID taskId,
-      long taskVersion,
-      UUID warehouseId,
-      UUID externalTaskId,
-      String status,
-      OffsetDateTime doneAt) {}
-
   private record AcquireEquipmentMovementReservationRequest(
       UUID movementId,
       UUID lineId,
@@ -1672,7 +2139,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID movementId,
       UUID lineId,
       UUID equipmentId,
-      String equipmentCode,
       String equipmentName,
       UUID sourceBalanceId,
       UUID sourceWarehouseId,
@@ -1714,7 +2180,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID movementId, List<EquipmentMovementExecutionLineResponse> lines) {}
 
   private record EquipmentMovementOperationRequest(
-      String direction, String equipmentCode, String equipmentName, long quantity) {}
+      String direction, UUID equipmentId, String equipmentName, long quantity) {}
 
   private record RegisterEquipmentMovementTaskRequest(
       UUID warehouseId,
@@ -1739,6 +2205,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID rentalItemId,
       UUID clientId,
       String tenantSnapshot,
+      OffsetDateTime draftReservationExpiresAt,
       UUID actorSubjectId,
       String actorRole) {}
 
@@ -1754,7 +2221,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
 
   private record OrderEquipmentReservationResponse(
       UUID equipmentId,
-      String equipmentCode,
       String equipmentName,
       long quantity,
       long availableQuantity) {}
@@ -1767,7 +2233,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
 
   private record OrderFurnitureMovementPlanLineResponse(
       UUID equipmentId,
-      String equipmentCode,
       String equipmentName,
       UUID sourceBalanceId,
       UUID sourceWarehouseId,
@@ -1792,7 +2257,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
 
   private record CabinFurnitureMovementPlanLineResponse(
       UUID equipmentId,
-      String equipmentCode,
       String equipmentName,
       UUID sourceBalanceId,
       UUID sourceWarehouseId,
@@ -1811,7 +2275,6 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
 
   private record OrderEquipmentContentResponse(
       UUID equipmentId,
-      String equipmentCode,
       String equipmentName,
       long quantity,
       String locationKind) {}
@@ -1856,5 +2319,118 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       long size,
       long totalElements,
       long totalPages) {}
+
+  private record CabinFacetsResponse(
+      UUID warehouseId,
+      List<String> cabinTypes,
+      List<String> finishes,
+      List<String> dimensions,
+      List<String> categories) {}
+
+  private record CabinSearchGroupRequest(
+      String cabinType,
+      String finish,
+      String dimensions,
+      String category,
+      String characteristics,
+      Boolean linoleum,
+      int quantity) {}
+
+  private record CabinSearchRequest(
+      UUID warehouseId,
+      UUID holdScopeId,
+      OffsetDateTime expiresAt,
+      UUID actorSubjectId,
+      String actorRole,
+      List<CabinSearchGroupRequest> groups) {}
+
+  private record AvailableCabinResponse(
+      UUID id,
+      long version,
+      UUID warehouseId,
+      String status,
+      String number,
+      String rentalType,
+      String dimensions,
+      String finishing,
+      String category,
+      String characteristics,
+      Boolean linoleum,
+      Map<String, Object> passport,
+      List<String> tags,
+      OffsetDateTime updatedAt) {}
+
+  private record CabinSearchGroupResponse(
+      CabinSearchGroupRequest group, List<AvailableCabinResponse> cabins) {}
+
+  private record CabinSearchResponse(
+      UUID warehouseId,
+      OffsetDateTime expiresAt,
+      List<CabinSearchGroupResponse> groups) {}
+
+  private record CabinIdsRequest(UUID warehouseId, List<UUID> rentalItemIds) {}
+
+  private record CabinSnapshotsResponse(
+      UUID warehouseId, List<AvailableCabinResponse> items) {}
+
+  private record CabinAvailabilityItemResponse(
+      UUID rentalItemId, boolean available, String reason) {}
+
+  private record CabinAvailabilityResponse(
+      UUID warehouseId, List<CabinAvailabilityItemResponse> items) {}
+
+  private record ReplacePresentationHoldsRequest(
+      UUID warehouseId,
+      List<UUID> rentalItemIds,
+      OffsetDateTime expiresAt,
+      UUID actorSubjectId,
+      String actorRole) {}
+
+  private record PresentationHoldResponse(
+      UUID holdId,
+      long version,
+      UUID presentationId,
+      UUID rentalItemId,
+      UUID warehouseId,
+      String state,
+      OffsetDateTime expiresAt,
+      UUID orderId,
+      OffsetDateTime createdAt,
+      OffsetDateTime endedAt) {}
+
+  private record PresentationHoldsResponse(
+      UUID presentationId,
+      OffsetDateTime expiresAt,
+      List<PresentationHoldResponse> holds) {}
+
+  private record ConvertPresentationHoldsRequest(
+      UUID orderId,
+      UUID warehouseId,
+      List<UUID> selectedRentalItemIds,
+      UUID clientId,
+      String tenantSnapshot,
+      UUID actorSubjectId,
+      String actorRole) {}
+
+  private record ConvertedPresentationHoldsResponse(
+      UUID presentationId,
+      UUID orderId,
+      List<OrderUnitReservationResponse> reservations,
+      List<UUID> releasedRentalItemIds) {}
+
+  private record CabinMediaSnapshotsRequest(
+      UUID warehouseId, List<UUID> cabinIds) {}
+
+  private record CabinMediaPhotoResponse(
+      UUID mediaId,
+      long generation,
+      int sortOrder,
+      List<String> availableVariants) {}
+
+  private record CabinMediaSnapshotResponse(
+      UUID cabinId, List<CabinMediaPhotoResponse> photos) {}
+
+  private record CabinMediaSnapshotsResponse(
+      List<CabinMediaSnapshotResponse> items) {}
 
 }

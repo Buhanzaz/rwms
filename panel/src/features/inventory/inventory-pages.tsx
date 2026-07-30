@@ -6,11 +6,13 @@ import {
   ArrowLeft01Icon,
   CheckmarkCircle02Icon,
   ClipboardCheckIcon,
+  FilterIcon,
   SentIcon,
 } from "@hugeicons/core-free-icons"
 import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 
+import { MobileAppRequiredDialog } from "@/components/mobile-app-required-dialog"
 import { PageToolbar, PageToolbarActions } from "@/components/page-toolbar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -22,8 +24,16 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Field, FieldLabel } from "@/components/ui/field"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Field, FieldError, FieldLabel } from "@/components/ui/field"
+import { Textarea } from "@/components/ui/textarea"
 import {
   INVENTORY_QUERY_KEY,
   completeInventory,
@@ -36,6 +46,7 @@ import {
   listInventories,
   previewInventoryCompletion,
   publishInventoryWorks,
+  resolveInventoryFindingConflict,
   saveInventoryFinding,
   startInventory,
   subscribeInventory,
@@ -45,8 +56,14 @@ import {
   hasInventoryWarehouseAccess,
 } from "@/features/inventory/inventory-access"
 import { InventoryAddDialog } from "@/features/inventory/inventory-add-dialog"
+import {
+  createEmptyInventoryFindingFilters,
+  filterInventoryFindings,
+} from "@/features/inventory/inventory-finding-filtering"
+import { InventoryFindingFilters } from "@/features/inventory/inventory-finding-filters"
 import { InventoryFindingsList } from "@/features/inventory/inventory-findings-list"
 import { InventoryInspectionWorkspace } from "@/features/inventory/inventory-inspection-workspace"
+import { InventoryMembershipMovements } from "@/features/inventory/inventory-membership-movements"
 import {
   InventoryEmptyState,
   InventoryUnavailable,
@@ -75,25 +92,19 @@ import {
   RepairWorkCompletionDialog,
   type RepairWorkCompletionResult,
 } from "@/features/repair-estimates/repair-work-completion-dialog"
+import {
+  getWarehouseQueueCapabilities,
+  warehouseQueueCapabilitiesQueryKey,
+} from "@/features/repair-estimates/api/warehouse-queue-capabilities"
 import { useAuth } from "@/features/auth/use-auth"
+import { useIsMobile } from "@/hooks/use-mobile"
+import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import {
   useWorkspaceBack,
   workspaceEntryNavigationOptions,
 } from "@/hooks/use-workspace-back"
 import { ApiError } from "@/lib/api-client"
-
-type FindingFilter =
-  "ALL" | "INSPECTED" | "WORK" | "CONFLICT" | "ADDED" | "MISSING"
-
-const filterLabels: Record<FindingFilter, string> = {
-  ALL: "Все",
-  INSPECTED: "Проверены",
-  WORK: "С работами",
-  CONFLICT: "Конфликты",
-  ADDED: "Добавлены",
-  MISSING: "Не найдены",
-}
 
 function errorMessage(error: unknown) {
   if (error instanceof ApiError && error.status === 409) {
@@ -135,24 +146,6 @@ function businessDateInTimeZone(timeZone: string) {
   return `${get("year")}-${get("month")}-${get("day")}`
 }
 
-function filterFindings(
-  findings: InventoryFindingDto[],
-  filter: FindingFilter
-) {
-  if (filter === "INSPECTED")
-    return findings.filter((item) => item.inspectionStatus !== "NOT_INSPECTED")
-  if (filter === "WORK") return findings.filter((item) => item.lines.length > 0)
-  if (filter === "CONFLICT")
-    return findings.filter((item) => item.conflicts.length > 0)
-  if (filter === "ADDED")
-    return findings.filter(
-      (item) => item.origin === "ADDED_NEW" || item.origin === "ADDED_USED"
-    )
-  if (filter === "MISSING")
-    return findings.filter((item) => item.reconciliationStatus === "MISSING")
-  return findings
-}
-
 function InventoryLoading({
   children = "Загрузка инвентаризации...",
 }: {
@@ -192,7 +185,6 @@ export function InventoryEntryPage() {
       return startInventory({
         warehouse: {
           id: selectedWarehouse.id,
-          code: selectedWarehouse.code,
           name: selectedWarehouse.name,
           timeZone: selectedWarehouse.timeZone,
         },
@@ -295,8 +287,19 @@ function FindingEditor({
   const [comment, setComment] = useState(finding.comment)
   const [lines, setLines] = useState<RepairEstimateLineDto[]>(finding.lines)
   const [media, setMedia] = useState<ReadyMediaReference[]>(finding.media)
+  const [coverMediaId, setCoverMediaId] = useState<string | null>(
+    finding.coverMediaId
+  )
   const [mediaReady, setMediaReady] = useState(false)
   const [completionOpen, setCompletionOpen] = useState(false)
+  const movementCapabilitiesQuery = useQuery({
+    queryKey: warehouseQueueCapabilitiesQueryKey(session.warehouseId),
+    queryFn: () =>
+      getWarehouseQueueCapabilities(accessToken!, session.warehouseId),
+    enabled: !readOnly && Boolean(accessToken && session.warehouseId),
+  })
+  const movementRouteAvailable =
+    movementCapabilitiesQuery.data?.movementToShipmentAvailable === true
   const mutation = useMutation({
     mutationFn: (completion: RepairWorkCompletionResult | null) => {
       if (!actor) throw new Error("Нет доступа")
@@ -307,12 +310,15 @@ function FindingEditor({
         findingId: finding.id,
         comment,
         media,
+        coverMediaId,
         lines,
         repairPlans: completion
           ? completion.taskPlans.map(toInventoryRepairPlanSnapshot)
           : finding.repairPlans,
         repairCompletionMode: completion?.completionMode ?? null,
-        movementRequired: completion?.movementRequired ?? false,
+        movementRequired:
+          movementRouteAvailable && completion?.movementRequired === true,
+        priority: completion?.priority ?? finding.repairPriority,
       })
     },
     onSuccess: () => {
@@ -327,6 +333,11 @@ function FindingEditor({
     },
   })
   const snapshot = finding.currentSnapshot ?? finding.expectedSnapshot
+  const acceptsAfterRentWithoutEstimate =
+    snapshot?.status === "AFTER_RENT" && lines.length === 0
+  const missingRequiredAcceptancePhoto =
+    acceptsAfterRentWithoutEstimate && media.length === 0
+  const missingCoverPhoto = media.length > 0 && coverMediaId === null
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       <PageToolbar>
@@ -336,16 +347,31 @@ function FindingEditor({
         </Button>
         {!readOnly ? (
           <PageToolbarActions>
+            {missingRequiredAcceptancePhoto ? (
+              <p role="status" className="text-sm text-muted-foreground">
+                Чтобы принять бытовку после аренды, добавьте хотя бы одну
+                готовую фотографию.
+              </p>
+            ) : null}
             <Button
               type="button"
-              disabled={mutation.isPending || !mediaReady}
+              disabled={
+                mutation.isPending ||
+                !mediaReady ||
+                missingRequiredAcceptancePhoto ||
+                missingCoverPhoto
+              }
               onClick={() =>
                 lines.length > 0
                   ? setCompletionOpen(true)
                   : mutation.mutate(null)
               }
             >
-              {mutation.isPending ? "Сохраняем..." : "Сохранить осмотр"}
+              {mutation.isPending
+                ? "Сохраняем..."
+                : acceptsAfterRentWithoutEstimate
+                  ? "Принять бытовку"
+                  : "Сохранить осмотр"}
             </Button>
           </PageToolbarActions>
         ) : null}
@@ -369,17 +395,31 @@ function FindingEditor({
         movementRequired={finding.movementRequired}
         repairPlans={finding.repairPlans}
         readOnly={readOnly}
+        coverMediaId={coverMediaId}
         message={
           finding.conflicts.map((conflict) => conflict.message).join("; ") ||
           null
         }
         onCommentChange={setComment}
         onLinesChange={setLines}
-        onMediaChange={setMedia}
+        onMediaChange={(nextMedia) => {
+          setMedia(nextMedia)
+          setCoverMediaId((currentCoverMediaId) =>
+            currentCoverMediaId &&
+            nextMedia.some(
+              (reference) => reference.mediaId === currentCoverMediaId
+            )
+              ? currentCoverMediaId
+              : null
+          )
+        }}
         onMediaReadyChange={setMediaReady}
+        onCoverMediaIdChange={setCoverMediaId}
       />
       <RepairWorkCompletionDialog
         open={completionOpen}
+        accessToken={accessToken}
+        warehouseId={session.warehouseId}
         lines={lines}
         pending={mutation.isPending}
         error={
@@ -392,7 +432,8 @@ function FindingEditor({
         previewKey={`inventory:${session.id}:${finding.id}:${session.version}`}
         initialCompletionMode={finding.repairCompletionMode ?? undefined}
         initialMovementRequired={finding.movementRequired}
-        movementAvailable={false}
+        initialPriority={finding.repairPriority}
+        movementRouteAvailable={movementRouteAvailable}
         routingSelectionAvailable={false}
         planStructureEditingAvailable={false}
         reconcileInitialPlans={
@@ -424,6 +465,8 @@ function useInventoryDetailRoute() {
     queryKey: inventoryDetailQueryKey(inventoryId),
     queryFn: () => getInventory(inventoryId),
     enabled: Boolean(inventoryId && actor),
+    refetchInterval: (query) =>
+      query.state.data?.status === "ACTIVE" ? 5_000 : false,
   })
   const session =
     query.data && query.data.warehouseId === selectedWarehouse?.id
@@ -433,13 +476,18 @@ function useInventoryDetailRoute() {
 }
 
 export function InventorySessionPage() {
+  const isMobile = useIsMobile()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const { currentUser } = useAuth()
   const { inventoryId, actor, selectedWarehouse, query, session } =
     useInventoryDetailRoute()
-  const [filter, setFilter] = useState<FindingFilter>("ALL")
+  const [filters, setFilters] = useState(createEmptyInventoryFindingFilters)
+  const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
   const [addOpen, setAddOpen] = useState(false)
+  const [mobileAppOperation, setMobileAppOperation] = useState<
+    "Осмотр бытовки" | null
+  >(null)
   const findingId = searchParams.get("findingId")
   const goBack = useWorkspaceBack(`/inventory/${inventoryId}`)
   const selectedFinding =
@@ -471,6 +519,16 @@ export function InventorySessionPage() {
     navigate(`/inventory/history/${session.id}`, { replace: true })
     return <InventoryLoading />
   }
+  if (isMobile && findingId)
+    return (
+      <MobileAppRequiredDialog
+        open={true}
+        onOpenChange={(open) => {
+          if (!open) navigate(`/inventory/${inventoryId}`, { replace: true })
+        }}
+        operation="Осмотр бытовки"
+      />
+    )
   if (findingId) {
     if (!selectedFinding)
       return (
@@ -481,7 +539,7 @@ export function InventorySessionPage() {
       )
     return (
       <FindingEditor
-        key={`${selectedFinding.id}:${session.version}`}
+        key={selectedFinding.id}
         session={session}
         finding={selectedFinding}
         readOnly={
@@ -505,12 +563,17 @@ export function InventorySessionPage() {
     session.warehouseId,
     "MANAGE"
   )
-  const visible = filterFindings(session.findings, filter)
-  const openFinding = (finding: InventoryFindingDto) =>
+  const visible = filterInventoryFindings(session.findings, filters)
+  const openFinding = (finding: InventoryFindingDto) => {
+    if (isMobile) {
+      setMobileAppOperation("Осмотр бытовки")
+      return
+    }
     navigate(
       `/inventory/${session.id}?findingId=${encodeURIComponent(finding.id)}`,
       workspaceEntryNavigationOptions
     )
+  }
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       <PageToolbar>
@@ -534,7 +597,22 @@ export function InventorySessionPage() {
             />
           </div>
         </div>
-        <PageToolbarActions>
+        <PageToolbarActions className="w-full flex-nowrap overflow-x-auto pb-1 sm:w-auto sm:pb-0">
+          <Button
+            type="button"
+            size="icon"
+            variant={filtersOpen ? "secondary" : "outline"}
+            aria-label={
+              filtersOpen
+                ? "Скрыть фильтры инвентаризации"
+                : "Показать фильтры инвентаризации"
+            }
+            aria-controls="inventory-finding-filters"
+            aria-expanded={filtersOpen}
+            onClick={() => setFiltersOpen((current) => !current)}
+          >
+            <HugeiconsIcon icon={FilterIcon} aria-hidden="true" />
+          </Button>
           <Button
             type="button"
             variant="outline"
@@ -546,6 +624,7 @@ export function InventorySessionPage() {
           </Button>
           <Button
             type="button"
+            className="ml-auto"
             disabled={!canManage}
             onClick={() =>
               navigate(
@@ -558,23 +637,13 @@ export function InventorySessionPage() {
               icon={CheckmarkCircle02Icon}
               data-icon="inline-start"
             />
-            Закончить инвентаризацию
+            Закончить
           </Button>
         </PageToolbarActions>
       </PageToolbar>
-      <ToggleGroup
-        type="single"
-        value={filter}
-        onValueChange={(value) => value && setFilter(value as FindingFilter)}
-        variant="outline"
-        className="flex flex-wrap justify-start"
-      >
-        {(Object.keys(filterLabels) as FindingFilter[]).map((value) => (
-          <ToggleGroupItem key={value} value={value}>
-            {filterLabels[value]}
-          </ToggleGroupItem>
-        ))}
-      </ToggleGroup>
+      <div id="inventory-finding-filters" hidden={!filtersOpen}>
+        <InventoryFindingFilters filters={filters} onChange={setFilters} />
+      </div>
       <div className="min-h-0 flex-1 overflow-y-auto md:flex">
         {visible.length > 0 ? (
           <InventoryFindingsList
@@ -595,6 +664,13 @@ export function InventorySessionPage() {
         onOpenChange={setAddOpen}
         onResolved={(_, finding) => openFinding(finding)}
       />
+      <MobileAppRequiredDialog
+        open={mobileAppOperation !== null}
+        onOpenChange={(open) => {
+          if (!open) setMobileAppOperation(null)
+        }}
+        operation={mobileAppOperation ?? "Осмотр бытовки"}
+      />
     </div>
   )
 }
@@ -607,6 +683,10 @@ export function InventoryFinishPage() {
   const [acknowledgedRiskSignature, setAcknowledgedRiskSignature] = useState<
     string | null
   >(null)
+  const [keepInspectionFinding, setKeepInspectionFinding] =
+    useState<InventoryFindingDto | null>(null)
+  const [keepInspectionReason, setKeepInspectionReason] = useState("")
+  const [keepInspectionSubmitted, setKeepInspectionSubmitted] = useState(false)
   const canManage = Boolean(
     session &&
     hasInventoryWarehouseAccess(currentUser, session.warehouseId, "MANAGE")
@@ -631,6 +711,41 @@ export function InventoryFinishPage() {
     refetchOnWindowFocus: "always",
   })
   const reviewedSession = previewQuery.data
+  const resolutionMutation = useMutation({
+    mutationFn: ({
+      finding,
+      strategy,
+      reason,
+    }: {
+      finding: InventoryFindingDto
+      strategy: "ACCEPT_REGISTRY" | "KEEP_INSPECTION"
+      reason: string | null
+    }) => {
+      if (!reviewedSession || !actor)
+        throw new Error("Инвентаризация недоступна")
+      return resolveInventoryFindingConflict({
+        inventoryId: reviewedSession.id,
+        expectedVersion: reviewedSession.version,
+        expectedFindingVersion: finding.version,
+        actor,
+        findingId: finding.id,
+        strategy,
+        reason,
+      })
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData(inventoryDetailQueryKey(updated.id), updated)
+      setAcknowledgedRiskSignature(null)
+      setKeepInspectionFinding(null)
+      setKeepInspectionReason("")
+      setKeepInspectionSubmitted(false)
+      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
+      toast.success("Конфликт урегулирован")
+    },
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
+    },
+  })
   const mutation = useMutation({
     mutationFn: async (publish: boolean) => {
       if (!reviewedSession || !actor)
@@ -691,9 +806,13 @@ export function InventoryFinishPage() {
   const missing = reviewedSession.findings.filter(
     (item) => item.reconciliationStatus === "MISSING"
   ).length
+  const notInspected = reviewedSession.findings.filter(
+    (item) => item.inspectionStatus === "NOT_INSPECTED"
+  ).length
   const conflictingFindings = reviewedSession.findings.filter(
     (item) => item.conflicts.length > 0
   )
+  const unresolvedConflicts = conflictingFindings.length > 0
   const withWork = reviewedSession.findings.filter(
     (item) => item.lines.length > 0
   )
@@ -724,6 +843,7 @@ export function InventoryFinishPage() {
               Всего: {reviewedSession.findings.length}
             </Badge>
             <Badge variant="secondary">Не найдено: {missing}</Badge>
+            <Badge variant="secondary">Непроверено: {notInspected}</Badge>
             <Badge variant="secondary">
               Конфликты: {conflictingFindings.length}
             </Badge>
@@ -744,9 +864,15 @@ export function InventoryFinishPage() {
                 htmlFor="inventory-finish-confirm"
                 className="font-normal"
               >
-                Я проверил ненайденные бытовки и конфликты
+                Я проверил непроверенные и ненайденные бытовки
               </FieldLabel>
             </Field>
+          ) : null}
+          {unresolvedConflicts ? (
+            <p role="alert" className="text-sm text-destructive">
+              Урегулируйте все конфликты реестра перед завершением
+              инвентаризации.
+            </p>
           ) : null}
           {mutation.error ? (
             <p role="alert" className="text-sm text-destructive">
@@ -761,6 +887,7 @@ export function InventoryFinishPage() {
                   disabled={
                     mutation.isPending ||
                     previewQuery.isFetching ||
+                    unresolvedConflicts ||
                     (confirmationRequired && !confirmed)
                   }
                   onClick={() => mutation.mutate(true)}
@@ -774,6 +901,7 @@ export function InventoryFinishPage() {
                   disabled={
                     mutation.isPending ||
                     previewQuery.isFetching ||
+                    unresolvedConflicts ||
                     (confirmationRequired && !confirmed)
                   }
                   onClick={() => mutation.mutate(false)}
@@ -787,6 +915,7 @@ export function InventoryFinishPage() {
                 disabled={
                   mutation.isPending ||
                   previewQuery.isFetching ||
+                  unresolvedConflicts ||
                   (confirmationRequired && !confirmed)
                 }
                 onClick={() => mutation.mutate(false)}
@@ -805,9 +934,16 @@ export function InventoryFinishPage() {
           <h2 id="preview-title" className="text-lg font-semibold">
             Предварительные итоги
           </h2>
-          <InventoryStatistics statistics={reviewedSession.statistics} />
+          <InventoryStatistics
+            statistics={reviewedSession.statistics}
+            findings={reviewedSession.findings}
+          />
         </section>
       ) : null}
+      <InventoryMembershipMovements
+        movements={reviewedSession.membershipMovements}
+        warehouse={reviewedSession.warehouse}
+      />
       {conflictingFindings.length > 0 ? (
         <section
           className="flex flex-col gap-3"
@@ -819,7 +955,14 @@ export function InventoryFinishPage() {
           {conflictingFindings.map((finding) => (
             <Card key={finding.id} size="sm">
               <CardHeader>
-                <CardTitle>{finding.cabinNumber}</CardTitle>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <CardTitle>{finding.cabinNumber}</CardTitle>
+                  {finding.currentSnapshot ? (
+                    <Badge variant="outline">
+                      {RENTAL_ITEM_STATUS_LABEL[finding.currentSnapshot.status]}
+                    </Badge>
+                  ) : null}
+                </div>
               </CardHeader>
               <CardContent className="flex flex-col gap-3 text-sm">
                 {finding.currentSnapshot?.status === "RENTED" ? (
@@ -828,25 +971,93 @@ export function InventoryFinishPage() {
                     {finding.currentSnapshot.tenant?.trim() || "не указан"}
                   </p>
                 ) : null}
-                <ul className="flex list-disc flex-col gap-2 pl-5">
+                <ul className="flex flex-col gap-2">
                   {finding.conflicts.map((conflict) => (
-                    <li key={conflict.code}>
-                      <p>{conflict.message}</p>
-                      <p className="text-muted-foreground">
-                        Было: {conflictValue(conflict.expected)}; сейчас:{" "}
-                        {conflictValue(conflict.actual)}
-                      </p>
+                    <li key={conflict.code} className="rounded-md border p-3">
+                      <p className="font-medium">{conflict.message}</p>
+                      <div
+                        className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2 text-muted-foreground"
+                        aria-label="Было → Стало"
+                      >
+                        <p>
+                          <span className="block text-xs">Было</span>
+                          <span className="text-foreground">
+                            {conflictValue(conflict.expected)}
+                          </span>
+                        </p>
+                        <span aria-hidden="true">→</span>
+                        <p>
+                          <span className="block text-xs">Стало</span>
+                          <span className="text-foreground">
+                            {conflictValue(conflict.actual)}
+                          </span>
+                        </p>
+                      </div>
                     </li>
                   ))}
                 </ul>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <Button
+                    type="button"
+                    className="w-full"
+                    disabled={
+                      resolutionMutation.isPending ||
+                      finding.currentSnapshot === null
+                    }
+                    onClick={() => {
+                      resolutionMutation.reset()
+                      resolutionMutation.mutate({
+                        finding,
+                        strategy: "ACCEPT_REGISTRY",
+                        reason: null,
+                      })
+                    }}
+                  >
+                    Принять реестр
+                  </Button>
+                  <Button
+                    type="button"
+                    className="w-full"
+                    variant="secondary"
+                    disabled={resolutionMutation.isPending}
+                    onClick={() => {
+                      resolutionMutation.reset()
+                      setKeepInspectionFinding(finding)
+                      setKeepInspectionReason("")
+                      setKeepInspectionSubmitted(false)
+                    }}
+                  >
+                    Оставить данные осмотра
+                  </Button>
+                  <Button
+                    type="button"
+                    className="w-full"
+                    variant="outline"
+                    disabled={resolutionMutation.isPending}
+                    onClick={() =>
+                      navigate(
+                        `/inventory/${reviewedSession.id}?findingId=${finding.id}`,
+                        workspaceEntryNavigationOptions
+                      )
+                    }
+                  >
+                    Дополнить осмотр
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           ))}
+          {resolutionMutation.error && !keepInspectionFinding ? (
+            <p role="alert" className="text-sm text-destructive">
+              {errorMessage(resolutionMutation.error)}
+            </p>
+          ) : null}
         </section>
       ) : null}
       <InventoryFindingsList
         findings={reviewedSession.findings}
         canInspect={false}
+        statusMode="COMPLETION"
         onOpen={(finding) =>
           navigate(
             `/inventory/${reviewedSession.id}?findingId=${finding.id}`,
@@ -864,6 +1075,76 @@ export function InventoryFinishPage() {
           </CardContent>
         </Card>
       ))}
+      <Dialog
+        open={keepInspectionFinding !== null}
+        onOpenChange={(open) => {
+          if (open) return
+          setKeepInspectionFinding(null)
+          setKeepInspectionReason("")
+          setKeepInspectionSubmitted(false)
+          resolutionMutation.reset()
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Оставить данные осмотра</DialogTitle>
+            <DialogDescription>
+              Укажите причину, по которой данные осмотра должны иметь приоритет
+              над актуальным реестром.
+            </DialogDescription>
+          </DialogHeader>
+          <Field
+            data-invalid={
+              keepInspectionSubmitted && !keepInspectionReason.trim()
+            }
+          >
+            <FieldLabel htmlFor="inventory-conflict-reason">Причина</FieldLabel>
+            <Textarea
+              id="inventory-conflict-reason"
+              value={keepInspectionReason}
+              maxLength={2000}
+              aria-invalid={
+                keepInspectionSubmitted && !keepInspectionReason.trim()
+              }
+              onChange={(event) => setKeepInspectionReason(event.target.value)}
+            />
+            {keepInspectionSubmitted && !keepInspectionReason.trim() ? (
+              <FieldError>Введите причину решения</FieldError>
+            ) : null}
+          </Field>
+          {resolutionMutation.error ? (
+            <p role="alert" className="text-sm text-destructive">
+              {errorMessage(resolutionMutation.error)}
+            </p>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={resolutionMutation.isPending}
+              onClick={() => setKeepInspectionFinding(null)}
+            >
+              Отмена
+            </Button>
+            <Button
+              type="button"
+              disabled={resolutionMutation.isPending}
+              onClick={() => {
+                setKeepInspectionSubmitted(true)
+                const reason = keepInspectionReason.trim()
+                if (!keepInspectionFinding || !reason) return
+                resolutionMutation.mutate({
+                  finding: keepInspectionFinding,
+                  strategy: "KEEP_INSPECTION",
+                  reason,
+                })
+              }}
+            >
+              Сохранить решение
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -1008,14 +1289,22 @@ export function InventoryHistoryDetailPage() {
           <h2 id="frozen-title" className="text-lg font-semibold">
             Зафиксированные итоги
           </h2>
-          <InventoryStatistics statistics={session.statistics} />
+          <InventoryStatistics
+            statistics={session.statistics}
+            findings={session.findings}
+          />
         </section>
       ) : null}
+      <InventoryMembershipMovements
+        movements={session.membershipMovements}
+        warehouse={session.warehouse}
+      />
       <div className="min-h-[20rem] md:flex">
         <InventoryFindingsList
           findings={session.findings}
           canInspect={false}
           showPublication
+          statusMode="COMPLETION"
           onOpen={(finding) =>
             navigate(
               `/inventory/history/${session.id}?findingId=${finding.id}`,

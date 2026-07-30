@@ -6,12 +6,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+import dev.buhanzaz.rwms.maintenance.api.ReplaceRepairCapacitySettingsRequest;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceMediaReference;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceEventType;
 import dev.buhanzaz.rwms.maintenance.domain.MediaFactProjection;
 import dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState;
+import dev.buhanzaz.rwms.maintenance.domain.RepairComplexity;
 import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
+import dev.buhanzaz.rwms.maintenance.domain.RepairStageState;
 import dev.buhanzaz.rwms.maintenance.domain.RentalItemFactProjection;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventFactFactory;
 import dev.buhanzaz.rwms.maintenance.integration.MaintenanceDependencyGateway;
@@ -20,13 +23,13 @@ import dev.buhanzaz.rwms.maintenance.repository.MaintenanceMediaReferenceReposit
 import dev.buhanzaz.rwms.maintenance.repository.MediaFactProjectionRepository;
 import dev.buhanzaz.rwms.maintenance.repository.RentalItemFactProjectionRepository;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
-import dev.buhanzaz.rwms.maintenance.service.MaintenanceCatalogImportValidationException;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceConflictException;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceDependencyException;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceIdempotencyStore;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceReconciliationReviewService;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceReconciliationStore;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceValidationException;
+import dev.buhanzaz.rwms.maintenance.service.RepairCapacitySettingsService;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -43,6 +46,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -84,6 +89,7 @@ class MaintenanceCorePostgresIntegrationTest {
   @Autowired MediaFactProjectionRepository mediaFacts;
   @Autowired MaintenanceMediaReferenceRepository mediaReferences;
   @Autowired MaintenanceReconciliationStore reconciliations;
+  @Autowired RepairCapacitySettingsService repairCapacitySettings;
   @Autowired JdbcTemplate jdbc;
   @Autowired PlatformTransactionManager transactionManager;
 
@@ -100,91 +106,833 @@ class MaintenanceCorePostgresIntegrationTest {
           media_fact_projection,
           rental_item_fact_projection,
           operation_lease_fact_projection,
+          repair_capacity_settings,
           maintenance_idempotency_record,
           integration_reconciliation,
           event_stream_head
         cascade
         """);
     reset(dependencies);
+    when(dependencies.repairComplexityThresholds(any(UUID.class)))
+        .thenAnswer(invocation -> new MaintenanceDependencyGateway.RepairComplexityThresholds(
+            invocation.getArgument(0), 0L, 60, 180, 360));
     when(dependencies.preflightMaintenanceRouting(any(UUID.class), anyList()))
-        .thenAnswer(invocation -> new MaintenanceDependencyGateway.RoutingPreflight(
-            invocation.getArgument(0), true, List.of(), List.of()));
+        .thenAnswer(invocation -> {
+          List<MaintenanceDependencyGateway.RoutingQueueRequirement> requirements =
+              invocation.getArgument(1);
+          return new MaintenanceDependencyGateway.RoutingPreflight(
+              invocation.getArgument(0),
+              true,
+              List.of(),
+              List.of(),
+              List.of(),
+              requirements.stream()
+                  .map(value -> new MaintenanceDependencyGateway.RoutingQueueSnapshot(
+                      value.queueDefinitionId(),
+                      value.queueDefinitionId(),
+                      value.queueDefinitionId().toString(),
+                      value.type()))
+                  .toList());
+        });
+    when(dependencies.preflightCatalogRouting(anyList()))
+        .thenAnswer(invocation -> {
+          List<MaintenanceDependencyGateway.CatalogRoutingQueueRequirement> requirements =
+              invocation.getArgument(0);
+          return new MaintenanceDependencyGateway.CatalogRoutingPreflight(
+              true,
+              List.of(),
+              List.of(),
+              requirements.stream()
+                  .map(value -> new MaintenanceDependencyGateway.QueueDefinitionSnapshot(
+                      value.queueDefinitionId(),
+                      value.queueDefinitionId().toString(),
+                      value.type()))
+                  .toList());
+        });
     clearInvocations(eventFacts);
   }
 
   @Test
-  void reviewedBootstrapPreflightFailureCommitsNoLocalCatalogState() {
-    when(dependencies.preflightMaintenanceRouting(any(UUID.class), anyList()))
-        .thenAnswer(invocation -> {
-          UUID warehouseId = invocation.getArgument(0);
-          List<MaintenanceDependencyGateway.RoutingQueueRequirement> requirements =
-              invocation.getArgument(1);
-          return new MaintenanceDependencyGateway.RoutingPreflight(
-              warehouseId, false, List.of(requirements.getFirst().queueId()), List.of());
-        });
-
-    assertThatThrownBy(() -> service.bootstrapCatalog(
+  void allWarehousesUseOneCatalogAndCanonicalGlobalQueueRouting() {
+    UUID spbWarehouseId = UUID.randomUUID();
+    UUID anotherWarehouseId = UUID.randomUUID();
+    var spbCatalog =
+        service.createCatalog(
             UUID.randomUUID(),
             UUID.randomUUID(),
-            new BootstrapCatalogRequest(REVIEWED_WAREHOUSE_ID)))
-        .isInstanceOfSatisfying(
-            MaintenanceCatalogImportValidationException.class,
-            exception -> assertThat(exception.violations())
-                .extracting(dev.buhanzaz.rwms.platform.contracts.FieldViolation::code)
-                .containsExactly("MAINTENANCE_ROUTING_QUEUE_MISSING"));
+            new CreateCatalogRequest(spbWarehouseId));
 
-    @SuppressWarnings("unchecked")
-    ArgumentCaptor<List<MaintenanceDependencyGateway.RoutingQueueRequirement>> requirements =
-        ArgumentCaptor.forClass(List.class);
-    verify(dependencies).preflightMaintenanceRouting(
-        eq(REVIEWED_WAREHOUSE_ID),
-        requirements.capture());
-    assertThat(requirements.getValue())
-        .hasSize(6)
-        .doesNotHaveDuplicates();
-    assertThat(jdbc.queryForObject("select count(*) from catalog_version", Integer.class)).isZero();
-    assertThat(jdbc.queryForObject("select count(*) from catalog_node", Integer.class)).isZero();
-    assertThat(jdbc.queryForObject("select count(*) from catalog_link", Integer.class)).isZero();
-    assertThat(jdbc.queryForObject(
-        "select count(*) from maintenance_idempotency_record", Integer.class)).isZero();
-    assertThat(jdbc.queryForObject(
-        "select count(*) from integration_reconciliation", Integer.class)).isZero();
+    var repeatedCreate =
+        service.createCatalog(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            new CreateCatalogRequest(anotherWarehouseId));
+
+    assertThat(repeatedCreate.replayed()).isTrue();
+    assertThat(repeatedCreate.response().id()).isEqualTo(spbCatalog.response().id());
+    assertThat(repeatedCreate.response().warehouseId()).isEqualTo(spbWarehouseId);
+    assertThat(service.catalogVersions(spbWarehouseId))
+        .extracting(CatalogVersionResponse::id)
+        .containsExactly(spbCatalog.response().id());
+    assertThat(service.catalogVersions(anotherWarehouseId))
+        .extracting(CatalogVersionResponse::id)
+        .containsExactly(spbCatalog.response().id());
+
+    UUID localQueueId = UUID.randomUUID();
+    RoutingSnapshot localRouting =
+        new RoutingSnapshot(localQueueId, "EXTERNAL_WORKS", "REPAIR");
+    CatalogNodeInput routedWork =
+        new CatalogNodeInput(
+            UUID.randomUUID(),
+            CatalogNodeType.WORK,
+            "External finishing",
+            true,
+            null,
+            false,
+            null,
+            "piece",
+            "100.00",
+            15,
+            true,
+            false,
+            true,
+            null,
+            null,
+            new CatalogRoutingInput(localRouting.queueId(), localRouting.queueType()),
+            null,
+            null,
+            false,
+            null);
+
+    CatalogVersionResponse changed =
+        service.changeCatalog(
+            spbCatalog.response().id(),
+            spbWarehouseId,
+            new ChangeCatalogRequest(
+                spbCatalog.response().version(), List.of(routedWork), List.of()));
+
+    assertThat(changed.id()).isEqualTo(spbCatalog.response().id());
+    assertThat(changed.warehouseId()).isEqualTo(spbWarehouseId);
+    verify(dependencies)
+        .preflightCatalogRouting(
+            argThat(
+                requirements ->
+                    requirements.size() == 1
+                        && requirements.getFirst().queueDefinitionId().equals(localQueueId)
+                        && requirements.getFirst().type().equals("REPAIR")));
   }
 
   @Test
-  void reviewedBootstrapRejectsMismatchedQueueBeforeCommit() {
-    when(dependencies.preflightMaintenanceRouting(any(UUID.class), anyList()))
-        .thenAnswer(invocation -> {
-          UUID warehouseId = invocation.getArgument(0);
-          List<MaintenanceDependencyGateway.RoutingQueueRequirement> requirements =
-              invocation.getArgument(1);
-          return new MaintenanceDependencyGateway.RoutingPreflight(
-              warehouseId,
-              false,
-              List.of(),
-              List.of(new MaintenanceDependencyGateway.RoutingMismatch(
-                  requirements.getFirst().queueId(), List.of("CODE", "TYPE"))));
+  void globalCatalogWorkResolvesItsDefinitionAtRepairWarehouse() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    TestCatalogWork work = ensureTestCatalogWork(warehouseId);
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 7));
+
+    UUID lineId = UUID.randomUUID();
+    CatalogNodeSnapshot catalogSnapshot =
+        new CatalogNodeSnapshot(
+            work.catalogVersionId(),
+            work.nodeId(),
+            CatalogNodeType.WORK,
+            "Проверочная работа",
+            "шт",
+            "100.00",
+            15,
+            work.routing(),
+            null,
+            false,
+            null);
+    RoutingSnapshot targetWarehouseRouting = work.routing();
+    CreateDirectRepairRequest request =
+        new CreateDirectRepairRequest(
+            warehouseId,
+            rentalItemId,
+            LocalDate.of(2026, 7, 26),
+            null,
+            List.of(
+                new EstimateLineInput(
+                    lineId,
+                    catalogSnapshot,
+                    EstimateLineType.WORK,
+                    "Проверочная работа",
+                    "шт",
+                    "1",
+                    "100.00",
+                    15,
+                    null,
+                    List.of())),
+            List.of(
+                new PlanStageInput(
+                    UUID.randomUUID(),
+                    RepairStageKind.REPAIR_WORK,
+                    0,
+                    targetWarehouseRouting,
+                    null)),
+            List.of());
+
+    var created =
+        service.createDirectRepair(UUID.randomUUID(), UUID.randomUUID(), request);
+
+    assertThat(created.response().warehouseId()).isEqualTo(warehouseId);
+    assertThat(created.response().plan().stages().getFirst().routing())
+        .isEqualTo(targetWarehouseRouting);
+  }
+
+  @Test
+  void catalogLineCanonicalizesUnitFromActiveCatalogAndRejectsSubmittedTypeMismatch() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    TestCatalogWork work = ensureTestCatalogWork(warehouseId);
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 7));
+    CatalogNodeSnapshot forgedSnapshot = new CatalogNodeSnapshot(
+        work.catalogVersionId(),
+        work.nodeId(),
+        CatalogNodeType.MATERIAL,
+        "Поддельная позиция",
+        "подделка",
+        "0.00",
+        0,
+        null,
+        null,
+        false,
+        null);
+    UUID acceptedLineId = UUID.randomUUID();
+    EstimateLineInput accepted = new EstimateLineInput(
+        acceptedLineId,
+        forgedSnapshot,
+        EstimateLineType.WORK,
+        "Проверочная работа",
+        "переданная единица",
+        "1",
+        "100.00",
+        null,
+        null,
+        List.of());
+    PlanStageInput acceptedStage = new PlanStageInput(
+        UUID.randomUUID(),
+        RepairStageKind.REPAIR_WORK,
+        0,
+        work.routing(),
+        List.of(acceptedLineId),
+        acceptedLineId,
+        "",
+        null);
+
+    var created = service.createDirectRepair(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        new CreateDirectRepairRequest(
+            warehouseId,
+            rentalItemId,
+            LocalDate.of(2026, 7, 26),
+            null,
+            List.of(accepted),
+            List.of(acceptedStage),
+            List.of()));
+    assertThat(created.response().plan().stages().getFirst().workLines())
+        .singleElement()
+        .satisfies(line -> {
+          assertThat(line.lineType()).isEqualTo(EstimateLineType.WORK);
+          assertThat(line.unit()).isEqualTo("шт");
         });
 
-    assertThatThrownBy(() -> service.bootstrapCatalog(
-            UUID.randomUUID(),
-            UUID.randomUUID(),
-            new BootstrapCatalogRequest(REVIEWED_WAREHOUSE_ID)))
-        .isInstanceOfSatisfying(
-            MaintenanceCatalogImportValidationException.class,
-            exception -> assertThat(exception.violations())
-                .extracting(dev.buhanzaz.rwms.platform.contracts.FieldViolation::code)
-                .containsExactly("MAINTENANCE_ROUTING_QUEUE_MISMATCH"));
+    UUID mismatchedLineId = UUID.randomUUID();
+    EstimateLineInput mismatched = new EstimateLineInput(
+        mismatchedLineId,
+        forgedSnapshot,
+        EstimateLineType.MATERIAL,
+        "Проверочная работа",
+        "шт",
+        "1",
+        "100.00",
+        null,
+        null,
+        List.of());
+    PlanStageInput mismatchedStage = new PlanStageInput(
+        UUID.randomUUID(),
+        RepairStageKind.REPAIR_WORK,
+        0,
+        work.routing(),
+        List.of(mismatchedLineId),
+        null,
+        "",
+        null);
+    assertThatThrownBy(
+            () ->
+                service.createDirectRepair(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    new CreateDirectRepairRequest(
+                        warehouseId,
+                        rentalItemId,
+                        LocalDate.of(2026, 7, 26),
+                        null,
+                        List.of(mismatched),
+                        List.of(mismatchedStage),
+                        List.of())))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .hasMessageContaining("type must match");
+  }
 
-    assertThat(jdbc.queryForObject("select count(*) from catalog_version", Integer.class)).isZero();
-    assertThat(jdbc.queryForObject(
-        "select count(*) from integration_reconciliation", Integer.class)).isZero();
+  @Test
+  void directRepairAcceptsAnIndependentlyRoutedMaterialOnlyStage() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    TestCatalogWork route = ensureTestCatalogWork(warehouseId);
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 7));
+    UUID materialLineId = UUID.randomUUID();
+    EstimateLineInput material =
+        new EstimateLineInput(
+            materialLineId,
+            null,
+            EstimateLineType.MATERIAL,
+            "Герметик",
+            "туба",
+            "2",
+            "350.00",
+            0,
+            null,
+            List.of());
+    PlanStageInput materialStage =
+        new PlanStageInput(
+            UUID.randomUUID(),
+            RepairStageKind.REPAIR_WORK,
+            0,
+            route.routing(),
+            List.of(materialLineId),
+            null,
+            "",
+            null);
+
+    var created =
+        service.createDirectRepair(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            new CreateDirectRepairRequest(
+                warehouseId,
+                rentalItemId,
+                LocalDate.of(2026, 7, 27),
+                null,
+                List.of(material),
+                List.of(materialStage),
+                List.of()));
+
+    assertThat(created.response().plan().stages().getFirst().workLines()).isEmpty();
+    assertThat(created.response().plan().stages().getFirst().materialLines())
+        .singleElement()
+        .satisfies(
+            line -> {
+              assertThat(line.id()).isEqualTo(materialLineId);
+              assertThat(line.lineType()).isEqualTo(EstimateLineType.MATERIAL);
+            });
+    assertThat(created.response().plan().stages().getFirst().primaryLineId()).isNull();
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "60, LIGHT",
+      "61, MEDIUM",
+      "180, MEDIUM",
+      "181, COMPLEX",
+      "360, COMPLEX",
+      "361, CAPITAL"
+  })
+  void repairComplexityUsesContinuousInclusiveWarehouseBoundaries(
+      int plannedMinutes, RepairComplexity expected) {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 7));
+
+    RepairResponse created =
+        service
+            .createDirectRepair(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                customWorkRepairRequest(
+                    warehouseId, rentalItemId, plannedMinutes))
+            .response();
+
+    assertThat(created.complexity().type()).isEqualTo(expected);
+    assertThat(created.complexity().plannedMinutes())
+        .isEqualTo(Integer.toString(plannedMinutes));
+    assertThat(created.complexity().forcedCapital()).isFalse();
+  }
+
+  @Test
+  void repairComplexityIsRecalculatedFromCurrentWarehouseThresholdsOnRead() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 7));
+    RepairResponse created =
+        service
+            .createDirectRepair(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                customWorkRepairRequest(warehouseId, rentalItemId, 120))
+            .response();
+    assertThat(created.complexity().type()).isEqualTo(RepairComplexity.MEDIUM);
+
+    when(dependencies.repairComplexityThresholds(warehouseId))
+        .thenReturn(
+            new MaintenanceDependencyGateway.RepairComplexityThresholds(
+                warehouseId, 1L, 30, 60, 90));
+
+    assertThat(service.repair(created.id(), warehouseId).complexity().type())
+        .isEqualTo(RepairComplexity.CAPITAL);
+  }
+
+  @Test
+  void queuedRepairSynchronizesForcedCapitalAdditionAndRemovalIdempotently() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    TestCatalogWork normalWork = ensureTestCatalogWork(warehouseId);
+    TestCatalogWork forcedWork =
+        insertTestCatalogWork(normalWork, "Замена несущей конструкции", true);
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 7));
+
+    RepairResponse created =
+        service
+            .createDirectRepair(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                catalogWorkRepairRequest(
+                    warehouseId, rentalItemId, normalWork))
+            .response();
+    RepairFixture fixture =
+        new RepairFixture(
+            created.id(),
+            created.plan().stages().getFirst().taskSync().externalTaskId(),
+            warehouseId,
+            rentalItemId);
+    service.queueRepair(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        fixture.repairId(),
+        new QueueRepairRequest(created.version(), 3));
+    stubQueueDependencies(fixture);
+    assertThat(service.reconcileOneTask()).isTrue();
+    var queued = repairs.findById(fixture.repairId()).orElseThrow();
+    assertThat(queued.getExecutionState()).isEqualTo(RepairExecutionState.QUEUED);
+
+    CreateDirectRepairRequest forcedPlan =
+        catalogWorkRepairRequest(warehouseId, rentalItemId, forcedWork);
+    RepairResponse forced =
+        service.updateRepairPlan(
+            fixture.repairId(),
+            new UpdateRepairPlanRequest(
+                queued.getVersion(),
+                forcedPlan.lines(),
+                forcedPlan.plan(),
+                List.of(),
+                null));
+    assertThat(forced.complexity().type()).isEqualTo(RepairComplexity.CAPITAL);
+    assertThat(forced.complexity().forcedCapital()).isTrue();
+
+    var beforeCapitalSync = repairs.findById(fixture.repairId()).orElseThrow();
+    deferOtherReconciliations(
+        fixture.repairId(), "SYNC_REPAIR_COMPLEXITY_STATUS");
+    when(dependencies.getRentalItemSnapshot(rentalItemId))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                rentalItemId,
+                beforeCapitalSync.getRentalItemVersionSnapshot(),
+                warehouseId,
+                "БТ-42",
+                "REPAIR"));
+    when(
+            dependencies.fencedStatus(
+                any(),
+                eq(rentalItemId),
+                eq(warehouseId),
+                eq(beforeCapitalSync.getRentalItemVersionSnapshot()),
+                eq(beforeCapitalSync.getLeaseId()),
+                eq(beforeCapitalSync.getFencingToken()),
+                eq("MAINTENANCE_REPAIR"),
+                eq(fixture.repairId().toString()),
+                eq("QUEUE_TO_CAPITAL_REPAIR"),
+                eq(false)))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                rentalItemId,
+                beforeCapitalSync.getRentalItemVersionSnapshot() + 1,
+                warehouseId,
+                "БТ-42",
+                "CAPITAL_REPAIR"));
+
+    assertThat(service.reconcileOneTask()).isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select state from integration_reconciliation
+                where repair_id=? and operation_type='SYNC_REPAIR_COMPLEXITY_STATUS'
+                  and state='CONFIRMED'
+                order by created_at desc limit 1
+                """,
+                String.class,
+                fixture.repairId()))
+        .isEqualTo("CONFIRMED");
+
+    jdbc.update(
+        """
+        update integration_reconciliation
+           set state='RETRY_PENDING', next_attempt_at=clock_timestamp()
+         where repair_id=? and operation_type='SYNC_REPAIR_COMPLEXITY_STATUS'
+        """,
+        fixture.repairId());
+    clearInvocations(dependencies);
+    long capitalAssetVersion =
+        repairs
+            .findById(fixture.repairId())
+            .orElseThrow()
+            .getRentalItemVersionSnapshot();
+    when(dependencies.getRentalItemSnapshot(rentalItemId))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                rentalItemId,
+                capitalAssetVersion,
+                warehouseId,
+                "БТ-42",
+                "CAPITAL_REPAIR"));
+    assertThat(service.reconcileOneTask()).isTrue();
+    verify(dependencies, never())
+        .fencedStatus(
+            any(),
+            any(),
+            any(),
+            anyLong(),
+            any(),
+            anyLong(),
+            anyString(),
+            anyString(),
+            anyString(),
+            anyBoolean());
+
+    CreateDirectRepairRequest normalPlan =
+        catalogWorkRepairRequest(warehouseId, rentalItemId, normalWork);
+    long currentVersion = service.repair(fixture.repairId(), warehouseId).version();
+    RepairResponse normal =
+        service.updateRepairPlan(
+            fixture.repairId(),
+            new UpdateRepairPlanRequest(
+                currentVersion,
+                normalPlan.lines(),
+                normalPlan.plan(),
+                List.of(),
+                null));
+    assertThat(normal.complexity().type()).isEqualTo(RepairComplexity.LIGHT);
+    assertThat(normal.complexity().forcedCapital()).isFalse();
+
+    deferOtherReconciliations(
+        fixture.repairId(), "SYNC_REPAIR_COMPLEXITY_STATUS");
+    var beforeNormalSync = repairs.findById(fixture.repairId()).orElseThrow();
+    clearInvocations(dependencies);
+    when(dependencies.getRentalItemSnapshot(rentalItemId))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                rentalItemId,
+                beforeNormalSync.getRentalItemVersionSnapshot(),
+                warehouseId,
+                "БТ-42",
+                "CAPITAL_REPAIR"));
+    when(
+            dependencies.fencedStatus(
+                any(),
+                eq(rentalItemId),
+                eq(warehouseId),
+                eq(beforeNormalSync.getRentalItemVersionSnapshot()),
+                eq(beforeNormalSync.getLeaseId()),
+                eq(beforeNormalSync.getFencingToken()),
+                eq("MAINTENANCE_REPAIR"),
+                eq(fixture.repairId().toString()),
+                eq("QUEUE_TO_REPAIR"),
+                eq(false)))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                rentalItemId,
+                beforeNormalSync.getRentalItemVersionSnapshot() + 1,
+                warehouseId,
+                "БТ-42",
+                "REPAIR"));
+
+    assertThat(service.reconcileOneTask()).isTrue();
+    verify(dependencies)
+        .fencedStatus(
+            any(),
+            eq(rentalItemId),
+            eq(warehouseId),
+            eq(beforeNormalSync.getRentalItemVersionSnapshot()),
+            eq(beforeNormalSync.getLeaseId()),
+            eq(beforeNormalSync.getFencingToken()),
+            eq("MAINTENANCE_REPAIR"),
+            eq(fixture.repairId().toString()),
+            eq("QUEUE_TO_REPAIR"),
+            eq(false));
+  }
+
+  @Test
+  void transferArrivalFailsClosedWhenTargetWarehouseLacksRequiredGlobalQueue() {
+    RegisteredRepairFixture registered = createRegisteredPrimaryRepair();
+    RepairFixture fixture = registered.repair();
+    UUID transferId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    UUID targetWarehouseId = UUID.randomUUID();
+    UUID requiredQueueDefinitionId =
+        service
+            .repair(fixture.repairId(), fixture.warehouseId())
+            .plan()
+            .stages()
+            .getFirst()
+            .routing()
+            .queueId();
+    TransferRepairRequest transfer =
+        new TransferRepairRequest(
+            fixture.rentalItemId(),
+            fixture.warehouseId(),
+            targetWarehouseId);
+
+    var prepared =
+        service.prepareTransferDeparture(
+            transferId, lineId, UUID.randomUUID(), transfer);
+    assertThat(prepared.response().activeRepairId())
+        .isEqualTo(fixture.repairId());
+    assertThat(
+            repairs
+                .findById(fixture.repairId())
+                .orElseThrow()
+                .getTransferState())
+        .isEqualTo("DEPARTURE_PREPARED");
+
+    when(dependencies.queueCapabilities(targetWarehouseId))
+        .thenReturn(
+            new MaintenanceDependencyGateway.QueueCapabilities(
+                targetWarehouseId, false, List.of()));
+    when(
+            dependencies.preflightMaintenanceRouting(
+                eq(targetWarehouseId), anyList()))
+        .thenAnswer(
+            invocation ->
+                new MaintenanceDependencyGateway.RoutingPreflight(
+                    targetWarehouseId,
+                    false,
+                    List.of(requiredQueueDefinitionId),
+                    List.of(),
+                    List.of(),
+                    List.of()));
+
+    var preflight =
+        service.transferArrivalPreflight(
+            transferId, lineId, transfer);
+    assertThat(preflight.activeRepairId()).isEqualTo(fixture.repairId());
+    assertThat(preflight.priorityRequired()).isTrue();
+    assertThat(preflight.movementToShipmentAvailable()).isFalse();
+    assertThat(preflight.missingQueueDefinitionIds())
+        .containsExactly(requiredQueueDefinitionId);
+
+    clearInvocations(dependencies);
+    assertThatThrownBy(
+            () ->
+                service.completeTransferArrival(
+                    transferId,
+                    lineId,
+                    UUID.randomUUID(),
+                    new CompleteTransferRepairRequest(
+                        fixture.rentalItemId(),
+                        fixture.warehouseId(),
+                        targetWarehouseId,
+                        4,
+                        false)))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .extracting(
+            exception ->
+                ((MaintenanceConflictException) exception).code())
+        .isEqualTo("MAINTENANCE_TARGET_QUEUE_MISSING");
+
+    verify(dependencies).queueCapabilities(targetWarehouseId);
+    verify(dependencies)
+        .preflightMaintenanceRouting(
+            eq(targetWarehouseId),
+            argThat(
+                requirements ->
+                    requirements.size() == 1
+                        && requirements
+                            .getFirst()
+                            .queueDefinitionId()
+                            .equals(requiredQueueDefinitionId)));
+    verify(dependencies, never()).getTask(any());
+    verify(dependencies, never())
+        .relocateTask(any(), any(), anyLong(), any());
+    verify(dependencies, never()).getRentalItemSnapshot(any());
+    verify(dependencies, never())
+        .acquireLease(any(), any(), anyLong(), anyString(), anyString());
+    assertThat(repairs.findById(fixture.repairId()).orElseThrow())
+        .satisfies(
+            repair -> {
+              assertThat(repair.getWarehouseId())
+                  .isEqualTo(fixture.warehouseId());
+              assertThat(repair.getTransferTargetWarehouseId())
+                  .isEqualTo(targetWarehouseId);
+              assertThat(repair.getTransferState())
+                  .isEqualTo("DEPARTURE_PREPARED");
+            });
+  }
+
+  @Test
+  void forcedCapitalReworkSynchronizesThroughThePrimaryLifecycleOwner() {
+    RepairFixture source = createQueuedPendingAcceptanceRepair();
+    var sourceBeforeRework =
+        repairs.findById(source.repairId()).orElseThrow();
+    TestCatalogWork forcedWork =
+        insertTestCatalogWork(
+            ensureTestCatalogWork(source.warehouseId()),
+            "Замена несущего каркаса",
+            true);
+    CreateDirectRepairRequest forcedContent =
+        catalogWorkRepairRequest(
+            source.warehouseId(), source.rentalItemId(), forcedWork);
+    RepairResponse child =
+        service
+            .createRework(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                source.repairId(),
+                new CreateReworkRequest(
+                    sourceBeforeRework.getVersion(),
+                    "Капитальная доработка",
+                    forcedContent.lines(),
+                    forcedContent.plan(),
+                    List.of()))
+            .response();
+    assertThat(child.complexity().type())
+        .isEqualTo(RepairComplexity.CAPITAL);
+    assertThat(child.complexity().forcedCapital()).isTrue();
+
+    service.queueRepair(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        child.id(),
+        new QueueRepairRequest(child.version(), 5));
+    var primaryOwner =
+        repairs.findById(source.repairId()).orElseThrow();
+    var queuedChild = repairs.findById(child.id()).orElseThrow();
+    assertThat(queuedChild.getExecutionState())
+        .isEqualTo(RepairExecutionState.QUEUED);
+    assertThat(primaryOwner.getLeaseId()).isNotNull();
+    deferOtherReconciliations(
+        child.id(), "SYNC_REPAIR_COMPLEXITY_STATUS");
+
+    long currentAssetVersion =
+        Math.max(
+            primaryOwner.getRentalItemVersionSnapshot(),
+            queuedChild.getRentalItemVersionSnapshot());
+    clearInvocations(dependencies);
+    when(dependencies.repairComplexityThresholds(source.warehouseId()))
+        .thenReturn(
+            new MaintenanceDependencyGateway.RepairComplexityThresholds(
+                source.warehouseId(), 0L, 60, 180, 360));
+    when(dependencies.getRentalItemSnapshot(source.rentalItemId()))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                source.rentalItemId(),
+                currentAssetVersion,
+                source.warehouseId(),
+                "БТ-42",
+                "REPAIR"));
+    when(
+            dependencies.fencedStatus(
+                any(),
+                eq(source.rentalItemId()),
+                eq(source.warehouseId()),
+                eq(currentAssetVersion),
+                eq(primaryOwner.getLeaseId()),
+                eq(primaryOwner.getFencingToken()),
+                eq("MAINTENANCE_REPAIR"),
+                eq(source.repairId().toString()),
+                eq("QUEUE_TO_CAPITAL_REPAIR"),
+                eq(false)))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                source.rentalItemId(),
+                currentAssetVersion + 1,
+                source.warehouseId(),
+                "БТ-42",
+                "CAPITAL_REPAIR"));
+
+    assertThat(service.reconcileOneTask()).isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select state from integration_reconciliation
+                 where repair_id=? and operation_type='SYNC_REPAIR_COMPLEXITY_STATUS'
+                """,
+                String.class,
+                child.id()))
+        .isEqualTo("CONFIRMED");
+    assertThat(repairs.findById(source.repairId()).orElseThrow())
+        .satisfies(
+            value ->
+                assertThat(value.getRentalItemVersionSnapshot())
+                    .isEqualTo(currentAssetVersion + 1));
+    assertThat(repairs.findById(child.id()).orElseThrow())
+        .satisfies(
+            value -> {
+              assertThat(value.getRentalItemVersionSnapshot())
+                  .isEqualTo(currentAssetVersion + 1);
+              assertThat(value.getLeaseId())
+                  .isEqualTo(primaryOwner.getLeaseId());
+            });
+    verify(dependencies)
+        .fencedStatus(
+            any(),
+            eq(source.rentalItemId()),
+            eq(source.warehouseId()),
+            eq(currentAssetVersion),
+            eq(primaryOwner.getLeaseId()),
+            eq(primaryOwner.getFencingToken()),
+            eq("MAINTENANCE_REPAIR"),
+            eq(source.repairId().toString()),
+            eq("QUEUE_TO_CAPITAL_REPAIR"),
+            eq(false));
   }
 
   @Test
   void activationDependencyFailureLeavesTheDraftAndEventStreamUntouched() {
     UUID catalogId = insertDraftCatalog(UUID.randomUUID(), "7".repeat(64));
-    when(dependencies.preflightMaintenanceRouting(any(UUID.class), anyList()))
+    CatalogVersionResponse changed =
+        service.changeCatalog(
+            catalogId,
+            new ChangeCatalogRequest(
+                0L,
+                List.of(
+                    new CatalogNodeInput(
+                        UUID.randomUUID(),
+                        CatalogNodeType.WORK,
+                        "Routed work",
+                        true,
+                        null,
+                        false,
+                        null,
+                        "шт",
+                        "100.00",
+                        15,
+                        true,
+                        false,
+                        true,
+                        null,
+                        null,
+                        new CatalogRoutingInput(UUID.randomUUID(), "REPAIR"),
+                        null,
+                        null,
+                        false,
+                        null)),
+                List.of()));
+    when(dependencies.preflightCatalogRouting(anyList()))
         .thenThrow(new MaintenanceDependencyException(
             org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
             "task-board unavailable"));
@@ -193,7 +941,7 @@ class MaintenanceCorePostgresIntegrationTest {
             UUID.randomUUID(),
             UUID.randomUUID(),
             catalogId,
-            new VersionCommand(0L)))
+            new VersionCommand(changed.version())))
         .isInstanceOfSatisfying(
             MaintenanceDependencyException.class,
             exception -> assertThat(exception.status())
@@ -203,15 +951,56 @@ class MaintenanceCorePostgresIntegrationTest {
         select state,version from catalog_version where id=?
         """, catalogId))
         .containsEntry("state", "DRAFT")
-        .containsEntry("version", 0L);
+        .containsEntry("version", changed.version());
     assertThat(jdbc.queryForObject("""
         select current_version from event_stream_head
         where aggregate_type='CATALOG_VERSION' and aggregate_id=?
-        """, Long.class, catalogId.toString())).isZero();
+        """, Long.class, catalogId.toString())).isEqualTo(changed.version());
     assertThat(jdbc.queryForObject(
         "select count(*) from integration_reconciliation", Integer.class)).isZero();
     assertThat(jdbc.queryForObject(
         "select count(*) from maintenance_idempotency_record", Integer.class)).isZero();
+  }
+
+  @Test
+  void catalogDisplayColorRoundTripsThroughTheServiceAndDatabase() {
+    UUID catalogId = insertDraftCatalog(UUID.randomUUID(), "e".repeat(64));
+    UUID nodeId = UUID.randomUUID();
+    CatalogNodeInput coloredCategory = new CatalogNodeInput(
+        nodeId,
+        CatalogNodeType.CATEGORY,
+        "Exterior",
+        true,
+        null,
+        false,
+        null,
+        null,
+        null,
+        0,
+        false,
+        false,
+        true,
+        null,
+        null,
+        null,
+        null,
+        "#3a7bc2",
+        false,
+        null);
+
+    service.changeCatalog(
+        catalogId,
+        new ChangeCatalogRequest(0L, List.of(coloredCategory), List.of()));
+
+    assertThat(service.catalogNodes(catalogId))
+        .singleElement()
+        .extracting(CatalogNodeResponse::displayColor)
+        .isEqualTo("#3A7BC2");
+    assertThat(jdbc.queryForObject(
+        "select display_color from catalog_node where catalog_version_id=? and node_id=?",
+        String.class,
+        catalogId,
+        nodeId)).isEqualTo("#3A7BC2");
   }
 
   @Test
@@ -224,7 +1013,6 @@ class MaintenanceCorePostgresIntegrationTest {
         new RoutingSnapshot(queueId, "SANITARY_DISINFECTION", "HOLDING");
     CatalogNodeInput routedNode = new CatalogNodeInput(
         nodeId,
-        "ROUTED_WORK",
         CatalogNodeType.WORK,
         "Routed work",
         true,
@@ -239,8 +1027,10 @@ class MaintenanceCorePostgresIntegrationTest {
         true,
         null,
         null,
-        routing,
-        List.of(),
+        new CatalogRoutingInput(routing.queueId(), routing.queueType()),
+        null,
+        null,
+        false,
         null);
     CatalogVersionResponse changed = service.changeCatalog(
         firstCatalogId,
@@ -322,6 +1112,7 @@ class MaintenanceCorePostgresIntegrationTest {
         """, firstCatalogId);
     assertThat(service.reconcileOneTask()).isTrue();
     verify(dependencies).deleteCatalogPosition(oldExternalReference, 0L);
+    verify(dependencies, never()).registerCatalogPosition(queueId, oldExternalReference);
     assertThat(service.catalogVersion(replacement.id()).routingSync().state())
         .isEqualTo(DeliveryState.DELIVERED);
     CatalogRoutingSyncSnapshot supersededTruth =
@@ -329,6 +1120,57 @@ class MaintenanceCorePostgresIntegrationTest {
     assertThat(supersededTruth.state()).isEqualTo(DeliveryState.DELIVERED);
     assertThat(supersededTruth.cleanupRequired()).isOne();
     assertThat(supersededTruth.cleanupConfirmed()).isOne();
+  }
+
+  @Test
+  void latestCatalogRouteSupersedesAQuarantinedRegistrationForTheSameNode() {
+    UUID catalogId = insertDraftCatalog(UUID.randomUUID(), "c".repeat(64));
+    UUID nodeId = UUID.randomUUID();
+    String externalReference = "catalog:" + catalogId + ":" + nodeId;
+    TransactionTemplate transactions = new TransactionTemplate(transactionManager);
+
+    transactions.executeWithoutResult(status ->
+        reconciliations.enqueueCatalogPosition(
+            "REGISTER_CATALOG_POSITION",
+            UUID.randomUUID(),
+            catalogId,
+            nodeId,
+            UUID.randomUUID(),
+            externalReference,
+            List.of()));
+    jdbc.update("""
+        update integration_reconciliation
+           set state='QUARANTINED',
+               attempt_count=4,
+               created_at=clock_timestamp() - interval '1 minute',
+               updated_at=clock_timestamp() - interval '1 minute'
+         where catalog_version_id=?
+           and catalog_node_id=?
+           and operation_type='REGISTER_CATALOG_POSITION'
+        """, catalogId, nodeId);
+
+    UUID currentQueueId = UUID.randomUUID();
+    transactions.executeWithoutResult(status ->
+        reconciliations.enqueueCatalogPosition(
+            "REGISTER_CATALOG_POSITION",
+            UUID.randomUUID(),
+            catalogId,
+            nodeId,
+            currentQueueId,
+            externalReference,
+            List.of()));
+    transactions.executeWithoutResult(status -> {
+      MaintenanceReconciliationStore.WorkItem current =
+          reconciliations.lockNextDue().orElseThrow();
+      assertThat(current.catalogQueueId()).isEqualTo(currentQueueId);
+      reconciliations.confirmed(current, Map.of("queueId", currentQueueId));
+    });
+
+    MaintenanceReconciliationStore.CatalogRoutingTruth truth =
+        transactions.execute(status -> reconciliations.catalogRoutingTruth(catalogId).orElseThrow());
+    assertThat(truth.state()).isEqualTo("DELIVERED");
+    assertThat(truth.registrationsRequired()).isOne();
+    assertThat(truth.registrationsConfirmed()).isOne();
   }
 
   @Test
@@ -374,10 +1216,12 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   @Test
-  void concurrentCatalogActivationReselectsUnderOneWarehouseLock() throws Exception {
-    UUID warehouseId = UUID.randomUUID();
-    UUID first = insertDraftCatalog(warehouseId, "1".repeat(64));
-    UUID second = insertDraftCatalog(warehouseId, "2".repeat(64));
+  void concurrentCatalogActivationKeepsOneGlobalActiveVersionAcrossWarehouses()
+      throws Exception {
+    UUID first =
+        insertDraftCatalog(UUID.randomUUID(), "1".repeat(64));
+    UUID second =
+        insertDraftCatalog(UUID.randomUUID(), "2".repeat(64));
     CountDownLatch start = new CountDownLatch(1);
     var executor = Executors.newFixedThreadPool(2);
     try {
@@ -390,11 +1234,11 @@ class MaintenanceCorePostgresIntegrationTest {
 
       assertThat(jdbc.queryForObject("""
           select count(*) from catalog_version
-          where warehouse_id=? and state='ACTIVE'
-          """, Integer.class, warehouseId)).isOne();
+          where state='ACTIVE'
+          """, Integer.class)).isOne();
       assertThat(jdbc.queryForList("""
-          select state from catalog_version where warehouse_id=? order by id
-          """, String.class, warehouseId))
+          select state from catalog_version order by id
+          """, String.class))
           .containsExactlyInAnyOrder("ACTIVE", "SUPERSEDED");
     } finally {
       executor.shutdownNow();
@@ -405,9 +1249,15 @@ class MaintenanceCorePostgresIntegrationTest {
   void remoteSuccessPrecedesOnlyRetrySafeTransactionalApply() {
     RepairFixture fixture = createDirectRepair();
     service.queueRepair(
-        UUID.randomUUID(), UUID.randomUUID(), fixture.repairId(), new VersionCommand(0L));
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        fixture.repairId(),
+        new QueueRepairRequest(0L, 1));
 
-    verifyNoInteractions(dependencies);
+    verify(dependencies).preflightMaintenanceRouting(eq(fixture.warehouseId()), anyList());
+    verify(dependencies, times(2)).repairComplexityThresholds(fixture.warehouseId());
+    verifyNoMoreInteractions(dependencies);
+    assertThat(repairs.findById(fixture.repairId()).orElseThrow().getPriority()).isEqualTo(1);
     assertThat(jdbc.queryForObject("""
         select count(*) from integration_reconciliation
         where repair_id=? and operation_type='QUEUE_REPAIR' and state='PENDING'
@@ -433,14 +1283,1272 @@ class MaintenanceCorePostgresIntegrationTest {
         where repair_id=? and operation_type='QUEUE_REPAIR'
         """, fixture.repairId());
     assertThat(service.reconcileOneTask()).isTrue();
-    assertThat(repairs.findById(fixture.repairId()).orElseThrow().getExecutionState())
-        .isEqualTo(RepairExecutionState.QUEUED);
+    assertThat(repairs.findById(fixture.repairId()).orElseThrow())
+        .satisfies(
+            repair -> {
+              assertThat(repair.getExecutionState()).isEqualTo(RepairExecutionState.QUEUED);
+              assertThat(repair.getPriority()).isEqualTo(1);
+            });
 
     ArgumentCaptor<UUID> keys = ArgumentCaptor.forClass(UUID.class);
     verify(dependencies, times(2)).acquireLease(
         keys.capture(), eq(fixture.rentalItemId()), eq(7L),
         eq("MAINTENANCE_REPAIR"), eq(fixture.repairId().toString()));
     assertThat(keys.getAllValues()).hasSize(2).allMatch(keys.getAllValues().getFirst()::equals);
+  }
+
+  @Test
+  void firstPrimaryRepairStillAcquiresLeaseFencesAssetAndRegistersTask() {
+    RepairFixture first = createDirectRepair();
+    service.queueRepair(
+        UUID.randomUUID(), UUID.randomUUID(), first.repairId(), new VersionCommand(0L));
+    stubQueueDependencies(first);
+
+    assertThat(service.reconcileOneTask()).isTrue();
+    var queued = repairs.findById(first.repairId()).orElseThrow();
+    assertThat(queued.getExecutionState()).isEqualTo(RepairExecutionState.QUEUED);
+    assertThat(queued.getLeaseId()).isNotNull();
+    assertThat(queued.getLeaseReconciliationState()).isEqualTo("ACTIVE");
+
+    registerQueuedRepair(first);
+    assertThat(repairs.findById(first.repairId()).orElseThrow().getTaskGenerationState())
+        .isEqualTo("GENERATED");
+
+    verify(dependencies).acquireLease(
+        any(), eq(first.rentalItemId()), eq(7L),
+        eq("MAINTENANCE_REPAIR"), eq(first.repairId().toString()));
+    verify(dependencies).fencedStatus(
+        any(), eq(first.rentalItemId()), eq(first.warehouseId()), eq(7L),
+        eq(queued.getLeaseId()), eq(queued.getFencingToken()), eq("MAINTENANCE_REPAIR"),
+        eq(first.repairId().toString()), eq("QUEUE_TO_REPAIR"), eq(false));
+    verify(dependencies).registerTask(
+        any(), eq(first.externalTaskId()), eq(first.repairId()), eq(first.warehouseId()),
+        eq(first.rentalItemId()), nullable(String.class),
+        any(LocalDate.class), anyInt(), eq(6), anyList());
+  }
+
+  @Test
+  void queuedRepairPlanCanBeChangedBeforeStartAndUpdatesItsRegisteredTask() {
+    RegisteredRepairFixture registered = createRegisteredPrimaryRepair();
+    RepairFixture fixture = registered.repair();
+    var before = repairs.findById(fixture.repairId()).orElseThrow();
+    long taskBoardVersion = before.getTaskBoardVersion();
+    CreateDirectRepairRequest changedContent =
+        directRepairRequest(
+            fixture.warehouseId(),
+            fixture.rentalItemId(),
+            LocalDate.of(2026, 7, 18),
+            "Исправленный план");
+
+    clearInvocations(dependencies);
+    RepairResponse changed =
+        service.updateRepairPlan(
+            fixture.repairId(),
+            new UpdateRepairPlanRequest(
+                before.getVersion(),
+                changedContent.lines(),
+                changedContent.plan(),
+                List.of(),
+                null));
+
+    assertThat(changed.executionState()).isEqualTo(RepairExecutionState.QUEUED);
+    assertThat(changed.version()).isEqualTo(before.getVersion() + 1);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from integration_reconciliation
+                where repair_id=? and dependency_type='TASK_BOARD'
+                  and operation_type='UPDATE_TASK' and state='PENDING'
+                """,
+                Integer.class,
+                fixture.repairId()))
+        .isOne();
+    verify(dependencies)
+        .preflightMaintenanceRouting(eq(fixture.warehouseId()), anyList());
+    verify(dependencies).repairComplexityThresholds(fixture.warehouseId());
+    verifyNoMoreInteractions(dependencies);
+
+    when(dependencies.updatePreStartTask(
+            any(),
+            eq(fixture.externalTaskId()),
+            eq(taskBoardVersion),
+            eq("БТ-42"),
+            anyList()))
+        .thenReturn(
+            new MaintenanceDependencyGateway.TaskSnapshot(
+                fixture.externalTaskId(),
+                taskBoardVersion + 1,
+                "ACTIVE",
+                List.of(
+                    new MaintenanceDependencyGateway.TaskStageSnapshot(
+                        0, registered.queueEntryId(), 0))));
+    when(dependencies.getRentalItemSnapshot(fixture.rentalItemId()))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                fixture.rentalItemId(),
+                before.getRentalItemVersionSnapshot(),
+                fixture.warehouseId(),
+                "БТ-42",
+                "REPAIR"));
+
+    assertThat(service.reconcileOneTask()).isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select state from integration_reconciliation
+                where repair_id=? and dependency_type='ASSET'
+                  and operation_type='SYNC_REPAIR_COMPLEXITY_STATUS'
+                """,
+                String.class,
+                fixture.repairId()))
+        .isEqualTo("CONFIRMED");
+    assertThat(service.reconcileOneTask()).isTrue();
+
+    verify(dependencies)
+        .updatePreStartTask(
+            any(),
+            eq(fixture.externalTaskId()),
+            eq(taskBoardVersion),
+            eq("БТ-42"),
+            anyList());
+    assertThat(repairs.findById(fixture.repairId()).orElseThrow())
+        .satisfies(
+            saved -> {
+              assertThat(saved.getExecutionState()).isEqualTo(RepairExecutionState.QUEUED);
+              assertThat(saved.getTaskBoardVersion()).isEqualTo(taskBoardVersion + 1);
+              assertThat(saved.getTaskGenerationState()).isEqualTo("GENERATED");
+            });
+  }
+
+  @Test
+  void emptyDirectRepairFreesTheCabinWithoutCreatingAWorkerTask() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 7));
+    var created =
+        service.createDirectRepair(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            new CreateDirectRepairRequest(
+                warehouseId,
+                rentalItemId,
+                LocalDate.of(2026, 7, 17),
+                null,
+                List.of(),
+                List.of(),
+                List.of()));
+
+    var queued =
+        service.queueRepair(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            created.response().id(),
+            new QueueRepairRequest(0L, 3));
+
+    assertThat(queued.response().repair().executionState())
+        .isEqualTo(RepairExecutionState.CANCELLED);
+    assertThat(queued.response().repair().plan().stages()).isEmpty();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from integration_reconciliation
+                where repair_id=? and operation_type='EMPTY_REPAIR_TO_FREE' and state='PENDING'
+                """,
+                Integer.class,
+                created.response().id()))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from integration_reconciliation
+                where repair_id=? and dependency_type='TASK_BOARD'
+                """,
+                Integer.class,
+                created.response().id()))
+        .isZero();
+
+    UUID leaseId = UUID.randomUUID();
+    when(
+            dependencies.acquireLease(
+                any(),
+                eq(rentalItemId),
+                eq(7L),
+                eq("MAINTENANCE_REPAIR"),
+                eq(created.response().id().toString())))
+        .thenReturn(
+            new MaintenanceDependencyGateway.LeaseSnapshot(
+                leaseId,
+                0,
+                rentalItemId,
+                "MAINTENANCE_REPAIR",
+                created.response().id(),
+                11,
+                OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15)));
+    when(
+            dependencies.fencedStatus(
+                any(),
+                eq(rentalItemId),
+                eq(warehouseId),
+                eq(7L),
+                eq(leaseId),
+                eq(11L),
+                eq("MAINTENANCE_REPAIR"),
+                eq(created.response().id().toString()),
+                eq("EMPTY_REPAIR_TO_FREE"),
+                eq(false)))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                rentalItemId, 8, warehouseId, "БТ-42", "FREE"));
+
+    assertThat(service.reconcileOneTask()).isTrue();
+    assertThat(repairs.findById(created.response().id()).orElseThrow())
+        .satisfies(
+            repair -> {
+              assertThat(repair.getExecutionState()).isEqualTo(RepairExecutionState.CANCELLED);
+              assertThat(repair.getRentalItemVersionSnapshot()).isEqualTo(8);
+              assertThat(repair.getReconciliationState()).isEqualTo("RECONCILED");
+              assertThat(repair.getDeliveryState()).isEqualTo("DELIVERED");
+            });
+    verify(dependencies)
+        .releaseLease(
+            any(),
+            eq(leaseId),
+            eq(0L),
+            eq(11L),
+            eq("MAINTENANCE_REPAIR"),
+            eq(created.response().id().toString()));
+    verify(dependencies, never())
+        .registerTask(
+            any(),
+            any(),
+            any(),
+            any(),
+            any(),
+            nullable(String.class),
+            any(LocalDate.class),
+            anyInt(),
+            anyInt(),
+            anyList());
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "BOOKED, 3, 5",
+      "REPAIR, 3, 5",
+      "WAITING_REPAIR_CHECK, 3, 5",
+      "WRITTEN_OFF, 3, 5",
+      "CAPITAL_REPAIR, 4, 6",
+      "WAITING_ESTIMATE_CONFIRMATION, 3, 5",
+      "SALE, 3, 5",
+      "USED_SALE, 3, 5",
+      "RESERVED, 3, 5",
+      "FREE, 3, 5",
+      "WAREHOUSE, 3, 5",
+      "OWN_NEEDS, 3, 5",
+      "IN_TRANSFER, 3, 5"
+  })
+  void eligibleRentalItemRepairKeepsSelectedPriorityAndRegistersTask(
+      String sourceStatus, int priority, int dailyCapacity) {
+    RepairFixture repair = createDirectRepair(sourceStatus, 0);
+    repairCapacitySettings.replace(
+        repair.warehouseId(),
+        new ReplaceRepairCapacitySettingsRequest(0L, dailyCapacity));
+    service.queueRepair(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        repair.repairId(),
+        new QueueRepairRequest(0L, priority));
+    UUID leaseId = UUID.randomUUID();
+    when(dependencies.getRentalItemSnapshot(repair.rentalItemId()))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                repair.rentalItemId(), 0, repair.warehouseId(), "БТ-42", sourceStatus),
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                repair.rentalItemId(), 1, repair.warehouseId(), "БТ-42", "REPAIR"));
+    when(dependencies.acquireLease(
+        any(), eq(repair.rentalItemId()), eq(0L),
+        eq("MAINTENANCE_REPAIR"), eq(repair.repairId().toString())))
+        .thenReturn(new MaintenanceDependencyGateway.LeaseSnapshot(
+            leaseId, 0, repair.rentalItemId(), "MAINTENANCE_REPAIR", repair.repairId(), 11,
+            OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15)));
+    when(dependencies.fencedStatus(
+        any(), eq(repair.rentalItemId()), eq(repair.warehouseId()), eq(0L),
+        eq(leaseId), eq(11L), eq("MAINTENANCE_REPAIR"),
+        eq(repair.repairId().toString()), eq("QUEUE_TO_REPAIR"), eq(false)))
+        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
+            repair.rentalItemId(), 1, repair.warehouseId(), "БТ-42", "REPAIR"));
+
+    assertThat(service.reconcileOneTask()).isTrue();
+    assertThat(repairs.findById(repair.repairId()).orElseThrow())
+        .satisfies(queued -> {
+          assertThat(queued.getExecutionState()).isEqualTo(RepairExecutionState.QUEUED);
+          assertThat(queued.getPriority()).isEqualTo(priority);
+          assertThat(queued.getLeaseId()).isEqualTo(leaseId);
+        });
+
+    UUID entryId = UUID.randomUUID();
+    when(dependencies.registerTask(
+        any(),
+        eq(repair.externalTaskId()),
+        eq(repair.repairId()),
+        eq(repair.warehouseId()),
+        eq(repair.rentalItemId()),
+        eq("БТ-42"),
+        any(LocalDate.class),
+        eq(priority),
+        eq(dailyCapacity),
+        anyList()))
+        .thenReturn(new MaintenanceDependencyGateway.TaskSnapshot(
+            repair.externalTaskId(), 0, "ACTIVE",
+            List.of(new MaintenanceDependencyGateway.TaskStageSnapshot(0, entryId, 0))));
+
+    assertThat(service.reconcileOneTask()).isTrue();
+    assertThat(repairs.findById(repair.repairId()).orElseThrow().getTaskGenerationState())
+        .isEqualTo("GENERATED");
+    verify(dependencies).registerTask(
+        any(),
+        eq(repair.externalTaskId()),
+        eq(repair.repairId()),
+        eq(repair.warehouseId()),
+        eq(repair.rentalItemId()),
+        eq("БТ-42"),
+        any(LocalDate.class),
+        eq(priority),
+        eq(dailyCapacity),
+        anyList());
+  }
+
+  @ParameterizedTest
+  @CsvSource({"RENTED", "AFTER_RENT"})
+  void directRepairRejectsTheTwoUnavailableRentalItemStatuses(String sourceStatus) {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, sourceStatus, 0));
+
+    assertThatThrownBy(() -> service.createDirectRepair(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        directRepairRequest(warehouseId, rentalItemId, LocalDate.of(2026, 7, 17), null)))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .hasMessageContaining("RENTED or AFTER_RENT");
+    verifyNoInteractions(dependencies);
+  }
+
+  @Test
+  void workerTaskSnapshotUsesCanonicalLinesWithTimeCommentsMaterialsAndMedia() {
+    RepairFixture fixture = createDirectRepair();
+    UUID repairMediaId = UUID.randomUUID();
+    UUID workMediaId = UUID.randomUUID();
+    UUID materialMediaId = UUID.randomUUID();
+    OffsetDateTime capturedAt = OffsetDateTime.parse("2026-07-23T10:15:30+03:00");
+    new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+      service.applyInboundMediaFact(
+          repairMediaId,
+          1,
+          "MAINTENANCE_REPAIR",
+          fixture.repairId(),
+          fixture.warehouseId(),
+          "READY",
+          "{\"contentType\":\"image/jpeg\",\"capturedAt\":\"2026-07-23T10:15:30+03:00\"}",
+          1);
+      service.applyInboundMediaFact(
+          workMediaId,
+          2,
+          "MAINTENANCE_REPAIR",
+          fixture.repairId(),
+          fixture.warehouseId(),
+          "READY",
+          "{\"contentType\":\"image/png\"}",
+          2);
+      service.applyInboundMediaFact(
+          materialMediaId,
+          3,
+          "MAINTENANCE_REPAIR",
+          fixture.repairId(),
+          fixture.warehouseId(),
+          "READY",
+          "{\"contentType\":\"image/webp\"}",
+          3);
+    });
+    CreateDirectRepairRequest content = workerTaskContent(
+        fixture.warehouseId(),
+        fixture.rentalItemId(),
+        workMediaId,
+        materialMediaId);
+    service.updateRepairPlan(
+        fixture.repairId(),
+        new UpdateRepairPlanRequest(
+            0L,
+            content.lines(),
+            content.plan(),
+            List.of(new MediaReferenceInput(repairMediaId, 1L)),
+            repairMediaId));
+    service.queueRepair(
+        UUID.randomUUID(), UUID.randomUUID(), fixture.repairId(), new VersionCommand(1L));
+    stubQueueDependencies(fixture);
+    assertThat(service.reconcileOneTask()).isTrue();
+
+    UUID entryId = UUID.randomUUID();
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<MaintenanceDependencyGateway.TaskStage>> stages =
+        ArgumentCaptor.forClass(List.class);
+    when(dependencies.registerTask(
+        any(),
+        eq(fixture.externalTaskId()),
+        eq(fixture.repairId()),
+        eq(fixture.warehouseId()),
+        eq(fixture.rentalItemId()),
+        eq("БТ-42"),
+        any(LocalDate.class),
+        anyInt(),
+        eq(6),
+        stages.capture()))
+        .thenReturn(new MaintenanceDependencyGateway.TaskSnapshot(
+            fixture.externalTaskId(),
+            0,
+            "ACTIVE",
+            List.of(new MaintenanceDependencyGateway.TaskStageSnapshot(0, entryId, 0))));
+
+    assertThat(service.reconcileOneTask()).isTrue();
+
+    MaintenanceDependencyGateway.TaskStage snapshot = stages.getValue().getFirst();
+    assertThat(snapshot.plannedDurationMinutes()).isEqualTo(38);
+    assertThat(snapshot.works())
+        .singleElement()
+        .satisfies(
+            work -> {
+              assertThat(work.id()).isNotNull();
+              assertThat(work.name()).isEqualTo("Замена профлиста");
+              assertThat(work.quantity()).isEqualTo(2.5);
+              assertThat(work.unit()).isEqualTo("шт");
+              assertThat(work.durationMinutes()).isEqualTo(15);
+              assertThat(work.comment()).isEqualTo("Проверить внешний угол");
+            });
+    assertThat(snapshot.materials())
+        .singleElement()
+        .satisfies(
+            material -> {
+              assertThat(material.id()).isNotNull();
+              assertThat(material.name()).isEqualTo("Профлист");
+              assertThat(material.quantity()).isEqualTo(3.0);
+              assertThat(material.unit()).isEqualTo("лист");
+            });
+    assertThat(snapshot.comments())
+        .extracting(MaintenanceDependencyGateway.TaskComment::text)
+        .containsExactly("Проверить внешний угол", "Принять по количеству", "Срочно");
+    assertThat(snapshot.sourceMedia())
+        .extracting(MaintenanceDependencyGateway.TaskSourceMedia::mediaId)
+        .containsExactlyInAnyOrder(repairMediaId, workMediaId, materialMediaId);
+    assertThat(snapshot.sourceMedia())
+        .filteredOn(media -> media.mediaId().equals(repairMediaId))
+        .singleElement()
+        .satisfies(
+            media -> {
+              assertThat(media.contentType()).isEqualTo("image/jpeg");
+              assertThat(media.capturedAt()).isEqualTo(capturedAt);
+            });
+  }
+
+  @Test
+  void customRepairWorkUsesItsExplicitQueueAndPublishesWorkerContent() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    ensureTestCatalogWork(warehouseId);
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 7));
+    RoutingSnapshot routing =
+        new RoutingSnapshot(UUID.randomUUID(), "CUSTOM_EXTERNAL", "REPAIR");
+    UUID lineId = UUID.randomUUID();
+    EstimateLineInput line =
+        new EstimateLineInput(
+            lineId,
+            null,
+            EstimateLineType.WORK,
+            "Нестандартная герметизация",
+            "пог. м",
+            "2",
+            "0.00",
+            17,
+            "Проверить шов по всей длине",
+            List.of());
+    PlanStageInput stage =
+        new PlanStageInput(
+            UUID.randomUUID(),
+            RepairStageKind.REPAIR_WORK,
+            0,
+            routing,
+            List.of(lineId),
+            lineId,
+            "",
+            null);
+
+    var created =
+        service.createDirectRepair(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            new CreateDirectRepairRequest(
+                warehouseId,
+                rentalItemId,
+                LocalDate.of(2026, 7, 26),
+                null,
+                List.of(line),
+                List.of(stage),
+                List.of()));
+
+    assertThat(created.response().plan().stages())
+        .singleElement()
+        .satisfies(
+            saved -> {
+              assertThat(saved.routing()).isEqualTo(routing);
+              assertThat(saved.workLines())
+                  .singleElement()
+                  .satisfies(
+                      work -> {
+                        assertThat(work.catalogSnapshot()).isNull();
+                        assertThat(work.lineType()).isEqualTo(EstimateLineType.WORK);
+                        assertThat(work.description())
+                            .isEqualTo("Нестандартная герметизация");
+                        assertThat(work.unit()).isEqualTo("пог. м");
+                        assertThat(work.quantity()).isEqualTo("2");
+                        assertThat(work.normativeMinutes()).isEqualTo(17);
+                        assertThat(work.comment())
+                            .isEqualTo("Проверить шов по всей длине");
+                      });
+            });
+
+    RepairFixture fixture =
+        new RepairFixture(
+            created.response().id(),
+            created.response().plan().stages().getFirst().taskSync().externalTaskId(),
+            warehouseId,
+            rentalItemId);
+    service.queueRepair(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        fixture.repairId(),
+        new VersionCommand(0L));
+    stubQueueDependencies(fixture);
+    assertThat(service.reconcileOneTask()).isTrue();
+
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<MaintenanceDependencyGateway.TaskStage>> stages =
+        ArgumentCaptor.forClass(List.class);
+    when(dependencies.registerTask(
+            any(),
+            eq(fixture.externalTaskId()),
+            eq(fixture.repairId()),
+            eq(warehouseId),
+            eq(rentalItemId),
+            eq("БТ-42"),
+            any(LocalDate.class),
+            anyInt(),
+            eq(6),
+            stages.capture()))
+        .thenReturn(
+            new MaintenanceDependencyGateway.TaskSnapshot(
+                fixture.externalTaskId(),
+                0,
+                "ACTIVE",
+                List.of(
+                    new MaintenanceDependencyGateway.TaskStageSnapshot(
+                        0, UUID.randomUUID(), 0))));
+
+    assertThat(service.reconcileOneTask()).isTrue();
+    assertThat(stages.getValue())
+        .singleElement()
+        .satisfies(
+            published -> {
+              assertThat(published.plannedDurationMinutes()).isEqualTo(34);
+              assertThat(published.works())
+                  .singleElement()
+                  .satisfies(
+                      work -> {
+                        assertThat(work.id()).isNotNull();
+                        assertThat(work.name())
+                            .isEqualTo("Нестандартная герметизация");
+                        assertThat(work.quantity()).isEqualTo(2.0);
+                        assertThat(work.unit()).isEqualTo("пог. м");
+                        assertThat(work.durationMinutes()).isEqualTo(17);
+                        assertThat(work.comment())
+                            .isEqualTo("Проверить шов по всей длине");
+                      });
+            });
+  }
+
+  @Test
+  void customMaterialStaysMaterialUsesItsOwnUnitAndOnlyPreflightsTheStageQueue() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 7));
+    CreateDirectRepairRequest base = directRepairRequest(
+        warehouseId, rentalItemId, LocalDate.of(2026, 7, 26), null);
+    EstimateLineInput catalogWork = base.lines().getFirst();
+    PlanStageInput baseStage = base.plan().getFirst();
+    UUID materialLineId = UUID.randomUUID();
+    EstimateLineInput customMaterial = new EstimateLineInput(
+        materialLineId,
+        null,
+        EstimateLineType.MATERIAL,
+        "Герметик",
+        "туба",
+        "3",
+        "100.00",
+        120,
+        "Нанести после очистки",
+        List.of());
+    PlanStageInput combinedStage = new PlanStageInput(
+        baseStage.id(),
+        RepairStageKind.REPAIR_WORK,
+        0,
+        baseStage.routing(),
+        List.of(catalogWork.id(), materialLineId),
+        catalogWork.id(),
+        "",
+        null);
+    CreateDirectRepairRequest combined = new CreateDirectRepairRequest(
+        warehouseId,
+        rentalItemId,
+        LocalDate.of(2026, 7, 26),
+        null,
+        List.of(catalogWork, customMaterial),
+        List.of(combinedStage),
+        List.of());
+
+    PlanStageInput materialOnlyStage = new PlanStageInput(
+        UUID.randomUUID(),
+        RepairStageKind.REPAIR_WORK,
+        0,
+        baseStage.routing(),
+        List.of(materialLineId),
+        null,
+        "",
+        null);
+    var materialOnly =
+        service.createDirectRepair(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            new CreateDirectRepairRequest(
+                warehouseId,
+                rentalItemId,
+                LocalDate.of(2026, 7, 26),
+                null,
+                List.of(customMaterial),
+                List.of(materialOnlyStage),
+                List.of()));
+    assertThat(materialOnly.response().plan().stages().getFirst().workLines()).isEmpty();
+    assertThat(materialOnly.response().plan().stages().getFirst().materialLines())
+        .singleElement()
+        .satisfies(
+            line -> {
+              assertThat(line.lineType()).isEqualTo(EstimateLineType.MATERIAL);
+              assertThat(line.unit()).isEqualTo("туба");
+              assertThat(line.normativeMinutes()).isZero();
+            });
+
+    clearInvocations(dependencies);
+    var created = service.createDirectRepair(UUID.randomUUID(), UUID.randomUUID(), combined);
+    RepairStageResponse stage = service.repair(created.response().id()).plan().stages().getFirst();
+    assertThat(stage.workLines()).singleElement().satisfies(
+        line -> assertThat(line.lineType()).isEqualTo(EstimateLineType.WORK));
+    assertThat(stage.materialLines()).singleElement().satisfies(
+        line -> {
+          assertThat(line.catalogSnapshot()).isNull();
+          assertThat(line.lineType()).isEqualTo(EstimateLineType.MATERIAL);
+          assertThat(line.unit()).isEqualTo("туба");
+          assertThat(line.normativeMinutes()).isZero();
+        });
+    verify(dependencies)
+        .preflightMaintenanceRouting(
+            eq(warehouseId),
+            argThat(
+                requirements ->
+                    requirements.size() == 1
+                        && requirements.getFirst().queueDefinitionId()
+                            .equals(baseStage.routing().queueId())
+                        && requirements.getFirst().type()
+                            .equals(baseStage.routing().queueType())));
+
+    RepairFixture fixture = new RepairFixture(
+        created.response().id(),
+        stage.taskSync().externalTaskId(),
+        warehouseId,
+        rentalItemId);
+    service.queueRepair(
+        UUID.randomUUID(), UUID.randomUUID(), fixture.repairId(), new VersionCommand(0L));
+    stubQueueDependencies(fixture);
+    assertThat(service.reconcileOneTask()).isTrue();
+
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<MaintenanceDependencyGateway.TaskStage>> stages =
+        ArgumentCaptor.forClass(List.class);
+    when(dependencies.registerTask(
+            any(),
+            eq(fixture.externalTaskId()),
+            eq(fixture.repairId()),
+            eq(warehouseId),
+            eq(rentalItemId),
+            eq("БТ-42"),
+            any(LocalDate.class),
+            anyInt(),
+            eq(6),
+            stages.capture()))
+        .thenReturn(
+            new MaintenanceDependencyGateway.TaskSnapshot(
+                fixture.externalTaskId(),
+                0,
+                "ACTIVE",
+                List.of(
+                    new MaintenanceDependencyGateway.TaskStageSnapshot(
+                        0, UUID.randomUUID(), 0))));
+
+    assertThat(service.reconcileOneTask()).isTrue();
+    assertThat(stages.getValue()).singleElement().satisfies(
+        published -> {
+          assertThat(published.title()).contains("Материалы: Герметик — 3 туба");
+          assertThat(published.materials()).singleElement().satisfies(
+              material -> {
+                assertThat(material.id()).isNotNull();
+                assertThat(material.unit()).isEqualTo("туба");
+              });
+        });
+  }
+
+  @Test
+  void estimatePersistsCustomWorkRoutingAndRejectsMovementQueues() {
+    UUID warehouseId = UUID.randomUUID();
+    ensureTestCatalogWork(warehouseId);
+    UUID rentalItemId = UUID.randomUUID();
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "AFTER_RENT", 7));
+    UUID lineId = UUID.randomUUID();
+    EstimateLineInput customLine =
+        new EstimateLineInput(
+            lineId,
+            null,
+            EstimateLineType.WORK,
+            "Локальная доработка",
+            "час",
+            "1",
+            "0.00",
+            25,
+            "Комментарий мастера",
+            List.of());
+    RoutingSnapshot holding =
+        new RoutingSnapshot(UUID.randomUUID(), "CUSTOM_HOLDING", "HOLDING");
+    PlanStageInput customStage =
+        new PlanStageInput(
+            UUID.randomUUID(),
+            RepairStageKind.REPAIR_WORK,
+            0,
+            holding,
+            List.of(lineId),
+            lineId,
+            "",
+            null);
+
+    EstimateLineInput missingUnit = new EstimateLineInput(
+        lineId,
+        null,
+        EstimateLineType.WORK,
+        "Локальная доработка",
+        " ",
+        "1",
+        "0.00",
+        25,
+        "Комментарий мастера",
+        List.of());
+    assertThatThrownBy(
+            () ->
+                service.createEstimate(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    new CreateEstimateRequest(
+                        warehouseId,
+                        rentalItemId,
+                        LocalDate.of(2026, 7, 26),
+                        null,
+                        List.of(missingUnit),
+                        List.of(customStage),
+                        List.of())))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .hasMessageContaining("unit");
+
+    EstimateLineInput missingTime =
+        new EstimateLineInput(
+            lineId,
+            null,
+            EstimateLineType.WORK,
+            "Локальная доработка",
+            "час",
+            "1",
+            "0.00",
+            null,
+            "Комментарий мастера",
+            List.of());
+    assertThatThrownBy(
+            () ->
+                service.createEstimate(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    new CreateEstimateRequest(
+                        warehouseId,
+                        rentalItemId,
+                        LocalDate.of(2026, 7, 26),
+                        null,
+                        List.of(missingTime),
+                        List.of(customStage),
+                        List.of())))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .hasMessageContaining("execution time");
+
+    var created =
+        service.createEstimate(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            new CreateEstimateRequest(
+                warehouseId,
+                rentalItemId,
+                LocalDate.of(2026, 7, 26),
+                null,
+                List.of(customLine),
+                List.of(customStage),
+                List.of()));
+
+    assertThat(created.response().revisions().getFirst().lines())
+        .singleElement()
+        .satisfies(
+            line -> {
+              assertThat(line.catalogSnapshot()).isNull();
+              assertThat(line.lineType()).isEqualTo(EstimateLineType.WORK);
+              assertThat(line.unit()).isEqualTo("час");
+              assertThat(line.normativeMinutes()).isEqualTo(25);
+            });
+    assertThat(jdbc.queryForObject(
+        "select unit from estimate_line where estimate_id=? and line_id=?",
+        String.class,
+        created.response().id(),
+        lineId)).isEqualTo("час");
+    assertThat(created.response().revisions().getFirst().plan())
+        .singleElement()
+        .satisfies(saved -> assertThat(saved.routing()).isEqualTo(holding));
+    verify(dependencies)
+        .preflightMaintenanceRouting(
+            eq(warehouseId),
+            argThat(
+                requirements ->
+                    requirements.size() == 1
+                        && requirements.getFirst().queueDefinitionId().equals(holding.queueId())
+                        && requirements.getFirst().type().equals("HOLDING")));
+
+    RoutingSnapshot movement =
+        new RoutingSnapshot(UUID.randomUUID(), "MOVEMENT", "MOVEMENT");
+    PlanStageInput invalidStage =
+        new PlanStageInput(
+            UUID.randomUUID(),
+            RepairStageKind.REPAIR_WORK,
+            0,
+            movement,
+            List.of(lineId),
+            lineId,
+            "",
+            null);
+    assertThatThrownBy(
+            () ->
+                service.updateEstimate(
+                    created.response().id(),
+                    new UpdateEstimateRequest(
+                        created.response().version(),
+                        LocalDate.of(2026, 7, 26),
+                        null,
+                        List.of(customLine),
+                        List.of(invalidStage),
+                        List.of())))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .hasMessageContaining("repair or holding queue");
+  }
+
+  @Test
+  void firstPrimaryRepairAdoptsAnExistingRepairStatusWithoutALifecycleOwner() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "REPAIR", 7));
+    var created =
+        service.createDirectRepair(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            directRepairRequest(
+                warehouseId,
+                rentalItemId,
+                LocalDate.of(2026, 7, 17),
+                null));
+    RepairFixture repair =
+        new RepairFixture(
+            created.response().id(),
+            created.response().plan().stages().getFirst().taskSync().externalTaskId(),
+            warehouseId,
+            rentalItemId);
+    service.queueRepair(
+        UUID.randomUUID(), UUID.randomUUID(), repair.repairId(), new QueueRepairRequest(0L, 5));
+    UUID leaseId = UUID.randomUUID();
+    when(dependencies.getRentalItemSnapshot(rentalItemId))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                rentalItemId, 7, warehouseId, "БТ-42", "REPAIR"));
+    when(dependencies.acquireLease(
+            any(),
+            eq(rentalItemId),
+            eq(7L),
+            eq("MAINTENANCE_REPAIR"),
+            eq(repair.repairId().toString())))
+        .thenReturn(
+            new MaintenanceDependencyGateway.LeaseSnapshot(
+                leaseId,
+                0,
+                rentalItemId,
+                "MAINTENANCE_REPAIR",
+                repair.repairId(),
+                11,
+                OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15)));
+    when(dependencies.fencedStatus(
+            any(),
+            eq(rentalItemId),
+            eq(warehouseId),
+            eq(7L),
+            eq(leaseId),
+            eq(11L),
+            eq("MAINTENANCE_REPAIR"),
+            eq(repair.repairId().toString()),
+            eq("QUEUE_TO_REPAIR"),
+            eq(false)))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                rentalItemId, 7, warehouseId, "БТ-42", "REPAIR"));
+
+    assertThat(service.reconcileOneTask()).isTrue();
+
+    assertThat(repairs.findById(repair.repairId()).orElseThrow())
+        .satisfies(
+            queued -> {
+              assertThat(queued.getExecutionState()).isEqualTo(RepairExecutionState.QUEUED);
+              assertThat(queued.getPriority()).isEqualTo(5);
+              assertThat(queued.getRentalItemVersionSnapshot()).isEqualTo(7);
+              assertThat(queued.getLeaseId()).isEqualTo(leaseId);
+              assertThat(queued.getLeaseReconciliationState()).isEqualTo("ACTIVE");
+            });
+    verify(dependencies)
+        .fencedStatus(
+            any(),
+            eq(rentalItemId),
+            eq(warehouseId),
+            eq(7L),
+            eq(leaseId),
+            eq(11L),
+            eq("MAINTENANCE_REPAIR"),
+            eq(repair.repairId().toString()),
+            eq("QUEUE_TO_REPAIR"),
+            eq(false));
+  }
+
+  @Test
+  void secondPrimaryRepairQueuesAndRegistersWithoutTakingOverTheFirstLease() {
+    RepairFixture first = createDirectRepair();
+    service.queueRepair(
+        UUID.randomUUID(), UUID.randomUUID(), first.repairId(), new VersionCommand(0L));
+    stubQueueDependencies(first);
+    assertThat(service.reconcileOneTask()).isTrue();
+    registerQueuedRepair(first);
+    var firstBefore = repairs.findById(first.repairId()).orElseThrow();
+    UUID firstLeaseId = firstBefore.getLeaseId();
+    long firstLeaseVersion = firstBefore.getLeaseVersion();
+    long firstFencingToken = firstBefore.getFencingToken();
+    OffsetDateTime firstLeaseExpiresAt = firstBefore.getLeaseExpiresAt();
+    clearInvocations(dependencies);
+
+    var second =
+        service.createDirectRepair(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            directRepairRequest(
+                first.warehouseId(),
+                first.rentalItemId(),
+                LocalDate.of(2026, 7, 18),
+                null));
+    RepairFixture secondFixture = new RepairFixture(
+        second.response().id(),
+        second.response().plan().stages().getFirst().taskSync().externalTaskId(),
+        first.warehouseId(),
+        first.rentalItemId());
+    service.queueRepair(
+        UUID.randomUUID(), UUID.randomUUID(), secondFixture.repairId(), new VersionCommand(0L));
+    when(dependencies.getRentalItemSnapshot(first.rentalItemId()))
+        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
+            first.rentalItemId(), 8, first.warehouseId(), "БТ-42", "REPAIR"));
+
+    assertThat(service.reconcileOneTask()).isTrue();
+    var secondQueued = repairs.findById(secondFixture.repairId()).orElseThrow();
+    assertThat(secondQueued.getExecutionState()).isEqualTo(RepairExecutionState.QUEUED);
+    assertThat(secondQueued.getRentalItemVersionSnapshot()).isEqualTo(8);
+    assertThat(secondQueued.getLeaseId()).isNull();
+    assertThat(secondQueued.getLeaseVersion()).isNull();
+    assertThat(secondQueued.getFencingToken()).isNull();
+    assertThat(secondQueued.getLeaseExpiresAt()).isNull();
+    assertThat(secondQueued.getLeaseReconciliationState()).isEqualTo("NOT_REQUIRED");
+    assertThat(jdbc.queryForObject("""
+        select count(*) from repair_stage
+        where repair_id=? and state='QUEUED'
+        """, Integer.class, secondFixture.repairId())).isOne();
+
+    registerQueuedRepair(secondFixture);
+    assertThat(repairs.findById(secondFixture.repairId()).orElseThrow().getTaskGenerationState())
+        .isEqualTo("GENERATED");
+    assertThat(repairs.findById(first.repairId()).orElseThrow())
+        .satisfies(owner -> {
+          assertThat(owner.getLeaseId()).isEqualTo(firstLeaseId);
+          assertThat(owner.getLeaseVersion()).isEqualTo(firstLeaseVersion);
+          assertThat(owner.getFencingToken()).isEqualTo(firstFencingToken);
+          assertThat(owner.getLeaseExpiresAt()).isEqualTo(firstLeaseExpiresAt);
+          assertThat(owner.getLeaseReconciliationState()).isEqualTo("ACTIVE");
+        });
+
+    verify(dependencies, times(2)).getRentalItemSnapshot(first.rentalItemId());
+    verify(dependencies, never()).acquireLease(
+        any(), eq(first.rentalItemId()), anyLong(),
+        anyString(), eq(secondFixture.repairId().toString()));
+    verify(dependencies, never()).renewLease(
+        any(), any(), anyLong(), anyLong(),
+        anyString(), eq(secondFixture.repairId().toString()));
+    verify(dependencies, never()).fencedStatus(
+        any(), eq(first.rentalItemId()), eq(first.warehouseId()), anyLong(),
+        any(), anyLong(), anyString(), eq(secondFixture.repairId().toString()),
+        anyString(), anyBoolean());
+    verify(dependencies, never()).releaseLease(
+        any(), any(), anyLong(), anyLong(),
+        anyString(), eq(secondFixture.repairId().toString()));
+    verify(dependencies).registerTask(
+        any(), eq(secondFixture.externalTaskId()), eq(secondFixture.repairId()),
+        eq(first.warehouseId()),
+        eq(first.rentalItemId()), nullable(String.class),
+        any(LocalDate.class), anyInt(), eq(6), anyList());
+  }
+
+  @Test
+  void repeatedSecondRepairQueueCommandIsIdempotent() {
+    RepairFixture first = createDirectRepair();
+    service.queueRepair(
+        UUID.randomUUID(), UUID.randomUUID(), first.repairId(), new VersionCommand(0L));
+    stubQueueDependencies(first);
+    assertThat(service.reconcileOneTask()).isTrue();
+    registerQueuedRepair(first);
+    clearInvocations(dependencies);
+
+    var created =
+        service.createDirectRepair(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            directRepairRequest(
+                first.warehouseId(),
+                first.rentalItemId(),
+                LocalDate.of(2026, 7, 18),
+                null));
+    RepairFixture second = new RepairFixture(
+        created.response().id(),
+        created.response().plan().stages().getFirst().taskSync().externalTaskId(),
+        first.warehouseId(),
+        first.rentalItemId());
+    UUID subjectId = UUID.randomUUID();
+    UUID key = UUID.randomUUID();
+
+    assertThat(service.queueRepair(
+        subjectId, key, second.repairId(), new VersionCommand(0L)).replayed()).isFalse();
+    assertThat(service.queueRepair(
+        subjectId, key, second.repairId(), new VersionCommand(0L)).replayed()).isTrue();
+    assertThat(jdbc.queryForObject("""
+        select count(*) from integration_reconciliation
+        where repair_id=? and operation_type='QUEUE_REPAIR'
+        """, Integer.class, second.repairId())).isOne();
+
+    when(dependencies.getRentalItemSnapshot(first.rentalItemId()))
+        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
+            first.rentalItemId(), 8, first.warehouseId(), "БТ-42", "REPAIR"));
+    assertThat(service.reconcileOneTask()).isTrue();
+    registerQueuedRepair(second);
+
+    assertThat(jdbc.queryForObject("""
+        select count(*) from integration_reconciliation
+        where repair_id=? and operation_type='REGISTER_TASK'
+        """, Integer.class, second.repairId())).isOne();
+    verify(dependencies, times(1)).registerTask(
+        any(), eq(second.externalTaskId()), eq(second.repairId()), eq(first.warehouseId()),
+        eq(first.rentalItemId()), nullable(String.class),
+        any(LocalDate.class), anyInt(), eq(6), anyList());
+    verify(dependencies, never()).acquireLease(
+        any(), eq(first.rentalItemId()), anyLong(),
+        anyString(), eq(second.repairId().toString()));
+    verify(dependencies, never()).fencedStatus(
+        any(), eq(first.rentalItemId()), eq(first.warehouseId()), anyLong(),
+        any(), anyLong(), anyString(), eq(second.repairId().toString()),
+        anyString(), anyBoolean());
+  }
+
+  @Test
+  void reconciliationRequiredLifecycleOwnerQueuesSecondRepairWithoutLeaseCalls() {
+    RepairFixture first = createDirectRepair();
+    service.queueRepair(
+        UUID.randomUUID(), UUID.randomUUID(), first.repairId(), new VersionCommand(0L));
+    stubQueueDependencies(first);
+    assertThat(service.reconcileOneTask()).isTrue();
+    registerQueuedRepair(first);
+    jdbc.update("""
+        update maintenance_repair
+        set lease_reconciliation_state='RECONCILIATION_REQUIRED'
+        where id=?
+        """, first.repairId());
+    clearInvocations(dependencies);
+
+    var created =
+        service.createDirectRepair(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            directRepairRequest(
+                first.warehouseId(),
+                first.rentalItemId(),
+                LocalDate.of(2026, 7, 18),
+                null));
+    RepairFixture second = new RepairFixture(
+        created.response().id(),
+        created.response().plan().stages().getFirst().taskSync().externalTaskId(),
+        first.warehouseId(),
+        first.rentalItemId());
+    service.queueRepair(
+        UUID.randomUUID(), UUID.randomUUID(), second.repairId(), new VersionCommand(0L));
+    when(dependencies.getRentalItemSnapshot(first.rentalItemId()))
+        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
+            first.rentalItemId(), 8, first.warehouseId(), "БТ-42", "REPAIR"));
+
+    assertThat(service.reconcileOneTask()).isTrue();
+    registerQueuedRepair(second);
+
+    assertThat(repairs.findById(second.repairId()).orElseThrow())
+        .satisfies(repair -> {
+          assertThat(repair.getExecutionState()).isEqualTo(RepairExecutionState.QUEUED);
+          assertThat(repair.getLeaseId()).isNull();
+          assertThat(repair.getLeaseReconciliationState()).isEqualTo("NOT_REQUIRED");
+          assertThat(repair.getTaskGenerationState()).isEqualTo("GENERATED");
+        });
+    assertThat(repairs.findById(first.repairId()).orElseThrow().getLeaseReconciliationState())
+        .isEqualTo("RECONCILIATION_REQUIRED");
+    verify(dependencies, times(2)).getRentalItemSnapshot(first.rentalItemId());
+    verify(dependencies, never()).acquireLease(
+        any(), eq(first.rentalItemId()), anyLong(),
+        anyString(), eq(second.repairId().toString()));
+    verify(dependencies, never()).renewLease(
+        any(), any(), anyLong(), anyLong(),
+        anyString(), eq(second.repairId().toString()));
+    verify(dependencies, never()).fencedStatus(
+        any(), eq(first.rentalItemId()), eq(first.warehouseId()), anyLong(),
+        any(), anyLong(), anyString(), eq(second.repairId().toString()),
+        anyString(), anyBoolean());
+    verify(dependencies, never()).releaseLease(
+        any(), any(), anyLong(), anyLong(),
+        anyString(), eq(second.repairId().toString()));
+  }
+
+  @Test
+  void authenticatedRetryQueuesAQuarantinedSecondRepairWithoutLeaseCalls() {
+    RepairFixture first = createDirectRepair();
+    service.queueRepair(
+        UUID.randomUUID(), UUID.randomUUID(), first.repairId(), new VersionCommand(0L));
+    stubQueueDependencies(first);
+    assertThat(service.reconcileOneTask()).isTrue();
+    registerQueuedRepair(first);
+    jdbc.update("""
+        update maintenance_repair
+        set lease_reconciliation_state='RELEASED'
+        where id=?
+        """, first.repairId());
+    clearInvocations(dependencies);
+
+    var created =
+        service.createDirectRepair(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            directRepairRequest(
+                first.warehouseId(),
+                first.rentalItemId(),
+                LocalDate.of(2026, 7, 18),
+                null));
+    RepairFixture second = new RepairFixture(
+        created.response().id(),
+        created.response().plan().stages().getFirst().taskSync().externalTaskId(),
+        first.warehouseId(),
+        first.rentalItemId());
+    service.queueRepair(
+        UUID.randomUUID(), UUID.randomUUID(), second.repairId(), new VersionCommand(0L));
+    when(dependencies.getRentalItemSnapshot(first.rentalItemId()))
+        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
+            first.rentalItemId(), 8, first.warehouseId(), "БТ-42", "REPAIR"));
+
+    for (int attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) makeReconciliationDue(second.repairId(), "QUEUE_REPAIR");
+      assertThat(service.reconcileOneTask()).isTrue();
+    }
+    assertThat(jdbc.queryForObject("""
+        select state from integration_reconciliation
+        where repair_id=? and operation_type='QUEUE_REPAIR'
+        """, String.class, second.repairId())).isEqualTo("QUARANTINED");
+
+    jdbc.update("""
+        update maintenance_repair
+        set lease_reconciliation_state='RECONCILIATION_REQUIRED'
+        where id=?
+        """, first.repairId());
+    UUID reviewer = UUID.randomUUID();
+    long currentVersion = service.repair(second.repairId(), second.warehouseId()).version();
+    service.queueRepair(
+        reviewer,
+        UUID.randomUUID(),
+        second.repairId(),
+        new QueueRepairRequest(currentVersion, 3));
+
+    assertThat(jdbc.queryForMap("""
+        select state,attempt_count,review_version,review_subject_id,review_reason
+        from integration_reconciliation
+        where repair_id=? and operation_type='QUEUE_REPAIR'
+        """, second.repairId()))
+        .containsEntry("state", "RETRY_PENDING")
+        .containsEntry("attempt_count", 0)
+        .containsEntry("review_version", 1L)
+        .containsEntry("review_subject_id", reviewer)
+        .containsEntry(
+            "review_reason",
+            "Authenticated repair queue retry after canonical asset revalidation");
+
+    assertThat(service.reconcileOneTask()).isTrue();
+    registerQueuedRepair(second);
+    assertThat(repairs.findById(second.repairId()).orElseThrow())
+        .satisfies(repair -> {
+          assertThat(repair.getExecutionState()).isEqualTo(RepairExecutionState.QUEUED);
+          assertThat(repair.getLeaseId()).isNull();
+          assertThat(repair.getLeaseReconciliationState()).isEqualTo("NOT_REQUIRED");
+          assertThat(repair.getTaskGenerationState()).isEqualTo("GENERATED");
+        });
+    verify(dependencies, never()).acquireLease(
+        any(), eq(first.rentalItemId()), anyLong(),
+        anyString(), eq(second.repairId().toString()));
+    verify(dependencies, never()).renewLease(
+        any(), any(), anyLong(), anyLong(),
+        anyString(), eq(second.repairId().toString()));
+    verify(dependencies, never()).fencedStatus(
+        any(), eq(first.rentalItemId()), eq(first.warehouseId()), anyLong(),
+        any(), anyLong(), anyString(), eq(second.repairId().toString()),
+        anyString(), anyBoolean());
+    verify(dependencies, never()).releaseLease(
+        any(), any(), anyLong(), anyLong(),
+        anyString(), eq(second.repairId().toString()));
   }
 
   @Test
@@ -495,27 +2603,37 @@ class MaintenanceCorePostgresIntegrationTest {
     UUID categoryId = UUID.randomUUID();
     UUID chairMaterialId = UUID.randomUUID();
     UUID tableMaterialId = UUID.randomUUID();
+    UUID workNodeId = UUID.randomUUID();
+    RoutingSnapshot repairRouting =
+        new RoutingSnapshot(UUID.randomUUID(), "REPAIR", "REPAIR");
     UUID chairEquipmentId = UUID.fromString("52000000-0000-4000-8000-000000000001");
     UUID tableEquipmentId = UUID.fromString("52000000-0000-4000-8000-000000000002");
     CatalogNodeInput category = new CatalogNodeInput(
-        categoryId, "FURNITURE", CatalogNodeType.CATEGORY, "Furniture", true, null,
+        categoryId, CatalogNodeType.CATEGORY, "Furniture", true, null,
         true, null, null, null, 0, false, false, true,
-        null, null, null, List.of(), null);
+        null, null, null, null, null, false, null);
     CatalogNodeInput chair = new CatalogNodeInput(
-        chairMaterialId, "CHAIR", CatalogNodeType.MATERIAL, "Chair", true, categoryId,
-        false, new FurnitureEquipmentReference(chairEquipmentId, "CHAIR", "Chair"),
+        chairMaterialId, CatalogNodeType.MATERIAL, "Chair", true, categoryId,
+        false, new FurnitureEquipmentReference(chairEquipmentId, "Chair"),
         "piece", "100.00", 0, true, false, false,
-        null, null, null, List.of(), null);
+        null, null, null, null, null, false, null);
     CatalogNodeInput table = new CatalogNodeInput(
-        tableMaterialId, "TABLE", CatalogNodeType.MATERIAL, "Table", true, categoryId,
-        false, new FurnitureEquipmentReference(tableEquipmentId, "TABLE", "Table"),
+        tableMaterialId, CatalogNodeType.MATERIAL, "Table", true, categoryId,
+        false, new FurnitureEquipmentReference(tableEquipmentId, "Table"),
         "piece", "100.00", 0, true, false, false,
-        null, null, null, List.of(), null);
+        null, null, null, null, null, false, null);
+    CatalogNodeInput work = new CatalogNodeInput(
+        workNodeId, CatalogNodeType.WORK, "Repair furniture", true, null,
+        false, null, "piece", "100.00", 15, true, false, true,
+        null, null, new CatalogRoutingInput(repairRouting.queueId(), repairRouting.queueType()),
+        null, null, false, null);
     CatalogVersionResponse changed = service.changeCatalog(
-        catalogId, new ChangeCatalogRequest(0L, List.of(category, chair, table), List.of()));
+        catalogId,
+        new ChangeCatalogRequest(0L, List.of(category, chair, table, work), List.of()));
     service.activateCatalog(
         UUID.randomUUID(), UUID.randomUUID(), catalogId,
         new VersionCommand(changed.version()));
+    reconcileCatalogRoute(repairRouting.queueId());
     clearInvocations(dependencies);
     rentalItemFacts.saveAndFlush(
         RentalItemFactProjection.create(rentalItemId, warehouseId, "AFTER_RENT", 7));
@@ -523,26 +2641,39 @@ class MaintenanceCorePostgresIntegrationTest {
     CatalogNodeSnapshot forgedChairSnapshot = new CatalogNodeSnapshot(
         catalogId,
         chairMaterialId,
-        "FORGED",
         CatalogNodeType.MATERIAL,
         "Forged furniture",
         "piece",
         "1.00",
         0,
         null,
-        new FurnitureEquipmentReference(UUID.randomUUID(), "FORGED", "Forged"));
+        new FurnitureEquipmentReference(UUID.randomUUID(), "Forged"),
+        false,
+        null);
     CatalogNodeSnapshot forgedTableSnapshot = new CatalogNodeSnapshot(
         catalogId,
         tableMaterialId,
-        "FORGED_TABLE",
         CatalogNodeType.MATERIAL,
         "Forged table",
         "piece",
         "1.00",
         0,
         null,
-        new FurnitureEquipmentReference(UUID.randomUUID(), "FORGED_TABLE", "Forged table"));
-    PlanStageInput planStage = stage();
+        new FurnitureEquipmentReference(UUID.randomUUID(), "Forged table"),
+        false,
+        null);
+    CatalogNodeSnapshot workSnapshot = new CatalogNodeSnapshot(
+        catalogId,
+        workNodeId,
+        CatalogNodeType.WORK,
+        "Repair furniture",
+        "piece",
+        "100.00",
+        15,
+        repairRouting,
+        null,
+        false,
+        null);
 
     assertThatThrownBy(() -> service.createEstimate(
         UUID.randomUUID(),
@@ -553,9 +2684,9 @@ class MaintenanceCorePostgresIntegrationTest {
             LocalDate.of(2026, 7, 19),
             null,
             List.of(new EstimateLineInput(
-                UUID.randomUUID(), forgedChairSnapshot, "Replace chairs", "1.5", "100.00",
-                null, List.of())),
-            List.of(planStage),
+                UUID.randomUUID(), forgedChairSnapshot, EstimateLineType.MATERIAL,
+                "Replace chairs", "piece", "1.5", "100.00", 0, null, List.of())),
+            List.of(stage()),
             List.of())))
         .isInstanceOf(
             dev.buhanzaz.rwms.maintenance.service.MaintenanceValidationException.class)
@@ -563,14 +2694,27 @@ class MaintenanceCorePostgresIntegrationTest {
 
     List<EstimateLineInput> lines = List.of(
         new EstimateLineInput(
-            UUID.randomUUID(), forgedTableSnapshot, "Replace table", "1", "100.00",
-            null, List.of()),
+            UUID.randomUUID(), forgedTableSnapshot, EstimateLineType.MATERIAL,
+            "Replace table", "piece", "1", "100.00", 0, null, List.of()),
         new EstimateLineInput(
-            UUID.randomUUID(), forgedChairSnapshot, "Replace chairs", "2", "100.00",
-            null, List.of()),
+            UUID.randomUUID(), forgedChairSnapshot, EstimateLineType.MATERIAL,
+            "Replace chairs", "piece", "2", "100.00", 0, null, List.of()),
         new EstimateLineInput(
-            UUID.randomUUID(), forgedTableSnapshot, "Replace more tables", "3", "100.00",
-            null, List.of()));
+            UUID.randomUUID(), forgedTableSnapshot, EstimateLineType.MATERIAL,
+            "Replace more tables", "piece", "3", "100.00", 0, null, List.of()),
+        new EstimateLineInput(
+            UUID.randomUUID(), workSnapshot, EstimateLineType.WORK,
+            "Repair furniture", "piece", "1", "100.00", 15, null, List.of()));
+    PlanStageInput planStage =
+        new PlanStageInput(
+            UUID.randomUUID(),
+            RepairStageKind.REPAIR_WORK,
+            0,
+            repairRouting,
+            lines.stream().map(EstimateLineInput::id).toList(),
+            lines.getLast().id(),
+            "",
+            null);
     var created = service.createEstimate(
         UUID.randomUUID(),
         UUID.randomUUID(),
@@ -586,15 +2730,16 @@ class MaintenanceCorePostgresIntegrationTest {
         UUID.randomUUID(),
         UUID.randomUUID(),
         created.response().id(),
-        new CompleteEstimateRequest(created.response().version()));
+        new CompleteEstimateRequest(created.response().version(), 2));
+    assertThat(completed.response().repair().priority()).isEqualTo(2);
     UUID repairId = completed.response().repair().id();
     UUID estimateId = created.response().id();
 
     List<EstimateLineInput> changedFurniture = new ArrayList<>(lines);
     EstimateLineInput first = changedFurniture.getFirst();
     changedFurniture.set(0, new EstimateLineInput(
-        first.id(), first.catalogSnapshot(), first.description(), "2", first.unitPrice(),
-        first.comment(), first.mediaReferences()));
+        first.id(), first.catalogSnapshot(), first.lineType(), first.description(), first.unit(), "2",
+        first.unitPrice(), first.normativeMinutes(), first.comment(), first.mediaReferences()));
     assertThatThrownBy(() -> service.amendEstimate(
         UUID.randomUUID(),
         UUID.randomUUID(),
@@ -613,14 +2758,15 @@ class MaintenanceCorePostgresIntegrationTest {
 
     List<EstimateLineInput> overflowingFurniture = new ArrayList<>(lines);
     EstimateLineInput firstTable = overflowingFurniture.getFirst();
-    EstimateLineInput lastTable = overflowingFurniture.getLast();
+    EstimateLineInput lastTable = overflowingFurniture.get(2);
     overflowingFurniture.set(0, new EstimateLineInput(
-        firstTable.id(), firstTable.catalogSnapshot(), firstTable.description(),
-        Long.toString(Long.MAX_VALUE), firstTable.unitPrice(), firstTable.comment(),
-        firstTable.mediaReferences()));
+        firstTable.id(), firstTable.catalogSnapshot(), firstTable.lineType(), firstTable.description(),
+        firstTable.unit(), Long.toString(Long.MAX_VALUE), firstTable.unitPrice(),
+        firstTable.normativeMinutes(), firstTable.comment(), firstTable.mediaReferences()));
     overflowingFurniture.set(2, new EstimateLineInput(
-        lastTable.id(), lastTable.catalogSnapshot(), lastTable.description(), "1",
-        lastTable.unitPrice(), lastTable.comment(), lastTable.mediaReferences()));
+        lastTable.id(), lastTable.catalogSnapshot(), lastTable.lineType(), lastTable.description(),
+        lastTable.unit(), "1", lastTable.unitPrice(), lastTable.normativeMinutes(),
+        lastTable.comment(), lastTable.mediaReferences()));
     assertThatThrownBy(() -> service.amendEstimate(
         UUID.randomUUID(),
         UUID.randomUUID(),
@@ -648,8 +2794,8 @@ class MaintenanceCorePostgresIntegrationTest {
             leaseId, 0, rentalItemId, "MAINTENANCE_ESTIMATE", estimateId, 17,
             OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15)));
     List<MaintenanceDependencyGateway.FurnitureLoss> losses = List.of(
-        new MaintenanceDependencyGateway.FurnitureLoss(chairEquipmentId, "CHAIR", 2),
-        new MaintenanceDependencyGateway.FurnitureLoss(tableEquipmentId, "TABLE", 4));
+        new MaintenanceDependencyGateway.FurnitureLoss(chairEquipmentId, 2),
+        new MaintenanceDependencyGateway.FurnitureLoss(tableEquipmentId, 4));
     when(dependencies.fencedStatus(
         any(), eq(rentalItemId), eq(warehouseId), eq(7L), eq(leaseId), eq(17L),
         eq("MAINTENANCE_ESTIMATE"), eq(estimateId.toString()), eq("QUEUE_TO_REPAIR"),
@@ -672,31 +2818,29 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   @Test
-  void estimateRejectsUnlinkedFurnitureFromAnAlreadyActiveLegacyCatalog() {
+  void estimateRejectsUnlinkedFurnitureFromAnAlreadyActiveCatalog() {
     UUID warehouseId = UUID.randomUUID();
     UUID rentalItemId = UUID.randomUUID();
     UUID catalogId = insertDraftCatalog(warehouseId, "e".repeat(64));
     UUID categoryId = UUID.randomUUID();
     UUID materialId = UUID.randomUUID();
     UUID equipmentId = UUID.randomUUID();
-    when(dependencies.ensureFurnitureEquipment("CHAIR", "Chair"))
+    when(dependencies.ensureFurnitureEquipment(materialId, "Chair"))
         .thenReturn(new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
-            equipmentId, "CHAIR", "Chair"));
+            equipmentId, "Chair"));
     CatalogNodeInput category = new CatalogNodeInput(
-        categoryId, "FURNITURE", CatalogNodeType.CATEGORY, "Furniture", true, null,
-        false, null, null, null, 0, false, false, true,
-        null, null, null, List.of(), null);
+        categoryId, CatalogNodeType.CATEGORY, "Furniture", true, null,
+        true, null, null, null, 0, false, false, true,
+        null, null, null, null, null, false, null);
     CatalogNodeInput material = new CatalogNodeInput(
-        materialId, "CHAIR", CatalogNodeType.MATERIAL, "Chair", true, categoryId,
+        materialId, CatalogNodeType.MATERIAL, "Chair", true, categoryId,
         false, null, "piece", "100.00", 0, true, false, false,
-        null, null, null, List.of(), null);
+        null, null, null, null, null, false, null);
     service.changeCatalog(
         catalogId, new ChangeCatalogRequest(0L, List.of(category, material), List.of()));
-    // V4 backfills the FURNITURE marker on catalogs that were active before mappings existed.
     jdbc.update("""
         update catalog_node
         set furniture_equipment_id=null,
-            furniture_equipment_code=null,
             furniture_equipment_name=null
         where catalog_version_id=? and node_id=?
         """, catalogId, materialId);
@@ -704,8 +2848,8 @@ class MaintenanceCorePostgresIntegrationTest {
     rentalItemFacts.saveAndFlush(
         RentalItemFactProjection.create(rentalItemId, warehouseId, "AFTER_RENT", 7));
     CatalogNodeSnapshot submitted = new CatalogNodeSnapshot(
-        catalogId, materialId, "CHAIR", CatalogNodeType.MATERIAL, "Chair", "piece",
-        "100.00", 0, null, null);
+        catalogId, materialId, CatalogNodeType.MATERIAL, "Chair", "piece",
+        "100.00", 0, null, null, false, null);
 
     assertThatThrownBy(() -> service.createEstimate(
         UUID.randomUUID(),
@@ -716,8 +2860,8 @@ class MaintenanceCorePostgresIntegrationTest {
             LocalDate.of(2026, 7, 19),
             null,
             List.of(new EstimateLineInput(
-                UUID.randomUUID(), submitted, "Replace chair", "1", "100.00", null,
-                List.of())),
+                UUID.randomUUID(), submitted, EstimateLineType.MATERIAL, "Replace chair", "piece",
+                "1", "100.00", 0, null, List.of())),
             List.of(stage()),
             List.of())))
         .isInstanceOf(
@@ -731,19 +2875,19 @@ class MaintenanceCorePostgresIntegrationTest {
     UUID categoryId = UUID.randomUUID();
     UUID equipmentId = UUID.randomUUID();
     CatalogNodeInput category = new CatalogNodeInput(
-        categoryId, "FURNITURE", CatalogNodeType.CATEGORY, "Furniture", true, null,
+        categoryId, CatalogNodeType.CATEGORY, "Furniture", true, null,
         true, null, null, null, 0, false, false, true,
-        null, null, null, List.of(), null);
+        null, null, null, null, null, false, null);
     CatalogNodeInput chair = new CatalogNodeInput(
-        UUID.randomUUID(), "CHAIR", CatalogNodeType.MATERIAL, "Chair", true, categoryId,
-        false, new FurnitureEquipmentReference(equipmentId, "CHAIR", "Chair"),
+        UUID.randomUUID(), CatalogNodeType.MATERIAL, "Chair", true, categoryId,
+        false, new FurnitureEquipmentReference(equipmentId, "Chair"),
         "piece", "100.00", 0, true, false, false,
-        null, null, null, List.of(), null);
+        null, null, null, null, null, false, null);
     CatalogNodeInput conflicting = new CatalogNodeInput(
-        UUID.randomUUID(), "SEAT", CatalogNodeType.MATERIAL, "Seat", true, categoryId,
-        false, new FurnitureEquipmentReference(equipmentId, "SEAT", "Seat"),
+        UUID.randomUUID(), CatalogNodeType.MATERIAL, "Seat", true, categoryId,
+        false, new FurnitureEquipmentReference(equipmentId, "Seat"),
         "piece", "100.00", 0, true, false, false,
-        null, null, null, List.of(), null);
+        null, null, null, null, null, false, null);
 
     assertThatThrownBy(() -> service.changeCatalog(
         catalogId,
@@ -751,37 +2895,51 @@ class MaintenanceCorePostgresIntegrationTest {
             0L, List.of(category, chair, conflicting), List.of())))
         .isInstanceOf(
             dev.buhanzaz.rwms.maintenance.service.MaintenanceValidationException.class)
-        .hasMessageContaining("one canonical code and name");
+        .hasMessageContaining("One furniture equipment ID must use one canonical name");
   }
 
   @Test
-  void preV4FurnitureSnapshotCannotQueueWithoutTheCanonicalEquipmentLink() {
+  void furnitureSnapshotCannotQueueWithoutTheCanonicalEquipmentLink() {
     UUID warehouseId = UUID.randomUUID();
     UUID rentalItemId = UUID.randomUUID();
     UUID catalogId = insertDraftCatalog(warehouseId, "d".repeat(64));
     UUID categoryId = UUID.randomUUID();
     UUID materialId = UUID.randomUUID();
+    UUID workId = UUID.randomUUID();
     UUID equipmentId = UUID.randomUUID();
+    RoutingSnapshot routing =
+        new RoutingSnapshot(UUID.randomUUID(), "REPAIR", "REPAIR");
     CatalogNodeInput category = new CatalogNodeInput(
-        categoryId, "FURNITURE", CatalogNodeType.CATEGORY, "Furniture", true, null,
+        categoryId, CatalogNodeType.CATEGORY, "Furniture", true, null,
         true, null, null, null, 0, false, false, true,
-        null, null, null, List.of(), null);
+        null, null, null, null, null, false, null);
     CatalogNodeInput material = new CatalogNodeInput(
-        materialId, "CHAIR", CatalogNodeType.MATERIAL, "Chair", true, categoryId,
-        false, new FurnitureEquipmentReference(equipmentId, "CHAIR", "Chair"),
+        materialId, CatalogNodeType.MATERIAL, "Chair", true, categoryId,
+        false, new FurnitureEquipmentReference(equipmentId, "Chair"),
         "piece", "100.00", 0, true, false, false,
-        null, null, null, List.of(), null);
+        null, null, null, null, null, false, null);
+    CatalogNodeInput work = new CatalogNodeInput(
+        workId, CatalogNodeType.WORK, "Repair chair", true, null,
+        false, null, "piece", "100.00", 15, true, false, true,
+        null, null, new CatalogRoutingInput(routing.queueId(), routing.queueType()),
+        null, null, false, null);
     CatalogVersionResponse changed = service.changeCatalog(
-        catalogId, new ChangeCatalogRequest(0L, List.of(category, material), List.of()));
+        catalogId, new ChangeCatalogRequest(0L, List.of(category, material, work), List.of()));
     service.activateCatalog(
         UUID.randomUUID(), UUID.randomUUID(), catalogId,
         new VersionCommand(changed.version()));
+    reconcileCatalogRoute(routing.queueId());
     clearInvocations(dependencies);
     rentalItemFacts.saveAndFlush(
         RentalItemFactProjection.create(rentalItemId, warehouseId, "AFTER_RENT", 7));
     CatalogNodeSnapshot submitted = new CatalogNodeSnapshot(
-        catalogId, materialId, "CHAIR", CatalogNodeType.MATERIAL, "Chair", "piece",
-        "100.00", 0, null, null);
+        catalogId, materialId, CatalogNodeType.MATERIAL, "Chair", "piece",
+        "100.00", 0, null, null, false, null);
+    CatalogNodeSnapshot submittedWork = new CatalogNodeSnapshot(
+        catalogId, workId, CatalogNodeType.WORK, "Repair chair", "piece",
+        "100.00", 15, routing, null, false, null);
+    UUID materialLineId = UUID.randomUUID();
+    UUID workLineId = UUID.randomUUID();
     var created = service.createEstimate(
         UUID.randomUUID(),
         UUID.randomUUID(),
@@ -790,10 +2948,23 @@ class MaintenanceCorePostgresIntegrationTest {
             rentalItemId,
             LocalDate.of(2026, 7, 19),
             null,
-            List.of(new EstimateLineInput(
-                UUID.randomUUID(), submitted, "Replace chair", "1", "100.00", null,
-                List.of())),
-            List.of(stage()),
+            List.of(
+                new EstimateLineInput(
+                    materialLineId, submitted, EstimateLineType.MATERIAL, "Replace chair", "piece",
+                    "1", "100.00", 0, null, List.of()),
+                new EstimateLineInput(
+                    workLineId, submittedWork, EstimateLineType.WORK, "Repair chair", "piece",
+                    "1", "100.00", 15, null, List.of())),
+            List.of(
+                new PlanStageInput(
+                    UUID.randomUUID(),
+                    RepairStageKind.REPAIR_WORK,
+                    0,
+                    routing,
+                    List.of(materialLineId, workLineId),
+                    workLineId,
+                    "",
+                    null)),
             List.of()));
     var completed = service.completeEstimate(
         UUID.randomUUID(),
@@ -804,7 +2975,6 @@ class MaintenanceCorePostgresIntegrationTest {
     jdbc.update("""
         update catalog_node
         set furniture_equipment_id=null,
-            furniture_equipment_code=null,
             furniture_equipment_name=null
         where catalog_version_id=? and node_id=?
         """, catalogId, materialId);
@@ -818,6 +2988,7 @@ class MaintenanceCorePostgresIntegrationTest {
     assertThat(service.estimate(created.response().id())
         .revisions().getFirst().lines().getFirst().catalogSnapshot().furnitureEquipment())
         .isNull();
+    clearInvocations(dependencies);
     assertThat(service.reconcileOneTask()).isTrue();
 
     assertThat(repairs.findById(repairId).orElseThrow().getExecutionState())
@@ -828,7 +2999,8 @@ class MaintenanceCorePostgresIntegrationTest {
         """, repairId))
         .containsEntry("state", "RETRY_PENDING")
         .containsEntry("last_error_code", "MaintenanceValidationException");
-    verifyNoInteractions(dependencies);
+    verify(dependencies).repairComplexityThresholds(warehouseId);
+    verifyNoMoreInteractions(dependencies);
   }
 
   @Test
@@ -892,8 +3064,10 @@ class MaintenanceCorePostgresIntegrationTest {
         where repair_id=? and operation_type='REGISTER_TASK'
         """, UUID.class, fixture.repairId());
     when(dependencies.registerTask(
-        eq(stableKey), eq(fixture.externalTaskId()), eq(fixture.warehouseId()),
-        eq(fixture.rentalItemId()), anyList()))
+        eq(stableKey), eq(fixture.externalTaskId()), eq(fixture.repairId()),
+        eq(fixture.warehouseId()),
+        eq(fixture.rentalItemId()), nullable(String.class),
+        any(LocalDate.class), anyInt(), eq(6), anyList()))
         .thenThrow(new IllegalStateException("task-board unavailable"));
 
     assertThat(service.reconcileOneTask()).isTrue();
@@ -915,8 +3089,10 @@ class MaintenanceCorePostgresIntegrationTest {
     makeReconciliationDue(fixture.repairId(), "REGISTER_TASK");
     UUID entryId = UUID.randomUUID();
     when(dependencies.registerTask(
-        eq(stableKey), eq(fixture.externalTaskId()), eq(fixture.warehouseId()),
-        eq(fixture.rentalItemId()), anyList()))
+        eq(stableKey), eq(fixture.externalTaskId()), eq(fixture.repairId()),
+        eq(fixture.warehouseId()),
+        eq(fixture.rentalItemId()), nullable(String.class),
+        any(LocalDate.class), anyInt(), eq(6), anyList()))
         .thenReturn(new MaintenanceDependencyGateway.TaskSnapshot(
             fixture.externalTaskId(), 0, "ACTIVE",
             List.of(new MaintenanceDependencyGateway.TaskStageSnapshot(0, entryId, 0))));
@@ -927,8 +3103,10 @@ class MaintenanceCorePostgresIntegrationTest {
         where repair_id=? and operation_type='REGISTER_TASK'
         """, String.class, fixture.repairId())).isEqualTo("CONFIRMED");
     verify(dependencies, times(2)).registerTask(
-        eq(stableKey), eq(fixture.externalTaskId()), eq(fixture.warehouseId()),
-        eq(fixture.rentalItemId()), anyList());
+        eq(stableKey), eq(fixture.externalTaskId()), eq(fixture.repairId()),
+        eq(fixture.warehouseId()),
+        eq(fixture.rentalItemId()), nullable(String.class),
+        any(LocalDate.class), anyInt(), eq(6), anyList());
   }
 
   @Test
@@ -945,8 +3123,10 @@ class MaintenanceCorePostgresIntegrationTest {
         where repair_id=? and operation_type='REGISTER_TASK'
         """, UUID.class, fixture.repairId());
     when(dependencies.registerTask(
-        eq(stableKey), eq(fixture.externalTaskId()), eq(fixture.warehouseId()),
-        eq(fixture.rentalItemId()), anyList()))
+        eq(stableKey), eq(fixture.externalTaskId()), eq(fixture.repairId()),
+        eq(fixture.warehouseId()),
+        eq(fixture.rentalItemId()), nullable(String.class),
+        any(LocalDate.class), anyInt(), eq(6), anyList()))
         .thenThrow(new IllegalStateException("task-board unavailable with private details"));
 
     for (int attempt = 1; attempt <= 4; attempt++) {
@@ -984,8 +3164,10 @@ class MaintenanceCorePostgresIntegrationTest {
 
     assertThat(service.reconcileOneTask()).isFalse();
     verify(dependencies, times(4)).registerTask(
-        eq(stableKey), eq(fixture.externalTaskId()), eq(fixture.warehouseId()),
-        eq(fixture.rentalItemId()), anyList());
+        eq(stableKey), eq(fixture.externalTaskId()), eq(fixture.repairId()),
+        eq(fixture.warehouseId()),
+        eq(fixture.rentalItemId()), nullable(String.class),
+        any(LocalDate.class), anyInt(), eq(6), anyList());
   }
 
   @Test
@@ -1048,6 +3230,12 @@ class MaintenanceCorePostgresIntegrationTest {
   @Test
   void draftRepairMediaReplacementUsesCasAndAdvancesItsOwnerProof() {
     RepairFixture fixture = createDirectRepair();
+    CreateDirectRepairRequest content =
+        directRepairRequest(
+            fixture.warehouseId(),
+            fixture.rentalItemId(),
+            LocalDate.of(2026, 7, 17),
+            null);
     UUID mediaId = UUID.randomUUID();
     new TransactionTemplate(transactionManager).executeWithoutResult(status ->
         service.applyInboundMediaFact(
@@ -1063,7 +3251,11 @@ class MaintenanceCorePostgresIntegrationTest {
     RepairResponse changed = service.updateRepairPlan(
         fixture.repairId(),
         new UpdateRepairPlanRequest(
-            0L, List.of(stage()), List.of(new MediaReferenceInput(mediaId, 1L))));
+            0L,
+            content.lines(),
+            content.plan(),
+            List.of(new MediaReferenceInput(mediaId, 1L)),
+            mediaId));
 
     assertThat(changed.version()).isOne();
     assertThat(changed.mediaReferences())
@@ -1089,7 +3281,7 @@ class MaintenanceCorePostgresIntegrationTest {
 
     assertThatThrownBy(() -> service.updateRepairPlan(
         fixture.repairId(),
-        new UpdateRepairPlanRequest(0L, List.of(stage()), List.of())))
+        new UpdateRepairPlanRequest(0L, List.of(), List.of(stage()), List.of(), null)))
         .isInstanceOf(MaintenanceConflictException.class)
         .extracting(exception -> ((MaintenanceConflictException) exception).code())
         .isEqualTo("MAINTENANCE_VERSION_CONFLICT");
@@ -1124,6 +3316,14 @@ class MaintenanceCorePostgresIntegrationTest {
     });
     long expectedVersion = repairs.findById(fixture.repairId()).orElseThrow().getVersion();
 
+    assertThatThrownBy(() -> service.accept(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        fixture.repairId(),
+        new RepairDecisionRequest(expectedVersion, "no photo", List.of())))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .extracting(exception -> ((MaintenanceValidationException) exception).code())
+        .isEqualTo("MAINTENANCE_VALIDATION_FAILED");
     assertThatThrownBy(() -> service.accept(
         UUID.randomUUID(),
         UUID.randomUUID(),
@@ -1169,19 +3369,262 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   @Test
+  void linkedMaterialCharacteristicIsAppliedOnlyAfterSuccessfulAcceptanceAndReplayIsIdempotent() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    UUID characteristicId = UUID.randomUUID();
+    TestCatalogWork work = ensureTestCatalogWork(warehouseId);
+    TestCatalogMaterial material =
+        insertCharacteristicMaterial(
+            work, "Дверь железная", characteristicId, "Железная дверь");
+    rentalItemFacts.saveAndFlush(
+        RentalItemFactProjection.create(rentalItemId, warehouseId, "FREE", 7));
+    RepairFixture fixture =
+        createQueuedPendingAcceptanceRepair(
+            workAndMaterialRepairRequest(
+                warehouseId, rentalItemId, work, material));
+    long expectedVersion =
+        repairs.findById(fixture.repairId()).orElseThrow().getVersion();
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from integration_reconciliation
+                 where repair_id=? and operation_type='APPLY_CHARACTERISTIC'
+                """,
+                Integer.class,
+                fixture.repairId()))
+        .isZero();
+    verify(dependencies, never())
+        .applyCabinCharacteristic(any(), any(), any());
+
+    assertThatThrownBy(
+            () ->
+                service.accept(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    fixture.repairId(),
+                    new RepairDecisionRequest(
+                        expectedVersion, "Без подтверждающего фото", List.of())))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .extracting(
+            exception ->
+                ((MaintenanceValidationException) exception).code())
+        .isEqualTo("MAINTENANCE_VALIDATION_FAILED");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from integration_reconciliation
+                 where repair_id=? and operation_type='APPLY_CHARACTERISTIC'
+                """,
+                Integer.class,
+                fixture.repairId()))
+        .isZero();
+
+    UUID subjectId = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    RepairDecisionRequest decision =
+        acceptanceDecision(
+            fixture, expectedVersion, "Материал и результат приняты");
+    var accepted =
+        service.accept(
+            subjectId, idempotencyKey, fixture.repairId(), decision);
+    var replayed =
+        service.accept(
+            subjectId, idempotencyKey, fixture.repairId(), decision);
+
+    assertThat(accepted.replayed()).isFalse();
+    assertThat(replayed.replayed()).isTrue();
+    assertThat(replayed.response()).isEqualTo(accepted.response());
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from integration_reconciliation
+                 where repair_id=? and operation_type='APPLY_CHARACTERISTIC'
+                """,
+                Integer.class,
+                fixture.repairId()))
+        .isOne();
+
+    deferOtherReconciliations(fixture.repairId(), "APPLY_CHARACTERISTIC");
+    when(
+            dependencies.applyCabinCharacteristic(
+                any(), eq(rentalItemId), eq(characteristicId)))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AppliedCabinCharacteristic(
+                rentalItemId, characteristicId, true, 10));
+
+    assertThat(service.reconcileOneTask()).isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select state from integration_reconciliation
+                 where repair_id=? and operation_type='APPLY_CHARACTERISTIC'
+                """,
+                String.class,
+                fixture.repairId()))
+        .isEqualTo("CONFIRMED");
+    assertThat(service.reconcileOneTask()).isFalse();
+    verify(dependencies, times(1))
+        .applyCabinCharacteristic(
+            any(), eq(rentalItemId), eq(characteristicId));
+  }
+
+  @Test
+  void acceptanceWaitsForEveryRepairSubtaskAndPersistsAfterTheLastOneCompletes() {
+    MultiStageRepairFixture fixture = createRegisteredTwoStageRepair();
+
+    applyTaskOutcome(
+        fixture.repair(),
+        fixture.queueEntryIds().getFirst(),
+        "task-board.queue-entry.completed.v1");
+    assertThat(service.repair(fixture.repair().repairId()))
+        .satisfies(repair -> {
+          assertThat(repair.executionState()).isEqualTo(RepairExecutionState.IN_PROGRESS);
+          assertThat(repair.acceptanceState()).isEqualTo(RepairAcceptanceState.NOT_READY);
+        });
+    assertThat(service.acceptance(fixture.repair().warehouseId()))
+        .extracting(AcceptanceProjection::repairId)
+        .doesNotContain(fixture.repair().repairId());
+
+    applyTaskOutcome(
+        fixture.repair(),
+        fixture.queueEntryIds().get(1),
+        "task-board.queue-entry.completed.v1");
+    stubPendingAcceptanceAsset(fixture.repair());
+    assertThat(service.reconcileOneTask()).isTrue();
+    RepairResponse pending = service.repair(fixture.repair().repairId());
+    assertThat(pending.acceptanceState()).isEqualTo(RepairAcceptanceState.PENDING);
+    assertThat(pending.plan().stages())
+        .allMatch(stage -> stage.state() == RepairStageState.DONE);
+
+    service.accept(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        fixture.repair().repairId(),
+        acceptanceDecision(
+            fixture.repair(), pending.version(), "Все подзадачи проверены"));
+
+    assertThat(service.repair(fixture.repair().repairId()).acceptanceState())
+        .isEqualTo(RepairAcceptanceState.ACCEPTED);
+    assertThat(service.acceptance(fixture.repair().warehouseId()))
+        .extracting(AcceptanceProjection::repairId)
+        .doesNotContain(fixture.repair().repairId());
+  }
+
+  @Test
   void completedReworkReturnsSourceToPendingAndAcceptCascadesWithoutDuplicateStatus() {
     ReworkFixture fixture = createCompletedRework();
+
+    assertThat(service.acceptance(fixture.source().warehouseId()))
+        .extracting(AcceptanceProjection::repairId)
+        .contains(fixture.child().repairId())
+        .doesNotContain(fixture.source().repairId());
 
     long childVersion = repairs.findById(fixture.child().repairId()).orElseThrow().getVersion();
     service.accept(
         UUID.randomUUID(), UUID.randomUUID(), fixture.child().repairId(),
-        new RepairDecisionRequest(childVersion, "accepted after rework"));
+        acceptanceDecision(fixture.child(), childVersion, "accepted after rework"));
 
-    assertThat(repairs.findById(fixture.child().repairId()).orElseThrow().getAcceptanceState())
+    assertThat(service.repair(fixture.child().repairId()).acceptanceState())
         .isEqualTo(RepairAcceptanceState.ACCEPTED);
-    assertThat(repairs.findById(fixture.source().repairId()).orElseThrow().getAcceptanceState())
+    assertThat(service.repair(fixture.source().repairId()).acceptanceState())
         .isEqualTo(RepairAcceptanceState.ACCEPTED);
+    assertThat(service.acceptance(fixture.source().warehouseId()))
+        .extracting(AcceptanceProjection::repairId)
+        .doesNotContain(fixture.child().repairId(), fixture.source().repairId());
     assertSinglePendingAcceptanceIntent(fixture.source().repairId());
+  }
+
+  @Test
+  void reworkWithoutNewPhotosReadsSourcePhotosWithoutCopyingTheirOwnership() {
+    RepairFixture source = createQueuedPendingAcceptanceRepair();
+    UUID sourceMediaId = UUID.randomUUID();
+    new TransactionTemplate(transactionManager).executeWithoutResult(status ->
+        service.applyInboundMediaFact(
+            sourceMediaId,
+            4,
+            "MAINTENANCE_REPAIR",
+            source.repairId(),
+            source.warehouseId(),
+            "READY",
+            "{}",
+            4));
+    mediaReferences.saveAndFlush(new MaintenanceMediaReference(
+        "REPAIR",
+        source.repairId(),
+        sourceMediaId,
+        4,
+        "MAINTENANCE_REPAIR",
+        source.warehouseId(),
+        "{}"));
+
+    RepairFixture child = createDraftRework(source);
+
+    assertThat(service.repair(child.repairId()).mediaReferences())
+        .containsExactly(new MediaReferenceInput(sourceMediaId, 4L));
+    assertThat(mediaReferences.findAllByAggregateTypeAndAggregateIdOrderByMediaId(
+        "REPAIR", child.repairId())).isEmpty();
+    assertThat(mediaReferences.findAllByAggregateTypeAndAggregateIdOrderByMediaId(
+        "REPAIR", source.repairId()))
+        .singleElement()
+        .extracting(MaintenanceMediaReference::getMediaId)
+        .isEqualTo(sourceMediaId);
+  }
+
+  @Test
+  void repeatReworkUsesLatestCompletedCandidateAndPreservesItsLineage() {
+    ReworkFixture completed = createCompletedRework();
+    ReworkCandidatesResponse candidates =
+        service.reworkCandidates(
+            completed.child().repairId(), completed.child().warehouseId());
+    ReworkCandidateLine candidate = candidates.items().stream()
+        .filter(item -> item.sourceRepairId().equals(completed.child().repairId()))
+        .findFirst()
+        .orElseThrow();
+    UUID repeatedLineId = UUID.randomUUID();
+    UUID stageId = UUID.randomUUID();
+    RoutingSnapshot routing = candidate.line().catalogSnapshot().routing();
+    CreateReworkRequest request = new CreateReworkRequest(
+        service.repair(completed.child().repairId()).version(),
+        "Повторить некачественно выполненную работу",
+        List.of(new RepeatReworkLineInput(
+            repeatedLineId,
+            ReworkLineDisposition.REPEAT,
+            candidate.sourceRepairId(),
+            candidate.sourceLineId(),
+            "2",
+            "Переделать ещё раз")),
+        List.of(new PlanStageInput(
+            stageId,
+            RepairStageKind.REPAIR_WORK,
+            0,
+            routing,
+            List.of(repeatedLineId),
+            repeatedLineId,
+            "",
+            null)),
+        List.of(),
+        null);
+
+    RepairResponse repeated = service.createRework(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        completed.child().repairId(),
+        request).response();
+    EstimateLineResponse repeatedLine = repeated.plan().stages().getFirst().workLines().getFirst();
+
+    assertThat(repeatedLine.id()).isEqualTo(repeatedLineId);
+    assertThat(repeatedLine.disposition()).isEqualTo(ReworkLineDisposition.REPEAT);
+    assertThat(repeatedLine.sourceRepairId()).isEqualTo(candidate.sourceRepairId());
+    assertThat(repeatedLine.sourceLineId()).isEqualTo(candidate.sourceLineId());
+    assertThat(repeatedLine.lineageRootLineId()).isEqualTo(candidate.lineageRootLineId());
+    assertThat(repeatedLine.catalogSnapshot()).isEqualTo(candidate.line().catalogSnapshot());
+    assertThat(repeatedLine.description()).isEqualTo(candidate.line().description());
+    assertThat(repeatedLine.unitPrice()).isEqualTo(candidate.line().unitPrice());
+    assertThat(repeatedLine.mediaReferences()).isEqualTo(candidate.line().mediaReferences());
+    assertThat(repeatedLine.quantity()).isEqualTo("2");
+    assertThat(repeatedLine.comment()).isEqualTo("Переделать ещё раз");
   }
 
   @Test
@@ -1218,6 +3661,76 @@ class MaintenanceCorePostgresIntegrationTest {
         select count(*) from integration_reconciliation
         where operation_type='CANCELLED_PRIMARY_RECONCILIATION'
         """, Integer.class)).isZero();
+    verifyNoInteractions(dependencies);
+  }
+
+  @Test
+  void cancelledNoLeaseSecondaryRepairCompletesLocallyAndRetainsTheFirstLease() {
+    RegisteredRepairFixture first = createRegisteredPrimaryRepair();
+    var firstBefore = repairs.findById(first.repair().repairId()).orElseThrow();
+    UUID firstLeaseId = firstBefore.getLeaseId();
+    long firstLeaseVersion = firstBefore.getLeaseVersion();
+    long firstFencingToken = firstBefore.getFencingToken();
+    OffsetDateTime firstLeaseExpiresAt = firstBefore.getLeaseExpiresAt();
+
+    var created =
+        service.createDirectRepair(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            directRepairRequest(
+                first.repair().warehouseId(),
+                first.repair().rentalItemId(),
+                LocalDate.of(2026, 7, 18),
+                null));
+    RepairFixture second = new RepairFixture(
+        created.response().id(),
+        created.response().plan().stages().getFirst().taskSync().externalTaskId(),
+        first.repair().warehouseId(),
+        first.repair().rentalItemId());
+    service.queueRepair(
+        UUID.randomUUID(), UUID.randomUUID(), second.repairId(), new VersionCommand(0L));
+    when(dependencies.getRentalItemSnapshot(second.rentalItemId()))
+        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
+            second.rentalItemId(), 8, second.warehouseId(), "БТ-42", "REPAIR"));
+    assertThat(service.reconcileOneTask()).isTrue();
+    RegisteredRepairFixture registeredSecond = registerQueuedRepair(second);
+    UUID eventId = UUID.randomUUID();
+    clearInvocations(dependencies);
+
+    applyTaskOutcome(
+        second,
+        registeredSecond.queueEntryId(),
+        "task-board.queue-entry.cancelled.v1",
+        eventId);
+    applyTaskOutcome(
+        second,
+        registeredSecond.queueEntryId(),
+        "task-board.queue-entry.cancelled.v1",
+        eventId);
+
+    assertThat(repairs.findById(second.repairId()).orElseThrow())
+        .satisfies(cancelled -> {
+          assertThat(cancelled.getExecutionState()).isEqualTo(RepairExecutionState.CANCELLED);
+          assertThat(cancelled.getLeaseId()).isNull();
+          assertThat(cancelled.getLeaseVersion()).isNull();
+          assertThat(cancelled.getFencingToken()).isNull();
+          assertThat(cancelled.getLeaseExpiresAt()).isNull();
+          assertThat(cancelled.getLeaseReconciliationState()).isEqualTo("NOT_REQUIRED");
+          assertThat(cancelled.getReconciliationState()).isEqualTo("RECONCILED");
+          assertThat(cancelled.getDeliveryState()).isEqualTo("DELIVERED");
+        });
+    assertThat(repairs.findById(first.repair().repairId()).orElseThrow())
+        .satisfies(owner -> {
+          assertThat(owner.getLeaseId()).isEqualTo(firstLeaseId);
+          assertThat(owner.getLeaseVersion()).isEqualTo(firstLeaseVersion);
+          assertThat(owner.getFencingToken()).isEqualTo(firstFencingToken);
+          assertThat(owner.getLeaseExpiresAt()).isEqualTo(firstLeaseExpiresAt);
+          assertThat(owner.getLeaseReconciliationState()).isEqualTo("ACTIVE");
+        });
+    assertThat(jdbc.queryForObject("""
+        select count(*) from integration_reconciliation
+        where repair_id=? and operation_type='CANCELLED_PRIMARY_RECONCILIATION'
+        """, Integer.class, second.repairId())).isZero();
     verifyNoInteractions(dependencies);
   }
 
@@ -1335,44 +3848,248 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   @Test
-  void reworkQueueRejectsExpiredAndFourMinuteLeaseButAcceptsFiveMinutePlus() {
+  void reworkQueueRefreshesAValidNearExpiryRootLeaseBeforeQueuing() {
     RepairFixture source = createQueuedPendingAcceptanceRepair();
     RepairFixture child = createDraftRework(source);
+    var rootBefore = repairs.findById(source.repairId()).orElseThrow();
 
-    setLeaseExpiry(source.repairId(), "-1 second");
-    assertQueueLeaseConflict(child);
     setLeaseExpiry(source.repairId(), "4 minutes 59 seconds");
-    assertQueueLeaseConflict(child);
-    setLeaseExpiry(source.repairId(), "6 minutes");
+    OffsetDateTime renewedExpiresAt = OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15);
+    when(dependencies.renewLease(
+        any(), eq(rootBefore.getLeaseId()), eq(rootBefore.getLeaseVersion()),
+        eq(rootBefore.getFencingToken()), eq("MAINTENANCE_REPAIR"),
+        eq(source.repairId().toString())))
+        .thenReturn(new MaintenanceDependencyGateway.LeaseSnapshot(
+            rootBefore.getLeaseId(),
+            rootBefore.getLeaseVersion() + 1,
+            source.rentalItemId(),
+            "MAINTENANCE_REPAIR",
+            source.repairId(),
+            rootBefore.getFencingToken(),
+            renewedExpiresAt));
 
     service.queueRepair(
         UUID.randomUUID(), UUID.randomUUID(), child.repairId(), new VersionCommand(0L));
 
     assertThat(repairs.findById(child.repairId()).orElseThrow().getExecutionState())
         .isEqualTo(RepairExecutionState.QUEUED);
-    assertThat(repairs.findById(source.repairId()).orElseThrow().getAcceptanceState())
-        .isEqualTo(RepairAcceptanceState.IN_REWORK);
+    assertThat(repairs.findById(source.repairId()).orElseThrow())
+        .satisfies(root -> {
+          assertThat(root.getAcceptanceState()).isEqualTo(RepairAcceptanceState.IN_REWORK);
+          assertThat(root.getLeaseVersion()).isEqualTo(rootBefore.getLeaseVersion() + 1);
+          assertThat(root.getFencingToken()).isEqualTo(rootBefore.getFencingToken());
+          assertThat(root.getLeaseExpiresAt()).isAfter(OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
+        });
+    assertThat(repairs.findById(child.repairId()).orElseThrow())
+        .satisfies(queued -> {
+          assertThat(queued.getLeaseId()).isEqualTo(rootBefore.getLeaseId());
+          assertThat(queued.getLeaseVersion()).isEqualTo(rootBefore.getLeaseVersion() + 1);
+          assertThat(queued.getFencingToken()).isEqualTo(rootBefore.getFencingToken());
+          assertThat(queued.getLeaseExpiresAt()).isAfter(OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
+        });
+    verify(dependencies).renewLease(
+        any(), eq(rootBefore.getLeaseId()), eq(rootBefore.getLeaseVersion()),
+        eq(rootBefore.getFencingToken()), eq("MAINTENANCE_REPAIR"),
+        eq(source.repairId().toString()));
   }
 
   @Test
-  void terminalDecisionDoesNotCommitUntilLeaseHasFiveMinuteWindow() {
+  void acceptanceRefreshesAValidNearExpiryLeaseBeforeRecordingTheDecision() {
     RepairFixture fixture = createQueuedPendingAcceptanceRepair();
-    long version = repairs.findById(fixture.repairId()).orElseThrow().getVersion();
+    var repairBefore = repairs.findById(fixture.repairId()).orElseThrow();
+    long version = repairBefore.getVersion();
     setLeaseExpiry(fixture.repairId(), "4 minutes 59 seconds");
+    OffsetDateTime renewedExpiresAt = OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15);
+    when(dependencies.renewLease(
+        any(), eq(repairBefore.getLeaseId()), eq(repairBefore.getLeaseVersion()),
+        eq(repairBefore.getFencingToken()), eq("MAINTENANCE_REPAIR"),
+        eq(fixture.repairId().toString())))
+        .thenReturn(new MaintenanceDependencyGateway.LeaseSnapshot(
+            repairBefore.getLeaseId(),
+            repairBefore.getLeaseVersion() + 1,
+            fixture.rentalItemId(),
+            "MAINTENANCE_REPAIR",
+            fixture.repairId(),
+            repairBefore.getFencingToken(),
+            renewedExpiresAt));
 
-    assertThatThrownBy(() -> service.accept(
-        UUID.randomUUID(), UUID.randomUUID(), fixture.repairId(),
-        new RepairDecisionRequest(version, "too close")))
-        .isInstanceOf(MaintenanceConflictException.class);
-    assertThat(repairs.findById(fixture.repairId()).orElseThrow().getAcceptanceState())
-        .isEqualTo(RepairAcceptanceState.PENDING);
-
-    setLeaseExpiry(fixture.repairId(), "6 minutes");
     service.accept(
         UUID.randomUUID(), UUID.randomUUID(), fixture.repairId(),
-        new RepairDecisionRequest(version, "fresh lease"));
-    assertThat(repairs.findById(fixture.repairId()).orElseThrow().getAcceptanceState())
-        .isEqualTo(RepairAcceptanceState.ACCEPTED);
+        acceptanceDecision(fixture, version, "refreshed lease"));
+
+    assertThat(repairs.findById(fixture.repairId()).orElseThrow())
+        .satisfies(accepted -> {
+          assertThat(accepted.getAcceptanceState()).isEqualTo(RepairAcceptanceState.ACCEPTED);
+          assertThat(accepted.getLeaseId()).isEqualTo(repairBefore.getLeaseId());
+          assertThat(accepted.getLeaseVersion()).isEqualTo(repairBefore.getLeaseVersion() + 1);
+          assertThat(accepted.getFencingToken()).isEqualTo(repairBefore.getFencingToken());
+          assertThat(accepted.getLeaseExpiresAt()).isAfter(OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
+        });
+    verify(dependencies).renewLease(
+        any(), eq(repairBefore.getLeaseId()), eq(repairBefore.getLeaseVersion()),
+        eq(repairBefore.getFencingToken()), eq("MAINTENANCE_REPAIR"),
+        eq(fixture.repairId().toString()));
+  }
+
+  @Test
+  void acceptanceReacquiresAnExpiredLeaseBeforeRecordingTheDecision() {
+    RepairFixture fixture = createQueuedPendingAcceptanceRepair();
+    var repairBefore = repairs.findById(fixture.repairId()).orElseThrow();
+    long version = repairBefore.getVersion();
+    setLeaseExpiry(fixture.repairId(), "-1 second");
+    UUID replacementLeaseId = UUID.randomUUID();
+    long replacementFence = repairBefore.getFencingToken() + 1;
+    OffsetDateTime replacementExpiresAt =
+        OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15);
+    when(dependencies.acquireLease(
+        any(), eq(fixture.rentalItemId()), eq(repairBefore.getRentalItemVersionSnapshot()),
+        eq("MAINTENANCE_REPAIR"), eq(fixture.repairId().toString())))
+        .thenReturn(new MaintenanceDependencyGateway.LeaseSnapshot(
+            replacementLeaseId,
+            0,
+            fixture.rentalItemId(),
+            "MAINTENANCE_REPAIR",
+            fixture.repairId(),
+            replacementFence,
+            replacementExpiresAt));
+
+    service.accept(
+        UUID.randomUUID(), UUID.randomUUID(), fixture.repairId(),
+        acceptanceDecision(fixture, version, "reacquired expired lease"));
+
+    assertThat(repairs.findById(fixture.repairId()).orElseThrow())
+        .satisfies(accepted -> {
+          assertThat(accepted.getAcceptanceState()).isEqualTo(RepairAcceptanceState.ACCEPTED);
+          assertThat(accepted.getLeaseId()).isEqualTo(replacementLeaseId);
+          assertThat(accepted.getLeaseVersion()).isZero();
+          assertThat(accepted.getFencingToken()).isEqualTo(replacementFence);
+          assertThat(accepted.getLeaseExpiresAt())
+              .isAfter(OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
+        });
+    verify(dependencies).acquireLease(
+        any(), eq(fixture.rentalItemId()), eq(repairBefore.getRentalItemVersionSnapshot()),
+        eq("MAINTENANCE_REPAIR"), eq(fixture.repairId().toString()));
+    verify(dependencies, never()).renewLease(
+        any(), any(), anyLong(), anyLong(), anyString(), anyString());
+  }
+
+  @Test
+  void acceptanceProjectionDoesNotOfferAParentBlockedByActiveDraftRework() {
+    RepairFixture source = createQueuedPendingAcceptanceRepair();
+    createDraftRework(source);
+
+    assertThat(service.acceptance(source.warehouseId()))
+        .noneMatch(item -> item.repairId().equals(source.repairId()));
+  }
+
+  @Test
+  void acceptanceRejectsAbsentOrUnrenewableLease() {
+    RepairFixture absent = createQueuedPendingAcceptanceRepair();
+    long absentVersion = repairs.findById(absent.repairId()).orElseThrow().getVersion();
+    jdbc.update(
+        """
+        update maintenance_repair
+        set lease_id=null,
+            lease_version=null,
+            fencing_token=null,
+            lease_expires_at=null,
+            lease_reconciliation_state='NOT_REQUIRED'
+        where id=?
+        """,
+        absent.repairId());
+    clearInvocations(dependencies);
+
+    assertThatThrownBy(
+            () ->
+                service.accept(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    absent.repairId(),
+                    acceptanceDecision(absent, absentVersion, "missing lease")))
+        .isInstanceOf(MaintenanceConflictException.class)
+        .extracting(exception -> ((MaintenanceConflictException) exception).code())
+        .isEqualTo("MAINTENANCE_LEASE_CONFLICT");
+    verifyNoInteractions(dependencies);
+
+    RepairFixture unrenewable = createQueuedPendingAcceptanceRepair();
+    var repairBefore = repairs.findById(unrenewable.repairId()).orElseThrow();
+    setLeaseExpiry(unrenewable.repairId(), "4 minutes 59 seconds");
+    clearInvocations(dependencies);
+    when(dependencies.renewLease(
+        any(), eq(repairBefore.getLeaseId()), eq(repairBefore.getLeaseVersion()),
+        eq(repairBefore.getFencingToken()), eq("MAINTENANCE_REPAIR"),
+        eq(unrenewable.repairId().toString())))
+        .thenThrow(
+            new MaintenanceDependencyException(
+                org.springframework.http.HttpStatus.CONFLICT, "asset lease is no longer renewable"));
+
+    assertThatThrownBy(
+            () ->
+                service.accept(
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    unrenewable.repairId(),
+                    acceptanceDecision(
+                        unrenewable, repairBefore.getVersion(), "lost lease")))
+        .isInstanceOfSatisfying(
+            MaintenanceDependencyException.class,
+            exception ->
+                assertThat(exception.status()).isEqualTo(org.springframework.http.HttpStatus.CONFLICT));
+    assertThat(repairs.findById(unrenewable.repairId()).orElseThrow().getAcceptanceState())
+        .isEqualTo(RepairAcceptanceState.PENDING);
+  }
+
+  @Test
+  void acceptanceRejectsLeaseRenewalThatChangesTheFenceOrDoesNotAdvanceTheVersion() {
+    RepairFixture fixture = createQueuedPendingAcceptanceRepair();
+    var repairBefore = repairs.findById(fixture.repairId()).orElseThrow();
+    setLeaseExpiry(fixture.repairId(), "4 minutes 59 seconds");
+    OffsetDateTime renewedExpiresAt = OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15);
+    when(dependencies.renewLease(
+        any(), eq(repairBefore.getLeaseId()), eq(repairBefore.getLeaseVersion()),
+        eq(repairBefore.getFencingToken()), eq("MAINTENANCE_REPAIR"),
+        eq(fixture.repairId().toString())))
+        .thenReturn(
+            new MaintenanceDependencyGateway.LeaseSnapshot(
+                repairBefore.getLeaseId(),
+                repairBefore.getLeaseVersion() + 1,
+                fixture.rentalItemId(),
+                "MAINTENANCE_REPAIR",
+                fixture.repairId(),
+                repairBefore.getFencingToken() + 1,
+                renewedExpiresAt),
+            new MaintenanceDependencyGateway.LeaseSnapshot(
+                repairBefore.getLeaseId(),
+                repairBefore.getLeaseVersion(),
+                fixture.rentalItemId(),
+                "MAINTENANCE_REPAIR",
+                fixture.repairId(),
+                repairBefore.getFencingToken(),
+                renewedExpiresAt));
+
+    for (int attempt = 0; attempt < 2; attempt++) {
+      assertThatThrownBy(
+              () ->
+                  service.accept(
+                      UUID.randomUUID(),
+                      UUID.randomUUID(),
+                      fixture.repairId(),
+                      acceptanceDecision(
+                          fixture, repairBefore.getVersion(), "invalid renewal")))
+          .isInstanceOf(MaintenanceDependencyException.class)
+          .hasMessageContaining("preserve the current fence and version");
+    }
+
+    assertThat(repairs.findById(fixture.repairId()).orElseThrow())
+        .satisfies(repair -> {
+          assertThat(repair.getAcceptanceState()).isEqualTo(RepairAcceptanceState.PENDING);
+          assertThat(repair.getLeaseVersion()).isEqualTo(repairBefore.getLeaseVersion());
+          assertThat(repair.getFencingToken()).isEqualTo(repairBefore.getFencingToken());
+        });
+    verify(dependencies, times(2)).renewLease(
+        any(), eq(repairBefore.getLeaseId()), eq(repairBefore.getLeaseVersion()),
+        eq(repairBefore.getFencingToken()), eq("MAINTENANCE_REPAIR"),
+        eq(fixture.repairId().toString()));
   }
 
   @Test
@@ -1429,7 +4146,7 @@ class MaintenanceCorePostgresIntegrationTest {
             List.of(stage()),
             List.of())))
         .isInstanceOf(MaintenanceValidationException.class)
-        .hasMessageContaining("must not have AFTER_RENT");
+        .hasMessageContaining("must not have RENTED or AFTER_RENT");
   }
 
   @Test
@@ -1486,6 +4203,61 @@ class MaintenanceCorePostgresIntegrationTest {
     assertThat(jdbc.queryForObject("""
         select idempotency_key from integration_reconciliation where id=?
         """, UUID.class, reconciliationId)).isEqualTo(stableKey);
+  }
+
+  @Test
+  void authenticatedQueueRetryReviewsAndResumesItsExactQuarantinedWork() {
+    RepairFixture fixture = createDirectRepair();
+    service.queueRepair(
+        UUID.randomUUID(), UUID.randomUUID(), fixture.repairId(), new VersionCommand(0L));
+    when(dependencies.getRentalItemSnapshot(fixture.rentalItemId()))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                fixture.rentalItemId(), 7, fixture.warehouseId(), "FREE"));
+    when(dependencies.acquireLease(any(), any(), anyLong(), anyString(), anyString()))
+        .thenThrow(new IllegalStateException("asset unavailable"));
+
+    for (int attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) makeReconciliationDue(fixture.repairId(), "QUEUE_REPAIR");
+      assertThat(service.reconcileOneTask()).isTrue();
+    }
+    UUID reviewer = UUID.randomUUID();
+    long currentVersion = service.repair(fixture.repairId(), fixture.warehouseId()).version();
+
+    service.queueRepair(
+        reviewer,
+        UUID.randomUUID(),
+        fixture.repairId(),
+        new QueueRepairRequest(currentVersion, 3));
+
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select state,attempt_count,review_version,review_subject_id,review_reason
+                from integration_reconciliation
+                where repair_id=? and operation_type='QUEUE_REPAIR'
+                """,
+                fixture.repairId()))
+        .containsEntry("state", "RETRY_PENDING")
+        .containsEntry("attempt_count", 0)
+        .containsEntry("review_version", 1L)
+        .containsEntry("review_subject_id", reviewer)
+        .containsEntry(
+            "review_reason",
+            "Authenticated repair queue retry after canonical asset revalidation");
+
+    reset(dependencies);
+    stubQueueDependencies(fixture);
+    assertThat(service.reconcileOneTask()).isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select state from integration_reconciliation
+                where repair_id=? and operation_type='QUEUE_REPAIR'
+                """,
+                String.class,
+                fixture.repairId()))
+        .isEqualTo("CONFIRMED");
   }
 
   @Test
@@ -1598,6 +4370,10 @@ class MaintenanceCorePostgresIntegrationTest {
   void terminalDecisionAndDraftReworkRaceCannotBothCommit() throws Exception {
     RepairFixture fixture = createQueuedPendingAcceptanceRepair();
     long expectedVersion = repairs.findById(fixture.repairId()).orElseThrow().getVersion();
+    CreateReworkRequest reworkRequest =
+        reworkRequest(fixture, expectedVersion, "rework");
+    RepairDecisionRequest acceptanceRequest =
+        acceptanceDecision(fixture, expectedVersion, "accepted");
     CountDownLatch start = new CountDownLatch(1);
     AtomicInteger committed = new AtomicInteger();
     List<Throwable> failures = java.util.Collections.synchronizedList(new ArrayList<>());
@@ -1609,8 +4385,7 @@ class MaintenanceCorePostgresIntegrationTest {
             try {
               service.createRework(
                   UUID.randomUUID(), UUID.randomUUID(), fixture.repairId(),
-                  new CreateReworkRequest(
-                      expectedVersion, "rework", List.of(stage()), List.of()));
+                  reworkRequest);
               committed.incrementAndGet();
             } catch (RuntimeException exception) {
               failures.add(exception);
@@ -1622,7 +4397,7 @@ class MaintenanceCorePostgresIntegrationTest {
             try {
               service.accept(
                   UUID.randomUUID(), UUID.randomUUID(), fixture.repairId(),
-                  new RepairDecisionRequest(expectedVersion, "accepted"));
+                  acceptanceRequest);
               committed.incrementAndGet();
             } catch (RuntimeException exception) {
               failures.add(exception);
@@ -1663,6 +4438,42 @@ class MaintenanceCorePostgresIntegrationTest {
     return fixture;
   }
 
+  private RepairFixture createQueuedPendingAcceptanceRepair(
+      CreateDirectRepairRequest request) {
+    RepairResponse created =
+        service
+            .createDirectRepair(
+                UUID.randomUUID(), UUID.randomUUID(), request)
+            .response();
+    RepairFixture fixture =
+        new RepairFixture(
+            created.id(),
+            created.plan().stages().getFirst().taskSync().externalTaskId(),
+            request.warehouseId(),
+            request.rentalItemId());
+    service.queueRepair(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        fixture.repairId(),
+        new VersionCommand(created.version()));
+    stubQueueDependencies(fixture);
+    assertThat(service.reconcileOneTask()).isTrue();
+    RegisteredRepairFixture registered = registerQueuedRepair(fixture);
+    applyTaskOutcome(
+        fixture,
+        registered.queueEntryId(),
+        "task-board.queue-entry.completed.v1");
+    assertThat(
+            repairs
+                .findById(fixture.repairId())
+                .orElseThrow()
+                .getAcceptanceState())
+        .isEqualTo(RepairAcceptanceState.PENDING);
+    stubPendingAcceptanceAsset(fixture);
+    assertThat(service.reconcileOneTask()).isTrue();
+    return fixture;
+  }
+
   private RegisteredRepairFixture createRegisteredPrimaryRepair() {
     RepairFixture fixture = createDirectRepair();
     service.queueRepair(
@@ -1672,10 +4483,56 @@ class MaintenanceCorePostgresIntegrationTest {
     return registerQueuedRepair(fixture);
   }
 
+  private MultiStageRepairFixture createRegisteredTwoStageRepair() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    rentalItemFacts.saveAndFlush(RentalItemFactProjection.create(
+        rentalItemId, warehouseId, "FREE", 7));
+    CreateDirectRepairRequest request = twoStageDirectRepairRequest(
+        warehouseId, rentalItemId);
+    RepairResponse created = service.createDirectRepair(
+        UUID.randomUUID(), UUID.randomUUID(), request).response();
+    RepairFixture fixture = new RepairFixture(
+        created.id(),
+        created.plan().stages().getFirst().taskSync().externalTaskId(),
+        warehouseId,
+        rentalItemId);
+    service.queueRepair(
+        UUID.randomUUID(), UUID.randomUUID(), fixture.repairId(), new VersionCommand(0L));
+    stubQueueDependencies(fixture);
+    assertThat(service.reconcileOneTask()).isTrue();
+
+    List<UUID> queueEntryIds = List.of(UUID.randomUUID(), UUID.randomUUID());
+    when(dependencies.registerTask(
+        any(),
+        eq(fixture.externalTaskId()),
+        eq(fixture.repairId()),
+        eq(fixture.warehouseId()),
+        eq(fixture.rentalItemId()),
+        nullable(String.class),
+        any(LocalDate.class),
+        anyInt(),
+        eq(6),
+        anyList()))
+        .thenReturn(new MaintenanceDependencyGateway.TaskSnapshot(
+            fixture.externalTaskId(),
+            0,
+            "ACTIVE",
+            List.of(
+                new MaintenanceDependencyGateway.TaskStageSnapshot(
+                    0, queueEntryIds.getFirst(), 0),
+                new MaintenanceDependencyGateway.TaskStageSnapshot(
+                    1, queueEntryIds.get(1), 0))));
+    assertThat(service.reconcileOneTask()).isTrue();
+    return new MultiStageRepairFixture(fixture, queueEntryIds);
+  }
+
   private RegisteredRepairFixture registerQueuedRepair(RepairFixture fixture) {
     UUID entryId = UUID.randomUUID();
-    when(dependencies.registerTask(any(), eq(fixture.externalTaskId()),
-        eq(fixture.warehouseId()), eq(fixture.rentalItemId()), anyList()))
+    when(dependencies.registerTask(any(), eq(fixture.externalTaskId()), eq(fixture.repairId()),
+        eq(fixture.warehouseId()), eq(fixture.rentalItemId()), nullable(String.class),
+        any(LocalDate.class), anyInt(),
+        eq(6), anyList()))
         .thenReturn(new MaintenanceDependencyGateway.TaskSnapshot(
             fixture.externalTaskId(), 0, "ACTIVE",
             List.of(new MaintenanceDependencyGateway.TaskStageSnapshot(0, entryId, 0))));
@@ -1687,7 +4544,7 @@ class MaintenanceCorePostgresIntegrationTest {
     long sourceVersion = repairs.findById(source.repairId()).orElseThrow().getVersion();
     var created = service.createRework(
         UUID.randomUUID(), UUID.randomUUID(), source.repairId(),
-        new CreateReworkRequest(sourceVersion, "corrective work", List.of(stage()), List.of()));
+        reworkRequest(source, sourceVersion, "corrective work"));
     return new RepairFixture(
         created.response().id(),
         created.response().plan().stages().getFirst().taskSync().externalTaskId(),
@@ -1765,14 +4622,6 @@ class MaintenanceCorePostgresIntegrationTest {
         """, interval, repairId);
   }
 
-  private void assertQueueLeaseConflict(RepairFixture child) {
-    assertThatThrownBy(() -> service.queueRepair(
-        UUID.randomUUID(), UUID.randomUUID(), child.repairId(), new VersionCommand(0L)))
-        .isInstanceOf(MaintenanceConflictException.class);
-    assertThat(repairs.findById(child.repairId()).orElseThrow().getExecutionState())
-        .isEqualTo(RepairExecutionState.DRAFT);
-  }
-
   private void makeReconciliationDue(UUID repairId, String operation) {
     jdbc.update("""
         update integration_reconciliation set next_attempt_at=clock_timestamp()
@@ -1785,25 +4634,31 @@ class MaintenanceCorePostgresIntegrationTest {
   }
 
   private RepairFixture createDirectRepair(long rentalItemVersion) {
+    return createDirectRepair("FREE", rentalItemVersion);
+  }
+
+  private RepairFixture createDirectRepair(String status, long rentalItemVersion) {
     UUID warehouseId = UUID.randomUUID();
     UUID rentalItemId = UUID.randomUUID();
     rentalItemFacts.saveAndFlush(RentalItemFactProjection.create(
-        rentalItemId, warehouseId, "FREE", rentalItemVersion));
+        rentalItemId, warehouseId, status, rentalItemVersion));
     var result = service.createDirectRepair(
         UUID.randomUUID(), UUID.randomUUID(),
-        new CreateDirectRepairRequest(
-            warehouseId, rentalItemId, LocalDate.of(2026, 7, 17), null,
-            List.of(stage()), List.of()));
+        directRepairRequest(
+            warehouseId, rentalItemId, LocalDate.of(2026, 7, 17), null));
     return new RepairFixture(
         result.response().id(), result.response().plan().stages().getFirst().taskSync().externalTaskId(),
         warehouseId, rentalItemId);
   }
 
   private void stubQueueDependencies(RepairFixture fixture) {
+    when(dependencies.repairComplexityThresholds(fixture.warehouseId()))
+        .thenReturn(new MaintenanceDependencyGateway.RepairComplexityThresholds(
+            fixture.warehouseId(), 0L, 60, 180, 360));
     UUID leaseId = UUID.randomUUID();
     when(dependencies.getRentalItemSnapshot(fixture.rentalItemId()))
         .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
-            fixture.rentalItemId(), 7, fixture.warehouseId(), "FREE"));
+            fixture.rentalItemId(), 7, fixture.warehouseId(), "БТ-42", "FREE"));
     when(dependencies.acquireLease(
         any(), eq(fixture.rentalItemId()), eq(7L),
         eq("MAINTENANCE_REPAIR"), eq(fixture.repairId().toString())))
@@ -1815,7 +4670,7 @@ class MaintenanceCorePostgresIntegrationTest {
         eq(leaseId), eq(11L), eq("MAINTENANCE_REPAIR"),
         eq(fixture.repairId().toString()), eq("QUEUE_TO_REPAIR"), eq(false)))
         .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
-            fixture.rentalItemId(), 8, fixture.warehouseId(), "REPAIR"));
+            fixture.rentalItemId(), 8, fixture.warehouseId(), "БТ-42", "REPAIR"));
   }
 
   private UUID insertDraftCatalog(UUID warehouseId, String sourceSha256) {
@@ -1837,6 +4692,594 @@ class MaintenanceCorePostgresIntegrationTest {
     return id;
   }
 
+  private CreateDirectRepairRequest directRepairRequest(
+      UUID warehouseId,
+      UUID rentalItemId,
+      LocalDate dispatchDate,
+      String sourceParty) {
+    TestCatalogWork work = ensureTestCatalogWork(warehouseId);
+    UUID lineId = UUID.randomUUID();
+    CatalogNodeSnapshot snapshot =
+        new CatalogNodeSnapshot(
+            work.catalogVersionId(),
+            work.nodeId(),
+            CatalogNodeType.WORK,
+            "Проверочная работа",
+            "шт",
+            "100.00",
+            15,
+            work.routing(),
+            null,
+            false,
+            null);
+    EstimateLineInput line =
+        new EstimateLineInput(
+            lineId,
+            snapshot,
+            EstimateLineType.WORK,
+            "Проверочная работа",
+            "шт",
+            "1",
+            "100.00",
+            15,
+            null,
+            List.of());
+    PlanStageInput plan =
+        new PlanStageInput(
+            UUID.randomUUID(),
+            RepairStageKind.REPAIR_WORK,
+            0,
+            work.routing(),
+            List.of(lineId),
+            lineId,
+            "",
+            null);
+    return new CreateDirectRepairRequest(
+        warehouseId,
+        rentalItemId,
+        dispatchDate,
+        sourceParty,
+        List.of(line),
+        List.of(plan),
+        List.of());
+  }
+
+  private CreateDirectRepairRequest customWorkRepairRequest(
+      UUID warehouseId, UUID rentalItemId, int normativeMinutes) {
+    TestCatalogWork route = ensureTestCatalogWork(warehouseId);
+    UUID lineId = UUID.randomUUID();
+    EstimateLineInput line =
+        new EstimateLineInput(
+            lineId,
+            null,
+            EstimateLineType.WORK,
+            "Пользовательская работа",
+            "шт",
+            "1",
+            "100.00",
+            normativeMinutes,
+            null,
+            List.of());
+    PlanStageInput stage =
+        new PlanStageInput(
+            UUID.randomUUID(),
+            RepairStageKind.REPAIR_WORK,
+            0,
+            route.routing(),
+            List.of(lineId),
+            lineId,
+            "",
+            null);
+    return new CreateDirectRepairRequest(
+        warehouseId,
+        rentalItemId,
+        LocalDate.of(2026, 7, 17),
+        null,
+        List.of(line),
+        List.of(stage),
+        List.of());
+  }
+
+  private CreateDirectRepairRequest catalogWorkRepairRequest(
+      UUID warehouseId, UUID rentalItemId, TestCatalogWork work) {
+    UUID lineId = UUID.randomUUID();
+    CatalogNodeSnapshot snapshot =
+        new CatalogNodeSnapshot(
+            work.catalogVersionId(),
+            work.nodeId(),
+            CatalogNodeType.WORK,
+            work.name(),
+            "шт",
+            "100.00",
+            15,
+            work.routing(),
+            null,
+            work.forcesCapitalRepair(),
+            null);
+    EstimateLineInput line =
+        new EstimateLineInput(
+            lineId,
+            snapshot,
+            EstimateLineType.WORK,
+            work.name(),
+            "шт",
+            "1",
+            "100.00",
+            15,
+            null,
+            List.of());
+    PlanStageInput stage =
+        new PlanStageInput(
+            UUID.randomUUID(),
+            RepairStageKind.REPAIR_WORK,
+            0,
+            work.routing(),
+            List.of(lineId),
+            lineId,
+            "",
+            null);
+    return new CreateDirectRepairRequest(
+        warehouseId,
+        rentalItemId,
+        LocalDate.of(2026, 7, 17),
+        null,
+        List.of(line),
+        List.of(stage),
+        List.of());
+  }
+
+  private CreateDirectRepairRequest workAndMaterialRepairRequest(
+      UUID warehouseId,
+      UUID rentalItemId,
+      TestCatalogWork work,
+      TestCatalogMaterial material) {
+    UUID workLineId = UUID.randomUUID();
+    UUID materialLineId = UUID.randomUUID();
+    CatalogNodeSnapshot workSnapshot =
+        new CatalogNodeSnapshot(
+            work.catalogVersionId(),
+            work.nodeId(),
+            CatalogNodeType.WORK,
+            work.name(),
+            "шт",
+            "100.00",
+            15,
+            work.routing(),
+            null,
+            work.forcesCapitalRepair(),
+            null);
+    CatalogNodeSnapshot materialSnapshot =
+        new CatalogNodeSnapshot(
+            material.catalogVersionId(),
+            material.nodeId(),
+            CatalogNodeType.MATERIAL,
+            material.name(),
+            "шт",
+            "250.00",
+            0,
+            material.routing(),
+            null,
+            false,
+            material.characteristic());
+    EstimateLineInput workLine =
+        new EstimateLineInput(
+            workLineId,
+            workSnapshot,
+            EstimateLineType.WORK,
+            work.name(),
+            "шт",
+            "1",
+            "100.00",
+            15,
+            null,
+            List.of());
+    EstimateLineInput materialLine =
+        new EstimateLineInput(
+            materialLineId,
+            materialSnapshot,
+            EstimateLineType.MATERIAL,
+            material.name(),
+            "шт",
+            "1",
+            "250.00",
+            0,
+            null,
+            List.of());
+    PlanStageInput stage =
+        new PlanStageInput(
+            UUID.randomUUID(),
+            RepairStageKind.REPAIR_WORK,
+            0,
+            work.routing(),
+            List.of(workLineId, materialLineId),
+            workLineId,
+            "",
+            null);
+    return new CreateDirectRepairRequest(
+        warehouseId,
+        rentalItemId,
+        LocalDate.of(2026, 7, 17),
+        null,
+        List.of(workLine, materialLine),
+        List.of(stage),
+        List.of());
+  }
+
+  private CreateDirectRepairRequest twoStageDirectRepairRequest(
+      UUID warehouseId, UUID rentalItemId) {
+    TestCatalogWork work = ensureTestCatalogWork(warehouseId);
+    CatalogNodeSnapshot snapshot =
+        new CatalogNodeSnapshot(
+            work.catalogVersionId(),
+            work.nodeId(),
+            CatalogNodeType.WORK,
+            "Проверочная работа",
+            "шт",
+            "100.00",
+            15,
+            work.routing(),
+            null,
+            false,
+            null);
+    UUID firstLineId = UUID.randomUUID();
+    UUID secondLineId = UUID.randomUUID();
+    EstimateLineInput firstLine =
+        new EstimateLineInput(
+            firstLineId,
+            snapshot,
+            EstimateLineType.WORK,
+            "Первая работа",
+            "шт",
+            "1",
+            "100.00",
+            15,
+            null,
+            List.of());
+    EstimateLineInput secondLine =
+        new EstimateLineInput(
+            secondLineId,
+            snapshot,
+            EstimateLineType.WORK,
+            "Вторая работа",
+            "шт",
+            "1",
+            "100.00",
+            15,
+            null,
+            List.of());
+    PlanStageInput firstStage =
+        new PlanStageInput(
+            UUID.randomUUID(),
+            RepairStageKind.REPAIR_WORK,
+            0,
+            work.routing(),
+            List.of(firstLineId),
+            firstLineId,
+            "",
+            null);
+    PlanStageInput secondStage =
+        new PlanStageInput(
+            UUID.randomUUID(),
+            RepairStageKind.REPAIR_WORK,
+            1,
+            work.routing(),
+            List.of(secondLineId),
+            secondLineId,
+            "",
+            null);
+    return new CreateDirectRepairRequest(
+        warehouseId,
+        rentalItemId,
+        LocalDate.of(2026, 7, 17),
+        null,
+        List.of(firstLine, secondLine),
+        List.of(firstStage, secondStage),
+        List.of());
+  }
+
+  private CreateDirectRepairRequest workerTaskContent(
+      UUID warehouseId, UUID rentalItemId, UUID workMediaId, UUID materialMediaId) {
+    TestCatalogWork work = ensureTestCatalogWork(warehouseId);
+    TestCatalogMaterial material = ensureTestCatalogMaterial(work);
+    UUID workLineId = UUID.randomUUID();
+    UUID materialLineId = UUID.randomUUID();
+    CatalogNodeSnapshot workSnapshot = new CatalogNodeSnapshot(
+        work.catalogVersionId(),
+        work.nodeId(),
+        CatalogNodeType.WORK,
+        "Проверочная работа",
+        "шт",
+        "100.00",
+        15,
+        work.routing(),
+        null,
+        false,
+        null);
+    CatalogNodeSnapshot materialSnapshot = new CatalogNodeSnapshot(
+        material.catalogVersionId(),
+        material.nodeId(),
+        CatalogNodeType.MATERIAL,
+        "Профлист",
+        "лист",
+        "250.00",
+        0,
+        material.routing(),
+        null,
+        false,
+        null);
+    EstimateLineInput workLine = new EstimateLineInput(
+        workLineId,
+        workSnapshot,
+        EstimateLineType.WORK,
+        "Замена профлиста",
+        "шт",
+        "2.5",
+        "100.00",
+        15,
+        "Проверить внешний угол",
+        List.of(new MediaReferenceInput(workMediaId, 2L)));
+    EstimateLineInput materialLine = new EstimateLineInput(
+        materialLineId,
+        materialSnapshot,
+        EstimateLineType.MATERIAL,
+        "Профлист",
+        "лист",
+        "3",
+        "250.00",
+        0,
+        "Принять по количеству",
+        List.of(new MediaReferenceInput(materialMediaId, 3L)));
+    PlanStageInput plan = new PlanStageInput(
+        UUID.randomUUID(),
+        RepairStageKind.REPAIR_WORK,
+        0,
+        work.routing(),
+        List.of(workLineId, materialLineId),
+        workLineId,
+        "Срочно",
+        null);
+    return new CreateDirectRepairRequest(
+        warehouseId,
+        rentalItemId,
+        LocalDate.of(2026, 7, 17),
+        null,
+        List.of(workLine, materialLine),
+        List.of(plan),
+        List.of());
+  }
+
+  private CreateReworkRequest reworkRequest(
+      RepairFixture source, long expectedVersion, String reason) {
+    CreateDirectRepairRequest content =
+        directRepairRequest(
+            source.warehouseId(),
+            source.rentalItemId(),
+            LocalDate.of(2026, 7, 17),
+            null);
+    return new CreateReworkRequest(
+        expectedVersion,
+        reason,
+        content.lines(),
+        content.plan(),
+        List.of());
+  }
+
+  private TestCatalogWork ensureTestCatalogWork(UUID warehouseId) {
+    List<Map<String, Object>> existing =
+        jdbc.queryForList(
+            """
+            select version.id catalog_version_id,node.node_id,node.name,
+                   node.routing_queue_id,node.routing_queue_name,
+                   node.routing_queue_type,node.forces_capital_repair
+             from catalog_version version
+              join catalog_node node on node.catalog_version_id=version.id
+             where version.state='ACTIVE'
+               and node.node_type='WORK' and node.active
+             order by node.name,node.node_id
+             limit 1
+            """);
+    if (!existing.isEmpty()) {
+      Map<String, Object> value = existing.getFirst();
+      return new TestCatalogWork(
+          (UUID) value.get("catalog_version_id"),
+          (UUID) value.get("node_id"),
+          (String) value.get("name"),
+          new RoutingSnapshot(
+              (UUID) value.get("routing_queue_id"),
+              (String) value.get("routing_queue_name"),
+              (String) value.get("routing_queue_type")),
+          (Boolean) value.get("forces_capital_repair"));
+    }
+
+    UUID catalogVersionId =
+        jdbc.query(
+                """
+                select id
+                  from catalog_version
+                 where state='ACTIVE'
+                 limit 1
+                """,
+                (result, row) -> result.getObject(1, UUID.class))
+            .stream()
+            .findFirst()
+            .orElseGet(
+                () -> {
+                  UUID id = UUID.randomUUID();
+                  jdbc.update(
+                      """
+                      insert into catalog_version(
+                        id,version,warehouse_id,state,source_sha256,node_count,link_count,
+                        validation_report,activated_at,created_at,updated_at)
+                      values (?,0,?,'ACTIVE',?,0,0,?,clock_timestamp(),
+                              clock_timestamp(),clock_timestamp())
+                      """,
+                      id,
+                      warehouseId,
+                      "e".repeat(64),
+                      """
+                      {"valid":true,"errorCount":0,"warningCount":0,
+                       "reportSha256":"0000000000000000000000000000000000000000000000000000000000000000"}
+                      """);
+                  return id;
+                });
+    UUID nodeId = UUID.randomUUID();
+    UUID queueId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,parent_node_id,
+          furniture_category,furniture_equipment_id,furniture_equipment_name,unit,price_minor,
+          duration_minutes,include_in_estimate,common_item,show_in_main_menu,canvas_x,canvas_y,
+          routing_queue_id,routing_queue_name,routing_queue_type,comment)
+        values (?,?,?,'WORK','Проверочная работа',true,null,
+                false,null,null,'шт',10000,15,true,false,true,null,null,?,
+                'Repair','REPAIR',null)
+        """,
+        UUID.randomUUID(),
+        nodeId,
+        catalogVersionId,
+        queueId);
+    jdbc.update(
+        "update catalog_version set node_count=node_count+1 where id=?",
+        catalogVersionId);
+    return new TestCatalogWork(
+        catalogVersionId,
+        nodeId,
+        "Проверочная работа",
+        new RoutingSnapshot(queueId, "Repair", "REPAIR"),
+        false);
+  }
+
+  private TestCatalogWork insertTestCatalogWork(
+      TestCatalogWork base, String name, boolean forcesCapitalRepair) {
+    UUID nodeId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,parent_node_id,
+          furniture_category,furniture_equipment_id,furniture_equipment_name,unit,price_minor,
+          duration_minutes,include_in_estimate,common_item,show_in_main_menu,canvas_x,canvas_y,
+          routing_queue_id,routing_queue_name,routing_queue_type,comment,forces_capital_repair)
+        values (?,?,?,'WORK',?,true,null,
+                false,null,null,'шт',10000,15,true,false,true,null,null,?,
+                ?,?,null,?)
+        """,
+        UUID.randomUUID(),
+        nodeId,
+        base.catalogVersionId(),
+        name,
+        base.routing().queueId(),
+        base.routing().queueName(),
+        base.routing().queueType(),
+        forcesCapitalRepair);
+    jdbc.update(
+        "update catalog_version set node_count=node_count+1 where id=?",
+        base.catalogVersionId());
+    return new TestCatalogWork(
+        base.catalogVersionId(),
+        nodeId,
+        name,
+        base.routing(),
+        forcesCapitalRepair);
+  }
+
+  private TestCatalogMaterial ensureTestCatalogMaterial(TestCatalogWork work) {
+    UUID nodeId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,parent_node_id,
+          furniture_category,furniture_equipment_id,furniture_equipment_name,unit,price_minor,
+          duration_minutes,include_in_estimate,common_item,show_in_main_menu,canvas_x,canvas_y,
+          routing_queue_id,routing_queue_name,routing_queue_type,comment)
+        values (?,?,?,'MATERIAL','Профлист',true,null,
+                false,null,null,'лист',25000,0,true,false,true,null,null,?,
+                ?,?,null)
+        """,
+        UUID.randomUUID(),
+        nodeId,
+        work.catalogVersionId(),
+        work.routing().queueId(),
+        work.routing().queueName(),
+        work.routing().queueType());
+    jdbc.update(
+        "update catalog_version set node_count=node_count+1 where id=?",
+        work.catalogVersionId());
+    return new TestCatalogMaterial(
+        work.catalogVersionId(),
+        nodeId,
+        "Профлист",
+        work.routing(),
+        null);
+  }
+
+  private TestCatalogMaterial insertCharacteristicMaterial(
+      TestCatalogWork work,
+      String name,
+      UUID characteristicId,
+      String characteristicName) {
+    UUID nodeId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,parent_node_id,
+          furniture_category,furniture_equipment_id,furniture_equipment_name,unit,price_minor,
+          duration_minutes,include_in_estimate,common_item,show_in_main_menu,canvas_x,canvas_y,
+          routing_queue_id,routing_queue_name,routing_queue_type,comment,
+          characteristic_id,characteristic_name)
+        values (?,?,?,'MATERIAL',?,true,null,
+                false,null,null,'шт',25000,0,true,false,true,null,null,?,
+                ?,?,null,?,?)
+        """,
+        UUID.randomUUID(),
+        nodeId,
+        work.catalogVersionId(),
+        name,
+        work.routing().queueId(),
+        work.routing().queueName(),
+        work.routing().queueType(),
+        characteristicId,
+        characteristicName);
+    jdbc.update(
+        "update catalog_version set node_count=node_count+1 where id=?",
+        work.catalogVersionId());
+    return new TestCatalogMaterial(
+        work.catalogVersionId(),
+        nodeId,
+        name,
+        work.routing(),
+        new CabinCharacteristicReference(
+            characteristicId, characteristicName));
+  }
+
+  private void reconcileCatalogRoute(UUID queueId) {
+    when(dependencies.registerCatalogPosition(eq(queueId), anyString()))
+        .thenAnswer(invocation -> {
+          String externalReference = invocation.getArgument(1);
+          return new MaintenanceDependencyGateway.CatalogPositionReference(
+              UUID.nameUUIDFromBytes(
+                  externalReference.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+              0L,
+              queueId,
+              "CATALOG_POSITION",
+              externalReference);
+        });
+    assertThat(service.reconcileOneTask()).isTrue();
+  }
+
+  private void deferOtherReconciliations(UUID repairId, String operation) {
+    jdbc.update(
+        """
+        update integration_reconciliation
+           set next_attempt_at=clock_timestamp() + interval '1 day'
+         where repair_id=?
+           and operation_type<>?
+           and state in ('PENDING','RETRY_PENDING')
+        """,
+        repairId,
+        operation);
+  }
+
   private Void activateAfter(CountDownLatch start, UUID catalogId) throws Exception {
     start.await();
     service.activateCatalog(
@@ -1846,6 +5289,25 @@ class MaintenanceCorePostgresIntegrationTest {
 
   private static PlanStageInput stage() {
     return stage(0, null);
+  }
+
+  private RepairDecisionRequest acceptanceDecision(
+      RepairFixture fixture, long expectedVersion, String comment) {
+    UUID mediaId = UUID.randomUUID();
+    new TransactionTemplate(transactionManager).executeWithoutResult(status ->
+        service.applyInboundMediaFact(
+            mediaId,
+            1,
+            "MAINTENANCE_ACCEPTANCE",
+            fixture.repairId(),
+            fixture.warehouseId(),
+            "READY",
+            "{}",
+            1));
+    return new RepairDecisionRequest(
+        expectedVersion,
+        comment,
+        List.of(new MediaReferenceInput(mediaId, 1L)));
   }
 
   private static PlanStageInput stage(int order, OffsetDateTime taskDeadline) {
@@ -1859,7 +5321,21 @@ class MaintenanceCorePostgresIntegrationTest {
       UUID externalTaskId,
       UUID warehouseId,
       UUID rentalItemId) {}
+  private record TestCatalogWork(
+      UUID catalogVersionId,
+      UUID nodeId,
+      String name,
+      RoutingSnapshot routing,
+      boolean forcesCapitalRepair) {}
+  private record TestCatalogMaterial(
+      UUID catalogVersionId,
+      UUID nodeId,
+      String name,
+      RoutingSnapshot routing,
+      CabinCharacteristicReference characteristic) {}
   private record RegisteredRepairFixture(RepairFixture repair, UUID queueEntryId) {}
+  private record MultiStageRepairFixture(
+      RepairFixture repair, List<UUID> queueEntryIds) {}
   private record QueuedReworkFixture(
       RepairFixture source, RepairFixture child, UUID queueEntryId) {}
   private record ReworkFixture(RepairFixture source, RepairFixture child) {}

@@ -1,6 +1,8 @@
 package dev.buhanzaz.rwms.inventory.mapper;
 
 import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.InventoryActorView;
+import dev.buhanzaz.rwms.inventory.api.InventoryApiModels.MembershipMovementView;
+import dev.buhanzaz.rwms.inventory.domain.InventoryMembershipMovement;
 import dev.buhanzaz.rwms.inventory.domain.InventorySession;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
@@ -14,4 +16,6 @@ public interface InventorySessionMapper {
   @Mapping(source = "startedBySubjectId", target = "id")
   @Mapping(source = "startedByDisplayName", target = "displayName")
   InventoryActorView toInventoryActorView(InventorySession inventorySession);
+
+  MembershipMovementView toMembershipMovementView(InventoryMembershipMovement movement);
 }

@@ -2,12 +2,17 @@ package dev.buhanzaz.rwms.taskboard.eventing;
 
 import dev.buhanzaz.rwms.platform.contracts.DomainEventEnvelopeV2;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.BoardTaskFact;
+import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.EntryOwnerProofFact;
+import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.GroupKpiDayFact;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.QueueEntryFact;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.QueueUsageReferenceFact;
+import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.TaskEvidenceFact;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.WorkQueueFact;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.WorkerClassFact;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.WorkerFact;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.WorkerGroupFact;
+import java.lang.reflect.ParameterizedType;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -33,7 +38,10 @@ public class TaskBoardEventPayloadPolicy {
       TaskBoardAggregateType.WORK_QUEUE, WorkQueueFact.class,
       TaskBoardAggregateType.QUEUE_USAGE_REFERENCE, QueueUsageReferenceFact.class,
       TaskBoardAggregateType.BOARD_TASK, BoardTaskFact.class,
-      TaskBoardAggregateType.QUEUE_ENTRY, QueueEntryFact.class);
+      TaskBoardAggregateType.QUEUE_ENTRY, QueueEntryFact.class,
+      TaskBoardAggregateType.TASK_BOARD_ENTRY_OWNER_PROOF, EntryOwnerProofFact.class,
+      TaskBoardAggregateType.TASK_EVIDENCE, TaskEvidenceFact.class,
+      TaskBoardAggregateType.GROUP_KPI_DAY, GroupKpiDayFact.class);
   private static final Map<TaskBoardAggregateType, String> ID_FIELDS = Map.of(
       TaskBoardAggregateType.WORKER_CLASS, "workerClassId",
       TaskBoardAggregateType.WORKER, "workerId",
@@ -41,7 +49,10 @@ public class TaskBoardEventPayloadPolicy {
       TaskBoardAggregateType.WORK_QUEUE, "workQueueId",
       TaskBoardAggregateType.QUEUE_USAGE_REFERENCE, "queueUsageReferenceId",
       TaskBoardAggregateType.BOARD_TASK, "boardTaskId",
-      TaskBoardAggregateType.QUEUE_ENTRY, "queueEntryId");
+      TaskBoardAggregateType.QUEUE_ENTRY, "queueEntryId",
+      TaskBoardAggregateType.TASK_BOARD_ENTRY_OWNER_PROOF, "ownerId",
+      TaskBoardAggregateType.TASK_EVIDENCE, "evidenceId",
+      TaskBoardAggregateType.GROUP_KPI_DAY, "evidenceId");
 
   private final ObjectMapper objectMapper;
   private final ObjectMapper strictObjectMapper;
@@ -75,7 +86,9 @@ public class TaskBoardEventPayloadPolicy {
       throw new IllegalArgumentException("Task-board event aggregate identity mismatch");
     }
     try {
-      strictObjectMapper.readerFor(PAYLOAD_TYPES.get(aggregateType)).readValue(payload);
+      Class<?> payloadType = PAYLOAD_TYPES.get(aggregateType);
+      requireCanonicalRecordShape(payloadType, payload);
+      strictObjectMapper.readerFor(payloadType).readValue(payload);
     } catch (RuntimeException exception) {
       throw new IllegalArgumentException("Task-board event payload failed typed semantic validation", exception);
     }
@@ -85,6 +98,36 @@ public class TaskBoardEventPayloadPolicy {
     Set<String> supported = TaskBoardEventTypes.BY_AGGREGATE.get(aggregateType);
     if (supported == null || !supported.contains(eventType)) {
       throw new IllegalArgumentException("Task-board event type does not match aggregate family");
+    }
+  }
+
+  private static void requireCanonicalRecordShape(Class<?> recordType, JsonNode payload) {
+    if (!recordType.isRecord() || !payload.isObject()) {
+      throw new IllegalArgumentException("Task-board event payload must use a record object");
+    }
+    for (var component : recordType.getRecordComponents()) {
+      if (!payload.has(component.getName())) {
+        throw new IllegalArgumentException(
+            "Task-board event payload misses canonical field " + component.getName());
+      }
+      JsonNode value = payload.get(component.getName());
+      if (value == null || value.isNull()) {
+        continue;
+      }
+      if (component.getType().isRecord()) {
+        requireCanonicalRecordShape(component.getType(), value);
+        continue;
+      }
+      if (List.class.isAssignableFrom(component.getType())
+          && component.getGenericType() instanceof ParameterizedType parameterized
+          && parameterized.getActualTypeArguments()[0] instanceof Class<?> itemType
+          && itemType.isRecord()) {
+        if (!value.isArray()) {
+          throw new IllegalArgumentException(
+              "Task-board event payload field " + component.getName() + " must be an array");
+        }
+        value.forEach(item -> requireCanonicalRecordShape(itemType, item));
+      }
     }
   }
 

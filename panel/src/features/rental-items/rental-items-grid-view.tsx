@@ -8,10 +8,7 @@ import {
 } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 
-import {
-  PhotoCarousel,
-  type PhotoCarouselPhoto,
-} from "@/components/media/photo-carousel"
+import { PhotoCarousel } from "@/components/media/photo-carousel"
 import { Button } from "@/components/ui/button"
 import type { CabinCoverProjection } from "@/features/media/media-service"
 import { RentalItemStatusBadge } from "@/features/rental-items/rental-item-status-badge"
@@ -43,46 +40,6 @@ const MIN_ADAPTIVE_CARD_WIDTH = 150
 const MIN_ADAPTIVE_CARD_HEIGHT = 176
 const CARD_PHOTO_RATIO = 0.75
 
-function getCharacteristics(value: string | null) {
-  if (!value?.trim()) return []
-
-  return value
-    .split(/[,;\n]+/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-}
-
-function getItemPhotos(
-  item: RentalItemDto,
-  servicePhotos: readonly PhotoCarouselPhoto[]
-) {
-  const photos: Array<string | PhotoCarouselPhoto> = [...servicePhotos]
-  if (item.legacyPhotos && item.legacyPhotos.length > 0) {
-    return [
-      ...photos,
-      ...item.legacyPhotos.slice(0, 4).map((photo) => ({
-        id: photo.id,
-        url: photo.url,
-        variants: {
-          small: { url: photo.variants?.small?.url ?? photo.url },
-          medium: { url: photo.url },
-          large: { url: photo.variants?.largeWebp?.url ?? photo.url },
-        },
-        createdAt: photo.capturedAt ?? undefined,
-      })),
-    ]
-  }
-  if (item.previewPhotoUrls && item.previewPhotoUrls.length > 0) {
-    return [...photos, ...item.previewPhotoUrls]
-  }
-
-  if (item.mainPhotoUrl) {
-    return [...photos, item.mainPhotoUrl]
-  }
-
-  return photos
-}
-
 function RentalItemCardPhoto({
   item,
   accessToken,
@@ -108,8 +65,7 @@ function RentalItemCardPhoto({
     url: photo.url,
     variants: { small: { url: photo.url } },
   }))
-  const photos = getItemPhotos(item, servicePhotos)
-  const photoCount = item.photoCount + (projection?.photoCount ?? 0)
+  const photoCount = Math.max(projection?.photoCount ?? 0, servicePhotos.length)
   const effectiveAvailability =
     coverAvailability === "unavailable" ||
     servicePhotoResult.availability === "unavailable"
@@ -119,7 +75,7 @@ function RentalItemCardPhoto({
         ? "loading"
         : "available"
 
-  if (photos.length === 0) {
+  if (servicePhotos.length === 0) {
     const placeholder =
       effectiveAvailability === "unavailable"
         ? "Сервис фото недоступен"
@@ -144,7 +100,7 @@ function RentalItemCardPhoto({
 
   return (
     <PhotoCarousel
-      photos={photos}
+      photos={servicePhotos}
       item={item}
       imageVariant="thumbnail"
       photoCount={photoCount}
@@ -306,7 +262,7 @@ export function RentalItemsGridView({
               }}
             >
               {rowItems.map((item) => {
-                const characteristics = getCharacteristics(item.characteristics)
+                const characteristics = item.characteristics
                 const actions = renderItemActions?.(item)
 
                 return (
@@ -377,14 +333,14 @@ export function RentalItemsGridView({
                             characteristics.length > 0 ? (
                               <div
                                 className="flex max-h-11 min-w-0 flex-wrap content-start justify-end gap-1 overflow-hidden"
-                                aria-label={`Характеристики: ${characteristics.join(", ")}`}
+                                aria-label="Характеристики бытовки"
                               >
                                 {characteristics.map((characteristic) => (
                                   <span
-                                    key={characteristic}
+                                    key={characteristic.id}
                                     className="max-w-full truncate rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-3 text-muted-foreground"
                                   >
-                                    {characteristic}
+                                    {characteristic.name}
                                   </span>
                                 ))}
                               </div>

@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.maintenance.service;
 
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.LogisticsEquipmentShortage;
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.LogisticsReturnShortageResponse;
+import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.MediaReferenceInput;
 import static dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.UpsertLogisticsReturnShortageRequest;
 
 import dev.buhanzaz.rwms.maintenance.domain.LogisticsReturnShortage;
@@ -24,8 +25,9 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Stage 8 source intake only: logistics cannot create or mutate a repair,
- * estimate, task, lease or asset state through this service.
+ * Immutable logistics source intake paired with exactly one empty DRAFT estimate.
+ *
+ * <p>Repair creation remains exclusively owned by the normal estimate-completion transition.
  */
 @Service
 @RequiredArgsConstructor
@@ -39,6 +41,8 @@ public class LogisticsReturnShortageService {
       UUID returnId, UUID lineId, UpsertLogisticsReturnShortageRequest request) {
     LogisticsReturnShortageId id = new LogisticsReturnShortageId(returnId, lineId);
     List<LogisticsEquipmentShortage> shortages = canonicalShortages(request.shortages());
+    List<MediaReferenceInput> mediaReferences =
+        canonicalMediaReferences(request.mediaReferences());
     String snapshot = write(shortages);
     String snapshotSha256 = sha256(snapshot);
     String sourceSha256 =
@@ -50,6 +54,8 @@ public class LogisticsReturnShortageService {
                     request.warehouseId(),
                     request.rentalItemId(),
                     request.rentalItemVersion(),
+                    request.dispatchDate(),
+                    mediaReferences,
                     shortages)));
     LogisticsReturnShortage candidate =
         LogisticsReturnShortage.receive(
@@ -63,7 +69,7 @@ public class LogisticsReturnShortageService {
 
     boolean registered;
     try {
-      registered = registrar.register(candidate);
+      registered = registrar.register(candidate, request.dispatchDate(), mediaReferences);
     } catch (DataIntegrityViolationException ignored) {
       registered = false;
     }
@@ -101,6 +107,7 @@ public class LogisticsReturnShortageService {
         stored.warehouseId(),
         stored.rentalItemId(),
         stored.rentalItemVersion(),
+        stored.estimateId(),
         readShortages(stored.shortageSnapshot()),
         stored.snapshotSha256(),
         stored.receivedAt());
@@ -125,6 +132,33 @@ public class LogisticsReturnShortageService {
     }
     return values.stream()
         .sorted(Comparator.comparing(value -> value.equipmentId().toString()))
+        .toList();
+  }
+
+  private static List<MediaReferenceInput> canonicalMediaReferences(
+      List<MediaReferenceInput> values) {
+    if (values == null || values.isEmpty() || values.size() > 20) {
+      throw new MaintenanceValidationException(
+          "MAINTENANCE_VALIDATION_FAILED",
+          "At least one and at most twenty return inspection photos are required");
+    }
+    Set<UUID> mediaIds = new HashSet<>();
+    for (MediaReferenceInput value : values) {
+      if (value == null
+          || value.mediaId() == null
+          || value.generation() == null
+          || value.generation() < 1) {
+        throw new MaintenanceValidationException(
+            "MAINTENANCE_VALIDATION_FAILED", "Return inspection photo reference is invalid");
+      }
+      if (!mediaIds.add(value.mediaId())) {
+        throw new MaintenanceValidationException(
+            "MAINTENANCE_VALIDATION_FAILED",
+            "Return inspection photos contain a duplicate media ID");
+      }
+    }
+    return values.stream()
+        .sorted(Comparator.comparing(value -> value.mediaId().toString()))
         .toList();
   }
 
@@ -156,5 +190,7 @@ public class LogisticsReturnShortageService {
       UUID warehouseId,
       UUID rentalItemId,
       long rentalItemVersion,
+      java.time.LocalDate dispatchDate,
+      List<MediaReferenceInput> mediaReferences,
       List<LogisticsEquipmentShortage> shortages) {}
 }

@@ -38,24 +38,21 @@ export function formatDossierActorLabel(
 ) {
   const matchingDisplay =
     display?.subjectId === actor.subjectId ? display : undefined
-  const role = matchingDisplay?.globalRole
-    ? globalRoleLabels[matchingDisplay.globalRole]
-    : (principalTypeLabels[actor.principalType] ?? "Участник")
-  const fullName = matchingDisplay
-    ? [
-        matchingDisplay.lastName,
-        matchingDisplay.firstName,
-        matchingDisplay.middleName,
-      ]
-        .map(nonBlank)
-        .filter((part): part is string => part !== null)
-        .join(" ")
-    : ""
-  const identity =
-    fullName ||
-    nonBlank(matchingDisplay?.email) ||
-    nonBlank(matchingDisplay?.username) ||
-    actor.subjectId
+  if (matchingDisplay) return formatDossierActorDisplay(matchingDisplay)
 
-  return `${role} — ${identity}`
+  return principalTypeLabels[actor.principalType] ?? "Участник"
+}
+
+export function formatDossierActorDisplay(display: DossierActorDisplay) {
+  const role = display.globalRole
+    ? globalRoleLabels[display.globalRole]
+    : (principalTypeLabels[display.principalType] ?? "Участник")
+  const fullName = [display.lastName, display.firstName, display.middleName]
+    .map(nonBlank)
+    .filter((part): part is string => part !== null)
+    .join(" ")
+  const identity =
+    fullName || nonBlank(display.email) || nonBlank(display.username)
+
+  return identity ? `${role} — ${identity}` : role
 }

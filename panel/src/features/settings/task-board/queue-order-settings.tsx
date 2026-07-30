@@ -19,13 +19,6 @@ import { CSS } from "@dnd-kit/utilities"
 import { GripVertical } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
 import type { WorkQueueDto } from "@/features/settings/task-board/model/task-board-settings"
 import { queueTypeLabels } from "@/features/settings/task-board/model/task-board-settings"
 import { cn } from "@/lib/utils"
@@ -59,7 +52,6 @@ function SortableQueue({ queue }: { queue: WorkQueueDto }) {
         <GripVertical data-icon="inline-start" />
       </Button>
       <span className="min-w-0 flex-1 truncate font-medium">{queue.name}</span>
-      <span className="text-xs text-muted-foreground">{queue.code}</span>
     </div>
   )
 }
@@ -95,60 +87,58 @@ export function QueueOrderSettings({
   }
 
   return (
-    <Card className="min-h-0 flex-1" size="sm">
-      <CardHeader>
-        <CardTitle>Порядок очередей</CardTitle>
-        <CardDescription>
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+      <div className="flex flex-col gap-1">
+        <h2 className="font-semibold">Порядок очередей</h2>
+        <p className="text-sm text-muted-foreground">
           Перетащите обычные очереди. HOLDING всегда сохраняются последними.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex min-h-0 flex-col gap-4 overflow-y-auto">
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragEnd={handleDragEnd}
+        </p>
+      </div>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext
+          items={regular.map((queue) => queue.id)}
+          strategy={verticalListSortingStrategy}
         >
-          <SortableContext
-            items={regular.map((queue) => queue.id)}
-            strategy={verticalListSortingStrategy}
-          >
-            <div className="flex flex-col gap-2">
-              {regular.map((queue) => (
-                <SortableQueue key={queue.id} queue={queue} />
-              ))}
-            </div>
-          </SortableContext>
-        </DndContext>
-        {holding.length ? (
           <div className="flex flex-col gap-2">
-            <p className="text-xs font-medium text-muted-foreground">
-              Последние очереди удержания
-            </p>
-            {holding.map((queue) => (
-              <div
-                key={queue.id}
-                className="flex min-h-[49px] items-center gap-3 rounded-lg border bg-muted px-3 py-2"
-              >
-                <span className="min-w-0 flex-1 truncate font-medium">
-                  {queue.name}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {queueTypeLabels[queue.type]}
-                </span>
-              </div>
+            {regular.map((queue) => (
+              <SortableQueue key={queue.id} queue={queue} />
             ))}
           </div>
-        ) : null}
-        <div className="flex justify-end">
-          <Button
-            type="button"
-            disabled={pending}
-            onClick={() => void onSave(regular)}
-          >
-            {pending ? "Сохраняем…" : "Сохранить порядок"}
-          </Button>
+        </SortableContext>
+      </DndContext>
+      {holding.length ? (
+        <div className="flex flex-col gap-2">
+          <p className="text-xs font-medium text-muted-foreground">
+            Последние очереди удержания
+          </p>
+          {holding.map((queue) => (
+            <div
+              key={queue.id}
+              className="flex min-h-[49px] items-center gap-3 rounded-lg border bg-muted px-3 py-2"
+            >
+              <span className="min-w-0 flex-1 truncate font-medium">
+                {queue.name}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {queueTypeLabels[queue.type]}
+              </span>
+            </div>
+          ))}
         </div>
-      </CardContent>
-    </Card>
+      ) : null}
+      <div className="flex justify-end">
+        <Button
+          type="button"
+          disabled={pending}
+          onClick={() => void onSave(regular)}
+        >
+          {pending ? "Сохраняем…" : "Сохранить порядок"}
+        </Button>
+      </div>
+    </div>
   )
 }

@@ -30,10 +30,13 @@ const correlationHeader = "X-Correlation-Id"
 
 var checksumPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+const maxStoredGeneration = int64(1<<31 - 1)
+
 type Configuration struct {
 	MaxUploadBytes   int64
 	AllowedMIMETypes map[string]struct{}
 	UploadExpiry     time.Duration
+	AssetImports     assetImportService
 }
 
 type readiness interface {
@@ -43,16 +46,25 @@ type readiness interface {
 type repository interface {
 	CreateUpload(context.Context, persistence.CreateUploadCommand) (persistence.AssetRecord, bool, error)
 	AcquireUploadSessionContentLock(context.Context, uuid.UUID) (func() error, error)
-	UploadSessionForSubject(context.Context, uuid.UUID, uuid.UUID) (persistence.AssetRecord, error)
+	UploadSessionForPrincipal(context.Context, uuid.UUID, uuid.UUID, string) (persistence.AssetRecord, error)
 	FinalizeUpload(context.Context, persistence.FinalizeCommand) (persistence.AssetRecord, bool, error)
 	ReadOwnerAssets(context.Context, string, string, uuid.UUID, int, *uuid.UUID,
 		func([]persistence.AssetWithVariants) error) error
+	ReadTaskBoardEntryAssetsForWorker(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int, *uuid.UUID,
+		func([]persistence.AssetWithVariants) error) error
 	ReadCabinCovers(context.Context, uuid.UUID, []uuid.UUID,
 		func([]persistence.CabinCoverRecord) error) error
+	ReadCabinPresentationSnapshots(context.Context, uuid.UUID, []uuid.UUID,
+		func([]persistence.CabinPresentationSnapshotRecord) error) error
 	ReadOriginal(context.Context, uuid.UUID, string, string, uuid.UUID,
 		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
 	ReadCurrentVariant(context.Context, uuid.UUID, string, string, uuid.UUID, int, media.Variant,
 		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
+	ReadTaskBoardEntryOriginalForWorker(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, *int,
+		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
+	ReadTaskBoardEntryVariantForWorker(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, int, media.Variant,
+		func(persistence.AssetRecord, *persistence.VariantRecord) error) error
+	AuthorizeTaskBoardEntryWorker(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
 	GetAssetScoped(context.Context, uuid.UUID, string, string, uuid.UUID) (persistence.AssetRecord, error)
 	UpsertServiceOwnerProof(context.Context, persistence.ServiceOwnerProofCommand) (persistence.ServiceOwnerProofRecord, bool, error)
 	ValidateLogisticsReferences(context.Context, persistence.ValidateLogisticsReferencesCommand) error
@@ -62,7 +74,45 @@ type repository interface {
 
 type tokenValidator interface {
 	Validate(context.Context, string) (auth.Principal, error)
+	ValidateWorker(context.Context, string) (auth.WorkerPrincipal, error)
 	ValidateService(context.Context, string) (auth.ServicePrincipal, error)
+}
+
+// mediaRequestPrincipal deliberately keeps the OAuth subject used to own an
+// upload session separate from the actor identity in facts. For WORKER, the
+// former is auth-service's session subject while the latter is worker_id.
+type mediaRequestPrincipal struct {
+	subjectID     uuid.UUID
+	principalType string
+	actor         persistence.ActorReference
+	user          *auth.Principal
+	worker        *auth.WorkerPrincipal
+}
+
+func (principal mediaRequestPrincipal) isWorker() bool {
+	return principal.worker != nil
+}
+
+func (principal mediaRequestPrincipal) requireTaskBoardWorker(ownerType, ownerID string, warehouseID uuid.UUID) (uuid.UUID, error) {
+	if principal.worker == nil || ownerType != persistence.OwnerTypeTaskBoardEntry {
+		return uuid.Nil, auth.ErrForbidden
+	}
+	if err := principal.worker.RequireTaskAccess(warehouseID); err != nil {
+		return uuid.Nil, err
+	}
+	entryID, err := uuid.Parse(ownerID)
+	if err != nil || entryID == uuid.Nil {
+		return uuid.Nil, auth.ErrForbidden
+	}
+	return entryID, nil
+}
+
+func workerIDFor(principal mediaRequestPrincipal) *uuid.UUID {
+	if principal.worker == nil {
+		return nil
+	}
+	workerID := principal.worker.WorkerID
+	return &workerID
 }
 
 type objectStore interface {
@@ -106,13 +156,14 @@ func (reader *boundedUploadReader) Read(buffer []byte) (int, error) {
 }
 
 type Server struct {
-	repository repository
-	database   readiness
-	auth       tokenValidator
-	store      objectStore
-	config     Configuration
-	logger     *slog.Logger
-	mux        *http.ServeMux
+	repository   repository
+	database     readiness
+	auth         tokenValidator
+	store        objectStore
+	config       Configuration
+	assetImports assetImportService
+	logger       *slog.Logger
+	mux          *http.ServeMux
 }
 
 func NewServer(repository repository, database readiness, validator tokenValidator, store objectStore, configuration Configuration, logger *slog.Logger) (*Server, error) {
@@ -122,7 +173,7 @@ func NewServer(repository repository, database readiness, validator tokenValidat
 	if configuration.MaxUploadBytes <= 0 || configuration.UploadExpiry <= 0 || len(configuration.AllowedMIMETypes) == 0 {
 		return nil, fmt.Errorf("media API limits and allowlist are required")
 	}
-	server := &Server{repository: repository, database: database, auth: validator, store: store, config: configuration, logger: logger, mux: http.NewServeMux()}
+	server := &Server{repository: repository, database: database, auth: validator, store: store, config: configuration, assetImports: configuration.AssetImports, logger: logger, mux: http.NewServeMux()}
 	server.routes()
 	return server, nil
 }
@@ -144,7 +195,14 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("POST /api/media/v1/assets/{mediaId}/rotation", server.rotate)
 	server.mux.HandleFunc("POST /api/media/v1/assets/{mediaId}/deletion", server.deleteAsset)
 	server.mux.HandleFunc("POST /api/internal/media/v1/owner-proofs", server.upsertOwnerProof)
+	server.mux.HandleFunc("POST /api/internal/media/v1/asset-imports/preflight", server.preflightAssetImport)
+	server.mux.HandleFunc("GET /api/internal/media/v1/asset-imports/{jobId}", server.getAssetImport)
+	server.mux.HandleFunc("POST /api/internal/media/v1/asset-imports/{jobId}/activate", server.activateAssetImport)
+	server.mux.HandleFunc("POST /api/internal/media/v1/asset-imports/{jobId}/replace-sources", server.replaceAssetImportSources)
+	server.mux.HandleFunc("POST /api/internal/media/v1/asset-imports/{jobId}/retry", server.retryAssetImport)
 	server.mux.HandleFunc("POST /api/internal/media/v1/logistics/references/validate", server.validateLogisticsReferences)
+	server.mux.HandleFunc("POST /api/internal/media/v1/logistics/cabin-presentations/snapshots", server.listLogisticsCabinPresentationSnapshots)
+	server.mux.HandleFunc("GET /api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content", server.getLogisticsCabinPresentationVariantContent)
 	server.mux.HandleFunc("/health/live", server.methodNotAllowed)
 	server.mux.HandleFunc("/health/ready", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/upload-sessions", server.methodNotAllowed)
@@ -157,7 +215,13 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("/api/media/v1/assets/{mediaId}/rotation", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/assets/{mediaId}/deletion", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/internal/media/v1/owner-proofs", server.methodNotAllowed)
+	// A trailing-prefix fallback is less specific than every method-qualified
+	// import route above, while avoiding the ambiguous exact-path fallbacks that
+	// would conflict with the GET {jobId} pattern in net/http's ServeMux.
+	server.mux.HandleFunc("/api/internal/media/v1/asset-imports/", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/internal/media/v1/logistics/references/validate", server.methodNotAllowed)
+	server.mux.HandleFunc("/api/internal/media/v1/logistics/cabin-presentations/snapshots", server.methodNotAllowed)
+	server.mux.HandleFunc("/api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content", server.methodNotAllowed)
 	server.mux.HandleFunc("/", server.notFound)
 }
 
@@ -350,23 +414,139 @@ func (server *Server) validateLogisticsReferences(response http.ResponseWriter, 
 	})
 }
 
+type cabinPresentationSnapshotsRequest struct {
+	WarehouseID string   `json:"warehouseId"`
+	CabinIDs    []string `json:"cabinIds"`
+}
+
+// listLogisticsCabinPresentationSnapshots is intentionally a private
+// projection boundary: logistics receives only opaque current media references
+// and the variants it may subsequently stream. It never receives a public URL,
+// MinIO location, filename, MIME type, or processing detail.
+func (server *Server) listLogisticsCabinPresentationSnapshots(response http.ResponseWriter, request *http.Request) {
+	if !server.logisticsPrincipal(response, request) {
+		return
+	}
+	var body cabinPresentationSnapshotsRequest
+	if !server.decode(response, request, &body) {
+		return
+	}
+	warehouseID, err := uuid.Parse(body.WarehouseID)
+	if err != nil || warehouseID == uuid.Nil || len(body.CabinIDs) < 1 || len(body.CabinIDs) > 100 {
+		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_CABIN_PRESENTATION", "Invalid cabin presentation request")
+		return
+	}
+	cabinIDs := make([]uuid.UUID, 0, len(body.CabinIDs))
+	seen := make(map[uuid.UUID]struct{}, len(body.CabinIDs))
+	for _, value := range body.CabinIDs {
+		cabinID, parseErr := uuid.Parse(value)
+		if parseErr != nil || cabinID == uuid.Nil {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_CABIN_PRESENTATION", "Invalid cabin presentation request")
+			return
+		}
+		if _, duplicate := seen[cabinID]; duplicate {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_CABIN_PRESENTATION", "Invalid cabin presentation request")
+			return
+		}
+		seen[cabinID] = struct{}{}
+		cabinIDs = append(cabinIDs, cabinID)
+	}
+	items := make([]any, 0, len(cabinIDs))
+	err = server.repository.ReadCabinPresentationSnapshots(request.Context(), warehouseID, cabinIDs,
+		func(records []persistence.CabinPresentationSnapshotRecord) error {
+			for _, record := range records {
+				photos := make([]any, 0, len(record.Photos))
+				for _, photo := range record.Photos {
+					variants := make([]string, 0, 2)
+					if photo.HasSmall {
+						variants = append(variants, string(media.VariantSmall))
+					}
+					if photo.HasLarge {
+						variants = append(variants, string(media.VariantLarge))
+					}
+					photos = append(photos, map[string]any{
+						"mediaId": photo.MediaID, "generation": photo.Generation,
+						"sortOrder": photo.SortOrder, "availableVariants": variants,
+					})
+				}
+				items = append(items, map[string]any{"cabinId": record.CabinID, "photos": photos})
+			}
+			return nil
+		})
+	if err != nil {
+		server.repositoryProblem(response, request, err)
+		return
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	writeJSON(response, http.StatusOK, map[string]any{"items": items})
+}
+
+// getLogisticsCabinPresentationVariantContent streams exactly one approved
+// cabin image variant. Every owner, warehouse, state, current-generation, and
+// variant mismatch is folded into the same 404 response so this endpoint does
+// not become a media-existence oracle.
+func (server *Server) getLogisticsCabinPresentationVariantContent(response http.ResponseWriter, request *http.Request) {
+	if !server.logisticsPrincipal(response, request) {
+		return
+	}
+	mediaID, mediaErr := uuid.Parse(request.PathValue("mediaId"))
+	variant := media.Variant(request.PathValue("variant"))
+	query := request.URL.Query()
+	warehouseID, warehouseErr := uuid.Parse(query.Get("warehouseId"))
+	cabinID, cabinErr := uuid.Parse(query.Get("cabinId"))
+	generation, generationErr := strconv.ParseInt(query.Get("generation"), 10, 64)
+	if mediaErr != nil || mediaID == uuid.Nil || warehouseErr != nil || warehouseID == uuid.Nil ||
+		cabinErr != nil || cabinID == uuid.Nil || generationErr != nil || generation < 1 || generation > maxStoredGeneration {
+		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_CABIN_PRESENTATION", "Invalid cabin presentation request")
+		return
+	}
+	if variant != media.VariantSmall && variant != media.VariantLarge {
+		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_CABIN_PRESENTATION", "Invalid cabin presentation variant")
+		return
+	}
+
+	var selectedVariant *persistence.VariantRecord
+	err := server.repository.ReadCurrentVariant(request.Context(), mediaID, persistence.OwnerTypeCabin,
+		cabinID.String(), warehouseID, int(generation), variant,
+		func(asset persistence.AssetRecord, record *persistence.VariantRecord) error {
+			if asset.ID != mediaID || asset.OwnerType != persistence.OwnerTypeCabin || asset.OwnerID != cabinID.String() ||
+				asset.WarehouseID != warehouseID || asset.Kind != media.KindImage || asset.Status != media.StatusReady ||
+				asset.Generation != int(generation) ||
+				record == nil || record.Variant != variant || record.ObjectKey == "" || record.ObjectVersionID == "" ||
+				record.SizeBytes <= 0 || normalizeContentType(record.ContentType) != "image/webp" {
+				return persistence.ErrNotFound
+			}
+			copyOfVariant := *record
+			selectedVariant = &copyOfVariant
+			return nil
+		})
+	if err != nil {
+		server.repositoryProblem(response, request, err)
+		return
+	}
+	server.streamVariant(response, request,
+		"cabin-presentation-"+strings.ToLower(string(variant))+extensionForContentType(selectedVariant.ContentType),
+		*selectedVariant)
+}
+
 type createUploadRequest struct {
-	OwnerType      string `json:"ownerType"`
-	OwnerID        string `json:"ownerId"`
-	DocumentID     string `json:"documentId"`
-	LineID         string `json:"lineId"`
-	WarehouseID    string `json:"warehouseId"`
-	Context        string `json:"context"`
-	FolderID       string `json:"folderId"`
-	FileName       string `json:"fileName"`
-	ContentType    string `json:"contentType"`
-	ContentLength  int64  `json:"contentLength"`
-	ChecksumSHA256 string `json:"checksumSha256"`
-	SortOrder      int64  `json:"sortOrder"`
+	OwnerType         string `json:"ownerType"`
+	OwnerID           string `json:"ownerId"`
+	DocumentID        string `json:"documentId"`
+	LineID            string `json:"lineId"`
+	ClientReferenceID string `json:"clientReferenceId"`
+	WarehouseID       string `json:"warehouseId"`
+	Context           string `json:"context"`
+	FolderID          string `json:"folderId"`
+	FileName          string `json:"fileName"`
+	ContentType       string `json:"contentType"`
+	ContentLength     int64  `json:"contentLength"`
+	ChecksumSHA256    string `json:"checksumSha256"`
+	SortOrder         int64  `json:"sortOrder"`
 }
 
 func (server *Server) createUpload(response http.ResponseWriter, request *http.Request) {
-	principal, ok := server.principal(response, request)
+	principal, ok := server.mediaPrincipal(response, request)
 	if !ok {
 		return
 	}
@@ -394,11 +574,29 @@ func (server *Server) createUpload(response http.ResponseWriter, request *http.R
 	} else {
 		body.OwnerID = ownerID
 	}
+	var clientReferenceID *uuid.UUID
+	if body.OwnerType == persistence.OwnerTypeTaskBoardEntry {
+		parsed, parseErr := uuid.Parse(body.ClientReferenceID)
+		if parseErr != nil || parsed == uuid.Nil || parsed.String() != body.ClientReferenceID {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid upload request")
+			return
+		}
+		clientReferenceID = &parsed
+	} else if body.ClientReferenceID != "" {
+		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid upload request")
+		return
+	}
 	if !validFileName(body.FileName) {
 		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_FILE_NAME", "Invalid file name")
 		return
 	}
-	if err := principal.Require("rwms.write", warehouseID, auth.Edit); err != nil {
+	if principal.isWorker() {
+		if _, err := principal.requireTaskBoardWorker(body.OwnerType, ownerID, warehouseID); err != nil ||
+			body.Context != persistence.ViewerContextWorkResult {
+			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+			return
+		}
+	} else if principal.user == nil || principal.user.Require("rwms.write", warehouseID, auth.Edit) != nil {
 		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 		return
 	}
@@ -413,6 +611,10 @@ func (server *Server) createUpload(response http.ResponseWriter, request *http.R
 	}
 	kind, accepted := media.KindForContentType(contentType)
 	if !accepted {
+		server.problem(response, request, http.StatusUnsupportedMediaType, "MEDIA_UNSUPPORTED_TYPE", "Unsupported media type")
+		return
+	}
+	if body.OwnerType == persistence.OwnerTypeTaskBoardEntry && (kind != media.KindImage || contentType != "image/jpeg") {
 		server.problem(response, request, http.StatusUnsupportedMediaType, "MEDIA_UNSUPPORTED_TYPE", "Unsupported media type")
 		return
 	}
@@ -433,14 +635,16 @@ func (server *Server) createUpload(response http.ResponseWriter, request *http.R
 	fingerprint := requestFingerprint(map[string]any{
 		"ownerType": body.OwnerType, "ownerId": body.OwnerID, "documentId": body.DocumentID,
 		"lineId": body.LineID, "warehouseId": warehouseID,
-		"context": body.Context, "folderId": body.FolderID,
+		"clientReferenceId": body.ClientReferenceID,
+		"context":           body.Context, "folderId": body.FolderID,
 		"fileName": fileName, "contentType": contentType, "contentLength": body.ContentLength,
 		"checksumSha256": body.ChecksumSHA256, "sortOrder": body.SortOrder,
 	})
 	asset, replayed, err := server.repository.CreateUpload(request.Context(), persistence.CreateUploadCommand{
-		MediaID: mediaID, FolderID: folderID, UploadSessionID: sessionID, SubjectID: principal.SubjectID,
+		MediaID: mediaID, FolderID: folderID, UploadSessionID: sessionID, SubjectID: principal.subjectID,
+		PrincipalType: principal.principalType, Actor: principal.actor, WorkerID: workerIDFor(principal),
 		IdempotencyKey: idempotencyKey, RequestSHA256: fingerprint, OwnerType: body.OwnerType,
-		OwnerID: ownerID, WarehouseID: warehouseID, Kind: kind, FileName: fileName,
+		OwnerID: ownerID, WarehouseID: warehouseID, ClientReferenceID: clientReferenceID, Kind: kind, FileName: fileName,
 		ContentType: contentType, ContentLength: body.ContentLength, ChecksumSHA256: body.ChecksumSHA256,
 		SortOrder: body.SortOrder, SourceObjectKey: objectKey,
 		UploadExpiresAt: time.Now().UTC().Add(server.config.UploadExpiry), CorrelationID: correlationID(request.Context()),
@@ -473,7 +677,7 @@ type uploadedObjectResponse struct {
 // object. The regular completion endpoint then provides an exact idempotent
 // confirmation using the same key and immutable object metadata.
 func (server *Server) uploadSessionContent(response http.ResponseWriter, request *http.Request) {
-	principal, ok := server.principal(response, request)
+	principal, ok := server.mediaPrincipal(response, request)
 	if !ok {
 		return
 	}
@@ -498,18 +702,17 @@ func (server *Server) uploadSessionContent(response http.ResponseWriter, request
 		}
 	}()
 
-	asset, err := server.repository.UploadSessionForSubject(request.Context(), sessionID, principal.SubjectID)
+	asset, err := server.repository.UploadSessionForPrincipal(request.Context(), sessionID, principal.subjectID, principal.principalType)
 	if err != nil {
 		server.repositoryProblem(response, request, err)
 		return
 	}
-	if err := principal.Require("rwms.write", asset.WarehouseID, auth.Edit); err != nil {
-		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+	if !server.authorizeUploadAsset(response, request, principal, asset) {
 		return
 	}
 
 	if asset.UploadCompletedAt != nil {
-		server.confirmContentReplay(response, request, asset, sessionID, principal.SubjectID, idempotencyKey)
+		server.confirmContentReplay(response, request, asset, sessionID, principal, idempotencyKey)
 		return
 	}
 	if !time.Now().Before(asset.UploadExpiresAt) {
@@ -569,7 +772,8 @@ func (server *Server) uploadSessionContent(response http.ResponseWriter, request
 	}
 	fingerprint := finalizeFingerprint(sessionID, finalizeRequest)
 	asset, replayed, err := server.repository.FinalizeUpload(request.Context(), persistence.FinalizeCommand{
-		SessionID: sessionID, SubjectID: principal.SubjectID, IdempotencyKey: idempotencyKey,
+		SessionID: sessionID, SubjectID: principal.subjectID, PrincipalType: principal.principalType,
+		Actor: principal.actor, WorkerID: workerIDFor(principal), IdempotencyKey: idempotencyKey,
 		RequestSHA256: fingerprint, ObjectVersionID: finalizeRequest.ObjectVersionID,
 		ETag: finalizeRequest.ETag, ChecksumSHA256: finalizeRequest.ChecksumSHA256,
 		ContentType: verified.ContentType, SizeBytes: verified.SizeBytes, CorrelationID: correlationID(request.Context()),
@@ -590,11 +794,31 @@ func (server *Server) uploadSessionContent(response http.ResponseWriter, request
 	})
 }
 
+func (server *Server) authorizeUploadAsset(response http.ResponseWriter, request *http.Request, principal mediaRequestPrincipal, asset persistence.AssetRecord) bool {
+	if principal.isWorker() {
+		entryID, err := principal.requireTaskBoardWorker(asset.OwnerType, asset.OwnerID, asset.WarehouseID)
+		if err != nil {
+			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+			return false
+		}
+		if err := server.repository.AuthorizeTaskBoardEntryWorker(request.Context(), entryID, asset.WarehouseID, principal.worker.WorkerID); err != nil {
+			server.repositoryProblem(response, request, err)
+			return false
+		}
+		return true
+	}
+	if principal.user == nil || principal.user.Require("rwms.write", asset.WarehouseID, auth.Edit) != nil {
+		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+		return false
+	}
+	return true
+}
+
 func (server *Server) confirmContentReplay(
 	response http.ResponseWriter,
 	request *http.Request,
 	asset persistence.AssetRecord,
-	sessionID, subjectID, idempotencyKey uuid.UUID,
+	sessionID uuid.UUID, principal mediaRequestPrincipal, idempotencyKey uuid.UUID,
 ) {
 	finalizeRequest := finalizeUploadRequest{
 		ObjectVersionID: asset.SourceVersionID,
@@ -602,7 +826,8 @@ func (server *Server) confirmContentReplay(
 		ChecksumSHA256:  asset.SourceChecksum,
 	}
 	asset, replayed, err := server.repository.FinalizeUpload(request.Context(), persistence.FinalizeCommand{
-		SessionID: sessionID, SubjectID: subjectID, IdempotencyKey: idempotencyKey,
+		SessionID: sessionID, SubjectID: principal.subjectID, PrincipalType: principal.principalType,
+		Actor: principal.actor, WorkerID: workerIDFor(principal), IdempotencyKey: idempotencyKey,
 		RequestSHA256:   finalizeFingerprint(sessionID, finalizeRequest),
 		ObjectVersionID: finalizeRequest.ObjectVersionID, ETag: finalizeRequest.ETag,
 		ChecksumSHA256: finalizeRequest.ChecksumSHA256, ContentType: asset.ContentType,
@@ -638,7 +863,7 @@ func finalizeFingerprint(sessionID uuid.UUID, body finalizeUploadRequest) string
 }
 
 func (server *Server) finalizeUpload(response http.ResponseWriter, request *http.Request) {
-	principal, ok := server.principal(response, request)
+	principal, ok := server.mediaPrincipal(response, request)
 	if !ok {
 		return
 	}
@@ -664,19 +889,19 @@ func (server *Server) finalizeUpload(response http.ResponseWriter, request *http
 	}
 	body.ObjectVersionID = objectVersionID
 	body.ETag = etag
-	asset, err := server.repository.UploadSessionForSubject(request.Context(), sessionID, principal.SubjectID)
+	asset, err := server.repository.UploadSessionForPrincipal(request.Context(), sessionID, principal.subjectID, principal.principalType)
 	if err != nil {
 		server.repositoryProblem(response, request, err)
 		return
 	}
-	if err := principal.Require("rwms.write", asset.WarehouseID, auth.Edit); err != nil {
-		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+	if !server.authorizeUploadAsset(response, request, principal, asset) {
 		return
 	}
 	fingerprint := finalizeFingerprint(sessionID, body)
 	if asset.UploadCompletedAt != nil {
 		asset, replayed, err := server.repository.FinalizeUpload(request.Context(), persistence.FinalizeCommand{
-			SessionID: sessionID, SubjectID: principal.SubjectID, IdempotencyKey: idempotencyKey,
+			SessionID: sessionID, SubjectID: principal.subjectID, PrincipalType: principal.principalType,
+			Actor: principal.actor, WorkerID: workerIDFor(principal), IdempotencyKey: idempotencyKey,
 			RequestSHA256: fingerprint, ObjectVersionID: objectVersionID,
 			ETag: etag, ChecksumSHA256: body.ChecksumSHA256,
 			ContentType: asset.ContentType, SizeBytes: asset.ExpectedLength, CorrelationID: correlationID(request.Context()),
@@ -707,7 +932,8 @@ func (server *Server) finalizeUpload(response http.ResponseWriter, request *http
 		return
 	}
 	asset, replayed, err := server.repository.FinalizeUpload(request.Context(), persistence.FinalizeCommand{
-		SessionID: sessionID, SubjectID: principal.SubjectID, IdempotencyKey: idempotencyKey,
+		SessionID: sessionID, SubjectID: principal.subjectID, PrincipalType: principal.principalType,
+		Actor: principal.actor, WorkerID: workerIDFor(principal), IdempotencyKey: idempotencyKey,
 		RequestSHA256: fingerprint, ObjectVersionID: objectVersionID,
 		ETag: etag, ChecksumSHA256: body.ChecksumSHA256,
 		ContentType: metadata.ContentType, SizeBytes: metadata.SizeBytes, CorrelationID: correlationID(request.Context()),
@@ -777,7 +1003,7 @@ func (server *Server) verifyObject(ctx context.Context, asset persistence.AssetR
 }
 
 func (server *Server) listOwner(response http.ResponseWriter, request *http.Request) {
-	principal, ok := server.principal(response, request)
+	principal, ok := server.mediaPrincipal(response, request)
 	if !ok {
 		return
 	}
@@ -786,7 +1012,15 @@ func (server *Server) listOwner(response http.ResponseWriter, request *http.Requ
 	if !ok {
 		return
 	}
-	if err := principal.Require("rwms.read", warehouseID, auth.View); err != nil {
+	var workerEntryID uuid.UUID
+	if principal.isWorker() {
+		entryID, err := principal.requireTaskBoardWorker(ownerType, ownerID, warehouseID)
+		if err != nil {
+			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+			return
+		}
+		workerEntryID = entryID
+	} else if principal.user == nil || principal.user.Require("rwms.read", warehouseID, auth.View) != nil {
 		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
 		return
 	}
@@ -810,17 +1044,22 @@ func (server *Server) listOwner(response http.ResponseWriter, request *http.Requ
 	}
 	var assets []persistence.AssetRecord
 	items := make([]any, 0, limit)
-	err = server.repository.ReadOwnerAssets(request.Context(), ownerType,
-		ownerID, warehouseID, limit, after,
-		func(records []persistence.AssetWithVariants) error {
-			assets = make([]persistence.AssetRecord, len(records))
-			for index := range records {
-				assets[index] = records[index].Asset
-				variants := safeVariants(records[index], ownerType, ownerID, warehouseID)
-				items = append(items, assetResponse(records[index].Asset, variants))
-			}
-			return nil
-		})
+	consume := func(records []persistence.AssetWithVariants) error {
+		assets = make([]persistence.AssetRecord, len(records))
+		for index := range records {
+			assets[index] = records[index].Asset
+			variants := safeVariants(records[index], ownerType, ownerID, warehouseID)
+			items = append(items, assetResponse(records[index].Asset, variants))
+		}
+		return nil
+	}
+	if principal.isWorker() {
+		err = server.repository.ReadTaskBoardEntryAssetsForWorker(request.Context(), workerEntryID,
+			warehouseID, principal.worker.WorkerID, limit, after, consume)
+	} else {
+		err = server.repository.ReadOwnerAssets(request.Context(), ownerType, ownerID, warehouseID,
+			limit, after, consume)
+	}
 	if err != nil {
 		server.repositoryProblem(response, request, err)
 		return
@@ -901,7 +1140,7 @@ func (server *Server) listCabinCovers(response http.ResponseWriter, request *htt
 }
 
 func (server *Server) getOriginal(response http.ResponseWriter, request *http.Request) {
-	principal, ok := server.principal(response, request)
+	principal, ok := server.mediaPrincipal(response, request)
 	if !ok {
 		return
 	}
@@ -914,26 +1153,45 @@ func (server *Server) getOriginal(response http.ResponseWriter, request *http.Re
 		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid media ID")
 		return
 	}
-	if err := principal.Require("rwms.read", warehouseID, auth.View); err != nil {
-		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
-		return
+	var generation *int
+	if rawGeneration := request.URL.Query().Get("generation"); rawGeneration != "" {
+		parsed, parseErr := strconv.Atoi(rawGeneration)
+		if parseErr != nil || parsed <= 0 {
+			server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid media generation")
+			return
+		}
+		generation = &parsed
 	}
 	var selectedAsset persistence.AssetRecord
 	var selectedOriginal *persistence.VariantRecord
-	err = server.repository.ReadOriginal(request.Context(), mediaID, ownerType, ownerID,
-		warehouseID, func(asset persistence.AssetRecord, original *persistence.VariantRecord) error {
-			if asset.Status != media.StatusReady || asset.Generation <= 0 {
-				return errMediaNotReady
-			}
-			if original == nil || original.Variant != media.VariantOriginal ||
-				original.ObjectVersionID == "" {
-				return errOriginalMissing
-			}
-			selectedAsset = asset
-			copyOfOriginal := *original
-			selectedOriginal = &copyOfOriginal
-			return nil
-		})
+	consume := func(asset persistence.AssetRecord, original *persistence.VariantRecord) error {
+		if asset.Status != media.StatusReady || asset.Generation <= 0 {
+			return errMediaNotReady
+		}
+		if original == nil || original.Variant != media.VariantOriginal ||
+			original.ObjectVersionID == "" {
+			return errOriginalMissing
+		}
+		selectedAsset = asset
+		copyOfOriginal := *original
+		selectedOriginal = &copyOfOriginal
+		return nil
+	}
+	if principal.isWorker() {
+		entryID, workerErr := principal.requireTaskBoardWorker(ownerType, ownerID, warehouseID)
+		if workerErr != nil {
+			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+			return
+		}
+		err = server.repository.ReadTaskBoardEntryOriginalForWorker(request.Context(), entryID, warehouseID,
+			principal.worker.WorkerID, mediaID, generation, consume)
+	} else {
+		if principal.user == nil || principal.user.Require("rwms.read", warehouseID, auth.View) != nil {
+			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+			return
+		}
+		err = server.repository.ReadOriginal(request.Context(), mediaID, ownerType, ownerID, warehouseID, consume)
+	}
 	switch {
 	case errors.Is(err, errMediaNotReady):
 		server.problem(response, request, http.StatusConflict, "MEDIA_NOT_READY", "Media is not ready")
@@ -948,7 +1206,7 @@ func (server *Server) getOriginal(response http.ResponseWriter, request *http.Re
 }
 
 func (server *Server) getVariantContent(response http.ResponseWriter, request *http.Request) {
-	principal, ok := server.principal(response, request)
+	principal, ok := server.mediaPrincipal(response, request)
 	if !ok {
 		return
 	}
@@ -971,26 +1229,36 @@ func (server *Server) getVariantContent(response http.ResponseWriter, request *h
 		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid media generation")
 		return
 	}
-	if err := principal.Require("rwms.read", warehouseID, auth.View); err != nil {
-		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
-		return
-	}
-
 	var selectedAsset persistence.AssetRecord
 	var selectedVariant *persistence.VariantRecord
-	err = server.repository.ReadCurrentVariant(request.Context(), mediaID, ownerType, ownerID,
-		warehouseID, generation, variant, func(asset persistence.AssetRecord, record *persistence.VariantRecord) error {
-			if asset.Status != media.StatusReady || asset.Generation != generation {
-				return errMediaNotReady
-			}
-			if record == nil || record.Variant != variant || record.ObjectVersionID == "" {
-				return errOriginalMissing
-			}
-			selectedAsset = asset
-			copyOfVariant := *record
-			selectedVariant = &copyOfVariant
-			return nil
-		})
+	consume := func(asset persistence.AssetRecord, record *persistence.VariantRecord) error {
+		if asset.Status != media.StatusReady || asset.Generation != generation {
+			return errMediaNotReady
+		}
+		if record == nil || record.Variant != variant || record.ObjectVersionID == "" {
+			return errOriginalMissing
+		}
+		selectedAsset = asset
+		copyOfVariant := *record
+		selectedVariant = &copyOfVariant
+		return nil
+	}
+	if principal.isWorker() {
+		entryID, workerErr := principal.requireTaskBoardWorker(ownerType, ownerID, warehouseID)
+		if workerErr != nil {
+			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+			return
+		}
+		err = server.repository.ReadTaskBoardEntryVariantForWorker(request.Context(), entryID, warehouseID,
+			principal.worker.WorkerID, mediaID, generation, variant, consume)
+	} else {
+		if principal.user == nil || principal.user.Require("rwms.read", warehouseID, auth.View) != nil {
+			server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+			return
+		}
+		err = server.repository.ReadCurrentVariant(request.Context(), mediaID, ownerType, ownerID,
+			warehouseID, generation, variant, consume)
+	}
 	switch {
 	case errors.Is(err, errMediaNotReady):
 		server.problem(response, request, http.StatusConflict, "MEDIA_NOT_READY", "Media is not ready")
@@ -1232,12 +1500,44 @@ func assetResponse(asset persistence.AssetRecord, variants []any) map[string]any
 		variants = []any{}
 	}
 	return map[string]any{
-		"id": asset.ID, "folderId": asset.FolderID, "fileName": asset.FileName, "contentType": asset.ContentType,
+		"id": asset.ID, "folderId": asset.FolderID, "clientReferenceId": asset.ClientReferenceID,
+		"fileName": asset.FileName, "contentType": asset.ContentType,
 		"kind": asset.Kind, "status": asset.Status, "version": asset.Version,
 		"generation": asset.Generation, "rotationDegrees": asset.Rotation,
 		"sortOrder": asset.SortOrder, "sizeBytes": asset.SizeBytes, "createdAt": asset.CreatedAt,
 		"variants": variants,
 	}
+}
+
+// mediaPrincipal accepts a normal USER token for the established public media
+// routes and a narrow WORKER token only where handlers explicitly opt into
+// task-board work-result access. Service tokens continue to use the internal
+// service-only routes below.
+func (server *Server) mediaPrincipal(response http.ResponseWriter, request *http.Request) (mediaRequestPrincipal, bool) {
+	authorization := request.Header.Get("Authorization")
+	user, userErr := server.auth.Validate(request.Context(), authorization)
+	if userErr == nil {
+		return mediaRequestPrincipal{
+			subjectID: user.SubjectID, principalType: persistence.PrincipalTypeUser,
+			actor: persistence.ActorReference{SubjectID: user.SubjectID, PrincipalType: persistence.PrincipalTypeUser},
+			user:  &user,
+		}, true
+	}
+	worker, workerErr := server.auth.ValidateWorker(request.Context(), authorization)
+	if workerErr == nil {
+		return mediaRequestPrincipal{
+			subjectID: worker.SubjectID, principalType: persistence.PrincipalTypeWorker,
+			actor:  persistence.ActorReference{SubjectID: worker.WorkerID, PrincipalType: persistence.PrincipalTypeWorker},
+			worker: &worker,
+		}, true
+	}
+	status := http.StatusUnauthorized
+	code := "MEDIA_UNAUTHORIZED"
+	if errors.Is(userErr, auth.ErrForbidden) || errors.Is(workerErr, auth.ErrForbidden) {
+		status, code = http.StatusForbidden, "MEDIA_FORBIDDEN"
+	}
+	server.problem(response, request, status, code, "Access is denied")
+	return mediaRequestPrincipal{}, false
 }
 
 func (server *Server) principal(response http.ResponseWriter, request *http.Request) (auth.Principal, bool) {

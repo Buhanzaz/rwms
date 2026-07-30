@@ -38,9 +38,7 @@ vi.mock("@/hooks/use-warehouse", () => ({
   useWarehouse: () => ({
     selectedWarehouse: {
       id: WAREHOUSE_ID,
-      serviceId: WAREHOUSE_ID,
       version: 1,
-      code: "SPB",
       name: "Склад Санкт-Петербург",
       city: "Санкт-Петербург",
       address: null,
@@ -70,7 +68,6 @@ function equipmentItem(
     version: 1,
     warehouseId: WAREHOUSE_ID,
     category: name === "Конвектор" ? "ELECTRICAL" : "FURNITURE",
-    code: name === "Конвектор" ? "CONVECTOR" : "CHAIR",
     name,
     active: true,
     comment: null,
@@ -211,6 +208,107 @@ afterEach(() => {
 })
 
 describe("EquipmentPage", () => {
+  it("shows the loading message in the top-left corner of the equipment grid", async () => {
+    equipmentApi.getEquipmentItemsWithRentalUsages.mockImplementationOnce(
+      () => new Promise(() => undefined)
+    )
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route path="/" element={<EquipmentPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+
+    const loadingState = await screen.findByText("Загрузка оборудования...")
+
+    expect(loadingState.className).toContain("items-start")
+    expect(loadingState.className).toContain("justify-start")
+    expect(loadingState.className).not.toContain("items-center")
+  })
+
+  it("keeps an empty desktop grid header and fills the remaining panel height", async () => {
+    equipmentApi.getEquipmentItemsWithRentalUsages.mockResolvedValueOnce([])
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route path="/" element={<EquipmentPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+
+    const desktopGrid = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>(
+        '[data-slot="operations-list-grid"]'
+      )
+      expect(element).not.toBeNull()
+      return element!
+    })
+
+    expect(
+      within(desktopGrid).getByRole("button", { name: "Наименование" })
+    ).toBeTruthy()
+    expect(desktopGrid.className).toContain("min-h-full")
+    expect(desktopGrid.parentElement?.className).toContain("flex-1")
+    expect(desktopGrid.parentElement?.className).toContain("block")
+    expect(desktopGrid.parentElement?.className).not.toContain("hidden")
+    expect(screen.queryByText("Доп. оборудование не найдено.")).toBeNull()
+  })
+
+  it("keeps search and the equipment grid available without collapsible filters", async () => {
+    const user = userEvent.setup()
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route path="/" element={<EquipmentPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-slot="operations-list-grid"]')
+      ).not.toBeNull()
+    )
+    expect(
+      screen.queryByRole("button", { name: /фильтры оборудования/i })
+    ).toBeNull()
+    expect(document.getElementById("equipment-filters")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Категория" })).toBeNull()
+
+    const search = screen.getByRole("searchbox", {
+      name: "Поиск оборудования",
+    })
+    await user.type(search, "Конвектор")
+    await waitFor(() =>
+      expect(
+        equipmentApi.getEquipmentItemsWithRentalUsages
+      ).toHaveBeenLastCalledWith("asset-token", {
+        warehouseId: WAREHOUSE_ID,
+        search: "Конвектор",
+      })
+    )
+    expect(
+      container.querySelector('[data-slot="operations-list-grid"]')
+    ).not.toBeNull()
+  })
+
   it("shows the same compact, left-aligned cabin submenu for every equipment category", async () => {
     const user = userEvent.setup()
     const queryClient = new QueryClient({

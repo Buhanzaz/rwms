@@ -41,6 +41,7 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/shipments/{documentId}/furniture-tasks",
             "/api/logistics/v1/transfers",
             "/api/logistics/v1/transfers/{documentId}",
+            "/api/logistics/v1/transfers/{documentId}/furniture-readiness",
             "/api/logistics/v1/equipment-movement-tasks",
             "/api/logistics/v1/equipment-movement-tasks/{taskId}",
             "/api/logistics/v1/orders",
@@ -50,6 +51,17 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/orders/{orderId}/units",
             "/api/logistics/v1/orders/{orderId}/units/{unitId}/desired-equipment",
             "/api/logistics/v1/clients",
+            "/api/logistics/v1/rental-inquiries",
+            "/api/logistics/v1/rental-inquiries/{inquiryId}",
+            "/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-facets",
+            "/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches",
+            "/api/logistics/v1/rental-inquiries/{inquiryId}/cabin-availability",
+            "/api/logistics/v1/rental-inquiries/{inquiryId}/client-presentation",
+            "/api/logistics/v1/settings/rental",
+            "/api/logistics/public/v1/client-presentations/{token}",
+            "/api/logistics/public/v1/client-presentations/{token}/bookings",
+            "/api/logistics/public/v1/client-presentations/{token}/bookings/{bookingId}",
+            "/api/logistics/public/v1/client-presentations/{token}/media/{cabinId}/{mediaId}/{generation}/{variant}",
             "/api/logistics/v1/{documentType}/{documentId}/reconcile");
     assertThat(child(child(document, "components"), "schemas"))
         .containsKeys(
@@ -58,6 +70,7 @@ class LogisticsContractFoundationTest {
             "ShipmentFurnitureTaskResult",
             "ShipmentFurnitureReadiness",
             "CreateTransferRequest",
+            "TransferFurnitureReadiness",
             "CreateEquipmentMovementTaskRequest",
             "EquipmentMovementTask",
             "EquipmentMovementTaskLine",
@@ -67,9 +80,30 @@ class LogisticsContractFoundationTest {
             "OrderDesiredEquipment",
             "SetOrderUnitDesiredEquipmentRequest",
             "OrderHistoryEvent",
+            "CreateRentalInquiryRequest",
+            "RentalInquiry",
+            "CabinFacets",
+            "CabinSearchRequest",
+            "CabinSearchResponse",
+            "PublishClientPresentationRequest",
+            "ClientPresentation",
+            "PublicClientPresentation",
+            "PresentationBooking",
+            "RentalSettings",
             "LogisticsDocument",
             "LogisticsLine",
             "ReconcileRequest");
+    Map<String, Object> schemas = child(child(document, "components"), "schemas");
+    assertThat(
+            child(
+                child(child(schemas, "CabinSearchRequest"), "properties"),
+                "groups"))
+        .containsEntry("maxItems", 20);
+    assertThat(
+            child(
+                child(child(schemas, "CabinSearchResponse"), "properties"),
+                "groups"))
+        .containsEntry("maxItems", 20);
     Map<String, Object> idempotencyKey =
         child(child(document, "components"), "parameters");
     assertThat(idempotencyKey.get("IdempotencyKey"))
@@ -79,6 +113,21 @@ class LogisticsContractFoundationTest {
               assertThat(parameter.get("in")).isEqualTo("header");
               assertThat(parameter.get("required")).isEqualTo(true);
             });
+  }
+
+  @Test
+  void equipmentMovementDurationIsRequiredAndPositiveInCommandsAndResponses() throws Exception {
+    Map<String, Object> schemas = child(child(openApi(), "components"), "schemas");
+
+    for (String schemaName :
+        List.of("CreateEquipmentMovementTaskRequest", "EquipmentMovementTask")) {
+      Map<String, Object> schema = child(schemas, schemaName);
+      assertThat((List<?>) schema.get("required"))
+          .anyMatch("plannedDurationMinutes"::equals);
+      assertThat(child(child(schema, "properties"), "plannedDurationMinutes"))
+          .containsEntry("type", "integer")
+          .containsEntry("minimum", 1);
+    }
   }
 
   @Test
@@ -104,7 +153,9 @@ class LogisticsContractFoundationTest {
             "listTransfers",
             "createTransfer",
             "getTransfer",
+            "getTransferFurnitureReadiness",
             "departTransferLine",
+            "getTransferArrivalPreflight",
             "arriveTransferLine",
             "cancelTransfer",
             "createCabinFurnitureTask",
@@ -125,12 +176,110 @@ class LogisticsContractFoundationTest {
             "removeOrderUnit",
             "setOrderUnitDesiredEquipment",
             "getOrderHistory",
+            "createRentalInquiry",
+            "getRentalInquiry",
+            "getRentalInquiryCabinFacets",
+            "searchRentalInquiryCabins",
+            "checkRentalInquiryCabinAvailability",
+            "getRentalInquiryClientPresentation",
+            "publishRentalInquiryClientPresentation",
+            "revokeRentalInquiryClientPresentation",
+            "listRentalBookingAlerts",
+            "actOnRentalBookingAlert",
+            "getRentalSettings",
+            "updateRentalSettings",
+            "getPublicClientPresentation",
+            "confirmPublicClientPresentation",
+            "getPublicClientPresentationBooking",
+            "getPublicClientPresentationMedia",
             "reconcileDocument");
     assertThat(paths.keySet())
         .allSatisfy(
             path ->
                 assertThat(normalizedPath(path))
                     .doesNotMatch(FORBIDDEN_PUBLIC_PATH_PATTERN));
+  }
+
+  @Test
+  void rentalSettingsExposeIndependentChatAndPresentationHoldDurations()
+      throws Exception {
+    Map<String, Object> schemas = child(child(openApi(), "components"), "schemas");
+    Map<String, Object> settings = child(schemas, "RentalSettings");
+    Map<String, Object> settingsProperties = child(settings, "properties");
+    Map<String, Object> update = child(schemas, "UpdateRentalSettingsRequest");
+    Map<String, Object> updateProperties = child(update, "properties");
+
+    List<String> settingsRequired =
+        ((List<?>) settings.get("required")).stream()
+            .map(String.class::cast)
+            .toList();
+    List<String> updateRequired =
+        ((List<?>) update.get("required")).stream()
+            .map(String.class::cast)
+            .toList();
+
+    assertThat(settingsRequired)
+        .contains(
+            "chatSelectionHoldMinutes",
+            "presentationHoldMinutes",
+            "draftReservationHoldMinutes");
+    assertThat(updateRequired)
+        .contains(
+            "expectedVersion",
+            "chatSelectionHoldMinutes",
+            "presentationHoldMinutes",
+            "draftReservationHoldMinutes");
+    assertThat(child(settingsProperties, "chatSelectionHoldMinutes"))
+        .containsEntry("minimum", 1)
+        .containsEntry("maximum", 1440);
+    assertThat(child(settingsProperties, "presentationHoldMinutes"))
+        .containsEntry("minimum", 5)
+        .containsEntry("maximum", 1440);
+    assertThat(child(settingsProperties, "draftReservationHoldMinutes"))
+        .containsEntry("minimum", 1440)
+        .containsEntry("maximum", 14400);
+    assertThat(updateProperties)
+        .containsKeys(
+            "expectedVersion",
+            "chatSelectionHoldMinutes",
+            "presentationHoldMinutes",
+            "draftReservationHoldMinutes");
+  }
+
+  @Test
+  void transferFurnitureReadinessIsAReadOnlyCanonicalProjection() throws Exception {
+    Map<String, Object> document = openApi();
+    Map<String, Object> paths = child(document, "paths");
+    Map<String, Object> endpoint =
+        child(paths, "/api/logistics/v1/transfers/{documentId}/furniture-readiness");
+    Map<String, Object> operation = child(endpoint, "get");
+    Map<String, Object> schemas = child(child(document, "components"), "schemas");
+
+    assertThat(endpoint).containsOnlyKeys("parameters", "get");
+    assertThat(operation.get("operationId")).isEqualTo("getTransferFurnitureReadiness");
+    assertThat(child(operation, "responses")).containsKeys("200", "401", "403", "404");
+    assertThat(
+            child(
+                    child(
+                        child(child(operation, "responses"), "200"),
+                        "content"),
+                    "application/json")
+                .get("schema"))
+        .isEqualTo(Map.of("$ref", "#/components/schemas/TransferFurnitureReadiness"));
+    assertThat(child(schemas, "TransferFurnitureReadinessState").get("enum"))
+        .isEqualTo(List.of("NOT_REQUIRED", "READY", "AWAITING_TASK_COMPLETION", "BLOCKED"));
+    assertThat(child(schemas, "TransferFurnitureReadiness").get("required"))
+        .isEqualTo(List.of("transferId", "transferVersion", "state", "tasks"));
+    assertThat(child(schemas, "TransferFurnitureTaskStatus").get("required"))
+        .isEqualTo(
+            List.of(
+                "rentalItemId",
+                "unitNumber",
+                "taskId",
+                "externalTaskId",
+                "taskBoardTaskId",
+                "taskState",
+                "lineCount"));
   }
 
   @Test
@@ -154,6 +303,26 @@ class LogisticsContractFoundationTest {
                                     parameter ->
                                         assertThat(parameter.get("$ref"))
                                             .isEqualTo("#/components/parameters/ExpectedVersion"))));
+  }
+
+  @Test
+  void returnInspectionCommandsRequireLineOwnedPhotosAndExplicitEquipmentConfirmation()
+      throws Exception {
+    Map<String, Object> schemas = child(child(openApi(), "components"), "schemas");
+    Map<String, Object> acceptanceLine = child(schemas, "ReturnMediaLineRequest");
+    Map<String, Object> acceptanceProperties = child(acceptanceLine, "properties");
+    Map<String, Object> estimateLine = child(schemas, "ReturnShortageLineRequest");
+    Map<String, Object> estimateProperties = child(estimateLine, "properties");
+
+    assertThat(acceptanceLine.get("required"))
+        .isEqualTo(List.of("lineId", "references", "equipmentConfirmed"));
+    assertThat(child(acceptanceProperties, "references").get("minItems")).isEqualTo(1);
+    assertThat(child(acceptanceProperties, "equipmentConfirmed"))
+        .containsEntry("type", "boolean")
+        .containsEntry("const", true);
+    assertThat(estimateLine.get("required"))
+        .isEqualTo(List.of("lineId", "references", "shortages"));
+    assertThat(child(estimateProperties, "references").get("minItems")).isEqualTo(1);
   }
 
   @Test
@@ -248,6 +417,38 @@ class LogisticsContractFoundationTest {
   }
 
   @Test
+  void rentalInquiryBookingFactHasADeclaredMinimalContractAndConversationKey() throws Exception {
+    JsonNode schema =
+        objectMapper.readTree(Files.readString(rentalInquiryEventSchemaPath()));
+    assertThat(strings(schema.get("required")))
+        .containsExactlyInAnyOrder(
+            "eventId",
+            "eventType",
+            "occurredAt",
+            "rentalInquiryId",
+            "conversationId",
+            "orderId");
+    assertThat(fieldNames(schema.get("properties")))
+        .containsExactlyInAnyOrder(
+            "eventId",
+            "eventType",
+            "occurredAt",
+            "rentalInquiryId",
+            "conversationId",
+            "orderId");
+
+    Map<String, Object> contract = eventContract();
+    Map<String, Object> channel = child(child(contract, "channels"), "rentalInquiryFacts");
+    assertThat(channel.get("address"))
+        .isEqualTo("rwms.logistics.rental-inquiry.events.v1");
+    Map<String, Object> message =
+        child(child(child(contract, "components"), "messages"), "RentalInquiryBookedV1");
+    assertThat(message)
+        .containsEntry("name", "logistics.rental-inquiry.booked.v1")
+        .containsEntry("x-rwms-record-key", "conversationId");
+  }
+
+  @Test
   void inboundContractAllowsOnlyDeclaredSourceFactsAndAHarmlessDlt() throws Exception {
     Map<String, Object> document = eventContract();
     Map<String, Object> channels = child(document, "channels");
@@ -291,6 +492,12 @@ class LogisticsContractFoundationTest {
   private Path eventSchemaPath() {
     return Path.of(
         System.getProperty("rwms.contracts.dir"), "events/logistics/logistics-events-v1.schema.json");
+  }
+
+  private Path rentalInquiryEventSchemaPath() {
+    return Path.of(
+        System.getProperty("rwms.contracts.dir"),
+        "events/logistics/rental-inquiry-events-v1.schema.json");
   }
 
   @SuppressWarnings("unchecked")

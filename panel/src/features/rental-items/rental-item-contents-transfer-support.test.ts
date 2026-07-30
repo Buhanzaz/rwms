@@ -59,7 +59,6 @@ describe("rental-item contents source summary", () => {
       version: 1,
       warehouseId: "warehouse-1",
       category: "FURNITURE",
-      code: "TABLE",
       name: "Стол",
       active: true,
       comment: null,

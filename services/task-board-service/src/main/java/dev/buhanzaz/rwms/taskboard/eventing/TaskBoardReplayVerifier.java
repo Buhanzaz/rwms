@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.taskboard.eventing;
 
 import dev.buhanzaz.rwms.taskboard.repository.BoardTaskRepository;
+import dev.buhanzaz.rwms.taskboard.repository.GroupKpiDayStateRepository;
 import dev.buhanzaz.rwms.taskboard.repository.QueueEntryRepository;
 import dev.buhanzaz.rwms.taskboard.repository.QueueUsageReferenceRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkQueueRepository;
@@ -42,6 +43,7 @@ public class TaskBoardReplayVerifier {
   private final QueueUsageReferenceRepository queueUsageReferences;
   private final BoardTaskRepository boardTasks;
   private final QueueEntryRepository queueEntries;
+  private final GroupKpiDayStateRepository groupKpiDays;
   private final TaskBoardReplayAuditStore replayAudit;
   private final TaskBoardEventingMetrics metrics;
 
@@ -167,11 +169,15 @@ public class TaskBoardReplayVerifier {
       }
       Optional<Object> liveProjection = liveProjection(stream.aggregateType(), stream.aggregateId());
       if (liveProjection.isPresent()) {
-        String projectionJson = canonicalJson(write(liveProjection.orElseThrow()));
-        if (!projectionJson.equals(tail.payload())) {
+        JsonNode live = read(write(liveProjection.orElseThrow()));
+        JsonNode storedProjection = read(tail.payload());
+        String projectionJson = canonicalJson(write(live));
+        String storedJson = canonicalJson(write(storedProjection));
+        if (!projectionJson.equals(storedJson)) {
           throw new IllegalStateException("Task-board replay tail does not match live projection");
         }
-      } else if (!TERMINAL_DELETE_EVENTS.contains(tail.eventType())
+      } else if (!isJdbcProjection(stream.aggregateType())
+          && !TERMINAL_DELETE_EVENTS.contains(tail.eventType())
           && !read(tail.payload()).path("deleted").asBoolean(false)) {
         throw new IllegalStateException("Task-board live projection is missing without terminal delete");
       }
@@ -199,7 +205,15 @@ public class TaskBoardReplayVerifier {
           boardTasks.findById(id).map(value -> (Object) facts.boardTask(value, false));
       case QUEUE_ENTRY ->
           queueEntries.findById(id).map(value -> (Object) facts.queueEntry(value, false));
+      case GROUP_KPI_DAY ->
+          groupKpiDays.findById(id).map(value -> (Object) facts.groupKpiDay(value));
+      case TASK_BOARD_ENTRY_OWNER_PROOF, TASK_EVIDENCE -> Optional.empty();
     };
+  }
+
+  private boolean isJdbcProjection(TaskBoardAggregateType type) {
+    return type == TaskBoardAggregateType.TASK_BOARD_ENTRY_OWNER_PROOF
+        || type == TaskBoardAggregateType.TASK_EVIDENCE;
   }
 
   private TaskBoardReplayAuditStore.Summary summary(List<StreamIdentity> streams) {
@@ -348,6 +362,9 @@ public class TaskBoardReplayVerifier {
       case QUEUE_USAGE_REFERENCE -> TaskBoardEventTypes.QUEUE_REFERENCE_CREATED;
       case BOARD_TASK -> TaskBoardEventTypes.BOARD_TASK_CREATED;
       case QUEUE_ENTRY -> TaskBoardEventTypes.QUEUE_ENTRY_CREATED;
+      case TASK_BOARD_ENTRY_OWNER_PROOF -> TaskBoardEventTypes.ENTRY_OWNER_PROOF_CHANGED;
+      case TASK_EVIDENCE -> TaskBoardEventTypes.TASK_EVIDENCE_READY;
+      case GROUP_KPI_DAY -> TaskBoardEventTypes.GROUP_KPI_DAY_CHANGED;
     };
   }
 

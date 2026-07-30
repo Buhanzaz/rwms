@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+} from "react"
 import { useQuery } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { ArrowLeft01Icon, Search01Icon } from "@hugeicons/core-free-icons"
+import { ArrowLeft01Icon } from "@hugeicons/core-free-icons"
 
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -32,7 +37,6 @@ import {
   getOperationalRepairEstimateCatalog,
 } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
 import type { RepairEstimateCatalogNodeDto } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
-import { repairEstimateCatalogNodeTypeLabel } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 import {
   applyCatalogNodesToEstimateLines,
   getRepairEstimateCatalogQuantityError,
@@ -70,6 +74,43 @@ export type RepairEstimateCatalogPager = {
 }
 
 const CATALOG_PAGE_SIZE = 9
+const DISPLAY_COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/
+
+function normalizedDisplayColor(value: string | null | undefined) {
+  if (value === null || value === undefined) {
+    return null
+  }
+
+  const normalized = value.trim()
+  return DISPLAY_COLOR_PATTERN.test(normalized) ? normalized : null
+}
+
+function readableCatalogForeground(color: string) {
+  const red = Number.parseInt(color.slice(1, 3), 16) / 255
+  const green = Number.parseInt(color.slice(3, 5), 16) / 255
+  const blue = Number.parseInt(color.slice(5, 7), 16) / 255
+  const linear = [red, green, blue].map((channel) =>
+    channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+  )
+  const luminance = 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+  return luminance > 0.42 ? "#111827" : "#FFFFFF"
+}
+
+function catalogNodeColorStyle(
+  node: RepairEstimateCatalogNodeDto
+): CSSProperties | undefined {
+  const color = normalizedDisplayColor(node.displayColor)
+  if (color === null) {
+    return undefined
+  }
+
+  return {
+    backgroundColor: color,
+    borderColor: color,
+    color: readableCatalogForeground(color),
+  }
+}
 
 function uniqueNodes(nodes: readonly RepairEstimateCatalogNodeDto[]) {
   return Array.from(new Map(nodes.map((node) => [node.id, node])).values())
@@ -95,7 +136,6 @@ export function RepairEstimateCatalogPicker({
   )
   const [mode, setMode] = useState<CatalogMode>("LINKED_SET")
   const [path, setPath] = useState<string[]>([])
-  const [search, setSearch] = useState("")
   const [pendingWork, setPendingWork] =
     useState<RepairEstimateCatalogNodeDto | null>(null)
   const [pendingMaterial, setPendingMaterial] =
@@ -122,23 +162,6 @@ export function RepairEstimateCatalogPicker({
   const visibleNodes = useMemo(() => {
     if (!catalog) {
       return []
-    }
-
-    const searchValue = search.trim().toLocaleLowerCase("ru")
-    if (searchValue) {
-      return filterForUsage(catalog.operationalEstimateNodes)
-        .filter((node) =>
-          node.name.toLocaleLowerCase("ru").includes(searchValue)
-        )
-        .filter((node) => {
-          if (mode === "WORKS_ONLY") {
-            return node.nodeType === "WORK"
-          }
-          if (mode === "MATERIALS_ONLY") {
-            return node.nodeType !== "WORK"
-          }
-          return true
-        })
     }
 
     if (pendingMaterial) {
@@ -179,20 +202,12 @@ export function RepairEstimateCatalogPicker({
       }
       return true
     })
-  }, [
-    catalog,
-    currentNode,
-    filterForUsage,
-    mode,
-    pendingMaterial,
-    pendingWork,
-    search,
-  ])
+  }, [catalog, currentNode, filterForUsage, mode, pendingMaterial, pendingWork])
 
   const breadcrumbs: CatalogBreadcrumb[] = [
     {
       key: "main-menu",
-      label: "Главное меню",
+      label: "Каталог",
       pathLength: 0,
     },
     ...path.map((nodeId, index) => ({
@@ -236,7 +251,6 @@ export function RepairEstimateCatalogPicker({
   function resetNavigation(nextMode = mode) {
     setMode(nextMode)
     setPath([])
-    setSearch("")
     setPendingWork(null)
     setPendingMaterial(null)
     setMessage(null)
@@ -254,14 +268,12 @@ export function RepairEstimateCatalogPicker({
 
   function navigateInto(node: RepairEstimateCatalogNodeDto) {
     setPath((current) => [...current, node.id])
-    setSearch("")
     setMessage(null)
     setPage(0)
   }
 
   function navigateToBreadcrumb(pathLength: number) {
     setPath((current) => current.slice(0, pathLength))
-    setSearch("")
     setPendingWork(null)
     setPendingMaterial(null)
     setMessage(null)
@@ -299,9 +311,6 @@ export function RepairEstimateCatalogPicker({
       return
     }
 
-    // A selected search result starts the next navigation step immediately.
-    // Otherwise the global result list masks pending material/location choices.
-    setSearch("")
     setPage(0)
 
     if (["CATEGORY", "SUBCATEGORY"].includes(node.nodeType)) {
@@ -406,16 +415,18 @@ export function RepairEstimateCatalogPicker({
         locationTitle: addContext.locationTitle,
       })
     )
-    const followUps = filterForUsage(
-      catalog.getFollowUpNodes(addContext.continuationNode.id)
+    const outgoingNodes = filterForUsage(
+      uniqueNodes([
+        ...catalog.getFollowUpNodes(addContext.continuationNode.id),
+        ...catalog.getDependencyNodes(addContext.continuationNode.id),
+      ])
     )
     setAddContext(null)
     setPendingWork(null)
     setPendingMaterial(null)
-    setSearch("")
     setMessage("Позиция добавлена в смету")
     setPage(0)
-    if (followUps.length > 0) {
+    if (outgoingNodes.length > 0) {
       setPath((current) => [...current, addContext.continuationNode.id])
     }
   }
@@ -426,58 +437,54 @@ export function RepairEstimateCatalogPicker({
 
   return (
     <section className="flex flex-col gap-3">
-      <div className="grid [grid-template-columns:repeat(auto-fit,minmax(min(12rem,100%),1fr))] gap-3">
-        <Field>
-          <FieldLabel htmlFor="estimate-catalog-search">Поиск</FieldLabel>
-          <div className="relative">
-            <HugeiconsIcon
-              icon={Search01Icon}
-              className="pointer-events-none absolute top-1/2 left-2 size-4 -translate-y-1/2 text-muted-foreground"
-            />
-            <Input
-              id="estimate-catalog-search"
-              aria-label="Поиск по каталогу сметы"
-              className="pl-8"
-              value={search}
-              placeholder="Работа или материал"
-              onChange={(event) => {
-                setSearch(event.target.value)
-                setPage(0)
-              }}
-            />
-          </div>
-        </Field>
-
-        <Field>
-          <FieldLabel htmlFor="estimate-catalog-mode">
-            Режим каталога
-          </FieldLabel>
-          <Select
-            value={mode}
-            onValueChange={(value) => resetNavigation(value as CatalogMode)}
+      <Field>
+        <FieldLabel htmlFor="estimate-catalog-mode">Состав</FieldLabel>
+        <Select
+          value={mode}
+          onValueChange={(value) => resetNavigation(value as CatalogMode)}
+        >
+          <SelectTrigger
+            id="estimate-catalog-mode"
+            aria-label="Состав каталога"
+            className="w-full"
           >
-            <SelectTrigger
-              id="estimate-catalog-mode"
-              aria-label="Режим каталога"
-              className="w-full"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem value="LINKED_SET">Работы + материалы</SelectItem>
-                <SelectItem value="WORKS_ONLY">Только работы</SelectItem>
-                <SelectItem value="MATERIALS_ONLY">Только материалы</SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </Field>
-      </div>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="LINKED_SET">Работы + материалы</SelectItem>
+              <SelectItem value="WORKS_ONLY">Только работы</SelectItem>
+              <SelectItem value="MATERIALS_ONLY">Только материалы</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </Field>
 
       <nav
         aria-label="Путь по каталогу"
         className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground"
       >
+        {path.length > 0 || pendingWork ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            aria-label="Назад по каталогу"
+            onClick={() => {
+              if (pendingMaterial) {
+                setPendingMaterial(null)
+              } else if (pendingWork) {
+                setPendingWork(null)
+              } else {
+                setPath((current) => current.slice(0, -1))
+              }
+              setMessage(null)
+              setPage(0)
+            }}
+          >
+            <HugeiconsIcon icon={ArrowLeft01Icon} />
+          </Button>
+        ) : null}
         {breadcrumbs.map((breadcrumb, index) => (
           <span key={breadcrumb.key} className="flex items-center gap-1">
             {index > 0 ? <span aria-hidden="true">/</span> : null}
@@ -523,26 +530,6 @@ export function RepairEstimateCatalogPicker({
             </Button>
           </span>
         ) : null}
-        {(path.length > 0 || pendingWork) && !search ? (
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => {
-              if (pendingMaterial) {
-                setPendingMaterial(null)
-              } else if (pendingWork) {
-                setPendingWork(null)
-              } else {
-                setPath((current) => current.slice(0, -1))
-              }
-              setMessage(null)
-              setPage(0)
-            }}
-          >
-            <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
-            Назад
-          </Button>
-        ) : null}
       </nav>
 
       {message ? (
@@ -563,7 +550,7 @@ export function RepairEstimateCatalogPicker({
             <CardTitle>Ничего не найдено</CardTitle>
           </CardHeader>
           <CardContent className="text-muted-foreground">
-            Измените поиск или проверьте связи в настройках каталога.
+            Откройте другой раздел или проверьте связи в настройках каталога.
           </CardContent>
         </Card>
       ) : (
@@ -573,26 +560,22 @@ export function RepairEstimateCatalogPicker({
               key={node.id}
               type="button"
               aria-label={`${nodeActionLabel(node)}: ${node.name}`}
+              data-catalog-display-color={
+                normalizedDisplayColor(node.displayColor) ?? undefined
+              }
               className="group w-full min-w-0 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:ring-inset"
               onClick={() => selectNode(node)}
             >
               <Card
                 size="sm"
-                className="h-full min-h-24 cursor-pointer justify-between ring-inset"
+                className="h-full cursor-pointer ring-inset"
+                style={catalogNodeColorStyle(node)}
               >
                 <CardHeader>
                   <CardTitle className="min-w-0 break-words">
                     {node.name}
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="mt-auto">
-                  <div className="flex flex-wrap gap-1">
-                    <Badge variant="secondary">
-                      {repairEstimateCatalogNodeTypeLabel(node.nodeType)}
-                    </Badge>
-                    {node.includeInEstimate ? <Badge>Смета</Badge> : null}
-                  </div>
-                </CardContent>
               </Card>
             </button>
           ))}

@@ -9,6 +9,7 @@ import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.BoardTaskFact
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.WorkerClassFact;
 import dev.buhanzaz.rwms.taskboard.repository.WorkerClassRepository;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -89,6 +90,9 @@ class TaskBoardEventingRuntimeIntegrationTest {
                     warehouseId,
                     externalTaskId,
                     TaskStatus.ACTIVE,
+                    LocalDate.of(2026, 7, 24),
+                    2,
+                    true,
                     null,
                     null,
                     null,
@@ -181,7 +185,7 @@ class TaskBoardEventingRuntimeIntegrationTest {
 
   private void verifyConcurrentCasAndAtomicRollback(TransactionTemplate tx) throws Exception {
     UUID concurrentId = UUID.randomUUID();
-    WorkerClassFact concurrentPayload = workerClassFact(concurrentId, "CONCURRENT");
+    WorkerClassFact concurrentPayload = workerClassFact(concurrentId);
     tx.executeWithoutResult(
         ignored ->
             eventStore.initialize(
@@ -212,13 +216,13 @@ class TaskBoardEventingRuntimeIntegrationTest {
               firstId,
               0,
               TaskBoardEventTypes.WORKER_CLASS_CREATED,
-              workerClassFact(firstId, "ATOMIC_A"));
+              workerClassFact(firstId));
           eventStore.initialize(
               TaskBoardAggregateType.WORKER_CLASS,
               secondId,
               0,
               TaskBoardEventTypes.WORKER_CLASS_CREATED,
-              workerClassFact(secondId, "ATOMIC_B"));
+              workerClassFact(secondId));
         });
     assertThatThrownBy(
             () ->
@@ -235,7 +239,7 @@ class TaskBoardEventingRuntimeIntegrationTest {
                           firstId,
                           0,
                           TaskBoardEventTypes.WORKER_CLASS_CHANGED,
-                          workerClassFact(firstId, "ATOMIC_A"));
+                          workerClassFact(firstId));
                       throw new IllegalStateException("force rollback");
                     }))
         .isInstanceOf(IllegalStateException.class)
@@ -268,7 +272,7 @@ class TaskBoardEventingRuntimeIntegrationTest {
 
   private void verifySnapshotThreshold(TransactionTemplate tx) {
     UUID aggregateId = UUID.randomUUID();
-    WorkerClassFact payload = workerClassFact(aggregateId, "SNAPSHOT");
+    WorkerClassFact payload = workerClassFact(aggregateId);
     tx.executeWithoutResult(
         ignored -> {
           eventStore.initialize(
@@ -308,7 +312,7 @@ class TaskBoardEventingRuntimeIntegrationTest {
          where status='PENDING'
         """);
     UUID orderedId = UUID.randomUUID();
-    WorkerClassFact orderedPayload = workerClassFact(orderedId, "ORDERED");
+    WorkerClassFact orderedPayload = workerClassFact(orderedId);
     tx.executeWithoutResult(
         ignored -> {
           eventStore.initialize(
@@ -358,7 +362,7 @@ class TaskBoardEventingRuntimeIntegrationTest {
         .isOne();
 
     UUID gapId = UUID.randomUUID();
-    WorkerClassFact gapPayload = workerClassFact(gapId, "GAP");
+    WorkerClassFact gapPayload = workerClassFact(gapId);
     tx.executeWithoutResult(
         ignored -> {
           eventStore.initialize(
@@ -409,7 +413,6 @@ class TaskBoardEventingRuntimeIntegrationTest {
         tx.execute(
             ignored -> {
               var value = new WorkerClass();
-              value.setCode("REPLAY_" + UUID.randomUUID().toString().substring(0, 8));
               value.setName("Runtime replay projection");
               value.setSortOrder(500);
               value.setActive(true);
@@ -425,8 +428,8 @@ class TaskBoardEventingRuntimeIntegrationTest {
     assertThat(replay.payloadSha256()).hasSize(64);
   }
 
-  private WorkerClassFact workerClassFact(UUID id, String code) {
-    return new WorkerClassFact(id, UUID.randomUUID(), code, 1, true, false);
+  private WorkerClassFact workerClassFact(UUID id) {
+    return new WorkerClassFact(id, UUID.randomUUID(), 1, true, false);
   }
 
   private long currentVersion(TaskBoardAggregateType type, UUID id) {

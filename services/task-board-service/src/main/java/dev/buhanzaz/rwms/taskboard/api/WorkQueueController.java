@@ -30,6 +30,13 @@ public class WorkQueueController {
     return service.listQueues(warehouseId);
   }
 
+  @GetMapping("/queue-capabilities")
+  public WarehouseQueueCapabilities capabilities(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId) {
+    read(jwt, warehouseId);
+    return service.queueCapabilities(warehouseId);
+  }
+
   @PostMapping("/work-queues")
   @ResponseStatus(HttpStatus.CREATED)
   public WorkQueueDto create(

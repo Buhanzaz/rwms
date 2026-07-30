@@ -14,6 +14,9 @@ public interface OrderClientRepository
   Optional<OrderClient> findByClientTypeAndNormalizedName(
       ClientType clientType, String normalizedName);
 
+  Optional<OrderClient> findByClientTypeAndNormalizedPhone(
+      ClientType clientType, String normalizedPhone);
+
   Optional<OrderClient> findByCreatedBySubjectIdAndCreationIdempotencyKey(
       UUID createdBySubjectId, UUID creationIdempotencyKey);
 

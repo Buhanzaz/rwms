@@ -31,23 +31,29 @@ function rentalItem(overrides: Partial<RentalItemDto> = {}): RentalItemDto {
     version: 4,
     warehouseId: WAREHOUSE_ID,
     number: "БЫТ-042",
+    rentalTypeId: "af57f2b0-3a71-4b7f-8d2f-000000000002",
+    dimensionId: "af57f2b0-3a71-4b7f-8d2f-000000000107",
+    finishingId: "af57f2b0-3a71-4b7f-8d2f-000000000202",
     type: "БК-2",
     dimensions: "2.4x6",
     finishing: "ЛДСП",
     category: "Обычная",
-    characteristics: "Окно",
+    characteristics: [
+      {
+        id: "af57f2b0-3a71-4b7f-8d2f-000000000301",
+        name: "Пластиковое окно",
+      },
+    ],
     linoleum: true,
     status: "AFTER_RENT",
     comment: null,
-    hasPhotos: false,
-    photoCount: 0,
-    mainPhotoUrl: null,
-    locationNodeId: null,
     contents: null,
     contentsItems: [],
     shipmentDate: null,
     tenant: null,
     price: null,
+    passport: {},
+    tags: [],
     ...overrides,
   }
 }
@@ -128,7 +134,6 @@ describe("panel estimate rental-items client", () => {
       page: 0,
       size: 40,
       excludeStatuses: [
-        "NEW",
         "RENTED",
         "BOOKED",
         "REPAIR",
@@ -165,5 +170,17 @@ describe("panel estimate rental-items client", () => {
       "access-token",
       RENTAL_ITEM_ID
     )
+  })
+
+  it("does not resolve an item that is not after rent", async () => {
+    vi.mocked(getAssetRentalItem).mockResolvedValue(
+      rentalItem({ status: "USED_SALE" })
+    )
+
+    await expect(
+      panelEstimateRentalItemsClient.resolveById(WAREHOUSE_ID, RENTAL_ITEM_ID)
+    ).resolves.toBeNull()
+
+    expect(listReturns).not.toHaveBeenCalled()
   })
 })

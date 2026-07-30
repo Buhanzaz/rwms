@@ -77,6 +77,10 @@ final class MaintenanceEventContractFixtures {
           MaintenanceAggregateType.REPAIR,
           REPAIR_ID,
           reworkRepair());
+      case REPAIR_TRANSFER_PREPARED, REPAIR_TRANSFERRED -> new FactCase(
+          MaintenanceAggregateType.REPAIR,
+          REPAIR_ID,
+          primaryRepair(RepairExecutionState.QUEUED, RepairAcceptanceState.NOT_READY));
       case REPAIR_ACCEPTED -> new FactCase(
           MaintenanceAggregateType.REPAIR,
           REPAIR_ID,
@@ -131,6 +135,7 @@ final class MaintenanceEventContractFixtures {
         executionState,
         acceptanceState,
         LocalDate.of(2026, 7, 17),
+        3,
         List.of(stage(executionState)));
   }
 
@@ -147,6 +152,7 @@ final class MaintenanceEventContractFixtures {
         RepairExecutionState.DRAFT,
         RepairAcceptanceState.NOT_READY,
         LocalDate.of(2026, 7, 17),
+        3,
         List.of(stage(RepairExecutionState.DRAFT)));
   }
 

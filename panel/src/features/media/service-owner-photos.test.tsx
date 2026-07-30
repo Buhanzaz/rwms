@@ -1,6 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { ApiError } from "@/lib/api-client"
 import { maintenanceEstimateMediaOwner } from "@/features/media/media-service"
 
 const mediaState = vi.hoisted(() => ({
@@ -10,6 +11,22 @@ const mediaState = vi.hoisted(() => ({
 vi.mock("@/features/media/use-service-owner-media", () => ({
   serviceOwnerMediaQueryKey: () => ["service-owner-media"],
   useServiceOwnerMedia: () => mediaState.value,
+}))
+
+vi.mock("@/components/media/photo-carousel", () => ({
+  PhotoCarousel: ({
+    photos,
+    emptyLabel = "Нет фото",
+  }: {
+    photos: Array<{ id: string }>
+    emptyLabel?: string
+  }) => (
+    <div>
+      {photos.length === 0
+        ? emptyLabel
+        : photos.map((photo) => <span key={photo.id}>{photo.id}</span>)}
+    </div>
+  ),
 }))
 
 import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
@@ -72,6 +89,29 @@ describe("ServiceOwnerPhotos", () => {
     expect(screen.queryByText("Нет фото")).toBeNull()
   })
 
+  it("keeps an ordinary authorization error visible", () => {
+    mediaState.value = mediaValue({
+      query: {
+        isError: true,
+        isLoading: false,
+        isSuccess: false,
+        error: new ApiError("Нет доступа к фотографиям", 403),
+      },
+    })
+
+    render(
+      <ServiceOwnerPhotos
+        accessToken="token"
+        owner={owner}
+        readOnly
+        title="Фото сметы"
+      />
+    )
+
+    expect(screen.getByText("Нет доступа к фотографиям")).toBeTruthy()
+    expect(screen.queryByText("Сервис фото недоступен")).toBeNull()
+  })
+
   it("reports each logical READY asset once regardless of derived variants", () => {
     const onReadyReferencesChange = vi.fn()
     mediaState.value = mediaValue({
@@ -101,6 +141,48 @@ describe("ServiceOwnerPhotos", () => {
         generation: 4,
       },
     ])
+  })
+
+  it("renders an adjacent action and limits a read-only comparison gallery", () => {
+    mediaState.value = mediaValue({
+      assets: [
+        {
+          id: "33333333-3333-4333-8333-333333333333",
+          kind: "IMAGE",
+          status: "READY",
+        },
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          kind: "IMAGE",
+          status: "READY",
+        },
+      ],
+      photos: [
+        {
+          id: "33333333-3333-4333-8333-333333333333",
+          url: "blob:first",
+        },
+        {
+          id: "44444444-4444-4444-8444-444444444444",
+          url: "blob:second",
+        },
+      ],
+      logicalPhotoCount: 2,
+    })
+
+    render(
+      <ServiceOwnerPhotos
+        accessToken="token"
+        owner={owner}
+        readOnly
+        title="Фото до"
+        visibleMediaIds={["44444444-4444-4444-8444-444444444444"]}
+        toolbarAction={<button type="button">Источник фото</button>}
+      />
+    )
+
+    expect(screen.getByText("1 из 20")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Источник фото" })).toBeTruthy()
   })
 
   it("does not clear persisted references before the owner query succeeds", () => {

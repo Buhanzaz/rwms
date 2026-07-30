@@ -59,3 +59,13 @@ PROMPT_PANEL_RENTAL_TABLE_MIGRATION.md
 /amplicode.xml
 /old_db/**/target/
 *.lck
+/.playwright/
+/.claude/
+/output/
+/old_db/
+/WMS_ARCHITECTURE_KNOWLEDGE/
+
+### Local exports and standalone repositories ###
+/test.html
+/manager-download-site/
+/+4

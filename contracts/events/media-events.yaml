@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: RWMS Media Events
-  version: 1.3.0
+  version: 1.4.0
   description: >-
     PostgreSQL is the replay authority. Facts and processing requests use
     separate schemas and aggregate families. Delivery is at-least-once.
@@ -17,7 +17,8 @@ channels:
       Keyed by mediaId; aggregate versions preserve per-media order. Owner types
       cover inventory, cabin, maintenance and logistics scopes. Logistics facts
       retain the server-derived documentId:lineId identity; browsers never
-      construct or submit that composite value.
+      construct or submit that composite value. TASK_BOARD_ENTRY facts carry
+      the stable evidenceId as clientReferenceId and a WORKER actor reference.
     messages:
       mediaFactV1: { $ref: '#/components/messages/MediaFactV1' }
   processingRequests:
@@ -50,6 +51,14 @@ channels:
       actor data are forbidden.
     messages:
       inventoryOwnerDltV1: { $ref: '#/components/messages/InventoryOwnerDltV1' }
+  taskBoardOwnerProofFacts:
+    address: rwms.task-board.entry-owner-proof.v1
+    description: >-
+      Task-board entry owner proofs are keyed by entry UUID and applied with
+      aggregate-version gap detection. Worker media access fails closed until
+      an active current proof explicitly contains the authenticated worker ID.
+    messages:
+      taskBoardEntryOwnerProofV1: { $ref: '#/components/messages/TaskBoardEntryOwnerProofV1' }
 operations:
   publishMediaFact:
     action: send
@@ -69,6 +78,9 @@ operations:
   publishInventoryOwnerDeadLetter:
     action: send
     channel: { $ref: '#/channels/inventoryOwnerDeadLetters' }
+  consumeTaskBoardOwnerProofFact:
+    action: receive
+    channel: { $ref: '#/channels/taskBoardOwnerProofFacts' }
 components:
   messages:
     MediaFactV1:
@@ -102,3 +114,14 @@ components:
       name: media.inventory-owner.dlt.v1
       payload: { $ref: './media/media-inventory-owner-dlt-v1.schema.json' }
       x-rwms-record-key: source finding aggregateId when identity is valid; UUIDv5(OID namespace, SHA-256(raw source bytes)) when invalid
+    TaskBoardEntryOwnerProofV1:
+      name: task-board.entry-owner-proof.changed.v1
+      payload:
+        allOf:
+          - $ref: './task-board/task-board-events-v1.schema.json'
+          - type: object
+            required: [aggregateType, eventType]
+            properties:
+              aggregateType: { const: TASK_BOARD_ENTRY_OWNER_PROOF }
+              eventType: { const: task-board.entry-owner-proof.changed.v1 }
+      x-rwms-record-key: aggregateId

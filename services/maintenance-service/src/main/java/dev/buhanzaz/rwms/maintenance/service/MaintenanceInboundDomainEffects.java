@@ -1,6 +1,8 @@
 package dev.buhanzaz.rwms.maintenance.service;
 
 import dev.buhanzaz.rwms.maintenance.eventing.transport.MaintenanceInboundEffects;
+import dev.buhanzaz.rwms.maintenance.repository.MaintenanceRepairRepository;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.UUID;
@@ -14,12 +16,20 @@ import tools.jackson.databind.ObjectMapper;
 @Component
 public class MaintenanceInboundDomainEffects implements MaintenanceInboundEffects {
   private final MaintenanceApplicationService service;
+  private final MaintenanceRepairRepository repairs;
+  private final RepairTaskEvidenceProjectionService taskEvidence;
   private final JdbcTemplate jdbc;
   private final ObjectMapper mapper;
 
   public MaintenanceInboundDomainEffects(
-      MaintenanceApplicationService service, JdbcTemplate jdbc, ObjectMapper mapper) {
+      MaintenanceApplicationService service,
+      MaintenanceRepairRepository repairs,
+      RepairTaskEvidenceProjectionService taskEvidence,
+      JdbcTemplate jdbc,
+      ObjectMapper mapper) {
     this.service = service;
+    this.repairs = repairs;
+    this.taskEvidence = taskEvidence;
     this.jdbc = jdbc;
     this.mapper = mapper;
   }
@@ -28,6 +38,7 @@ public class MaintenanceInboundDomainEffects implements MaintenanceInboundEffect
   public void apply(InboundEvent event, TaskCorrelation correlation) {
     switch (event.aggregateType()) {
       case "BOARD_TASK", "QUEUE_ENTRY" -> applyTask(event, correlation);
+      case "TASK_EVIDENCE" -> applyTaskEvidence(event);
       case "MEDIA" -> applyMedia(event);
       case "RENTAL_ITEM" -> applyRentalItem(event);
       case "OPERATION_LEASE" -> applyLease(event);
@@ -37,7 +48,13 @@ public class MaintenanceInboundDomainEffects implements MaintenanceInboundEffect
   }
 
   private void applyTask(InboundEvent event, TaskCorrelation correlation) {
+    if ("BOARD_TASK".equals(event.aggregateType())
+        && "task-board.board-task.changed.v1".equals(event.eventType())) {
+      applyTaskSchedule(event, correlation);
+      return;
+    }
     if (!correlation.complete()) return;
+    if (repairs.findByExternalTaskId(correlation.externalTaskId()).isEmpty()) return;
     QueueFact queue = "QUEUE_ENTRY".equals(event.aggregateType())
         ? new QueueFact(
             event.eventId(), event.eventType(), event.aggregateVersion(),
@@ -46,6 +63,17 @@ public class MaintenanceInboundDomainEffects implements MaintenanceInboundEffect
     service.applyInboundTaskOutcome(
         queue.eventId(), queue.eventType(), correlation.externalTaskId(),
         correlation.queueEntryId(), queue.aggregateVersion(), queue.occurredAt());
+  }
+
+  private void applyTaskSchedule(InboundEvent event, TaskCorrelation correlation) {
+    if (correlation.externalTaskId() == null) return;
+    JsonNode scheduledDate = event.payload().get("scheduledDate");
+    if (scheduledDate == null || scheduledDate.isNull()) return;
+    if (repairs.findByExternalTaskId(correlation.externalTaskId()).isEmpty()) return;
+    service.applyInboundTaskSchedule(
+        correlation.externalTaskId(),
+        LocalDate.parse(scheduledDate.stringValue()),
+        event.aggregateVersion());
   }
 
   private QueueFact loadQueueFact(UUID eventId) {
@@ -77,6 +105,34 @@ public class MaintenanceInboundDomainEffects implements MaintenanceInboundEffect
             "kind", payload.required("kind").stringValue(),
             "rotationDegrees", payload.required("rotationDegrees").intValue())),
         event.aggregateVersion());
+  }
+
+  private void applyTaskEvidence(InboundEvent event) {
+    JsonNode payload = event.payload();
+    JsonNode sourceType = payload.required("sourceType");
+    JsonNode sourceId = payload.required("sourceId");
+    if (sourceType.isNull()
+        || sourceId.isNull()
+        || !"MAINTENANCE_REPAIR".equals(sourceType.stringValue())) {
+      return;
+    }
+    taskEvidence.apply(
+        UUID.fromString(event.aggregateId()),
+        event.aggregateVersion(),
+        UUID.fromString(sourceId.stringValue()),
+        UUID.fromString(payload.required("entryId").stringValue()),
+        UUID.fromString(payload.required("taskId").stringValue()),
+        payload.required("routeIndex").intValue(),
+        UUID.fromString(payload.required("warehouseId").stringValue()),
+        UUID.fromString(payload.required("workerId").stringValue()),
+        payload.required("workerGroupId").isNull()
+            ? null
+            : UUID.fromString(payload.required("workerGroupId").stringValue()),
+        UUID.fromString(payload.required("mediaId").stringValue()),
+        payload.required("mediaGeneration").longValue(),
+        OffsetDateTime.parse(payload.required("capturedAt").stringValue()),
+        OffsetDateTime.parse(payload.required("recordedAt").stringValue()),
+        payload.required("state").stringValue());
   }
 
   private void applyRentalItem(InboundEvent event) {

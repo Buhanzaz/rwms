@@ -41,6 +41,12 @@ public class GatewayProductionSafetyValidator {
     URI dossierTarget =
         requireOrigin(
             "rwms.gateway.routes.dossier-uri", properties.getRoutes().getDossierUri());
+    URI analyticsTarget =
+        requireOrigin(
+            "rwms.gateway.routes.analytics-uri", properties.getRoutes().getAnalyticsUri());
+    URI assistantTarget =
+        requireOrigin(
+            "rwms.gateway.routes.assistant-uri", properties.getRoutes().getAssistantUri());
     URI jwkSetUri = requireHttpUri("rwms.gateway.security.jwk-set-uri", properties.getSecurity().getJwkSetUri());
     if (jwkSetUri.getPath() == null
         || jwkSetUri.getPath().isBlank()
@@ -60,6 +66,10 @@ public class GatewayProductionSafetyValidator {
     }
 
     if (environment.matchesProfiles("prod", "production")) {
+      if (properties.getAppLinks().getSha256CertFingerprints().isEmpty()) {
+        throw new IllegalStateException(
+            "Worker Android Asset Links release certificate fingerprint is required in production");
+      }
       requireHttps("gateway public base", publicBase);
       requireHttps("gateway issuer", issuer);
       properties.getCors().getAllowedOrigins().forEach(origin -> requireHttps("CORS origin", URI.create(origin)));
@@ -72,6 +82,8 @@ public class GatewayProductionSafetyValidator {
       forbidLoopback("inventory target", inventoryTarget);
       forbidLoopback("logistics target", logisticsTarget);
       forbidLoopback("dossier target", dossierTarget);
+      forbidLoopback("analytics target", analyticsTarget);
+      forbidLoopback("assistant target", assistantTarget);
       forbidLoopback("internal JWKS target", jwkSetUri);
     }
   }

@@ -11,9 +11,9 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.time.LocalDate;
 import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
@@ -67,8 +67,29 @@ public class MaintenanceRepair {
   @Column(name = "dispatch_date", nullable = false)
   private LocalDate dispatchDate;
 
+  @Column(name = "priority", nullable = false)
+  private int priority = 3;
+
   @Column(name = "source_party", length = 512)
   private String sourceParty;
+
+  @Column(name = "cover_media_id")
+  private UUID coverMediaId;
+
+  @Column(name = "movement_to_shipment", nullable = false)
+  private boolean movementToShipment;
+
+  @Column(name = "transfer_state", nullable = false, length = 24)
+  private String transferState = "NONE";
+
+  @Column(name = "transfer_document_id")
+  private UUID transferDocumentId;
+
+  @Column(name = "transfer_line_id")
+  private UUID transferLineId;
+
+  @Column(name = "transfer_target_warehouse_id")
+  private UUID transferTargetWarehouseId;
 
   @Column(name = "rework_reason", length = 2000)
   private String reworkReason;
@@ -215,6 +236,7 @@ public class MaintenanceRepair {
     value.deliveryUpdatedAt = MaintenanceTime.now();
     value.leaseReconciliationState = "NOT_REQUIRED";
     value.reconciliationState = "NOT_REQUIRED";
+    value.transferState = "NONE";
     return value;
   }
 
@@ -234,6 +256,164 @@ public class MaintenanceRepair {
     leaseReconciliationState = "ACTIVE";
     deliveryState = "RETRY_PENDING";
     deliveryUpdatedAt = MaintenanceTime.now();
+  }
+
+  public void queueUnderExistingRepair() {
+    if (executionState != RepairExecutionState.DRAFT) {
+      throw new IllegalStateException("Only a draft repair can be queued");
+    }
+    if (leaseId != null
+        || leaseVersion != null
+        || fencingToken != null
+        || leaseExpiresAt != null
+        || !"NOT_REQUIRED".equals(leaseReconciliationState)) {
+      throw new IllegalStateException(
+          "A repair queued under an existing repair cannot own an operation lease");
+    }
+    executionState = RepairExecutionState.QUEUED;
+    deliveryState = "RETRY_PENDING";
+    deliveryUpdatedAt = MaintenanceTime.now();
+  }
+
+  public boolean isQueuedWithoutOperationLease() {
+    return kind == RepairKind.PRIMARY
+        && executionState != RepairExecutionState.DRAFT
+        && leaseId == null
+        && leaseVersion == null
+        && fencingToken == null
+        && leaseExpiresAt == null
+        && "NOT_REQUIRED".equals(leaseReconciliationState);
+  }
+
+  public void selectPriority(int priority) {
+    if (executionState != RepairExecutionState.DRAFT) {
+      throw new IllegalStateException("Priority can only be selected before queueing");
+    }
+    if (priority < 1 || priority > 5) {
+      throw new IllegalArgumentException("Repair priority must be between 1 and 5");
+    }
+    this.priority = priority;
+  }
+
+  public void selectMovementToShipment(boolean movementToShipment) {
+    if (executionState != RepairExecutionState.DRAFT
+        && executionState != RepairExecutionState.QUEUED) {
+      throw new IllegalStateException(
+          "Movement to shipment can only be selected before repair work starts");
+    }
+    this.movementToShipment = movementToShipment;
+  }
+
+  public boolean prepareWarehouseTransfer(
+      UUID transferDocumentId, UUID transferLineId, UUID targetWarehouseId) {
+    if (transferDocumentId == null || transferLineId == null || targetWarehouseId == null) {
+      throw new IllegalArgumentException("Transfer coordinates are required");
+    }
+    if (warehouseId.equals(targetWarehouseId)) {
+      throw new IllegalArgumentException("Transfer target warehouse must be different");
+    }
+    if ("DEPARTURE_PREPARED".equals(transferState)) {
+      if (!transferDocumentId.equals(this.transferDocumentId)
+          || !transferLineId.equals(this.transferLineId)
+          || !targetWarehouseId.equals(this.transferTargetWarehouseId)) {
+        throw new IllegalStateException(
+            "Repair is already prepared for another warehouse transfer");
+      }
+      return false;
+    }
+    if (!"NONE".equals(transferState)) {
+      throw new IllegalStateException("Repair cannot be transferred in its current state");
+    }
+    transferState = "DEPARTURE_PREPARED";
+    this.transferDocumentId = transferDocumentId;
+    this.transferLineId = transferLineId;
+    transferTargetWarehouseId = targetWarehouseId;
+    updatedAt = MaintenanceTime.now();
+    return true;
+  }
+
+  public void completeWarehouseTransfer(
+      UUID transferDocumentId,
+      UUID transferLineId,
+      UUID targetWarehouseId,
+      int priority,
+      boolean movementToShipment) {
+    if (!"DEPARTURE_PREPARED".equals(transferState)
+        || !transferDocumentId.equals(this.transferDocumentId)
+        || !transferLineId.equals(this.transferLineId)
+        || !targetWarehouseId.equals(transferTargetWarehouseId)) {
+      throw new IllegalStateException(
+          "Repair was not prepared for this warehouse transfer");
+    }
+    if (priority < 1 || priority > 5) {
+      throw new IllegalArgumentException("Repair priority must be between 1 and 5");
+    }
+    warehouseId = targetWarehouseId;
+    this.priority = priority;
+    this.movementToShipment = movementToShipment;
+    transferState = "NONE";
+    this.transferDocumentId = null;
+    this.transferLineId = null;
+    transferTargetWarehouseId = null;
+    updatedAt = MaintenanceTime.now();
+  }
+
+  public void markTaskRelocated(long taskVersion) {
+    if (taskVersion < 0) {
+      throw new IllegalArgumentException("Task-board version is invalid");
+    }
+    taskBoardVersion = taskVersion;
+    updatedAt = MaintenanceTime.now();
+  }
+
+  public void adoptLeaseAfterTransfer(
+      UUID leaseId,
+      long leaseVersion,
+      long fencingToken,
+      OffsetDateTime leaseExpiresAt) {
+    if (leaseId == null
+        || leaseVersion < 0
+        || fencingToken < 1
+        || leaseExpiresAt == null) {
+      throw new IllegalArgumentException("Arrival lease snapshot is invalid");
+    }
+    this.leaseId = leaseId;
+    this.leaseVersion = leaseVersion;
+    this.fencingToken = fencingToken;
+    this.leaseExpiresAt = leaseExpiresAt;
+    leaseReconciliationState = "ACTIVE";
+    reconciliationState = "RECONCILED";
+    updatedAt = MaintenanceTime.now();
+  }
+
+  public void replaceCoverMediaId(UUID coverMediaId) {
+    if (executionState != RepairExecutionState.DRAFT
+        && executionState != RepairExecutionState.QUEUED) {
+      throw new IllegalStateException("Cover photo can only be changed before repair work starts");
+    }
+    this.coverMediaId = coverMediaId;
+    updatedAt = MaintenanceTime.now();
+  }
+
+  /**
+   * Applies a newer task-board schedule fact to the repair that registered that external task.
+   * Source and rework links deliberately do not share this schedule: each repair owns its own
+   * task-board task.
+   */
+  public boolean synchronizeTaskBoardSchedule(LocalDate scheduledDate, long taskBoardVersion) {
+    if (scheduledDate == null || taskBoardVersion < 0) {
+      throw new IllegalArgumentException("Task-board schedule fact is invalid");
+    }
+    if (executionState != RepairExecutionState.QUEUED) {
+      return false;
+    }
+    if (this.taskBoardVersion != null && taskBoardVersion <= this.taskBoardVersion) {
+      return false;
+    }
+    dispatchDate = scheduledDate;
+    this.taskBoardVersion = taskBoardVersion;
+    updatedAt = MaintenanceTime.now();
+    return true;
   }
 
   public void confirmRentalItemVersion(long version) {
@@ -353,7 +533,7 @@ public class MaintenanceRepair {
 
   public void requirePreStartAmendment() {
     if (executionState != RepairExecutionState.DRAFT && executionState != RepairExecutionState.QUEUED) {
-      throw new IllegalStateException("Estimate cannot be amended after repair start");
+      throw new IllegalStateException("Repair plan cannot be amended after repair start");
     }
   }
 
@@ -392,6 +572,31 @@ public class MaintenanceRepair {
       throw new IllegalStateException("An active lease is required for renewal");
     }
     this.leaseVersion = leaseVersion;
+    this.leaseExpiresAt = expiresAt;
+    leaseReconciliationState = "ACTIVE";
+  }
+
+  /**
+   * Adopts a newly acquired fence after the previous operation lease expired.
+   *
+   * <p>This is intentionally distinct from renewal: a replacement lease has a new identity and
+   * fencing token. It may only replace a complete local lease snapshot; callers must validate the
+   * remote owner and rental-item identity before invoking it.
+   */
+  public void replaceExpiredLease(
+      UUID leaseId, long leaseVersion, long fencingToken, OffsetDateTime expiresAt) {
+    if (this.leaseId == null
+        || this.leaseVersion == null
+        || this.fencingToken == null
+        || this.leaseExpiresAt == null) {
+      throw new IllegalStateException("An existing lease snapshot is required for replacement");
+    }
+    if (leaseId == null || leaseVersion < 0 || fencingToken < 1 || expiresAt == null) {
+      throw new IllegalArgumentException("Replacement lease snapshot is invalid");
+    }
+    this.leaseId = leaseId;
+    this.leaseVersion = leaseVersion;
+    this.fencingToken = fencingToken;
     this.leaseExpiresAt = expiresAt;
     leaseReconciliationState = "ACTIVE";
   }
@@ -437,7 +642,14 @@ public class MaintenanceRepair {
   public RepairExecutionState getExecutionState() { return executionState; }
   public RepairAcceptanceState getAcceptanceState() { return acceptanceState; }
   public LocalDate getDispatchDate() { return dispatchDate; }
+  public int getPriority() { return priority; }
   public String getSourceParty() { return sourceParty; }
+  public UUID getCoverMediaId() { return coverMediaId; }
+  public boolean isMovementToShipment() { return movementToShipment; }
+  public String getTransferState() { return transferState; }
+  public UUID getTransferDocumentId() { return transferDocumentId; }
+  public UUID getTransferLineId() { return transferLineId; }
+  public UUID getTransferTargetWarehouseId() { return transferTargetWarehouseId; }
   public String getReworkReason() { return reworkReason; }
   public String getDecisionReason() { return decisionReason; }
   public String getDecisionActorRef() { return decisionActorRef; }

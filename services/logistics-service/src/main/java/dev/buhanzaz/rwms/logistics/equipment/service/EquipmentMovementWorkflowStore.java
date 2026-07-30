@@ -77,7 +77,6 @@ class EquipmentMovementWorkflowStore {
         reservation.reservationId(),
         reservation.version(),
         reservation.equipmentId(),
-        reservation.equipmentCode(),
         reservation.equipmentName(),
         reservation.state());
     lines.saveAndFlush(line);
@@ -301,26 +300,25 @@ class EquipmentMovementWorkflowStore {
       List<EquipmentMovementTaskLine> taskLines) {
     List<LogisticsDependencyGateway.EquipmentMovementOperation> operations = new ArrayList<>();
     for (EquipmentMovementTaskLine line : taskLines) {
-      String code = line.getEquipmentCode();
       String name = line.getEquipmentName();
-      if (code == null || name == null) {
+      if (name == null) {
         throw new LogisticsConflictException("Equipment movement reservation has no canonical equipment title");
       }
       if (line.getSourceLocationKind() == EquipmentMovementLocationKind.STOCK) {
         operations.add(
             new LogisticsDependencyGateway.EquipmentMovementOperation(
-                "BRING_TO_CABIN", code, name, line.getQuantity()));
+                "BRING_TO_CABIN", line.getEquipmentId(), name, line.getQuantity()));
       } else if (line.getTargetLocationKind() == EquipmentMovementLocationKind.STOCK) {
         operations.add(
             new LogisticsDependencyGateway.EquipmentMovementOperation(
-                "TAKE_FROM_CABIN", code, name, line.getQuantity()));
+                "TAKE_FROM_CABIN", line.getEquipmentId(), name, line.getQuantity()));
       } else {
         operations.add(
             new LogisticsDependencyGateway.EquipmentMovementOperation(
-                "TAKE_FROM_CABIN", code, name, line.getQuantity()));
+                "TAKE_FROM_CABIN", line.getEquipmentId(), name, line.getQuantity()));
         operations.add(
             new LogisticsDependencyGateway.EquipmentMovementOperation(
-                "BRING_TO_CABIN", code, name, line.getQuantity()));
+                "BRING_TO_CABIN", line.getEquipmentId(), name, line.getQuantity()));
       }
     }
     if (operations.isEmpty() || operations.size() > 10) {

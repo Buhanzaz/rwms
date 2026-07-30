@@ -37,6 +37,7 @@ import type { CabinCoverProjection } from "@/features/media/media-service"
 import { AddContentsDialog } from "@/features/rental-items/add-contents-dialog"
 import { MoveContentsToRentalItemDialog } from "@/features/rental-items/move-contents-to-rental-item-dialog"
 import { MoveContentsToStockDialog } from "@/features/rental-items/move-contents-to-stock-dialog"
+import { CharacteristicTags } from "@/features/rental-items/rental-item-detail-support"
 import { RentalItemStatusBadge } from "@/features/rental-items/rental-item-status-badge"
 import type { RentalItemCoverAvailability } from "@/features/rental-items/use-rental-item-covers"
 import {
@@ -265,18 +266,16 @@ function ContentsPopoverBody({
       {canManageContents && onMoveToRentalItem && onMoveToStock ? (
         <div className="grid gap-2 border-t bg-background p-2 sm:grid-cols-2">
           <Button
-            size="sm"
             variant="outline"
-            className="h-8 justify-center whitespace-nowrap"
+            className="h-9 justify-center whitespace-nowrap"
             onClick={onMoveToRentalItem}
           >
             <HugeiconsIcon icon={Exchange01Icon} data-icon="inline-start" />
             Переместить
           </Button>
           <Button
-            size="sm"
             variant="outline"
-            className="h-8 justify-center whitespace-nowrap"
+            className="h-9 justify-center whitespace-nowrap"
             onClick={onMoveToStock}
           >
             <HugeiconsIcon icon={WarehouseIcon} data-icon="inline-start" />
@@ -310,9 +309,8 @@ export function ContentsCell({
   if (!hasRows) {
     return canManageContents && onAddContents ? (
       <Button
-        size="sm"
         variant="secondary"
-        className="h-8"
+        className="h-9"
         onClick={(event) => {
           event.stopPropagation()
           onAddContents()
@@ -430,7 +428,10 @@ export function RentalItemsTableView({
     const dataColumns = activeColumnsConfig.map<ColumnDef<RentalItemDto>>(
       (columnConfig) => ({
         id: columnConfig.id,
-        accessorFn: (row) => getRentalItemSortValue(row, columnConfig.id),
+        accessorFn: (row) =>
+          columnConfig.id === "hasPhotos"
+            ? (mediaCovers.get(row.id)?.photoCount ?? 0)
+            : getRentalItemSortValue(row, columnConfig.id),
         size: getColumnSize(columnConfig),
         minSize: getColumnMinSize(columnConfig),
         maxSize: getColumnMaxSize(columnConfig),
@@ -460,8 +461,7 @@ export function RentalItemsTableView({
           }
 
           if (columnConfig.id === "hasPhotos") {
-            const photoCount =
-              item.photoCount + (mediaCovers.get(item.id)?.photoCount ?? 0)
+            const photoCount = mediaCovers.get(item.id)?.photoCount ?? 0
             if (photoCount === 0) {
               const emptyLabel =
                 coverAvailability === "unavailable"
@@ -550,13 +550,13 @@ export function RentalItemsTableView({
             )
           }
 
+          if (columnConfig.id === "characteristics") {
+            return <CharacteristicTags values={item.characteristics} />
+          }
+
           const value = formatRentalItemFieldValue(item, columnConfig.id)
 
-          if (
-            columnConfig.id === "type" ||
-            columnConfig.id === "characteristics" ||
-            columnConfig.id === "comment"
-          ) {
+          if (columnConfig.id === "type" || columnConfig.id === "comment") {
             return (
               <ExpandableTextCell value={value} label={columnConfig.label} />
             )
@@ -633,8 +633,11 @@ export function RentalItemsTableView({
 
   return (
     <>
-      <div className="min-h-0 w-full flex-1 overflow-hidden rounded-lg border bg-card">
-        <div className="h-full w-full overflow-auto">
+      <div
+        data-slot="rental-items-table-grid"
+        className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-lg border bg-card"
+      >
+        <div className="min-h-0 w-full flex-1 overflow-auto">
           <table
             className="table-fixed border-separate border-spacing-0 text-sm"
             style={{
@@ -708,15 +711,6 @@ export function RentalItemsTableView({
                     Загрузка склада...
                   </td>
                 </tr>
-              ) : table.getRowModel().rows.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={visibleColumns.length || 1}
-                    className="px-4 py-6 text-sm text-muted-foreground"
-                  >
-                    Бытовки не найдены.
-                  </td>
-                </tr>
               ) : (
                 table.getRowModel().rows.map((row) => (
                   <tr
@@ -728,7 +722,13 @@ export function RentalItemsTableView({
                   >
                     {row.getVisibleCells().map((cell) => (
                       <td key={cell.id} className={GRID_CELL_CLASS}>
-                        <div className="min-w-0 truncate">
+                        <div
+                          className={
+                            cell.column.id === "characteristics"
+                              ? "flex min-h-[33px] min-w-0 items-center"
+                              : "min-w-0 truncate"
+                          }
+                        >
                           {flexRender(
                             cell.column.columnDef.cell,
                             cell.getContext()

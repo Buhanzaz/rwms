@@ -8,6 +8,7 @@ import {
   within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { MemoryRouter, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { TransferDocument } from "@/features/logistics/warehouse-transfers/model/warehouse-transfer"
@@ -25,6 +26,8 @@ const transferApi = vi.hoisted(() => ({
   createWarehouseTransfer: vi.fn(),
   departWarehouseTransferLine: vi.fn(),
   getWarehouseTransfer: vi.fn(),
+  getWarehouseTransferArrivalPreflight: vi.fn(),
+  getWarehouseTransferFurnitureReadiness: vi.fn(),
   listWarehouseTransfers: vi.fn(),
   reconcileWarehouseTransfer: vi.fn(),
 }))
@@ -32,7 +35,11 @@ const driverDirectoryApi = vi.hoisted(() => ({
   listRepairWorkerGroups: vi.fn(),
 }))
 const rentalItemsApi = vi.hoisted(() => ({
+  getAssetRentalItem: vi.fn(),
   listAssetRentalItems: vi.fn(),
+}))
+const equipmentMovementTasksApi = vi.hoisted(() => ({
+  getEquipmentMovementTask: vi.fn(),
 }))
 const equipmentApi = vi.hoisted(() => ({
   getEquipmentItems: vi.fn(),
@@ -45,6 +52,10 @@ const authState = vi.hoisted(() => ({
 vi.mock(
   "@/features/logistics/warehouse-transfers/api/warehouse-transfer-api",
   () => ({
+    TRANSFER_FURNITURE_READINESS_QUERY_KEY: [
+      "logistics",
+      "transfer-furniture-readiness",
+    ],
     WAREHOUSE_TRANSFERS_QUERY_KEY: ["logistics", "warehouse-transfers"],
     ...transferApi,
   })
@@ -63,7 +74,12 @@ vi.mock("@/api/equipment-api", () => ({
 }))
 
 vi.mock("@/features/rental-items/api/asset-rental-items-api", () => ({
+  getAssetRentalItem: rentalItemsApi.getAssetRentalItem,
   listAssetRentalItems: rentalItemsApi.listAssetRentalItems,
+}))
+
+vi.mock("@/features/logistics/api/equipment-movement-tasks-api", () => ({
+  getEquipmentMovementTask: equipmentMovementTasksApi.getEquipmentMovementTask,
 }))
 
 vi.mock("@/features/media/service-owner-photos", () => ({
@@ -128,9 +144,7 @@ vi.mock("@/hooks/use-warehouse", () => ({
     warehouses: [
       {
         id: SOURCE_WAREHOUSE_ID,
-        serviceId: SOURCE_WAREHOUSE_ID,
         version: 1,
-        code: "MSK",
         name: "Москва",
         city: "Москва",
         address: null,
@@ -140,9 +154,7 @@ vi.mock("@/hooks/use-warehouse", () => ({
       },
       {
         id: DESTINATION_WAREHOUSE_ID,
-        serviceId: DESTINATION_WAREHOUSE_ID,
         version: 1,
-        code: "SPB",
         name: "Петербург",
         city: "Санкт-Петербург",
         address: null,
@@ -163,6 +175,9 @@ const ASSET_ID = "66666666-6666-4666-8666-666666666666"
 const SECOND_ASSET_ID = "67676767-6767-4676-8676-676767676767"
 const EMPTY_ASSET_ID = "68686868-6868-4686-8686-686868686868"
 const EQUIPMENT_TASK_ID = "77777777-7777-4777-8777-777777777777"
+const FURNITURE_TASK_ID = "78777777-7777-4777-8777-777777777777"
+const EXTERNAL_FURNITURE_TASK_ID = "79777777-7777-4777-8777-777777777777"
+const OTHER_ASSET_ID = "89888888-8888-4888-8888-888888888888"
 const IDEMPOTENCY_KEY = "99999999-9999-4999-8999-999999999999"
 const TRANSFER_CABIN = {
   id: ASSET_ID,
@@ -177,10 +192,6 @@ const TRANSFER_CABIN = {
   linoleum: null,
   status: "FREE" as const,
   comment: null,
-  hasPhotos: false,
-  photoCount: 0,
-  mainPhotoUrl: null,
-  locationNodeId: null,
   contents: null,
   contentsItems: [
     {
@@ -239,6 +250,7 @@ function transferDocument(
     equipmentMovementTaskId: EQUIPMENT_TASK_ID,
     scheduledDate: "2026-07-19",
     scheduledAt: null,
+    rentalOrderId: null,
     lines: [
       {
         id: LINE_ID,
@@ -256,7 +268,14 @@ function transferDocument(
   }
 }
 
-function renderPage() {
+function LocationProbe() {
+  const location = useLocation()
+  return (
+    <output data-testid="current-location">{`${location.pathname}${location.search}`}</output>
+  )
+}
+
+function renderPage(initialEntry = "/logistics/transfers") {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -264,9 +283,12 @@ function renderPage() {
     },
   })
   return render(
-    <QueryClientProvider client={queryClient}>
-      <WarehouseTransfersPage />
-    </QueryClientProvider>
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <QueryClientProvider client={queryClient}>
+        <LocationProbe />
+        <WarehouseTransfersPage />
+      </QueryClientProvider>
+    </MemoryRouter>
   )
 }
 
@@ -274,13 +296,21 @@ beforeEach(() => {
   authState.sourceLevel = "EDIT"
   authState.destinationLevel = "EDIT"
   vi.stubGlobal("crypto", { randomUUID: () => IDEMPOTENCY_KEY })
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  )
   driverDirectoryApi.listRepairWorkerGroups.mockResolvedValue([
     {
       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       warehouseId: SOURCE_WAREHOUSE_ID,
       name: "Водители",
       active: true,
-      queueCodes: [],
+      queueIds: [],
       routeQueueKinds: ["MOVEMENT"],
       members: [
         {
@@ -293,6 +323,7 @@ beforeEach(() => {
   rentalItemsApi.listAssetRentalItems.mockResolvedValue({
     content: [TRANSFER_CABIN, SECOND_TRANSFER_CABIN, EMPTY_TRANSFER_CABIN],
   })
+  rentalItemsApi.getAssetRentalItem.mockResolvedValue(TRANSFER_CABIN)
   equipmentApi.getEquipmentItems.mockResolvedValue([
     {
       id: EQUIPMENT_TASK_ID,
@@ -305,6 +336,20 @@ beforeEach(() => {
   const draft = transferDocument(DOCUMENT_ID, "DRAFT", 4)
   transferApi.listWarehouseTransfers.mockResolvedValue([draft])
   transferApi.getWarehouseTransfer.mockResolvedValue(draft)
+  transferApi.getWarehouseTransferFurnitureReadiness.mockResolvedValue({
+    transferId: DOCUMENT_ID,
+    transferVersion: 4,
+    state: "READY",
+    tasks: [],
+  })
+  transferApi.getWarehouseTransferArrivalPreflight.mockResolvedValue({
+    transferId: TRANSIT_DOCUMENT_ID,
+    lineId: LINE_ID,
+    activeRepairId: null,
+    priorityRequired: false,
+    movementToShipmentAvailable: false,
+    missingQueueDefinitionIds: [],
+  })
 })
 
 afterEach(() => {
@@ -314,6 +359,133 @@ afterEach(() => {
 })
 
 describe("WarehouseTransfersPage", () => {
+  it("filters transfers by a readable route, driver, status, and planned date", async () => {
+    const user = userEvent.setup()
+    const sourceRoute = "Москва · Москва → Петербург · Санкт-Петербург"
+    const destinationRoute = "Петербург · Санкт-Петербург → Москва · Москва"
+    const draft = transferDocument(DOCUMENT_ID, "DRAFT", 4)
+    const transit = {
+      ...transferDocument(TRANSIT_DOCUMENT_ID, "IN_TRANSIT", 9, "DEPARTED"),
+      warehouseId: DESTINATION_WAREHOUSE_ID,
+      destinationWarehouseId: SOURCE_WAREHOUSE_ID,
+      driverSnapshot: "Петров Петр",
+      scheduledDate: "2026-07-22",
+    }
+    transferApi.listWarehouseTransfers.mockResolvedValue([draft, transit])
+    renderPage()
+
+    await screen.findAllByText("Черновик")
+    const table = screen.getByRole("table")
+    expect(
+      screen.getByRole("textbox", { name: "Поиск по маршруту" })
+    ).toBeTruthy()
+    expect(screen.getByLabelText("Перемещение с")).toBeTruthy()
+    expect(screen.getByLabelText("Перемещение по")).toBeTruthy()
+    expect(screen.queryByRole("combobox", { name: "Наличие даты" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Обновить" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Показать все" })).toBeNull()
+
+    const filterButton = (label: string) => {
+      const button = [
+        ...document.querySelectorAll<HTMLButtonElement>(
+          '[data-slot="popover-trigger"]'
+        ),
+      ].find((candidate) => candidate.textContent?.startsWith(label))
+
+      if (!button) {
+        throw new Error(`Не найдена кнопка фильтра «${label}»`)
+      }
+
+      return button
+    }
+    const expectOnlyRoute = async (route: string, hiddenRoute: string) => {
+      await waitFor(() => {
+        expect(within(table).getByText(route)).toBeTruthy()
+        expect(within(table).queryByText(hiddenRoute)).toBeNull()
+      })
+    }
+    const resetFilters = async () => {
+      await user.click(screen.getByRole("button", { name: "Сбросить фильтры" }))
+      await waitFor(() => {
+        expect(within(table).getByText(sourceRoute)).toBeTruthy()
+        expect(within(table).getByText(destinationRoute)).toBeTruthy()
+      })
+    }
+
+    expect(filterButton("Статус")).toBeTruthy()
+    expect(filterButton("Маршрут")).toBeTruthy()
+    expect(filterButton("Водитель")).toBeTruthy()
+    expect(within(table).getByText(sourceRoute)).toBeTruthy()
+    expect(within(table).getByText(destinationRoute)).toBeTruthy()
+
+    const search = screen.getByRole("textbox", { name: "Поиск по маршруту" })
+    await user.type(search, "Петербург → Москва")
+    await expectOnlyRoute(destinationRoute, sourceRoute)
+    await user.clear(search)
+    await waitFor(() =>
+      expect(within(table).getByText(sourceRoute)).toBeTruthy()
+    )
+
+    await user.click(filterButton("Маршрут"))
+    await user.click(screen.getByRole("checkbox", { name: destinationRoute }))
+    await user.click(screen.getByRole("button", { name: "Применить" }))
+    await expectOnlyRoute(destinationRoute, sourceRoute)
+    await resetFilters()
+
+    await user.click(filterButton("Водитель"))
+    await user.click(screen.getByRole("checkbox", { name: "Петров Петр" }))
+    await user.click(screen.getByRole("button", { name: "Применить" }))
+    await expectOnlyRoute(destinationRoute, sourceRoute)
+    await resetFilters()
+
+    await user.click(filterButton("Статус"))
+    await user.click(screen.getByRole("checkbox", { name: "В пути" }))
+    await user.click(screen.getByRole("button", { name: "Применить" }))
+    await expectOnlyRoute(destinationRoute, sourceRoute)
+    await resetFilters()
+
+    fireEvent.change(screen.getByLabelText("Перемещение с"), {
+      target: { value: "2026-07-22" },
+    })
+    await expectOnlyRoute(destinationRoute, sourceRoute)
+  })
+
+  it("keeps the transfer search compact and lets the user hide filters", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findAllByText("Черновик")
+    const search = screen.getByRole("textbox", { name: "Поиск по маршруту" })
+    expect(search.parentElement?.classList.contains("max-w-xl")).toBe(true)
+
+    const hideFilters = screen.getByRole("button", {
+      name: "Скрыть фильтры",
+    })
+    expect(hideFilters.getAttribute("aria-controls")).toBe(
+      "logistics-transfer-filters"
+    )
+    expect(hideFilters.getAttribute("aria-expanded")).toBe("true")
+    expect(
+      screen.getByRole("button", { name: "Создать перемещение" })
+    ).toBeTruthy()
+
+    await user.click(hideFilters)
+
+    expect(document.getElementById("logistics-transfer-filters")?.hidden).toBe(
+      true
+    )
+    const showFilters = screen.getByRole("button", {
+      name: "Показать фильтры",
+    })
+    expect(showFilters.getAttribute("aria-expanded")).toBe("false")
+
+    await user.click(showFilters)
+
+    expect(document.getElementById("logistics-transfer-filters")?.hidden).toBe(
+      false
+    )
+  })
+
   it("keeps VIEW access read-only while preserving service reads", async () => {
     authState.sourceLevel = "VIEW"
     authState.destinationLevel = "VIEW"
@@ -397,6 +569,11 @@ describe("WarehouseTransfersPage", () => {
 
   it("creates a transfer with a date and the selected cabin composition", async () => {
     const user = userEvent.setup()
+    const plannedDate = new Date()
+    plannedDate.setDate(plannedDate.getDate() + 1)
+    const scheduledDate = `${plannedDate.getFullYear()}-${String(
+      plannedDate.getMonth() + 1
+    ).padStart(2, "0")}-${String(plannedDate.getDate()).padStart(2, "0")}`
     transferApi.createWarehouseTransfer.mockResolvedValue(
       transferDocument(DOCUMENT_ID, "DRAFT", 4)
     )
@@ -413,7 +590,7 @@ describe("WarehouseTransfersPage", () => {
       await screen.findByRole("option", { name: "Петербург · Санкт-Петербург" })
     )
     fireEvent.change(within(dialog).getByLabelText("Дата задания"), {
-      target: { value: "2026-07-25" },
+      target: { value: scheduledDate },
     })
     await user.click(within(dialog).getByLabelText("Номер бытовки"))
     await user.click(await screen.findByText(TRANSFER_CABIN.number))
@@ -436,7 +613,7 @@ describe("WarehouseTransfersPage", () => {
         warehouseId: SOURCE_WAREHOUSE_ID,
         destinationWarehouseId: DESTINATION_WAREHOUSE_ID,
         driverSnapshot: null,
-        scheduledDate: "2026-07-25",
+        scheduledDate,
         lines: [{ assetId: ASSET_ID, assetVersion: 8 }],
         furnitureReplacements: [
           {
@@ -449,6 +626,208 @@ describe("WarehouseTransfersPage", () => {
     )
   })
 
+  it("blocks departure and opens the unfinished furniture task", async () => {
+    authState.sourceLevel = "MANAGE"
+    authState.destinationLevel = "MANAGE"
+    transferApi.getWarehouseTransferFurnitureReadiness.mockResolvedValue({
+      transferId: DOCUMENT_ID,
+      transferVersion: 4,
+      state: "AWAITING_TASK_COMPLETION",
+      tasks: [
+        {
+          rentalItemId: ASSET_ID,
+          unitNumber: "БЫТ-001",
+          taskId: FURNITURE_TASK_ID,
+          externalTaskId: EXTERNAL_FURNITURE_TASK_ID,
+          taskBoardTaskId: null,
+          taskState: "AWAITING_WORKER",
+          lineCount: 1,
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    const blocker = (
+      await screen.findAllByRole("button", {
+        name: "Требуется закрыть задание",
+      })
+    )[0]!
+    const departButton = screen.getByRole("button", {
+      name: "Отправить",
+    }) as HTMLButtonElement
+    expect(departButton.disabled).toBe(true)
+    await user.click(blocker)
+
+    expect(screen.getByTestId("current-location").textContent).toBe(
+      `/task-board?externalTaskId=${EXTERNAL_FURNITURE_TASK_ID}`
+    )
+    expect(transferApi.departWarehouseTransferLine).not.toHaveBeenCalled()
+  })
+
+  it("links a blocked furniture task instead of enabling departure", async () => {
+    authState.sourceLevel = "MANAGE"
+    authState.destinationLevel = "MANAGE"
+    transferApi.getWarehouseTransferFurnitureReadiness.mockResolvedValue({
+      transferId: DOCUMENT_ID,
+      transferVersion: 4,
+      state: "BLOCKED",
+      tasks: [
+        {
+          rentalItemId: ASSET_ID,
+          unitNumber: "БЫТ-001",
+          taskId: FURNITURE_TASK_ID,
+          externalTaskId: EXTERNAL_FURNITURE_TASK_ID,
+          taskBoardTaskId: null,
+          taskState: "CONFLICT",
+          lineCount: 1,
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    const blocker = (
+      await screen.findAllByRole("button", {
+        name: "Требуется решить задачу",
+      })
+    )[0]!
+    expect(
+      (screen.getByRole("button", { name: "Отправить" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true)
+    await user.click(blocker)
+
+    expect(screen.getByTestId("current-location").textContent).toBe(
+      `/task-board?externalTaskId=${EXTERNAL_FURNITURE_TASK_ID}`
+    )
+  })
+
+  it("keeps departure disabled while furniture readiness is loading or unavailable", async () => {
+    authState.sourceLevel = "MANAGE"
+    authState.destinationLevel = "MANAGE"
+    transferApi.getWarehouseTransferFurnitureReadiness.mockImplementation(
+      () => new Promise(() => undefined)
+    )
+    renderPage()
+
+    expect(
+      (
+        (
+          await screen.findAllByRole("button", {
+            name: "Проверяем мебель…",
+          })
+        )[0] as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
+    expect(
+      (screen.getByRole("button", { name: "Отправить" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true)
+
+    cleanup()
+    transferApi.getWarehouseTransferFurnitureReadiness.mockRejectedValue(
+      new Error("Сервис мебели недоступен")
+    )
+    renderPage()
+
+    expect(
+      (
+        (
+          await screen.findAllByRole("button", {
+            name: "Не удалось проверить мебель",
+          })
+        )[0] as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
+    expect(
+      (screen.getByRole("button", { name: "Отправить" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true)
+  })
+
+  it("shows current IN_TRANSFER cabin contents and linked task lines by cabin", async () => {
+    authState.sourceLevel = "MANAGE"
+    authState.destinationLevel = "MANAGE"
+    transferApi.getWarehouseTransferFurnitureReadiness.mockResolvedValue({
+      transferId: DOCUMENT_ID,
+      transferVersion: 4,
+      state: "AWAITING_TASK_COMPLETION",
+      tasks: [
+        {
+          rentalItemId: ASSET_ID,
+          unitNumber: "БЫТ-001",
+          taskId: FURNITURE_TASK_ID,
+          externalTaskId: EXTERNAL_FURNITURE_TASK_ID,
+          taskBoardTaskId: null,
+          taskState: "AWAITING_WORKER",
+          lineCount: 2,
+        },
+      ],
+    })
+    rentalItemsApi.getAssetRentalItem.mockResolvedValue({
+      ...TRANSFER_CABIN,
+      status: "IN_TRANSFER",
+      contents: "Текущий шкаф — 2",
+      contentsItems: [
+        {
+          equipmentId: EQUIPMENT_TASK_ID,
+          equipmentName: "Текущий шкаф",
+          name: "Текущий шкаф",
+          quantity: 2,
+          locationKind: "CABIN_NON_RENTED",
+        },
+      ],
+    })
+    equipmentMovementTasksApi.getEquipmentMovementTask.mockResolvedValue({
+      lines: [
+        {
+          id: "98999999-9999-4999-8999-999999999999",
+          equipmentId: EQUIPMENT_TASK_ID,
+          equipmentName: "Актуальный шкаф",
+          sourceRentalItemId: null,
+          sourceLocationKind: "STOCK",
+          targetRentalItemId: ASSET_ID,
+          targetLocationKind: "CABIN_NON_RENTED",
+          quantity: 2,
+        },
+        {
+          id: "97999999-9999-4999-8999-999999999999",
+          equipmentId: EQUIPMENT_TASK_ID,
+          equipmentName: "Чужой стул",
+          sourceRentalItemId: OTHER_ASSET_ID,
+          sourceLocationKind: "CABIN_NON_RENTED",
+          targetRentalItemId: null,
+          targetLocationKind: "STOCK",
+          quantity: 1,
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Показать состав" }))[0]!
+    )
+
+    expect((await screen.findAllByText(/Текущий шкаф · 2/))[0]).toBeTruthy()
+    expect(
+      screen.getAllByText(
+        /Актуальный шкаф · количество: 2 · склад → бытовка БЫТ-001 \(не в аренде\)/
+      )[0]
+    ).toBeTruthy()
+    expect(screen.queryByText(/Чужой стул/)).toBeNull()
+    await waitFor(() =>
+      expect(rentalItemsApi.getAssetRentalItem).toHaveBeenCalledWith(
+        "transfer-token",
+        ASSET_ID
+      )
+    )
+    expect(
+      equipmentMovementTasksApi.getEquipmentMovementTask
+    ).toHaveBeenCalledWith("transfer-token", FURNITURE_TASK_ID)
+  })
+
   it("departs a cabin with both service-issued versions", async () => {
     authState.sourceLevel = "MANAGE"
     authState.destinationLevel = "MANAGE"
@@ -458,7 +837,11 @@ describe("WarehouseTransfersPage", () => {
     )
     renderPage()
 
-    await user.click(await screen.findByRole("button", { name: "Отправить" }))
+    const departButton = (await screen.findByRole("button", {
+      name: "Отправить",
+    })) as HTMLButtonElement
+    await waitFor(() => expect(departButton.disabled).toBe(false))
+    await user.click(departButton)
 
     await waitFor(() =>
       expect(transferApi.departWarehouseTransferLine).toHaveBeenCalledWith({
@@ -503,8 +886,88 @@ describe("WarehouseTransfersPage", () => {
             generation: 3,
           },
         ],
+        priority: null,
+        movementToShipment: false,
       })
     )
+  })
+
+  it("requires the accepting employee to choose repair priority and shows movement only when available", async () => {
+    authState.sourceLevel = "MANAGE"
+    authState.destinationLevel = "MANAGE"
+    const user = userEvent.setup()
+    const transit = transferDocument(TRANSIT_DOCUMENT_ID, "IN_TRANSIT", 9)
+    transferApi.listWarehouseTransfers.mockResolvedValue([transit])
+    transferApi.getWarehouseTransferArrivalPreflight.mockResolvedValue({
+      transferId: TRANSIT_DOCUMENT_ID,
+      lineId: LINE_ID,
+      activeRepairId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      priorityRequired: true,
+      movementToShipmentAvailable: true,
+      missingQueueDefinitionIds: [],
+    })
+    transferApi.arriveWarehouseTransferLine.mockResolvedValue(
+      transferDocument(TRANSIT_DOCUMENT_ID, "ARRIVING", 10, "ARRIVING")
+    )
+    renderPage()
+
+    await user.click(await screen.findByRole("button", { name: "Принять" }))
+    const priorityTrigger = await screen.findByLabelText("Приоритет ремонта")
+    expect(
+      screen.getByRole("checkbox", { name: "Перемещение на отгрузку" })
+    ).toBeTruthy()
+    await user.click(priorityTrigger)
+    await user.click(screen.getByRole("option", { name: "2 · Высокий" }))
+    await user.click(
+      screen.getByRole("checkbox", { name: "Перемещение на отгрузку" })
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Подготовить Фотографии строки 1" })
+    )
+    await user.click(screen.getByRole("button", { name: /^Принять$/ }))
+
+    await waitFor(() =>
+      expect(transferApi.arriveWarehouseTransferLine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: TRANSIT_DOCUMENT_ID,
+          lineId: LINE_ID,
+          priority: 2,
+          movementToShipment: true,
+        })
+      )
+    )
+  })
+
+  it("hides unavailable movement and blocks arrival when repair queues are missing", async () => {
+    authState.sourceLevel = "MANAGE"
+    authState.destinationLevel = "MANAGE"
+    const user = userEvent.setup()
+    const transit = transferDocument(TRANSIT_DOCUMENT_ID, "IN_TRANSIT", 9)
+    transferApi.listWarehouseTransfers.mockResolvedValue([transit])
+    transferApi.getWarehouseTransferArrivalPreflight.mockResolvedValue({
+      transferId: TRANSIT_DOCUMENT_ID,
+      lineId: LINE_ID,
+      activeRepairId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      priorityRequired: true,
+      movementToShipmentAvailable: false,
+      missingQueueDefinitionIds: ["eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"],
+    })
+    renderPage()
+
+    await user.click(await screen.findByRole("button", { name: "Принять" }))
+    expect(
+      await screen.findByText(/Приёмка заблокирована: подключите/)
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("checkbox", { name: "Перемещение на отгрузку" })
+    ).toBeNull()
+    expect(
+      (
+        screen.getByRole("button", {
+          name: /^Принять$/,
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true)
   })
 
   it("cancels the document through the service-owned workflow", async () => {
@@ -517,7 +980,7 @@ describe("WarehouseTransfersPage", () => {
     renderPage()
 
     await user.click(
-      (await screen.findAllByRole("button", { name: "Отменить документ" }))[0]!
+      (await screen.findAllByRole("button", { name: "Отменить" }))[0]!
     )
     await user.click(
       within(screen.getByRole("alertdialog")).getByRole("button", {

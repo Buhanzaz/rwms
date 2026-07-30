@@ -1,13 +1,14 @@
 openapi: 3.1.0
 info:
   title: RWMS Asset Service API
-  version: 1.5.0
+  version: 1.9.0
   description: >-
     Stage 5 canonical asset boundary plus narrow Stage 7 inventory-service and
     Stage 8 logistics-service private surfaces. Rental-item comments and
     manual-note text are readable only through this HTTP API and are never
     Kafka facts. New production databases start empty; browser fixtures and
-    legacy rows are not an import source.
+    legacy browser state is never imported automatically. An administrator may
+    explicitly review and commit a bounded server-parsed HTML registry export.
 servers:
   - url: /
 security:
@@ -47,6 +48,335 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/DependencyFailure' }
+  /api/asset/v1/rental-items/creation-options:
+    get:
+      operationId: getRentalItemCreationOptions
+      description: >-
+        Returns the active UUID-backed cabin passport choices and allowed type-to-dimension
+        pairs used by rental-item and inventory creation forms. Requires USER rwms.read and
+        warehouse VIEW access.
+      parameters: [ { $ref: '#/components/parameters/WarehouseIdQuery' } ]
+      responses:
+        '200':
+          description: Canonical rental-item creation choices.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RentalItemCreationOptions' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/asset/v1/html-imports:
+    get:
+      operationId: listRentalItemHtmlImports
+      description: Requires USER rwms.write and warehouse EDIT access.
+      parameters: [ { $ref: '#/components/parameters/WarehouseIdQuery' } ]
+      responses:
+        '200':
+          description: Durable import drafts for the selected warehouse.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/HtmlImportSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createRentalItemHtmlImport
+      description: >-
+        Parses one bounded HTML registry export without evaluating scripts or
+        retaining raw HTML. Requires USER rwms.write and warehouse EDIT access.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [warehouseId, html]
+              properties:
+                warehouseId: { type: string, format: uuid }
+                html: { type: string, format: binary }
+      responses:
+        '201':
+          description: Durable parsed review draft.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HtmlImportDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/DependencyFailure' }
+  /api/asset/v1/html-imports/{id}:
+    parameters: [ { $ref: '#/components/parameters/HtmlImportId' } ]
+    get:
+      operationId: getRentalItemHtmlImport
+      description: Requires USER rwms.write and warehouse EDIT access.
+      responses:
+        '200':
+          description: Current durable import draft and plan.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HtmlImportDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: cancelRentalItemHtmlImport
+      description: >-
+        Deletes an uncommitted HTML import draft and its normalized source
+        rows. Cabins and media are not changed. Requires USER rwms.write and
+        warehouse EDIT access.
+      parameters:
+        - name: expectedVersion
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/ExpectedVersion' }
+      responses:
+        '204':
+          description: Draft cancelled.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/asset/v1/html-imports/{id}/rows:
+    parameters: [ { $ref: '#/components/parameters/HtmlImportId' } ]
+    get:
+      operationId: listRentalItemHtmlImportRows
+      description: Requires USER rwms.write and warehouse EDIT access.
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+        - { name: size, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 100 } }
+      responses:
+        '200':
+          description: Paged normalized source rows; public photo keys are not exposed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HtmlImportRowPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/asset/v1/html-imports/{id}/plan:
+    parameters: [ { $ref: '#/components/parameters/HtmlImportId' } ]
+    put:
+      operationId: updateRentalItemHtmlImportPlan
+      description: Saves catalog, equipment, status, row and merge decisions with optimistic concurrency.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateHtmlImportPlanRequest' }
+      responses:
+        '200':
+          description: Re-evaluated durable import draft.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HtmlImportDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/asset/v1/html-imports/{id}/commit:
+    parameters:
+      - { $ref: '#/components/parameters/HtmlImportId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      operationId: commitRentalItemHtmlImport
+      description: >-
+        Atomically creates or merges selected cabins and staged catalogs. Only
+        WMS_ADMIN or SYSTEM_ADMIN with warehouse access may commit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommitHtmlImportRequest' }
+      responses:
+        '202':
+          description: Asset phase committed; media phase is durable and retryable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HtmlImportDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/DependencyFailure' }
+        '503': { $ref: '#/components/responses/DependencyFailure' }
+  /api/asset/v1/html-imports/{id}/retry-media:
+    parameters:
+      - { $ref: '#/components/parameters/HtmlImportId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      operationId: retryRentalItemHtmlImportMedia
+      description: Retries only the media phase after the asset transaction has committed, with optimistic concurrency.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RetryHtmlImportMediaRequest' }
+      responses:
+        '202':
+          description: Current durable media phase.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HtmlImportDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/DependencyFailure' }
+        '503': { $ref: '#/components/responses/DependencyFailure' }
+  /api/asset/v1/html-imports/{id}/replace-media:
+    parameters:
+      - { $ref: '#/components/parameters/HtmlImportId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      operationId: replaceRentalItemHtmlImportMedia
+      description: >-
+        Replaces one or more write-only Yandex.Disk links after a failed media
+        preflight and restarts only that media phase. The response and row list
+        expose cabin numbers and link presence, never an existing public link.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReplaceHtmlImportMediaRequest' }
+      responses:
+        '202':
+          description: Corrected media sources are queued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HtmlImportDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/DependencyFailure' }
+        '503': { $ref: '#/components/responses/DependencyFailure' }
+  /api/asset/v1/html-imports/{id}/skip-media:
+    parameters:
+      - { $ref: '#/components/parameters/HtmlImportId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      operationId: skipRentalItemHtmlImportMedia
+      description: >-
+        Finishes a terminal failed media phase with warnings; committed cabins
+        remain unchanged and no media job is resumed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SkipHtmlImportMediaRequest' }
+      responses:
+        '202':
+          description: Media phase is explicitly skipped and the import is completed with warnings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HtmlImportDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/asset/v1/cabin-settings:
+    get:
+      operationId: getCabinSettings
+      description: >-
+        Returns all operator-managed cabin types, dimensions, finishings, characteristics and
+        type-to-dimension links. Requires global catalog read permission.
+      responses:
+        '200':
+          description: UUID-backed cabin composition settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CabinSettings' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/asset/v1/cabin-settings/items:
+    post:
+      operationId: createCabinSettingsItem
+      description: >-
+        Creates one UUID-backed type, dimension, finishing or characteristic. Requires global
+        catalog management and an Idempotency-Key.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateCabinCatalogItemRequest' }
+      responses:
+        '201':
+          description: Created cabin setting or the original idempotent replay.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CabinCatalogItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/asset/v1/cabin-settings/items/{id}:
+    parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+    put:
+      operationId: updateCabinSettingsItem
+      description: Renames or activates/deactivates one cabin setting with optimistic concurrency.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateCabinCatalogItemRequest' }
+      responses:
+        '200':
+          description: Updated cabin setting.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CabinCatalogItem' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      operationId: deleteCabinSettingsItem
+      description: >-
+        Deletes a cabin setting only when no existing cabin or type-to-dimension relation refers to
+        it. Requires global catalog management and the item's current version.
+      parameters:
+        - name: expectedVersion
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/ExpectedVersion' }
+      responses:
+        '204': { description: Deleted cabin setting. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/asset/v1/cabin-settings/types/{typeId}/dimensions:
+    parameters: [ { name: typeId, in: path, required: true, schema: { type: string, format: uuid } } ]
+    put:
+      operationId: replaceCabinTypeDimensions
+      description: >-
+        Replaces the ordered set of dimensions allowed for one cabin type. Requires global catalog
+        management and the type's current version. An empty set is accepted only when the type has
+        no existing cabins.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReplaceCabinTypeDimensionsRequest' }
+      responses:
+        '200':
+          description: Full settings after the link replacement.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CabinSettings' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/asset/v1/rental-items/{id}:
     parameters: [ { $ref: '#/components/parameters/RentalItemId' } ]
     get:
@@ -362,27 +692,75 @@ paths:
         '200': { description: Current narrow maintenance asset snapshot., content: { application/json: { schema: { $ref: '#/components/schemas/MaintenanceRentalItemSnapshot' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-  /api/internal/asset/v1/maintenance/equipment-catalog/{equipmentCode}:
+  /api/internal/asset/v1/maintenance/cabin-characteristics:
+    get:
+      operationId: listMaintenanceCabinCharacteristics
+      description: >-
+        Requires SERVICE maintenance-service with exactly asset.maintenance.
+        Returns the active values from asset's canonical CHARACTERISTIC catalog;
+        maintenance never owns or copies this catalog.
+      responses:
+        '200':
+          description: Active cabin characteristics ordered by name and UUID.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CabinCatalogValue' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/internal/asset/v1/maintenance/rental-items/{rentalItemId}/characteristics/{characteristicId}:
     parameters:
-      - name: equipmentCode
+      - name: rentalItemId
         in: path
         required: true
-        description: Stable maintenance furniture code, canonicalized by asset-service.
-        schema: { type: string, minLength: 1, maxLength: 64 }
+        schema: { type: string, format: uuid }
+      - name: characteristicId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
     put:
-      operationId: ensureMaintenanceFurnitureEquipment
+      operationId: applyMaintenanceCabinCharacteristic
       description: >-
-        Requires SERVICE maintenance-service with exactly asset.maintenance. Idempotently creates
-        or reactivates the matching FURNITURE catalog item. A code already bound to another trimmed
-        name or category is rejected without mutation.
+        Requires SERVICE maintenance-service with exactly asset.maintenance.
+        Appends one active canonical CHARACTERISTIC after successful maintenance
+        acceptance. Existing cabin characteristics and their order are
+        preserved; the relation is unique and replay-safe.
+      responses:
+        '200':
+          description: Characteristic application or original subject-bound replay.
+          headers:
+            Idempotency-Replayed:
+              required: false
+              schema: { type: string, const: 'true' }
+          content:
+            application/json:
+              schema:
+                { $ref: '#/components/schemas/MaintenanceCharacteristicApplication' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/maintenance/equipment-catalog:
+    post:
+      operationId: createMaintenanceFurnitureEquipment
+      description: >-
+        Requires SERVICE maintenance-service with exactly asset.maintenance. Creates a FURNITURE
+        catalog item through the canonical UUID-idempotent create path; the maintenance catalog node
+        supplies Idempotency-Key and a changed equipmentName for the same key conflicts.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/EnsureMaintenanceFurnitureEquipmentRequest' }
       responses:
-        '200':
-          description: Existing, created or reactivated sanitized furniture identity.
+        '201':
+          description: Created furniture identity or the original successful replay.
+          headers:
+            Idempotency-Replayed:
+              required: false
+              schema: { type: string, const: 'true' }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MaintenanceFurnitureEquipment' }
@@ -396,6 +774,8 @@ paths:
       description: >-
         Requires the exact maintenance client/scope, matching active lease owner and fence. The request
         exposes only approved maintenance actions; asset derives and validates the source/target status.
+        COMPLETE_EMPTY_REPAIR is restricted to a repair-owned lease and frees only an eligible,
+        unoccupied cabin; occupied, reserved, in-flight and active-repair states are rejected.
         Only an estimate-owned queue action with estimateId equal to the lease owner may atomically move
         estimate-linked furniture from the cabin to LOST before the status transition. Direct repairs
         cannot submit furniture losses.
@@ -496,6 +876,10 @@ paths:
         A closed action allowlist validates the matching active typed lease, asset version and
         permissible canonical return, shipment or transfer transition. Only transfer arrival may
         move warehouse; attached cabin contents move through asset-owned ledger rows atomically.
+        TRANSFER_DEPART and TRANSFER_ARRIVE require transferAssetStatus FREE or REPAIR. Departure
+        persists this canonical restoration status and arrival rejects a mismatch instead of
+        applying a fallback. CAPITAL_REPAIR departs with REPAIR and is temporarily restored to
+        REPAIR so maintenance can reapply its calculated capital status after arrival.
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsFencedEffectRequest' } } } }
       responses:
         '200':
@@ -573,7 +957,7 @@ paths:
       description: >-
         Requires exactly asset.logistics. Reserves one exact STOCK or canonical cabin source balance
         for movementId:lineId until the caller-supplied reservedUntil instant. Asset derives the closed
-        LOGISTICS_EQUIPMENT_MOVEMENT owner and returns canonical catalog code/name for task text.
+        LOGISTICS_EQUIPMENT_MOVEMENT owner and returns canonical catalog UUID/name for task text.
       parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
         required: true
@@ -648,8 +1032,8 @@ paths:
       description: >-
         Requires SERVICE logistics-service with exactly asset.logistics. The server returns only
         unreserved FREE units without a live operation lease in the requested warehouse, plus
-        units already active in this order. Non-FREE units and reservations owned by other orders
-        are excluded before pagination.
+        units already active in this order. Non-FREE units and reservations owned
+        by other orders are excluded before pagination.
       parameters:
         - { name: warehouseId, in: query, required: true, schema: { type: string, format: uuid } }
         - { name: page, in: query, schema: { type: integer, minimum: 0, default: 0 } }
@@ -680,7 +1064,8 @@ paths:
     post:
       operationId: reserveOrderUnit
       description: >-
-        Atomically locks the canonical rental item and creates one active reservation. A partial
+        Atomically locks a FREE rental item and creates one active reservation. Releasing a draft
+        reservation restores FREE. A partial
         database unique index forbids a second active order for the same rental item.
       parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
       requestBody:
@@ -818,6 +1203,148 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/logistics/cabin-facets:
+    get:
+      operationId: readPresentationCabinFacets
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Returns facet values from
+        FREE cabins that are not order-reserved, operation-leased, or held by another presentation.
+        Supplying holdScopeId retains the requesting inquiry's current holds; this read does not
+        create a hold.
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseIdQuery' }
+        - name: holdScopeId
+          in: query
+          required: false
+          description: Inquiry ID whose current presentation holds remain visible in the facets.
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Available cabin facet values for the warehouse.
+          content: { application/json: { schema: { $ref: '#/components/schemas/CabinFacetResponse' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/internal/asset/v1/logistics/cabin-searches:
+    post:
+      operationId: searchPresentationCabins
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Matches currently
+        available rentable cabins for each requested group and creates or renews this inquiry's
+        short-lived holds; a cabin is returned at most once across the groups in a response.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CabinSearchRequest' } } }
+      responses:
+        '200':
+          description: Available cabin matches, grouped in request order.
+          content: { application/json: { schema: { $ref: '#/components/schemas/CabinSearchResponse' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/internal/asset/v1/logistics/cabin-availability:
+    post:
+      operationId: checkPresentationCabinAvailability
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Rechecks each selected
+        cabin and returns an explicit per-cabin availability reason without changing state.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CabinAvailabilityRequest' } } }
+      responses:
+        '200':
+          description: Per-cabin availability for the requested warehouse.
+          content: { application/json: { schema: { $ref: '#/components/schemas/CabinAvailabilityResponse' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/internal/asset/v1/logistics/cabin-snapshots:
+    post:
+      operationId: readPresentationCabinSnapshots
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Reads the current cabin
+        snapshots for a selected warehouse; all requested cabin IDs must still belong to it.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/CabinAvailabilityRequest' } } }
+      responses:
+        '200':
+          description: Current cabin snapshots in the request ID order.
+          content: { application/json: { schema: { $ref: '#/components/schemas/CabinSnapshotsResponse' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/internal/asset/v1/logistics/presentations/{presentationId}/holds:
+    parameters: [ { $ref: '#/components/parameters/PresentationId' } ]
+    get:
+      operationId: readPresentationHolds
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Expires due holds before
+        returning this presentation's remaining active cabin holds; an unknown or empty presentation
+        returns an empty holds list.
+      responses:
+        '200':
+          description: Active presentation holds and their latest expiry, if any.
+          content: { application/json: { schema: { $ref: '#/components/schemas/ReplacePresentationHoldsResponse' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    put:
+      operationId: replacePresentationHolds
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Atomically replaces the
+        presentation's active cabin selection. expiresAt must be in the future and no more than 24
+        hours away; retries use the same actor-bound idempotency key.
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ReplacePresentationHoldsRequest' } } }
+      responses:
+        '200':
+          description: Active holds after replacement or the original actor-bound replay.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/ReplacePresentationHoldsResponse' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/logistics/presentations/{presentationId}/holds/release:
+    parameters:
+      - { $ref: '#/components/parameters/PresentationId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      operationId: releasePresentationHolds
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Releases every active hold
+        for the presentation and is idempotent even when no active holds remain.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ActorInput' } } }
+      responses:
+        '200':
+          description: Empty active-holds result after release or the original actor-bound replay.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/ReplacePresentationHoldsResponse' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/logistics/presentations/{presentationId}/holds/convert:
+    parameters:
+      - { $ref: '#/components/parameters/PresentationId' }
+      - { $ref: '#/components/parameters/IdempotencyKey' }
+    post:
+      operationId: convertPresentationHolds
+      description: >-
+        Requires SERVICE logistics-service with exactly asset.logistics. Atomically converts the
+        selected live presentation holds into active order-unit reservations and releases the other
+        current holds; retries use the same actor-bound idempotency key.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ConvertPresentationHoldsRequest' } } }
+      responses:
+        '200':
+          description: Converted order-unit reservations and released cabin IDs, or the original replay.
+          headers: { Idempotency-Replayed: { schema: { type: string, const: 'true' } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/ConvertPresentationHoldsResponse' } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/internal/asset/v1/inventory/captures:
     post:
       operationId: createInventoryAssetCapture
@@ -831,6 +1358,22 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/asset/v1/inventory/assets/{assetId}:
+    parameters:
+      - name: assetId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      operationId: readCurrentInventoryAssetSnapshot
+      description: >-
+        Requires SERVICE inventory-service with exactly asset.inventory. Reads one authoritative
+        current inventory-safe asset snapshot, including its current tenant and cabin contents;
+        local general comments and manual notes are never exposed.
+      responses:
+        '200': { description: Current inventory-safe asset snapshot., content: { application/json: { schema: { $ref: '#/components/schemas/InventoryAssetCurrentSnapshot' } } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/internal/asset/v1/inventory/captures/{captureId}/members:
     parameters:
       - { name: captureId, in: path, required: true, schema: { type: string, format: uuid } }
@@ -900,7 +1443,9 @@ components:
     ClassifierId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
     HoldId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
     LeaseId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    HtmlImportId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
     WarehouseIdQuery: { name: warehouseId, in: query, required: true, schema: { type: string, format: uuid } }
+    PresentationId: { name: presentationId, in: path, required: true, schema: { type: string, format: uuid } }
     IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, format: uuid } }
   responses:
     RentalItemCreated:
@@ -936,41 +1481,484 @@ components:
     Forbidden: { description: Insufficient USER or exact service credential., content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     NotFound: { description: Canonical asset not found., content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
     Conflict: { description: Unified expected-version, idempotency, invariant or fencing conflict., content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
-    DependencyFailure: { description: Required private warehouse registry is unavailable or rejects the request., content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+    DependencyFailure: { description: A required private warehouse or media dependency is unavailable or rejects the request., content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
   schemas:
     ExpectedVersion: { type: integer, format: int64, minimum: 0 }
     NullableUuid: { oneOf: [ { type: string, format: uuid }, { type: 'null' } ] }
-    RentalItemStatus: { type: string, enum: [NEW, RENTED, BOOKED, REPAIR, WAITING_REPAIR_CHECK, WRITTEN_OFF, CAPITAL_REPAIR, AFTER_RENT, WAITING_ESTIMATE_CONFIRMATION, SALE, USED_SALE, RESERVED, FREE, WAREHOUSE, OWN_NEEDS, IN_TRANSFER] }
+    RentalItemStatus: { type: string, enum: [RENTED, BOOKED, REPAIR, WAITING_REPAIR_CHECK, WRITTEN_OFF, CAPITAL_REPAIR, AFTER_RENT, WAITING_ESTIMATE_CONFIRMATION, SALE, USED_SALE, RESERVED, FREE, WAREHOUSE, OWN_NEEDS, IN_TRANSFER] }
     BalanceLocationKind: { type: string, enum: [STOCK, CABIN_NON_RENTED, CABIN_RENTED, WRITTEN_OFF, LOST] }
     EquipmentCategory: { type: string, enum: [FURNITURE, ELECTRICAL, OTHER] }
     Passport: { type: object, additionalProperties: true }
-    CreateRentalItemRequest:
+    HtmlImportState:
+      type: string
+      enum: [DRAFT, REVIEW_REQUIRED, READY, COMMITTING, ASSETS_COMMITTED, MEDIA_IMPORTING, COMPLETED, COMPLETED_WITH_WARNINGS, FAILED]
+    HtmlImportRowAction:
+      type: string
+      enum: [CREATE, MERGE, EXCLUDE, REVIEW]
+    HtmlImportSummary:
       type: object
       additionalProperties: false
-      required: [warehouseId, number]
+      required: [id, version, warehouseId, state, rowCount, selectedCount, invalidCount, unresolvedCount, mediaLinkCount, warningCount, mediaJobId, failureCode, createdAt, updatedAt]
       properties:
+        id: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
         warehouseId: { type: string, format: uuid }
-        number: { type: string, minLength: 1, maxLength: 128 }
-        rentalType: { type: [string, 'null'], maxLength: 255 }
-        dimensions: { type: [string, 'null'], maxLength: 255 }
-        finishing: { type: [string, 'null'], maxLength: 255 }
-        category: { type: [string, 'null'], maxLength: 255 }
-        characteristics: { type: [string, 'null'], maxLength: 2000 }
+        state: { $ref: '#/components/schemas/HtmlImportState' }
+        rowCount: { type: integer, minimum: 0 }
+        selectedCount: { type: integer, minimum: 0 }
+        invalidCount: { type: integer, minimum: 0 }
+        unresolvedCount: { type: integer, minimum: 0 }
+        mediaLinkCount: { type: integer, minimum: 0 }
+        warningCount: { type: integer, minimum: 0 }
+        mediaJobId: { $ref: '#/components/schemas/NullableUuid' }
+        failureCode: { type: [string, 'null'], maxLength: 128 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    HtmlImportCatalogTarget:
+      type: object
+      additionalProperties: false
+      required: [id, kind, name, active]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { $ref: '#/components/schemas/CabinCatalogKind' }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        active: { type: boolean }
+    HtmlImportEquipmentTarget:
+      type: object
+      additionalProperties: false
+      required: [id, name, active]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        active: { type: boolean }
+    HtmlImportCandidateKind:
+      type: string
+      enum: [TYPE, DIMENSION, FINISHING, CATEGORY, CHARACTERISTIC, STATUS, EQUIPMENT]
+    HtmlImportSourceCandidate:
+      type: object
+      additionalProperties: false
+      required: [kind, sourceValue, suggestedValue, occurrences, suggestedTargetId, required]
+      properties:
+        kind: { $ref: '#/components/schemas/HtmlImportCandidateKind' }
+        sourceValue: { type: string, minLength: 1, maxLength: 255 }
+        suggestedValue: { type: [string, 'null'], maxLength: 255 }
+        occurrences: { type: integer, format: int64, minimum: 1 }
+        suggestedTargetId: { $ref: '#/components/schemas/NullableUuid' }
+        required: { type: boolean }
+    HtmlImportSourceValue:
+      type: object
+      additionalProperties: false
+      required: [sourceId, sourceLabel, suggestedValue]
+      properties:
+        sourceId: { type: [string, 'null'], maxLength: 255 }
+        sourceLabel: { type: [string, 'null'], maxLength: 255 }
+        suggestedValue: { type: [string, 'null'], maxLength: 255 }
+    HtmlImportDiagnostic:
+      type: object
+      additionalProperties: false
+      required: [severity, code, field]
+      properties:
+        severity: { type: string, enum: [ERROR, WARNING] }
+        code: { type: string, pattern: '^[A-Z][A-Z0-9_]{0,127}$' }
+        field: { type: [string, 'null'], maxLength: 64 }
+    HtmlImportFurnitureLine:
+      type: object
+      additionalProperties: false
+      required: [sourceId, sourceLabel, quantity]
+      properties:
+        sourceId: { type: string, minLength: 1, maxLength: 64 }
+        sourceLabel: { type: string, minLength: 1, maxLength: 255 }
+        quantity: { type: integer, minimum: 1, maximum: 1000 }
+    HtmlImportMappingAction:
+      type: string
+      enum: [MAP, CREATE, IGNORE]
+    HtmlImportCatalogMapping:
+      type: object
+      additionalProperties: false
+      required: [kind, sourceValue, action]
+      properties:
+        kind: { $ref: '#/components/schemas/CabinCatalogKind' }
+        sourceValue: { type: string, minLength: 1, maxLength: 255 }
+        action: { $ref: '#/components/schemas/HtmlImportMappingAction' }
+        targetId: { $ref: '#/components/schemas/NullableUuid' }
+        stagedName: { type: [string, 'null'], maxLength: 255 }
+    HtmlImportEquipmentMapping:
+      type: object
+      additionalProperties: false
+      required: [sourceValue, action]
+      properties:
+        sourceValue: { type: string, minLength: 1, maxLength: 255 }
+        action: { $ref: '#/components/schemas/HtmlImportMappingAction' }
+        targetId: { $ref: '#/components/schemas/NullableUuid' }
+        stagedName: { type: [string, 'null'], maxLength: 255 }
+    HtmlImportStatusMapping:
+      type: object
+      additionalProperties: false
+      required: [sourceValue, targetStatus]
+      properties:
+        sourceValue: { type: string, minLength: 1, maxLength: 255 }
+        targetStatus: { $ref: '#/components/schemas/RentalItemStatus' }
+    HtmlImportMergeWinner:
+      type: string
+      enum: [SOURCE, TARGET]
+    HtmlImportRowDecision:
+      type: object
+      additionalProperties: false
+      required: [sourceRowId, action]
+      properties:
+        sourceRowId: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+        action: { $ref: '#/components/schemas/HtmlImportRowAction' }
+        proposedNumber: { type: [string, 'null'], maxLength: 128 }
+        targetRentalItemId: { $ref: '#/components/schemas/NullableUuid' }
+        targetExpectedVersion:
+          oneOf:
+            - { $ref: '#/components/schemas/ExpectedVersion' }
+            - { type: 'null' }
+        rentalTypeId: { $ref: '#/components/schemas/NullableUuid' }
+        dimensionId: { $ref: '#/components/schemas/NullableUuid' }
+        finishingId: { $ref: '#/components/schemas/NullableUuid' }
+        categoryId: { $ref: '#/components/schemas/NullableUuid' }
+        characteristicIds:
+          oneOf:
+            - type: array
+              maxItems: 100
+              uniqueItems: true
+              items: { type: string, format: uuid }
+            - { type: 'null' }
+        status:
+          oneOf:
+            - { $ref: '#/components/schemas/RentalItemStatus' }
+            - { type: 'null' }
         linoleum: { type: [boolean, 'null'] }
-        passport: { $ref: '#/components/schemas/Passport' }
-        tags: { type: array, maxItems: 128, items: { type: string, minLength: 1, maxLength: 128 } }
-    UpdatePassportRequest:
+        comment: { type: [string, 'null'], maxLength: 4000 }
+        mergeChoices:
+          type: [object, 'null']
+          maxProperties: 32
+          additionalProperties: { $ref: '#/components/schemas/HtmlImportMergeWinner' }
+    HtmlImportPlan:
+      type: object
+      additionalProperties: false
+      required: [catalogMappings, equipmentMappings, statusMappings, rows]
+      properties:
+        catalogMappings:
+          type: array
+          maxItems: 1000
+          items: { $ref: '#/components/schemas/HtmlImportCatalogMapping' }
+        equipmentMappings:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/HtmlImportEquipmentMapping' }
+        statusMappings:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/HtmlImportStatusMapping' }
+        rows:
+          type: array
+          maxItems: 5000
+          items: { $ref: '#/components/schemas/HtmlImportRowDecision' }
+    UpdateHtmlImportPlanRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, catalogMappings, equipmentMappings, statusMappings, rows]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        catalogMappings:
+          type: array
+          maxItems: 1000
+          items: { $ref: '#/components/schemas/HtmlImportCatalogMapping' }
+        equipmentMappings:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/HtmlImportEquipmentMapping' }
+        statusMappings:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/HtmlImportStatusMapping' }
+        rows:
+          type: array
+          maxItems: 5000
+          items: { $ref: '#/components/schemas/HtmlImportRowDecision' }
+    CommitHtmlImportRequest:
       type: object
       additionalProperties: false
       required: [expectedVersion]
       properties:
         expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+    RetryHtmlImportMediaRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+    SkipHtmlImportMediaRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+    HtmlImportMediaReplacement:
+      type: object
+      additionalProperties: false
+      required: [rowId, publicUrl]
+      properties:
+        rowId: { type: string, format: uuid }
+        publicUrl:
+          description: Exact Yandex.Disk replacement link. It is write-only and never returned by this API.
+          type: string
+          pattern: '^https://disk\.yandex\.ru/d/[A-Za-z0-9_-]{14}$'
+    ReplaceHtmlImportMediaRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, replacements]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        replacements:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items: { $ref: '#/components/schemas/HtmlImportMediaReplacement' }
+    ExistingRentalItemPreview:
+      type: object
+      additionalProperties: false
+      required: [id, version, number, status, rentalTypeId, rentalType, dimensionId, dimension, finishingId, finishing, categoryId, category, linoleum, generalComment, passport]
+      properties:
+        id: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        number: { type: string, minLength: 1, maxLength: 128 }
+        status: { $ref: '#/components/schemas/RentalItemStatus' }
+        rentalTypeId: { $ref: '#/components/schemas/NullableUuid' }
         rentalType: { type: [string, 'null'], maxLength: 255 }
-        dimensions: { type: [string, 'null'], maxLength: 255 }
+        dimensionId: { $ref: '#/components/schemas/NullableUuid' }
+        dimension: { type: [string, 'null'], maxLength: 255 }
+        finishingId: { $ref: '#/components/schemas/NullableUuid' }
         finishing: { type: [string, 'null'], maxLength: 255 }
+        categoryId: { $ref: '#/components/schemas/NullableUuid' }
         category: { type: [string, 'null'], maxLength: 255 }
-        characteristics: { type: [string, 'null'], maxLength: 2000 }
         linoleum: { type: [boolean, 'null'] }
+        generalComment: { type: [string, 'null'], maxLength: 4000 }
+        passport: { $ref: '#/components/schemas/Passport' }
+    HtmlImportRow:
+      type: object
+      additionalProperties: false
+      required: [id, sourceRowId, sourcePosition, sourceNumber, proposedNumber, action, targetRentalItemId, rentalType, dimension, finishing, category, characteristics, linoleum, storageState, status, proposedStatus, comment, hasPhotoLink, furniture, shipmentDate, tenant, price, diagnostics, decision, existingRentalItem]
+      properties:
+        id: { type: string, format: uuid }
+        sourceRowId: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+        sourcePosition: { type: integer, minimum: 0 }
+        sourceNumber: { type: [string, 'null'], maxLength: 512 }
+        proposedNumber: { type: [string, 'null'], maxLength: 128 }
+        action: { $ref: '#/components/schemas/HtmlImportRowAction' }
+        targetRentalItemId: { $ref: '#/components/schemas/NullableUuid' }
+        rentalType: { $ref: '#/components/schemas/HtmlImportSourceValue' }
+        dimension: { $ref: '#/components/schemas/HtmlImportSourceValue' }
+        finishing: { $ref: '#/components/schemas/HtmlImportSourceValue' }
+        category: { $ref: '#/components/schemas/HtmlImportSourceValue' }
+        characteristics:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/HtmlImportSourceValue' }
+        linoleum: { type: [boolean, 'null'] }
+        storageState: { type: [string, 'null'], maxLength: 4000 }
+        status: { $ref: '#/components/schemas/HtmlImportSourceValue' }
+        proposedStatus:
+          oneOf:
+            - { $ref: '#/components/schemas/RentalItemStatus' }
+            - { type: 'null' }
+        comment: { type: [string, 'null'], maxLength: 4000 }
+        hasPhotoLink: { type: boolean }
+        furniture:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/HtmlImportFurnitureLine' }
+        shipmentDate: { type: [string, 'null'], format: date }
+        tenant: { type: [string, 'null'], maxLength: 4000 }
+        price: { type: [number, 'null'], exclusiveMinimum: 0 }
+        diagnostics:
+          type: array
+          items: { $ref: '#/components/schemas/HtmlImportDiagnostic' }
+        decision:
+          oneOf:
+            - { $ref: '#/components/schemas/HtmlImportRowDecision' }
+            - { type: 'null' }
+        existingRentalItem:
+          oneOf:
+            - { $ref: '#/components/schemas/ExistingRentalItemPreview' }
+            - { type: 'null' }
+    HtmlImportRowPage:
+      type: object
+      additionalProperties: false
+      required: [content, page, size, totalElements, totalPages]
+      properties:
+        content: { type: array, items: { $ref: '#/components/schemas/HtmlImportRow' } }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1, maximum: 200 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+        totalPages: { type: integer, format: int64, minimum: 0 }
+    HtmlImportDetail:
+      type: object
+      additionalProperties: false
+      required: [id, version, warehouseId, state, rowCount, selectedCount, invalidCount, unresolvedCount, mediaLinkCount, warningCount, mediaJobId, failureCode, createdAt, updatedAt, catalogTargets, equipmentTargets, sourceCandidates, plan]
+      properties:
+        id: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        warehouseId: { type: string, format: uuid }
+        state: { $ref: '#/components/schemas/HtmlImportState' }
+        rowCount: { type: integer, minimum: 0 }
+        selectedCount: { type: integer, minimum: 0 }
+        invalidCount: { type: integer, minimum: 0 }
+        unresolvedCount: { type: integer, minimum: 0 }
+        mediaLinkCount: { type: integer, minimum: 0 }
+        warningCount: { type: integer, minimum: 0 }
+        mediaJobId: { $ref: '#/components/schemas/NullableUuid' }
+        failureCode: { type: [string, 'null'], maxLength: 128 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        catalogTargets:
+          type: array
+          items: { $ref: '#/components/schemas/HtmlImportCatalogTarget' }
+        equipmentTargets:
+          type: array
+          items: { $ref: '#/components/schemas/HtmlImportEquipmentTarget' }
+        sourceCandidates:
+          type: array
+          items: { $ref: '#/components/schemas/HtmlImportSourceCandidate' }
+        plan: { $ref: '#/components/schemas/HtmlImportPlan' }
+    CreateRentalItemRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, number, rentalTypeId, dimensionId, finishingId, characteristicIds, linoleum]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        number: { type: string, minLength: 1, maxLength: 128 }
+        rentalTypeId: { type: string, format: uuid }
+        dimensionId: { type: string, format: uuid }
+        finishingId: { type: string, format: uuid }
+        category: { type: [string, 'null'], maxLength: 255 }
+        characteristicIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        linoleum: { type: boolean }
+        passport: { $ref: '#/components/schemas/Passport' }
+        tags: { type: array, maxItems: 128, items: { type: string, minLength: 1, maxLength: 128 } }
+    CabinCatalogKind:
+      type: string
+      enum: [TYPE, DIMENSION, FINISHING, CATEGORY, CHARACTERISTIC]
+    CabinCatalogValue:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 255 }
+    CabinCatalogItem:
+      type: object
+      additionalProperties: false
+      required: [id, version, kind, name, active, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        kind: { $ref: '#/components/schemas/CabinCatalogKind' }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        active: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CabinTypeDimension:
+      type: object
+      additionalProperties: false
+      required: [typeId, dimensionId, sortOrder]
+      properties:
+        typeId: { type: string, format: uuid }
+        dimensionId: { type: string, format: uuid }
+        sortOrder: { type: integer, minimum: 0 }
+    CabinSettings:
+      type: object
+      additionalProperties: false
+      required: [types, dimensions, finishings, categories, characteristics, typeDimensions]
+      properties:
+        types: { type: array, items: { $ref: '#/components/schemas/CabinCatalogItem' } }
+        dimensions: { type: array, items: { $ref: '#/components/schemas/CabinCatalogItem' } }
+        finishings: { type: array, items: { $ref: '#/components/schemas/CabinCatalogItem' } }
+        categories: { type: array, items: { $ref: '#/components/schemas/CabinCatalogItem' } }
+        characteristics: { type: array, items: { $ref: '#/components/schemas/CabinCatalogItem' } }
+        typeDimensions: { type: array, items: { $ref: '#/components/schemas/CabinTypeDimension' } }
+    CreateCabinCatalogItemRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, name]
+      properties:
+        kind: { $ref: '#/components/schemas/CabinCatalogKind' }
+        name: { type: string, minLength: 1, maxLength: 255 }
+    UpdateCabinCatalogItemRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, name, active]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        active: { type: boolean }
+    ReplaceCabinTypeDimensionsRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, dimensionIds]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        dimensionIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    RentalItemCreationOptions:
+      type: object
+      additionalProperties: false
+      required:
+        [newCategory, usedCategories, rentalTypes, dimensions, finishings, categories, characteristics, typeDimensions]
+      properties:
+        newCategory: { type: string, minLength: 1, maxLength: 255 }
+        usedCategories:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string, minLength: 1, maxLength: 255 }
+        rentalTypes:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/CabinCatalogValue' }
+        dimensions:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/CabinCatalogValue' }
+        finishings:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/CabinCatalogValue' }
+        categories:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/CabinCatalogValue' }
+        characteristics:
+          type: array
+          items: { $ref: '#/components/schemas/CabinCatalogValue' }
+        typeDimensions:
+          type: array
+          items: { $ref: '#/components/schemas/CabinTypeDimension' }
+    UpdatePassportRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, rentalTypeId, dimensionId, finishingId, characteristicIds, linoleum]
+      properties:
+        expectedVersion: { $ref: '#/components/schemas/ExpectedVersion' }
+        rentalTypeId: { type: string, format: uuid }
+        dimensionId: { type: string, format: uuid }
+        finishingId: { type: string, format: uuid }
+        category: { type: [string, 'null'], maxLength: 255 }
+        characteristicIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        linoleum: { type: boolean }
         passport: { $ref: '#/components/schemas/Passport' }
         tags: { type: array, maxItems: 128, items: { type: string, minLength: 1, maxLength: 128 } }
     UpdateStatusRequest:
@@ -996,10 +1984,9 @@ components:
     EquipmentContent:
       type: object
       additionalProperties: false
-      required: [equipmentId, equipmentCode, equipmentName, quantity, locationKind]
+      required: [equipmentId, equipmentName, quantity, locationKind]
       properties:
         equipmentId: { type: string, format: uuid }
-        equipmentCode: { type: string }
         equipmentName: { type: string }
         quantity: { type: integer, format: int64, minimum: 0 }
         locationKind: { $ref: '#/components/schemas/BalanceLocationKind' }
@@ -1022,6 +2009,7 @@ components:
         rentalItemId: { type: string, format: uuid }
         clientId: { type: string, format: uuid }
         tenantSnapshot: { type: string, minLength: 1, maxLength: 512 }
+        draftReservationExpiresAt: { type: [string, 'null'], format: date-time }
         actorSubjectId: { type: string, format: uuid }
         actorRole: { $ref: '#/components/schemas/OrderActorRole' }
     OrderEquipmentRequirement:
@@ -1046,10 +2034,9 @@ components:
     OrderEquipmentReservation:
       type: object
       additionalProperties: false
-      required: [equipmentId, equipmentCode, equipmentName, quantity, availableQuantity]
+      required: [equipmentId, equipmentName, quantity, availableQuantity]
       properties:
         equipmentId: { type: string, format: uuid }
-        equipmentCode: { type: string, minLength: 1, maxLength: 64 }
         equipmentName: { type: string, minLength: 1, maxLength: 255 }
         quantity: { type: integer, format: int64, minimum: 1 }
         availableQuantity: { type: integer, format: int64, minimum: 0 }
@@ -1071,10 +2058,9 @@ components:
     OrderFurnitureMovementPlanLine:
       type: object
       additionalProperties: false
-      required: [equipmentId, equipmentCode, equipmentName, sourceBalanceId, sourceWarehouseId, sourceRentalItemId, sourceLocationKind, expectedSourceBalanceVersion, targetWarehouseId, targetRentalItemId, targetLocationKind, quantity]
+      required: [equipmentId, equipmentName, sourceBalanceId, sourceWarehouseId, sourceRentalItemId, sourceLocationKind, expectedSourceBalanceVersion, targetWarehouseId, targetRentalItemId, targetLocationKind, quantity]
       properties:
         equipmentId: { type: string, format: uuid }
-        equipmentCode: { type: string, minLength: 1, maxLength: 64 }
         equipmentName: { type: string, minLength: 1, maxLength: 255 }
         sourceBalanceId: { type: string, format: uuid }
         sourceWarehouseId: { type: string, format: uuid }
@@ -1114,10 +2100,9 @@ components:
     CabinFurnitureMovementPlanLine:
       type: object
       additionalProperties: false
-      required: [equipmentId, equipmentCode, equipmentName, sourceBalanceId, sourceWarehouseId, sourceRentalItemId, sourceLocationKind, expectedSourceBalanceVersion, targetWarehouseId, targetRentalItemId, targetLocationKind, quantity]
+      required: [equipmentId, equipmentName, sourceBalanceId, sourceWarehouseId, sourceRentalItemId, sourceLocationKind, expectedSourceBalanceVersion, targetWarehouseId, targetRentalItemId, targetLocationKind, quantity]
       properties:
         equipmentId: { type: string, format: uuid }
-        equipmentCode: { type: string, minLength: 1, maxLength: 64 }
         equipmentName: { type: string, minLength: 1, maxLength: 255 }
         sourceBalanceId: { type: string, format: uuid }
         sourceWarehouseId: { type: string, format: uuid }
@@ -1142,10 +2127,9 @@ components:
     OrderEquipmentContent:
       type: object
       additionalProperties: false
-      required: [equipmentId, equipmentCode, equipmentName, quantity, locationKind]
+      required: [equipmentId, equipmentName, quantity, locationKind]
       properties:
         equipmentId: { type: string, format: uuid }
-        equipmentCode: { type: string }
         equipmentName: { type: string }
         quantity: { type: integer, format: int64, minimum: 0 }
         locationKind: { $ref: '#/components/schemas/BalanceLocationKind' }
@@ -1210,6 +2194,229 @@ components:
         releasedAt: { type: [string, 'null'], format: date-time }
         replayed: { type: boolean }
         unit: { $ref: '#/components/schemas/OrderRentalItem' }
+    ActorInput:
+      type: object
+      additionalProperties: false
+      required: [actorSubjectId, actorRole]
+      properties:
+        actorSubjectId: { type: string, format: uuid }
+        actorRole: { $ref: '#/components/schemas/OrderActorRole' }
+    ReplacePresentationHoldsRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, rentalItemIds, expiresAt, actorSubjectId, actorRole]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        rentalItemIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        expiresAt:
+          type: string
+          format: date-time
+          description: Must be strictly in the future and no more than 24 hours from processing time.
+        actorSubjectId: { type: string, format: uuid }
+        actorRole: { $ref: '#/components/schemas/OrderActorRole' }
+    ConvertPresentationHoldsRequest:
+      type: object
+      additionalProperties: false
+      required: [orderId, warehouseId, selectedRentalItemIds, clientId, tenantSnapshot, actorSubjectId, actorRole]
+      properties:
+        orderId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        selectedRentalItemIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        tenantSnapshot: { type: string, minLength: 1, maxLength: 512 }
+        actorSubjectId: { type: string, format: uuid }
+        actorRole: { $ref: '#/components/schemas/OrderActorRole' }
+    PresentationHoldState:
+      type: string
+      enum: [ACTIVE, CONVERTED, RELEASED, EXPIRED]
+    PresentationHoldView:
+      type: object
+      additionalProperties: false
+      required: [holdId, version, presentationId, rentalItemId, warehouseId, state, expiresAt, createdAt]
+      properties:
+        holdId: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        presentationId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        state: { $ref: '#/components/schemas/PresentationHoldState' }
+        expiresAt: { type: string, format: date-time }
+        orderId: { $ref: '#/components/schemas/NullableUuid' }
+        createdAt: { type: string, format: date-time }
+        endedAt: { type: [string, 'null'], format: date-time }
+    ReplacePresentationHoldsResponse:
+      type: object
+      additionalProperties: false
+      required: [presentationId, holds]
+      properties:
+        presentationId: { type: string, format: uuid }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        holds:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/PresentationHoldView' }
+    ConvertPresentationHoldsResponse:
+      type: object
+      additionalProperties: false
+      required: [presentationId, orderId, reservations, releasedRentalItemIds]
+      properties:
+        presentationId: { type: string, format: uuid }
+        orderId: { type: string, format: uuid }
+        reservations:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/OrderUnitReservation' }
+        releasedRentalItemIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    CabinSearchGroup:
+      type: object
+      additionalProperties: false
+      required: [quantity]
+      properties:
+        cabinType: { type: [string, 'null'], maxLength: 255 }
+        finish: { type: [string, 'null'], maxLength: 255 }
+        dimensions: { type: [string, 'null'], maxLength: 255 }
+        category:
+          type: [string, 'null']
+          maxLength: 255
+          description: Exact optional category facet such as ИТР, Обычная or Новая; null matches all.
+        characteristics:
+          type: [string, 'null']
+          maxLength: 2000
+          description: >-
+            Optional case-insensitive normalized substring of stored cabin characteristics; null or
+            blank matches all.
+        linoleum:
+          type: [boolean, 'null']
+          description: Optional exact linoleum filter; null matches all.
+        quantity: { type: integer, format: int32, minimum: 1, maximum: 30 }
+    CabinSearchRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, holdScopeId, expiresAt, actorSubjectId, actorRole, groups]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        holdScopeId:
+          type: string
+          format: uuid
+          description: Rental inquiry ID that owns the short-lived chat selection.
+        expiresAt:
+          type: string
+          format: date-time
+          description: Configurable short chat-selection expiry, no more than 24 hours in the future.
+        actorSubjectId: { type: string, format: uuid }
+        actorRole: { $ref: '#/components/schemas/OrderActorRole' }
+        groups:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items: { $ref: '#/components/schemas/CabinSearchGroup' }
+    CabinAvailabilityRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, rentalItemIds]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        rentalItemIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    CabinFacetResponse:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, cabinTypes, finishes, dimensions, categories]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        cabinTypes: { type: array, items: { type: string, minLength: 1, maxLength: 255 } }
+        finishes: { type: array, items: { type: string, minLength: 1, maxLength: 255 } }
+        dimensions: { type: array, items: { type: string, minLength: 1, maxLength: 255 } }
+        categories: { type: array, items: { type: string, minLength: 1, maxLength: 255 } }
+    AvailableCabin:
+      type: object
+      additionalProperties: false
+      required: [id, version, warehouseId, number, status, passport, tags, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        warehouseId: { type: string, format: uuid }
+        number: { type: string, minLength: 1, maxLength: 128 }
+        status: { $ref: '#/components/schemas/RentalItemStatus' }
+        rentalType: { type: [string, 'null'], maxLength: 255 }
+        dimensions: { type: [string, 'null'], maxLength: 255 }
+        finishing: { type: [string, 'null'], maxLength: 255 }
+        category: { type: [string, 'null'], maxLength: 255 }
+        characteristics: { type: [string, 'null'], maxLength: 2000 }
+        linoleum: { type: [boolean, 'null'] }
+        passport: { $ref: '#/components/schemas/Passport' }
+        tags: { type: array, items: { type: string } }
+        updatedAt: { type: string, format: date-time }
+    CabinSearchGroupResult:
+      type: object
+      additionalProperties: false
+      required: [group, cabins]
+      properties:
+        group: { $ref: '#/components/schemas/CabinSearchGroup' }
+        cabins:
+          type: array
+          maxItems: 30
+          items: { $ref: '#/components/schemas/AvailableCabin' }
+    CabinSearchResponse:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, expiresAt, groups]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        expiresAt: { type: string, format: date-time }
+        groups:
+          type: array
+          maxItems: 20
+          items: { $ref: '#/components/schemas/CabinSearchGroupResult' }
+    CabinAvailabilityReason:
+      type: string
+      enum: [NOT_FOUND, WAREHOUSE_MISMATCH, STATUS, ORDER_RESERVED, PRESENTATION_HELD, OPERATION_LEASED, AVAILABLE]
+    CabinAvailability:
+      type: object
+      additionalProperties: false
+      required: [rentalItemId, available, reason]
+      properties:
+        rentalItemId: { type: string, format: uuid }
+        available: { type: boolean }
+        reason: { $ref: '#/components/schemas/CabinAvailabilityReason' }
+    CabinAvailabilityResponse:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, items]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CabinAvailability' }
+    CabinSnapshotsResponse:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, items]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/AvailableCabin' }
     OrderUnitCandidate:
       type: object
       additionalProperties: false
@@ -1241,18 +2448,23 @@ components:
     RentalItem:
       type: object
       additionalProperties: false
-      required: [id, version, warehouseId, number, status, passport, tags, contents, activeOrderReservation, createdAt, updatedAt]
+      required: [id, version, warehouseId, number, status, rentalTypeId, dimensionId, finishingId, characteristics, passport, tags, contents, activeOrderReservation, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         version: { $ref: '#/components/schemas/ExpectedVersion' }
         warehouseId: { type: string, format: uuid }
         number: { type: string }
         status: { $ref: '#/components/schemas/RentalItemStatus' }
+        rentalTypeId: { $ref: '#/components/schemas/NullableUuid' }
         rentalType: { type: [string, 'null'] }
+        dimensionId: { $ref: '#/components/schemas/NullableUuid' }
         dimensions: { type: [string, 'null'] }
+        finishingId: { $ref: '#/components/schemas/NullableUuid' }
         finishing: { type: [string, 'null'] }
         category: { type: [string, 'null'] }
-        characteristics: { type: [string, 'null'] }
+        characteristics:
+          type: array
+          items: { $ref: '#/components/schemas/CabinCatalogValue' }
         linoleum: { type: [boolean, 'null'] }
         generalComment: { type: [string, 'null'] }
         passport: { $ref: '#/components/schemas/Passport' }
@@ -1277,8 +2489,8 @@ components:
     CreateEquipmentRequest:
       type: object
       additionalProperties: false
-      required: [code, name, category]
-      properties: { code: { type: string, maxLength: 64 }, name: { type: string, maxLength: 255 }, category: { $ref: '#/components/schemas/EquipmentCategory' }, comment: { type: [string, 'null'], maxLength: 2000 } }
+      required: [name, category]
+      properties: { name: { type: string, maxLength: 255 }, category: { $ref: '#/components/schemas/EquipmentCategory' }, comment: { type: [string, 'null'], maxLength: 2000 } }
     UpdateEquipmentRequest:
       allOf:
         - $ref: '#/components/schemas/CreateEquipmentRequest'
@@ -1288,8 +2500,8 @@ components:
     Equipment:
       type: object
       additionalProperties: false
-      required: [id, version, code, name, category, active, createdAt, updatedAt]
-      properties: { id: { type: string, format: uuid }, version: { $ref: '#/components/schemas/ExpectedVersion' }, code: { type: string }, name: { type: string }, category: { $ref: '#/components/schemas/EquipmentCategory' }, active: { type: boolean }, comment: { type: [string, 'null'] }, createdAt: { type: string, format: date-time }, updatedAt: { type: string, format: date-time } }
+      required: [id, version, name, category, active, createdAt, updatedAt]
+      properties: { id: { type: string, format: uuid }, version: { $ref: '#/components/schemas/ExpectedVersion' }, name: { type: string }, category: { $ref: '#/components/schemas/EquipmentCategory' }, active: { type: boolean }, comment: { type: [string, 'null'] }, createdAt: { type: string, format: date-time }, updatedAt: { type: string, format: date-time } }
     EquipmentBalance:
       type: object
       additionalProperties: false
@@ -1323,13 +2535,13 @@ components:
     EquipmentDisposition:
       type: object
       additionalProperties: false
-      required: [movement, equipmentCode, equipmentName]
-      properties: { movement: { $ref: '#/components/schemas/Movement' }, equipmentCode: { type: string }, equipmentName: { type: string } }
+      required: [movement, equipmentName]
+      properties: { movement: { $ref: '#/components/schemas/Movement' }, equipmentName: { type: string } }
     CreateClassifierRequest:
       type: object
       additionalProperties: false
-      required: [type, code, name, active]
-      properties: { type: { type: string, enum: [CATEGORY, SUBCATEGORY, TYPE, CONDITION] }, parentId: { $ref: '#/components/schemas/NullableUuid' }, code: { type: string, maxLength: 64 }, name: { type: string, maxLength: 255 }, active: { type: boolean }, sortOrder: { type: [integer, 'null'], minimum: 0 } }
+      required: [type, name, active]
+      properties: { type: { type: string, enum: [CATEGORY, SUBCATEGORY, TYPE, CONDITION] }, parentId: { $ref: '#/components/schemas/NullableUuid' }, name: { type: string, maxLength: 255 }, active: { type: boolean }, sortOrder: { type: [integer, 'null'], minimum: 0 } }
     ClassifierRequest:
       allOf:
         - $ref: '#/components/schemas/CreateClassifierRequest'
@@ -1339,8 +2551,8 @@ components:
     Classifier:
       type: object
       additionalProperties: false
-      required: [id, version, type, code, name, active]
-      properties: { id: { type: string, format: uuid }, version: { $ref: '#/components/schemas/ExpectedVersion' }, type: { type: string }, parentId: { $ref: '#/components/schemas/NullableUuid' }, code: { type: string }, name: { type: string }, active: { type: boolean }, sortOrder: { type: [integer, 'null'] } }
+      required: [id, version, type, name, active]
+      properties: { id: { type: string, format: uuid }, version: { $ref: '#/components/schemas/ExpectedVersion' }, type: { type: string }, parentId: { $ref: '#/components/schemas/NullableUuid' }, name: { type: string }, active: { type: boolean }, sortOrder: { type: [integer, 'null'] } }
     ExpectedVersionRequest:
       type: object
       additionalProperties: false
@@ -1386,7 +2598,7 @@ components:
       enum: [MAINTENANCE_ESTIMATE, MAINTENANCE_REPAIR]
     MaintenanceStatusAction:
       type: string
-      enum: [QUEUE_FOR_REPAIR, COMPLETE_EMPTY_ESTIMATE, MARK_PENDING_ACCEPTANCE, ACCEPT_REPAIR, WRITE_OFF]
+      enum: [QUEUE_FOR_REPAIR, QUEUE_FOR_CAPITAL_REPAIR, COMPLETE_EMPTY_ESTIMATE, COMPLETE_EMPTY_REPAIR, MARK_PENDING_ACCEPTANCE, ACCEPT_REPAIR, WRITE_OFF]
     MaintenanceRentalItemSnapshot:
       type: object
       additionalProperties: false
@@ -1405,11 +2617,19 @@ components:
     MaintenanceFurnitureEquipment:
       type: object
       additionalProperties: false
-      required: [equipmentId, equipmentCode, equipmentName]
+      required: [equipmentId, equipmentName]
       properties:
         equipmentId: { type: string, format: uuid }
-        equipmentCode: { type: string }
         equipmentName: { type: string }
+    MaintenanceCharacteristicApplication:
+      type: object
+      additionalProperties: false
+      required: [rentalItemId, characteristicId, added, rentalItemVersion]
+      properties:
+        rentalItemId: { type: string, format: uuid }
+        characteristicId: { type: string, format: uuid }
+        added: { type: boolean }
+        rentalItemVersion: { $ref: '#/components/schemas/ExpectedVersion' }
     AcquireMaintenanceOperationLeaseRequest:
       type: object
       additionalProperties: false
@@ -1440,13 +2660,9 @@ components:
     MaintenanceFurnitureLoss:
       type: object
       additionalProperties: false
-      required: [equipmentId, equipmentCode, quantity]
+      required: [equipmentId, quantity]
       properties:
         equipmentId: { type: string, format: uuid }
-        equipmentCode:
-          type: string
-          maxLength: 64
-          pattern: '^[A-Z0-9][A-Z0-9_-]{0,63}$'
         quantity: { type: integer, format: int64, minimum: 1 }
     MaintenanceFencedStatusRequest:
       type: object
@@ -1475,6 +2691,9 @@ components:
     LogisticsRentalItemAction:
       type: string
       enum: [RETURN_INTAKE, RETURN_SETTLE_FREE, RETURN_SETTLE_SHORTAGE, SHIPMENT_CONFIRM, TRANSFER_DEPART, TRANSFER_ARRIVE]
+    TransferAssetStatus:
+      type: string
+      enum: [FREE, REPAIR]
     LogisticsEquipmentContentSnapshot:
       type: object
       additionalProperties: false
@@ -1583,6 +2802,7 @@ components:
         documentId: { type: string, format: uuid }
         lineId: { type: string, format: uuid }
         destinationWarehouseId: { $ref: '#/components/schemas/NullableUuid' }
+        transferAssetStatus: { $ref: '#/components/schemas/TransferAssetStatus' }
     AcquireLogisticsEquipmentHoldRequest:
       type: object
       additionalProperties: false
@@ -1661,7 +2881,7 @@ components:
     LogisticsEquipmentMovementReservation:
       type: object
       additionalProperties: false
-      required: [reservationId, version, ownerType, movementId, lineId, equipmentId, equipmentCode, equipmentName, sourceBalanceId, sourceWarehouseId, sourceRentalItemId, sourceLocationKind, quantity, state, reservedUntil, executedAt]
+      required: [reservationId, version, ownerType, movementId, lineId, equipmentId, equipmentName, sourceBalanceId, sourceWarehouseId, sourceRentalItemId, sourceLocationKind, quantity, state, reservedUntil, executedAt]
       properties:
         reservationId: { type: string, format: uuid }
         version: { $ref: '#/components/schemas/ExpectedVersion' }
@@ -1669,7 +2889,6 @@ components:
         movementId: { type: string, format: uuid }
         lineId: { type: string, format: uuid }
         equipmentId: { type: string, format: uuid }
-        equipmentCode: { type: string, maxLength: 64 }
         equipmentName: { type: string, maxLength: 255 }
         sourceBalanceId: { type: string, format: uuid }
         sourceWarehouseId: { type: string, format: uuid }
@@ -1762,6 +2981,20 @@ components:
         displayCanonicalNumber: { type: string }
         identityMatchKey: { type: string }
         tenantSnapshot: { type: [string, 'null'], maxLength: 512 }
+    InventoryAssetCurrentSnapshot:
+      type: object
+      additionalProperties: false
+      required: [assetId, version, warehouseId, status, displayCanonicalNumber, identityMatchKey, tenantSnapshot, passportSnapshot, contentsSnapshot]
+      properties:
+        assetId: { type: string, format: uuid }
+        version: { $ref: '#/components/schemas/ExpectedVersion' }
+        warehouseId: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/RentalItemStatus' }
+        displayCanonicalNumber: { type: string, minLength: 1, maxLength: 128 }
+        identityMatchKey: { type: string, minLength: 1, maxLength: 128 }
+        tenantSnapshot: { type: [string, 'null'], maxLength: 512 }
+        passportSnapshot: { $ref: '#/components/schemas/Passport' }
+        contentsSnapshot: { type: array, items: { $ref: '#/components/schemas/EquipmentContent' } }
     InventoryNumberResolutionRequest:
       type: object
       additionalProperties: false
@@ -1787,7 +3020,7 @@ components:
     InventoryValidationItem:
       type: object
       additionalProperties: false
-      required: [assetId, found, version, warehouseId, status, displayCanonicalNumber, identityMatchKey, tenantSnapshot]
+      required: [assetId, found, version, warehouseId, status, displayCanonicalNumber, identityMatchKey, tenantSnapshot, passportSnapshot, contentsSnapshot]
       properties:
         assetId: { type: string, format: uuid }
         found: { type: boolean }
@@ -1797,6 +3030,14 @@ components:
         displayCanonicalNumber: { type: [string, 'null'], maxLength: 128 }
         identityMatchKey: { type: [string, 'null'], maxLength: 128 }
         tenantSnapshot: { type: [string, 'null'], maxLength: 512 }
+        passportSnapshot:
+          oneOf:
+            - { type: object, additionalProperties: true }
+            - { type: 'null' }
+        contentsSnapshot:
+          oneOf:
+            - { type: array, items: { $ref: '#/components/schemas/EquipmentContent' } }
+            - { type: 'null' }
     InventoryValidation:
       type: object
       additionalProperties: false
@@ -1808,18 +3049,22 @@ components:
     InventorySourceAssetRequest:
       type: object
       additionalProperties: false
-      required: [inventoryId, findingId, warehouseId, number]
+      required: [inventoryId, findingId, warehouseId, number, rentalTypeId, dimensionId, finishingId, characteristicIds, linoleum]
       properties:
         inventoryId: { type: string, format: uuid }
         findingId: { type: string, format: uuid }
         warehouseId: { type: string, format: uuid }
         number: { type: string, minLength: 1, maxLength: 128 }
-        rentalType: { type: [string, 'null'], maxLength: 255 }
-        dimensions: { type: [string, 'null'], maxLength: 255 }
-        finishing: { type: [string, 'null'], maxLength: 255 }
+        rentalTypeId: { type: string, format: uuid }
+        dimensionId: { type: string, format: uuid }
+        finishingId: { type: string, format: uuid }
         category: { type: [string, 'null'], maxLength: 255 }
-        characteristics: { type: [string, 'null'], maxLength: 2000 }
-        linoleum: { type: [boolean, 'null'] }
+        characteristicIds:
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        linoleum: { type: boolean }
         passport: { $ref: '#/components/schemas/Passport' }
         tags: { type: array, items: { type: string, minLength: 1, maxLength: 128 } }
     InventorySourceAsset:

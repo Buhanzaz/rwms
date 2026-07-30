@@ -1,6 +1,8 @@
 import type {
   CreateTransferLine,
   TransferDocument,
+  TransferArrivalPreflight,
+  TransferFurnitureReadiness,
   TransferFurnitureReplacement,
   TransferMediaReference,
 } from "@/features/logistics/warehouse-transfers/model/warehouse-transfer"
@@ -30,6 +32,8 @@ export type TransferLineCommand = TransferVersionedCommand & {
 
 export type TransferArrivalCommand = TransferLineCommand & {
   references: TransferMediaReference[]
+  priority: number | null
+  movementToShipment: boolean
 }
 
 export type TransferReconcileCommand = TransferVersionedCommand & {
@@ -39,6 +43,13 @@ export type TransferReconcileCommand = TransferVersionedCommand & {
 export interface WarehouseTransferClient {
   list(accessToken: string, warehouseId: string): Promise<TransferDocument[]>
   get(accessToken: string, documentId: string): Promise<TransferDocument>
+  getFurnitureReadiness(
+    accessToken: string,
+    documentId: string
+  ): Promise<TransferFurnitureReadiness>
+  getArrivalPreflight(
+    input: Omit<TransferLineCommand, "idempotencyKey">
+  ): Promise<TransferArrivalPreflight>
   create(input: TransferCreateCommand): Promise<TransferDocument>
   depart(input: TransferLineCommand): Promise<TransferDocument>
   arrive(input: TransferArrivalCommand): Promise<TransferDocument>

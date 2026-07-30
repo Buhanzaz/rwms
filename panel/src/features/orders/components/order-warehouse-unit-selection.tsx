@@ -4,6 +4,7 @@ import type { SortingState } from "@tanstack/react-table"
 import {
   Add01Icon,
   CheckmarkCircle02Icon,
+  FilterIcon,
   GridViewIcon,
   ListViewIcon,
   Loading03Icon,
@@ -45,6 +46,7 @@ import {
   RENTAL_ITEM_COVERS_QUERY_KEY,
 } from "@/features/rental-items/use-rental-item-covers"
 import { useOrdersModule } from "@/features/orders/orders-module-context"
+import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 
 export function OrderWarehouseUnitSelection({
   accessToken,
@@ -72,6 +74,7 @@ export function OrderWarehouseUnitSelection({
   const [viewMode, setViewMode] = useState<RentalItemsViewMode>("grid")
   const [gridSettingsOpen, setGridSettingsOpen] = useState(false)
   const [savedGridSize, setSavedGridSize] = useState<number | null>(2)
+  const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
   const viewport = useRentalItemsGridViewport()
   const gridFormatMax = getRentalItemsGridFormatMax(viewport)
   const effectiveGridFormat = getEffectiveRentalItemsGridFormat(
@@ -212,16 +215,33 @@ export function OrderWarehouseUnitSelection({
     <>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-hidden">
         <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-          {filterOptions.length > 0 ? (
-            <RentalItemsFilters
-              options={filterOptions}
-              filters={effectiveFilters}
-              onFiltersChange={setFilters}
-            />
-          ) : (
-            <span />
-          )}
+          {filterOptions.length > 0 && filtersOpen ? (
+            <div id="order-unit-filters" className="w-full sm:flex-1">
+              <RentalItemsFilters
+                options={filterOptions}
+                filters={effectiveFilters}
+                onFiltersChange={setFilters}
+              />
+            </div>
+          ) : null}
           <div className="flex shrink-0 items-center gap-2">
+            {filterOptions.length > 0 ? (
+              <Button
+                type="button"
+                size="icon"
+                variant={filtersOpen ? "secondary" : "outline"}
+                aria-label={
+                  filtersOpen
+                    ? "Скрыть фильтры бытовок для бронирования"
+                    : "Показать фильтры бытовок для бронирования"
+                }
+                aria-controls="order-unit-filters"
+                aria-expanded={filtersOpen}
+                onClick={() => setFiltersOpen((current) => !current)}
+              >
+                <HugeiconsIcon icon={FilterIcon} aria-hidden="true" />
+              </Button>
+            ) : null}
             <ToggleGroup
               type="single"
               value={viewMode}
@@ -233,7 +253,7 @@ export function OrderWarehouseUnitSelection({
               variant="outline"
               size="lg"
               spacing={2}
-              aria-label="Вид бытовок заказа"
+              aria-label="Вид бытовок бронирования"
             >
               <ToggleGroupItem
                 value="table"

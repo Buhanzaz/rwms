@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application>
+        <!-- Feature Robolectric tests need Compose's UI-test manifest, but its
+             generic exported activity must never ship in the test APK. -->
+        <activity
+            android:name="androidx.activity.ComponentActivity"
+            tools:node="remove" />
+    </application>
+</manifest>

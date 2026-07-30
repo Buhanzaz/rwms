@@ -9,12 +9,15 @@ import dev.buhanzaz.rwms.asset.domain.OrderEquipmentReservation;
 import dev.buhanzaz.rwms.asset.domain.OrderEquipmentReservationState;
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservation;
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservationState;
+import dev.buhanzaz.rwms.asset.domain.PresentationUnitHold;
+import dev.buhanzaz.rwms.asset.domain.PresentationUnitHoldState;
 import dev.buhanzaz.rwms.asset.domain.RentalItem;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.mapper.OrderAssetResponseMapper;
 import dev.buhanzaz.rwms.asset.repository.EquipmentCatalogItemRepository;
 import dev.buhanzaz.rwms.asset.repository.OrderEquipmentReservationRepository;
 import dev.buhanzaz.rwms.asset.repository.OrderUnitReservationRepository;
+import dev.buhanzaz.rwms.asset.repository.PresentationUnitHoldRepository;
 import dev.buhanzaz.rwms.asset.repository.RentalItemRepository;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -26,6 +29,10 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
+import org.springframework.scheduling.annotation.Scheduled;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
@@ -41,6 +48,9 @@ import tools.jackson.databind.ObjectMapper;
 @Service
 @RequiredArgsConstructor
 public class OrderAssetService {
+  private static final UUID EXPIRATION_SUBJECT_ID =
+      UUID.fromString("00000000-0000-0000-0000-000000000000");
+  private static final String EXPIRATION_ROLE = "SYSTEM_ADMIN";
   private static final Set<RentalItemStatus> RESERVABLE_STATUSES =
       Set.of(RentalItemStatus.FREE);
   private static final Set<RentalItemStatus> ORDER_EDITABLE_STATUSES =
@@ -48,6 +58,7 @@ public class OrderAssetService {
 
   private final RentalItemRepository rentalItems;
   private final OrderUnitReservationRepository reservations;
+  private final PresentationUnitHoldRepository presentationHolds;
   private final OrderEquipmentReservationRepository equipmentReservations;
   private final EquipmentCatalogItemRepository equipmentCatalog;
   private final AssetService assets;
@@ -55,9 +66,10 @@ public class OrderAssetService {
   private final OrderAssetResponseMapper responses;
   private final ObjectMapper json;
 
-  @Transactional(readOnly = true)
+  @Transactional
   public OrderUnitCandidatePage candidates(
       UUID orderId, UUID warehouseId, int page, int size, String search) {
+    expireDueDraftReservations(now());
     requirePage(page, size);
     String normalizedSearch = search == null ? "" : search.trim().toUpperCase(Locale.ROOT);
     var result =
@@ -66,6 +78,8 @@ public class OrderAssetService {
             warehouseId,
             RESERVABLE_STATUSES,
             OrderUnitReservationState.ACTIVE,
+            PresentationUnitHoldState.ACTIVE,
+            now(),
             normalizedSearch,
             PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "number", "id")));
     Map<UUID, OrderUnitReservation> current =
@@ -93,8 +107,9 @@ public class OrderAssetService {
         result.getTotalPages());
   }
 
-  @Transactional(readOnly = true)
+  @Transactional
   public List<OrderUnitReservationView> units(UUID orderId) {
+    expireDueDraftReservations(now());
     return reservations
         .findAllByOrderIdAndStateOrderByCreatedAtAscIdAsc(
             orderId, OrderUnitReservationState.ACTIVE)
@@ -116,6 +131,9 @@ public class OrderAssetService {
           withReplay(read(replay.get(), OrderUnitReservationView.class)), true);
     }
 
+    OffsetDateTime timestamp = now();
+    validateDraftReservationExpiry(request.draftReservationExpiresAt(), timestamp);
+    expireDueDraftReservations(timestamp);
     try {
       assets.lockOrderRentalItemForOrder(request.rentalItemId());
     } catch (AssetConflictException exception) {
@@ -125,6 +143,16 @@ public class OrderAssetService {
         rentalItems
             .findByIdForUpdate(request.rentalItemId())
             .orElseThrow(() -> new AssetNotFoundException("Rental item was not found"));
+    presentationHolds.expireDue(timestamp);
+    PresentationUnitHold activePresentationHold =
+        presentationHolds
+            .findActiveByRentalItemForUpdate(
+                item.getId(), PresentationUnitHoldState.ACTIVE)
+            .orElse(null);
+    if (activePresentationHold != null && activePresentationHold.isLiveAt(timestamp)) {
+      throw conflict(
+          "UNIT_PRESENTATION_HELD", "Бытовка временно зарезервирована для клиента");
+    }
     OrderUnitReservation existing =
         reservations
             .findByRentalItemIdAndState(item.getId(), OrderUnitReservationState.ACTIVE)
@@ -132,9 +160,10 @@ public class OrderAssetService {
     if (existing != null) {
       if (existing.getOrderId().equals(orderId)
           && item.getWarehouseId().equals(request.warehouseId())) {
-        boolean projectionChanged = existing.updateClientProjection(
-            request.clientId(), request.tenantSnapshot());
-        if (projectionChanged) {
+        boolean changed =
+            existing.updateClientProjection(request.clientId(), request.tenantSnapshot());
+        changed |= existing.synchronizeDraftReservationExpiry(request.draftReservationExpiresAt());
+        if (changed) {
           reservations.saveAndFlush(existing);
         }
         if (item.getStatus() == RentalItemStatus.FREE
@@ -173,6 +202,7 @@ public class OrderAssetService {
                   item.getWarehouseId(),
                   request.clientId(),
                   request.tenantSnapshot(),
+                  request.draftReservationExpiresAt(),
                   request.actorSubjectId(),
                   request.actorRole()));
       assets.bookOrderRentalItem(item.getId());
@@ -267,9 +297,16 @@ public class OrderAssetService {
     return new AssetService.CreateResult<>(response, false);
   }
 
-  @Transactional(readOnly = true)
+  @Transactional
   public boolean hasActiveUnits(UUID orderId) {
+    expireDueDraftReservations(now());
     return reservations.existsByOrderIdAndState(orderId, OrderUnitReservationState.ACTIVE);
+  }
+
+  @Scheduled(fixedDelayString = "${rwms.asset.order-reservation.expiration-sweep-delay:PT1M}")
+  @Transactional
+  public void releaseExpiredDraftReservations() {
+    expireDueDraftReservations(now());
   }
 
   /**
@@ -383,8 +420,9 @@ public class OrderAssetService {
         currentByEquipment.values().stream()
             .filter(value -> value.getState() == OrderEquipmentReservationState.ACTIVE)
             .sorted(
-                Comparator.comparing(
-                    value -> catalog.get(value.getEquipmentId()).getCode()))
+                Comparator.<OrderEquipmentReservation, String>comparing(
+                    value -> catalog.get(value.getEquipmentId()).getName())
+                    .thenComparing(OrderEquipmentReservation::getEquipmentId))
             .map(
                 value ->
                     responses.toOrderEquipmentReservation(
@@ -570,7 +608,6 @@ public class OrderAssetService {
       long quantity) {
     return new OrderFurnitureMovementPlanLine(
         equipment.getId(),
-        equipment.getCode(),
         equipment.getName(),
         source.id(),
         source.warehouseId(),
@@ -633,6 +670,37 @@ public class OrderAssetService {
   private static void requirePage(int page, int size) {
     if (page < 0 || size < 1 || size > 200) {
       throw new IllegalArgumentException("Invalid order-unit page request");
+    }
+  }
+
+  private static OffsetDateTime now() {
+    return OffsetDateTime.now(ZoneOffset.UTC).truncatedTo(ChronoUnit.MICROS);
+  }
+
+  private void expireDueDraftReservations(OffsetDateTime timestamp) {
+    for (UUID reservationId :
+        reservations.findExpiredDraftReservationIds(OrderUnitReservationState.ACTIVE, timestamp)) {
+      OrderUnitReservation snapshot = reservations.findById(reservationId).orElse(null);
+      if (snapshot == null) continue;
+      RentalItem item =
+          rentalItems
+              .findByIdForUpdate(snapshot.getRentalItemId())
+              .orElseThrow(() -> new AssetNotFoundException("Rental item was not found"));
+      OrderUnitReservation reservation =
+          reservations.findByIdForUpdate(reservationId).orElse(null);
+      if (reservation == null || !reservation.isDraftReservationExpiredAt(timestamp)) continue;
+      reservation.release(EXPIRATION_SUBJECT_ID, EXPIRATION_ROLE);
+      reservations.saveAndFlush(reservation);
+      assets.releaseOrderBooking(item.getId());
+    }
+  }
+
+  private static void validateDraftReservationExpiry(
+      OffsetDateTime expiresAt, OffsetDateTime timestamp) {
+    if (expiresAt == null) return;
+    if (!expiresAt.isAfter(timestamp) || expiresAt.isAfter(timestamp.plusDays(10))) {
+      throw new IllegalArgumentException(
+          "draftReservationExpiresAt must be within the next 10 days");
     }
   }
 

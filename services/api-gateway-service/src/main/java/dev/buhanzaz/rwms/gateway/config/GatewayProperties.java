@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -20,6 +21,7 @@ public class GatewayProperties {
   @Valid private final Routes routes = new Routes();
   @Valid private final Security security = new Security();
   @Valid private final Cors cors = new Cors();
+  @Valid private final AppLinks appLinks = new AppLinks();
   @Setter
   @NotNull private URI publicBaseUri;
 
@@ -35,6 +37,8 @@ public class GatewayProperties {
     @NotNull private URI inventoryUri;
     @NotNull private URI logisticsUri;
     @NotNull private URI dossierUri;
+    @NotNull private URI analyticsUri;
+    @NotNull private URI assistantUri;
   }
 
   @Getter
@@ -50,5 +54,21 @@ public class GatewayProperties {
   public static final class Cors {
     @NotEmpty private List<String> allowedOrigins = List.of();
 
+  }
+
+  @Setter
+  @Getter
+  public static final class AppLinks {
+    @NotBlank
+    @Pattern(regexp = "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$")
+    private String packageName = "dev.buhanzaz.rwms.worker";
+
+    private List<
+            @Pattern(
+                regexp =
+                    "^(?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2}$",
+                message = "must be a colon-separated SHA-256 certificate fingerprint")
+            String>
+        sha256CertFingerprints = List.of();
   }
 }

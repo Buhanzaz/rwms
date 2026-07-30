@@ -4,6 +4,7 @@ import {
   listHttpEligibleWorkerGroups,
   moveHttpTaskBoardEntry,
   pauseHttpTaskBoardEntry,
+  pinHttpTaskBoardEntry,
   resumeHttpTaskBoardEntry,
   takeHttpTaskBoardEntry,
 } from "@/features/task-board/api/http-task-board-client"
@@ -14,21 +15,50 @@ import type {
 
 export const TASK_BOARD_QUERY_KEY = ["task-board"] as const
 
-export function taskBoardQueryKey(warehouseId: string) {
-  return [...TASK_BOARD_QUERY_KEY, warehouseId] as const
+export function taskBoardQueryKey(
+  warehouseId: string,
+  date: string | null = null
+) {
+  return [...TASK_BOARD_QUERY_KEY, warehouseId, date ?? "default"] as const
 }
 
-export function getTaskBoard(accessToken: string, warehouseId: string) {
-  return getHttpTaskBoard(accessToken, warehouseId)
+export function getTaskBoard(
+  accessToken: string,
+  warehouseId: string,
+  date?: string | null
+) {
+  return getHttpTaskBoard(accessToken, warehouseId, date)
+}
+
+export async function getTaskBoardsForAvailableDates(
+  accessToken: string,
+  warehouseId: string
+) {
+  const initial = await getHttpTaskBoard(accessToken, warehouseId)
+  if (initial.availableDates.length === 0) return []
+  const byDate = new Map<string, typeof initial>()
+  if (initial.selectedDate) byDate.set(initial.selectedDate, initial)
+  const remainingDates = initial.availableDates.filter(
+    (date) => !byDate.has(date)
+  )
+  const remainingBoards = await Promise.all(
+    remainingDates.map((date) =>
+      getHttpTaskBoard(accessToken, warehouseId, date)
+    )
+  )
+  remainingBoards.forEach((board) => {
+    if (board.selectedDate) byDate.set(board.selectedDate, board)
+  })
+  return initial.availableDates.flatMap((date) => {
+    const board = byDate.get(date)
+    return board ? [board] : []
+  })
 }
 
 export function listEligibleTaskBoardGroups(
   accessToken: string,
   entry: TaskBoardEntryDto
 ) {
-  if (!entry.queueId) {
-    return Promise.resolve([])
-  }
   return listHttpEligibleWorkerGroups(
     accessToken,
     entry.warehouseId,
@@ -41,13 +71,23 @@ export function moveTaskBoardEntry(params: {
   entry: TaskBoardEntryDto
   queue: TaskBoardQueueDto
   targetIndex: number
+  targetDate: string
 }) {
   return moveHttpTaskBoardEntry(
     params.accessToken,
     params.entry,
     params.queue.settingsQueueId,
-    params.targetIndex
+    params.targetIndex,
+    params.targetDate
   )
+}
+
+export function pinTaskBoardEntry(params: {
+  accessToken: string
+  entry: TaskBoardEntryDto
+  pinned: boolean
+}) {
+  return pinHttpTaskBoardEntry(params.accessToken, params.entry, params.pinned)
 }
 
 export function takeTaskBoardEntry(params: {

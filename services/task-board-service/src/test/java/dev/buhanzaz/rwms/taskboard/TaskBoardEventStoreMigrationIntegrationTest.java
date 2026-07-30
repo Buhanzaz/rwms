@@ -67,10 +67,10 @@ class TaskBoardEventStoreMigrationIntegrationTest {
   }
 
   @Test
-  void cleanInstallAppliesV4ThroughV7AndRepeatIsNoOp() {
+  void cleanInstallAppliesV4ThroughV20AndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(17);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -87,8 +87,15 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             "version_gap_quarantine",
             "replay_operation_audit",
             "task_sync_source",
+            "worker_task_evidence",
+            "worker_media_event_inbox",
+            "worker_device_registration",
             "task_board_outbox",
-            "task_board_inbox");
+            "task_board_inbox",
+            "warehouse_metadata",
+            "warehouse_kpi_settings",
+            "queue_definition",
+            "task_relocation_receipt");
     assertThat(tables()).doesNotContain("worker_pii");
     assertThat(jdbc.queryForObject("select count(*) from domain_event", Integer.class)).isZero();
     assertThat(jdbc.queryForObject("select count(*) from outbox_event", Integer.class)).isZero();
@@ -107,6 +114,88 @@ class TaskBoardEventStoreMigrationIntegrationTest {
         .containsEntry("version", "7")
         .containsEntry("description", "equipment movement completion deadline")
         .containsEntry("script", "V7__equipment_movement_completion_deadline.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='11'"))
+        .containsEntry("version", "11")
+        .containsEntry("description", "queue group audience")
+        .containsEntry("script", "V11__queue_group_audience.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='12'"))
+        .containsEntry("version", "12")
+        .containsEntry("description", "worker task content snapshot")
+        .containsEntry("script", "V12__worker_task_content_snapshot.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='13'"))
+        .containsEntry("version", "13")
+        .containsEntry("description", "require task queue")
+        .containsEntry("script", "V13__require_task_queue.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='14'"))
+        .containsEntry("version", "14")
+        .containsEntry("description", "ordered queue classes")
+        .containsEntry("script", "V14__ordered_queue_classes.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='15'"))
+        .containsEntry("version", "15")
+        .containsEntry("description", "worker task works")
+        .containsEntry("script", "V15__worker_task_works.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='16'"))
+        .containsEntry("version", "16")
+        .containsEntry("description", "repair queue entry stream origins")
+        .containsEntry("script", "V16__repair_queue_entry_stream_origins.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='17'"))
+        .containsEntry("version", "17")
+        .containsEntry("description", "remove legacy business codes")
+        .containsEntry("script", "V17__remove_legacy_business_codes.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='18'"))
+        .containsEntry("version", "18")
+        .containsEntry("description", "warehouse kpi settings")
+        .containsEntry("script", "V18__warehouse_kpi_settings.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='19'"))
+        .containsEntry("version", "19")
+        .containsEntry("description", "global queue catalog and repair complexity")
+        .containsEntry(
+            "script", "V19__global_queue_catalog_and_repair_complexity.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='20'"))
+        .containsEntry("version", "20")
+        .containsEntry("description", "canonicalize task board runtime state")
+        .containsEntry(
+            "script", "V20__canonicalize_task_board_runtime_state.sql")
         .containsEntry("success", true);
   }
 
@@ -136,7 +225,7 @@ class TaskBoardEventStoreMigrationIntegrationTest {
                 "select count(*) from domain_event where aggregate_type='WORKER' "
                     + "and payload ? 'profileRevision' "
                     + "and payload - array['workerId','warehouseId','active',"
-                    + "'profileRevision','qualifications','deleted'] = '{}'::jsonb",
+                    + "'profileRevision','currentGroupId','qualifications','deleted'] = '{}'::jsonb",
                 Integer.class))
         .isEqualTo(4);
     assertThat(
@@ -150,7 +239,7 @@ class TaskBoardEventStoreMigrationIntegrationTest {
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from domain_event where aggregate_type='WORKER_CLASS' "
-                    + "and payload - array['workerClassId','revisionMarker','code','sortOrder',"
+                    + "and payload - array['workerClassId','revisionMarker','sortOrder',"
                     + "'active','deleted'] = '{}'::jsonb",
                 Integer.class))
         .isEqualTo(2);
@@ -158,24 +247,28 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             jdbc.queryForObject(
                 "select count(*) from domain_event where aggregate_type='WORKER_GROUP' "
                     + "and payload - array['workerGroupId','revisionMarker','warehouseId',"
-                    + "'workerClassId','active','members','deleted'] = '{}'::jsonb "
+                    + "'workerClassId','active','operationalStatus','members','deleted'] = '{}'::jsonb "
                     + "and not jsonb_path_exists(payload, '$.members[*].roleInGroup')",
                 Integer.class))
         .isEqualTo(2);
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from domain_event where aggregate_type='WORK_QUEUE' "
-                    + "and payload - array['workQueueId','revisionMarker','warehouseId','code',"
-                    + "'queueType','sortOrder','active','hidden','collapsed',"
+                    + "and payload - array['workQueueId','revisionMarker','warehouseId',"
+                    + "'queueDefinitionId','queueType','sortOrder','active','hidden','collapsed',"
                     + "'holdingPeriodMinutes','notificationThreshold',"
-                    + "'notifyWhenThresholdReached','classBindings','deleted'] = '{}'::jsonb",
+                    + "'notifyWhenThresholdReached','resultPhotoMinCount',"
+                    + "'classBindings','deleted'] = '{}'::jsonb "
+                    + "and not jsonb_path_exists(payload, '$.classBindings[*] ? "
+                    + "(!exists(@.bindingOrder) || !exists(@.notifyUrgent))')",
                 Integer.class))
         .isEqualTo(3);
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from domain_event where aggregate_type='BOARD_TASK' "
                     + "and payload - array['boardTaskId','warehouseId','externalTaskId','status',"
-                    + "'plannedDurationMinutes','deadlineAt','doneAt','deleted'] = '{}'::jsonb",
+                    + "'scheduledDate','priority','pinned','plannedDurationMinutes',"
+                    + "'deadlineAt','doneAt','deleted'] = '{}'::jsonb",
                 Integer.class))
         .isEqualTo(4);
     assertThat(
@@ -196,9 +289,40 @@ class TaskBoardEventStoreMigrationIntegrationTest {
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from domain_event where aggregate_type='QUEUE_ENTRY' "
+                    + "and payload - array['queueEntryId','taskId','queueId','routeIndex',"
+                    + "'queuePosition','entryType','status','plannedDurationMinutes',"
+                    + "'activeStartedAt','pausedAt','doneAt','activeWorkSeconds',"
+                    + "'originalBudgetSeconds','currentBudgetSeconds','pauseOrigin',"
+                    + "'assignments','timeEvents','interruptions','deleted'] = '{}'::jsonb "
                     + "and not (payload ? 'taskText')",
                 Integer.class))
         .isEqualTo(5);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from domain_event where "
+                    + "(aggregate_type in ('WORKER_CLASS','WORK_QUEUE') and payload ? 'code') "
+                    + "or (aggregate_type='QUEUE_ENTRY' and payload ? 'queueCode')",
+                Integer.class))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from aggregate_snapshot where "
+                    + "(aggregate_type in ('WORKER_CLASS','WORK_QUEUE') and state ? 'code') "
+                    + "or (aggregate_type='QUEUE_ENTRY' and state ? 'queueCode')",
+                Integer.class))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from domain_event where payload_sha256 <> "
+                    + "encode(sha256(convert_to(payload::text, 'UTF8')), 'hex')",
+                Integer.class))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from aggregate_snapshot where state_sha256 <> "
+                    + "encode(sha256(convert_to(state::text, 'UTF8')), 'hex')",
+                Integer.class))
+        .isZero();
     assertThat(tables()).doesNotContain("worker_pii");
     assertThat(payloadText())
         .doesNotContain(
@@ -494,6 +618,7 @@ class TaskBoardEventStoreMigrationIntegrationTest {
     jdbc.update(
         "update queue_usage_reference set reference_type='REPAIR_PLAN' "
             + "where reference_type='TASK_HISTORY'");
+    reconcileUnassignedFixtureTasks();
     createHistoricalMigrationEvidence();
     seedRabbitCompatibilityRows();
     Map<String, String> before = retainedContentDigests();
@@ -504,7 +629,7 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(3);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(16);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
     assertThat(retainedContentDigests()).containsExactlyInAnyOrderEntriesOf(before);
@@ -513,6 +638,22 @@ class TaskBoardEventStoreMigrationIntegrationTest {
                 "select count(*) from board_task where completion_deadline_enforced",
                 Integer.class))
         .isZero();
+  }
+
+  private void reconcileUnassignedFixtureTasks() {
+    jdbc.execute(
+        """
+        update queue_entry entry
+        set (queue_id, queue_code) = (
+          select work_queue.id, work_queue.code
+          from work_queue
+          join board_task on board_task.warehouse_id = work_queue.warehouse_id
+          where board_task.id = entry.task_id
+          order by work_queue.sort_order, work_queue.id
+          limit 1
+        )
+        where entry.queue_id is null
+        """);
   }
 
   private List<Map<String, Object>> deterministicBaselineProjection() {
@@ -698,8 +839,29 @@ class TaskBoardEventStoreMigrationIntegrationTest {
   private String digest(String table) {
     String json =
         "board_task".equals(table)
-            ? "to_jsonb(row_value) - 'completion_deadline_enforced'"
-            : "to_jsonb(row_value)";
+            ? "to_jsonb(row_value) - array['completion_deadline_enforced',"
+                + "'scheduled_date','priority','pinned','request_fingerprint']"
+            : "queue_entry".equals(table)
+                ? "to_jsonb(row_value) - array['queue_code','worker_works','worker_materials',"
+                    + "'worker_comments','source_media_references','revision_marker',"
+                    + "'original_budget_seconds','current_budget_seconds']"
+                : "work_queue".equals(table)
+                    ? "to_jsonb(row_value) - array['code','result_photo_min_count',"
+                        + "'name','description','queue_type','definition_id']"
+                    : "queue_usage_reference".equals(table)
+                        ? "to_jsonb(row_value) - array['queue_id','queue_definition_id']"
+                    : "worker_class".equals(table)
+                        ? "to_jsonb(row_value) - 'code'"
+                    : "work_queue_class_binding".equals(table)
+                        ? "to_jsonb(row_value) - array['binding_order','notify_urgent']"
+                        : "worker_group_member".equals(table)
+                            ? "to_jsonb(row_value) - 'role_in_group'"
+                            : "worker".equals(table)
+                                ? "to_jsonb(row_value) - 'current_group_id'"
+                                : "worker_group".equals(table)
+                                    ? "to_jsonb(row_value) - array['operational_status',"
+                                        + "'unavailable_since','unavailability_reason']"
+                                    : "to_jsonb(row_value)";
     return jdbc.queryForObject(
         "select md5(coalesce(string_agg(("
             + json

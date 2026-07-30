@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 
-import { ApiError } from "@/lib/api-client"
 import type { PhotoCarouselPhoto } from "@/components/media/photo-carousel"
 import {
   cabinMediaOwner,
@@ -13,6 +12,11 @@ import {
   type MediaUploadCommandKeys,
   type MediaVariant,
 } from "@/features/media/media-service"
+import {
+  ownerProofRetryDelay,
+  retryOwnerProofOperation,
+  shouldRetryOwnerProof,
+} from "@/features/media/owner-proof-retry"
 import { RENTAL_ITEM_DOSSIER_QUERY_KEY } from "@/features/rental-items/dossier/api/rental-item-dossier-api"
 import {
   formatDossierActorLabel,
@@ -75,65 +79,6 @@ type RentalItemMediaUploadJob = Readonly<{
   folderId: string
   commandKeys: MediaUploadCommandKeys
 }>
-
-function isRetryableOwnerMediaError(error: unknown) {
-  return (
-    error instanceof ApiError &&
-    (error.status === 409 ||
-      error.status === 503 ||
-      (error.status === 403 && error.code === "MEDIA_OWNER_PROOF_REQUIRED"))
-  )
-}
-
-function legacyPhotos(item: RentalItemDto): RentalItemMediaPhoto[] {
-  const folderId = `${item.id}-legacy-folder`
-  const source = item.legacyPhotos?.length
-    ? item.legacyPhotos
-    : (item.previewPhotoUrls ?? []).map((url, index) => ({
-        id: `${item.id}-legacy-${index}`,
-        url,
-      }))
-
-  return source.map((photo, index) => {
-    const legacyVariants = (
-      photo as {
-        variants?: {
-          small?: { url?: unknown }
-          largeWebp?: { url?: unknown }
-        }
-      }
-    ).variants
-    const medium = photo.url
-    const small =
-      typeof legacyVariants?.small?.url === "string"
-        ? legacyVariants.small.url
-        : medium
-    const large =
-      typeof legacyVariants?.largeWebp?.url === "string"
-        ? legacyVariants.largeWebp.url
-        : medium
-    const capturedAt = (photo as { capturedAt?: unknown }).capturedAt
-    const occurredAt = typeof capturedAt === "string" ? capturedAt : null
-    return {
-      id: photo.id,
-      folderId,
-      fileName: `Фото ${index + 1}`,
-      url: medium,
-      variants: {
-        small: { url: small },
-        medium: { url: medium },
-        large: { url: large },
-      },
-      createdAt: occurredAt ?? undefined,
-      occurredAt,
-      actorLabel: UNKNOWN_ACTOR,
-      sourceLabel: "Общие фотографии",
-      stage: "GENERAL",
-      processingStatus: "READY",
-      asset: null,
-    }
-  })
-}
 
 function mediaActivity(
   assetId: string,
@@ -241,6 +186,8 @@ export function useRentalItemMedia({
     queryFn: () =>
       mediaClient.listOwnerMedia(accessToken!, owner, { limit: 100 }),
     enabled: enabled && item !== null && Boolean(accessToken),
+    retry: shouldRetryOwnerProof,
+    retryDelay: ownerProofRetryDelay,
     refetchInterval: (result) =>
       result.state.data?.items.some(
         (asset) => asset.status === "UPLOADING" || asset.status === "PROCESSING"
@@ -255,17 +202,12 @@ export function useRentalItemMedia({
       ),
     [query.data?.items]
   )
-  const legacyMediaPhotos = useMemo(
-    () => (item ? legacyPhotos(item) : []),
-    [item]
-  )
   const logicalPhotoCount = useMemo(
     () =>
-      legacyMediaPhotos.length +
       (query.data?.items ?? []).filter(
         (asset) => asset.kind === "IMAGE" && asset.status !== "DELETED"
       ).length,
-    [legacyMediaPhotos.length, query.data?.items]
+    [query.data?.items]
   )
   const assetSignatures = useMemo(
     () =>
@@ -332,8 +274,9 @@ export function useRentalItemMedia({
       const pending = inFlight.current.get(key)
       if (pending) return pending
 
-      const request = mediaClient
-        .createVariantObjectUrl(accessToken, owner, variant)
+      const request = retryOwnerProofOperation(() =>
+        mediaClient.createVariantObjectUrl(accessToken, owner, variant)
+      )
         .then((objectUrl) => {
           if (
             !mounted.current ||
@@ -434,35 +377,13 @@ export function useRentalItemMedia({
         },
       ]
     })
-    return [...legacyMediaPhotos, ...servicePhotos]
-  }, [
-    activeLoadedVariants,
-    actorDisplays,
-    dossierActivities,
-    legacyMediaPhotos,
-    readyImages,
-  ])
+    return servicePhotos
+  }, [activeLoadedVariants, actorDisplays, dossierActivities, readyImages])
 
   const photoFolders = useMemo<RentalItemPhotoFolder[]>(() => {
     const folders = new Map<string, RentalItemPhotoFolder>()
-    const legacy = photos.filter((photo) => photo.asset === null)
-    if (legacy.length > 0) {
-      folders.set(legacy[0].folderId, {
-        id: legacy[0].folderId,
-        occurredAt:
-          legacy.find((photo) => photo.occurredAt !== null)?.occurredAt ?? null,
-        actorLabel: UNKNOWN_ACTOR,
-        sourceLabel: "Общие фотографии",
-        stage: "GENERAL",
-        photos: legacy,
-        assets: [],
-      })
-    }
-
     const photosByAsset = new Map(
-      photos
-        .filter((photo) => photo.asset !== null)
-        .map((photo) => [photo.id, photo] as const)
+      photos.map((photo) => [photo.id, photo] as const)
     )
     for (const asset of query.data?.items ?? []) {
       if (asset.kind !== "IMAGE") continue
@@ -533,9 +454,8 @@ export function useRentalItemMedia({
         )
       }
     },
-    retry: (failureCount, error) =>
-      failureCount < 5 && isRetryableOwnerMediaError(error),
-    retryDelay: (attempt) => Math.min(250 * 2 ** attempt, 2_000),
+    retry: shouldRetryOwnerProof,
+    retryDelay: ownerProofRetryDelay,
     onSuccess: () => toast.success("Фотографии добавлены"),
     onError: (error) => toast.error(errorMessage(error)),
     onSettled: async () => {
@@ -557,13 +477,15 @@ export function useRentalItemMedia({
       const idempotencyKey =
         rotateKeys.current.get(rotationSignature) ?? crypto.randomUUID()
       rotateKeys.current.set(rotationSignature, idempotencyKey)
-      return mediaClient.rotate(
-        accessToken,
-        owner,
-        asset.id,
-        rotationDegrees,
-        asset.version,
-        idempotencyKey
+      return retryOwnerProofOperation(() =>
+        mediaClient.rotate(
+          accessToken,
+          owner,
+          asset.id,
+          rotationDegrees,
+          asset.version,
+          idempotencyKey
+        )
       )
     },
     onSuccess: async (_, asset) => {

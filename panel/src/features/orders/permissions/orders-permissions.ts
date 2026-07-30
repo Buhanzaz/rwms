@@ -13,13 +13,9 @@ export function canViewAllOrders(user: OrdersModuleUser | null) {
   return user !== null && ORDERS_ADMINISTRATIVE_ROLES.has(user.globalRole)
 }
 
-export function getOrdersListNavigationLabel(user: OrdersModuleUser | null) {
-  return canViewAllOrders(user) ? "Все заказы" : "Мои заказы"
-}
-
 export const ORDERS_NAVIGATION = {
-  rootLabel: "Заказы",
+  rootLabel: "Бронирование",
   listPath: "/orders",
   createPath: "/orders/new",
-  createLabel: "Создать новый заказ",
+  createLabel: "Новое бронирование",
 } as const

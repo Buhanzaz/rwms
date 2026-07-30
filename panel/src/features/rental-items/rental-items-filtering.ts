@@ -1,5 +1,5 @@
 import {
-  getRentalItemFieldLabel,
+  getRentalItemFieldLabels,
   getVisibleRentalItemFilterDefinitions,
   type RentalItemDto,
   type RentalItemsColumnConfig,
@@ -28,7 +28,9 @@ export function filterRentalItemsByFilters(
   return items.filter((item) =>
     Object.entries(filters).every(([key, values]) => {
       if (!values || values.length === 0) return true
-      return values.includes(getRentalItemFieldLabel(item, key))
+      return getRentalItemFieldLabels(item, key).some((label) =>
+        values.includes(label)
+      )
     })
   )
 }
@@ -42,7 +44,9 @@ export function buildRentalItemsFilterOptions(
     (filter) => ({
       ...filter,
       values: Array.from(
-        new Set(items.map((item) => getRentalItemFieldLabel(item, filter.id)))
+        new Set(
+          items.flatMap((item) => getRentalItemFieldLabels(item, filter.id))
+        )
       ).sort((left, right) => left.localeCompare(right, "ru")),
     })
   )

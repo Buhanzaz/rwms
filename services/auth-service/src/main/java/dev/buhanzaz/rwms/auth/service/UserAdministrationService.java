@@ -8,6 +8,7 @@ import dev.buhanzaz.rwms.auth.api.EffectiveWarehouseAccessDto;
 import dev.buhanzaz.rwms.auth.api.UpdateUserRequest;
 import dev.buhanzaz.rwms.auth.api.WarehouseAccessDto;
 import dev.buhanzaz.rwms.auth.api.WarehouseAccessRequest;
+import dev.buhanzaz.rwms.auth.config.OAuthClientProperties;
 import dev.buhanzaz.rwms.auth.domain.AuthSubject;
 import dev.buhanzaz.rwms.auth.domain.PrincipalType;
 import dev.buhanzaz.rwms.auth.domain.UserGlobalRole;
@@ -62,6 +63,7 @@ public class UserAdministrationService {
     private final AuthSubjectProfileStore profiles;
     private final UserWarehouseAccessNoteStore accessNotes;
     private final AuthResponseMapper responseMapper;
+    private final AuthorizationRevocationService authorizationRevocations;
 
     @Transactional(readOnly = true)
     public List<AdminUserResponse> listUsers() {
@@ -117,6 +119,10 @@ public class UserAdministrationService {
         List<CanonicalWarehouseAccess> canonicalAccesses = canonicalAccesses(
                 request.warehouseAccesses() == null ? List.of() : request.warehouseAccesses());
         validateWarehouses(canonicalAccesses);
+        boolean mobileAppAccess = requestedMobileAppAccess(
+                request.globalRole(), request.mobileAppAccess(), false);
+        boolean rentalAccess = requestedRentalAccess(
+                request.rentalAccess(), request.globalRole().hasRentalAccessByDefault());
         AuthSubject subject = projectionWriter.insertUser(
                 username,
                 passwordEncoder.encode(request.password()),
@@ -125,7 +131,9 @@ public class UserAdministrationService {
                 request.email(),
                 request.timeZoneId(),
                 request.globalRole(),
-                request.active() == null || request.active());
+                request.active() == null || request.active(),
+                mobileAppAccess,
+                rentalAccess);
         projectionWriter.replaceAccesses(subject, accessWrites(canonicalAccesses));
         eventStore.initialize(
                 AuthAggregateType.USER_AUTHORIZATION,
@@ -145,13 +153,18 @@ public class UserAdministrationService {
         checkVersion(subject, request.expectedVersion());
         String username = normalizedUsername(request.username());
         var profile = profiles.require(subject.getId());
+        boolean mobileAppAccess = requestedMobileAppAccess(
+                request.globalRole(), request.mobileAppAccess(), subject.isMobileAppAccess());
+        boolean rentalAccess = requestedRentalAccess(request.rentalAccess(), subject.isRentalAccess());
         boolean profileChanged = !Objects.equals(profile.username(), username)
                 || !Objects.equals(profile.firstName(), normalizedOptional(request.firstName()))
                 || !Objects.equals(profile.lastName(), normalizedOptional(request.lastName()))
                 || !Objects.equals(profile.email(), normalizedOptional(request.email()))
                 || !Objects.equals(profile.timeZoneId(), normalizedOptional(request.timeZoneId()));
         boolean credentialStatusChanged = subject.isActive() != request.active();
-        boolean authorizationChanged = subject.getGlobalRole() != request.globalRole();
+        boolean authorizationChanged = subject.getGlobalRole() != request.globalRole()
+                || subject.isMobileAppAccess() != mobileAppAccess
+                || subject.isRentalAccess() != rentalAccess;
         long streamVersion = eventStore.lockCurrentVersion(
                 AuthAggregateType.USER_AUTHORIZATION, subject.getId());
         checkStreamVersion(streamVersion, request.expectedVersion());
@@ -159,6 +172,9 @@ public class UserAdministrationService {
             return adminResponse(subject);
         }
         boolean disabling = subject.isActive() && !request.active();
+        boolean revokeManagerAccess =
+                (subject.isMobileAppAccess() && !mobileAppAccess) || disabling;
+        boolean revokeRentalAccess = subject.isRentalAccess() && !rentalAccess;
         boolean removesSystemAdmin = subject.getGlobalRole() == UserGlobalRole.SYSTEM_ADMIN
                 && request.globalRole() != UserGlobalRole.SYSTEM_ADMIN;
         if (subject.getId().equals(current.getId()) && disabling) {
@@ -180,6 +196,8 @@ public class UserAdministrationService {
                 request.timeZoneId(),
                 request.globalRole(),
                 request.active(),
+                mobileAppAccess,
+                rentalAccess,
                 profileChanged,
                 credentialStatusChanged);
         eventStore.append(
@@ -191,6 +209,12 @@ public class UserAdministrationService {
                         : AuthEventTypes.USER_CHANGED,
                 eventFacts.userAuthorization(subject),
                 eventFacts.actor(current));
+        if (revokeRentalAccess) {
+            authorizationRevocations.revokePrincipal(profile.username());
+        } else if (revokeManagerAccess || !Objects.equals(profile.username(), username)) {
+            authorizationRevocations.revokePrincipalClient(
+                    profile.username(), OAuthClientProperties.MANAGER_ANDROID_CLIENT_ID);
+        }
         return adminResponse(subject);
     }
 
@@ -218,6 +242,8 @@ public class UserAdministrationService {
                 AuthEventTypes.USER_PASSWORD_CHANGED,
                 eventFacts.userAuthorization(subject),
                 eventFacts.actor(current));
+        authorizationRevocations.revokePrincipal(
+                profiles.require(subject.getId()).username());
     }
 
     @Transactional
@@ -400,6 +426,25 @@ public class UserAdministrationService {
 
     private String normalizedOptional(String value) {
         return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private boolean requestedMobileAppAccess(
+            UserGlobalRole role, Boolean requested, boolean current) {
+        boolean mobileAppAccess = requested == null ? current : requested;
+        if (!role.isManagerAppEligible()) {
+            if (Boolean.TRUE.equals(requested)) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Доступ к приложению разрешён только системному администратору, "
+                                + "администратору WMS или руководителю склада");
+            }
+            return false;
+        }
+        return mobileAppAccess;
+    }
+
+    private boolean requestedRentalAccess(Boolean requested, boolean current) {
+        return requested == null ? current : requested;
     }
 
     private String displayName(AuthSubjectProfileStore.Profile profile) {

@@ -1,7 +1,13 @@
 import { useMemo, useRef, useState, type FormEvent } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
+import { useNavigate } from "react-router-dom"
 
 import { getEquipmentItems } from "@/api/equipment-api"
 import type { WarehouseInfo } from "@/api/warehouse-api"
@@ -23,6 +29,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Card,
   CardAction,
@@ -61,6 +68,7 @@ import {
   FieldSet,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Select,
   SelectContent,
@@ -72,8 +80,20 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
+import {
+  getEquipmentMovementTask,
+  type EquipmentMovementLocationKind,
+} from "@/features/logistics/api/equipment-movement-tasks-api"
+import {
+  LogisticsDocumentFilters,
+  LogisticsFiltersToggle,
+  type LogisticsDocumentFiltersState,
+} from "@/features/logistics/logistics-document-filters"
 import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
-import { listAssetRentalItems } from "@/features/rental-items/api/asset-rental-items-api"
+import {
+  getAssetRentalItem,
+  listAssetRentalItems,
+} from "@/features/rental-items/api/asset-rental-items-api"
 import {
   CabinFurnitureCompositionDialog,
   CabinFurnitureContents,
@@ -82,37 +102,51 @@ import {
 } from "@/features/rental-items/cabin-furniture-composition-dialog"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
 import {
+  TRANSFER_FURNITURE_READINESS_QUERY_KEY,
   WAREHOUSE_TRANSFERS_QUERY_KEY,
   arriveWarehouseTransferLine,
   cancelWarehouseTransfer,
   createWarehouseTransfer,
   departWarehouseTransferLine,
   getWarehouseTransfer,
+  getWarehouseTransferArrivalPreflight,
+  getWarehouseTransferFurnitureReadiness,
   listWarehouseTransfers,
   reconcileWarehouseTransfer,
 } from "@/features/logistics/warehouse-transfers/api/warehouse-transfer-api"
 import {
+  TRANSFER_DOCUMENT_STATES,
   TRANSFER_LINE_STATE_LABELS,
   TRANSFER_STATE_LABELS,
   type TransferDocument,
+  type TransferArrivalPreflight,
   type TransferDocumentState,
+  type TransferFurnitureReadiness,
   type TransferFurnitureReplacement,
+  type TransferFurnitureTaskStatus,
   type TransferLine,
   type TransferMediaReference,
 } from "@/features/logistics/warehouse-transfers/model/warehouse-transfer"
 import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
+import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
 import { logisticsTransferMediaOwner } from "@/features/media/media-service"
 import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
 
-const ACTIONABLE_STATES = new Set<TransferDocumentState>([
-  "DRAFT",
-  "DEPARTING",
-  "IN_TRANSIT",
-  "CONFLICT",
-  "RECONCILIATION_REQUIRED",
-])
+type TransferFilters = LogisticsDocumentFiltersState<TransferDocumentState> & {
+  routes: string[]
+  drivers: string[]
+}
+
+const EMPTY_FILTERS: TransferFilters = {
+  states: [],
+  schedule: "ALL",
+  dateFrom: "",
+  dateTo: "",
+  routes: [],
+  drivers: [],
+}
 
 type TransferLineTarget = {
   document: TransferDocument
@@ -200,16 +234,93 @@ function statusVariant(state: TransferDocumentState) {
   return "outline" as const
 }
 
-function warehouseLabel(warehouse: WarehouseInfo | undefined, id: string) {
-  return warehouse ? `${warehouse.name} · ${warehouse.city}` : id
+function warehouseLabel(warehouse: WarehouseInfo | undefined) {
+  return warehouse
+    ? `${warehouse.name} · ${warehouse.city}`
+    : "Склад недоступен"
+}
+
+function transferRouteKey(
+  document: Pick<TransferDocument, "warehouseId" | "destinationWarehouseId">
+) {
+  return `${document.warehouseId}:${document.destinationWarehouseId}`
+}
+
+function transferRouteLabel(
+  document: Pick<TransferDocument, "warehouseId" | "destinationWarehouseId">,
+  warehouses: readonly WarehouseInfo[]
+) {
+  return `${warehouseLabel(
+    warehouses.find((warehouse) => warehouse.id === document.warehouseId)
+  )} → ${warehouseLabel(
+    warehouses.find(
+      (warehouse) => warehouse.id === document.destinationWarehouseId
+    )
+  )}`
+}
+
+function matchesDateRange(
+  value: string,
+  filters: LogisticsDocumentFiltersState<string>
+) {
+  if (filters.dateFrom && value < filters.dateFrom) return false
+  if (filters.dateTo && value > filters.dateTo) return false
+  return true
+}
+
+function textFilterOptions(values: Iterable<string | null | undefined>) {
+  return [
+    ...new Set(
+      [...values].filter((value): value is string => Boolean(value?.trim()))
+    ),
+  ]
+    .sort((left, right) => left.localeCompare(right, "ru"))
+    .map((value) => ({ value, label: value }))
+}
+
+function needsFurnitureReadiness(document: TransferDocument) {
+  return (
+    (document.state === "DRAFT" || document.state === "DEPARTING") &&
+    document.lines.some((line) => line.state === "PENDING")
+  )
+}
+
+function furnitureTaskHref(readiness: TransferFurnitureReadiness | undefined) {
+  const task =
+    readiness?.tasks.find((candidate) => candidate.taskState !== "COMPLETED") ??
+    readiness?.tasks[0]
+  return task
+    ? `/task-board?externalTaskId=${encodeURIComponent(task.externalTaskId)}`
+    : null
+}
+
+function equipmentLocationLabel(
+  locationKind: EquipmentMovementLocationKind,
+  rentalItemId: string | null,
+  cabin: RentalItemDto | undefined
+) {
+  if (locationKind === "STOCK") return "склад"
+  const cabinLabel =
+    rentalItemId === cabin?.id
+      ? `бытовка ${cabin.number}`
+      : rentalItemId
+        ? "бытовка недоступна"
+        : "бытовка"
+  return `${cabinLabel} (${locationKind === "CABIN_RENTED" ? "в аренде" : "не в аренде"})`
+}
+
+function equipmentMovementLineLabel(line: { equipmentName: string | null }) {
+  return line.equipmentName ?? "Оборудование"
 }
 
 export function WarehouseTransfersPage() {
   const { accessToken, currentUser } = useAuth()
   const { selectedWarehouseId, warehouses } = useWarehouse()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState("")
-  const [showAll, setShowAll] = useState(false)
+  const [filters, setFilters] = useState(EMPTY_FILTERS)
+  const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [arrivalTarget, setArrivalTarget] = useState<TransferLineTarget | null>(
@@ -245,16 +356,104 @@ export function WarehouseTransfersPage() {
     queryFn: () => getWarehouseTransfer(accessToken!, expandedId!),
     enabled: Boolean(accessToken && expandedId),
   })
+  const furnitureReadinessDocuments = useMemo(() => {
+    const documents = query.data ?? []
+    const expandedDetail = detailQuery.data
+    if (!expandedDetail || expandedId !== expandedDetail.id) return documents
+    return documents.map((document) =>
+      document.id === expandedDetail.id ? expandedDetail : document
+    )
+  }, [detailQuery.data, expandedId, query.data])
+  const furnitureReadinessQueries = useQueries({
+    queries: furnitureReadinessDocuments.map((document) => ({
+      queryKey: [
+        ...TRANSFER_FURNITURE_READINESS_QUERY_KEY,
+        currentUser?.id ?? "unknown-user",
+        document.id,
+        document.version,
+      ],
+      queryFn: () =>
+        getWarehouseTransferFurnitureReadiness(accessToken!, document.id),
+      enabled: Boolean(accessToken),
+      refetchInterval: 3_000,
+    })),
+  })
+  const furnitureReadinessByDocumentId = useMemo(
+    () =>
+      new Map(
+        furnitureReadinessDocuments.flatMap((document, index) => {
+          const readiness = furnitureReadinessQueries[index]?.data
+          return readiness ? ([[document.id, readiness]] as const) : []
+        })
+      ),
+    [furnitureReadinessDocuments, furnitureReadinessQueries]
+  )
+  const furnitureReadinessQueryByDocumentId = useMemo(
+    () =>
+      new Map(
+        furnitureReadinessDocuments.map((document, index) => [
+          document.id,
+          furnitureReadinessQueries[index],
+        ])
+      ),
+    [furnitureReadinessDocuments, furnitureReadinessQueries]
+  )
+  const stateOptions = useMemo(
+    () =>
+      TRANSFER_DOCUMENT_STATES.map((state) => ({
+        value: state,
+        label: TRANSFER_STATE_LABELS[state],
+      })),
+    []
+  )
+  const routeOptions = useMemo(() => {
+    const routes = new Map<string, string>()
+    for (const document of query.data ?? []) {
+      routes.set(
+        transferRouteKey(document),
+        transferRouteLabel(document, warehouses)
+      )
+    }
+    return [...routes.entries()]
+      .sort(([, left], [, right]) => left.localeCompare(right, "ru"))
+      .map(([value, label]) => ({ value, label }))
+  }, [query.data, warehouses])
+  const driverOptions = useMemo(
+    () =>
+      textFilterOptions(
+        (query.data ?? []).map((document) => document.driverSnapshot)
+      ),
+    [query.data]
+  )
 
   const rows = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru")
     return (query.data ?? []).filter((document) => {
-      if (!showAll && !ACTIONABLE_STATES.has(document.state)) return false
+      if (
+        filters.states.length > 0 &&
+        !filters.states.includes(document.state)
+      ) {
+        return false
+      }
+      if (
+        filters.routes.length > 0 &&
+        !filters.routes.includes(transferRouteKey(document))
+      ) {
+        return false
+      }
+      if (
+        filters.drivers.length > 0 &&
+        !filters.drivers.includes(document.driverSnapshot ?? "")
+      ) {
+        return false
+      }
+      if (!matchesDateRange(document.scheduledDate, filters)) return false
       if (!needle) return true
       return [
         document.id,
         document.warehouseId,
         document.destinationWarehouseId,
+        transferRouteLabel(document, warehouses),
         document.driverSnapshot,
         TRANSFER_STATE_LABELS[document.state],
         ...document.lines.flatMap((line) => [line.id, line.assetId]),
@@ -262,7 +461,7 @@ export function WarehouseTransfersPage() {
         .filter(Boolean)
         .some((value) => String(value).toLocaleLowerCase("ru").includes(needle))
     })
-  }, [query.data, search, showAll])
+  }, [filters, query.data, search, warehouses])
 
   function invalidateTransfers() {
     void queryClient.invalidateQueries({
@@ -336,9 +535,13 @@ export function WarehouseTransfersPage() {
       document,
       line,
       references,
+      priority,
+      movementToShipment,
       idempotencyKey,
     }: TransferLineTarget & {
       references: TransferMediaReference[]
+      priority: number | null
+      movementToShipment: boolean
       idempotencyKey: string
     }) =>
       arriveWarehouseTransferLine({
@@ -348,6 +551,8 @@ export function WarehouseTransfersPage() {
         expectedVersion: document.version,
         expectedLineVersion: line.version,
         references,
+        priority,
+        movementToShipment,
         idempotencyKey,
       }),
     onSuccess: (result) => {
@@ -424,9 +629,47 @@ export function WarehouseTransfersPage() {
       : document
   }
 
+  function furnitureGate(document: TransferDocument) {
+    const required = needsFurnitureReadiness(document)
+    const readiness = furnitureReadinessByDocumentId.get(document.id)
+    const readinessQuery = furnitureReadinessQueryByDocumentId.get(document.id)
+    const loading =
+      required &&
+      readiness === undefined &&
+      (readinessQuery?.isLoading || readinessQuery?.isFetching)
+    const ready =
+      !required ||
+      readiness?.state === "NOT_REQUIRED" ||
+      readiness?.state === "READY"
+    const awaitingTask = readiness?.state === "AWAITING_TASK_COMPLETION"
+    const blockedTask = readiness?.state === "BLOCKED"
+    const taskHref = furnitureTaskHref(readiness)
+    const canOpenTask =
+      Boolean(taskHref) && (awaitingTask || blockedTask) && Boolean(accessToken)
+    const blockerLabel = awaitingTask
+      ? "Требуется закрыть задание"
+      : blockedTask
+        ? "Требуется решить задачу"
+        : loading
+          ? "Проверяем мебель…"
+          : readinessQuery?.isError
+            ? "Не удалось проверить мебель"
+            : "Проверяем мебель…"
+
+    return {
+      required,
+      readiness,
+      ready,
+      taskHref,
+      canOpenTask,
+      blockerLabel,
+    }
+  }
+
   function actions(document: TransferDocument) {
     const current = currentDocument(document)
     const canManage = canManageDocument(current)
+    const furniture = furnitureGate(current)
     return (
       <div className="flex flex-wrap gap-2">
         <Button
@@ -440,6 +683,17 @@ export function WarehouseTransfersPage() {
         >
           {expandedId === document.id ? "Скрыть состав" : "Показать состав"}
         </Button>
+        {canManage && furniture.required && !furniture.ready ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!furniture.canOpenTask}
+            onClick={() => furniture.taskHref && navigate(furniture.taskHref)}
+          >
+            {furniture.blockerLabel}
+          </Button>
+        ) : null}
         {canManage && current.state === "DRAFT" ? (
           <Button
             size="sm"
@@ -447,7 +701,7 @@ export function WarehouseTransfersPage() {
             disabled={cancelMutation.isPending}
             onClick={() => setCancelTarget(current)}
           >
-            Отменить документ
+            Отменить
           </Button>
         ) : null}
         {canManage &&
@@ -464,28 +718,20 @@ export function WarehouseTransfersPage() {
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       <PageToolbar>
-        <PageToolbarContent>
+        <PageToolbarContent className="max-w-xl">
           <Input
-            aria-label="Поиск перемещений"
-            placeholder="ID документа, бытовки, водителя или склада"
+            aria-label="Поиск по маршруту"
+            placeholder="Маршрут, бытовка, водитель или склад"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
         </PageToolbarContent>
         <PageToolbarActions>
-          <Button
-            variant="outline"
-            onClick={() => setShowAll((value) => !value)}
-          >
-            {showAll ? "Требуют действий" : "Показать все"}
-          </Button>
-          <Button
-            variant="outline"
-            disabled={!accessToken || !selectedWarehouseId || query.isFetching}
-            onClick={() => void query.refetch()}
-          >
-            {query.isFetching ? "Обновляется…" : "Обновить"}
-          </Button>
+          <LogisticsFiltersToggle
+            open={filtersOpen}
+            controls="logistics-transfer-filters"
+            onOpenChange={setFiltersOpen}
+          />
           {canCreateTransfer ? (
             <Button onClick={() => setCreateOpen(true)}>
               <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
@@ -494,6 +740,35 @@ export function WarehouseTransfersPage() {
           ) : null}
         </PageToolbarActions>
       </PageToolbar>
+
+      <div id="logistics-transfer-filters" hidden={!filtersOpen}>
+        <LogisticsDocumentFilters
+          filters={filters}
+          stateOptions={stateOptions}
+          dateLabel="Перемещение"
+          showSchedule={false}
+          extraFilters={[
+            {
+              label: "Маршрут",
+              options: routeOptions,
+              selected: filters.routes,
+              onApply: (routes) =>
+                setFilters((current) => ({ ...current, routes })),
+            },
+            {
+              label: "Водитель",
+              options: driverOptions,
+              selected: filters.drivers,
+              onApply: (drivers) =>
+                setFilters((current) => ({ ...current, drivers })),
+            },
+          ]}
+          onChange={(nextFilters) =>
+            setFilters((current) => ({ ...current, ...nextFilters }))
+          }
+          onReset={() => setFilters(EMPTY_FILTERS)}
+        />
+      </div>
 
       {!accessToken ? (
         <FieldError>
@@ -520,6 +795,7 @@ export function WarehouseTransfersPage() {
             expandedItemId={expandedId}
             renderExpandedRow={(document) => {
               const current = currentDocument(document)
+              const furniture = furnitureGate(current)
               return (
                 <div className="flex flex-col gap-2">
                   {detailQuery.error && expandedId === document.id ? (
@@ -531,8 +807,13 @@ export function WarehouseTransfersPage() {
                     </FieldError>
                   ) : null}
                   <TransferLines
+                    accessToken={accessToken}
                     document={current}
                     canManage={canManageDocument(current)}
+                    furnitureReadiness={furniture.readiness}
+                    furnitureReady={furniture.ready}
+                    furnitureBlockerLabel={furniture.blockerLabel}
+                    showDetails
                     departingLineId={
                       departMutation.isPending
                         ? (departMutation.variables?.line.id ?? null)
@@ -581,16 +862,14 @@ export function WarehouseTransfersPage() {
                     {warehouseLabel(
                       warehouses.find(
                         (warehouse) => warehouse.id === document.warehouseId
-                      ),
-                      document.warehouseId
+                      )
                     )}
                     {" → "}
                     {warehouseLabel(
                       warehouses.find(
                         (warehouse) =>
                           warehouse.id === document.destinationWarehouseId
-                      ),
-                      document.destinationWarehouseId
+                      )
                     )}
                   </span>
                 ),
@@ -632,8 +911,7 @@ export function WarehouseTransfersPage() {
                   {warehouseLabel(
                     warehouses.find(
                       (warehouse) => warehouse.id === document.warehouseId
-                    ),
-                    document.warehouseId
+                    )
                   )}
                 </CardTitle>
                 <CardDescription>
@@ -642,8 +920,7 @@ export function WarehouseTransfersPage() {
                     warehouses.find(
                       (warehouse) =>
                         warehouse.id === document.destinationWarehouseId
-                    ),
-                    document.destinationWarehouseId
+                    )
                   )}
                   {` · ${formatDate(document.scheduledDate)}`}
                 </CardDescription>
@@ -654,32 +931,43 @@ export function WarehouseTransfersPage() {
                 </CardAction>
               </CardHeader>
               <CardContent>
-                <TransferLines
-                  document={currentDocument(document)}
-                  canManage={canManageDocument(currentDocument(document))}
-                  departingLineId={
-                    departMutation.isPending
-                      ? (departMutation.variables?.line.id ?? null)
-                      : null
-                  }
-                  arrivingLineId={
-                    arriveMutation.isPending
-                      ? (arriveMutation.variables?.line.id ?? null)
-                      : null
-                  }
-                  onDepart={(line) =>
-                    departMutation.mutate({
-                      document: currentDocument(document),
-                      line,
-                    })
-                  }
-                  onArrive={(line) =>
-                    setArrivalTarget({
-                      document: currentDocument(document),
-                      line,
-                    })
-                  }
-                />
+                {(() => {
+                  const current = currentDocument(document)
+                  const furniture = furnitureGate(current)
+                  return (
+                    <TransferLines
+                      accessToken={accessToken}
+                      document={current}
+                      canManage={canManageDocument(current)}
+                      furnitureReadiness={furniture.readiness}
+                      furnitureReady={furniture.ready}
+                      furnitureBlockerLabel={furniture.blockerLabel}
+                      showDetails={expandedId === document.id}
+                      departingLineId={
+                        departMutation.isPending
+                          ? (departMutation.variables?.line.id ?? null)
+                          : null
+                      }
+                      arrivingLineId={
+                        arriveMutation.isPending
+                          ? (arriveMutation.variables?.line.id ?? null)
+                          : null
+                      }
+                      onDepart={(line) =>
+                        departMutation.mutate({
+                          document: current,
+                          line,
+                        })
+                      }
+                      onArrive={(line) =>
+                        setArrivalTarget({
+                          document: current,
+                          line,
+                        })
+                      }
+                    />
+                  )
+                })()}
               </CardContent>
               <CardFooter className="flex-wrap gap-2">
                 {actions(document)}
@@ -706,10 +994,17 @@ export function WarehouseTransfersPage() {
           pending={arriveMutation.isPending}
           error={commandError}
           onOpenChange={(open) => !open && setArrivalTarget(null)}
-          onSubmit={(references, idempotencyKey) =>
+          onSubmit={(
+            references,
+            priority,
+            movementToShipment,
+            idempotencyKey
+          ) =>
             arriveMutation.mutate({
               ...arrivalTarget,
               references,
+              priority,
+              movementToShipment,
               idempotencyKey,
             })
           }
@@ -717,7 +1012,6 @@ export function WarehouseTransfersPage() {
       ) : null}
       {reconcileTarget ? (
         <ReconcileTransferDialog
-          document={reconcileTarget}
           pending={reconcileMutation.isPending}
           error={commandError}
           onOpenChange={(open) => !open && setReconcileTarget(null)}
@@ -759,78 +1053,268 @@ export function WarehouseTransfersPage() {
 }
 
 function TransferLines({
+  accessToken,
   document,
   canManage,
+  furnitureReadiness,
+  furnitureReady,
+  furnitureBlockerLabel,
+  showDetails,
   departingLineId,
   arrivingLineId,
   onDepart,
   onArrive,
 }: {
+  accessToken: string | null
   document: TransferDocument
   canManage: boolean
+  furnitureReadiness: TransferFurnitureReadiness | undefined
+  furnitureReady: boolean
+  furnitureBlockerLabel: string
+  showDetails: boolean
   departingLineId: string | null
   arrivingLineId: string | null
   onDepart: (line: TransferLine) => void
   onArrive: (line: TransferLine) => void
 }) {
   const lineCommandPending = departingLineId !== null || arrivingLineId !== null
+  const cabinQueries = useQueries({
+    queries: document.lines.map((line) => ({
+      queryKey: ["rental-items", "warehouse-transfer-cabin", line.assetId],
+      queryFn: () => getAssetRentalItem(accessToken, line.assetId),
+      enabled: showDetails && Boolean(accessToken),
+    })),
+  })
+  const linkedTasks = useMemo(() => {
+    const taskByRentalItemId = new Map(
+      (furnitureReadiness?.tasks ?? []).map((task) => [task.rentalItemId, task])
+    )
+    return document.lines.flatMap((line) => {
+      const task = taskByRentalItemId.get(line.assetId)
+      return task ? [{ lineId: line.id, rentalItemId: line.assetId, task }] : []
+    })
+  }, [document.lines, furnitureReadiness])
+  const taskQueries = useQueries({
+    queries: linkedTasks.map(({ task }) => ({
+      queryKey: ["logistics", "equipment-movement-task", task.taskId],
+      queryFn: () => getEquipmentMovementTask(accessToken!, task.taskId),
+      enabled: showDetails && Boolean(accessToken),
+    })),
+  })
+  const cabinQueryByLineId = new Map(
+    document.lines.map((line, index) => [line.id, cabinQueries[index]])
+  )
+  const taskBindingByLineId = new Map(
+    linkedTasks.map((binding, index) => [
+      binding.lineId,
+      { task: binding.task, query: taskQueries[index] },
+    ])
+  )
+
   return (
     <div className="grid gap-2">
-      {document.lines.map((line) => (
-        <Card key={line.id} size="sm">
-          <CardHeader>
-            <CardTitle>Бытовка {line.lineNumber}</CardTitle>
-            <CardDescription>
-              Asset <span className="font-mono text-xs">{line.assetId}</span>
-            </CardDescription>
-            <CardAction>
-              <Badge variant="outline">
-                {TRANSFER_LINE_STATE_LABELS[line.state]}
-              </Badge>
-            </CardAction>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2 text-sm">
-            <span>
-              Версия бытовки: {line.assetVersion} · версия строки:{" "}
-              {line.version}
-            </span>
-            {canManage &&
-            line.state === "PENDING" &&
-            (document.state === "DRAFT" || document.state === "DEPARTING") ? (
-              <Button
-                type="button"
-                className="w-fit"
-                size="sm"
-                disabled={lineCommandPending}
-                onClick={() => onDepart(line)}
-              >
-                {departingLineId === line.id ? "Отправляется…" : "Отправить"}
-              </Button>
-            ) : null}
-            {line.state === "DEPARTED" ? (
-              <div className="flex flex-col items-start gap-2">
-                {canManage &&
-                (document.state === "IN_TRANSIT" ||
-                  document.state === "ARRIVING") ? (
+      {document.lines.map((line) => {
+        const cabinQuery = cabinQueryByLineId.get(line.id)
+        const taskBinding = taskBindingByLineId.get(line.id)
+        const canDepart =
+          canManage &&
+          line.state === "PENDING" &&
+          (document.state === "DRAFT" || document.state === "DEPARTING")
+        return (
+          <Card key={line.id} size="sm">
+            <CardHeader>
+              <CardTitle>
+                Бытовка{" "}
+                {cabinQuery?.data?.number ?? `строка ${line.lineNumber}`}
+              </CardTitle>
+              <CardDescription>Бытовка из складского состава</CardDescription>
+              <CardAction>
+                <Badge variant="outline">
+                  {TRANSFER_LINE_STATE_LABELS[line.state]}
+                </Badge>
+              </CardAction>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2 text-sm">
+              <span>
+                Версия бытовки: {line.assetVersion} · версия строки:{" "}
+                {line.version}
+              </span>
+              {showDetails ? (
+                <TransferCabinComposition
+                  accessToken={accessToken}
+                  rentalItemId={line.assetId}
+                  cabin={cabinQuery?.data}
+                  cabinLoading={
+                    cabinQuery?.isLoading === true ||
+                    cabinQuery?.isFetching === true
+                  }
+                  cabinError={cabinQuery?.error}
+                  task={taskBinding?.task}
+                  taskLoading={
+                    taskBinding?.query.isLoading === true ||
+                    taskBinding?.query.isFetching === true
+                  }
+                  taskError={taskBinding?.query.error}
+                  movementTask={taskBinding?.query.data}
+                />
+              ) : null}
+              {canDepart ? (
+                <div className="flex flex-col items-start gap-1">
                   <Button
                     type="button"
                     className="w-fit"
                     size="sm"
-                    disabled={lineCommandPending}
-                    onClick={() => onArrive(line)}
+                    disabled={lineCommandPending || !furnitureReady}
+                    onClick={() => onDepart(line)}
                   >
-                    {arrivingLineId === line.id ? "Принимается…" : "Принять"}
+                    {departingLineId === line.id
+                      ? "Отправляется…"
+                      : "Отправить"}
                   </Button>
-                ) : null}
-                <span className="text-muted-foreground">
-                  Перед приёмкой добавьте фотографии состояния бытовки на складе
-                  назначения.
-                </span>
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
-      ))}
+                  {!furnitureReady ? (
+                    <span className="text-muted-foreground">
+                      {furnitureBlockerLabel}
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
+              {line.state === "DEPARTED" ? (
+                <div className="flex flex-col items-start gap-2">
+                  {canManage &&
+                  (document.state === "IN_TRANSIT" ||
+                    document.state === "ARRIVING") ? (
+                    <Button
+                      type="button"
+                      className="w-fit"
+                      size="sm"
+                      disabled={lineCommandPending}
+                      onClick={() => onArrive(line)}
+                    >
+                      {arrivingLineId === line.id ? "Принимается…" : "Принять"}
+                    </Button>
+                  ) : null}
+                  <span className="text-muted-foreground">
+                    Перед приёмкой добавьте фотографии состояния бытовки на
+                    складе назначения.
+                  </span>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        )
+      })}
+    </div>
+  )
+}
+
+function TransferCabinComposition({
+  accessToken,
+  rentalItemId,
+  cabin,
+  cabinLoading,
+  cabinError,
+  task,
+  taskLoading,
+  taskError,
+  movementTask,
+}: {
+  accessToken: string | null
+  rentalItemId: string
+  cabin: RentalItemDto | undefined
+  cabinLoading: boolean
+  cabinError: unknown
+  task: TransferFurnitureTaskStatus | undefined
+  taskLoading: boolean
+  taskError: unknown
+  movementTask: Awaited<ReturnType<typeof getEquipmentMovementTask>> | undefined
+}) {
+  const taskLines =
+    movementTask?.lines.filter(
+      (line) =>
+        line.sourceRentalItemId === rentalItemId ||
+        line.targetRentalItemId === rentalItemId
+    ) ?? []
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-1">
+        <span>Текущее наполнение</span>
+        {!accessToken ? (
+          <FieldError>
+            Для загрузки текущего наполнения требуется авторизация.
+          </FieldError>
+        ) : cabinLoading ? (
+          <Skeleton className="h-4 w-3/4" />
+        ) : cabinError ? (
+          <FieldError>
+            {errorMessage(
+              cabinError,
+              "Не удалось загрузить текущее наполнение бытовки"
+            )}
+          </FieldError>
+        ) : cabin ? (
+          cabin.contentsItems.length > 0 ? (
+            <ul className="flex flex-col gap-1">
+              {cabin.contentsItems.map((item, index) => (
+                <li key={`${item.equipmentId ?? item.name}-${index}`}>
+                  {item.equipmentName ?? item.name} · {item.quantity}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <span className="text-muted-foreground">
+              В бытовке нет оборудования.
+            </span>
+          )
+        ) : (
+          <FieldError>
+            Не удалось получить текущее наполнение бытовки.
+          </FieldError>
+        )}
+      </div>
+      {task ? (
+        <div className="flex flex-col gap-1">
+          <span>Строки задания мебели для {task.unitNumber}</span>
+          {taskLoading ? (
+            <Skeleton className="h-4 w-3/4" />
+          ) : taskError ? (
+            <FieldError>
+              {errorMessage(
+                taskError,
+                "Не удалось загрузить строки задания мебели"
+              )}
+            </FieldError>
+          ) : movementTask ? (
+            taskLines.length > 0 ? (
+              <ul className="flex flex-col gap-1">
+                {taskLines.map((line) => (
+                  <li key={line.id}>
+                    {equipmentMovementLineLabel(line)} · количество:{" "}
+                    {line.quantity} ·{" "}
+                    {equipmentLocationLabel(
+                      line.sourceLocationKind,
+                      line.sourceRentalItemId,
+                      cabin
+                    )}
+                    {" → "}
+                    {equipmentLocationLabel(
+                      line.targetLocationKind,
+                      line.targetRentalItemId,
+                      cabin
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <span className="text-muted-foreground">
+                В задании нет строк для этой бытовки.
+              </span>
+            )
+          ) : (
+            <FieldError>Не удалось получить строки задания мебели.</FieldError>
+          )}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -851,30 +1335,84 @@ function ArrivalTransferDialog({
   error: string | null
   onSubmit: (
     references: TransferMediaReference[],
+    priority: number | null,
+    movementToShipment: boolean,
     idempotencyKey: string
   ) => void
   onOpenChange: (open: boolean) => void
 }) {
   const [references, setReferences] = useState<TransferMediaReference[]>([])
+  const [priority, setPriority] = useState("")
+  const [movementToShipment, setMovementToShipment] = useState(false)
   const attempt = useRef<CommandAttempt | null>(null)
   const [validationError, setValidationError] = useState<string | null>(null)
+  const preflightQuery = useQuery({
+    queryKey: [
+      ...WAREHOUSE_TRANSFERS_QUERY_KEY,
+      "arrival-preflight",
+      document.id,
+      document.version,
+      line.id,
+      line.version,
+    ],
+    queryFn: () =>
+      getWarehouseTransferArrivalPreflight({
+        accessToken: accessToken!,
+        documentId: document.id,
+        lineId: line.id,
+        expectedVersion: document.version,
+        expectedLineVersion: line.version,
+      }),
+    enabled: Boolean(accessToken),
+    retry: false,
+  })
+  const preflight: TransferArrivalPreflight | undefined = preflightQuery.data
+  const hasMissingQueues =
+    (preflight?.missingQueueDefinitionIds.length ?? 0) > 0
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (!preflight) {
+      setValidationError(
+        "Дождитесь проверки продолжения ремонта на складе назначения."
+      )
+      return
+    }
+    if (hasMissingQueues) {
+      setValidationError(
+        "Приёмка заблокирована: на складе назначения нет очередей, необходимых активному ремонту."
+      )
+      return
+    }
+    if (preflight.priorityRequired && !priority) {
+      setValidationError("Выберите приоритет продолжения ремонта.")
+      return
+    }
     if (references.length === 0 || references.length > 20) {
       setValidationError(
         "Добавьте хотя бы одну готовую фотографию приёмки строки."
       )
       return
     }
-    const signature = JSON.stringify(references)
+    const selectedPriority = preflight.priorityRequired
+      ? Number(priority)
+      : null
+    const selectedMovement =
+      preflight.activeRepairId !== null &&
+      preflight.movementToShipmentAvailable &&
+      movementToShipment
+    const signature = JSON.stringify([
+      references,
+      selectedPriority,
+      selectedMovement,
+    ])
     const idempotencyKey =
       attempt.current?.signature === signature
         ? attempt.current.idempotencyKey
         : commandIdentity()
     attempt.current = { signature, idempotencyKey }
     setValidationError(null)
-    onSubmit(references, idempotencyKey)
+    onSubmit(references, selectedPriority, selectedMovement, idempotencyKey)
   }
 
   return (
@@ -888,6 +1426,71 @@ function ArrivalTransferDialog({
               назначения.
             </DialogDescription>
           </DialogHeader>
+          {preflightQuery.isPending ? (
+            <FieldDescription className="py-4">
+              Проверяем активный ремонт и очереди склада назначения…
+            </FieldDescription>
+          ) : null}
+          {preflightQuery.isError ? (
+            <FieldError>
+              {errorMessage(
+                preflightQuery.error,
+                "Не удалось проверить продолжение ремонта"
+              )}
+            </FieldError>
+          ) : null}
+          {preflight?.activeRepairId ? (
+            <FieldSet className="py-4">
+              <FieldLegend variant="label">Продолжение ремонта</FieldLegend>
+              <FieldDescription>
+                Параметры задаёт сотрудник, принимающий бытовку на склад
+                назначения.
+              </FieldDescription>
+              <FieldGroup>
+                <Field>
+                  <FieldLabel htmlFor="transfer-repair-priority">
+                    Приоритет ремонта
+                  </FieldLabel>
+                  <Select value={priority} onValueChange={setPriority}>
+                    <SelectTrigger id="transfer-repair-priority">
+                      <SelectValue placeholder="Выберите приоритет" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="1">1 · Самый срочный</SelectItem>
+                        <SelectItem value="2">2 · Высокий</SelectItem>
+                        <SelectItem value="3">3 · Средний</SelectItem>
+                        <SelectItem value="4">4 · Низкий</SelectItem>
+                        <SelectItem value="5">
+                          5 · Самый неприоритетный
+                        </SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                {preflight.movementToShipmentAvailable ? (
+                  <Field orientation="horizontal">
+                    <Checkbox
+                      id="transfer-movement-to-shipment"
+                      checked={movementToShipment}
+                      onCheckedChange={(checked) =>
+                        setMovementToShipment(checked === true)
+                      }
+                    />
+                    <FieldLabel htmlFor="transfer-movement-to-shipment">
+                      Перемещение на отгрузку
+                    </FieldLabel>
+                  </Field>
+                ) : null}
+              </FieldGroup>
+            </FieldSet>
+          ) : null}
+          {hasMissingQueues ? (
+            <FieldError>
+              Приёмка заблокирована: подключите на складе назначения очереди
+              ремонта ({preflight?.missingQueueDefinitionIds.join(", ")}).
+            </FieldError>
+          ) : null}
           <FieldSet className="py-4">
             <FieldLegend variant="label">Фотографии приёмки</FieldLegend>
             <FieldDescription>
@@ -917,7 +1520,16 @@ function ArrivalTransferDialog({
             >
               Отмена
             </Button>
-            <Button type="submit" disabled={pending}>
+            <Button
+              type="submit"
+              disabled={
+                pending ||
+                preflightQuery.isPending ||
+                preflightQuery.isError ||
+                hasMissingQueues ||
+                (preflight?.priorityRequired === true && !priority)
+              }
+            >
               {pending ? "Принимается…" : "Принять"}
             </Button>
           </DialogFooter>
@@ -1376,13 +1988,11 @@ function CreateTransferDialog({
 }
 
 function ReconcileTransferDialog({
-  document,
   pending,
   error,
   onSubmit,
   onOpenChange,
 }: {
-  document: TransferDocument
   pending: boolean
   error: string | null
   onSubmit: (reason: string) => void
@@ -1401,8 +2011,8 @@ function ReconcileTransferDialog({
           <DialogHeader>
             <DialogTitle>Сверить перемещение</DialogTitle>
             <DialogDescription>
-              Logistics-service повторно проверит незавершённые эффекты
-              документа {document.id.slice(0, 8)}.
+              Logistics-service повторно проверит незавершённые эффекты этого
+              документа.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup className="py-4">

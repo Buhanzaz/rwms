@@ -42,6 +42,7 @@ public class AuthEventFactFactory {
         return new UserAuthorizationFact(
                 subject.getId(),
                 subject.isActive(),
+                subject.isMobileAppAccess(),
                 subject.getGlobalRole(),
                 profile.revision(),
                 grants);

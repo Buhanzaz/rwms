@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ApiError } from "@/lib/api-client"
 
 import type { PhotoCarouselPhoto } from "@/components/media/photo-carousel"
 import {
@@ -14,6 +13,11 @@ import {
   type ReadyMediaReference,
   type ServiceMediaOwner,
 } from "@/features/media/media-service"
+import {
+  ownerProofRetryDelay,
+  retryOwnerProofOperation,
+  shouldRetryOwnerProof,
+} from "@/features/media/owner-proof-retry"
 
 const mediaClient = createHttpMediaClient()
 const INITIAL_VARIANTS: readonly DerivedMediaVariantKind[] = ["MEDIUM"]
@@ -83,15 +87,6 @@ function mutationError(error: unknown) {
     : "Операция с фотографиями не выполнена"
 }
 
-function isRetryableOwnerMediaError(error: unknown) {
-  return (
-    error instanceof ApiError &&
-    (error.status === 409 ||
-      error.status === 503 ||
-      (error.status === 403 && error.code === "MEDIA_OWNER_PROOF_REQUIRED"))
-  )
-}
-
 export function useServiceOwnerMedia({
   accessToken,
   owner,
@@ -114,14 +109,16 @@ export function useServiceOwnerMedia({
   const [loadedVariants, setLoadedVariants] = useState<
     Record<string, LoadedAssetVariants>
   >({})
-  const [failedVariants, setFailedVariants] = useState<ReadonlySet<string>>(
-    () => new Set()
+  const [variantErrors, setVariantErrors] = useState<Record<string, unknown>>(
+    {}
   )
   const query = useQuery({
     queryKey,
     queryFn: () =>
       mediaClient.listOwnerMedia(accessToken!, owner, { limit: 100 }),
     enabled: enabled && Boolean(accessToken),
+    retry: shouldRetryOwnerProof,
+    retryDelay: ownerProofRetryDelay,
     refetchInterval: (result) =>
       result.state.data?.items.some(
         (asset) => asset.status === "UPLOADING" || asset.status === "PROCESSING"
@@ -151,6 +148,18 @@ export function useServiceOwnerMedia({
       ),
     [loadedVariants, signatures]
   )
+  const failedVariantKeys = useMemo(
+    () =>
+      Object.keys(variantErrors).filter((key) => {
+        const [assetId, signature] = key.split("|")
+        return signatures.get(assetId) === signature
+      }),
+    [signatures, variantErrors]
+  )
+  const previewError =
+    failedVariantKeys.length > 0
+      ? (variantErrors[failedVariantKeys[0]!] ?? null)
+      : null
 
   useEffect(() => {
     mounted.current = true
@@ -197,12 +206,18 @@ export function useServiceOwnerMedia({
         }
         return
       }
-      if (failedVariants.has(key)) return
       const existingRequest = inFlight.current.get(key)
       if (existingRequest) return existingRequest
 
-      const request = mediaClient
-        .createVariantObjectUrl(accessToken, owner, variant)
+      setVariantErrors((currentErrors) => {
+        if (!(key in currentErrors)) return currentErrors
+        const remaining = { ...currentErrors }
+        delete remaining[key]
+        return remaining
+      })
+      const request = retryOwnerProofOperation(() =>
+        mediaClient.createVariantObjectUrl(accessToken, owner, variant)
+      )
         .then((objectUrl) => {
           if (
             !mounted.current ||
@@ -232,26 +247,33 @@ export function useServiceOwnerMedia({
             }
           })
         })
-        .catch(() => {
+        .catch((error) => {
           if (!mounted.current) return
-          setFailedVariants((current) => {
-            const next = new Set(current)
-            next.add(key)
-            return next
-          })
+          setVariantErrors((currentErrors) => ({
+            ...currentErrors,
+            [key]: error,
+          }))
         })
         .finally(() => inFlight.current.delete(key))
       inFlight.current.set(key, request)
       return request
     },
-    [accessToken, currentLoaded, failedVariants, owner]
+    [accessToken, currentLoaded, owner]
   )
 
   const initialVariantKey = initialVariants.join("|")
   useEffect(() => {
     if (!enabled || !accessToken) return
-    for (const asset of readyImages) {
-      for (const variant of initialVariants) void ensureVariant(asset, variant)
+    let active = true
+    void Promise.resolve().then(() => {
+      if (!active) return
+      for (const asset of readyImages) {
+        for (const variant of initialVariants)
+          void ensureVariant(asset, variant)
+      }
+    })
+    return () => {
+      active = false
     }
   }, [
     accessToken,
@@ -276,9 +298,8 @@ export function useServiceOwnerMedia({
         )
       }
     },
-    retry: (failureCount, error) =>
-      failureCount < 5 && isRetryableOwnerMediaError(error),
-    retryDelay: (attempt) => Math.min(250 * 2 ** attempt, 2_000),
+    retry: shouldRetryOwnerProof,
+    retryDelay: ownerProofRetryDelay,
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
   })
   const rotateMutation = useMutation({
@@ -296,13 +317,15 @@ export function useServiceOwnerMedia({
       const signature = `${asset.id}:${asset.version}:${rotation}`
       const key = rotateKeys.current.get(signature) ?? crypto.randomUUID()
       rotateKeys.current.set(signature, key)
-      return mediaClient.rotate(
-        accessToken,
-        owner,
-        asset.id,
-        rotation,
-        asset.version,
-        key
+      return retryOwnerProofOperation(() =>
+        mediaClient.rotate(
+          accessToken,
+          owner,
+          asset.id,
+          rotation,
+          asset.version,
+          key
+        )
       )
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
@@ -313,12 +336,14 @@ export function useServiceOwnerMedia({
       const signature = `${asset.id}:${asset.version}`
       const key = deleteKeys.current.get(signature) ?? crypto.randomUUID()
       deleteKeys.current.set(signature, key)
-      return mediaClient.deleteAsset(
-        accessToken,
-        owner,
-        asset.id,
-        asset.version,
-        key
+      return retryOwnerProofOperation(() =>
+        mediaClient.deleteAsset(
+          accessToken,
+          owner,
+          asset.id,
+          asset.version,
+          key
+        )
       )
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
@@ -361,6 +386,11 @@ export function useServiceOwnerMedia({
     },
     [ensureVariant, readyImages]
   )
+  const retryPreviews = useCallback(() => {
+    for (const asset of readyImages) {
+      for (const variant of initialVariants) void ensureVariant(asset, variant)
+    }
+  }, [ensureVariant, initialVariants, readyImages])
 
   const logicalPhotoCount = assets.filter(
     (asset) => asset.kind === "IMAGE" && asset.status !== "DELETED"
@@ -378,6 +408,7 @@ export function useServiceOwnerMedia({
     readyReferences,
     query,
     requestFullscreen,
+    retryPreviews,
     upload: uploadMutation.mutateAsync,
     rotate: rotateMutation.mutateAsync,
     remove: deleteMutation.mutateAsync,
@@ -386,7 +417,10 @@ export function useServiceOwnerMedia({
       rotateMutation.isPending ||
       deleteMutation.isPending,
     error: operationError ? mutationError(operationError) : null,
+    previewError,
     previewUnavailable:
-      readyImages.length > 0 && photos.length === 0 && failedVariants.size > 0,
+      readyImages.length > 0 &&
+      photos.length === 0 &&
+      failedVariantKeys.length > 0,
   }
 }

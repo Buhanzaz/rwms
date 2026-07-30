@@ -139,5 +139,13 @@ rwms:
         instance-id: ${LOGISTICS_KAFKA_INSTANCE_ID:logistics-service}
     security:
       dev-auth-bypass: false
+    client-presentation:
+      token-secret: ${CLIENT_PRESENTATION_TOKEN_SECRET:rwms-local-client-presentation-secret-change-me}
+    rental-inquiry:
+      outbox-enabled: ${LOGISTICS_RENTAL_INQUIRY_OUTBOX_ENABLED:true}
+      outbox-delay: ${LOGISTICS_RENTAL_INQUIRY_OUTBOX_DELAY:1s}
+      outbox-initial-delay: ${LOGISTICS_RENTAL_INQUIRY_OUTBOX_INITIAL_DELAY:1s}
+      booking-retry-delay: ${LOGISTICS_RENTAL_BOOKING_RETRY_DELAY:2s}
+      booking-retry-initial-delay: ${LOGISTICS_RENTAL_BOOKING_RETRY_INITIAL_DELAY:2s}
   cors:
     allowed-origins: ${PANEL_ORIGIN}

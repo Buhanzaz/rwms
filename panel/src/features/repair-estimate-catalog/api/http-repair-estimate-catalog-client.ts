@@ -29,46 +29,43 @@ export const httpRepairEstimateCatalogClient: RepairEstimateCatalogClient = {
       "ACTIVE"
     )
     const active = versions.items.find(
-      (version) =>
-        version.lifecycle === "ACTIVE" && version.warehouseId === warehouseId
+      (version) => version.lifecycle === "ACTIVE"
     )
     if (!active) {
-      throw new Error("Для выбранного склада не активирован каталог ремонта.")
+      throw new Error("Единый каталог ремонта ещё не активирован.")
     }
 
     const [nodes, links] = await Promise.all([
       listMaintenanceCatalogNodes(accessToken, warehouseId, active.id),
       listMaintenanceCatalogLinks(accessToken, warehouseId, active.id),
     ])
-    const nodeById = new Map(nodes.map((node) => [node.id, node]))
     return {
       nodes: nodes.map((node) => ({
         id: node.id,
         catalogVersionId: node.catalogVersionId,
-        code: node.code,
         name: node.name,
+        displayColor: node.displayColor ?? null,
         nodeType: node.nodeType,
         parentId: node.parentNodeId,
-        parentCode: node.parentNodeId
-          ? (nodeById.get(node.parentNodeId)?.code ?? null)
-          : null,
         active: node.active,
         unit: node.unit,
         unitPrice: node.unitPrice,
         durationMinutes: node.nodeType === "WORK" ? node.durationMinutes : null,
         showInMainMenu: node.showInMainMenu,
         routeQueueKind:
-          node.routing?.queueKind === "MOVEMENT" ||
-          node.routing?.queueKind === "REPAIR" ||
-          node.routing?.queueKind === "HOLDING"
-            ? node.routing.queueKind
+          node.routing?.queueType === "MOVEMENT" ||
+          node.routing?.queueType === "REPAIR" ||
+          node.routing?.queueType === "HOLDING"
+            ? node.routing.queueType
             : null,
-        workQueueId: node.routing?.queueId ?? null,
-        workQueueCode: node.routing?.queueCode ?? null,
+        queueDefinitionId: node.routing?.queueId ?? null,
+        queueDefinitionName: node.routing?.queueName ?? null,
         includeInEstimate: node.includeInEstimate,
         commonItem: node.commonItem,
         furnitureCategory: Boolean(node.furnitureCategory),
         furnitureEquipment: node.furnitureEquipment ?? null,
+        forcesCapitalRepair: node.forcesCapitalRepair,
+        characteristic: node.characteristic,
         comment: node.comment,
       })),
       links: links.map((link) => ({

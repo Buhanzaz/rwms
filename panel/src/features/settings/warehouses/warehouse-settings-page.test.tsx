@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -40,15 +46,21 @@ vi.mock("@/hooks/use-warehouse", () => ({
 
 const warehouse = {
   id: "00000000-0000-4000-8000-000000000001",
-  serviceId: "00000000-0000-4000-8000-000000000001",
   version: 3,
-  code: "WH_NORTH",
   name: "Северный склад",
   city: "Санкт-Петербург",
   address: null,
   timeZone: "Europe/Moscow",
   active: true,
   sortOrder: 2,
+}
+
+const inactiveWarehouse = {
+  ...warehouse,
+  id: "00000000-0000-4000-8000-000000000003",
+  name: "Южный склад",
+  city: "Москва",
+  active: false,
 }
 
 function renderPage() {
@@ -90,6 +102,48 @@ afterEach(() => {
 })
 
 describe("WarehouseSettingsPage", () => {
+  it("keeps selected filters, search and create action when filters are collapsed", async () => {
+    const user = userEvent.setup()
+    listWarehouses.mockResolvedValue([warehouse, inactiveWarehouse])
+
+    renderPage()
+
+    await screen.findByRole("button", { name: "Статус" })
+    await user.click(screen.getByRole("button", { name: "Статус" }))
+    await user.click(screen.getByLabelText("Активные"))
+    await user.click(screen.getByRole("button", { name: "Применить" }))
+
+    await waitFor(() => expect(screen.queryByText("Южный склад")).toBeNull())
+
+    await user.click(
+      screen.getByRole("button", { name: "Скрыть фильтры складов" })
+    )
+
+    expect(
+      document
+        .getElementById("warehouse-settings-filters")
+        ?.hasAttribute("hidden")
+    ).toBe(true)
+    expect(
+      screen.getByRole("searchbox", { name: "Поиск складов" })
+    ).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Создать склад" })).toBeTruthy()
+
+    await user.click(
+      screen.getByRole("button", { name: "Показать фильтры складов" })
+    )
+
+    const filtersPanel = document.getElementById("warehouse-settings-filters")
+    if (filtersPanel === null) throw new Error("Не найдена панель фильтров")
+
+    await user.click(
+      within(filtersPanel).getByRole("button", { name: /Статус/ })
+    )
+    expect(screen.getByLabelText("Активные").getAttribute("data-state")).toBe(
+      "checked"
+    )
+  })
+
   it("creates a warehouse through the canonical idempotent command", async () => {
     const user = userEvent.setup()
     listWarehouses.mockResolvedValue([warehouse])
@@ -104,7 +158,6 @@ describe("WarehouseSettingsPage", () => {
     await user.click(
       await screen.findByRole("button", { name: "Создать склад" })
     )
-    await setField(user, "Код", "wh_south")
     await setField(user, "Название", "Южный склад")
     await setField(user, "Город", "Москва")
     await setField(user, "Временная зона", "Europe/Moscow")
@@ -115,7 +168,6 @@ describe("WarehouseSettingsPage", () => {
         "access-token",
         "00000000-0000-4000-8000-000000000002",
         {
-          code: "WH_SOUTH",
           name: "Южный склад",
           city: "Москва",
           address: null,
@@ -144,7 +196,6 @@ describe("WarehouseSettingsPage", () => {
         warehouse.id,
         warehouse.version,
         {
-          code: warehouse.code,
           name: warehouse.name,
           city: warehouse.city,
           address: warehouse.address,

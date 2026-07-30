@@ -57,6 +57,11 @@ public class LogisticsPayloadSafetyValidatorsConfiguration {
   }
 
   @Bean
+  RwmsKafkaPayloadSafetyValidator logisticsShipmentDraftUpdatedPayloadSafetyValidator() {
+    return new LogisticsPayloadSafetyValidator(LogisticsEventType.SHIPMENT_DRAFT_UPDATED);
+  }
+
+  @Bean
   RwmsKafkaPayloadSafetyValidator logisticsShipmentPreparationStartedPayloadSafetyValidator() {
     return new LogisticsPayloadSafetyValidator(LogisticsEventType.SHIPMENT_PREPARATION_STARTED);
   }

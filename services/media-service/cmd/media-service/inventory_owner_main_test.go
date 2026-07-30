@@ -31,7 +31,7 @@ func TestInventoryOwnerRuntimeIsRequiredAndTerminalExitStopsAllProcesses(t *test
 		}
 		err := superviseMediaRuntime(context.Background(), time.Second, processes,
 			func(context.Context) error { return nil })
-		if err == nil || !strings.Contains(err.Error(), "all five supervised processes") {
+		if err == nil || !strings.Contains(err.Error(), "all required supervised processes") {
 			t.Fatalf("missing owner consumer error = %v", err)
 		}
 		if ran.Load() {
@@ -63,6 +63,8 @@ func TestInventoryOwnerRuntimeIsRequiredAndTerminalExitStopsAllProcesses(t *test
 				}
 			}},
 			{name: "cabin-owner-consumer", run: peer},
+			{name: "task-board-entry-owner-proof-consumer", run: peer},
+			{name: "asset-import-worker", run: peer},
 			{name: "http-server", run: peer},
 		}
 		shutdownCalled := make(chan struct{}, 1)
@@ -88,8 +90,8 @@ func TestInventoryOwnerRuntimeIsRequiredAndTerminalExitStopsAllProcesses(t *test
 		case <-time.After(5 * time.Second):
 			t.Fatal("supervisor did not stop after owner terminal error")
 		}
-		if peersCancelled.Load() != 4 {
-			t.Fatalf("cancelled peers = %d, want 4", peersCancelled.Load())
+		if peersCancelled.Load() != 6 {
+			t.Fatalf("cancelled peers = %d, want 6", peersCancelled.Load())
 		}
 		select {
 		case <-shutdownCalled:
@@ -199,8 +201,9 @@ func installMainResidualMigrations(t testing.TB, ctx context.Context, pool *pgxp
 		{"restore runtime source guard", "V5_1__restore_runtime_source_guard.sql", mediamigration.V5_1},
 		{"service owner proofs and soft delete", "V6__service_owner_proofs_and_soft_delete.sql", mediamigration.V6},
 		{"dynamic cabin owner projection", "V7__dynamic_cabin_owner_projection.sql", mediamigration.V7},
+		{"task board worker media", "V8__task_board_worker_media.sql", mediamigration.V8},
 	}
-	versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7"}
+	versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8"}
 	for index, migration := range migrations {
 		if _, err := pool.Exec(ctx, string(migration.body)); err != nil {
 			t.Fatalf("apply command %s: %v", migration.script, err)

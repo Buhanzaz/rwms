@@ -1,23 +1,9 @@
-import { useState } from "react"
 import { FilterIcon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
-import { Badge } from "@/components/ui/badge"
+import { SearchableMultiSelectFilter } from "@/components/searchable-multi-select-filter"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Field,
-  FieldGroup,
-  FieldLabel,
-  FieldLegend,
-  FieldSet,
-} from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
 import {
   Select,
   SelectContent,
@@ -36,105 +22,115 @@ export type LogisticsDocumentFiltersState<TState extends string> = {
   dateTo: string
 }
 
+export type LogisticsDocumentExtraFilter = {
+  label: string
+  options: Array<{ value: string; label: string }>
+  selected: string[]
+  onApply: (values: string[]) => void
+}
+
+export function LogisticsFiltersToggle({
+  open,
+  controls,
+  onOpenChange,
+}: {
+  open: boolean
+  controls: string
+  onOpenChange: (open: boolean) => void
+}) {
+  return (
+    <Button
+      type="button"
+      size="icon"
+      variant={open ? "secondary" : "outline"}
+      aria-label={open ? "Скрыть фильтры" : "Показать фильтры"}
+      aria-controls={controls}
+      aria-expanded={open}
+      onClick={() => onOpenChange(!open)}
+    >
+      <HugeiconsIcon icon={FilterIcon} aria-hidden="true" />
+    </Button>
+  )
+}
+
+function DateFilter({
+  id,
+  label,
+  value,
+  onChange,
+}: {
+  id: string
+  label: string
+  value: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <label
+      htmlFor={id}
+      className="flex h-9 w-full items-center gap-2 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 sm:min-w-52 sm:w-auto dark:bg-input/30"
+    >
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <Input
+        id={id}
+        type="date"
+        value={value}
+        className="h-auto min-w-0 flex-1 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  )
+}
+
 export function LogisticsDocumentFilters<TState extends string>({
   filters,
   stateOptions,
+  stateLabel = "Статус",
+  stateAfterExtraFilters = false,
   dateLabel,
+  extraFilters = [],
+  showSchedule = true,
   onChange,
+  onReset,
 }: {
   filters: LogisticsDocumentFiltersState<TState>
   stateOptions: Array<{ value: TState; label: string }>
+  stateLabel?: string
+  stateAfterExtraFilters?: boolean
   dateLabel: string
+  extraFilters?: LogisticsDocumentExtraFilter[]
+  showSchedule?: boolean
   onChange: (filters: LogisticsDocumentFiltersState<TState>) => void
+  onReset?: () => void
 }) {
-  const [statusOpen, setStatusOpen] = useState(false)
-  const [draftStates, setDraftStates] = useState<TState[]>(filters.states)
   const active =
     filters.states.length > 0 ||
-    filters.schedule !== "ALL" ||
+    (showSchedule && filters.schedule !== "ALL") ||
     filters.dateFrom !== "" ||
-    filters.dateTo !== ""
-
-  function toggleState(value: TState) {
-    setDraftStates((current) =>
-      current.includes(value)
-        ? current.filter((candidate) => candidate !== value)
-        : [...current, value]
-    )
-  }
+    filters.dateTo !== "" ||
+    extraFilters.some((filter) => filter.selected.length > 0)
 
   return (
-    <div className="flex flex-wrap items-end gap-2 rounded-lg border bg-card p-2">
-      <Popover
-        open={statusOpen}
-        onOpenChange={(open) => {
-          setStatusOpen(open)
-          if (open) setDraftStates(filters.states)
-        }}
-      >
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            size="sm"
-            variant={filters.states.length > 0 ? "secondary" : "outline"}
-          >
-            Статус
-            {filters.states.length > 0 ? (
-              <Badge variant="outline">{filters.states.length}</Badge>
-            ) : null}
-            <HugeiconsIcon icon={FilterIcon} data-icon="inline-end" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent align="start" className="w-72">
-          <FieldSet>
-            <FieldLegend variant="label">Статусы</FieldLegend>
-            <FieldGroup className="max-h-64 overflow-auto">
-              {stateOptions.map((option) => (
-                <Field key={option.value} orientation="horizontal">
-                  <Checkbox
-                    id={`document-state-${option.value}`}
-                    checked={draftStates.includes(option.value)}
-                    onCheckedChange={() => toggleState(option.value)}
-                  />
-                  <FieldLabel
-                    htmlFor={`document-state-${option.value}`}
-                    className="font-normal"
-                  >
-                    {option.label}
-                  </FieldLabel>
-                </Field>
-              ))}
-            </FieldGroup>
-          </FieldSet>
-          <div className="mt-3 flex justify-between gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                setDraftStates([])
-                onChange({ ...filters, states: [] })
-                setStatusOpen(false)
-              }}
-            >
-              Очистить
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => {
-                onChange({ ...filters, states: draftStates })
-                setStatusOpen(false)
-              }}
-            >
-              Применить
-            </Button>
-          </div>
-        </PopoverContent>
-      </Popover>
-
-      <Field className="w-52">
-        <FieldLabel htmlFor="document-schedule-filter">Дата</FieldLabel>
+    <div className="flex flex-col items-stretch gap-2 rounded-lg border bg-card p-2 sm:flex-row sm:flex-wrap sm:items-center">
+      {!stateAfterExtraFilters ? (
+        <SearchableMultiSelectFilter
+          label={stateLabel}
+          options={stateOptions}
+          selected={filters.states}
+          onApply={(states) => onChange({ ...filters, states })}
+        />
+      ) : null}
+      {extraFilters.map((filter) => (
+        <SearchableMultiSelectFilter key={filter.label} {...filter} />
+      ))}
+      {stateAfterExtraFilters ? (
+        <SearchableMultiSelectFilter
+          label={stateLabel}
+          options={stateOptions}
+          selected={filters.states}
+          onApply={(states) => onChange({ ...filters, states })}
+        />
+      ) : null}
+      {showSchedule ? (
         <Select
           value={filters.schedule}
           onValueChange={(schedule) =>
@@ -144,7 +140,11 @@ export function LogisticsDocumentFilters<TState extends string>({
             })
           }
         >
-          <SelectTrigger id="document-schedule-filter">
+          <SelectTrigger
+            id="document-schedule-filter"
+            aria-label="Наличие даты"
+            className="h-9 w-full sm:min-w-44 sm:w-auto"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -155,43 +155,37 @@ export function LogisticsDocumentFilters<TState extends string>({
             </SelectGroup>
           </SelectContent>
         </Select>
-      </Field>
-
-      <Field className="w-40">
-        <FieldLabel htmlFor="document-date-from">{dateLabel} с</FieldLabel>
-        <Input
-          id="document-date-from"
-          type="date"
-          value={filters.dateFrom}
-          onChange={(event) =>
-            onChange({ ...filters, dateFrom: event.target.value })
-          }
-        />
-      </Field>
-      <Field className="w-40">
-        <FieldLabel htmlFor="document-date-to">{dateLabel} по</FieldLabel>
-        <Input
-          id="document-date-to"
-          type="date"
-          value={filters.dateTo}
-          onChange={(event) =>
-            onChange({ ...filters, dateTo: event.target.value })
-          }
-        />
-      </Field>
+      ) : null}
+      <DateFilter
+        id="document-date-from"
+        label={`${dateLabel} с`}
+        value={filters.dateFrom}
+        onChange={(dateFrom) => onChange({ ...filters, dateFrom })}
+      />
+      <DateFilter
+        id="document-date-to"
+        label={`${dateLabel} по`}
+        value={filters.dateTo}
+        onChange={(dateTo) => onChange({ ...filters, dateTo })}
+      />
       {active ? (
         <Button
           type="button"
-          size="sm"
+          size="default"
           variant="ghost"
-          onClick={() =>
+          className="h-9 w-full self-start sm:w-auto"
+          onClick={() => {
+            if (onReset) {
+              onReset()
+              return
+            }
             onChange({
               states: [],
               schedule: "ALL",
               dateFrom: "",
               dateTo: "",
             })
-          }
+          }}
         >
           Сбросить фильтры
         </Button>

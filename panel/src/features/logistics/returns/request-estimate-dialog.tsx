@@ -1,14 +1,15 @@
 import { useRef, useState } from "react"
-import { useMutation } from "@tanstack/react-query"
+import { useMutation, useQuery } from "@tanstack/react-query"
 import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
 
+import { getEquipmentItems } from "@/api/equipment-api"
+import { MobileAppRequiredDialog } from "@/components/mobile-app-required-dialog"
 import { Button } from "@/components/ui/button"
 import {
   Card,
   CardAction,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -30,14 +31,23 @@ import {
   FieldSet,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { requestReturnEstimate } from "@/features/logistics/returns/api"
 import type {
+  MediaReference,
   ReturnDocument,
   ReturnShortageLine,
 } from "@/features/logistics/returns/model"
-
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+import { logisticsReturnMediaOwner } from "@/features/media/media-service"
+import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
+import { useIsMobile } from "@/hooks/use-mobile"
 
 type CommandAttempt = {
   signature: string
@@ -53,6 +63,7 @@ type ShortageDraft = {
 type ReturnShortageLineDraft = {
   lineId: string
   lineNumber: number
+  references: MediaReference[]
   shortages: ShortageDraft[]
 }
 
@@ -68,6 +79,7 @@ function initialLines(document: ReturnDocument): ReturnShortageLineDraft[] {
   return document.lines.map((line) => ({
     lineId: line.id,
     lineNumber: line.lineNumber,
+    references: [],
     shortages: [emptyShortage()],
   }))
 }
@@ -81,24 +93,51 @@ function isConflict(cause: unknown) {
   )
 }
 
-export function RequestEstimateDialog({
-  accessToken,
-  document,
-  onOpenChange,
-  onSuccess,
-  onConflict,
-}: {
+type RequestEstimateDialogProps = {
   accessToken: string
   document: ReturnDocument
   onOpenChange: (open: boolean) => void
   onSuccess: (document: ReturnDocument) => void
   onConflict: (cause: unknown) => void
-}) {
+}
+
+export function RequestEstimateDialog(props: RequestEstimateDialogProps) {
+  const isMobile = useIsMobile()
+
+  if (isMobile) {
+    return (
+      <MobileAppRequiredDialog
+        open={true}
+        onOpenChange={props.onOpenChange}
+        operation="Создание сметы"
+      />
+    )
+  }
+
+  return <RequestEstimateDialogForm {...props} />
+}
+
+function RequestEstimateDialogForm({
+  accessToken,
+  document,
+  onOpenChange,
+  onSuccess,
+  onConflict,
+}: RequestEstimateDialogProps) {
   const [lines, setLines] = useState<ReturnShortageLineDraft[]>(() =>
     initialLines(document)
   )
   const [validationError, setValidationError] = useState<string | null>(null)
   const attempt = useRef<CommandAttempt | null>(null)
+  const equipmentQuery = useQuery({
+    queryKey: ["equipment", "return-shortages", document.warehouseId],
+    queryFn: () =>
+      getEquipmentItems(accessToken, { warehouseId: document.warehouseId }),
+    enabled: Boolean(accessToken),
+  })
+  const equipmentItems = (equipmentQuery.data ?? []).filter(
+    (item) => item.active
+  )
   const mutation = useMutation({
     mutationFn: (command: {
       lines: ReturnShortageLine[]
@@ -115,6 +154,22 @@ export function RequestEstimateDialog({
       if (isConflict(cause)) onConflict(cause)
     },
   })
+
+  function updateReferences(lineId: string, references: MediaReference[]) {
+    setLines((current) =>
+      current.map((line) =>
+        line.lineId !== lineId ||
+        (line.references.length === references.length &&
+          line.references.every(
+            (reference, index) =>
+              reference.mediaId === references[index]?.mediaId &&
+              reference.generation === references[index]?.generation
+          ))
+          ? line
+          : { ...line, references }
+      )
+    )
+  }
 
   function updateShortage(
     lineId: string,
@@ -165,28 +220,48 @@ export function RequestEstimateDialog({
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const commandLines: ReturnShortageLine[] = []
+    const mediaIds = new Set<string>()
 
     for (const line of lines) {
+      if (line.references.length === 0) {
+        setValidationError(
+          "Добавьте хотя бы одну готовую фотографию осмотра для каждой строки."
+        )
+        return
+      }
+      for (const reference of line.references) {
+        if (mediaIds.has(reference.mediaId)) {
+          setValidationError(
+            "Одна фотография не может относиться сразу к нескольким строкам возврата."
+          )
+          return
+        }
+        mediaIds.add(reference.mediaId)
+      }
       const equipmentIds = new Set<string>()
       const shortages = []
       for (const shortage of line.shortages) {
         const equipmentId = shortage.equipmentId.trim()
         const missingQuantity = Number(shortage.missingQuantity)
         if (
-          !UUID_PATTERN.test(equipmentId) ||
+          !equipmentItems.some((item) => item.id === equipmentId) ||
           !Number.isSafeInteger(missingQuantity) ||
           missingQuantity < 1 ||
           equipmentIds.has(equipmentId)
         ) {
           setValidationError(
-            "Для каждой строки укажите уникальные equipment UUID и целое недостающее количество не меньше 1."
+            "Для каждой строки выберите уникальное оборудование и укажите целое недостающее количество не меньше 1."
           )
           return
         }
         equipmentIds.add(equipmentId)
         shortages.push({ equipmentId, missingQuantity })
       }
-      commandLines.push({ lineId: line.lineId, shortages })
+      commandLines.push({
+        lineId: line.lineId,
+        references: line.references,
+        shortages,
+      })
     }
 
     setValidationError(null)
@@ -210,9 +285,10 @@ export function RequestEstimateDialog({
           <DialogHeader>
             <DialogTitle>Создать смету</DialogTitle>
             <DialogDescription>
-              Зафиксируйте недостающее оборудование для каждой server-issued
-              строки. Logistics-service сам выполнит settlement и передаст факт
-              в maintenance-service.
+              Загрузите фотографии осмотра и зафиксируйте недостающее
+              оборудование для каждой server-issued строки. Logistics-service
+              проверит принадлежность готовых фотографий, выполнит settlement и
+              передаст факт в maintenance-service.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup className="py-4">
@@ -221,24 +297,49 @@ export function RequestEstimateDialog({
                 Недостающее оборудование
               </FieldLegend>
               <FieldDescription>
-                Справочник оборудования не входит в публичный return contract;
-                используйте только подтверждённые equipment ID.
+                Выберите недостающее оборудование по названию из справочника
+                текущего склада.
               </FieldDescription>
+              {equipmentQuery.isError ? (
+                <FieldError>
+                  Не удалось загрузить справочник оборудования.
+                </FieldError>
+              ) : null}
+              {!equipmentQuery.isPending &&
+              !equipmentQuery.isError &&
+              equipmentItems.length === 0 ? (
+                <FieldError>
+                  В текущем складе нет доступного оборудования.
+                </FieldError>
+              ) : null}
               <FieldGroup>
                 {lines.map((line) => (
                   <Card key={line.lineId} size="sm">
                     <CardHeader>
                       <CardTitle>Строка {line.lineNumber}</CardTitle>
-                      <CardDescription className="font-mono text-xs">
-                        {line.lineId}
-                      </CardDescription>
                     </CardHeader>
                     <CardContent>
                       <FieldGroup>
+                        <ServiceOwnerPhotos
+                          accessToken={accessToken}
+                          owner={logisticsReturnMediaOwner(
+                            document.id,
+                            line.lineId,
+                            document.warehouseId
+                          )}
+                          readOnly={mutation.isPending}
+                          maxItems={20}
+                          title={`Фотографии строки ${line.lineNumber}`}
+                          onReadyReferencesChange={(references) =>
+                            updateReferences(line.lineId, references)
+                          }
+                        />
                         {line.shortages.map((shortage, index) => {
                           const equipmentInvalid =
                             shortage.equipmentId.length > 0 &&
-                            !UUID_PATTERN.test(shortage.equipmentId.trim())
+                            !equipmentItems.some(
+                              (item) => item.id === shortage.equipmentId
+                            )
                           const missingQuantity = Number(
                             shortage.missingQuantity
                           )
@@ -278,23 +379,56 @@ export function RequestEstimateDialog({
                                     <FieldLabel
                                       htmlFor={`return-equipment-${line.lineId}-${shortage.key}`}
                                     >
-                                      Equipment UUID
+                                      Оборудование
                                     </FieldLabel>
-                                    <Input
-                                      id={`return-equipment-${line.lineId}-${shortage.key}`}
-                                      aria-label={`Equipment UUID · строка ${line.lineNumber} · позиция ${index + 1}`}
-                                      aria-invalid={equipmentInvalid}
-                                      required
+                                    <Select
                                       value={shortage.equipmentId}
-                                      placeholder="00000000-0000-0000-0000-000000000000"
-                                      onChange={(event) =>
+                                      disabled={
+                                        mutation.isPending ||
+                                        equipmentQuery.isPending ||
+                                        equipmentQuery.isError
+                                      }
+                                      onValueChange={(equipmentId) =>
                                         updateShortage(
                                           line.lineId,
                                           shortage.key,
-                                          { equipmentId: event.target.value }
+                                          { equipmentId }
                                         )
                                       }
-                                    />
+                                    >
+                                      <SelectTrigger
+                                        id={`return-equipment-${line.lineId}-${shortage.key}`}
+                                        aria-label={`Оборудование · строка ${line.lineNumber} · позиция ${index + 1}`}
+                                        aria-invalid={equipmentInvalid}
+                                      >
+                                        <SelectValue placeholder="Выберите оборудование" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectGroup>
+                                          {equipmentItems
+                                            .filter(
+                                              (item) =>
+                                                item.id ===
+                                                  shortage.equipmentId ||
+                                                !line.shortages.some(
+                                                  (other) =>
+                                                    other.key !==
+                                                      shortage.key &&
+                                                    other.equipmentId ===
+                                                      item.id
+                                                )
+                                            )
+                                            .map((item) => (
+                                              <SelectItem
+                                                key={item.id}
+                                                value={item.id}
+                                              >
+                                                {item.name}
+                                              </SelectItem>
+                                            ))}
+                                        </SelectGroup>
+                                      </SelectContent>
+                                    </Select>
                                   </Field>
                                   <Field data-invalid={quantityInvalid}>
                                     <FieldLabel
@@ -364,7 +498,15 @@ export function RequestEstimateDialog({
             >
               Отмена
             </Button>
-            <Button type="submit" disabled={mutation.isPending}>
+            <Button
+              type="submit"
+              disabled={
+                mutation.isPending ||
+                equipmentQuery.isPending ||
+                equipmentQuery.isError ||
+                equipmentItems.length === 0
+              }
+            >
               {mutation.isPending ? "Создаётся…" : "Создать смету"}
             </Button>
           </DialogFooter>

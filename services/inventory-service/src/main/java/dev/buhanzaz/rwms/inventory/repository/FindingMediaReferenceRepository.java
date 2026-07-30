@@ -15,10 +15,17 @@ public interface FindingMediaReferenceRepository
 
   @org.springframework.data.jpa.repository.Query(
       """
-      select reference from FindingMediaReference reference, InventoryFinding finding
+      select reference
+        from FindingMediaReference reference, InventoryFinding finding,
+             InventoryMediaFactProjection media
        where finding.id in :findingIds
          and reference.findingId=finding.id
          and reference.findingRevision=finding.revision
+         and media.mediaId=reference.mediaId
+         and media.generation=reference.generation
+         and media.ownerType='INVENTORY_FINDING'
+         and media.ownerId=finding.id
+         and media.mediaStatus='READY'
        order by reference.findingId,reference.mediaId,reference.generation
       """)
   List<FindingMediaReference> findActiveByFindingIds(

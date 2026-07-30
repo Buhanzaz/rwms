@@ -36,6 +36,9 @@ public class SecurityConfiguration {
     http.authorizeHttpRequests(
         authorize -> {
           authorize.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();
+          authorize
+              .requestMatchers("/api/logistics/public/v1/client-presentations/**")
+              .permitAll();
           if (bypassEnabled) authorize.requestMatchers("/api/logistics/**").permitAll();
           authorize.anyRequest().authenticated();
         });

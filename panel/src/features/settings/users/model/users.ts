@@ -20,6 +20,8 @@ export type AdminUser = {
   timeZoneId: string | null
   active: boolean
   globalRole: UserGlobalRole
+  mobileAppAccess: boolean
+  rentalAccess: boolean
   warehouseAccesses: AdminUserWarehouseAccess[]
 }
 
@@ -31,6 +33,8 @@ export type AdminUserProfileInput = {
   timeZoneId: string | null
   active: boolean
   globalRole: UserGlobalRole
+  mobileAppAccess: boolean
+  rentalAccess: boolean
 }
 
 export type CreateAdminUserInput = AdminUserProfileInput & {
@@ -56,6 +60,16 @@ export const warehouseAccessLevelLabels: Record<WarehouseAccessLevel, string> =
     EDIT: "Редактирование",
     MANAGE: "Управление",
   }
+
+const MANAGER_APP_ROLES = new Set<UserGlobalRole>([
+  "SYSTEM_ADMIN",
+  "WMS_ADMIN",
+  "WAREHOUSE_MANAGER",
+])
+
+export function isManagerAppEligibleRole(role: UserGlobalRole) {
+  return MANAGER_APP_ROLES.has(role)
+}
 
 export function getAdminUserDisplayName(user: AdminUser) {
   const fullName = [user.firstName, user.lastName].filter(Boolean).join(" ")

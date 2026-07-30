@@ -64,7 +64,6 @@ import tools.jackson.databind.SerializationFeature;
 public class InventoryAssetService {
   private static final int MAX_PAGE_SIZE = 500;
   private static final Set<RentalItemStatus> CAPTURE_STATUSES = EnumSet.of(
-      RentalItemStatus.NEW,
       RentalItemStatus.BOOKED,
       RentalItemStatus.REPAIR,
       RentalItemStatus.WAITING_REPAIR_CHECK,
@@ -92,6 +91,7 @@ public class InventoryAssetService {
   private final InventoryAssetBoundaryRegistrar registrar;
   private final AssetEventStore events;
   private final WarehouseRegistryClient warehouses;
+  private final CabinCompositionService cabinComposition;
   private final ObjectMapper mapper;
   private final TransactionTemplate captureSnapshotTransaction;
 
@@ -109,6 +109,7 @@ public class InventoryAssetService {
       InventoryAssetBoundaryRegistrar registrar,
       AssetEventStore events,
       WarehouseRegistryClient warehouses,
+      CabinCompositionService cabinComposition,
       ObjectMapper mapper,
       PlatformTransactionManager transactionManager) {
     this.rentalItems = rentalItems;
@@ -124,6 +125,7 @@ public class InventoryAssetService {
     this.registrar = registrar;
     this.events = events;
     this.warehouses = warehouses;
+    this.cabinComposition = cabinComposition;
     this.mapper = mapper;
     this.captureSnapshotTransaction = new TransactionTemplate(transactionManager);
     this.captureSnapshotTransaction.setPropagationBehavior(
@@ -239,6 +241,27 @@ public class InventoryAssetService {
         .orElseGet(() -> new InventoryNumberResolutionResponse(display, key, false, null));
   }
 
+  /** Reads one current inventory-safe asset projection from one repeatable-read transaction. */
+  public InventoryAssetCurrentSnapshot currentAssetSnapshot(UUID assetId) {
+    return captureSnapshotTransaction.execute(ignored -> {
+      RentalItem item = rentalItems.findById(assetId)
+          .orElseThrow(() -> new AssetNotFoundException("Rental item was not found"));
+      String tenantSnapshot = activeTenantSnapshots(List.of(assetId)).get(assetId);
+      List<EquipmentContentResponse> contentsSnapshot = List.copyOf(
+          contentsByRentalItem(List.of(assetId)).getOrDefault(assetId, List.of()));
+      return new InventoryAssetCurrentSnapshot(
+          item.getId(),
+          item.getVersion(),
+          item.getWarehouseId(),
+          item.getStatus(),
+          item.getNumber(),
+          item.getIdentityMatchKey(),
+          tenantSnapshot,
+          passportSnapshot(item, tenantSnapshot),
+          contentsSnapshot);
+    });
+  }
+
   @Transactional(readOnly = true)
   public InventoryValidationResponse validateAssets(InventoryValidationRequest request) {
     if (Set.copyOf(request.assetIds()).size() != request.assetIds().size()) {
@@ -248,11 +271,13 @@ public class InventoryAssetService {
     Map<UUID, RentalItem> current = rentalItems.findAllById(ids).stream()
         .collect(Collectors.toMap(RentalItem::getId, Function.identity()));
     Map<UUID, String> tenants = activeTenantSnapshots(ids);
+    Map<UUID, List<EquipmentContentResponse>> contents = contentsByRentalItem(ids);
     List<InventoryValidationItem> values = ids.stream()
         .map(id -> {
           RentalItem item = current.get(id);
           return item == null
-              ? new InventoryValidationItem(id, false, null, null, null, null, null, null)
+              ? new InventoryValidationItem(
+                  id, false, null, null, null, null, null, null, null, null)
               : new InventoryValidationItem(
                   id,
                   true,
@@ -261,7 +286,9 @@ public class InventoryAssetService {
                   item.getStatus(),
                   item.getNumber(),
                   item.getIdentityMatchKey(),
-                  tenants.get(id));
+                  tenants.get(id),
+                  passportSnapshot(item, tenants.get(id)),
+                  List.copyOf(contents.getOrDefault(id, List.of())));
         })
         .toList();
     return new InventoryValidationResponse(now(), canonicalHash(values), values);
@@ -272,14 +299,21 @@ public class InventoryAssetService {
       InventorySourceAssetRequest request) {
     String passportJson = write(request.passport() == null ? Map.of() : request.passport());
     String tagsJson = write(request.tags() == null ? List.of() : request.tags());
+    CabinCompositionService.CabinSelection selection = cabinComposition.requireSelection(
+        request.rentalTypeId(),
+        request.dimensionId(),
+        request.finishingId(),
+        request.characteristicIds());
+    CabinCompositionService.CategorySelection category =
+        cabinComposition.requireCategory(request.category());
     RentalItem candidate = RentalItem.createFromInventory(
         request.warehouseId(),
         request.number(),
-        request.rentalType(),
-        request.dimensions(),
-        request.finishing(),
-        request.category(),
-        request.characteristics(),
+        selection.rentalTypeId(),
+        selection.dimensionId(),
+        selection.finishingId(),
+        category.id(),
+        category.name(),
         request.linoleum(),
         passportJson,
         tagsJson);
@@ -325,6 +359,8 @@ public class InventoryAssetService {
     }
 
     RentalItem saved = rentalItems.saveAndFlush(candidate);
+    cabinComposition.replaceRentalItemCharacteristics(
+        saved.getId(), selection.characteristicIds());
     events.initialize(
         AssetAggregateType.RENTAL_ITEM,
         saved.getId(),
@@ -356,33 +392,8 @@ public class InventoryAssetService {
             warehouseId, CAPTURE_STATUSES);
     List<UUID> rentalItemIds = items.stream().map(RentalItem::getId).toList();
     Map<UUID, String> tenants = activeTenantSnapshots(rentalItemIds);
-    List<EquipmentBalance> balances = rentalItemIds.isEmpty()
-        ? List.of()
-        : equipmentBalances.findAllByRentalItemIdInAndQuantityGreaterThanAndLocationKindIn(
-            rentalItemIds, 0, CABIN_BALANCE_KINDS);
-    Map<UUID, EquipmentCatalogItem> equipmentItems = equipmentCatalog
-        .findAllById(balances.stream().map(EquipmentBalance::getEquipmentId).collect(Collectors.toSet()))
-        .stream()
-        .collect(Collectors.toMap(EquipmentCatalogItem::getId, item -> item));
-    Map<UUID, List<EquipmentContentResponse>> contentsByRentalItem = balances.stream()
-        .map(balance -> {
-          EquipmentCatalogItem item = requireEquipment(equipmentItems, balance.getEquipmentId());
-          return new EquipmentContentWithOwner(
-              balance.getRentalItemId(),
-              new EquipmentContentResponse(
-                  balance.getEquipmentId(),
-                  item.getCode(),
-                  item.getName(),
-                  balance.getQuantity(),
-                  balance.getLocationKind()));
-        })
-        .sorted(Comparator.comparing((EquipmentContentWithOwner value) ->
-                value.content().equipmentCode())
-            .thenComparing(value -> value.content().equipmentId()))
-        .collect(Collectors.groupingBy(
-            EquipmentContentWithOwner::rentalItemId,
-            LinkedHashMap::new,
-            Collectors.mapping(EquipmentContentWithOwner::content, Collectors.toList())));
+    Map<UUID, List<EquipmentContentResponse>> contentsByRentalItem =
+        contentsByRentalItem(rentalItemIds);
 
     List<CaptureMemberRow> result = new ArrayList<>(items.size());
     for (int index = 0; index < items.size(); index++) {
@@ -401,6 +412,36 @@ public class InventoryAssetService {
     return List.copyOf(result);
   }
 
+  private Map<UUID, List<EquipmentContentResponse>> contentsByRentalItem(
+      List<UUID> rentalItemIds) {
+    if (rentalItemIds.isEmpty()) return Map.of();
+    List<EquipmentBalance> balances =
+        equipmentBalances.findAllByRentalItemIdInAndQuantityGreaterThanAndLocationKindIn(
+            rentalItemIds, 0, CABIN_BALANCE_KINDS);
+    Map<UUID, EquipmentCatalogItem> equipmentItems = equipmentCatalog
+        .findAllById(balances.stream().map(EquipmentBalance::getEquipmentId).collect(Collectors.toSet()))
+        .stream()
+        .collect(Collectors.toMap(EquipmentCatalogItem::getId, item -> item));
+    return balances.stream()
+        .map(balance -> {
+          EquipmentCatalogItem item = requireEquipment(equipmentItems, balance.getEquipmentId());
+          return new EquipmentContentWithOwner(
+              balance.getRentalItemId(),
+              new EquipmentContentResponse(
+                  balance.getEquipmentId(),
+                  item.getName(),
+                  balance.getQuantity(),
+                  balance.getLocationKind()));
+        })
+        .sorted(Comparator.comparing((EquipmentContentWithOwner value) ->
+                value.content().equipmentName())
+            .thenComparing(value -> value.content().equipmentId()))
+        .collect(Collectors.groupingBy(
+            EquipmentContentWithOwner::rentalItemId,
+            LinkedHashMap::new,
+            Collectors.mapping(EquipmentContentWithOwner::content, Collectors.toList())));
+  }
+
   private static EquipmentCatalogItem requireEquipment(
       Map<UUID, EquipmentCatalogItem> items, UUID equipmentId) {
     EquipmentCatalogItem value = items.get(equipmentId);
@@ -411,12 +452,30 @@ public class InventoryAssetService {
   }
 
   private Map<String, Object> passportSnapshot(RentalItem item, String tenantSnapshot) {
+    CabinCompositionService.CabinComposition composition =
+        cabinComposition.compositionsFor(List.of(item)).get(item.getId());
     Map<String, Object> value = new LinkedHashMap<>();
-    value.put("rentalType", item.getRentalType());
-    value.put("dimensions", item.getDimensions());
-    value.put("finishing", item.getFinishing());
+    value.put(
+        "rentalType",
+        composition == null || composition.rentalType() == null
+            ? null
+            : composition.rentalType().name());
+    value.put(
+        "dimensions",
+        composition == null || composition.dimensions() == null
+            ? null
+            : composition.dimensions().name());
+    value.put(
+        "finishing",
+        composition == null || composition.finishing() == null
+            ? null
+            : composition.finishing().name());
     value.put("category", item.getCategory());
-    value.put("characteristics", item.getCharacteristics());
+    value.put(
+        "characteristics",
+        composition == null
+            ? List.of()
+            : composition.characteristics().stream().map(CabinCatalogValueResponse::name).toList());
     value.put("linoleum", item.getLinoleum());
     value.put("passport", read(item.getPassportJson(), new TypeReference<Map<String, Object>>() {}));
     value.put("tags", read(item.getTagsJson(), new TypeReference<List<String>>() {}));
@@ -491,11 +550,11 @@ public class InventoryAssetService {
     value.put("warehouseId", item.getWarehouseId());
     value.put("displayCanonicalNumber", item.getNumber());
     value.put("identityMatchKey", item.getIdentityMatchKey());
-    value.put("rentalType", item.getRentalType());
-    value.put("dimensions", item.getDimensions());
-    value.put("finishing", item.getFinishing());
+    value.put("rentalTypeId", item.getRentalTypeId());
+    value.put("dimensionId", item.getDimensionId());
+    value.put("finishingId", item.getFinishingId());
     value.put("category", item.getCategory());
-    value.put("characteristics", item.getCharacteristics());
+    value.put("characteristicIds", request.characteristicIds());
     value.put("linoleum", item.getLinoleum());
     value.put("passport", request.passport() == null ? Map.of() : request.passport());
     value.put("tags", request.tags() == null ? List.of() : request.tags());
@@ -512,17 +571,30 @@ public class InventoryAssetService {
 
   private Map<String, ?> rentalSnapshot(RentalItem item) {
     Map<String, Object> value = new LinkedHashMap<>();
+    CabinCompositionService.CabinComposition composition =
+        cabinComposition.compositionsFor(List.of(item)).get(item.getId());
     value.put("rentalItemId", item.getId().toString());
     value.put("version", item.getVersion());
     value.put("warehouseId", item.getWarehouseId().toString());
     value.put("number", item.getNumber());
     value.put("identityMatchKey", item.getIdentityMatchKey());
     value.put("status", item.getStatus().name());
-    value.put("rentalType", item.getRentalType());
-    value.put("dimensions", item.getDimensions());
-    value.put("finishing", item.getFinishing());
+    value.put(
+        "rentalTypeId",
+        item.getRentalTypeId() == null ? null : item.getRentalTypeId().toString());
+    value.put(
+        "dimensionId", item.getDimensionId() == null ? null : item.getDimensionId().toString());
+    value.put(
+        "finishingId", item.getFinishingId() == null ? null : item.getFinishingId().toString());
     value.put("category", item.getCategory());
-    value.put("characteristics", item.getCharacteristics());
+    value.put(
+        "characteristicIds",
+        composition == null
+            ? List.of()
+            : composition.characteristics().stream()
+                .map(CabinCatalogValueResponse::id)
+                .map(UUID::toString)
+                .toList());
     value.put("linoleum", item.getLinoleum());
     value.put("generalComment", item.getGeneralComment());
     value.put("passport", read(item.getPassportJson(), new TypeReference<Map<String, Object>>() {}));

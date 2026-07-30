@@ -143,6 +143,21 @@ func TestMigratedCabinOwnerBindingsAuthorizeOnlyTheirCanonicalWarehouseIntegrati
 		readyCovers[0].Previews[1].Variant.Variant != media.VariantSmall {
 		t.Fatalf("ReadCabinCovers(ready variants) = %#v, %v", readyCovers, err)
 	}
+	var presentationSnapshots []CabinPresentationSnapshotRecord
+	if err := repository.ReadCabinPresentationSnapshots(ctx, warehouseID, []uuid.UUID{cabinID},
+		func(records []CabinPresentationSnapshotRecord) error {
+			presentationSnapshots = records
+			return nil
+		}); err != nil || len(presentationSnapshots) != 1 || presentationSnapshots[0].CabinID != cabinID ||
+		len(presentationSnapshots[0].Photos) != 2 ||
+		presentationSnapshots[0].Photos[0].MediaID != command.MediaID ||
+		presentationSnapshots[0].Photos[0].Generation != 1 || presentationSnapshots[0].Photos[0].SortOrder != 0 ||
+		!presentationSnapshots[0].Photos[0].HasSmall || !presentationSnapshots[0].Photos[0].HasLarge ||
+		presentationSnapshots[0].Photos[1].MediaID != secondCommand.MediaID ||
+		presentationSnapshots[0].Photos[1].Generation != 1 || presentationSnapshots[0].Photos[1].SortOrder != 1 ||
+		!presentationSnapshots[0].Photos[1].HasSmall || presentationSnapshots[0].Photos[1].HasLarge {
+		t.Fatalf("ReadCabinPresentationSnapshots(ready variants) = %#v, %v", presentationSnapshots, err)
+	}
 
 	foreignCommand := createCommand(cabinID, foreignWarehouseID, media.KindImage, 1)
 	foreignCommand.OwnerType = OwnerTypeCabin

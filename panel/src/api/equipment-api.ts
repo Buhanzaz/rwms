@@ -8,10 +8,8 @@ import type {
   EquipmentItemDto,
   EquipmentItemsQueryParams,
   EquipmentMovementDto,
-  EquipmentWriteOffSummaryDto,
   DisposeEquipmentInput,
 } from "@/types/equipment"
-import type { WarehouseInventoryStockItemDto } from "@/types/warehouse-location"
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -29,7 +27,6 @@ type JsonRecord = Record<string, unknown>
 type AssetEquipmentDto = {
   id: string
   version: number
-  code: string
   name: string
   category: EquipmentCategory
   active: boolean
@@ -151,7 +148,6 @@ function parseEquipment(value: unknown): AssetEquipmentDto {
   return {
     id: uuid(source.id),
     version: nonNegativeInteger(source.version),
-    code: string(source.code),
     name: string(source.name),
     category: enumValue(source.category, EQUIPMENT_CATEGORIES),
     active: boolean(source.active),
@@ -222,7 +218,6 @@ function parseEquipmentItem(value: unknown): EquipmentItemDto {
     id: equipment.id,
     version: equipment.version,
     warehouseId: totals.warehouseId,
-    code: equipment.code,
     name: equipment.name,
     category: equipment.category,
     active: equipment.active,
@@ -254,7 +249,6 @@ function parseEquipmentDisposition(value: unknown): EquipmentDispositionDto {
     quantity: nonNegativeInteger(movement.quantity),
     kind: string(movement.kind),
     occurredAt: dateTime(movement.occurredAt),
-    equipmentCode: string(source.equipmentCode),
     equipmentName: string(source.equipmentName),
   }
 }
@@ -286,26 +280,10 @@ function searchByName<T extends { name?: string; equipmentName?: string }>(
   })
 }
 
-export function getEquipmentItems(
-  params: EquipmentItemsQueryParams
-): Promise<EquipmentItemDto[]>
-export function getEquipmentItems(
+export async function getEquipmentItems(
   accessToken: string | null,
   params: EquipmentItemsQueryParams
-): Promise<EquipmentItemDto[]>
-export async function getEquipmentItems(
-  accessTokenOrParams: string | null | EquipmentItemsQueryParams,
-  maybeParams?: EquipmentItemsQueryParams
 ): Promise<EquipmentItemDto[]> {
-  const legacyParamsCall =
-    accessTokenOrParams !== null && typeof accessTokenOrParams === "object"
-  const accessToken = legacyParamsCall ? null : accessTokenOrParams
-  const params = legacyParamsCall ? accessTokenOrParams : maybeParams
-
-  if (!params) {
-    throw new Error("Не задан склад для оборудования.")
-  }
-
   const endpoint = new URL(`${assetApiBaseUrl()}/equipment`)
   endpoint.searchParams.set("warehouseId", params.warehouseId)
 
@@ -340,7 +318,7 @@ export async function disposeEquipment(
   input: DisposeEquipmentInput
 ): Promise<EquipmentMovementDto> {
   if (!UUID_PATTERN.test(idempotencyKey)) {
-    throw new Error("Для списания нужен UUID Idempotency-Key.")
+    throw new Error("Не удалось подготовить безопасный ключ команды списания.")
   }
 
   if (
@@ -380,74 +358,12 @@ export async function disposeEquipment(
   return parseMovement(response)
 }
 
-export function listEquipmentDispositionItems(params: {
-  warehouseId: string
-  search?: string
-}): Promise<EquipmentDispositionListItemDto[]>
-export function listEquipmentDispositionItems(
+export async function listEquipmentDispositionItems(
   accessToken: string | null,
   params: { warehouseId: string; search?: string }
-): Promise<EquipmentDispositionListItemDto[]>
-export async function listEquipmentDispositionItems(
-  accessTokenOrParams: string | null | { warehouseId: string; search?: string },
-  maybeParams?: { warehouseId: string; search?: string }
 ): Promise<EquipmentDispositionListItemDto[]> {
-  const legacyParamsCall =
-    accessTokenOrParams !== null && typeof accessTokenOrParams === "object"
-  const accessToken = legacyParamsCall ? null : accessTokenOrParams
-  const params = legacyParamsCall ? accessTokenOrParams : maybeParams
-
-  if (!params) {
-    throw new Error("Не задан склад для списаний оборудования.")
-  }
-
   return searchByName(
     await listEquipmentDispositions(accessToken, params.warehouseId),
     params.search
   ).sort((left, right) => right.occurredAt.localeCompare(left.occurredAt))
-}
-
-export function getEquipmentWarehouseStock(
-  warehouseId: string,
-  accessToken: string | null = null
-): Promise<WarehouseInventoryStockItemDto[]> {
-  return getEquipmentItems(accessToken, { warehouseId }).then((items) =>
-    items
-      .filter((item) => item.availableStock > 0)
-      .map((item) => ({
-        name: item.name,
-        availableQuantity: item.availableStock,
-      }))
-  )
-}
-
-export function listEquipmentWriteOffs(params: {
-  warehouseId: string
-  search?: string
-}): Promise<EquipmentWriteOffSummaryDto[]>
-export function listEquipmentWriteOffs(
-  accessToken: string | null,
-  params: { warehouseId: string; search?: string }
-): Promise<EquipmentWriteOffSummaryDto[]>
-export async function listEquipmentWriteOffs(
-  accessTokenOrParams: string | null | { warehouseId: string; search?: string },
-  maybeParams?: { warehouseId: string; search?: string }
-): Promise<EquipmentWriteOffSummaryDto[]> {
-  const legacyParamsCall =
-    accessTokenOrParams !== null && typeof accessTokenOrParams === "object"
-  const accessToken = legacyParamsCall ? null : accessTokenOrParams
-  const params = legacyParamsCall ? accessTokenOrParams : maybeParams
-
-  if (!params) {
-    throw new Error("Не задан склад для оборудования.")
-  }
-
-  return (await getEquipmentItems(accessToken, params))
-    .filter((item) => item.writtenOffQuantity > 0)
-    .map((item) => ({
-      id: item.id,
-      warehouseId: item.warehouseId,
-      name: item.name,
-      writtenOffQuantity: item.writtenOffQuantity,
-    }))
 }

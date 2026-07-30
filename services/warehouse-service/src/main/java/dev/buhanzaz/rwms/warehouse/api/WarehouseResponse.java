@@ -5,7 +5,6 @@ import java.util.UUID;
 public record WarehouseResponse(
     UUID id,
     long version,
-    String code,
     String name,
     String city,
     String address,

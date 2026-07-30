@@ -4,6 +4,7 @@ import dev.buhanzaz.rwms.logistics.order.domain.ClientType;
 import dev.buhanzaz.rwms.logistics.order.domain.RentalOrderStatus;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
+import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -18,11 +19,15 @@ public final class OrderApiModels {
 
   public record NewClientInput(
       @NotNull ClientType clientType,
-      @NotBlank @Size(max = 512) String displayName) {}
+      @NotBlank @Size(max = 512) String displayName,
+      @NotBlank @Size(max = 32) String phone,
+      @Email @Size(max = 320) String email) {}
 
   public record CreateClientRequest(
       @NotNull ClientType clientType,
-      @NotBlank @Size(max = 512) String displayName) {}
+      @NotBlank @Size(max = 512) String displayName,
+      @NotBlank @Size(max = 32) String phone,
+      @Email @Size(max = 320) String email) {}
 
   public record CreateOrderRequest(UUID clientId, @Valid NewClientInput newClient) {
     @AssertTrue(message = "Exactly one of clientId or newClient is required")
@@ -54,6 +59,8 @@ public final class OrderApiModels {
       long version,
       ClientType type,
       String displayName,
+      String phone,
+      String email,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {}
 
@@ -90,13 +97,12 @@ public final class OrderApiModels {
 
   public record OrderEquipmentContentResponse(
       UUID equipmentId,
-      String equipmentCode,
       String equipmentName,
       long quantity,
       String locationKind) {}
 
   public record OrderDesiredEquipmentResponse(
-      UUID equipmentId, String equipmentCode, String equipmentName, long quantity) {}
+      UUID equipmentId, String equipmentName, long quantity) {}
 
   public record OrderRentalItemResponse(
       UUID id,

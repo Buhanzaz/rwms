@@ -67,6 +67,26 @@ public class OrderAuthorizer {
     }
   }
 
+  /**
+   * Checks the actor-side part of a booking edit. The lifecycle check for a
+   * saved booking's shipment and furniture task is performed under a document
+   * lock by {@code RentalOrderService}.
+   */
+  public void requireEditable(OrderActor actor, RentalOrder order) {
+    requireVisible(actor, order);
+    if (!actor.writeScope()) {
+      throw new AccessDeniedException("Required USER scope is missing");
+    }
+    if (order.getStatus() != RentalOrderStatus.DRAFT
+        && order.getStatus() != RentalOrderStatus.SAVED) {
+      throw new OrderProblemException(
+          HttpStatus.CONFLICT, "ORDER_NOT_EDITABLE", "Заказ больше нельзя редактировать");
+    }
+    if (order.getWarehouseId() != null && !canEditWarehouse(actor, order.getWarehouseId())) {
+      throw new AccessDeniedException("Insufficient warehouse access");
+    }
+  }
+
   public void requireWarehouseRead(OrderActor actor, UUID warehouseId) {
     if (!canReadWarehouse(actor, warehouseId)) {
       throw new AccessDeniedException("Insufficient warehouse access");
@@ -98,7 +118,8 @@ public class OrderAuthorizer {
   public boolean canEdit(OrderActor actor, RentalOrder order) {
     return actor.writeScope()
         && isVisible(actor, order)
-        && order.getStatus() == RentalOrderStatus.DRAFT
+        && (order.getStatus() == RentalOrderStatus.DRAFT
+            || order.getStatus() == RentalOrderStatus.SAVED)
         && (order.getWarehouseId() == null
             || canEditWarehouse(actor, order.getWarehouseId()));
   }
@@ -123,6 +144,7 @@ public class OrderAuthorizer {
           Set.of(),
           true,
           false,
+          true,
           true);
     }
     if (jwt == null || !"USER".equals(jwt.getClaimAsString("principal_type"))) {
@@ -148,6 +170,15 @@ public class OrderAuthorizer {
     if (displayName == null || displayName.isBlank()) displayName = subjectId.toString();
     boolean global = "SYSTEM_ADMIN".equals(role) || "WMS_ADMIN".equals(role);
     boolean local = "WAREHOUSE_MANAGER".equals(role);
+    Object rentalAccessClaim = jwt.getClaims().get("rentalAccess");
+    boolean rentalAccess =
+        rentalAccessClaim instanceof Boolean booleanValue
+            ? booleanValue
+            : rentalAccessClaim instanceof String stringValue
+                && Boolean.parseBoolean(stringValue);
+    if (!rentalAccess) {
+      throw new AccessDeniedException("Rental access is required");
+    }
     return new OrderActor(
         subjectId,
         role,
@@ -156,7 +187,8 @@ public class OrderAuthorizer {
         Set.copyOf(grants.editable()),
         global,
         local,
-        scopes.contains("rwms.write"));
+        scopes.contains("rwms.write"),
+        true);
   }
 
   private static WarehouseGrants grants(Jwt jwt) {

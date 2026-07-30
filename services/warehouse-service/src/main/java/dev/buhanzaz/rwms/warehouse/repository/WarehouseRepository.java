@@ -7,8 +7,4 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface WarehouseRepository extends JpaRepository<Warehouse, UUID> {
   List<Warehouse> findAllByActiveTrue();
-
-  boolean existsByCode(String code);
-
-  boolean existsByCodeAndIdNot(String code, UUID id);
 }

@@ -16,6 +16,11 @@ import tools.jackson.databind.ObjectMapper;
 @AutoConfiguration
 @ConditionalOnClass({StreamBridge.class, ObjectMapper.class})
 @ConditionalOnProperty(prefix = "rwms.platform.kafka", name = "enabled", havingValue = "true")
+@ConditionalOnProperty(
+        prefix = "rwms.platform.kafka",
+        name = "publisher-enabled",
+        havingValue = "true",
+        matchIfMissing = true)
 @EnableConfigurationProperties(RwmsKafkaProperties.class)
 public class RwmsKafkaAutoConfiguration {
 

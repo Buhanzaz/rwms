@@ -25,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class CabinFurnitureTaskService {
+  private static final int DEFAULT_PLANNED_DURATION_MINUTES = 60;
   private final LogisticsDependencyGateway dependencies;
   private final EquipmentMovementTaskService movementTasks;
 
@@ -71,7 +72,7 @@ public class CabinFurnitureTaskService {
                 warehouseId,
                 null,
                 plan.unitNumber(),
-                null,
+                DEFAULT_PLANNED_DURATION_MINUTES,
                 reservationDeadline(scheduledDate),
                 plan.lines().stream().map(CabinFurnitureTaskService::toTaskLine).toList()));
     return new CabinFurnitureTaskResult(
@@ -101,8 +102,6 @@ public class CabinFurnitureTaskService {
     for (LogisticsDependencyGateway.CabinFurnitureMovementPlanLine line : plan.lines()) {
       if (line == null
           || line.equipmentId() == null
-          || line.equipmentCode() == null
-          || line.equipmentCode().isBlank()
           || line.equipmentName() == null
           || line.equipmentName().isBlank()
           || line.sourceBalanceId() == null

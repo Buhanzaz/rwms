@@ -7,6 +7,23 @@ import type {
   RepairTaskWriteCommand,
 } from "@/features/repair-tasks/model/repair-task"
 
+export class RepairTaskQueueDraftPersistedError extends Error {
+  readonly taskId: string
+  readonly expectedVersion: number
+
+  constructor(params: {
+    taskId: string
+    expectedVersion: number
+    message: string
+    cause?: unknown
+  }) {
+    super(params.message, { cause: params.cause })
+    this.name = "RepairTaskQueueDraftPersistedError"
+    this.taskId = params.taskId
+    this.expectedVersion = params.expectedVersion
+  }
+}
+
 export interface RepairTasksClient {
   list(warehouseId: string): Promise<RepairTaskDto[]>
   listPendingAcceptance(warehouseId: string): Promise<RepairTaskDto[]>

@@ -23,7 +23,6 @@ public final class LogisticsFurnitureMovementApiModels {
 
   public record CabinFurnitureMovementPlanLine(
       UUID equipmentId,
-      String equipmentCode,
       String equipmentName,
       UUID sourceBalanceId,
       UUID sourceWarehouseId,

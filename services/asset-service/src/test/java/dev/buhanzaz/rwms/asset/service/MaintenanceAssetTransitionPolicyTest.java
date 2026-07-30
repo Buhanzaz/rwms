@@ -21,12 +21,39 @@ class MaintenanceAssetTransitionPolicyTest {
         RentalItemStatus.FREE, QUEUE_FOR_REPAIR, MAINTENANCE_REPAIR, repairId, null))
         .isEqualTo(RentalItemStatus.REPAIR);
     assertThat(MaintenanceAssetTransitionPolicy.target(
+        RentalItemStatus.REPAIR, QUEUE_FOR_REPAIR, MAINTENANCE_REPAIR, repairId, null))
+        .isEqualTo(RentalItemStatus.REPAIR);
+    assertThat(MaintenanceAssetTransitionPolicy.target(
+        RentalItemStatus.REPAIR,
+        QUEUE_FOR_CAPITAL_REPAIR,
+        MAINTENANCE_REPAIR,
+        repairId,
+        null))
+        .isEqualTo(RentalItemStatus.CAPITAL_REPAIR);
+    assertThat(MaintenanceAssetTransitionPolicy.target(
+        RentalItemStatus.CAPITAL_REPAIR, QUEUE_FOR_REPAIR, MAINTENANCE_REPAIR, repairId, null))
+        .isEqualTo(RentalItemStatus.REPAIR);
+    assertThat(MaintenanceAssetTransitionPolicy.target(
+        RentalItemStatus.USED_SALE, QUEUE_FOR_REPAIR, MAINTENANCE_REPAIR, repairId, null))
+        .isEqualTo(RentalItemStatus.REPAIR);
+    assertThat(MaintenanceAssetTransitionPolicy.target(
         RentalItemStatus.AFTER_RENT, COMPLETE_EMPTY_ESTIMATE,
         MAINTENANCE_ESTIMATE, repairId, null))
         .isEqualTo(RentalItemStatus.FREE);
     assertThat(MaintenanceAssetTransitionPolicy.target(
+        RentalItemStatus.AFTER_RENT, COMPLETE_EMPTY_REPAIR,
+        MAINTENANCE_REPAIR, repairId, null))
+        .isEqualTo(RentalItemStatus.FREE);
+    assertThat(MaintenanceAssetTransitionPolicy.target(
         RentalItemStatus.REPAIR, MARK_PENDING_ACCEPTANCE,
         MAINTENANCE_REPAIR, repairId, null))
+        .isEqualTo(RentalItemStatus.WAITING_REPAIR_CHECK);
+    assertThat(MaintenanceAssetTransitionPolicy.target(
+        RentalItemStatus.CAPITAL_REPAIR,
+        MARK_PENDING_ACCEPTANCE,
+        MAINTENANCE_REPAIR,
+        repairId,
+        null))
         .isEqualTo(RentalItemStatus.WAITING_REPAIR_CHECK);
     assertThat(MaintenanceAssetTransitionPolicy.target(
         RentalItemStatus.WAITING_REPAIR_CHECK, ACCEPT_REPAIR,
@@ -36,6 +63,61 @@ class MaintenanceAssetTransitionPolicyTest {
         RentalItemStatus.WAITING_REPAIR_CHECK, WRITE_OFF,
         MAINTENANCE_REPAIR, repairId, null))
         .isEqualTo(RentalItemStatus.WRITTEN_OFF);
+  }
+
+  @Test
+  void repairOwnedTransitionRejectsRentedAndInTransferStatuses() {
+    UUID repairId = UUID.randomUUID();
+
+    for (RentalItemStatus status : RentalItemStatus.values()) {
+      if (status == RentalItemStatus.RENTED
+          || status == RentalItemStatus.IN_TRANSFER) {
+        assertThatThrownBy(() -> MaintenanceAssetTransitionPolicy.target(
+            status, QUEUE_FOR_REPAIR, MAINTENANCE_REPAIR, repairId, null))
+            .as("source %s", status)
+            .isInstanceOf(AssetConflictException.class)
+            .hasMessageContaining("not allowed");
+      } else {
+        assertThat(MaintenanceAssetTransitionPolicy.target(
+            status, QUEUE_FOR_REPAIR, MAINTENANCE_REPAIR, repairId, null))
+            .as("source %s", status)
+            .isEqualTo(RentalItemStatus.REPAIR);
+      }
+    }
+  }
+
+  @Test
+  void emptyRepairFreesOnlyAnEligibleUnoccupiedCabinForTheRepairOwner() {
+    UUID repairId = UUID.randomUUID();
+    List<RentalItemStatus> allowed = List.of(
+        RentalItemStatus.FREE,
+        RentalItemStatus.WAREHOUSE,
+        RentalItemStatus.OWN_NEEDS,
+        RentalItemStatus.AFTER_RENT);
+
+    allowed.forEach(source -> assertThat(MaintenanceAssetTransitionPolicy.target(
+        source, COMPLETE_EMPTY_REPAIR, MAINTENANCE_REPAIR, repairId, null))
+        .as("source %s", source)
+        .isEqualTo(RentalItemStatus.FREE));
+
+    for (RentalItemStatus source : RentalItemStatus.values()) {
+      if (!allowed.contains(source)) {
+        assertThatThrownBy(() -> MaintenanceAssetTransitionPolicy.target(
+            source, COMPLETE_EMPTY_REPAIR, MAINTENANCE_REPAIR, repairId, null))
+            .as("source %s", source)
+            .isInstanceOf(AssetConflictException.class)
+            .hasMessageContaining("not allowed");
+      }
+    }
+
+    assertThatThrownBy(() -> MaintenanceAssetTransitionPolicy.target(
+        RentalItemStatus.FREE,
+        COMPLETE_EMPTY_REPAIR,
+        MAINTENANCE_ESTIMATE,
+        repairId,
+        null))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("repair-owned lease");
   }
 
   @Test
@@ -61,7 +143,6 @@ class MaintenanceAssetTransitionPolicyTest {
   void rejectsEveryForbiddenMaintenanceSourceAndGenericActionShape() {
     UUID ownerId = UUID.randomUUID();
     List<RentalItemStatus> forbidden = List.of(
-        RentalItemStatus.NEW,
         RentalItemStatus.RENTED,
         RentalItemStatus.BOOKED,
         RentalItemStatus.RESERVED,
@@ -81,6 +162,11 @@ class MaintenanceAssetTransitionPolicyTest {
         MAINTENANCE_REPAIR, ownerId, null))
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("estimate-owned lease");
+    assertThatThrownBy(() -> MaintenanceAssetTransitionPolicy.target(
+        RentalItemStatus.REPAIR, COMPLETE_EMPTY_ESTIMATE,
+        MAINTENANCE_ESTIMATE, ownerId, null))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("not allowed");
     assertThatThrownBy(() -> MaintenanceAssetTransitionPolicy.target(
         RentalItemStatus.FREE, QUEUE_FOR_REPAIR,
         MAINTENANCE_REPAIR, ownerId, UUID.randomUUID()))

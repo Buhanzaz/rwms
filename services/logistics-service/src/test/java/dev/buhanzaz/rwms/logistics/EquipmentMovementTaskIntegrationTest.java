@@ -103,7 +103,6 @@ class EquipmentMovementTaskIntegrationTest {
                     invocation.getArgument(1),
                     invocation.getArgument(2),
                     invocation.getArgument(3),
-                    "TABLE",
                     "Стол",
                     sourceBalanceId,
                     invocation.getArgument(4),
@@ -184,7 +183,6 @@ class EquipmentMovementTaskIntegrationTest {
                     invocation.getArgument(3),
                     invocation.getArgument(4),
                     EQUIPMENT,
-                    "TABLE",
                     "Стол",
                     UUID.randomUUID(),
                     WAREHOUSE,
@@ -218,6 +216,25 @@ class EquipmentMovementTaskIntegrationTest {
         .andExpect(jsonPath("$.state").value("COMPLETED"))
         .andExpect(jsonPath("$.lines[0].state").value("EXECUTED"));
     verify(dependencies).executeEquipmentMovement(any(), any(), any());
+  }
+
+  @Test
+  void rejectsAnExecutableMovementWithoutAPositiveDuration() throws Exception {
+    OffsetDateTime deadline = OffsetDateTime.now(ZoneOffset.UTC).plusHours(2);
+
+    mvc.perform(
+            post("/api/logistics/v1/equipment-movement-tasks")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {"warehouseId":"%s","unitNumber":"CAB-701",
+                    "deadlineAt":"%s","lines":[{"equipmentId":"%s","sourceRentalItemId":null,
+                    "sourceLocationKind":"STOCK","expectedSourceBalanceVersion":4,
+                    "targetRentalItemId":"%s","targetLocationKind":"CABIN_NON_RENTED","quantity":2}]}
+                    """.formatted(WAREHOUSE, deadline, EQUIPMENT, CABIN))
+                .with(actor()))
+        .andExpect(status().isBadRequest());
   }
 
   @Test

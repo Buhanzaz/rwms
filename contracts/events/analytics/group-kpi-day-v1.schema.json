@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/analytics/group-kpi-day-v1.schema.json",
+  "title": "RWMS task-board group KPI day snapshot v1",
+  "description": "Warehouse-local replaceable day evidence consumed by analytics-service. aggregateId and the Kafka record key equal payload.evidenceId. Cross-field validation additionally requires earnedRemainingSeconds <= completedBudgetSeconds and consistent open-state timestamps.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelopeVersion",
+    "eventId",
+    "eventType",
+    "eventVersion",
+    "occurredAt",
+    "recordedAt",
+    "producer",
+    "aggregateType",
+    "aggregateId",
+    "aggregateVersion",
+    "correlation",
+    "actorRef",
+    "payload"
+  ],
+  "properties": {
+    "envelopeVersion": {"const": 2},
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {"const": "task-board.group-kpi-day.changed.v1"},
+    "eventVersion": {"const": 1},
+    "occurredAt": {"$ref": "#/$defs/nullableDateTime"},
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "producer": {"const": "task-board-service"},
+    "aggregateType": {"const": "GROUP_KPI_DAY"},
+    "aggregateId": {"type": "string", "format": "uuid"},
+    "aggregateVersion": {"type": "integer", "format": "int64", "minimum": 0},
+    "correlation": {"$ref": "#/$defs/correlationContext"},
+    "actorRef": {
+      "oneOf": [
+        {"$ref": "#/$defs/opaqueActorReference"},
+        {"type": "null"}
+      ]
+    },
+    "payload": {"$ref": "#/$defs/groupKpiDaySnapshot"}
+  },
+  "x-rwms-topic": "rwms.task-board.group-kpi-day.v1",
+  "x-rwms-record-key": "aggregateId",
+  "x-rwms-consumer-group": "analytics-projection-v1",
+  "$defs": {
+    "nullableUuid": {
+      "oneOf": [
+        {"type": "string", "format": "uuid"},
+        {"type": "null"}
+      ]
+    },
+    "nullableDateTime": {
+      "oneOf": [
+        {"type": "string", "format": "date-time"},
+        {"type": "null"}
+      ]
+    },
+    "correlationContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correlationId", "causationId"],
+      "properties": {
+        "correlationId": {"type": "string", "format": "uuid"},
+        "causationId": {"$ref": "#/$defs/nullableUuid"}
+      }
+    },
+    "opaqueActorReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subjectId", "principalType", "profileRevision"],
+      "properties": {
+        "subjectId": {"type": "string", "format": "uuid"},
+        "principalType": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"},
+        "profileRevision": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$"
+            },
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "groupKpiDaySnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidenceId",
+        "warehouseId",
+        "workerGroupId",
+        "localDate",
+        "dataAvailableFrom",
+        "formulaVersion",
+        "completedBudgetSeconds",
+        "earnedRemainingSeconds",
+        "activeSeconds",
+        "penalizedIdleSeconds",
+        "completedTaskCount",
+        "openState",
+        "openStateStartedAt",
+        "penaltyStartsAt",
+        "nextTransitionAt",
+        "asOf"
+      ],
+      "properties": {
+        "evidenceId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "workerGroupId": {"type": "string", "format": "uuid"},
+        "localDate": {"type": "string", "format": "date"},
+        "dataAvailableFrom": {"type": "string", "format": "date"},
+        "formulaVersion": {"const": "kpi-v1"},
+        "completedBudgetSeconds": {"type": "integer", "format": "int64", "minimum": 0},
+        "earnedRemainingSeconds": {"type": "integer", "format": "int64", "minimum": 0},
+        "activeSeconds": {"type": "integer", "format": "int64", "minimum": 0},
+        "penalizedIdleSeconds": {"type": "integer", "format": "int64", "minimum": 0},
+        "completedTaskCount": {"type": "integer", "format": "int64", "minimum": 0},
+        "openState": {
+          "oneOf": [
+            {"enum": ["WORKING", "IDLE_GRACE", "IDLE_PENALIZED", "EXCLUDED"]},
+            {"type": "null"}
+          ]
+        },
+        "openStateStartedAt": {"$ref": "#/$defs/nullableDateTime"},
+        "penaltyStartsAt": {"$ref": "#/$defs/nullableDateTime"},
+        "nextTransitionAt": {"$ref": "#/$defs/nullableDateTime"},
+        "asOf": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}

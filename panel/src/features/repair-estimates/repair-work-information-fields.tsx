@@ -27,6 +27,8 @@ type RepairWorkInformationFieldsProps = {
   readOnly?: boolean
   rentalItemInvalid?: boolean
   showComment?: boolean
+  showContext?: boolean
+  showDispatchDate?: boolean
   onRentalItemChange: (rentalItem: EstimateRentalItemOptionDto) => void
   onContextChange: (value: string) => void
   onDispatchDateChange: (value: string | null) => void
@@ -50,6 +52,8 @@ export function RepairWorkInformationFields({
   readOnly = false,
   rentalItemInvalid = false,
   showComment = true,
+  showContext = true,
+  showDispatchDate = true,
   onRentalItemChange,
   onContextChange,
   onDispatchDateChange,
@@ -91,42 +95,46 @@ export function RepairWorkInformationFields({
         </FieldContent>
       </Field>
 
-      <Field
-        orientation="horizontal"
-        className={horizontalFieldClassName}
-        data-disabled={disabled}
-      >
-        <FieldLabel htmlFor={contextId}>{contextLabel}</FieldLabel>
-        <FieldContent className="min-w-0">
-          <Input
-            id={contextId}
-            aria-label={contextLabel}
-            disabled={disabled}
-            value={contextValue}
-            onChange={(event) => onContextChange(event.target.value)}
-          />
-        </FieldContent>
-      </Field>
+      {showContext ? (
+        <Field
+          orientation="horizontal"
+          className={horizontalFieldClassName}
+          data-disabled={disabled}
+        >
+          <FieldLabel htmlFor={contextId}>{contextLabel}</FieldLabel>
+          <FieldContent className="min-w-0">
+            <Input
+              id={contextId}
+              aria-label={contextLabel}
+              disabled={disabled}
+              value={contextValue}
+              onChange={(event) => onContextChange(event.target.value)}
+            />
+          </FieldContent>
+        </Field>
+      ) : null}
 
-      <Field
-        orientation="horizontal"
-        className={horizontalFieldClassName}
-        data-disabled={disabled}
-      >
-        <FieldLabel htmlFor="repair-work-dispatch-date">Прибытие</FieldLabel>
-        <FieldContent className="min-w-0">
-          <Input
-            id="repair-work-dispatch-date"
-            aria-label="Дата прибытия"
-            type="date"
-            disabled={disabled}
-            value={dispatchDate ?? ""}
-            onChange={(event) =>
-              onDispatchDateChange(event.target.value || null)
-            }
-          />
-        </FieldContent>
-      </Field>
+      {showDispatchDate ? (
+        <Field
+          orientation="horizontal"
+          className={horizontalFieldClassName}
+          data-disabled={disabled}
+        >
+          <FieldLabel htmlFor="repair-work-dispatch-date">Осмотр</FieldLabel>
+          <FieldContent className="min-w-0">
+            <Input
+              id="repair-work-dispatch-date"
+              aria-label="Дата осмотра"
+              type="date"
+              disabled={disabled}
+              value={dispatchDate ?? ""}
+              onChange={(event) =>
+                onDispatchDateChange(event.target.value || null)
+              }
+            />
+          </FieldContent>
+        </Field>
+      ) : null}
 
       {showComment ? (
         <Field data-disabled={disabled}>

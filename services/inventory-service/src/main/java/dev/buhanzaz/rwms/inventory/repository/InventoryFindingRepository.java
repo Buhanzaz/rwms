@@ -17,8 +17,31 @@ import org.springframework.data.repository.query.Param;
 public interface InventoryFindingRepository extends JpaRepository<InventoryFinding, UUID> {
   Optional<InventoryFinding> findByIdAndInventoryId(UUID id, UUID inventoryId);
 
+  Optional<InventoryFinding> findByIdAndInventoryIdAndMembershipActiveTrue(
+      UUID id, UUID inventoryId);
+
   Optional<InventoryFinding> findByInventoryIdAndIdentityMatchKey(
       UUID inventoryId, String matchKey);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select finding from InventoryFinding finding
+       where finding.inventoryId = :inventoryId and finding.identityMatchKey = :matchKey
+      """)
+  Optional<InventoryFinding> findByInventoryIdAndIdentityMatchKeyForUpdate(
+      @Param("inventoryId") UUID inventoryId, @Param("matchKey") String matchKey);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      select finding from InventoryFinding finding, InventorySession session
+       where finding.inventoryId = session.id
+         and session.lifecycle = dev.buhanzaz.rwms.inventory.domain.SessionLifecycle.ACTIVE
+         and finding.assetId = :assetId
+      """)
+  List<InventoryFinding> findInActiveSessionsByAssetIdForUpdate(
+      @Param("assetId") UUID assetId);
 
   @Query(
       """
@@ -31,15 +54,17 @@ public interface InventoryFindingRepository extends JpaRepository<InventoryFindi
   Optional<UUID> findOwnedInventoryId(
       @Param("findingId") UUID findingId, @Param("warehouseId") UUID warehouseId);
 
-  Page<InventoryFinding> findByInventoryId(UUID inventoryId, Pageable pageable);
+  Page<InventoryFinding> findByInventoryIdAndMembershipActiveTrue(
+      UUID inventoryId, Pageable pageable);
 
   @Query(
       """
       select finding.inventoryId as inventoryId,
              count(finding) as findingCount,
              sum(case when finding.inspection <> :notInspected then 1 else 0 end) as inspectedCount
-        from InventoryFinding finding
+       from InventoryFinding finding
        where finding.inventoryId in :inventoryIds
+         and finding.membershipActive = true
        group by finding.inventoryId
       """)
   List<InventoryFindingCounts> countByInventoryIds(
@@ -48,6 +73,9 @@ public interface InventoryFindingRepository extends JpaRepository<InventoryFindi
 
   List<InventoryFinding> findAllByInventoryIdOrderById(UUID inventoryId);
 
+  List<InventoryFinding> findAllByInventoryIdAndMembershipActiveTrueOrderById(
+      UUID inventoryId);
+
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query(
       "select finding from InventoryFinding finding where finding.inventoryId = :inventoryId order by finding.id")
@@ -55,6 +83,8 @@ public interface InventoryFindingRepository extends JpaRepository<InventoryFindi
       @Param("inventoryId") UUID inventoryId);
 
   long countByInventoryId(UUID inventoryId);
+
+  long countByInventoryIdAndMembershipActiveTrue(UUID inventoryId);
 
   interface InventoryFindingCounts {
     UUID getInventoryId();

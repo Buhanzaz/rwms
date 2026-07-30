@@ -19,7 +19,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Narrow Stage 8 receiver for a permanent logistics return-line shortage source. */
+/** Private receiver for one immutable return-line shortage and its maintenance estimate. */
 @RestController
 @Validated
 @RequestMapping("/api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/shortage")

@@ -15,6 +15,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-security")
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-web")
+    implementation("org.jsoup:jsoup:1.22.2")
     implementation(libs.spring.cloud.stream)
     implementation(libs.spring.cloud.stream.binder.kafka)
     implementation("io.micrometer:micrometer-tracing-bridge-otel")

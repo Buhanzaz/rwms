@@ -81,6 +81,7 @@ import {
   CharacteristicTags,
   EmptyDossierRegister,
 } from "@/features/rental-items/rental-item-detail-support"
+import { RentalItemPassportDialog } from "@/features/rental-items/rental-item-passport-dialog"
 import { MoveContentsToRentalItemDialog } from "@/features/rental-items/move-contents-to-rental-item-dialog"
 import { MoveContentsToStockDialog } from "@/features/rental-items/move-contents-to-stock-dialog"
 import {
@@ -231,12 +232,14 @@ function DossierActions({
   accessToken,
   canEdit,
   onAddPhoto,
+  onEditPassport,
   onSaved,
 }: {
   rentalItem: RentalItemDto
   accessToken: string | null
   canEdit: boolean
   onAddPhoto: () => void
+  onEditPassport: () => void
   onSaved: (value: RentalItemDto) => void
 }) {
   const navigate = useNavigate()
@@ -284,11 +287,7 @@ function DossierActions({
     return null
   }
 
-  const repairAllowed = ![
-    "WRITTEN_OFF",
-    "WAITING_ESTIMATE_CONFIRMATION",
-    "IN_TRANSFER",
-  ].includes(rentalItem.status)
+  const repairAllowed = !["RENTED", "AFTER_RENT"].includes(rentalItem.status)
 
   function createRepair() {
     navigate("/repairs?create=1", {
@@ -308,6 +307,10 @@ function DossierActions({
   return (
     <>
       <div className="flex flex-wrap gap-2">
+        <Button size="sm" variant="outline" onClick={onEditPassport}>
+          <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
+          Изменить паспорт
+        </Button>
         <Button size="sm" variant="outline" onClick={onAddPhoto}>
           <HugeiconsIcon icon={ImageUploadIcon} data-icon="inline-start" />
           Добавить фото
@@ -395,6 +398,7 @@ export function RentalItemDetailPage() {
   const { selectedWarehouse } = useWarehouse()
   const { accessToken, currentUser } = useAuth()
   const [photoUploadOpen, setPhotoUploadOpen] = useState(false)
+  const [passportEditOpen, setPassportEditOpen] = useState(false)
   const [addContentsOpen, setAddContentsOpen] = useState(false)
   const [moveContentsToStockOpen, setMoveContentsToStockOpen] = useState(false)
   const [moveContentsToRentalItemOpen, setMoveContentsToRentalItemOpen] =
@@ -647,7 +651,7 @@ export function RentalItemDetailPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto pb-4">
-      <Button variant="ghost" className="w-fit" onClick={goBack}>
+      <Button variant="outline" className="w-fit" onClick={goBack}>
         <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
         Назад
       </Button>
@@ -682,14 +686,13 @@ export function RentalItemDetailPage() {
               accessToken={accessToken}
               canEdit={canEditRentalItem}
               onAddPhoto={() => setPhotoUploadOpen(true)}
+              onEditPassport={() => setPassportEditOpen(true)}
               onSaved={setRentalItem}
             />
             <Separator />
             <dl className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-xs">
               <dt className="text-muted-foreground">Склад</dt>
-              <dd>
-                {selectedWarehouse?.name ?? selectedWarehouse?.code ?? "Склад"}
-              </dd>
+              <dd>{selectedWarehouse?.name ?? "Склад"}</dd>
               <dt className="text-muted-foreground">Габариты</dt>
               <dd>{rentalItem.dimensions ?? "—"}</dd>
               <dt className="text-muted-foreground">Отделка</dt>
@@ -700,7 +703,7 @@ export function RentalItemDetailPage() {
                 Характеристики
               </dt>
               <dd>
-                <CharacteristicTags value={rentalItem.characteristics} />
+                <CharacteristicTags values={rentalItem.characteristics} />
               </dd>
               <dt className="text-muted-foreground">Линолеум</dt>
               <dd>
@@ -783,9 +786,7 @@ export function RentalItemDetailPage() {
               <div>
                 <p className="text-muted-foreground">Склад</p>
                 <p className="font-medium">
-                  {selectedWarehouse?.name ??
-                    selectedWarehouse?.code ??
-                    "Склад"}
+                  {selectedWarehouse?.name ?? "Склад"}
                 </p>
               </div>
               <div>
@@ -867,7 +868,7 @@ export function RentalItemDetailPage() {
               <CardTitle>Характеристики</CardTitle>
             </CardHeader>
             <CardContent>
-              <CharacteristicTags value={rentalItem.characteristics} />
+              <CharacteristicTags values={rentalItem.characteristics} />
             </CardContent>
           </Card>
           <Card>
@@ -1189,8 +1190,7 @@ export function RentalItemDetailPage() {
                   <article key={note.id} className="rounded-md border p-3">
                     <p className="text-sm whitespace-pre-wrap">{note.text}</p>
                     <p className="mt-2 font-mono text-xs text-muted-foreground">
-                      {new Date(note.createdAt).toLocaleString("ru-RU")} ·{" "}
-                      {note.id}
+                      {new Date(note.createdAt).toLocaleString("ru-RU")}
                     </p>
                   </article>
                 ))}
@@ -1204,6 +1204,16 @@ export function RentalItemDetailPage() {
           )}
         </TabsContent>
       </Tabs>
+
+      {passportEditOpen ? (
+        <RentalItemPassportDialog
+          key={`${rentalItem.id}:${rentalItem.version}`}
+          open={passportEditOpen}
+          rentalItem={rentalItem}
+          onOpenChange={setPassportEditOpen}
+          onSaved={setRentalItem}
+        />
+      ) : null}
       <RentalItemPhotoUploadDialog
         open={photoUploadOpen}
         pending={media.isUploading}

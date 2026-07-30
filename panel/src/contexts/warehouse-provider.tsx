@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react"
@@ -19,6 +20,11 @@ function getSavedWarehouseId() {
 
 export function WarehouseProvider({ children }: { children: ReactNode }) {
   const { accessToken } = useAuth()
+  const accessTokenRef = useRef(accessToken)
+  const hasLoadedWarehouseListRef = useRef(false)
+  const reloadInProgressRef = useRef(false)
+  const reloadQueuedRef = useRef(false)
+  const [reloadRevision, setReloadRevision] = useState(0)
   const [warehouses, setWarehouses] = useState<WarehouseInfo[]>([])
   const [selectedWarehouseId, setSelectedWarehouseIdState] = useState<
     string | null
@@ -26,20 +32,41 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  useEffect(() => {
+    accessTokenRef.current = accessToken
+  }, [accessToken])
+
   const reloadWarehouses = useCallback(async () => {
-    if (accessToken === null) {
-      setWarehouses([])
-      setSelectedWarehouseIdState(null)
-      setError("Не получен токен доступа к сервису складов.")
-      setIsLoading(false)
+    if (reloadInProgressRef.current) {
+      reloadQueuedRef.current = true
       return
     }
 
-    try {
-      setIsLoading(true)
-      setError(null)
+    const currentAccessToken = accessTokenRef.current
 
-      const data = await listWarehouses(accessToken)
+    if (currentAccessToken === null) {
+      // A missing token can be a short OIDC restore/renewal window. Do not
+      // discard a working warehouse selection or turn an open form into the
+      // global error page while that window is in progress.
+      if (!hasLoadedWarehouseListRef.current) {
+        setIsLoading(true)
+        setError(null)
+      }
+      return
+    }
+
+    const isInitialLoad = !hasLoadedWarehouseListRef.current
+    reloadInProgressRef.current = true
+
+    try {
+      // AppLayout gates on these fields. A refresh after a successful load
+      // must stay in the background so unsaved page state remains mounted.
+      if (isInitialLoad) {
+        setIsLoading(true)
+        setError(null)
+      }
+
+      const data = await listWarehouses(currentAccessToken)
       const activeWarehouses = data.filter((warehouse) => warehouse.active)
       const savedWarehouseId = getSavedWarehouseId()
       const nextSelectedWarehouseId = resolveWarehouseSelection(
@@ -55,32 +82,49 @@ export function WarehouseProvider({ children }: { children: ReactNode }) {
       } else if (savedWarehouseId !== nextSelectedWarehouseId) {
         window.localStorage.setItem(STORAGE_KEY, nextSelectedWarehouseId)
       }
+
+      hasLoadedWarehouseListRef.current = true
+      setError(null)
     } catch (unknownError) {
-      setError(
-        unknownError instanceof Error
-          ? unknownError.message
-          : "Ошибка загрузки складов"
-      )
+      // A failed refresh must not replace an already usable application with
+      // the global error page. The next explicit reload or a fresh session
+      // token can retry it.
+      if (!hasLoadedWarehouseListRef.current) {
+        setError(
+          unknownError instanceof Error
+            ? unknownError.message
+            : "Ошибка загрузки складов"
+        )
+      }
     } finally {
-      setIsLoading(false)
-    }
-  }, [accessToken])
+      reloadInProgressRef.current = false
 
-  useEffect(() => {
-    let cancelled = false
-
-    void Promise.resolve().then(() => {
-      if (!cancelled) {
-        return reloadWarehouses()
+      if (isInitialLoad) {
+        setIsLoading(false)
       }
 
-      return undefined
-    })
+      // If OIDC supplied a newer token while the first request was pending,
+      // retry once with that token only when the first request did not produce
+      // a usable list. A successful first request remains a single load.
+      const shouldRetryQueuedReload =
+        reloadQueuedRef.current && !hasLoadedWarehouseListRef.current
+      reloadQueuedRef.current = false
 
-    return () => {
-      cancelled = true
+      if (shouldRetryQueuedReload) {
+        setReloadRevision((current) => current + 1)
+      }
     }
-  }, [reloadWarehouses])
+  }, [])
+
+  useEffect(() => {
+    // Do not perform a request until an actual bearer token is available.
+    // This also retries the first load when the token appears after the
+    // provider mounted. Once a list was loaded, a token rotation deliberately
+    // does not reload it or remount the application.
+    if (accessToken !== null && !hasLoadedWarehouseListRef.current) {
+      void reloadWarehouses()
+    }
+  }, [accessToken, reloadRevision, reloadWarehouses])
 
   const selectedWarehouse = useMemo(() => {
     if (selectedWarehouseId === null) {

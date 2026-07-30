@@ -84,7 +84,6 @@ export function OrderUnitContentsView({
       <TableHeader>
         <TableRow>
           <TableHead>Оборудование</TableHead>
-          <TableHead>Код</TableHead>
           <TableHead>Количество</TableHead>
           <TableHead>Состояние</TableHead>
         </TableRow>
@@ -95,7 +94,6 @@ export function OrderUnitContentsView({
             <TableCell className="font-medium">
               {content.equipmentName}
             </TableCell>
-            <TableCell>{content.equipmentCode}</TableCell>
             <TableCell>{content.quantity}</TableCell>
             <TableCell>
               <Badge variant="outline">
@@ -132,7 +130,7 @@ export function OrderUnitEquipmentDialog({
           </DialogTitle>
           <DialogDescription>
             Выберите комплектацию из каталога дополнительного оборудования.
-            После сохранения мебель бронируется за заказом; фактические
+            После сохранения мебель бронируется за бронированием; фактические
             перемещения создаются в отгрузке.
           </DialogDescription>
         </DialogHeader>
@@ -269,7 +267,7 @@ function OrderUnitEquipmentDialogContent({
     mutationFn: () => {
       if (!accessToken) throw new Error("Сессия завершена.")
       if (!order.permissions.canEdit) {
-        throw new Error("Изменение этого заказа запрещено.")
+        throw new Error("Изменение этого бронирования запрещено.")
       }
       return setOrderUnitDesiredEquipment({
         accessToken,
@@ -294,7 +292,7 @@ function OrderUnitEquipmentDialogContent({
       ])
       onSaved()
       toast.success(
-        "Желаемое наполнение сохранено. Мебель забронирована за заказом."
+        "Желаемое наполнение сохранено. Мебель забронирована за бронированием."
       )
       onClose()
     },
@@ -303,7 +301,7 @@ function OrderUnitEquipmentDialogContent({
         refresh()
         onSaved()
         setErrorText(
-          "Состав заказа или доступный остаток изменились. Актуальные данные загружены с сервера."
+          "Состав бронирования или доступный остаток изменились. Актуальные данные загружены с сервера."
         )
         return
       }
@@ -342,7 +340,7 @@ function OrderUnitEquipmentDialogContent({
     <div className="flex max-h-[70vh] min-h-0 flex-col gap-4">
       {errorText ? <FieldError>{errorText}</FieldError> : null}
       {!order.permissions.canEdit ? (
-        <FieldError>Изменение этого заказа запрещено.</FieldError>
+        <FieldError>Изменение этого бронирования запрещено.</FieldError>
       ) : null}
 
       <section className="min-h-0 flex-1 overflow-y-auto pr-1">
@@ -350,7 +348,7 @@ function OrderUnitEquipmentDialogContent({
           <h3 className="font-medium">Желаемое наполнение</h3>
           <p className="text-sm text-muted-foreground">
             «Доступно» учитывает мебель на складе и в свободных бытовках за
-            вычетом резервов других заказов.
+            вычетом резервов других бронирований.
           </p>
         </div>
         {equipmentQuery.isLoading ? (

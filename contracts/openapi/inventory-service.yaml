@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Inventory Service API
-  version: 1.0.0
+  version: 1.2.0
   x-rwms-owner: inventory-service
   x-rwms-stability: approved-stage-7
   description: >-
@@ -99,7 +99,11 @@ paths:
     get:
       tags: [Findings]
       operationId: listInventoryFindings
-      description: Requires USER, rwms.read and warehouse VIEW.
+      description: >-
+        Requires USER, rwms.read and warehouse VIEW. The active finding set
+        follows the live warehouse population: departures and transfers are
+        removed, while arrivals are added. Every membership change is retained
+        separately in SessionDetail.membershipMovements.
       parameters:
         - { $ref: '#/components/parameters/Page' }
         - { $ref: '#/components/parameters/Size' }
@@ -176,6 +180,34 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/SaveInspectionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/FindingResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailure' }
+        '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/conflict-resolution:
+    parameters:
+      - { $ref: '#/components/parameters/InventoryId' }
+      - { $ref: '#/components/parameters/FindingId' }
+    put:
+      tags: [Findings]
+      operationId: resolveFindingRegistryConflict
+      description: >-
+        Requires USER, rwms.write and warehouse EDIT. Available only after an
+        inspection and only while the exact current semantic registry snapshot
+        still conflicts with the inspection baseline. ACCEPT_REGISTRY rebases
+        the baseline while preserving inspection evidence and staged work.
+        KEEP_INSPECTION records an audited decision for that exact current
+        snapshot without mutating asset-service or maintenance-service.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResolveConflictRequest' }
       responses:
         '200': { $ref: '#/components/responses/FindingResponse' }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -466,8 +498,13 @@ components:
   schemas:
     SessionLifecycle: { type: string, enum: [ACTIVE, COMPLETED, CANCELLED] }
     FindingOrigin: { type: string, enum: [EXPECTED, ADDED_NEW, ADDED_USED, UNEXPECTED_EXISTING] }
+    InspectionSource: { type: string, enum: [INVENTORY] }
+    RentalItemStatus:
+      type: string
+      enum: [RENTED, BOOKED, REPAIR, WAITING_REPAIR_CHECK, WRITTEN_OFF, CAPITAL_REPAIR, AFTER_RENT, WAITING_ESTIMATE_CONFIRMATION, SALE, USED_SALE, RESERVED, FREE, WAREHOUSE, OWN_NEEDS, IN_TRANSFER]
     InspectionState: { type: string, enum: [NOT_INSPECTED, READY, WORK_STAGED] }
     ReconciliationState: { type: string, enum: [MATCHED, MISSING, CONFLICT] }
+    ConflictResolutionStrategy: { type: string, enum: [ACCEPT_REGISTRY, KEEP_INSPECTION] }
     ObservationPresence: { type: string, enum: [ABSENT, EXPLICIT_EMPTY, PRESENT] }
     PublicationState: { type: string, enum: [NOT_REQUIRED, READY, PENDING, SUCCEEDED, TRANSIENT_FAILED, BLOCKED, CLOSED_BLOCKED] }
     AggregatePublicationState: { type: string, enum: [NOT_REQUESTED, PENDING, PARTIAL, SUCCEEDED, BLOCKED] }
@@ -602,9 +639,11 @@ components:
       oneOf:
         - type: object
           additionalProperties: false
-          required: [mode, lines, stages]
+          required: [mode, priority, coverMediaId, lines, stages]
           properties:
             mode: { type: string, const: AUTO }
+            priority: { type: integer, minimum: 1, maximum: 5 }
+            coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
             lines:
               type: array
               minItems: 1
@@ -616,9 +655,11 @@ components:
               items: { $ref: '#/components/schemas/InventoryPlanStageSelection' }
         - type: object
           additionalProperties: false
-          required: [mode, lines, stages]
+          required: [mode, priority, coverMediaId, lines, stages]
           properties:
             mode: { type: string, const: MANUAL }
+            priority: { type: integer, minimum: 1, maximum: 5 }
+            coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
             lines:
               type: array
               minItems: 1
@@ -633,7 +674,7 @@ components:
       oneOf:
         - type: object
           additionalProperties: false
-          required: [expectedSessionRevision, expectedFindingRevision, inspection, comment, passportObservation, equipmentObservation, media, planSelection]
+          required: [expectedSessionRevision, expectedFindingRevision, inspection, comment, passportObservation, equipmentObservation, media, coverMediaId, planSelection]
           properties:
             expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
             expectedFindingRevision: { type: integer, format: int64, minimum: 0 }
@@ -642,10 +683,21 @@ components:
             passportObservation: { $ref: '#/components/schemas/PassportObservation' }
             equipmentObservation: { $ref: '#/components/schemas/EquipmentObservation' }
             media: { type: array, maxItems: 100, uniqueItems: true, items: { $ref: '#/components/schemas/MediaReference' } }
+            coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
             planSelection: { type: 'null' }
+          allOf:
+            - if:
+                properties:
+                  media: { minItems: 1 }
+              then:
+                properties:
+                  coverMediaId: { type: string, format: uuid }
+              else:
+                properties:
+                  coverMediaId: { type: 'null' }
         - type: object
           additionalProperties: false
-          required: [expectedSessionRevision, expectedFindingRevision, inspection, comment, passportObservation, equipmentObservation, media, planSelection]
+          required: [expectedSessionRevision, expectedFindingRevision, inspection, comment, passportObservation, equipmentObservation, media, coverMediaId, planSelection]
           properties:
             expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
             expectedFindingRevision: { type: integer, format: int64, minimum: 0 }
@@ -654,7 +706,30 @@ components:
             passportObservation: { $ref: '#/components/schemas/PassportObservation' }
             equipmentObservation: { $ref: '#/components/schemas/EquipmentObservation' }
             media: { type: array, maxItems: 100, uniqueItems: true, items: { $ref: '#/components/schemas/MediaReference' } }
+            coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
             planSelection: { $ref: '#/components/schemas/PlanSelection' }
+          allOf:
+            - if:
+                properties:
+                  media: { minItems: 1 }
+              then:
+                properties:
+                  coverMediaId: { type: string, format: uuid }
+              else:
+                properties:
+                  coverMediaId: { type: 'null' }
+    ResolveConflictRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedSessionRevision, expectedFindingRevision, strategy, reason]
+      properties:
+        expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
+        expectedFindingRevision: { type: integer, format: int64, minimum: 0 }
+        strategy: { $ref: '#/components/schemas/ConflictResolutionStrategy' }
+        reason:
+          oneOf:
+            - { type: string, minLength: 1, maxLength: 2000 }
+            - { type: 'null' }
     RevisionExpectation:
       type: object
       additionalProperties: false
@@ -677,7 +752,11 @@ components:
         expectedSessionRevision: { type: integer, format: int64, minimum: 0 }
         findingRevisions: { type: array, uniqueItems: true, items: { $ref: '#/components/schemas/RevisionExpectation' } }
         acknowledgementSha256: { $ref: '#/components/schemas/Sha256' }
-        validationSha256: { $ref: '#/components/schemas/Sha256' }
+        validationSha256:
+          allOf: [{ $ref: '#/components/schemas/Sha256' }]
+          description: >-
+            Digest of the business-significant registry validation facts from the preview.
+            A rental item's technical asset version is intentionally excluded.
     CancelSessionRequest:
       type: object
       additionalProperties: false
@@ -749,7 +828,7 @@ components:
     SessionDetail:
       type: object
       additionalProperties: false
-      required: [id, sessionRevision, warehouseId, warehouseVersion, warehouseTimeZone, author, businessDate, lifecycle, expectedCount, findingCount, inspectedCount, startedAt, terminalAt, publicationState, statistics, cancellation]
+      required: [id, sessionRevision, warehouseId, warehouseVersion, warehouseTimeZone, author, businessDate, lifecycle, expectedCount, findingCount, inspectedCount, startedAt, terminalAt, publicationState, membershipMovements, statistics, cancellation]
       properties:
         id: { type: string, format: uuid }
         sessionRevision: { type: integer, format: int64, minimum: 0 }
@@ -765,6 +844,9 @@ components:
         startedAt: { type: string, format: date-time }
         terminalAt: { $ref: '#/components/schemas/NullableDateTime' }
         publicationState: { $ref: '#/components/schemas/AggregatePublicationState' }
+        membershipMovements:
+          type: array
+          items: { $ref: '#/components/schemas/MembershipMovement' }
         statistics: { oneOf: [{ $ref: '#/components/schemas/FrozenStatistics' }, { type: 'null' }] }
         cancellation: { oneOf: [{ $ref: '#/components/schemas/CancellationAudit' }, { type: 'null' }] }
     CancellationAudit:
@@ -774,6 +856,27 @@ components:
       properties:
         reason: { type: string, minLength: 1, maxLength: 2000 }
         cancelledAt: { type: string, format: date-time }
+    MembershipMovement:
+      type: object
+      additionalProperties: false
+      required: [id, type, assetId, displayCanonicalNumber, origin, fromWarehouseId, toWarehouseId, status, tenantSnapshot, occurredAt]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [DEPARTED, TRANSFERRED, ARRIVED] }
+        assetId: { type: string, format: uuid }
+        displayCanonicalNumber: { type: string, minLength: 1, maxLength: 128 }
+        origin: { $ref: '#/components/schemas/FindingOrigin' }
+        fromWarehouseId: { $ref: '#/components/schemas/NullableUuid' }
+        toWarehouseId: { $ref: '#/components/schemas/NullableUuid' }
+        status:
+          oneOf:
+            - { $ref: '#/components/schemas/RentalItemStatus' }
+            - { type: 'null' }
+        tenantSnapshot:
+          oneOf:
+            - { type: string, maxLength: 512 }
+            - { type: 'null' }
+        occurredAt: { type: string, format: date-time }
     InventoryActor:
       type: object
       additionalProperties: false
@@ -784,13 +887,17 @@ components:
     Finding:
       type: object
       additionalProperties: false
-      required: [id, inventoryId, findingRevision, origin, inspection, reconciliation, assetId, assetVersion, displayCanonicalNumber, identityMatchKey, passportObservation, equipmentObservation, mutationState, planFingerprintSha256, comment, expectedSnapshot, currentSnapshot, conflicts, frozenPlan, media, publication]
+      required: [id, inventoryId, findingRevision, origin, inspection, inspectionSource, reconciliation, assetId, assetVersion, displayCanonicalNumber, identityMatchKey, passportObservation, equipmentObservation, mutationState, planFingerprintSha256, comment, expectedSnapshot, inspectionBaseline, currentSnapshot, conflicts, conflictResolution, frozenPlan, coverMediaId, media, publication]
       properties:
         id: { type: string, format: uuid }
         inventoryId: { type: string, format: uuid }
         findingRevision: { type: integer, format: int64, minimum: 0 }
         origin: { $ref: '#/components/schemas/FindingOrigin' }
         inspection: { $ref: '#/components/schemas/InspectionState' }
+        inspectionSource:
+          oneOf:
+            - { $ref: '#/components/schemas/InspectionSource' }
+            - { type: 'null' }
         reconciliation: { $ref: '#/components/schemas/ReconciliationState' }
         assetId: { $ref: '#/components/schemas/NullableUuid' }
         assetVersion: { oneOf: [{ type: integer, format: int64, minimum: 0 }, { type: 'null' }] }
@@ -802,9 +909,12 @@ components:
         planFingerprintSha256: { $ref: '#/components/schemas/NullableSha256' }
         comment: { type: string, maxLength: 2000 }
         expectedSnapshot: { oneOf: [{ $ref: '#/components/schemas/ExpectedItemSnapshot' }, { type: 'null' }] }
+        inspectionBaseline: { oneOf: [{ $ref: '#/components/schemas/CurrentItemSnapshot' }, { type: 'null' }] }
         currentSnapshot: { oneOf: [{ $ref: '#/components/schemas/CurrentItemSnapshot' }, { type: 'null' }] }
         conflicts: { type: array, items: { $ref: '#/components/schemas/InventoryConflict' } }
+        conflictResolution: { oneOf: [{ $ref: '#/components/schemas/ConflictResolution' }, { type: 'null' }] }
         frozenPlan: { oneOf: [{ $ref: '#/components/schemas/FrozenPlan' }, { type: 'null' }] }
+        coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
         media: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/MediaReference' } }
         publication: { oneOf: [{ $ref: '#/components/schemas/PublicationIntent' }, { type: 'null' }] }
     ExpectedItemSnapshot:
@@ -815,7 +925,7 @@ components:
         assetId: { type: string, format: uuid }
         assetVersion: { type: integer, format: int64, minimum: 0 }
         warehouseId: { type: string, format: uuid }
-        status: { type: string, enum: [NEW, BOOKED, REPAIR, WAITING_REPAIR_CHECK, CAPITAL_REPAIR, AFTER_RENT, SALE, USED_SALE, RESERVED, FREE, WAREHOUSE, OWN_NEEDS] }
+        status: { type: string, enum: [BOOKED, REPAIR, WAITING_REPAIR_CHECK, CAPITAL_REPAIR, AFTER_RENT, SALE, USED_SALE, RESERVED, FREE, WAREHOUSE, OWN_NEEDS] }
         displayCanonicalNumber: { type: string, minLength: 1, maxLength: 128 }
         tenantSnapshot: { type: [string, 'null'], maxLength: 512 }
         passportSnapshot:
@@ -830,31 +940,74 @@ components:
     CurrentItemSnapshot:
       type: object
       additionalProperties: false
-      required: [assetId, assetVersion, warehouseId, status, displayCanonicalNumber, tenantSnapshot]
+      required: [assetId, assetVersion, warehouseId, status, displayCanonicalNumber, tenantSnapshot, passportSnapshot, contentsSnapshot, repairsSnapshot]
       properties:
         assetId: { type: string, format: uuid }
         assetVersion: { type: integer, format: int64, minimum: 0 }
         warehouseId: { type: string, format: uuid }
-        status: { type: string, minLength: 1, maxLength: 48 }
+        status: { $ref: '#/components/schemas/RentalItemStatus' }
         displayCanonicalNumber: { type: string, minLength: 1, maxLength: 128 }
         tenantSnapshot: { type: [string, 'null'], maxLength: 512 }
+        passportSnapshot:
+          type: object
+          additionalProperties: true
+          description: Inventory-safe registry passport without local comments or notes.
+        contentsSnapshot:
+          type: array
+          items: {}
+          description: Inventory-safe cabin contents ordered by asset-service.
+        repairsSnapshot:
+          type: array
+          items: { $ref: '#/components/schemas/RepairRegistryFact' }
+          description: Active maintenance facts relevant to the inspected cabin.
+    RepairRegistryFact:
+      type: object
+      additionalProperties: false
+      required: [repairId, rootRepairId, origin, kind, executionState, acceptanceState, planFingerprintSha256]
+      properties:
+        repairId: { type: string, format: uuid }
+        rootRepairId: { type: string, format: uuid }
+        origin: { type: string, minLength: 1, maxLength: 48 }
+        kind: { type: string, minLength: 1, maxLength: 48 }
+        executionState: { type: string, minLength: 1, maxLength: 48 }
+        acceptanceState: { type: string, minLength: 1, maxLength: 48 }
+        planFingerprintSha256: { $ref: '#/components/schemas/Sha256' }
     InventoryConflict:
       type: object
       additionalProperties: false
       required: [code, message, expected, actual]
       properties:
-        code: { type: string, enum: [WAREHOUSE_CHANGED, STATUS_CHANGED, TENANT_CHANGED, RENTED, WRITTEN_OFF, OTHER_WAREHOUSE, ADDED_AFTER_START, RENTAL_ITEM_MISSING, ASSET_CHANGED] }
+        code:
+          type: string
+          enum: [WAREHOUSE_CHANGED, STATUS_CHANGED, TENANT_CHANGED, RENTED, WRITTEN_OFF, OTHER_WAREHOUSE, ADDED_AFTER_START, RENTAL_ITEM_MISSING, ASSET_CHANGED, NUMBER_CHANGED, PASSPORT_CHANGED, CONTENTS_CHANGED, REPAIRS_CHANGED]
         message: { type: string, minLength: 1, maxLength: 1000 }
         expected: { type: [string, 'null'] }
         actual: { type: [string, 'null'] }
+    ConflictResolution:
+      type: object
+      additionalProperties: false
+      required: [strategy, reason, resolvedAt]
+      properties:
+        strategy: { $ref: '#/components/schemas/ConflictResolutionStrategy' }
+        reason:
+          oneOf:
+            - { type: string, minLength: 1, maxLength: 2000 }
+            - { type: 'null' }
+        resolvedAt: { type: string, format: date-time }
     FrozenPlan:
       type: object
       additionalProperties: false
-      required: [mode, catalogVersionId, fingerprintSha256, lines, stages]
+      required: [mode, catalogVersionId, fingerprintSha256, priority, coverMediaId, lines, stages]
       properties:
         mode: { type: string, enum: [AUTO, MANUAL] }
         catalogVersionId: { type: string, format: uuid }
         fingerprintSha256: { $ref: '#/components/schemas/Sha256' }
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: Defaults to 3 only when reading a legacy frozen snapshot.
+        coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
         lines: { type: array, minItems: 1, maxItems: 2000, items: { $ref: '#/components/schemas/FrozenPlanLine' } }
         stages: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/FrozenPlanStage' } }
     FrozenPlanLine:
@@ -877,16 +1030,16 @@ components:
     FrozenPlanStage:
       type: object
       additionalProperties: false
-      required: [id, order, catalogNodeId, catalogNodeCode, kind, routingQueueId, routingQueueCode, routingQueueKind, movementRequired, photoRequired, normativeDurationMinutes]
+      required: [id, order, catalogNodeId, catalogNodeName, kind, routingQueueId, routingQueueName, routingQueueType, movementRequired, photoRequired, normativeDurationMinutes]
       properties:
         id: { type: string, format: uuid }
         order: { type: integer, minimum: 0 }
         catalogNodeId: { type: string, format: uuid }
-        catalogNodeCode: { type: string, minLength: 1, maxLength: 64 }
+        catalogNodeName: { type: string, minLength: 1, maxLength: 255 }
         kind: { type: string, enum: [REPAIR_WORK, MOVE_TO_REPAIR, MOVE_FROM_REPAIR] }
         routingQueueId: { type: string, format: uuid }
-        routingQueueCode: { type: string, minLength: 1, maxLength: 64 }
-        routingQueueKind: { type: string, minLength: 1, maxLength: 64 }
+        routingQueueName: { type: string, minLength: 1, maxLength: 255 }
+        routingQueueType: { type: string, minLength: 1, maxLength: 64 }
         movementRequired: { type: boolean }
         photoRequired: { type: boolean }
         normativeDurationMinutes: { type: integer, minimum: 0 }
@@ -941,7 +1094,11 @@ components:
       required: [findingId, code]
       properties:
         findingId: { type: string, format: uuid }
-        code: { type: string, enum: [MISSING, CONFLICT, ASSET_CHANGED, MEDIA_NOT_READY, PLAN_STALE, MUTATION_IN_FLIGHT] }
+        code:
+          type: string
+          enum: [NOT_INSPECTED, MISSING, CONFLICT, ASSET_CHANGED, MEDIA_NOT_READY, PLAN_STALE, MUTATION_IN_FLIGHT]
+          description: >-
+            Active previews report semantic registry differences as CONFLICT.
     CompletionPreview:
       type: object
       additionalProperties: false
@@ -950,7 +1107,11 @@ components:
         inventoryId: { type: string, format: uuid }
         sessionRevision: { type: integer, format: int64, minimum: 0 }
         findingRevisions: { type: array, items: { $ref: '#/components/schemas/RevisionExpectation' } }
-        validationSha256: { $ref: '#/components/schemas/Sha256' }
+        validationSha256:
+          allOf: [{ $ref: '#/components/schemas/Sha256' }]
+          description: >-
+            Digest of business-significant registry facts. Technical asset versions are
+            excluded so a version-only update cannot invalidate completion.
         validatedAt: { type: string, format: date-time }
         acknowledgementSha256: { $ref: '#/components/schemas/Sha256' }
         statistics: { $ref: '#/components/schemas/FrozenStatistics' }

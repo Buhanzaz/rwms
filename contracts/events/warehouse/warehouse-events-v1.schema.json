@@ -42,10 +42,9 @@
     },
     "warehouseFact": {
       "type": "object", "additionalProperties": false,
-      "required": ["warehouseId", "code", "timeZone", "active", "sortOrder"],
+      "required": ["warehouseId", "timeZone", "active", "sortOrder"],
       "properties": {
         "warehouseId": {"type": "string", "format": "uuid"},
-        "code": {"type": "string", "pattern": "^[A-Z0-9][A-Z0-9_-]{0,63}$"},
         "timeZone": {"type": "string", "minLength": 1, "maxLength": 64},
         "active": {"type": "boolean"},
         "sortOrder": {"oneOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]}

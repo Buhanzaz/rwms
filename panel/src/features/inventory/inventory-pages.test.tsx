@@ -1,0 +1,855 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { MemoryRouter, Route, Routes } from "react-router-dom"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+import type { CurrentUser } from "@/features/auth/auth-model"
+import type {
+  InventoryFindingDto,
+  InventorySessionDto,
+} from "@/features/inventory/model/inventory"
+import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
+
+const inventoryApi = vi.hoisted(() => ({
+  completeInventory: vi.fn(),
+  getInventory: vi.fn(),
+  previewInventoryCompletion: vi.fn(),
+  resolveInventoryFindingConflict: vi.fn(),
+  saveInventoryFinding: vi.fn(),
+  subscribeInventory: vi.fn(() => () => undefined),
+}))
+const inspectionWorkspace = vi.hoisted(() => ({
+  readyReferences: [] as Array<{ mediaId: string; generation: number }>,
+}))
+const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
+const auth = vi.hoisted(() => ({ useAuth: vi.fn() }))
+const warehouse = vi.hoisted(() => ({ useWarehouse: vi.fn() }))
+const viewport = vi.hoisted(() => ({ isMobile: false }))
+const queueCapabilities = vi.hoisted(() => ({ get: vi.fn() }))
+
+vi.mock("sonner", () => ({ toast }))
+vi.mock("@/features/auth/use-auth", () => ({ useAuth: auth.useAuth }))
+vi.mock("@/hooks/use-warehouse", () => ({
+  useWarehouse: warehouse.useWarehouse,
+}))
+vi.mock("@/features/inventory/api/inventory-api", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/features/inventory/api/inventory-api")
+  >("@/features/inventory/api/inventory-api")
+
+  return {
+    ...actual,
+    getInventory: inventoryApi.getInventory,
+    completeInventory: inventoryApi.completeInventory,
+    previewInventoryCompletion: inventoryApi.previewInventoryCompletion,
+    resolveInventoryFindingConflict:
+      inventoryApi.resolveInventoryFindingConflict,
+    saveInventoryFinding: inventoryApi.saveInventoryFinding,
+    subscribeInventory: inventoryApi.subscribeInventory,
+  }
+})
+vi.mock("@/hooks/use-mobile", () => ({
+  useIsMobile: () => viewport.isMobile,
+}))
+vi.mock("@/features/repair-estimates/api/warehouse-queue-capabilities", () => ({
+  warehouseQueueCapabilitiesQueryKey: (warehouseId: string) => [
+    "task-board",
+    warehouseId,
+    "queue-capabilities",
+  ],
+  getWarehouseQueueCapabilities: queueCapabilities.get,
+}))
+vi.mock("@/features/inventory/inventory-inspection-workspace", () => ({
+  InventoryInspectionWorkspace: ({
+    comment,
+    onCommentChange,
+    onMediaChange,
+    onMediaReadyChange,
+    onCoverMediaIdChange,
+  }: {
+    comment: string
+    onCommentChange: (value: string) => void
+    onMediaChange: (
+      references: Array<{ mediaId: string; generation: number }>
+    ) => void
+    onMediaReadyChange: (ready: boolean) => void
+    onCoverMediaIdChange: (mediaId: string | null) => void
+  }) => (
+    <section aria-label="Редактор осмотра">
+      <label>
+        Комментарий
+        <input
+          value={comment}
+          onChange={(event) => onCommentChange(event.target.value)}
+        />
+      </label>
+      <button
+        type="button"
+        onClick={() => {
+          onMediaChange(inspectionWorkspace.readyReferences)
+          onCoverMediaIdChange(
+            inspectionWorkspace.readyReferences[0]?.mediaId ?? null
+          )
+          onMediaReadyChange(true)
+        }}
+      >
+        Обновить готовые фото
+      </button>
+    </section>
+  ),
+}))
+vi.mock("@/features/repair-estimates/repair-work-completion-dialog", () => ({
+  RepairWorkCompletionDialog: ({
+    open,
+    movementRouteAvailable,
+    onComplete,
+  }: {
+    open: boolean
+    movementRouteAvailable: boolean
+    onComplete: (result: {
+      completionMode: "AUTO"
+      movementRequired: boolean
+      taskPlans: []
+      priority: 3
+    }) => void
+  }) =>
+    open ? (
+      <section aria-label="Настройка работ по осмотру">
+        {movementRouteAvailable ? (
+          <label>
+            <input
+              type="checkbox"
+              aria-label="Перемещение на отгрузку"
+              defaultChecked
+            />
+            Перемещение на отгрузку
+          </label>
+        ) : null}
+        <button
+          type="button"
+          onClick={() =>
+            onComplete({
+              completionMode: "AUTO",
+              movementRequired: true,
+              taskPlans: [],
+              priority: 3,
+            })
+          }
+        >
+          Подтвердить работы
+        </button>
+      </section>
+    ) : null,
+}))
+
+import {
+  InventoryFinishPage,
+  InventorySessionPage,
+} from "@/features/inventory/inventory-pages"
+
+const WAREHOUSE_ID = "11111111-1111-4111-8111-111111111111"
+const INVENTORY_ID = "22222222-2222-4222-8222-222222222222"
+const FINDING_ID = "33333333-3333-4333-8333-333333333333"
+
+const workLine: RepairEstimateLineDto = {
+  id: "77777777-7777-4777-8777-777777777777",
+  sourceLineKey: "inventory-work",
+  lineType: "WORK",
+  description: "Заменить дверь",
+  lineComment: "",
+  unit: "шт.",
+  quantity: 1,
+  normativeMinutes: 60,
+  unitPrice: "100.00",
+  lineTotal: "100.00",
+  catalogSnapshot: {
+    nodeId: "88888888-8888-4888-8888-888888888888",
+    name: "Заменить дверь",
+    nodeType: "WORK",
+    furnitureEquipment: null,
+  },
+  customQueueBinding: null,
+}
+
+const currentUser: CurrentUser = {
+  id: "44444444-4444-4444-8444-444444444444",
+  username: "inventory-user",
+  displayName: "Инвентаризатор",
+  firstName: null,
+  lastName: null,
+  email: null,
+  principalType: "USER",
+  globalRole: "WAREHOUSE_MANAGER",
+  rentalAccess: false,
+  warehouseAccessAll: false,
+  warehouseAccesses: [{ warehouseId: WAREHOUSE_ID, level: "MANAGE" }],
+}
+
+function finding(
+  status: "AFTER_RENT" | "FREE",
+  overrides: Partial<InventoryFindingDto> = {}
+): InventoryFindingDto {
+  return {
+    id: FINDING_ID,
+    version: 1,
+    rentalItemId: "55555555-5555-4555-855555555555",
+    canonicalNumber: "БЫТ-001",
+    cabinNumber: "БЫТ-001",
+    origin: "EXPECTED",
+    inspectionStatus: "NOT_INSPECTED",
+    reconciliationStatus: "MATCHED",
+    expectedSnapshot: {
+      rentalItemId: "55555555-5555-4555-855555555555",
+      number: "БЫТ-001",
+      canonicalNumber: "БЫТ-001",
+      warehouseId: WAREHOUSE_ID,
+      status: "FREE",
+      tenant: null,
+      passportSnapshot: {},
+      contentsSnapshot: [],
+      repairsSnapshot: [],
+    },
+    currentSnapshot: {
+      rentalItemId: "55555555-5555-4555-855555555555",
+      number: "БЫТ-001",
+      canonicalNumber: "БЫТ-001",
+      warehouseId: WAREHOUSE_ID,
+      status,
+      tenant: null,
+      passportSnapshot: {},
+      contentsSnapshot: [],
+      repairsSnapshot: [],
+    },
+    inspectionBaseline: null,
+    conflictResolution: null,
+    conflicts: [],
+    comment: "",
+    media: [],
+    coverMediaId: null,
+    inspectionSource: null,
+    lines: [],
+    repairCompletionMode: null,
+    repairPriority: 3,
+    movementRequired: false,
+    repairPlans: [],
+    publicationStatus: "NOT_REQUIRED",
+    publicationOperationKey: null,
+    publishedRepairTaskId: null,
+    publicationError: null,
+    ...overrides,
+  }
+}
+
+function activeSession(
+  selectedFinding: InventoryFindingDto,
+  overrides: Partial<InventorySessionDto> = {}
+): InventorySessionDto {
+  const findings = overrides.findings ?? [selectedFinding]
+  return {
+    id: INVENTORY_ID,
+    version: 1,
+    warehouseId: WAREHOUSE_ID,
+    status: "ACTIVE",
+    warehouse: {
+      id: WAREHOUSE_ID,
+      name: "Склад СПБ",
+      timeZone: "Europe/Moscow",
+    },
+    author: {
+      id: currentUser.id,
+      displayName: currentUser.displayName,
+      permissions: ["VIEW", "EDIT", "MANAGE"],
+      authorizedWarehouseIds: [WAREHOUSE_ID],
+    },
+    businessDate: "2026-07-27",
+    startedAt: "2026-07-27T08:00:00Z",
+    completedAt: null,
+    findingCount: findings.length,
+    inspectedCount: 0,
+    findings,
+    membershipMovements: [],
+    statistics: null,
+    publicationStatus: "NOT_REQUESTED",
+    ...overrides,
+  }
+}
+
+function renderPage(
+  initialEntry = `/inventory/${INVENTORY_ID}?findingId=${FINDING_ID}`
+) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  })
+
+  return render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <QueryClientProvider client={queryClient}>
+        <Routes>
+          <Route
+            path="/inventory/:inventoryId"
+            element={<InventorySessionPage />}
+          />
+          <Route
+            path="/inventory/:inventoryId/finish"
+            element={<InventoryFinishPage />}
+          />
+        </Routes>
+      </QueryClientProvider>
+    </MemoryRouter>
+  )
+}
+
+beforeEach(() => {
+  auth.useAuth.mockReturnValue({
+    accessToken: "inventory-token",
+    currentUser,
+  })
+  warehouse.useWarehouse.mockReturnValue({
+    selectedWarehouse: {
+      id: WAREHOUSE_ID,
+      name: "Склад СПБ",
+      timeZone: "Europe/Moscow",
+    },
+  })
+  inspectionWorkspace.readyReferences = []
+  viewport.isMobile = false
+  inventoryApi.saveInventoryFinding.mockResolvedValue(finding("AFTER_RENT"))
+  queueCapabilities.get.mockResolvedValue({
+    warehouseId: WAREHOUSE_ID,
+    movementToShipmentAvailable: false,
+    movementQueueDefinitions: [],
+  })
+})
+
+afterEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+})
+
+describe("InventorySessionPage inspection", () => {
+  it("requires a ready photo to accept an empty after-rent estimate", async () => {
+    const user = userEvent.setup()
+    inventoryApi.getInventory.mockResolvedValue(
+      activeSession(finding("AFTER_RENT"))
+    )
+
+    renderPage()
+
+    const accept = (await screen.findByRole("button", {
+      name: "Принять бытовку",
+    })) as HTMLButtonElement
+    expect(accept.disabled).toBe(true)
+    expect(
+      screen.getByText(
+        "Чтобы принять бытовку после аренды, добавьте хотя бы одну готовую фотографию."
+      )
+    ).toBeTruthy()
+
+    await user.click(
+      screen.getByRole("button", { name: "Обновить готовые фото" })
+    )
+    expect(accept.disabled).toBe(true)
+
+    inspectionWorkspace.readyReferences = [
+      {
+        mediaId: "66666666-6666-4666-8666-666666666666",
+        generation: 1,
+      },
+    ]
+    await user.click(
+      screen.getByRole("button", { name: "Обновить готовые фото" })
+    )
+
+    await waitFor(() => expect(accept.disabled).toBe(false))
+    expect(
+      screen.queryByText(
+        "Чтобы принять бытовку после аренды, добавьте хотя бы одну готовую фотографию."
+      )
+    ).toBeNull()
+
+    await user.click(accept)
+    await waitFor(() =>
+      expect(inventoryApi.saveInventoryFinding).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inventoryId: INVENTORY_ID,
+          findingId: FINDING_ID,
+          lines: [],
+          media: inspectionWorkspace.readyReferences,
+          coverMediaId: inspectionWorkspace.readyReferences[0]?.mediaId,
+        })
+      )
+    )
+  })
+
+  it("keeps the existing empty-inspection action for statuses other than AFTER_RENT", async () => {
+    const user = userEvent.setup()
+    inventoryApi.getInventory.mockResolvedValue(activeSession(finding("FREE")))
+
+    renderPage()
+
+    const save = (await screen.findByRole("button", {
+      name: "Сохранить осмотр",
+    })) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    expect(
+      screen.queryByText(
+        "Чтобы принять бытовку после аренды, добавьте хотя бы одну готовую фотографию."
+      )
+    ).toBeNull()
+
+    await user.click(
+      screen.getByRole("button", { name: "Обновить готовые фото" })
+    )
+    await waitFor(() => expect(save.disabled).toBe(false))
+  })
+
+  it("hides inventory movement and clamps a programmatic true when the warehouse capability is absent", async () => {
+    const user = userEvent.setup()
+    inventoryApi.getInventory.mockResolvedValue(
+      activeSession(finding("FREE", { lines: [workLine] }))
+    )
+
+    renderPage()
+
+    await user.click(
+      await screen.findByRole("button", { name: "Обновить готовые фото" })
+    )
+    const save = screen.getByRole("button", { name: "Сохранить осмотр" })
+    await waitFor(() =>
+      expect((save as HTMLButtonElement).disabled).toBe(false)
+    )
+    await user.click(save)
+
+    expect(
+      await screen.findByRole("region", {
+        name: "Настройка работ по осмотру",
+      })
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("checkbox", { name: "Перемещение на отгрузку" })
+    ).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: "Подтвердить работы" }))
+
+    await waitFor(() =>
+      expect(inventoryApi.saveInventoryFinding).toHaveBeenCalledWith(
+        expect.objectContaining({ movementRequired: false })
+      )
+    )
+  })
+
+  it("shows and preserves inventory movement when the current warehouse capability is available", async () => {
+    queueCapabilities.get.mockResolvedValue({
+      warehouseId: WAREHOUSE_ID,
+      movementToShipmentAvailable: true,
+      movementQueueDefinitions: [
+        {
+          queueDefinitionId: "movement-definition",
+          workQueueId: "warehouse-movement-queue",
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    inventoryApi.getInventory.mockResolvedValue(
+      activeSession(finding("FREE", { lines: [workLine] }))
+    )
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(queueCapabilities.get).toHaveBeenCalledWith(
+        "inventory-token",
+        WAREHOUSE_ID
+      )
+    )
+    await user.click(
+      screen.getByRole("button", { name: "Обновить готовые фото" })
+    )
+    const save = screen.getByRole("button", { name: "Сохранить осмотр" })
+    await waitFor(() =>
+      expect((save as HTMLButtonElement).disabled).toBe(false)
+    )
+    await user.click(save)
+
+    expect(
+      await screen.findByRole("checkbox", {
+        name: "Перемещение на отгрузку",
+      })
+    ).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Подтвердить работы" }))
+
+    await waitFor(() =>
+      expect(inventoryApi.saveInventoryFinding).toHaveBeenCalledWith(
+        expect.objectContaining({ movementRequired: true })
+      )
+    )
+  })
+
+  it("polls active sessions and preserves an open inspection draft across membership updates", async () => {
+    const user = userEvent.setup()
+    const initialFinding = finding("FREE")
+    const arrivingFinding = {
+      ...finding("FREE"),
+      id: "77777777-7777-4777-8777-777777777777",
+      cabinNumber: "БЫТ-002",
+      canonicalNumber: "БЫТ-002",
+    }
+    inventoryApi.getInventory
+      .mockResolvedValueOnce(activeSession(initialFinding))
+      .mockResolvedValue(
+        activeSession(initialFinding, {
+          version: 2,
+          findings: [initialFinding, arrivingFinding],
+        })
+      )
+
+    renderPage()
+
+    const comment = (await screen.findByRole("textbox", {
+      name: "Комментарий",
+    })) as HTMLInputElement
+    await user.type(comment, "Черновик осмотра")
+
+    await waitFor(
+      () => expect(inventoryApi.getInventory).toHaveBeenCalledTimes(2),
+      { timeout: 6_500 }
+    )
+
+    expect(comment.value).toBe("Черновик осмотра")
+  }, 8_000)
+})
+
+describe("Inventory mobile restrictions", () => {
+  it("shows the app warning instead of opening a cabin inspection", async () => {
+    const user = userEvent.setup()
+    viewport.isMobile = true
+    inventoryApi.getInventory.mockResolvedValue(
+      activeSession(finding("FREE", { inspectionStatus: "READY" }))
+    )
+
+    renderPage(`/inventory/${INVENTORY_ID}`)
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Открыть" }))[0]
+    )
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Осмотр бытовки доступно в мобильном приложении",
+    })
+    expect(
+      within(dialog)
+        .getByRole("link", { name: "Скачать приложение" })
+        .getAttribute("href")
+    ).toBe("/downloads/rwms-manager-app-debug.apk")
+    expect(
+      screen.queryByRole("region", { name: "Редактор осмотра" })
+    ).toBeNull()
+  })
+
+  it("opens the add-cabin dialog on mobile", async () => {
+    const user = userEvent.setup()
+    viewport.isMobile = true
+    inventoryApi.getInventory.mockResolvedValue(activeSession(finding("FREE")))
+
+    renderPage(`/inventory/${INVENTORY_ID}`)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Добавить бытовку" })
+    )
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Добавить бытовку",
+    })
+    expect(
+      within(dialog).getByText(
+        "Введите точный номер. Поиск повторно проверит весь реестр."
+      )
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("dialog", {
+        name: "Добавление бытовки доступно в мобильном приложении",
+      })
+    ).toBeNull()
+  })
+
+  it("blocks a direct cabin-inspection link and returns to the session list", async () => {
+    const user = userEvent.setup()
+    viewport.isMobile = true
+    inventoryApi.getInventory.mockResolvedValue(activeSession(finding("FREE")))
+
+    renderPage(`/inventory/${INVENTORY_ID}?findingId=${FINDING_ID}`)
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Осмотр бытовки доступно в мобильном приложении",
+    })
+    expect(
+      screen.queryByRole("region", { name: "Редактор осмотра" })
+    ).toBeNull()
+
+    await user.click(within(dialog).getByRole("button", { name: "Понятно" }))
+
+    expect(
+      await screen.findByRole("button", { name: "Добавить бытовку" })
+    ).toBeTruthy()
+  })
+
+  it("keeps filters, add and completion actions in one non-wrapping toolbar row", async () => {
+    inventoryApi.getInventory.mockResolvedValue(activeSession(finding("FREE")))
+
+    renderPage(`/inventory/${INVENTORY_ID}`)
+
+    await screen.findByRole("button", { name: "Добавить бытовку" })
+    const actions = document.querySelector('[data-slot="page-toolbar-actions"]')
+    expect(actions?.className).toContain("flex-nowrap")
+    expect(
+      within(actions as HTMLElement)
+        .getAllByRole("button")
+        .map((button) => button.textContent?.trim())
+    ).toEqual(["", "Добавить бытовку", "Закончить"])
+  })
+})
+
+describe("InventorySessionPage filters", () => {
+  it("filters findings and keeps the detailed filter state when the panel is hidden", async () => {
+    const user = userEvent.setup()
+    const firstFinding = finding("FREE")
+    const secondFinding = {
+      ...finding("FREE"),
+      id: "77777777-7777-4777-8777-777777777777",
+      cabinNumber: "БЫТ-002",
+      canonicalNumber: "БЫТ-002",
+    }
+    inventoryApi.getInventory.mockResolvedValue(
+      activeSession(firstFinding, {
+        findings: [firstFinding, secondFinding],
+      })
+    )
+
+    renderPage(`/inventory/${INVENTORY_ID}`)
+
+    await screen.findAllByText("БЫТ-001")
+    const filterLabels = [
+      "Источник",
+      "Статус",
+      "Сверка",
+      "Осмотр",
+      "Добавление",
+      "Наличие",
+      "Работы",
+    ]
+    const filtersPanel = document.getElementById("inventory-finding-filters")
+    expect(filtersPanel).not.toBeNull()
+    filterLabels.forEach((label) => {
+      expect(
+        within(filtersPanel as HTMLElement).getByRole("button", {
+          name: label,
+        })
+      ).toBeTruthy()
+    })
+    const numberFilter = screen.getByRole("textbox", {
+      name: "Номер бытовки",
+    }) as HTMLInputElement
+    await user.type(numberFilter, "002")
+
+    await waitFor(() => expect(screen.queryByText("БЫТ-001")).toBeNull())
+    expect(screen.getAllByText("БЫТ-002")).toHaveLength(2)
+
+    const hideFilters = screen.getByRole("button", {
+      name: "Скрыть фильтры инвентаризации",
+    })
+    expect(hideFilters.getAttribute("aria-controls")).toBe(
+      "inventory-finding-filters"
+    )
+    expect(hideFilters.getAttribute("aria-expanded")).toBe("true")
+
+    await user.click(hideFilters)
+
+    expect(document.getElementById("inventory-finding-filters")?.hidden).toBe(
+      true
+    )
+    const showFilters = screen.getByRole("button", {
+      name: "Показать фильтры инвентаризации",
+    })
+    expect(showFilters.getAttribute("aria-expanded")).toBe("false")
+
+    await user.click(showFilters)
+
+    expect(
+      (
+        screen.getByRole("textbox", {
+          name: "Номер бытовки",
+        }) as HTMLInputElement
+      ).value
+    ).toBe("002")
+  })
+})
+
+describe("InventoryFinishPage conflict resolution", () => {
+  function conflictFinding() {
+    const base = finding("FREE")
+    return {
+      ...base,
+      version: 6,
+      inspectionStatus: "READY" as const,
+      reconciliationStatus: "CONFLICT" as const,
+      inspectionBaseline: {
+        ...base.currentSnapshot!,
+        status: "AFTER_RENT" as const,
+      },
+      conflicts: [
+        {
+          code: "STATUS_CHANGED" as const,
+          message: "Статус бытовки изменился",
+          expected: "Ожидает осмотра",
+          actual: "Свободна",
+        },
+      ],
+    }
+  }
+
+  it("blocks completion and resolves a conflict by accepting the registry", async () => {
+    const user = userEvent.setup()
+    const conflict = conflictFinding()
+    const reviewed = activeSession(conflict, { version: 8 })
+    const resolved = activeSession(
+      {
+        ...conflict,
+        version: 7,
+        reconciliationStatus: "MATCHED",
+        conflicts: [],
+        conflictResolution: {
+          strategy: "ACCEPT_REGISTRY",
+          reason: null,
+          resolvedAt: "2026-07-27T10:00:00Z",
+        },
+      },
+      { version: 9 }
+    )
+    inventoryApi.getInventory
+      .mockResolvedValueOnce(reviewed)
+      .mockResolvedValue(resolved)
+    inventoryApi.previewInventoryCompletion
+      .mockResolvedValueOnce(reviewed)
+      .mockResolvedValue(resolved)
+    inventoryApi.resolveInventoryFindingConflict.mockResolvedValue(resolved)
+
+    renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    const complete = (await screen.findByRole("button", {
+      name: "Завершить",
+    })) as HTMLButtonElement
+    expect(complete.disabled).toBe(true)
+    expect(
+      screen.getByText(
+        "Урегулируйте все конфликты реестра перед завершением инвентаризации."
+      )
+    ).toBeTruthy()
+    expect(screen.queryByText(/Я проверил.*конфликт/i)).toBeNull()
+    expect(screen.getByLabelText("Было → Стало")).toBeTruthy()
+    expect(screen.getByText("Ожидает осмотра")).toBeTruthy()
+    expect(screen.getAllByText("Свободна").length).toBeGreaterThan(0)
+
+    await user.click(screen.getByRole("button", { name: "Принять реестр" }))
+
+    await waitFor(() =>
+      expect(inventoryApi.resolveInventoryFindingConflict).toHaveBeenCalledWith(
+        {
+          inventoryId: INVENTORY_ID,
+          expectedVersion: 8,
+          expectedFindingVersion: 6,
+          actor: expect.objectContaining({
+            id: currentUser.id,
+          }),
+          findingId: FINDING_ID,
+          strategy: "ACCEPT_REGISTRY",
+          reason: null,
+        }
+      )
+    )
+  })
+
+  it("requires an audited reason before keeping inspection data", async () => {
+    const user = userEvent.setup()
+    const conflict = conflictFinding()
+    const reviewed = activeSession(conflict, { version: 8 })
+    const resolved = activeSession(
+      {
+        ...conflict,
+        version: 7,
+        reconciliationStatus: "MATCHED",
+        conflicts: [],
+        conflictResolution: {
+          strategy: "KEEP_INSPECTION",
+          reason: "Подтверждено повторным осмотром",
+          resolvedAt: "2026-07-27T10:00:00Z",
+        },
+      },
+      { version: 9 }
+    )
+    inventoryApi.getInventory.mockResolvedValue(reviewed)
+    inventoryApi.previewInventoryCompletion.mockResolvedValue(reviewed)
+    inventoryApi.resolveInventoryFindingConflict.mockResolvedValue(resolved)
+
+    renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Оставить данные осмотра",
+      })
+    )
+    const dialog = screen.getByRole("dialog", {
+      name: "Оставить данные осмотра",
+    })
+    await user.click(
+      within(dialog).getByRole("button", { name: "Сохранить решение" })
+    )
+    expect(within(dialog).getByText("Введите причину решения")).toBeTruthy()
+    expect(inventoryApi.resolveInventoryFindingConflict).not.toHaveBeenCalled()
+
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Причина" }),
+      "Подтверждено повторным осмотром"
+    )
+    await user.click(
+      within(dialog).getByRole("button", { name: "Сохранить решение" })
+    )
+
+    await waitFor(() =>
+      expect(inventoryApi.resolveInventoryFindingConflict).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expectedVersion: 8,
+          expectedFindingVersion: 6,
+          strategy: "KEEP_INSPECTION",
+          reason: "Подтверждено повторным осмотром",
+        })
+      )
+    )
+  })
+
+  it("opens the existing inspection editor from a conflict", async () => {
+    const user = userEvent.setup()
+    const reviewed = activeSession(conflictFinding(), { version: 8 })
+    inventoryApi.getInventory.mockResolvedValue(reviewed)
+    inventoryApi.previewInventoryCompletion.mockResolvedValue(reviewed)
+
+    renderPage(`/inventory/${INVENTORY_ID}/finish`)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Дополнить осмотр" })
+    )
+
+    expect(
+      await screen.findByRole("region", { name: "Редактор осмотра" })
+    ).toBeTruthy()
+  })
+})

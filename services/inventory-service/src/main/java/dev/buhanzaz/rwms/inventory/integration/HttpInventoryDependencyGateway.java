@@ -4,6 +4,7 @@ import dev.buhanzaz.rwms.inventory.service.InventoryException;
 import java.time.ZoneId;
 import java.time.zone.ZoneRulesException;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.http.HttpHeaders;
@@ -146,6 +147,42 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
   }
 
   @Override
+  public Optional<LiveAssetSnapshot> currentAsset(UUID assetId) {
+    LiveAssetSnapshot response;
+    try {
+      response =
+          client
+              .get()
+              .uri(assetBase + "/api/internal/asset/v1/inventory/assets/" + assetId)
+              .header(HttpHeaders.AUTHORIZATION, bearer(ASSET_CLIENT, ASSET_SCOPE))
+              .retrieve()
+              .body(LiveAssetSnapshot.class);
+    } catch (RestClientResponseException exception) {
+      if (exception.getStatusCode() == HttpStatus.NOT_FOUND) return Optional.empty();
+      throw dependencyFailure(exception);
+    } catch (RuntimeException exception) {
+      throw dependencyFailure(exception);
+    }
+    if (response == null
+        || !assetId.equals(response.assetId())
+        || response.version() < 0
+        || response.warehouseId() == null
+        || response.status() == null
+        || response.status().isBlank()
+        || response.displayCanonicalNumber() == null
+        || response.displayCanonicalNumber().isBlank()
+        || response.identityMatchKey() == null
+        || response.identityMatchKey().isBlank()
+        || response.passportSnapshot() == null
+        || !response.passportSnapshot().isObject()
+        || response.contentsSnapshot() == null
+        || !response.contentsSnapshot().isArray()) {
+      throw malformed("Asset-service returned malformed live inventory asset truth");
+    }
+    return Optional.of(response);
+  }
+
+  @Override
   public SourceAsset createSourceAsset(UUID idempotencyKey, JsonNode request) {
     SourceAsset response =
         post(
@@ -194,10 +231,60 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
                                 && item.warehouseId() != null
                                 && item.status() != null
                                 && item.displayCanonicalNumber() != null
-                                && item.identityMatchKey() != null)))) {
+                                && item.identityMatchKey() != null
+                                && item.passportSnapshot() != null
+                                && item.passportSnapshot().isObject()
+                                && item.contentsSnapshot() != null
+                                && item.contentsSnapshot().isArray()))
+                        || (!item.found()
+                            && (!absent(item.passportSnapshot())
+                                || !absent(item.contentsSnapshot()))))) {
       throw malformed("Asset-service returned malformed validation truth");
     }
     return response;
+  }
+
+  @Override
+  public RepairSnapshots repairSnapshots(List<UUID> assetIds) {
+    RepairSnapshots response =
+        post(
+            maintenanceBase + "/api/internal/maintenance/v1/inventory/repair-snapshots",
+            null,
+            new RepairSnapshotRequest(assetIds),
+            RepairSnapshots.class,
+            MAINTENANCE_CLIENT,
+            MAINTENANCE_SCOPE);
+    List<UUID> expected = assetIds.stream().sorted().toList();
+    if (response.assets() == null
+        || !response.assets().stream().map(RepairAssetSnapshot::assetId).toList().equals(expected)
+        || response.assets().stream().anyMatch(this::malformedRepairAssetSnapshot)) {
+      throw malformed("Maintenance-service returned malformed inventory repair truth");
+    }
+    return response;
+  }
+
+  private boolean malformedRepairAssetSnapshot(RepairAssetSnapshot asset) {
+    if (asset.assetId() == null || asset.repairs() == null) return true;
+    UUID previous = null;
+    for (RepairRegistryFact repair : asset.repairs()) {
+      if (repair == null
+          || repair.repairId() == null
+          || repair.rootRepairId() == null
+          || repair.origin() == null
+          || repair.origin().isBlank()
+          || repair.kind() == null
+          || repair.kind().isBlank()
+          || repair.executionState() == null
+          || repair.executionState().isBlank()
+          || repair.acceptanceState() == null
+          || repair.acceptanceState().isBlank()
+          || !sha256(repair.planFingerprintSha256())
+          || (previous != null && previous.compareTo(repair.repairId()) >= 0)) {
+        return true;
+      }
+      previous = repair.repairId();
+    }
+    return false;
   }
 
   @Override
@@ -337,6 +424,10 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
     return value != null && value.matches("^[0-9a-f]{64}$");
   }
 
+  private static boolean absent(JsonNode value) {
+    return value == null || value.isNull();
+  }
+
   private static String strip(String value) {
     return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
   }
@@ -352,4 +443,6 @@ final class HttpInventoryDependencyGateway implements InventoryDependencyGateway
   private record NumberRequest(UUID warehouseId, String number) {}
 
   private record ValidationRequest(List<UUID> assetIds) {}
+
+  private record RepairSnapshotRequest(List<UUID> assetIds) {}
 }

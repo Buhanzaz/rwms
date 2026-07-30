@@ -10,6 +10,7 @@ public final class MaintenanceTransportTopics {
   public static final String REPAIR = "rwms.maintenance.repair.v1";
   public static final String BOARD_TASK = "rwms.task-board.board-task.v1";
   public static final String QUEUE_ENTRY = "rwms.task-board.queue-entry.v1";
+  public static final String TASK_EVIDENCE = "rwms.task-board.task-evidence.v1";
   public static final String MEDIA = "rwms.media.media.v1";
   public static final String RENTAL_ITEM = "rwms.asset.rental-item.v1";
   public static final String OPERATION_LEASE = "rwms.asset.operation-lease.v1";
@@ -18,7 +19,7 @@ public final class MaintenanceTransportTopics {
 
   public static final List<String> OUTPUTS = List.of(CATALOG, ESTIMATE, REPAIR, SANITIZED_DLT);
   public static final Set<String> INPUTS =
-      Set.of(BOARD_TASK, QUEUE_ENTRY, MEDIA, RENTAL_ITEM, OPERATION_LEASE);
+      Set.of(BOARD_TASK, QUEUE_ENTRY, TASK_EVIDENCE, MEDIA, RENTAL_ITEM, OPERATION_LEASE);
 
   private static final Map<String, TopicPolicy> POLICIES =
       Map.of(
@@ -52,6 +53,16 @@ public final class MaintenanceTransportTopics {
               Set.of(
                   "task-board.queue-entry.completed.v1",
                   "task-board.queue-entry.cancelled.v1")),
+          TASK_EVIDENCE,
+          new TopicPolicy(
+              "task-board-service",
+              "TASK_EVIDENCE",
+              Set.of(
+                  "task-board.task-evidence.ready.v1",
+                  "task-board.task-evidence.review-required.v1"),
+              Set.of(
+                  "task-board.task-evidence.ready.v1",
+                  "task-board.task-evidence.review-required.v1")),
           MEDIA,
           new TopicPolicy(
               "media-service",

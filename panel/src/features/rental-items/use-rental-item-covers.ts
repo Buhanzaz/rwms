@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+
+import type { PhotoCarouselPhoto } from "@/components/media/photo-carousel"
 
 import {
   cabinMediaOwner,
@@ -6,6 +8,7 @@ import {
   type CabinCoverProjection,
   type DisposableMediaObjectUrl,
 } from "@/features/media/media-service"
+import { retryOwnerProofOperation } from "@/features/media/owner-proof-retry"
 
 const mediaClient = createHttpMediaClient()
 
@@ -20,6 +23,7 @@ export type RentalItemCardServicePhoto = Readonly<{
   id: string
   generation: number
   url: string
+  variants: NonNullable<PhotoCarouselPhoto["variants"]>
 }>
 
 type LoadedRentalItemPhotos = Readonly<{
@@ -30,12 +34,18 @@ type LoadedRentalItemPhotos = Readonly<{
 
 const EMPTY_CABIN_PREVIEWS: NonNullable<CabinCoverProjection["previews"]> = []
 
+function fullscreenPhotoKey(id: string, generation: number) {
+  return `${id}:${generation}`
+}
+
 export function loadRentalItemCoverPage(
   accessToken: string,
   warehouseId: string,
   cabinIds: readonly string[]
 ) {
-  return mediaClient.listCabinCovers(accessToken, warehouseId, cabinIds)
+  return retryOwnerProofOperation(() =>
+    mediaClient.listCabinCovers(accessToken, warehouseId, cabinIds)
+  )
 }
 
 export function useRentalItemCardPhotos({
@@ -53,6 +63,15 @@ export function useRentalItemCardPhotos({
 }) {
   const [loadedPhotos, setLoadedPhotos] =
     useState<LoadedRentalItemPhotos | null>(null)
+  const [fullscreenUrls, setFullscreenUrls] = useState<
+    Readonly<Record<string, string>>
+  >({})
+  const fullscreenObjectUrls = useRef(
+    new Map<string, DisposableMediaObjectUrl>()
+  )
+  const fullscreenRequests = useRef(new Map<string, Promise<void>>())
+  const currentPhotoListSignature = useRef("")
+  const mounted = useRef(true)
   const previews = projection?.previews ?? EMPTY_CABIN_PREVIEWS
   const photoListSignature = `${warehouseId}:${cabinId}:${previews
     .map(
@@ -66,26 +85,43 @@ export function useRentalItemCardPhotos({
   )
 
   useEffect(() => {
+    currentPhotoListSignature.current = photoListSignature
+  }, [photoListSignature])
+
+  useEffect(() => {
+    mounted.current = true
+    const objectUrls = fullscreenObjectUrls.current
+    const requests = fullscreenRequests.current
+    return () => {
+      mounted.current = false
+      objectUrls.forEach((objectUrl) => objectUrl.dispose())
+      objectUrls.clear()
+      requests.clear()
+    }
+  }, [])
+
+  useEffect(() => {
     if (coverAvailability !== "available" || previews.length === 0) return
     let active = true
     const objectUrls: DisposableMediaObjectUrl[] = []
 
     void Promise.allSettled(
       previews.map((preview) =>
-        mediaClient
-          .createVariantObjectUrl(accessToken, owner, preview)
-          .then((objectUrl) => {
-            if (!active) {
-              objectUrl.dispose()
-              return null
-            }
-            objectUrls.push(objectUrl)
-            return {
-              id: preview.mediaId,
-              generation: preview.generation,
-              url: objectUrl.url,
-            }
-          })
+        retryOwnerProofOperation(() =>
+          mediaClient.createVariantObjectUrl(accessToken, owner, preview)
+        ).then((objectUrl) => {
+          if (!active) {
+            objectUrl.dispose()
+            return null
+          }
+          objectUrls.push(objectUrl)
+          return {
+            id: preview.mediaId,
+            generation: preview.generation,
+            url: objectUrl.url,
+            variants: { small: { url: objectUrl.url } },
+          }
+        })
       )
     )
       .then((results) => {
@@ -117,14 +153,78 @@ export function useRentalItemCardPhotos({
     }
   }, [accessToken, coverAvailability, owner, photoListSignature, previews])
 
+  const requestFullscreen = useCallback(
+    (photo: PhotoCarouselPhoto) => {
+      const source = loadedPhotos?.photos.find(
+        (candidate) => candidate.id === photo.id
+      )
+      if (!source) return Promise.resolve()
+
+      const key = fullscreenPhotoKey(source.id, source.generation)
+      if (fullscreenUrls[key]) return Promise.resolve()
+
+      const existingRequest = fullscreenRequests.current.get(key)
+      if (existingRequest) return existingRequest
+
+      const request = retryOwnerProofOperation(() =>
+        mediaClient.createOriginalObjectUrl(accessToken, owner, source.id)
+      )
+        .then((objectUrl) => {
+          if (
+            !mounted.current ||
+            currentPhotoListSignature.current !== photoListSignature
+          ) {
+            objectUrl.dispose()
+            return
+          }
+          fullscreenObjectUrls.current.get(key)?.dispose()
+          fullscreenObjectUrls.current.set(key, objectUrl)
+          setFullscreenUrls((current) => ({ ...current, [key]: objectUrl.url }))
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          fullscreenRequests.current.delete(key)
+        })
+      fullscreenRequests.current.set(key, request)
+      return request
+    },
+    [accessToken, fullscreenUrls, loadedPhotos, owner, photoListSignature]
+  )
+
+  const photos = useMemo(
+    () =>
+      loadedPhotos?.photos.map((photo) => {
+        const originalUrl =
+          fullscreenUrls[fullscreenPhotoKey(photo.id, photo.generation)]
+        return originalUrl
+          ? {
+              ...photo,
+              variants: {
+                ...photo.variants,
+                original: { url: originalUrl },
+              },
+            }
+          : photo
+      }) ?? [],
+    [fullscreenUrls, loadedPhotos]
+  )
+
   if (coverAvailability !== "available") {
-    return { photos: [], availability: coverAvailability }
+    return {
+      photos: [],
+      availability: coverAvailability,
+      requestFullscreen,
+    }
   }
   if (previews.length === 0) {
-    return { photos: [], availability: "available" as const }
+    return {
+      photos: [],
+      availability: "available" as const,
+      requestFullscreen,
+    }
   }
   if (loadedPhotos?.signature !== photoListSignature) {
-    return { photos: [], availability: "loading" as const }
+    return { photos: [], availability: "loading" as const, requestFullscreen }
   }
-  return loadedPhotos
+  return { ...loadedPhotos, photos, requestFullscreen }
 }

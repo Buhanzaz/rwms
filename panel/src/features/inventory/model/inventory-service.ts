@@ -81,14 +81,24 @@ export type InventoryFrozenPlanStage = {
   id: string
   order: number
   catalogNodeId: string
-  catalogNodeCode: string
+  catalogNodeName: string
   kind: "REPAIR_WORK" | "MOVE_TO_REPAIR" | "MOVE_FROM_REPAIR"
   routingQueueId: string
-  routingQueueCode: string
-  routingQueueKind: string
+  routingQueueName: string
+  routingQueueType: string
   movementRequired: boolean
   photoRequired: boolean
   normativeDurationMinutes: number
+}
+
+export type InventoryRepairRegistryFact = {
+  repairId: string
+  rootRepairId: string
+  origin: string
+  kind: string
+  executionState: string
+  acceptanceState: string
+  planFingerprintSha256: string
 }
 
 export type InventoryCurrentSnapshot = {
@@ -98,6 +108,22 @@ export type InventoryCurrentSnapshot = {
   status: string
   displayCanonicalNumber: string
   tenantSnapshot: string | null
+  passportSnapshot: Record<string, unknown>
+  contentsSnapshot: Record<string, unknown> | unknown[]
+  repairsSnapshot: InventoryRepairRegistryFact[]
+}
+
+export type InventoryMembershipMovement = {
+  id: string
+  type: "DEPARTED" | "TRANSFERRED" | "ARRIVED"
+  assetId: string
+  displayCanonicalNumber: string
+  origin: InventoryFindingOrigin
+  fromWarehouseId: string | null
+  toWarehouseId: string | null
+  status: string | null
+  tenantSnapshot: string | null
+  occurredAt: string
 }
 
 export type InventoryConflict = {
@@ -111,13 +137,25 @@ export type InventoryConflict = {
     | "ADDED_AFTER_START"
     | "RENTAL_ITEM_MISSING"
     | "ASSET_CHANGED"
+    | "NUMBER_CHANGED"
+    | "PASSPORT_CHANGED"
+    | "CONTENTS_CHANGED"
+    | "REPAIRS_CHANGED"
   message: string
   expected: string | null
   actual: string | null
 }
 
+export type InventoryConflictResolution = {
+  strategy: "ACCEPT_REGISTRY" | "KEEP_INSPECTION"
+  reason: string | null
+  resolvedAt: string
+}
+
 export type InventoryFrozenPlan = {
   mode: "AUTO" | "MANUAL"
+  priority?: 1 | 2 | 3 | 4 | 5
+  coverMediaId?: string | null
   catalogVersionId: string
   fingerprintSha256: string
   lines: InventoryFrozenPlanLine[]
@@ -155,9 +193,13 @@ export type InventoryFinding = {
   comment: string
   expectedSnapshot: InventoryExpectedSnapshot | null
   currentSnapshot: InventoryCurrentSnapshot | null
+  inspectionBaseline: InventoryCurrentSnapshot | null
+  conflictResolution: InventoryConflictResolution | null
   conflicts: InventoryConflict[]
   frozenPlan: InventoryFrozenPlan | null
   media: InventoryMediaReference[]
+  coverMediaId?: string | null
+  inspectionSource?: "INVENTORY" | null
   publication: InventoryPublicationIntent | null
 }
 
@@ -196,6 +238,7 @@ export type InventoryFrozenStatistics = {
 export type InventorySessionDetail = InventorySessionSummary & {
   statistics: InventoryFrozenStatistics | null
   cancellation: { reason: string; cancelledAt: string } | null
+  membershipMovements: InventoryMembershipMovement[]
 }
 
 export type InventorySessionView = InventorySessionDetail & {
@@ -240,6 +283,7 @@ export type InventoryCompletionPreview = {
   risks: Array<{
     findingId: string
     code:
+      | "NOT_INSPECTED"
       | "MISSING"
       | "CONFLICT"
       | "ASSET_CHANGED"
@@ -290,11 +334,15 @@ export type InventoryPlanSelection =
   | null
   | {
       mode: "AUTO"
+      priority: 1 | 2 | 3 | 4 | 5
+      coverMediaId: string | null
       lines: InventoryCatalogPlanLine[]
       stages: InventoryPlanStageSelection[]
     }
   | {
       mode: "MANUAL"
+      priority: 1 | 2 | 3 | 4 | 5
+      coverMediaId: string | null
       lines: Array<InventoryCatalogPlanLine | InventoryManualPlanLine>
       stages: InventoryPlanStageSelection[]
     }

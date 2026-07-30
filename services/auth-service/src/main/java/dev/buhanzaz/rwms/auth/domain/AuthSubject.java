@@ -68,6 +68,12 @@ public class AuthSubject {
     @Column(name = "global_role", length = 32)
     private UserGlobalRole globalRole;
 
+    @Column(name = "mobile_app_access", nullable = false)
+    private boolean mobileAppAccess;
+
+    @Column(name = "rental_access", nullable = false)
+    private boolean rentalAccess;
+
     @Column(name = "external_worker_id", length = 128)
     private String externalWorkerId;
 
@@ -120,9 +126,56 @@ public class AuthSubject {
             String timeZoneId,
             UserGlobalRole globalRole,
             boolean active) {
+        registerUser(
+                username,
+                passwordHash,
+                firstName,
+                lastName,
+                email,
+                timeZoneId,
+                globalRole,
+                active,
+                false);
+    }
+
+    public void registerUser(
+            String username,
+            String passwordHash,
+            String firstName,
+            String lastName,
+            String email,
+            String timeZoneId,
+            UserGlobalRole globalRole,
+            boolean active,
+            boolean mobileAppAccess) {
+        registerUser(
+                username,
+                passwordHash,
+                firstName,
+                lastName,
+                email,
+                timeZoneId,
+                globalRole,
+                active,
+                mobileAppAccess,
+                globalRole != null && globalRole.hasRentalAccessByDefault());
+    }
+
+    public void registerUser(
+            String username,
+            String passwordHash,
+            String firstName,
+            String lastName,
+            String email,
+            String timeZoneId,
+            UserGlobalRole globalRole,
+            boolean active,
+            boolean mobileAppAccess,
+            boolean rentalAccess) {
         if (principalType != null) {
             throw new IllegalStateException("Auth subject is already initialized");
         }
+        requireEligibleMobileAccess(globalRole, mobileAppAccess);
         principalType = PrincipalType.USER;
         this.username = username;
         this.passwordHash = passwordHash;
@@ -132,6 +185,8 @@ public class AuthSubject {
         this.timeZoneId = timeZoneId;
         this.globalRole = globalRole;
         this.active = active;
+        this.mobileAppAccess = mobileAppAccess;
+        this.rentalAccess = rentalAccess;
     }
 
     public void registerWorker(
@@ -148,6 +203,8 @@ public class AuthSubject {
         this.username = username;
         this.passwordHash = passwordHash;
         globalRole = null;
+        mobileAppAccess = false;
+        rentalAccess = false;
         active = true;
     }
 
@@ -166,9 +223,28 @@ public class AuthSubject {
     }
 
     public void changeUserAuthorization(UserGlobalRole globalRole, boolean active) {
+        changeUserAuthorization(
+                globalRole,
+                active,
+                mobileAppAccess && globalRole != null && globalRole.isManagerAppEligible());
+    }
+
+    public void changeUserAuthorization(
+            UserGlobalRole globalRole, boolean active, boolean mobileAppAccess) {
+        changeUserAuthorization(globalRole, active, mobileAppAccess, rentalAccess);
+    }
+
+    public void changeUserAuthorization(
+            UserGlobalRole globalRole,
+            boolean active,
+            boolean mobileAppAccess,
+            boolean rentalAccess) {
         requireType(PrincipalType.USER);
+        requireEligibleMobileAccess(globalRole, mobileAppAccess);
         this.globalRole = globalRole;
         this.active = active;
+        this.mobileAppAccess = mobileAppAccess;
+        this.rentalAccess = rentalAccess;
     }
 
     public void reconfigureWorker(
@@ -182,6 +258,8 @@ public class AuthSubject {
         this.username = username;
         this.passwordHash = passwordHash;
         globalRole = null;
+        mobileAppAccess = false;
+        rentalAccess = false;
         active = true;
     }
 
@@ -193,6 +271,11 @@ public class AuthSubject {
         active = false;
     }
 
+    public void enableWorkerAccess() {
+        requireType(PrincipalType.WORKER);
+        active = true;
+    }
+
     public void touch() {
         updatedAt = OffsetDateTime.now(ZoneOffset.UTC);
     }
@@ -200,6 +283,14 @@ public class AuthSubject {
     private void requireType(PrincipalType required) {
         if (principalType != required) {
             throw new IllegalStateException("Auth subject principal type does not allow this transition");
+        }
+    }
+
+    private void requireEligibleMobileAccess(
+            UserGlobalRole role, boolean requestedMobileAppAccess) {
+        if (requestedMobileAppAccess && (role == null || !role.isManagerAppEligible())) {
+            throw new IllegalArgumentException(
+                    "Mobile app access requires an eligible user role");
         }
     }
 }

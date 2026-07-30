@@ -2,6 +2,11 @@ package dev.buhanzaz.rwms.asset;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.DIMENSION_24_X_6;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.FINISHING_DVP;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.CATEGORY_NEW;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.TYPE_BK_1;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.plasticWindow;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireEquipmentHoldRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireMaintenanceOperationLeaseRequest;
@@ -116,14 +121,23 @@ class AssetJpaValidationIntegrationTest {
   @Transactional
   void flywayV3ValidatesJpaMappingsAndPersistsCanonicalRoots() {
     RentalItem rental = rentalItems.saveAndFlush(
-        RentalItem.create(UUID.randomUUID(), " cabin-101 ", null, null, null, null, null, null, "{}", "[]"));
+        RentalItem.create(
+            UUID.randomUUID(),
+            " cabin-101 ",
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
+            null,
+            null,
+            "{}",
+            "[]"));
     EquipmentCatalogItem catalog = equipment.saveAndFlush(
-        EquipmentCatalogItem.create(" chair-01 ", "Chair", EquipmentCategory.FURNITURE, null));
+        EquipmentCatalogItem.create("Chair", EquipmentCategory.FURNITURE, null));
 
     assertThat(rental.getNumber()).isEqualTo("CABIN-101");
     assertThat(rental.getIdentityMatchKey()).isEqualTo("CABIN101");
     assertThat(rental.getVersion()).isZero();
-    assertThat(catalog.getCode()).isEqualTo("CHAIR-01");
+    assertThat(catalog.getName()).isEqualTo("Chair");
     assertThat(catalog.getVersion()).isZero();
   }
 
@@ -137,13 +151,31 @@ class AssetJpaValidationIntegrationTest {
         UUID.randomUUID(),
         UUID.randomUUID(),
         new CreateRentalItemRequest(
-            firstWarehouseId, number, null, null, null, null, null, null, Map.of(), List.of()))
+            firstWarehouseId,
+            number,
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
+            null,
+            List.of(),
+            false,
+            Map.of(),
+            List.of()))
         .response();
     RentalItemResponse second = service.createRentalItem(
         UUID.randomUUID(),
         UUID.randomUUID(),
         new CreateRentalItemRequest(
-            secondWarehouseId, number, null, null, null, null, null, null, Map.of(), List.of()))
+            secondWarehouseId,
+            number,
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
+            null,
+            List.of(),
+            false,
+            Map.of(),
+            List.of()))
         .response();
 
     assertThat(inventoryAssetService.resolveNumber(
@@ -162,7 +194,16 @@ class AssetJpaValidationIntegrationTest {
         UUID.randomUUID(),
         UUID.randomUUID(),
         new CreateRentalItemRequest(
-            firstWarehouseId, number, null, null, null, null, null, null, Map.of(), List.of())))
+            firstWarehouseId,
+            number,
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
+            null,
+            List.of(),
+            false,
+            Map.of(),
+            List.of())))
         .isInstanceOf(AssetConflictException.class)
         .hasMessageContaining("this warehouse");
     assertThatThrownBy(() -> service.updateWarehouse(
@@ -213,10 +254,10 @@ class AssetJpaValidationIntegrationTest {
     String number = "INVLOCAL-" + UUID.randomUUID();
     InventorySourceAssetRequest firstRequest = new InventorySourceAssetRequest(
         UUID.randomUUID(), UUID.randomUUID(), firstWarehouseId, number,
-        null, null, null, null, null, null, Map.of(), List.of());
+        TYPE_BK_1, DIMENSION_24_X_6, FINISHING_DVP, null, List.of(), false, Map.of(), List.of());
     InventorySourceAssetRequest secondRequest = new InventorySourceAssetRequest(
         UUID.randomUUID(), UUID.randomUUID(), secondWarehouseId, number,
-        null, null, null, null, null, null, Map.of(), List.of());
+        TYPE_BK_1, DIMENSION_24_X_6, FINISHING_DVP, null, List.of(), false, Map.of(), List.of());
 
     var first = inventoryAssetService.createSourceAsset(firstRequest);
     var second = inventoryAssetService.createSourceAsset(secondRequest);
@@ -244,8 +285,18 @@ class AssetJpaValidationIntegrationTest {
     UUID inventoryId = UUID.randomUUID();
     UUID findingId = UUID.randomUUID();
     InventorySourceAssetRequest request = new InventorySourceAssetRequest(
-        inventoryId, findingId, UUID.randomUUID(), " ИНВ- 901 ", "Cabin", null, null,
-        null, null, null, Map.of("safe", "value"), List.of("TAG"));
+        inventoryId,
+        findingId,
+        UUID.randomUUID(),
+        " ИНВ- 901 ",
+        TYPE_BK_1,
+        DIMENSION_24_X_6,
+        FINISHING_DVP,
+        null,
+        plasticWindow(),
+        false,
+        Map.of("safe", "value"),
+        List.of("TAG"));
 
     var created = inventoryAssetService.createSourceAsset(request);
     var replayed = inventoryAssetService.createSourceAsset(request);
@@ -266,8 +317,18 @@ class AssetJpaValidationIntegrationTest {
         .isEqualTo(ordinaryIdempotencyBefore);
 
     InventorySourceAssetRequest changed = new InventorySourceAssetRequest(
-        inventoryId, findingId, request.warehouseId(), "ИНВ-902", "Cabin", null, null,
-        null, null, null, Map.of("safe", "value"), List.of("TAG"));
+        inventoryId,
+        findingId,
+        request.warehouseId(),
+        "ИНВ-902",
+        TYPE_BK_1,
+        DIMENSION_24_X_6,
+        FINISHING_DVP,
+        null,
+        plasticWindow(),
+        false,
+        Map.of("safe", "value"),
+        List.of("TAG"));
     assertThatThrownBy(() -> inventoryAssetService.createSourceAsset(changed))
         .isInstanceOf(AssetConflictException.class);
   }
@@ -276,7 +337,7 @@ class AssetJpaValidationIntegrationTest {
   void concurrentInventorySourceRetriesConvergeOnOneAsset() throws Exception {
     InventorySourceAssetRequest request = new InventorySourceAssetRequest(
         UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), "SRC-" + UUID.randomUUID(),
-        null, null, null, null, null, null, Map.of(), List.of());
+        TYPE_BK_1, DIMENSION_24_X_6, FINISHING_DVP, null, List.of(), false, Map.of(), List.of());
     var executor = Executors.newFixedThreadPool(2);
     try {
       var first = executor.submit(() -> inventoryAssetService.createSourceAsset(request));
@@ -368,10 +429,10 @@ class AssetJpaValidationIntegrationTest {
     String number = "RACE-" + UUID.randomUUID();
     InventorySourceAssetRequest firstRequest = new InventorySourceAssetRequest(
         UUID.randomUUID(), UUID.randomUUID(), warehouseId, number,
-        null, null, null, null, null, null, Map.of(), List.of());
+        TYPE_BK_1, DIMENSION_24_X_6, FINISHING_DVP, null, List.of(), false, Map.of(), List.of());
     InventorySourceAssetRequest secondRequest = new InventorySourceAssetRequest(
         UUID.randomUUID(), UUID.randomUUID(), warehouseId, number,
-        null, null, null, null, null, null, Map.of(), List.of());
+        TYPE_BK_1, DIMENSION_24_X_6, FINISHING_DVP, null, List.of(), false, Map.of(), List.of());
     var executor = Executors.newFixedThreadPool(2);
     try {
       var first = executor.submit(() -> inventoryAssetService.createSourceAsset(firstRequest));
@@ -407,7 +468,15 @@ class AssetJpaValidationIntegrationTest {
   @Transactional
   void flywayV3ValidatesOperationLeaseJpaMappingRepositoryLocksAndVersioning() {
     RentalItem rental = rentalItems.saveAndFlush(RentalItem.create(
-        UUID.randomUUID(), "lease-jpa-" + UUID.randomUUID(), null, null, null, null, null, null, "{}", "[]"));
+        UUID.randomUUID(),
+        "lease-jpa-" + UUID.randomUUID(),
+        TYPE_BK_1,
+        DIMENSION_24_X_6,
+        FINISHING_DVP,
+        null,
+        null,
+        "{}",
+        "[]"));
     OffsetDateTime acquiredAt = OffsetDateTime.now(ZoneOffset.UTC);
     OperationLease lease = operationLeases.saveAndFlush(OperationLease.acquire(
         rental.getId(),
@@ -474,12 +543,12 @@ class AssetJpaValidationIntegrationTest {
         new CreateRentalItemRequest(
             warehouseId,
             "cabin-" + UUID.randomUUID(),
-            "Office",
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
             null,
-            null,
-            null,
-            null,
-            null,
+            List.of(),
+            false,
             Map.of("privatePassportValue", "local-only"),
             List.of()));
     RentalItemResponse rental = created.response();
@@ -547,7 +616,7 @@ class AssetJpaValidationIntegrationTest {
         .createEquipment(
             subjectId,
             UUID.randomUUID(),
-            new CreateEquipmentRequest("chair-" + UUID.randomUUID(), "Chair", EquipmentCategory.FURNITURE, null))
+            new CreateEquipmentRequest("Chair", EquipmentCategory.FURNITURE, null))
         .response();
     var rental = service
         .createRentalItem(
@@ -556,12 +625,12 @@ class AssetJpaValidationIntegrationTest {
             new CreateRentalItemRequest(
                 warehouseId,
                 "cabin-" + UUID.randomUUID(),
+                TYPE_BK_1,
+                DIMENSION_24_X_6,
+                FINISHING_DVP,
                 null,
-                null,
-                null,
-                null,
-                null,
-                null,
+                List.of(),
+                false,
                 Map.of(),
                 List.of()))
         .response();
@@ -586,15 +655,16 @@ class AssetJpaValidationIntegrationTest {
     assertThat(replayed.replayed()).isTrue();
     assertThat(replayed.response().id()).isEqualTo(moved.response().id());
     var afterTransfer = service.equipmentTotals(catalog.id(), warehouseId);
-    assertThat(
-            List.of(
-                afterTransfer.totalQuantity(),
-                afterTransfer.stockQuantity(),
-                afterTransfer.nonRentedCabinQuantity(),
-                afterTransfer.rentedCabinQuantity(),
-                afterTransfer.writtenOffQuantity(),
-                afterTransfer.lostQuantity(),
-                afterTransfer.availableStock()))
+    List<Long> transferTotals =
+        List.of(
+            afterTransfer.totalQuantity(),
+            afterTransfer.stockQuantity(),
+            afterTransfer.nonRentedCabinQuantity(),
+            afterTransfer.rentedCabinQuantity(),
+            afterTransfer.writtenOffQuantity(),
+            afterTransfer.lostQuantity(),
+            afterTransfer.availableStock());
+    assertThat(transferTotals)
         .containsExactly(10L, 5L, 5L, 0L, 0L, 0L, 5L);
     assertThat(jdbc.queryForObject("select coalesce(sum(quantity_delta), 0) from equipment_movement_ledger", Long.class))
         .isZero();
@@ -606,12 +676,13 @@ class AssetJpaValidationIntegrationTest {
         UUID.randomUUID(),
         new AcquireEquipmentHoldRequest(catalog.id(), warehouseId, "MAINTENANCE", "case-1", 5L, 1L));
     var afterHold = service.equipmentTotals(catalog.id(), warehouseId);
-    assertThat(
-            List.of(
-                afterHold.totalQuantity(),
-                afterHold.stockQuantity(),
-                afterHold.activeHeldQuantity(),
-                afterHold.availableStock()))
+    List<Long> holdTotals =
+        List.of(
+            afterHold.totalQuantity(),
+            afterHold.stockQuantity(),
+            afterHold.activeHeldQuantity(),
+            afterHold.availableStock());
+    assertThat(holdTotals)
         .containsExactly(10L, 5L, 5L, 0L);
     var committed = service.commitHold(
         subjectId,
@@ -665,15 +736,16 @@ class AssetJpaValidationIntegrationTest {
             Disposition.WRITE_OFF));
     assertThat(disposed.replayed()).isFalse();
     var afterDisposition = service.equipmentTotals(catalog.id(), warehouseId);
-    assertThat(
-            List.of(
-                afterDisposition.totalQuantity(),
-                afterDisposition.stockQuantity(),
-                afterDisposition.nonRentedCabinQuantity(),
-                afterDisposition.rentedCabinQuantity(),
-                afterDisposition.writtenOffQuantity(),
-                afterDisposition.lostQuantity(),
-                afterDisposition.availableStock()))
+    List<Long> dispositionTotals =
+        List.of(
+            afterDisposition.totalQuantity(),
+            afterDisposition.stockQuantity(),
+            afterDisposition.nonRentedCabinQuantity(),
+            afterDisposition.rentedCabinQuantity(),
+            afterDisposition.writtenOffQuantity(),
+            afterDisposition.lostQuantity(),
+            afterDisposition.availableStock());
+    assertThat(dispositionTotals)
         .containsExactly(10L, 5L, 0L, 3L, 2L, 0L, 0L);
     assertThat(jdbc.queryForObject("select coalesce(sum(quantity_delta), 0) from equipment_movement_ledger", Long.class))
         .isZero();
@@ -694,12 +766,12 @@ class AssetJpaValidationIntegrationTest {
             new CreateRentalItemRequest(
                 UUID.randomUUID(),
                 "cabin-" + UUID.randomUUID(),
+                TYPE_BK_1,
+                DIMENSION_24_X_6,
+                FINISHING_DVP,
                 null,
-                null,
-                null,
-                null,
-                null,
-                null,
+                List.of(),
+                false,
                 Map.of(),
                 List.of()))
         .response();
@@ -744,12 +816,12 @@ class AssetJpaValidationIntegrationTest {
         new CreateRentalItemRequest(
             UUID.randomUUID(),
             "replay-lease-" + UUID.randomUUID(),
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
             null,
-            null,
-            null,
-            null,
-            null,
-            null,
+            List.of(),
+            false,
             Map.of(),
             List.of()))
         .response();
@@ -780,7 +852,16 @@ class AssetJpaValidationIntegrationTest {
         subjectId,
         UUID.randomUUID(),
         new CreateRentalItemRequest(
-            UUID.randomUUID(), "cabin-" + UUID.randomUUID(), null, null, null, null, null, null, Map.of(), List.of()))
+            UUID.randomUUID(),
+            "cabin-" + UUID.randomUUID(),
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
+            null,
+            List.of(),
+            false,
+            Map.of(),
+            List.of()))
         .response();
     var lease = service.acquireLease(
         subjectId,
@@ -810,8 +891,16 @@ class AssetJpaValidationIntegrationTest {
         subjectId,
         UUID.randomUUID(),
         new CreateRentalItemRequest(
-            UUID.randomUUID(), "cabin-" + UUID.randomUUID(), null, null, null, null, null, null,
-            Map.of(), List.of()))
+            UUID.randomUUID(),
+            "cabin-" + UUID.randomUUID(),
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
+            null,
+            List.of(),
+            false,
+            Map.of(),
+            List.of()))
         .response();
     UUID acquireKey = UUID.randomUUID();
     var acquireRequest = new AcquireMaintenanceOperationLeaseRequest(
@@ -897,15 +986,23 @@ class AssetJpaValidationIntegrationTest {
         subjectId,
         UUID.randomUUID(),
         new CreateRentalItemRequest(
-            UUID.randomUUID(), "cabin-" + UUID.randomUUID(), null, null, null, null, null, null,
-            Map.of(), List.of()))
+            UUID.randomUUID(),
+            "cabin-" + UUID.randomUUID(),
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
+            null,
+            List.of(),
+            false,
+            Map.of(),
+            List.of()))
         .response();
     var request = new AcquireMaintenanceOperationLeaseRequest(
         rental.id(), MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR, ownerId, rental.version());
     String idempotencyLock = subjectId + ":maintenance.operation-lease.acquire:" + key;
 
-    try (var blocker = dataSource.getConnection();
-        var executor = Executors.newSingleThreadExecutor()) {
+    var executor = Executors.newSingleThreadExecutor();
+    try (var blocker = dataSource.getConnection()) {
       blocker.setAutoCommit(false);
       try (var statement = blocker.prepareStatement(
           "select pg_advisory_xact_lock(hashtextextended(?, 0))")) {
@@ -926,7 +1023,7 @@ class AssetJpaValidationIntegrationTest {
       var changed = service.updateStatus(
           rental.id(),
           new dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest(
-              rental.version(), RentalItemStatus.FREE));
+              rental.version(), RentalItemStatus.WAREHOUSE));
       assertThat(changed.version()).isEqualTo(rental.version() + 1);
       blocker.commit();
 
@@ -937,25 +1034,31 @@ class AssetJpaValidationIntegrationTest {
           "select count(*) from operation_lease where rental_item_id=?",
           Integer.class,
           rental.id())).isZero();
+    } finally {
+      executor.shutdownNow();
     }
   }
 
   @Test
   @Transactional
-  void maintenanceFencedStatusUsesTheActionAllowlistAndActiveFenceForReplay() {
+  void maintenanceFencedStatusQueuesFreeRentalItemAndUsesActiveFenceForReplay() {
     UUID subjectId = UUID.randomUUID();
     UUID ownerId = UUID.randomUUID();
-    var created = service.createRentalItem(
+    var rental = service.createRentalItem(
         subjectId,
         UUID.randomUUID(),
         new CreateRentalItemRequest(
-            UUID.randomUUID(), "cabin-" + UUID.randomUUID(), null, null, null, null, null, null,
-            Map.of(), List.of()))
+            UUID.randomUUID(),
+            "cabin-" + UUID.randomUUID(),
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
+            null,
+            List.of(),
+            false,
+            Map.of(),
+            List.of()))
         .response();
-    var rental = service.updateStatus(
-        created.id(),
-        new dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest(
-            created.version(), RentalItemStatus.FREE));
     var lease = service.acquireMaintenanceLease(
         subjectId,
         UUID.randomUUID(),
@@ -1024,23 +1127,270 @@ class AssetJpaValidationIntegrationTest {
 
   @Test
   @Transactional
+  void maintenanceCapitalQueueUsesTheSameVersionFenceAndCanReachAcceptance() {
+    UUID subjectId = UUID.randomUUID();
+    UUID ownerId = UUID.randomUUID();
+    var rental =
+        service
+            .createRentalItem(
+                subjectId,
+                UUID.randomUUID(),
+                new CreateRentalItemRequest(
+                    UUID.randomUUID(),
+                    "capital-" + UUID.randomUUID(),
+                    TYPE_BK_1,
+                    DIMENSION_24_X_6,
+                    FINISHING_DVP,
+                    null,
+                    List.of(),
+                    false,
+                    Map.of(),
+                    List.of()))
+            .response();
+    var lease =
+        service
+            .acquireMaintenanceLease(
+                subjectId,
+                UUID.randomUUID(),
+                new AcquireMaintenanceOperationLeaseRequest(
+                    rental.id(),
+                    MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR,
+                    ownerId,
+                    rental.version()))
+            .response();
+    UUID queueKey = UUID.randomUUID();
+    var request =
+        new MaintenanceFencedStatusRequest(
+            rental.version(),
+            MaintenanceStatusAction.QUEUE_FOR_CAPITAL_REPAIR,
+            lease.id(),
+            lease.fencingToken(),
+            MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR,
+            ownerId,
+            null);
+
+    var queued =
+        service.maintenanceFencedStatus(
+            subjectId, queueKey, rental.id(), request);
+    var replayed =
+        service.maintenanceFencedStatus(
+            subjectId, queueKey, rental.id(), request);
+
+    assertThat(queued.response().status())
+        .isEqualTo(RentalItemStatus.CAPITAL_REPAIR);
+    assertThat(queued.response().version()).isEqualTo(rental.version() + 1);
+    assertThat(replayed.replayed()).isTrue();
+    assertThat(replayed.response()).isEqualTo(queued.response());
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from domain_event
+                where aggregate_type='RENTAL_ITEM' and aggregate_id=?
+                  and event_type=?
+                """,
+                Integer.class,
+                rental.id().toString(),
+                AssetEventType.RENTAL_ITEM_STATUS_CHANGED.value()))
+        .isOne();
+
+    var pending =
+        service.maintenanceFencedStatus(
+            subjectId,
+            UUID.randomUUID(),
+            rental.id(),
+            new MaintenanceFencedStatusRequest(
+                queued.response().version(),
+                MaintenanceStatusAction.MARK_PENDING_ACCEPTANCE,
+                lease.id(),
+                lease.fencingToken(),
+                MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR,
+                ownerId,
+                null));
+    assertThat(pending.response().status())
+        .isEqualTo(RentalItemStatus.WAITING_REPAIR_CHECK);
+  }
+
+  @Test
+  @Transactional
+  void repeatedRepairQueueIsAnIdempotentNoOpForStatusEventsAndCabinBalances() {
+    UUID subjectId = UUID.randomUUID();
+    UUID ownerId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    var catalog = service
+        .createEquipment(
+            subjectId,
+            UUID.randomUUID(),
+            new CreateEquipmentRequest("Chair", EquipmentCategory.FURNITURE, null))
+        .response();
+    var created = service
+        .createRentalItem(
+            subjectId,
+            UUID.randomUUID(),
+            new CreateRentalItemRequest(
+                warehouseId,
+                "cabin-" + UUID.randomUUID(),
+                TYPE_BK_1,
+                DIMENSION_24_X_6,
+                FINISHING_DVP,
+                null,
+                List.of(),
+                false,
+                Map.of(),
+                List.of()))
+        .response();
+    var rental = service.updateStatus(
+        created.id(),
+        new dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest(
+            created.version(), RentalItemStatus.FREE));
+    seedStockBalance(catalog.id(), warehouseId, 2);
+    service.transfer(
+        subjectId,
+        UUID.randomUUID(),
+        new TransferEquipmentRequest(
+            catalog.id(),
+            warehouseId,
+            null,
+            BalanceLocationKind.STOCK,
+            0L,
+            warehouseId,
+            rental.id(),
+            BalanceLocationKind.CABIN_NON_RENTED,
+            0L,
+            1L));
+    UUID cabinBalanceId = jdbc.queryForObject(
+        """
+        select id from equipment_balance
+        where equipment_id=? and warehouse_id=? and rental_item_id=?
+          and location_kind='CABIN_NON_RENTED'
+        """,
+        UUID.class,
+        catalog.id(),
+        warehouseId,
+        rental.id());
+    var lease = service
+        .acquireMaintenanceLease(
+            subjectId,
+            UUID.randomUUID(),
+            new AcquireMaintenanceOperationLeaseRequest(
+                rental.id(),
+                MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR,
+                ownerId,
+                rental.version()))
+        .response();
+    var queued = service.maintenanceFencedStatus(
+        subjectId,
+        UUID.randomUUID(),
+        rental.id(),
+        new MaintenanceFencedStatusRequest(
+            rental.version(),
+            MaintenanceStatusAction.QUEUE_FOR_REPAIR,
+            lease.id(),
+            lease.fencingToken(),
+            MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR,
+            ownerId,
+            null));
+    long statusEventCount = jdbc.queryForObject(
+        """
+        select count(*) from domain_event
+        where aggregate_id=? and event_type=?
+        """,
+        Long.class,
+        rental.id().toString(),
+        AssetEventType.RENTAL_ITEM_STATUS_CHANGED.value());
+    long balanceVersion = jdbc.queryForObject(
+        "select version from equipment_balance where id=?", Long.class, cabinBalanceId);
+    OffsetDateTime balanceUpdatedAt = jdbc.queryForObject(
+        "select updated_at from equipment_balance where id=?",
+        OffsetDateTime.class,
+        cabinBalanceId);
+    long balanceEventCount = jdbc.queryForObject(
+        "select count(*) from domain_event where aggregate_type='EQUIPMENT_BALANCE' and aggregate_id=?",
+        Long.class,
+        cabinBalanceId.toString());
+
+    UUID requeueKey = UUID.randomUUID();
+    var requeueRequest = new MaintenanceFencedStatusRequest(
+        queued.response().version(),
+        MaintenanceStatusAction.QUEUE_FOR_REPAIR,
+        lease.id(),
+        lease.fencingToken(),
+        MaintenanceLeaseOwnerType.MAINTENANCE_REPAIR,
+        ownerId,
+        null);
+    var requeued =
+        service.maintenanceFencedStatus(subjectId, requeueKey, rental.id(), requeueRequest);
+    var replayed =
+        service.maintenanceFencedStatus(subjectId, requeueKey, rental.id(), requeueRequest);
+
+    assertThat(requeued.replayed()).isFalse();
+    assertThat(replayed.replayed()).isTrue();
+    assertThat(requeued.response().status()).isEqualTo(RentalItemStatus.REPAIR);
+    assertThat(requeued.response().version()).isEqualTo(queued.response().version());
+    assertThat(requeued.response().updatedAt()).isEqualTo(queued.response().updatedAt());
+    assertThat(replayed.response()).isEqualTo(requeued.response());
+    assertThat(jdbc.queryForObject(
+            """
+            select count(*) from domain_event
+            where aggregate_id=? and event_type=?
+            """,
+            Long.class,
+            rental.id().toString(),
+            AssetEventType.RENTAL_ITEM_STATUS_CHANGED.value()))
+        .isEqualTo(statusEventCount);
+    assertThat(jdbc.queryForObject(
+            "select version from equipment_balance where id=?", Long.class, cabinBalanceId))
+        .isEqualTo(balanceVersion);
+    assertThat(jdbc.queryForObject(
+            "select updated_at from equipment_balance where id=?",
+            OffsetDateTime.class,
+            cabinBalanceId))
+        .isEqualTo(balanceUpdatedAt);
+    assertThat(jdbc.queryForObject(
+            "select count(*) from domain_event where aggregate_type='EQUIPMENT_BALANCE' and aggregate_id=?",
+            Long.class,
+            cabinBalanceId.toString()))
+        .isEqualTo(balanceEventCount);
+  }
+
+  @Test
+  @Transactional
   void classifierStreamsAndNonSecretAssetFactsReplayDeterministicallyAgainstLiveProjection() {
     UUID subjectId = UUID.randomUUID();
     var rental = service.createRentalItem(
         subjectId,
         UUID.randomUUID(),
         new CreateRentalItemRequest(
-            UUID.randomUUID(), "cabin-" + UUID.randomUUID(), "Initial", null, null, null, null, null, Map.of(), List.of("A")))
+            UUID.randomUUID(),
+            "cabin-" + UUID.randomUUID(),
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
+            CATEGORY_NEW,
+            plasticWindow(),
+            false,
+            Map.of(),
+            List.of("A")))
         .response();
     service.updatePassport(
-        rental.id(), new UpdatePassportRequest(rental.version(), "Updated", null, null, null, null, null, Map.of("local", "only"), List.of("A")));
+        rental.id(),
+        new UpdatePassportRequest(
+            rental.version(),
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
+            CATEGORY_NEW,
+            plasticWindow(),
+            false,
+            Map.of("local", "only"),
+            List.of("A")));
     var classifier = service.createClassifier(
         subjectId,
         UUID.randomUUID(),
-        new CreateClassifierRequest("CATEGORY", null, "DEMO-" + UUID.randomUUID().toString().substring(0, 8), "Demo label", true, 1))
+        new CreateClassifierRequest("CATEGORY", null, "Demo label", true, 1))
         .response();
     service.updateClassifier(
-        classifier.id(), new ClassifierRequest(classifier.version(), "CATEGORY", null, classifier.code(), "Updated label", false, 2));
+        classifier.id(), new ClassifierRequest(
+            classifier.version(), "CATEGORY", null, "Updated label", false, 2));
 
     AssetReplayVerifier.ReplayParityResult first = replay.rebuildAndVerify();
     AssetReplayVerifier.ReplayParityResult repeated = replay.rebuildAndVerify();

@@ -30,9 +30,9 @@ class WarehouseEventContractTest {
     assertThat(schema.at("/properties/envelopeVersion/const").intValue()).isEqualTo(2);
     assertThat(schema.at("/$defs/warehouseFact/additionalProperties").booleanValue()).isFalse();
     assertThat(strings(schema.at("/$defs/warehouseFact/required")))
-        .containsExactlyInAnyOrder("warehouseId", "code", "timeZone", "active", "sortOrder");
+        .containsExactlyInAnyOrder("warehouseId", "timeZone", "active", "sortOrder");
     assertThat(fieldNames(schema.at("/$defs/warehouseFact/properties")))
-        .containsExactlyInAnyOrder("warehouseId", "code", "timeZone", "active", "sortOrder");
+        .containsExactlyInAnyOrder("warehouseId", "timeZone", "active", "sortOrder");
   }
 
   private Set<String> strings(JsonNode node) {

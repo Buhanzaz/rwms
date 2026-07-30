@@ -58,7 +58,10 @@ public class TaskBoardProductionSafetyValidator implements ApplicationRunner {
             "rwms.task-board.work-queue.v1",
             "rwms.task-board.queue-usage-reference.v1",
             "rwms.task-board.board-task.v1",
-            "rwms.task-board.queue-entry.v1");
+            "rwms.task-board.queue-entry.v1",
+            "rwms.task-board.entry-owner-proof.v1",
+            "rwms.task-board.task-evidence.v1",
+            "rwms.task-board.group-kpi-day.v1");
     for (int index = 0; index < requiredDestinations.size(); index++) {
       String configured =
           environment.getProperty("rwms.platform.kafka.destinations[" + index + "]");
@@ -117,7 +120,9 @@ public class TaskBoardProductionSafetyValidator implements ApplicationRunner {
             "taskBoardWorkQueueEvents",
             "taskBoardQueueUsageReferenceEvents",
             "taskBoardBoardTaskEvents",
-            "taskBoardQueueEntryEvents");
+            "taskBoardQueueEntryEvents",
+            "taskBoardMediaEvents",
+            "taskBoardWarehouseEvents");
     if (!functions.equals(requiredFunctions)) {
       throw new IllegalStateException(
           "Task-board Kafka consumer functions должны точно соответствовать F4T");
@@ -130,6 +135,14 @@ public class TaskBoardProductionSafetyValidator implements ApplicationRunner {
         "taskBoardQueueUsageReferenceEvents-in-0", requiredDestinations.get(4));
     requireConsumerBinding("taskBoardBoardTaskEvents-in-0", requiredDestinations.get(5));
     requireConsumerBinding("taskBoardQueueEntryEvents-in-0", requiredDestinations.get(6));
+    requireConsumerBinding(
+        "taskBoardMediaEvents-in-0",
+        "rwms.media.media.v1",
+        "task-board-worker-evidence-v1");
+    requireConsumerBinding(
+        "taskBoardWarehouseEvents-in-0",
+        "rwms.warehouse.warehouse.v1",
+        "task-board-warehouse-metadata-v1");
   }
 
   private int requiredPositiveInteger(String property) {
@@ -141,14 +154,18 @@ public class TaskBoardProductionSafetyValidator implements ApplicationRunner {
   }
 
   private void requireConsumerBinding(String binding, String destination) {
+    requireConsumerBinding(binding, destination, "task-board-shadow-v1");
+  }
+
+  private void requireConsumerBinding(String binding, String destination, String consumerGroup) {
     String prefix = "spring.cloud.stream.bindings." + binding;
     if (!destination.equals(environment.getProperty(prefix + ".destination"))) {
       throw new IllegalStateException(
           "Task-board Kafka input destination не соответствует контракту F4T");
     }
-    if (!"task-board-shadow-v1".equals(environment.getProperty(prefix + ".group"))) {
+    if (!consumerGroup.equals(environment.getProperty(prefix + ".group"))) {
       throw new IllegalStateException(
-          "Task-board Kafka consumer group должен быть task-board-shadow-v1");
+          "Task-board Kafka consumer group не соответствует контракту");
     }
     if (environment.getProperty(prefix + ".consumer.max-attempts", Integer.class, -1) != 1) {
       throw new IllegalStateException(

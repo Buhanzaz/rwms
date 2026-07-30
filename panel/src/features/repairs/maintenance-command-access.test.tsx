@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { cleanup, render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -35,6 +36,10 @@ const api = vi.hoisted(() => ({
   writeOffRepairDraft: vi.fn(),
 }))
 
+const actorApi = vi.hoisted(() => ({
+  listDossierActorDisplays: vi.fn(),
+}))
+
 function currentUser(level: WarehouseAccessLevel): CurrentUser {
   return {
     id: "operator-1",
@@ -45,6 +50,7 @@ function currentUser(level: WarehouseAccessLevel): CurrentUser {
     email: null,
     principalType: "USER",
     globalRole: "WAREHOUSE_MANAGER",
+    rentalAccess: false,
     warehouseAccessAll: false,
     warehouseAccesses: [{ warehouseId: WAREHOUSE_ID, level }],
   }
@@ -62,11 +68,14 @@ vi.mock("@/hooks/use-warehouse", () => ({
   useWarehouse: () => ({
     selectedWarehouse: {
       id: WAREHOUSE_ID,
-      code: "MSK",
       name: "Москва",
     },
     selectedWarehouseId: WAREHOUSE_ID,
   }),
+}))
+
+vi.mock("@/hooks/use-mobile", () => ({
+  useIsMobile: () => false,
 }))
 
 vi.mock("@/features/repair-estimates/api/repair-estimates-api", () => ({
@@ -79,13 +88,17 @@ vi.mock("@/features/repair-estimates/api/repair-estimates-api", () => ({
     warehouseId: string,
     estimateId: string | null
   ) => ["repair-estimates", "detail", warehouseId, estimateId],
-  repairEstimateListQueryKey: (warehouseId: string, status: string) => [
+  repairEstimateListQueryKey: (warehouseId: string, status?: string) => [
     "repair-estimates",
     "list",
     warehouseId,
-    status,
+    status ?? "all",
   ],
   saveRepairEstimateDraft: api.saveRepairEstimateDraft,
+}))
+
+vi.mock("@/features/rental-items/dossier/actor/actor-display-api", () => ({
+  listDossierActorDisplays: actorApi.listDossierActorDisplays,
 }))
 
 vi.mock("@/features/repair-tasks/api/repair-tasks-api", () => ({
@@ -276,6 +289,7 @@ beforeEach(() => {
   api.getRepairTaskBySourceEstimateId.mockResolvedValue(null)
   api.listRepairEstimates.mockResolvedValue([])
   api.listRepairTasks.mockResolvedValue([])
+  actorApi.listDossierActorDisplays.mockResolvedValue([])
 })
 
 afterEach(() => {
@@ -284,6 +298,40 @@ afterEach(() => {
 })
 
 describe("maintenance command access", () => {
+  it("collapses estimate filters without resetting the search", async () => {
+    const user = userEvent.setup()
+    renderPage("/estimates", <RepairEstimatesPage />)
+
+    const hideFilters = await screen.findByRole("button", {
+      name: "Скрыть фильтры смет",
+    })
+    expect(hideFilters.getAttribute("aria-expanded")).toBe("true")
+    expect(hideFilters.getAttribute("aria-controls")).toBe(
+      "repair-estimate-filters"
+    )
+
+    const search = screen.getByRole("searchbox", {
+      name: /Поиск по номеру бытовки/,
+    }) as HTMLInputElement
+    await user.type(search, "001")
+    expect(search.value).toBe("001")
+
+    await user.click(hideFilters)
+    expect(
+      screen
+        .getByRole("button", { name: "Показать фильтры смет" })
+        .getAttribute("aria-expanded")
+    ).toBe("false")
+    expect(document.getElementById("repair-estimate-filters")?.hidden).toBe(
+      true
+    )
+
+    await user.click(
+      screen.getByRole("button", { name: "Показать фильтры смет" })
+    )
+    expect(search.value).toBe("001")
+  })
+
   it("hides create commands and keeps existing drafts read-only for VIEW", async () => {
     const estimatesList = renderPage("/estimates", <RepairEstimatesPage />)
 
@@ -363,6 +411,36 @@ describe("maintenance command access", () => {
       await screen.findByRole("button", { name: "Сохранить черновик" })
     ).toBeTruthy()
     expect(screen.getByRole("button", { name: "Завершить" })).toBeTruthy()
+  })
+
+  it("allows EDIT to change a queued repair before work starts", async () => {
+    authState.level = "EDIT"
+    api.getRepairTask.mockResolvedValueOnce({
+      ...repair,
+      status: "QUEUED",
+    })
+
+    renderPage(`/repairs?repairId=${REPAIR_ID}&edit=1`, <RepairsPage />)
+
+    expect(
+      await screen.findByRole("button", { name: "Сохранить изменения" })
+    ).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Завершить" })).toBeNull()
+  })
+
+  it("allows EDIT to amend a completed estimate linked to a draft repair", async () => {
+    authState.level = "EDIT"
+    api.getRepairEstimate.mockResolvedValueOnce({
+      ...estimate,
+      status: "COMPLETED",
+    })
+    api.getRepairTaskBySourceEstimateId.mockResolvedValueOnce(repair)
+
+    renderPage(`/estimates?estimateId=${ESTIMATE_ID}`, <RepairEstimatesPage />)
+
+    expect(
+      await screen.findByRole("button", { name: "Редактировать смету" })
+    ).toBeTruthy()
   })
 
   it("preselects the rental item supplied by the warehouse card", () => {

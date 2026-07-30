@@ -13,6 +13,7 @@ import type {
   RepairEstimateCompletionMode,
   RepairEstimateDto,
   RepairEstimateMediaRefDto,
+  RepairPriority,
   RepairEstimateTaskPlanDto,
 } from "@/features/repair-estimates/model/repair-estimate"
 import { HttpMaintenanceRepairTasksAdapter } from "@/features/repair-tasks/adapters/http-maintenance-repair-tasks-adapter"
@@ -118,6 +119,7 @@ function buildWriteCommand(params: {
   draft: RepairTaskEditorDraft
   warehouseId: string
   subtasks: RepairTaskSubtaskDto[]
+  priority?: RepairPriority
 }): RepairTaskWriteCommand {
   if (params.draft.pendingUploads.length > 0 || params.draft.media.length > 0) {
     throw new Error(
@@ -140,7 +142,9 @@ function buildWriteCommand(params: {
     comment: "",
     media: [],
     maintenanceMediaReferences: params.draft.maintenanceMediaReferences,
+    coverMediaId: params.draft.coverMediaId,
     subtasks: params.subtasks,
+    priority: params.priority,
   }
 }
 
@@ -151,6 +155,7 @@ async function planSubtasks(params: {
   taskPlans?: RepairEstimateTaskPlanDto[]
   completionMode?: RepairEstimateCompletionMode
   movementRequired?: boolean
+  priority?: RepairPriority
 }) {
   const existing = params.draft.taskId
     ? await repairTasksClient.getById(params.draft.taskId, params.warehouseId)
@@ -179,7 +184,7 @@ async function planSubtasks(params: {
             materialLines: current?.materialLines ?? [],
             groupComment: plan.groupComment,
             queueId: plan.queueId ?? null,
-            queueCode: plan.queueCode,
+            queueName: plan.queueName,
             routeQueueKind: plan.routeQueueKind,
             sortOrder: index,
             queuePosition: index,
@@ -232,6 +237,7 @@ async function persistRepair(params: {
   taskPlans?: RepairEstimateTaskPlanDto[]
   completionMode?: RepairEstimateCompletionMode
   movementRequired?: boolean
+  priority?: RepairPriority
 }) {
   const subtasks = await planSubtasks(params)
   const command = buildWriteCommand({ ...params, subtasks })
@@ -253,6 +259,7 @@ export function queueRepairTask(params: {
   completionMode: RepairEstimateCompletionMode
   movementRequired: boolean
   taskPlans: RepairEstimateTaskPlanDto[]
+  priority: RepairPriority
 }) {
   return persistRepair({ ...params, status: "QUEUED" })
 }
@@ -309,6 +316,7 @@ export async function writeOffRepairDraft(params: {
   lines: RepairEstimateDto["lines"]
   media: RepairEstimateMediaRefDto[]
   maintenanceMediaReferences: Array<{ mediaId: string; generation: number }>
+  coverMediaId?: string | null
   pendingUploads: PendingEstimateMediaUpload[]
   writeOffReason: string
 }) {
@@ -333,6 +341,7 @@ export async function writeOffRepairDraft(params: {
     lines: params.lines,
     media: params.media,
     maintenanceMediaReferences: params.maintenanceMediaReferences,
+    coverMediaId: params.coverMediaId ?? null,
     pendingUploads: params.pendingUploads,
   }
   const subtasks = await planSubtasks({

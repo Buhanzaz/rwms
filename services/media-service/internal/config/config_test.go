@@ -61,6 +61,10 @@ func TestLoadAcceptsCompleteFailClosedConfiguration(t *testing.T) {
 		configuration.CabinOwnerGroup != "media-service-cabin-owner-v1" {
 		t.Fatalf("cabin owner Kafka configuration = %#v", configuration)
 	}
+	if configuration.TaskBoardEntryOwnerProofTopic != "rwms.task-board.entry-owner-proof.v1" ||
+		configuration.TaskBoardEntryOwnerProofGroup != "media-service-task-board-entry-owner-proof-v1" {
+		t.Fatalf("task-board owner proof Kafka configuration = %#v", configuration)
+	}
 }
 
 func TestLoadRejectsNonCanonicalInventoryOwnerKafkaConfiguration(t *testing.T) {
@@ -76,6 +80,14 @@ func TestLoadRejectsNonCanonicalCabinOwnerKafkaConfiguration(t *testing.T) {
 	t.Setenv("MEDIA_KAFKA_CABIN_OWNER_GROUP", "shared-consumer")
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() error = nil, want non-canonical cabin owner group rejection")
+	}
+}
+
+func TestLoadRejectsNonCanonicalTaskBoardOwnerProofKafkaConfiguration(t *testing.T) {
+	setCompleteConfiguration(t)
+	t.Setenv("MEDIA_KAFKA_TASK_BOARD_ENTRY_OWNER_PROOF_GROUP", "shared-consumer")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want non-canonical task-board owner proof group rejection")
 	}
 }
 

@@ -52,11 +52,22 @@ public class GatewaySecurityConfiguration {
                     "/api/logistics/private/**",
                     "/api/dossier/internal/**",
                     "/api/dossier/private/**",
+                    "/api/analytics/internal/**",
+                    "/api/analytics/private/**",
+                    "/api/assistant/internal/**",
+                    "/api/assistant/private/**",
                     "/auth/api/internal/**")
                 .denyAll()
                 .requestMatchers(
-                    "/auth/**", "/actuator/health", "/actuator/health/**", "/error")
+                    "/auth/**",
+                    "/api/logistics/public/v1/client-presentations/**",
+                    "/.well-known/assetlinks.json",
+                    "/actuator/health",
+                    "/actuator/health/**",
+                    "/error")
                 .permitAll()
+                .requestMatchers("/api/task-board/worker/v1/**")
+                .hasAuthority("SCOPE_worker.tasks")
                 .requestMatchers("/api/**", "/actuator/prometheus")
                 .authenticated()
                 .anyRequest()
@@ -111,10 +122,13 @@ public class GatewaySecurityConfiguration {
         List.of(
             HttpHeaders.AUTHORIZATION,
             HttpHeaders.CONTENT_TYPE,
+            HttpHeaders.IF_NONE_MATCH,
             CorrelationIdFilter.HEADER_NAME,
             "Idempotency-Key",
+            "Last-Event-ID",
             "X-XSRF-TOKEN"));
-    configuration.setExposedHeaders(List.of(CorrelationIdFilter.HEADER_NAME));
+    configuration.setExposedHeaders(
+        List.of(CorrelationIdFilter.HEADER_NAME, HttpHeaders.ETAG, HttpHeaders.RETRY_AFTER));
     configuration.setAllowCredentials(true);
     var source = new UrlBasedCorsConfigurationSource();
     source.registerCorsConfiguration("/**", configuration);

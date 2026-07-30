@@ -35,6 +35,13 @@ channels:
       transferDepartedV1: { $ref: '#/components/messages/TransferDepartedV1' }
       transferLineArrivedV1: { $ref: '#/components/messages/TransferLineArrivedV1' }
       transferConflictedV1: { $ref: '#/components/messages/TransferConflictedV1' }
+  rentalInquiryFacts:
+    address: rwms.logistics.rental-inquiry.events.v1
+    description: >-
+      Minimal booking completion fact used to archive the matching assistant
+      conversation. The conversation UUID is the Kafka record key.
+    messages:
+      rentalInquiryBookedV1: { $ref: '#/components/messages/RentalInquiryBookedV1' }
   assetRentalItemFacts:
     address: rwms.asset.rental-item.v1
     description: Read-only source evidence; it never authorizes a logistics effect.
@@ -82,6 +89,9 @@ operations:
   publishTransferFact:
     action: send
     channel: { $ref: '#/channels/transferFacts' }
+  publishRentalInquiryFact:
+    action: send
+    channel: { $ref: '#/channels/rentalInquiryFacts' }
   consumeRentalItemFacts:
     action: receive
     channel: { $ref: '#/channels/assetRentalItemFacts' }
@@ -120,6 +130,9 @@ components:
     ShipmentCreatedV1:
       name: logistics.shipment.created.v1
       payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    ShipmentDraftUpdatedV1:
+      name: logistics.shipment.draft-updated.v1
+      payload: { $ref: './logistics/logistics-events-v1.schema.json' }
     ShipmentPlannedV1:
       name: logistics.shipment.planned.v1
       payload: { $ref: './logistics/logistics-events-v1.schema.json' }
@@ -141,6 +154,10 @@ components:
     TransferConflictedV1:
       name: logistics.transfer.conflicted.v1
       payload: { $ref: './logistics/logistics-events-v1.schema.json' }
+    RentalInquiryBookedV1:
+      name: logistics.rental-inquiry.booked.v1
+      payload: { $ref: './logistics/rental-inquiry-events-v1.schema.json' }
+      x-rwms-record-key: conversationId
     RentalItemFactV1:
       name: logistics.input.asset.rental-item.v1
       payload:

@@ -4,12 +4,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.inventory.InventoryServiceApplication;
 import dev.buhanzaz.rwms.inventory.repository.InventoryMediaFactProjectionRepository;
 import dev.buhanzaz.rwms.inventory.eventing.InventoryEventStore.AppendCommand;
+import dev.buhanzaz.rwms.inventory.service.InventoryApplicationService;
+import dev.buhanzaz.rwms.platform.contracts.OpaqueActorReference;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -30,6 +35,7 @@ import org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProc
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -56,10 +62,12 @@ class InventoryEventingIntegrationTest {
   @Autowired InventoryMediaInboxProcessor media;
   @Autowired InventoryMediaFactProjectionRepository mediaFacts;
   @Autowired InventoryMediaRetryStore mediaRetries;
+  @Autowired InventoryAssetInboxProcessor assetInbox;
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper mapper;
   @Autowired ApplicationContext context;
   @Autowired BindingService bindingService;
+  @MockitoBean InventoryApplicationService inventory;
 
   @DynamicPropertySource
   static void properties(DynamicPropertyRegistry registry) {
@@ -155,6 +163,81 @@ class InventoryEventingIntegrationTest {
                 events.saveSnapshot(
                     "SESSION", aggregateId, 1, mapper.createObjectNode().put("step", 99)))
         .hasMessageContaining("changed");
+  }
+
+  @Test
+  void initializePersistsOpaqueActorReferenceAsJsonb() {
+    UUID aggregateId = UUID.randomUUID();
+    OpaqueActorReference actor =
+        new OpaqueActorReference("00000000-0000-0000-0000-000000000701", "USER", null);
+
+    var result =
+        events.initialize(
+            "SESSION",
+            aggregateId,
+            "inventory.session.started.v1",
+            SESSION_TOPIC,
+            mapper.createObjectNode().put("step", 0),
+            UUID.randomUUID(),
+            null,
+            actor);
+
+    assertThat(
+            jdbc.queryForObject(
+                "select actor_ref->>'subjectId' from domain_event where event_id=?",
+                String.class,
+                result.eventId()))
+        .isEqualTo(actor.subjectId());
+  }
+
+  @Test
+  void assetMembershipInboxDeduplicatesAndPreservesCausation() {
+    UUID eventId = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID correlationId = UUID.randomUUID();
+    OffsetDateTime recordedAt = OffsetDateTime.now(ZoneOffset.UTC);
+    ObjectNode envelope = mapper.createObjectNode();
+    envelope.put("envelopeVersion", 2);
+    envelope.put("eventId", eventId.toString());
+    envelope.put("eventType", "asset.rental-item.status-changed.v1");
+    envelope.put("eventVersion", 1);
+    envelope.putNull("occurredAt");
+    envelope.put("recordedAt", recordedAt.toString());
+    envelope.put("producer", "asset-service");
+    envelope.put("aggregateType", "RENTAL_ITEM");
+    envelope.put("aggregateId", assetId.toString());
+    envelope.put("aggregateVersion", 7);
+    envelope
+        .putObject("correlation")
+        .put("correlationId", correlationId.toString())
+        .putNull("causationId");
+    envelope.putNull("actorRef");
+    envelope
+        .putObject("payload")
+        .put("rentalItemId", assetId.toString())
+        .put("warehouseId", warehouseId.toString())
+        .put("status", "AFTER_RENT")
+        .put("numberSha256", "a".repeat(64));
+    byte[] body = envelope.toString().getBytes(StandardCharsets.UTF_8);
+    byte[] key = assetId.toString().getBytes(StandardCharsets.UTF_8);
+
+    assetInbox.initial(body, key);
+    assetInbox.initial(body, key);
+
+    verify(inventory)
+        .reconcileAssetMembership(
+            eq(assetId), isNull(), eq(correlationId), eq(eventId), eq(recordedAt));
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from inbox_message
+                 where consumer_group=? and event_id=? and status='PROCESSED'
+                """,
+                Integer.class,
+                InventoryAssetInboxProcessor.CONSUMER,
+                eventId))
+        .isOne();
   }
 
   @Test
@@ -275,13 +358,15 @@ class InventoryEventingIntegrationTest {
   }
 
   @Test
-  void mediaFactsDeduplicateExactBytesValidateNestedEnvelopeAndCommitEffectAtomically() {
+  void mediaFactsAcceptCanonicalFolderPayloadDeduplicateExactBytesAndCommitEffectAtomically() {
     UUID warehouseId = UUID.randomUUID();
     UUID inventoryId = UUID.randomUUID();
     UUID findingId = seedFinding(warehouseId, inventoryId);
     UUID mediaId = UUID.randomUUID();
     UUID eventId = UUID.randomUUID();
-    byte[] valid = mediaFact(eventId, mediaId, 1, findingId, warehouseId, "media.media.uploaded.v1");
+    // The private upload-session creation is version 1. The first fact emitted on the public
+    // media topic is therefore the finalized-upload snapshot at version 2.
+    byte[] valid = mediaFact(eventId, mediaId, 2, findingId, warehouseId, "media.media.uploaded.v1");
 
     media.initial(valid);
     media.initial(valid);
@@ -291,13 +376,13 @@ class InventoryEventingIntegrationTest {
                 "select last_aggregate_version from consumer_aggregate_checkpoint where aggregate_id=?",
                 Long.class,
                 mediaId.toString()))
-        .isOne();
+        .isEqualTo(2L);
     assertThat(jdbc.queryForObject("select count(*) from inventory_media_fact_projection", Integer.class))
         .isOne();
     assertThat(mediaFacts.findByMediaIdAndGeneration(mediaId, 0L))
         .hasValueSatisfying(
             projection -> {
-              assertThat(projection.getAggregateVersion()).isOne();
+              assertThat(projection.getAggregateVersion()).isEqualTo(2L);
               assertThat(projection.getMediaStatus()).isEqualTo("PROCESSING");
             });
 
@@ -305,14 +390,14 @@ class InventoryEventingIntegrationTest {
         mediaFact(
             UUID.randomUUID(),
             mediaId,
-            2,
+            3,
             findingId,
             warehouseId,
             "media.media.ready.v1"));
     assertThat(mediaFacts.findByMediaIdAndGeneration(mediaId, 0L))
         .hasValueSatisfying(
             projection -> {
-              assertThat(projection.getAggregateVersion()).isEqualTo(2L);
+              assertThat(projection.getAggregateVersion()).isEqualTo(3L);
               assertThat(projection.getMediaStatus()).isEqualTo("READY");
             });
 
@@ -358,7 +443,7 @@ class InventoryEventingIntegrationTest {
                       mediaFact(
                           atomicEventId,
                           atomicMediaId,
-                          1,
+                          2,
                           findingId,
                           warehouseId,
                           "media.media.uploaded.v1")))
@@ -382,56 +467,96 @@ class InventoryEventingIntegrationTest {
   }
 
   @Test
-  void mediaGapQuarantinesWithoutDltAndOperatorReconciliationUnblocksOrderedEffects() {
+  void mediaFactsAcceptSourceOwnedVersionGapsAndIgnoreStaleSnapshots() {
     UUID warehouseId = UUID.randomUUID();
     UUID inventoryId = UUID.randomUUID();
     UUID findingId = seedFinding(warehouseId, inventoryId);
     UUID mediaId = UUID.randomUUID();
-    UUID secondEvent = UUID.randomUUID();
-    UUID thirdEvent = UUID.randomUUID();
+    UUID uploadedEvent = UUID.randomUUID();
+    UUID rotatedEvent = UUID.randomUUID();
+    UUID staleEvent = UUID.randomUUID();
     int beforeDlt = jdbc.queryForObject("select count(*) from sanitized_dead_letter", Integer.class);
 
     media.initial(
         mediaFact(
-            secondEvent,
+            uploadedEvent,
             mediaId,
             2,
             findingId,
             warehouseId,
-            "media.media.ready.v1"));
+            "media.media.uploaded.v1"));
     media.initial(
         mediaFact(
-            thirdEvent,
+            rotatedEvent,
             mediaId,
-            3,
+            5,
             findingId,
             warehouseId,
             "media.media.rotated.v1"));
     assertThat(
             jdbc.queryForObject(
-                "select blocked from consumer_aggregate_checkpoint where aggregate_id=?",
-                Boolean.class,
-                mediaId.toString()))
-        .isTrue();
-    assertThat(jdbc.queryForObject("select count(*) from sanitized_dead_letter", Integer.class))
-        .isEqualTo(beforeDlt);
-
-    media.reconcileQuarantinedAggregate(
-        mediaId, 1, UUID.randomUUID(), "operator replayed missing version", UUID.randomUUID());
-    media.retry(secondEvent);
-    media.retry(thirdEvent);
-    assertThat(
-            jdbc.queryForObject(
                 "select last_aggregate_version from consumer_aggregate_checkpoint where aggregate_id=?",
                 Long.class,
                 mediaId.toString()))
-        .isEqualTo(3L);
+        .isEqualTo(5L);
+    assertThat(jdbc.queryForObject("select count(*) from sanitized_dead_letter", Integer.class))
+        .isEqualTo(beforeDlt);
+
+    media.initial(
+        mediaFact(
+            staleEvent,
+            mediaId,
+            3,
+            findingId,
+            warehouseId,
+            "media.media.ready.v1"));
     assertThat(
             jdbc.queryForObject(
-                "select count(*) from version_gap_quarantine where aggregate_id=? and status='RESOLVED'",
+                "select status from inbox_message where event_id=?", String.class, staleEvent))
+        .isEqualTo("PROCESSED");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from version_gap_quarantine where aggregate_id=?",
                 Integer.class,
                 mediaId.toString()))
-        .isOne();
+        .isZero();
+  }
+
+  @Test
+  void foreignOwnerMediaFactsBypassInventorySpecificValidation() throws Exception {
+    UUID warehouseId = UUID.randomUUID();
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = seedFinding(warehouseId, inventoryId);
+    UUID mediaId = UUID.randomUUID();
+    UUID eventId = UUID.randomUUID();
+
+    ObjectNode foreignOwner =
+        (ObjectNode)
+            mapper.readTree(
+                mediaFact(
+                    eventId,
+                    mediaId,
+                    2,
+                    findingId,
+                    warehouseId,
+                    "media.media.uploaded.v1",
+                    "LOGISTICS_RETURN"));
+    // A logistics return identifies its owner differently. That is valid for its bounded context
+    // and must not become an inventory DLT on the shared media topic.
+    ((ObjectNode) foreignOwner.path("payload")).put("ownerId", "return-line-42");
+    media.initial(mapper.writeValueAsBytes(foreignOwner));
+
+    assertThat(
+            jdbc.queryForObject(
+                "select status from inbox_message where event_id=?", String.class, eventId))
+        .isEqualTo("PROCESSED");
+    assertThat(mediaFacts.findByMediaIdAndGeneration(mediaId, 0L)).isEmpty();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from consumer_aggregate_checkpoint where aggregate_id=?",
+                Integer.class,
+                mediaId.toString()))
+        .isZero();
   }
 
   @Test
@@ -529,6 +654,24 @@ class InventoryEventingIntegrationTest {
       UUID findingId,
       UUID warehouseId,
       String eventType) {
+    return mediaFact(
+        eventId,
+        mediaId,
+        version,
+        findingId,
+        warehouseId,
+        eventType,
+        "INVENTORY_FINDING");
+  }
+
+  private byte[] mediaFact(
+      UUID eventId,
+      UUID mediaId,
+      long version,
+      UUID findingId,
+      UUID warehouseId,
+      String eventType,
+      String ownerType) {
     ObjectNode root = mapper.createObjectNode();
     root.put("envelopeVersion", 2);
     root.put("eventId", eventId.toString());
@@ -546,7 +689,8 @@ class InventoryEventingIntegrationTest {
     root.putNull("actorRef");
     ObjectNode payload = root.putObject("payload");
     payload.put("mediaId", mediaId.toString());
-    payload.put("ownerType", "INVENTORY_FINDING");
+    payload.put("folderId", UUID.randomUUID().toString());
+    payload.put("ownerType", ownerType);
     payload.put("ownerId", findingId.toString());
     payload.put("warehouseId", warehouseId.toString());
     payload.put("kind", "IMAGE");

@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface EstimateLineRepository extends JpaRepository<EstimateLine, UUID> {
   List<EstimateLine> findAllByEstimateIdAndEstimateRevisionOrderByLineNo(UUID estimateId, int estimateRevision);
+  List<EstimateLine> findAllByEstimateIdOrderByEstimateRevisionAscLineNoAsc(UUID estimateId);
   long countByEstimateIdAndEstimateRevision(UUID estimateId, int estimateRevision);
   void deleteAllByEstimateIdAndEstimateRevision(UUID estimateId, int estimateRevision);
 }

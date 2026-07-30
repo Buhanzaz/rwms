@@ -56,34 +56,29 @@ const item: RentalItemDto = {
   version: 1,
   warehouseId: WAREHOUSE_ID,
   number: "БЫТ-001",
+  rentalTypeId: "33333333-3333-4333-8333-333333333333",
+  dimensionId: "44444444-4444-4444-8444-444444444444",
+  finishingId: "55555555-5555-4555-8555-555555555555",
   type: "БК-1",
   dimensions: "2.4x6",
   finishing: "ДВП",
   category: "Новая",
-  characteristics: "Пластиковое окно",
+  characteristics: [
+    {
+      id: "66666666-6666-4666-8666-666666666666",
+      name: "Пластиковое окно",
+    },
+  ],
   linoleum: true,
   status: "WAREHOUSE",
   comment: null,
-  hasPhotos: true,
-  photoCount: 1,
-  mainPhotoUrl: "https://images.example.test/legacy-medium.jpg",
-  previewPhotoUrls: ["https://images.example.test/legacy-medium.jpg"],
-  legacyPhotos: [
-    {
-      id: "spb-1-photo-1",
-      url: "https://images.example.test/legacy-medium.jpg",
-      variants: {
-        small: { url: "https://images.example.test/legacy-small.webp" },
-        largeWebp: { url: "https://images.example.test/legacy-large.webp" },
-      },
-    },
-  ],
-  locationNodeId: null,
   contents: null,
   contentsItems: [],
   shipmentDate: null,
   tenant: null,
   price: null,
+  passport: {},
+  tags: [],
 }
 
 function Harness() {
@@ -135,7 +130,6 @@ function Harness() {
       ],
     ]),
   })
-  const legacy = rentalItemMedia.photos.find((photo) => photo.asset === null)
   const service = rentalItemMedia.photos.find((photo) => photo.id === ASSET_ID)
   return (
     <div>
@@ -146,9 +140,6 @@ function Harness() {
       <span data-testid="folder-count">
         {rentalItemMedia.photoFolders.length}
       </span>
-      <span data-testid="legacy-small">{legacy?.variants?.small?.url}</span>
-      <span data-testid="legacy-medium">{legacy?.variants?.medium?.url}</span>
-      <span data-testid="legacy-large">{legacy?.variants?.large?.url}</span>
       <span data-testid="service-small">{service?.variants?.small?.url}</span>
       <span data-testid="service-medium">{service?.variants?.medium?.url}</span>
       <span data-testid="service-large">{service?.variants?.large?.url}</span>
@@ -457,19 +448,10 @@ describe("rental item media", () => {
     const view = renderHarness()
 
     await waitFor(() =>
-      expect(screen.getByTestId("photo-count").textContent).toBe("2")
+      expect(screen.getByTestId("photo-count").textContent).toBe("1")
     )
-    expect(screen.getByTestId("logical-photo-count").textContent).toBe("2")
-    expect(screen.getByTestId("folder-count").textContent).toBe("2")
-    expect(screen.getByTestId("legacy-small").textContent).toBe(
-      "https://images.example.test/legacy-small.webp"
-    )
-    expect(screen.getByTestId("legacy-medium").textContent).toBe(
-      "https://images.example.test/legacy-medium.jpg"
-    )
-    expect(screen.getByTestId("legacy-large").textContent).toBe(
-      "https://images.example.test/legacy-large.webp"
-    )
+    expect(screen.getByTestId("logical-photo-count").textContent).toBe("1")
+    expect(screen.getByTestId("folder-count").textContent).toBe("1")
     expect(screen.getByTestId("service-small").textContent).toBe("blob:small")
     expect(screen.getByTestId("service-medium").textContent).toBe("")
     expect(screen.getByTestId("service-large").textContent).toBe("")

@@ -15,6 +15,7 @@ const lifecycle = vi.hoisted(() => ({
 }))
 const getBoard = vi.hoisted(() => vi.fn())
 const listQueues = vi.hoisted(() => vi.fn())
+const catalog = vi.hoisted(() => vi.fn())
 
 vi.mock(
   "@/features/repair-estimates/api/http-maintenance-lifecycle-client",
@@ -42,10 +43,21 @@ vi.mock("@/features/settings/task-board/api/task-board-settings-api", () => ({
   taskBoardSettingsClient: { listQueues },
 }))
 
+vi.mock(
+  "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api",
+  () => ({
+    getOperationalRepairEstimateCatalog: catalog,
+  })
+)
+
 import { HttpMaintenanceRepairTasksAdapter } from "@/features/repair-tasks/adapters/http-maintenance-repair-tasks-adapter"
-import type { MaintenanceRepair } from "@/features/repair-estimates/api/http-maintenance-lifecycle-client"
+import type {
+  MaintenanceEstimateLine,
+  MaintenanceRepair,
+} from "@/features/repair-estimates/api/http-maintenance-lifecycle-client"
 import type { RepairTaskWriteCommand } from "@/features/repair-tasks/model/repair-task"
 import type { RepairTaskRentalItemsClient } from "@/features/repair-tasks/ports/repair-task-rental-items-client"
+import { RepairTaskQueueDraftPersistedError } from "@/features/repair-tasks/ports/repair-tasks-client"
 import type { TaskBoardSnapshotDto } from "@/features/task-board/model/task-board"
 
 const warehouseId = "00000000-0000-4000-8000-000000000001"
@@ -57,6 +69,16 @@ const legacyQueueId = "00000000-0000-4000-8000-000000000015"
 const databaseQueueId = "00000000-0000-4000-8000-000000000025"
 const externalTaskId = "00000000-0000-4000-8000-000000000006"
 const entryId = "00000000-0000-4000-8000-000000000007"
+const workLineId = "00000000-0000-4000-8000-000000000008"
+const materialLineId = "00000000-0000-4000-8000-000000000009"
+const catalogVersionId = "00000000-0000-4000-8000-000000000010"
+const workNodeId = "00000000-0000-4000-8000-000000000011"
+const materialNodeId = "00000000-0000-4000-8000-000000000012"
+const characteristicId = "00000000-0000-4000-8000-000000000013"
+const evidenceId = "00000000-0000-4000-8000-000000000031"
+const evidenceMediaId = "00000000-0000-4000-8000-000000000032"
+const workerId = "00000000-0000-4000-8000-000000000033"
+const workerGroupId = "00000000-0000-4000-8000-000000000034"
 
 function repair(
   acceptanceState: MaintenanceRepair["acceptanceState"] = "NOT_READY"
@@ -74,6 +96,7 @@ function repair(
     acceptanceState,
     version: 3,
     dispatchDate: "2026-07-18",
+    priority: 2,
     sourceParty: "Арендатор",
     plan: {
       repairId,
@@ -86,9 +109,14 @@ function repair(
           state: acceptanceState === "PENDING" ? "DONE" : "PLANNED",
           routing: {
             queueId,
-            queueCode: "REPAIR",
-            queueKind: "REPAIR",
+            queueName: "Ремонт",
+            queueType: "REPAIR",
           },
+          workLines: [],
+          materialLines: [],
+          primaryLineId: null,
+          groupComment: "",
+          evidence: [],
           taskDeadline: null,
           taskSync: {
             externalTaskId,
@@ -108,6 +136,14 @@ function repair(
     inventorySource: null,
     lease: null,
     mediaReferences: [],
+    complexity: {
+      type: "LIGHT",
+      name: "Лёгкий ремонт",
+      color: "#22C55E",
+      plannedMinutes: "30",
+      forcedCapital: false,
+    },
+    movementToShipment: false,
     createdAt: "2026-07-18T08:00:00Z",
     updatedAt: "2026-07-18T10:00:00Z",
     actor: { actorId: "user-1", actorType: "USER" },
@@ -131,12 +167,13 @@ function repairCommandResult(
 
 const board: TaskBoardSnapshotDto = {
   warehouseId,
+  selectedDate: "2026-07-18",
+  availableDates: ["2026-07-18"],
   queues: [
     {
       key: "queue-repair",
       label: "Ремонт",
       kind: "REPAIR",
-      queueCode: "REPAIR",
       settingsQueueId: queueId,
       settingsCollapsed: false,
       entries: [
@@ -146,7 +183,6 @@ const board: TaskBoardSnapshotDto = {
           warehouseId,
           queueKey: "queue-repair",
           queueId,
-          queueCode: "REPAIR",
           entryType: "REAL",
           routeIndex: 0,
           routeLength: 1,
@@ -157,6 +193,9 @@ const board: TaskBoardSnapshotDto = {
           title: "Ремонт",
           unitNumber: "CAB-17",
           taskStatus: "DONE",
+          scheduledDate: "2026-07-18",
+          priority: 2,
+          pinned: true,
           status: "DONE",
           taskText: null,
           plannedDurationMinutes: 30,
@@ -167,9 +206,9 @@ const board: TaskBoardSnapshotDto = {
             {
               id: "assignment-1",
               version: 1,
-              workerId: "worker-1",
+              workerId,
               workerName: "Иван",
-              workerGroupId: "group-1",
+              workerGroupId,
               workerGroupName: "Бригада 1",
               status: "DONE",
               assignedAt: "2026-07-18T09:00:00Z",
@@ -197,6 +236,127 @@ const rentalItemsClient: RepairTaskRentalItemsClient = {
   })),
 }
 
+const workLine = {
+  id: workLineId,
+  sourceLineKey: workLineId,
+  lineType: "WORK" as const,
+  description: "Заменить окно",
+  lineComment: "Сначала снять створку",
+  unit: "шт.",
+  quantity: 1,
+  unitPrice: "100.00",
+  lineTotal: "100.00",
+  catalogSnapshot: {
+    nodeId: workNodeId,
+    name: "Заменить окно",
+    nodeType: "WORK" as const,
+    furnitureEquipment: null,
+  },
+  maintenanceMediaReferences: [],
+}
+
+const materialLine = {
+  id: materialLineId,
+  sourceLineKey: materialLineId,
+  lineType: "MATERIAL" as const,
+  description: "Оконный блок",
+  lineComment: "",
+  unit: "шт.",
+  quantity: 1,
+  unitPrice: "250.00",
+  lineTotal: "250.00",
+  catalogSnapshot: {
+    nodeId: materialNodeId,
+    name: "Оконный блок",
+    nodeType: "MATERIAL" as const,
+    furnitureEquipment: null,
+  },
+  maintenanceMediaReferences: [],
+}
+
+const customWorkLine = {
+  id: "00000000-0000-4000-8000-000000000029",
+  sourceLineKey: "00000000-0000-4000-8000-000000000029",
+  lineType: "WORK" as const,
+  description: "Подтянуть крепления",
+  lineComment: "Нужна стремянка",
+  unit: "ед",
+  quantity: 1,
+  normativeMinutes: 45,
+  unitPrice: "0.00",
+  lineTotal: "0.00",
+  catalogSnapshot: null,
+  customQueueBinding: {
+    queueId,
+    queueName: "Ремонт",
+    queueKind: "REPAIR" as const,
+  },
+  maintenanceMediaReferences: [],
+}
+
+const maintenanceWorkLine: MaintenanceEstimateLine = {
+  id: workLineId,
+  catalogSnapshot: {
+    catalogVersionId,
+    nodeId: workNodeId,
+    nodeType: "WORK",
+    name: "Заменить окно",
+    unit: "шт.",
+    unitPrice: "100.00",
+    durationMinutes: 30,
+    routing: {
+      queueId,
+      queueName: "Ремонт",
+      queueType: "REPAIR",
+    },
+    furnitureEquipment: null,
+    forcesCapitalRepair: true,
+    characteristic: null,
+  },
+  lineType: "WORK",
+  description: "Заменить окно",
+  unit: "шт.",
+  quantity: "1",
+  normativeMinutes: 30,
+  unitPrice: "100.00",
+  comment: "Сначала снять створку",
+  mediaReferences: [],
+  lineTotal: "100.00",
+}
+
+const maintenanceMaterialLine: MaintenanceEstimateLine = {
+  id: materialLineId,
+  catalogSnapshot: {
+    catalogVersionId,
+    nodeId: materialNodeId,
+    nodeType: "MATERIAL",
+    name: "Оконный блок",
+    unit: "шт.",
+    unitPrice: "250.00",
+    durationMinutes: 0,
+    routing: {
+      queueId,
+      queueName: "Ремонт",
+      queueType: "REPAIR",
+    },
+    furnitureEquipment: null,
+    forcesCapitalRepair: false,
+    characteristic: {
+      characteristicId,
+      characteristicName: "Железная дверь",
+    },
+  },
+  lineType: "MATERIAL",
+  description: "Оконный блок",
+  unit: "шт.",
+  quantity: "1",
+  normativeMinutes: 0,
+  unitPrice: "250.00",
+  comment: null,
+  mediaReferences: [],
+  lineTotal: "250.00",
+}
+
 const writeCommand: RepairTaskWriteCommand = {
   taskId: null,
   expectedVersion: null,
@@ -213,16 +373,18 @@ const writeCommand: RepairTaskWriteCommand = {
   comment: "",
   media: [],
   maintenanceMediaReferences: [],
+  coverMediaId: null,
+  priority: 2,
   subtasks: [
     {
       id: stageId,
       kind: "REPAIR_WORK",
       status: "WAITING",
-      workLines: [],
+      workLines: [workLine],
       materialLines: [],
       groupComment: "",
       queueId,
-      queueCode: "REPAIR",
+      queueName: "Ремонт",
       routeQueueKind: "REPAIR",
       sortOrder: 0,
       queuePosition: 0,
@@ -244,12 +406,64 @@ describe("maintenance repair tasks adapter", () => {
     listQueues.mockResolvedValue([
       {
         id: queueId,
-        code: "REPAIR",
+        name: "Ремонт",
         type: "REPAIR",
         active: true,
         hidden: false,
       },
     ])
+    catalog.mockResolvedValue({
+      nodes: [
+        {
+          id: workNodeId,
+          catalogVersionId,
+          name: "Заменить окно",
+          nodeType: "WORK",
+          parentId: null,
+          active: true,
+          unit: "шт.",
+          unitPrice: "100.00",
+          durationMinutes: 30,
+          showInMainMenu: true,
+          routeQueueKind: "REPAIR",
+          queueDefinitionId: queueId,
+          queueDefinitionName: "Ремонт",
+          includeInEstimate: true,
+          commonItem: false,
+          furnitureCategory: false,
+          furnitureEquipment: null,
+          forcesCapitalRepair: true,
+          characteristic: null,
+          comment: null,
+        },
+        {
+          id: materialNodeId,
+          catalogVersionId,
+          name: "Оконный блок",
+          nodeType: "MATERIAL",
+          parentId: null,
+          active: true,
+          unit: "шт.",
+          unitPrice: "250.00",
+          durationMinutes: 0,
+          showInMainMenu: true,
+          routeQueueKind: "REPAIR",
+          queueDefinitionId: queueId,
+          queueDefinitionName: "Ремонт",
+          includeInEstimate: true,
+          commonItem: false,
+          furnitureCategory: false,
+          furnitureEquipment: null,
+          forcesCapitalRepair: false,
+          characteristic: {
+            characteristicId,
+            characteristicName: "Железная дверь",
+          },
+          comment: null,
+        },
+      ],
+      links: [],
+    })
   })
 
   it("enriches a maintenance repair with real task-board and acceptance facts", async () => {
@@ -278,14 +492,365 @@ describe("maintenance repair tasks adapter", () => {
     })
     expect(task?.subtasks[0]).toMatchObject({
       externalTaskId,
+      entryType: "REAL",
+      scheduledDate: "2026-07-18",
+      priority: 2,
+      pinned: true,
+      queuePosition: 1,
       plannedDurationMinutes: 30,
       activeWorkSeconds: 1200,
-      workerGroup: { id: "group-1", name: "Бригада 1" },
+      workerGroup: { id: workerGroupId, name: "Бригада 1" },
     })
     expect(task?.subtasks[0]?.assignments[0]?.worker?.name).toBe("Иван")
   })
 
-  it("fails task-board enrichment closed without inventing assignments", async () => {
+  it("uses the maintenance category normative when the board entry is no longer visible", async () => {
+    const historicalRepair = repair("PENDING")
+    historicalRepair.plan.stages[0].workLines = [maintenanceWorkLine]
+    lifecycle.get.mockResolvedValue(historicalRepair)
+    lifecycle.listAcceptance.mockResolvedValue({
+      items: [
+        {
+          repairId,
+          readyAt: "2026-07-18T10:05:00Z",
+        },
+      ],
+    })
+    const historicalBoard = structuredClone(board)
+    historicalBoard.queues.forEach((queue) => {
+      queue.entries = []
+    })
+    historicalBoard.totalEntries = 0
+    historicalBoard.realEntries = 0
+    getBoard.mockResolvedValue(historicalBoard)
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const task = await adapter.getById(repairId, warehouseId)
+
+    expect(task?.subtasks[0]).toMatchObject({
+      plannedDurationMinutes: 30,
+      activeWorkSeconds: 0,
+    })
+    expect(task?.subtasks[0]?.workLines[0]?.normativeMinutes).toBe(30)
+  })
+
+  it("serializes unique stage lines with exact operational catalog snapshots", async () => {
+    lifecycle.createDirect.mockResolvedValue(repair())
+    const command = structuredClone(writeCommand)
+    command.subtasks[0].workLines = [workLine]
+    command.subtasks[0].materialLines = [materialLine]
+    command.subtasks[0].groupComment = "Монтажная группа"
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    await adapter.saveDraft(command)
+
+    const request = lifecycle.createDirect.mock.calls[0]?.[2]
+    expect(request).toMatchObject({
+      warehouseId,
+      rentalItemId,
+      dispatchDate: "2026-07-18",
+      sourceParty: "WMS-панель",
+    })
+    expect(request.lines).toHaveLength(2)
+    expect(
+      new Set(request.lines.map((line: { id: string }) => line.id)).size
+    ).toBe(2)
+    expect(request.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: workLineId,
+          lineType: "WORK",
+          unit: "шт.",
+          catalogSnapshot: expect.objectContaining({
+            catalogVersionId,
+            nodeId: workNodeId,
+            nodeType: "WORK",
+            routing: {
+              queueId,
+              queueName: "Ремонт",
+              queueType: "REPAIR",
+            },
+            forcesCapitalRepair: true,
+            characteristic: null,
+          }),
+        }),
+        expect.objectContaining({
+          id: materialLineId,
+          lineType: "MATERIAL",
+          unit: "шт.",
+          catalogSnapshot: expect.objectContaining({
+            catalogVersionId,
+            nodeId: materialNodeId,
+            nodeType: "MATERIAL",
+            forcesCapitalRepair: false,
+            characteristic: {
+              characteristicId,
+              characteristicName: "Железная дверь",
+            },
+          }),
+        }),
+      ])
+    )
+    expect(request.plan).toEqual([
+      expect.objectContaining({
+        includedLineIds: [workLineId, materialLineId],
+        primaryLineId: workLineId,
+        groupComment: "Монтажная группа",
+      }),
+    ])
+  })
+
+  it("serializes a custom work line without a catalog snapshot", async () => {
+    lifecycle.createDirect.mockResolvedValue(repair())
+    const command = structuredClone(writeCommand)
+    command.subtasks[0].workLines = [customWorkLine]
+    command.subtasks[0].groupComment = "Нужна стремянка"
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    await adapter.saveDraft(command)
+
+    const request = lifecycle.createDirect.mock.calls[0]?.[2]
+    expect(request.lines).toEqual([
+      expect.objectContaining({
+        id: customWorkLine.id,
+        catalogSnapshot: null,
+        lineType: "WORK",
+        description: customWorkLine.description,
+        unit: "ед",
+        normativeMinutes: 45,
+        comment: customWorkLine.lineComment,
+      }),
+    ])
+    expect(request.plan).toEqual([
+      expect.objectContaining({
+        includedLineIds: [customWorkLine.id],
+        primaryLineId: customWorkLine.id,
+        groupComment: "Нужна стремянка",
+        routing: {
+          queueId,
+          queueName: "Ремонт",
+          queueType: "REPAIR",
+        },
+      }),
+    ])
+  })
+
+  it("serializes a custom material with its declared unit and a zero duration", async () => {
+    lifecycle.createDirect.mockResolvedValue(repair())
+    const command = structuredClone(writeCommand)
+    const customMaterialLine = {
+      ...customWorkLine,
+      id: "00000000-0000-4000-8000-000000000030",
+      sourceLineKey: "00000000-0000-4000-8000-000000000030",
+      lineType: "MATERIAL" as const,
+      description: "Крепёж",
+      unit: "упак.",
+      normativeMinutes: 90,
+    }
+    command.subtasks[0].workLines = [customWorkLine]
+    command.subtasks[0].materialLines = [customMaterialLine]
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    await adapter.saveDraft(command)
+
+    expect(lifecycle.createDirect.mock.calls[0]?.[2].lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: customMaterialLine.id,
+          catalogSnapshot: null,
+          lineType: "MATERIAL",
+          unit: "упак.",
+          normativeMinutes: 0,
+        }),
+      ])
+    )
+  })
+
+  it("serializes a material-only repair stage with a null primary line", async () => {
+    lifecycle.createDirect.mockResolvedValue(repair())
+    const command = structuredClone(writeCommand)
+    const standaloneMaterial = {
+      ...customWorkLine,
+      id: "00000000-0000-4000-8000-000000000035",
+      sourceLineKey: "00000000-0000-4000-8000-000000000035",
+      lineType: "MATERIAL" as const,
+      description: "Герметик",
+      unit: "туба",
+      normativeMinutes: 0,
+    }
+    command.subtasks[0].workLines = []
+    command.subtasks[0].materialLines = [standaloneMaterial]
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    await adapter.saveDraft(command)
+
+    expect(lifecycle.createDirect.mock.calls[0]?.[2].plan).toEqual([
+      expect.objectContaining({
+        includedLineIds: [standaloneMaterial.id],
+        primaryLineId: null,
+        routing: {
+          queueId,
+          queueName: "Ремонт",
+          queueType: "REPAIR",
+        },
+      }),
+    ])
+  })
+
+  it("projects server work, material and group content into the repair subtask", async () => {
+    const contentRepair = structuredClone(repair())
+    contentRepair.plan.stages[0].workLines = [maintenanceWorkLine]
+    contentRepair.plan.stages[0].materialLines = [maintenanceMaterialLine]
+    contentRepair.plan.stages[0].primaryLineId = workLineId
+    contentRepair.plan.stages[0].groupComment = "Монтажная группа"
+    lifecycle.get.mockResolvedValue(contentRepair)
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const task = await adapter.getById(repairId, warehouseId)
+
+    expect(task?.subtasks[0]).toMatchObject({
+      groupComment: "Монтажная группа",
+      workLines: [
+        {
+          id: workLineId,
+          lineType: "WORK",
+          description: "Заменить окно",
+          lineComment: "Сначала снять створку",
+          quantity: 1,
+          catalogSnapshot: {
+            nodeId: workNodeId,
+            nodeType: "WORK",
+          },
+        },
+      ],
+      materialLines: [
+        {
+          id: materialLineId,
+          lineType: "MATERIAL",
+          description: "Оконный блок",
+          quantity: 1,
+        },
+      ],
+    })
+  })
+
+  it("reconstructs a custom work line binding from its containing repair stage", async () => {
+    const contentRepair = structuredClone(repair())
+    contentRepair.plan.stages[0].routing = {
+      queueId,
+      queueName: "Ожидание проверки",
+      queueType: "HOLDING",
+    }
+    contentRepair.plan.stages[0].workLines = [
+      {
+        ...maintenanceWorkLine,
+        id: customWorkLine.id,
+        catalogSnapshot: null,
+        description: customWorkLine.description,
+        comment: customWorkLine.lineComment,
+      },
+    ]
+    contentRepair.plan.stages[0].primaryLineId = customWorkLine.id
+    lifecycle.get.mockResolvedValue(contentRepair)
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const task = await adapter.getById(repairId, warehouseId)
+
+    expect(task?.subtasks[0]?.workLines).toEqual([
+      expect.objectContaining({
+        id: customWorkLine.id,
+        lineType: "WORK",
+        catalogSnapshot: null,
+        customQueueBinding: {
+          queueId,
+          queueName: "Ожидание проверки",
+          queueKind: "HOLDING",
+        },
+        lineComment: "Нужна стремянка",
+      }),
+    ])
+  })
+
+  it("projects worker evidence and resolves display names from task-board assignments", async () => {
+    const evidenceRepair = structuredClone(repair("PENDING"))
+    evidenceRepair.plan.stages[0].evidence = [
+      {
+        evidenceId,
+        entryId,
+        workerId,
+        workerGroupId,
+        mediaId: evidenceMediaId,
+        mediaGeneration: 4,
+        capturedAt: "2026-07-18T09:45:00Z",
+        recordedAt: "2026-07-18T10:00:00Z",
+        state: "READY",
+      },
+    ]
+    lifecycle.get.mockResolvedValue(evidenceRepair)
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const task = await adapter.getById(repairId, warehouseId)
+
+    expect(task?.subtasks[0]?.evidence).toEqual([
+      {
+        evidenceId,
+        entryId,
+        workerId,
+        workerDisplayName: "Иван",
+        workerGroupId,
+        workerGroupName: "Бригада 1",
+        mediaId: evidenceMediaId,
+        mediaGeneration: 4,
+        capturedAt: "2026-07-18T09:45:00Z",
+        recordedAt: "2026-07-18T10:00:00Z",
+        state: "READY",
+      },
+    ])
+  })
+
+  it("keeps maintenance draft repairs in the repairs list", async () => {
+    lifecycle.listRepairs.mockResolvedValue({ items: [repair()] })
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const tasks = await adapter.list(warehouseId)
+
+    expect(lifecycle.listRepairs).toHaveBeenCalledWith("token", warehouseId)
+    expect(tasks).toEqual([
+      expect.objectContaining({
+        id: repairId,
+        status: "DRAFT",
+      }),
+    ])
+  })
+
+  it("fails the repair projection when task-board enrichment is unavailable", async () => {
     lifecycle.listRepairs.mockResolvedValue({ items: [repair()] })
     getBoard.mockRejectedValue(new Error("task-board unavailable"))
     const adapter = new HttpMaintenanceRepairTasksAdapter(
@@ -293,31 +858,207 @@ describe("maintenance repair tasks adapter", () => {
       async () => "token"
     )
 
-    const [task] = await adapter.list(warehouseId)
-
-    expect(task.taskBoardAvailable).toBe(false)
-    expect(task.subtasks[0]?.assignments).toEqual([])
-    expect(task.subtasks[0]?.workerGroup).toBeNull()
+    await expect(adapter.list(warehouseId)).rejects.toThrow(
+      "task-board unavailable"
+    )
   })
 
-  it("reports the persisted repair UUID when queueing fails", async () => {
-    lifecycle.createDirect.mockResolvedValue(repair())
-    lifecycle.queue.mockRejectedValue(new Error("task-board unavailable"))
+  it("rejects a repair priority outside the service contract", async () => {
+    lifecycle.listRepairs.mockResolvedValue({
+      items: [{ ...repair(), priority: 0 }],
+    })
+    getBoard.mockResolvedValue(board)
     const adapter = new HttpMaintenanceRepairTasksAdapter(
       rentalItemsClient,
       async () => "token"
     )
 
-    await expect(adapter.queue(writeCommand)).rejects.toThrow(
-      `Черновик ремонта ${repairId} сохранён, но постановка в очередь не выполнена: task-board unavailable`
+    await expect(adapter.list(warehouseId)).rejects.toThrow(
+      "некорректный приоритет"
+    )
+  })
+
+  it("reports the persisted repair UUID when queueing fails", async () => {
+    lifecycle.createDirect.mockResolvedValue(repair())
+    lifecycle.queue.mockRejectedValue(new Error("task-board unavailable"))
+    lifecycle.get.mockResolvedValue({ ...repair(), version: 4 })
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const queued = adapter.queue(writeCommand)
+
+    await expect(queued).rejects.toMatchObject({
+      name: "RepairTaskQueueDraftPersistedError",
+      taskId: repairId,
+      expectedVersion: 4,
+      message: `Черновик ремонта ${repairId} сохранён, но постановка в очередь не выполнена: task-board unavailable`,
+    })
+    await expect(queued).rejects.toBeInstanceOf(
+      RepairTaskQueueDraftPersistedError
     )
     expect(lifecycle.queue).toHaveBeenCalledWith(
       "token",
       warehouseId,
       repairId,
       3,
+      2,
       expect.any(String)
     )
+  })
+
+  it("uses the persisted draft on retry instead of creating another repair", async () => {
+    const persistedDraft = { ...repair(), version: 4 }
+    const replacedDraft = { ...repair(), version: 5 }
+    const queuedRepair: MaintenanceRepair = {
+      ...repair(),
+      executionState: "QUEUED",
+      version: 6,
+    }
+    lifecycle.createDirect.mockResolvedValue(repair())
+    lifecycle.queue
+      .mockRejectedValueOnce(new Error("task-board unavailable"))
+      .mockResolvedValueOnce(repairCommandResult(queuedRepair, "DELIVERED"))
+    lifecycle.get.mockResolvedValue(persistedDraft)
+    lifecycle.replacePlan.mockResolvedValue(replacedDraft)
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    let persistedError: RepairTaskQueueDraftPersistedError | null = null
+    try {
+      await adapter.queue(writeCommand)
+    } catch (error) {
+      expect(error).toBeInstanceOf(RepairTaskQueueDraftPersistedError)
+      persistedError = error as RepairTaskQueueDraftPersistedError
+    }
+
+    expect(persistedError).not.toBeNull()
+    const retryCommand = {
+      ...structuredClone(writeCommand),
+      taskId: persistedError!.taskId,
+      expectedVersion: persistedError!.expectedVersion,
+    }
+    const task = await adapter.queue(retryCommand)
+
+    expect(task.status).toBe("QUEUED")
+    expect(lifecycle.createDirect).toHaveBeenCalledTimes(1)
+    expect(lifecycle.replacePlan).toHaveBeenCalledWith(
+      "token",
+      warehouseId,
+      repairId,
+      4,
+      expect.any(Array),
+      expect.any(Array),
+      [],
+      null
+    )
+    expect(lifecycle.queue).toHaveBeenLastCalledWith(
+      "token",
+      warehouseId,
+      repairId,
+      5,
+      2,
+      expect.any(String)
+    )
+  })
+
+  it("returns success when a failed queue response already persisted a queued repair", async () => {
+    const queuedRepair: MaintenanceRepair = {
+      ...repair(),
+      executionState: "QUEUED",
+      version: 4,
+    }
+    lifecycle.createDirect.mockResolvedValue(repair())
+    lifecycle.queue.mockRejectedValue(new Error("connection reset"))
+    lifecycle.get.mockResolvedValue(queuedRepair)
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const task = await adapter.queue(writeCommand)
+
+    expect(task).toMatchObject({
+      id: repairId,
+      version: 4,
+      status: "QUEUED",
+    })
+    expect(lifecycle.createDirect).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not mask permanent task-board delivery failure for a queued repair", async () => {
+    const queuedRepair: MaintenanceRepair = {
+      ...repair(),
+      executionState: "QUEUED",
+      version: 4,
+    }
+    lifecycle.createDirect.mockResolvedValue(repair())
+    lifecycle.queue.mockResolvedValue(
+      repairCommandResult(queuedRepair, "QUARANTINED")
+    )
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    await expect(adapter.queue(writeCommand)).rejects.toThrow(
+      `Ремонт ${repairId} не поставлен в очередь: maintenance-service зафиксировал необратимую ошибку формирования или доставки этапов.`
+    )
+    expect(lifecycle.get).not.toHaveBeenCalled()
+  })
+
+  it("confirms a queued repair when the immediate draft response has stale quarantined delivery", async () => {
+    const queuedRepair: MaintenanceRepair = {
+      ...repair(),
+      executionState: "QUEUED",
+      version: 4,
+    }
+    lifecycle.createDirect.mockResolvedValue(repair())
+    lifecycle.queue.mockResolvedValue(
+      repairCommandResult(repair(), "QUARANTINED")
+    )
+    lifecycle.get.mockResolvedValue(queuedRepair)
+    const wait = vi.fn(async (delayMs: number) => void delayMs)
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token",
+      wait
+    )
+
+    const task = await adapter.queue(writeCommand)
+
+    expect(task).toMatchObject({
+      id: repairId,
+      version: 4,
+      status: "QUEUED",
+    })
+    expect(lifecycle.get).toHaveBeenCalledTimes(1)
+    expect(wait).toHaveBeenCalledWith(100)
+  })
+
+  it("fails when the first GET confirms quarantined stage delivery", async () => {
+    const failedRepair = structuredClone(repair())
+    failedRepair.plan.stages[0].taskSync.delivery.state = "QUARANTINED"
+    lifecycle.createDirect.mockResolvedValue(repair())
+    lifecycle.queue.mockResolvedValue(
+      repairCommandResult(repair(), "QUARANTINED")
+    )
+    lifecycle.get.mockResolvedValue(failedRepair)
+    const wait = vi.fn(async (delayMs: number) => void delayMs)
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token",
+      wait
+    )
+
+    await expect(adapter.queue(writeCommand)).rejects.toThrow(
+      `Ремонт ${repairId} не поставлен в очередь: maintenance-service зафиксировал необратимую ошибку формирования или доставки этапов.`
+    )
+    expect(lifecycle.get).toHaveBeenCalledTimes(1)
+    expect(wait).toHaveBeenCalledWith(100)
   })
 
   it("returns an immediately queued repair without polling", async () => {
@@ -402,10 +1143,24 @@ describe("maintenance repair tasks adapter", () => {
     expect(wait).toHaveBeenCalledTimes(1)
   })
 
-  it("times out without presenting a persisted draft as queued", async () => {
+  it("retries the latest persisted draft version after async queue confirmation times out", async () => {
+    const readError = new Error("maintenance read unavailable")
+    const queuedRepair: MaintenanceRepair = {
+      ...repair(),
+      executionState: "QUEUED",
+      version: 9,
+    }
     lifecycle.createDirect.mockResolvedValue(repair())
-    lifecycle.queue.mockResolvedValue(repairCommandResult(repair(), "PENDING"))
-    lifecycle.get.mockResolvedValue(repair())
+    lifecycle.queue
+      .mockResolvedValueOnce(repairCommandResult(repair(), "PENDING"))
+      .mockResolvedValueOnce(repairCommandResult(queuedRepair, "DELIVERED"))
+    lifecycle.get
+      .mockResolvedValueOnce({ ...repair(), version: 4 })
+      .mockResolvedValueOnce({ ...repair(), version: 5 })
+      .mockResolvedValueOnce({ ...repair(), version: 6 })
+      .mockResolvedValueOnce({ ...repair(), version: 7 })
+      .mockRejectedValueOnce(readError)
+    lifecycle.replacePlan.mockResolvedValue({ ...repair(), version: 8 })
     const wait = vi.fn(async (delayMs: number) => void delayMs)
     const adapter = new HttpMaintenanceRepairTasksAdapter(
       rentalItemsClient,
@@ -413,8 +1168,49 @@ describe("maintenance repair tasks adapter", () => {
       wait
     )
 
-    await expect(adapter.queue(writeCommand)).rejects.toThrow(
+    let timeoutError: RepairTaskQueueDraftPersistedError | null = null
+    try {
+      await adapter.queue(writeCommand)
+    } catch (error) {
+      expect(error).toBeInstanceOf(RepairTaskQueueDraftPersistedError)
+      timeoutError = error as RepairTaskQueueDraftPersistedError
+    }
+
+    expect(timeoutError).toMatchObject({
+      taskId: repairId,
+      expectedVersion: 7,
+      cause: readError,
+    })
+    expect(timeoutError?.message).toBe(
       `Ремонт ${repairId} сохранён, но его состояние в maintenance-service всё ещё ожидает подтверждения постановки в очередь.`
+    )
+
+    const retryCommand = {
+      ...structuredClone(writeCommand),
+      taskId: timeoutError!.taskId,
+      expectedVersion: timeoutError!.expectedVersion,
+    }
+    const task = await adapter.queue(retryCommand)
+
+    expect(task.status).toBe("QUEUED")
+    expect(lifecycle.createDirect).toHaveBeenCalledTimes(1)
+    expect(lifecycle.replacePlan).toHaveBeenCalledWith(
+      "token",
+      warehouseId,
+      repairId,
+      7,
+      expect.any(Array),
+      expect.any(Array),
+      [],
+      null
+    )
+    expect(lifecycle.queue).toHaveBeenLastCalledWith(
+      "token",
+      warehouseId,
+      repairId,
+      8,
+      2,
+      expect.any(String)
     )
     expect(lifecycle.get).toHaveBeenCalledTimes(5)
     expect(wait.mock.calls.map(([delayMs]) => delayMs)).toEqual([
@@ -430,6 +1226,7 @@ describe("maintenance repair tasks adapter", () => {
     command.taskId = repairId
     command.expectedVersion = 3
     command.maintenanceMediaReferences = mediaReferences
+    command.coverMediaId = rentalItemId
     const adapter = new HttpMaintenanceRepairTasksAdapter(
       rentalItemsClient,
       async () => "token"
@@ -443,13 +1240,20 @@ describe("maintenance repair tasks adapter", () => {
       repairId,
       3,
       expect.any(Array),
-      mediaReferences
+      expect.any(Array),
+      mediaReferences,
+      rentalItemId
     )
   })
 
-  it("preserves repair photos when only the stage order changes", async () => {
+  it("preserves repair photos and stage content when only the order changes", async () => {
     const mediaReferences = [{ mediaId: rentalItemId, generation: 4 }]
-    const currentRepair = { ...repair(), mediaReferences }
+    const currentRepair = structuredClone(repair())
+    currentRepair.mediaReferences = mediaReferences
+    currentRepair.plan.stages[0].workLines = [maintenanceWorkLine]
+    currentRepair.plan.stages[0].materialLines = [maintenanceMaterialLine]
+    currentRepair.plan.stages[0].primaryLineId = workLineId
+    currentRepair.plan.stages[0].groupComment = "Монтажная группа"
     lifecycle.get.mockResolvedValue(currentRepair)
     lifecycle.replacePlan.mockResolvedValue(currentRepair)
     const adapter = new HttpMaintenanceRepairTasksAdapter(
@@ -469,51 +1273,63 @@ describe("maintenance repair tasks adapter", () => {
       warehouseId,
       repairId,
       3,
-      expect.any(Array),
-      mediaReferences
+      expect.arrayContaining([
+        expect.objectContaining({ id: workLineId }),
+        expect.objectContaining({ id: materialLineId }),
+      ]),
+      [
+        expect.objectContaining({
+          id: stageId,
+          includedLineIds: [workLineId, materialLineId],
+          primaryLineId: workLineId,
+          groupComment: "Монтажная группа",
+        }),
+      ],
+      mediaReferences,
+      null
     )
   })
 
-  it("resolves a reviewed legacy queue ID by its exact database queue code", async () => {
+  it("uses the exact active queue UUID when several queues share a type", async () => {
     listQueues.mockResolvedValue([
       {
         id: "00000000-0000-4000-8000-000000000021",
-        code: "REPAIR_BODY",
+        name: "Кузовной ремонт",
         type: "REPAIR",
         active: true,
         hidden: false,
       },
       {
         id: "00000000-0000-4000-8000-000000000022",
-        code: "REPAIR_ELECTRICAL",
+        name: "Электрика",
         type: "REPAIR",
         active: true,
         hidden: false,
       },
       {
         id: "00000000-0000-4000-8000-000000000023",
-        code: "REPAIR_FLOOR",
+        name: "Пол",
         type: "REPAIR",
         active: true,
         hidden: false,
       },
       {
         id: "00000000-0000-4000-8000-000000000024",
-        code: "REPAIR_ROOF",
+        name: "Кровля",
         type: "REPAIR",
         active: true,
         hidden: false,
       },
       {
         id: databaseQueueId,
-        code: "REPAIR_WINDOWS",
+        name: "Ремонт окон",
         type: "REPAIR",
         active: true,
         hidden: false,
       },
       {
         id: "00000000-0000-4000-8000-000000000026",
-        code: "REPAIR_FINISHING",
+        name: "Отделка",
         type: "REPAIR",
         active: true,
         hidden: false,
@@ -521,8 +1337,8 @@ describe("maintenance repair tasks adapter", () => {
     ])
     lifecycle.createDirect.mockResolvedValue(repair())
     const command = structuredClone(writeCommand)
-    command.subtasks[0].queueId = legacyQueueId
-    command.subtasks[0].queueCode = "REPAIR_WINDOWS"
+    command.subtasks[0].queueId = databaseQueueId
+    command.subtasks[0].queueName = "Ремонт окон"
     const adapter = new HttpMaintenanceRepairTasksAdapter(
       rentalItemsClient,
       async () => "token"
@@ -538,8 +1354,8 @@ describe("maintenance repair tasks adapter", () => {
           expect.objectContaining({
             routing: {
               queueId: databaseQueueId,
-              queueCode: "REPAIR_WINDOWS",
-              queueKind: "REPAIR",
+              queueName: "Ремонт окон",
+              queueType: "REPAIR",
             },
           }),
         ],
@@ -547,18 +1363,18 @@ describe("maintenance repair tasks adapter", () => {
     )
   })
 
-  it("keeps an unmatched route kind ambiguous when several active queues exist", async () => {
+  it("rejects a stale UUID instead of guessing from queues with the same type", async () => {
     listQueues.mockResolvedValue([
       {
         id: "00000000-0000-4000-8000-000000000031",
-        code: "REPAIR_BODY",
+        name: "Кузовной ремонт",
         type: "REPAIR",
         active: true,
         hidden: false,
       },
       {
         id: "00000000-0000-4000-8000-000000000032",
-        code: "REPAIR_WINDOWS",
+        name: "Ремонт окон",
         type: "REPAIR",
         active: true,
         hidden: false,
@@ -566,14 +1382,51 @@ describe("maintenance repair tasks adapter", () => {
     ])
     const command = structuredClone(writeCommand)
     command.subtasks[0].queueId = legacyQueueId
-    command.subtasks[0].queueCode = "LEGACY_REPAIR"
+    command.subtasks[0].queueName = "Старая очередь"
     const adapter = new HttpMaintenanceRepairTasksAdapter(
       rentalItemsClient,
       async () => "token"
     )
 
     await expect(adapter.saveDraft(command)).rejects.toThrow(
-      "Для этапа 0 выберите конкретную очередь."
+      "Для этапа 0 выберите активную очередь."
+    )
+    expect(lifecycle.createDirect).not.toHaveBeenCalled()
+  })
+
+  it("rejects furniture movement as a repair-stage route", async () => {
+    listQueues.mockResolvedValue([
+      {
+        id: queueId,
+        name: "Перемещение мебели",
+        type: "FURNITURE_MOVEMENT",
+        active: true,
+        hidden: false,
+      },
+    ])
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    await expect(adapter.saveDraft(writeCommand)).rejects.toThrow(
+      "предназначена для перемещения мебели"
+    )
+    expect(lifecycle.createDirect).not.toHaveBeenCalled()
+  })
+
+  it("does not let custom work resolve to a movement queue", async () => {
+    const command = structuredClone(writeCommand)
+    command.subtasks[0].workLines = [customWorkLine]
+    command.subtasks[0].queueName = "Перемещение на ремонт"
+    command.subtasks[0].routeQueueKind = "MOVEMENT"
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    await expect(adapter.saveDraft(command)).rejects.toThrow(
+      "Пользовательская работа"
     )
     expect(lifecycle.createDirect).not.toHaveBeenCalled()
   })
@@ -582,22 +1435,22 @@ describe("maintenance repair tasks adapter", () => {
     listQueues.mockResolvedValue([
       {
         id: databaseQueueId,
-        code: "REPAIR_WINDOWS",
+        name: "Ремонт окон",
         type: "REPAIR",
         active: false,
         hidden: true,
       },
     ])
     const command = structuredClone(writeCommand)
-    command.subtasks[0].queueId = legacyQueueId
-    command.subtasks[0].queueCode = "REPAIR_WINDOWS"
+    command.subtasks[0].queueId = databaseQueueId
+    command.subtasks[0].queueName = "Ремонт окон"
     const adapter = new HttpMaintenanceRepairTasksAdapter(
       rentalItemsClient,
       async () => "token"
     )
 
     await expect(adapter.saveDraft(command)).rejects.toThrow(
-      "Для этапа 0 не настроена активная очередь."
+      "Для этапа 0 выберите активную очередь."
     )
     expect(lifecycle.createDirect).not.toHaveBeenCalled()
   })

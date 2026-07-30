@@ -302,6 +302,23 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/logistics/v1/transfers/{documentId}/furniture-readiness:
+    parameters:
+      - $ref: "#/components/parameters/DocumentId"
+    get:
+      operationId: getTransferFurnitureReadiness
+      description: >-
+        Reports the durable worker-task readiness for furniture changes selected for a transfer.
+        Requires rwms.read and VIEW access to both the origin and destination warehouses.
+      responses:
+        "200":
+          description: Current furniture readiness for the transfer.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TransferFurnitureReadiness" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/logistics/v1/transfers/{documentId}/lines/{lineId}/depart:
     parameters:
       - $ref: "#/components/parameters/DocumentId"
@@ -318,6 +335,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/transfers/{documentId}/lines/{lineId}/arrive:
     parameters:
       - $ref: "#/components/parameters/DocumentId"
@@ -340,6 +358,31 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/transfers/{documentId}/lines/{lineId}/arrival-preflight:
+    parameters:
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/LineId"
+      - $ref: "#/components/parameters/ExpectedVersion"
+      - $ref: "#/components/parameters/ExpectedLineVersion"
+    get:
+      operationId: getTransferArrivalPreflight
+      description: >-
+        Resolves the active repair that departed with this cabin and checks the
+        destination warehouse queue bindings before any arrival mutation.
+        Requires MANAGE access to both warehouses.
+      responses:
+        "200":
+          description: Canonical repair-continuation requirements for this line.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TransferArrivalPreflight" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/transfers/{documentId}/cancel:
     parameters:
       - $ref: "#/components/parameters/DocumentId"
@@ -757,6 +800,334 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/logistics/v1/rental-inquiries:
+    post:
+      operationId: createRentalInquiry
+      description: >-
+        Creates or replays the manager-owned rental inquiry that binds one
+        immutable existing or newly resolved client to one assistant conversation.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateRentalInquiryRequest" }
+      responses:
+        "201":
+          description: Current inquiry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RentalInquiry" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/v1/rental-inquiries/{inquiryId}:
+    parameters:
+      - $ref: "#/components/parameters/InquiryId"
+    get:
+      operationId: getRentalInquiry
+      responses:
+        "200":
+          description: Current inquiry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RentalInquiry" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/logistics/v1/rental-inquiries/{inquiryId}/cabin-facets:
+    parameters:
+      - $ref: "#/components/parameters/InquiryId"
+    get:
+      operationId: getRentalInquiryCabinFacets
+      description: >-
+        Returns bounded exact availability facets for warehouses visible to
+        this inquiry's manager. It performs no natural-language interpretation.
+      responses:
+        "200":
+          description: Exact warehouse and cabin facets.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CabinFacets" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/rental-inquiries/{inquiryId}/cabin-searches:
+    parameters:
+      - $ref: "#/components/parameters/InquiryId"
+    post:
+      operationId: searchRentalInquiryCabins
+      description: >-
+        Searches currently rentable cabins by exact structured filters supplied by the LLM tool call.
+        Every result is FREE; category is an independent exact filter and may be omitted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CabinSearchRequest" }
+      responses:
+        "200":
+          description: Rentable cabins grouped in request order.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CabinSearchResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/rental-inquiries/{inquiryId}/cabin-availability:
+    parameters:
+      - $ref: "#/components/parameters/InquiryId"
+    post:
+      operationId: checkRentalInquiryCabinAvailability
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CabinAvailabilityRequest" }
+      responses:
+        "200":
+          description: Current availability for the exact requested cabins.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CabinAvailabilityResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/rental-inquiries/{inquiryId}/client-presentation:
+    parameters:
+      - $ref: "#/components/parameters/InquiryId"
+    get:
+      operationId: getRentalInquiryClientPresentation
+      responses:
+        "200":
+          description: Current published presentation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClientPresentation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: publishRentalInquiryClientPresentation
+      description: >-
+        Publishes or replaces the inquiry presentation, atomically replacing
+        its asset-side time-limited cabin holds and rotating the public link.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PublishClientPresentationRequest" }
+      responses:
+        "200":
+          description: Published presentation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClientPresentation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+    delete:
+      operationId: revokeRentalInquiryClientPresentation
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "204": { description: Presentation revoked and active holds released. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/rental-booking-alerts:
+    get:
+      operationId: listRentalBookingAlerts
+      description: >-
+        Returns the current manager's unacknowledged completed client-presentation
+        bookings in confirmation order. Each alert is assembled from the immutable
+        presentation snapshot and contains only the cabins selected by the client.
+      responses:
+        "200":
+          description: Unacknowledged client confirmations, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RentalBookingAlert" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/logistics/v1/rental-booking-alerts/{bookingId}/actions:
+    parameters:
+      - $ref: "#/components/parameters/PresentationBookingId"
+    post:
+      operationId: actOnRentalBookingAlert
+      description: >-
+        Acknowledges one client confirmation with optimistic concurrency and an
+        Idempotency-Key. It never creates a second order; KEEP_DRAFT leaves the
+        existing draft order unchanged.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RentalBookingAlertActionRequest" }
+      responses:
+        "204": { description: Booking alert action was recorded or replayed. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/v1/settings/rental:
+    get:
+      operationId: getRentalSettings
+      responses:
+        "200":
+          description: Global rental presentation settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RentalSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    put:
+      operationId: updateRentalSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateRentalSettingsRequest" }
+      responses:
+        "200":
+          description: Updated settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RentalSettings" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/logistics/public/v1/client-presentations/{token}:
+    parameters:
+      - $ref: "#/components/parameters/PublicPresentationToken"
+    get:
+      security: []
+      operationId: getPublicClientPresentation
+      responses:
+        "200":
+          description: Public no-store presentation view.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicClientPresentation" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "410":
+          description: The post-expiry view window has ended.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ApiProblem" }
+  /api/logistics/public/v1/client-presentations/{token}/bookings:
+    parameters:
+      - $ref: "#/components/parameters/PublicPresentationToken"
+    post:
+      security: []
+      operationId: confirmPublicClientPresentation
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfirmClientPresentationRequest" }
+      responses:
+        "201":
+          description: Draft order was created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PresentationBooking" }
+        "202":
+          description: Idempotent booking orchestration is pending.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PresentationBooking" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Booking was rejected, or the selection can no longer be accepted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PresentationBooking" }
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ApiProblem" }
+        "410":
+          description: Holds or the public view have expired.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ApiProblem" }
+  /api/logistics/public/v1/client-presentations/{token}/bookings/{bookingId}:
+    parameters:
+      - $ref: "#/components/parameters/PublicPresentationToken"
+      - $ref: "#/components/parameters/PresentationBookingId"
+    get:
+      security: []
+      operationId: getPublicClientPresentationBooking
+      responses:
+        "200":
+          description: Completed booking state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PresentationBooking" }
+        "201":
+          description: Draft order was created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PresentationBooking" }
+        "202":
+          description: Booking is pending.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PresentationBooking" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Booking was rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PresentationBooking" }
+  /api/logistics/public/v1/client-presentations/{token}/media/{cabinId}/{mediaId}/{generation}/{variant}:
+    parameters:
+      - $ref: "#/components/parameters/PublicPresentationToken"
+      - $ref: "#/components/parameters/CabinId"
+      - $ref: "#/components/parameters/MediaId"
+      - $ref: "#/components/parameters/MediaGeneration"
+      - $ref: "#/components/parameters/MediaVariant"
+    get:
+      security: []
+      operationId: getPublicClientPresentationMedia
+      responses:
+        "200":
+          description: Authorized no-store presentation image.
+          headers:
+            X-Content-Type-Options:
+              schema: { type: string, const: nosniff }
+          content:
+            image/webp:
+              schema: { type: string, format: binary }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "410":
+          description: The presentation view window has ended.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ApiProblem" }
   /api/logistics/v1/{documentType}/{documentId}/reconcile:
     parameters:
       - $ref: "#/components/parameters/DocumentTypePath"
@@ -839,6 +1210,41 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    InquiryId:
+      name: inquiryId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PublicPresentationToken:
+      name: token
+      in: path
+      required: true
+      schema: { type: string, minLength: 40, maxLength: 256 }
+    PresentationBookingId:
+      name: bookingId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CabinId:
+      name: cabinId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    MediaId:
+      name: mediaId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    MediaGeneration:
+      name: generation
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    MediaVariant:
+      name: variant
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 64 }
   schemas:
     LogisticsDocument:
       type: object
@@ -1049,7 +1455,7 @@ components:
             description: Target warehouse for STOCK-to-STOCK movement; omitted means the source warehouse.,
           }
         unitNumber: { type: [string, "null"], maxLength: 64 }
-        plannedDurationMinutes: { type: [integer, "null"], minimum: 1 }
+        plannedDurationMinutes: { type: integer, minimum: 1 }
         deadlineAt: { type: string, format: date-time }
         lines:
           type: array
@@ -1074,7 +1480,6 @@ components:
           version,
           lineNumber,
           equipmentId,
-          equipmentCode,
           equipmentName,
           sourceWarehouseId,
           sourceRentalItemId,
@@ -1095,7 +1500,6 @@ components:
         version: { type: integer, format: int64, minimum: 0 }
         lineNumber: { type: integer, minimum: 1 }
         equipmentId: { type: string, format: uuid }
-        equipmentCode: { type: [string, "null"], maxLength: 128 }
         equipmentName: { type: [string, "null"], maxLength: 512 }
         sourceWarehouseId: { type: string, format: uuid }
         sourceRentalItemId: { type: [string, "null"], format: uuid }
@@ -1146,7 +1550,7 @@ components:
           { type: [integer, "null"], format: int64, minimum: 0 }
         taskBoardDoneAt: { type: [string, "null"], format: date-time }
         unitNumber: { type: [string, "null"], maxLength: 64 }
-        plannedDurationMinutes: { type: [integer, "null"], minimum: 1 }
+        plannedDurationMinutes: { type: integer, minimum: 1 }
         deadlineAt: { type: string, format: date-time }
         state: { $ref: "#/components/schemas/EquipmentMovementTaskState" }
         terminalState:
@@ -1215,7 +1619,7 @@ components:
     ReturnMediaLineRequest:
       type: object
       additionalProperties: false
-      required: [lineId, references]
+      required: [lineId, references, equipmentConfirmed]
       properties:
         lineId: { type: string, format: uuid }
         references:
@@ -1223,6 +1627,12 @@ components:
           minItems: 1
           maxItems: 20
           items: { $ref: "#/components/schemas/MediaReferenceInput" }
+        equipmentConfirmed:
+          type: boolean
+          const: true
+          description: >-
+            Explicit operator confirmation that the expected furniture and equipment
+            completeness was checked before accepting this return line without an estimate.
         additionalEquipment:
           type: array
           maxItems: 100
@@ -1246,9 +1656,15 @@ components:
     ReturnShortageLineRequest:
       type: object
       additionalProperties: false
-      required: [lineId, shortages]
+      required: [lineId, references, shortages]
       properties:
         lineId: { type: string, format: uuid }
+        references:
+          type: array
+          minItems: 1
+          maxItems: 20
+          description: READY inspection photos owned by this exact return line.
+          items: { $ref: "#/components/schemas/MediaReferenceInput" }
         shortages:
           type: array
           minItems: 1
@@ -1339,6 +1755,33 @@ components:
         tasks:
           type: array
           items: { $ref: "#/components/schemas/ShipmentFurnitureTaskStatus" }
+    TransferFurnitureReadinessState:
+      type: string
+      enum: [NOT_REQUIRED, READY, AWAITING_TASK_COMPLETION, BLOCKED]
+    TransferFurnitureTaskStatus:
+      type: object
+      additionalProperties: false
+      required:
+        [rentalItemId, unitNumber, taskId, externalTaskId, taskBoardTaskId, taskState, lineCount]
+      properties:
+        rentalItemId: { type: string, format: uuid }
+        unitNumber: { type: string, minLength: 1, maxLength: 64 }
+        taskId: { type: string, format: uuid }
+        externalTaskId: { type: string, format: uuid }
+        taskBoardTaskId: { type: [string, "null"], format: uuid }
+        taskState: { $ref: "#/components/schemas/EquipmentMovementTaskState" }
+        lineCount: { type: integer, minimum: 1 }
+    TransferFurnitureReadiness:
+      type: object
+      additionalProperties: false
+      required: [transferId, transferVersion, state, tasks]
+      properties:
+        transferId: { type: string, format: uuid }
+        transferVersion: { type: integer, format: int64, minimum: 0 }
+        state: { $ref: "#/components/schemas/TransferFurnitureReadinessState" }
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/TransferFurnitureTaskStatus" }
     ShipmentLineRequest:
       type: object
       additionalProperties: false
@@ -1434,13 +1877,43 @@ components:
     ArriveTransferLineRequest:
       type: object
       additionalProperties: false
-      required: [references]
+      required: [references, priority, movementToShipment]
       properties:
         references:
           type: array
           minItems: 1
           maxItems: 20
           items: { $ref: "#/components/schemas/MediaReferenceInput" }
+        priority:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 5
+          description: Required only when the preflight reports an active repair.
+        movementToShipment:
+          type: boolean
+          description: Must be false when the destination has no matching movement queue.
+    TransferArrivalPreflight:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          transferId,
+          lineId,
+          activeRepairId,
+          priorityRequired,
+          movementToShipmentAvailable,
+          missingQueueDefinitionIds,
+        ]
+      properties:
+        transferId: { type: string, format: uuid }
+        lineId: { type: string, format: uuid }
+        activeRepairId: { type: [string, "null"], format: uuid }
+        priorityRequired: { type: boolean }
+        movementToShipmentAvailable: { type: boolean }
+        missingQueueDefinitionIds:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
     ReconcileRequest:
       type: object
       additionalProperties: false
@@ -1453,17 +1926,21 @@ components:
     NewClientInput:
       type: object
       additionalProperties: false
-      required: [clientType, displayName]
+      required: [clientType, displayName, phone]
       properties:
         clientType: { $ref: "#/components/schemas/ClientType" }
         displayName: { type: string, minLength: 1, maxLength: 512 }
+        phone: { type: string, minLength: 1, maxLength: 32 }
+        email: { type: [string, "null"], format: email, maxLength: 320 }
     CreateClientRequest:
       type: object
       additionalProperties: false
-      required: [clientType, displayName]
+      required: [clientType, displayName, phone]
       properties:
         clientType: { $ref: "#/components/schemas/ClientType" }
         displayName: { type: string, minLength: 1, maxLength: 512 }
+        phone: { type: string, minLength: 1, maxLength: 32 }
+        email: { type: [string, "null"], format: email, maxLength: 320 }
     CreateOrderRequest:
       type: object
       additionalProperties: false
@@ -1516,12 +1993,14 @@ components:
     OrderClient:
       type: object
       additionalProperties: false
-      required: [id, version, type, displayName, createdAt, updatedAt]
+      required: [id, version, type, displayName, phone, email, createdAt, updatedAt]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         type: { $ref: "#/components/schemas/ClientType" }
         displayName: { type: string }
+        phone: { type: string, maxLength: 32 }
+        email: { type: [string, "null"], format: email, maxLength: 320 }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
     ClientPage:
@@ -1586,20 +2065,18 @@ components:
       type: object
       additionalProperties: false
       required:
-        [equipmentId, equipmentCode, equipmentName, quantity, locationKind]
+        [equipmentId, equipmentName, quantity, locationKind]
       properties:
         equipmentId: { type: string, format: uuid }
-        equipmentCode: { type: [string, "null"] }
         equipmentName: { type: [string, "null"] }
         quantity: { type: integer, format: int64, minimum: 0 }
         locationKind: { type: string }
     OrderDesiredEquipment:
       type: object
       additionalProperties: false
-      required: [equipmentId, equipmentCode, equipmentName, quantity]
+      required: [equipmentId, equipmentName, quantity]
       properties:
         equipmentId: { type: string, format: uuid }
-        equipmentCode: { type: string, minLength: 1, maxLength: 128 }
         equipmentName: { type: string, minLength: 1, maxLength: 512 }
         quantity: { type: integer, format: int64, minimum: 1 }
     OrderRentalItem:
@@ -1736,6 +2213,422 @@ components:
         previousValues: { type: [object, "null"], additionalProperties: true }
         newValues: { type: [object, "null"], additionalProperties: true }
         occurredAt: { type: string, format: date-time }
+    CreateRentalInquiryRequest:
+      type: object
+      additionalProperties: false
+      required: [conversationId]
+      properties:
+        conversationId: { type: string, format: uuid }
+        clientId: { type: string, format: uuid }
+        newClient: { $ref: "#/components/schemas/NewClientInput" }
+      oneOf:
+        - required: [clientId]
+          not: { required: [newClient] }
+        - required: [newClient]
+          not: { required: [clientId] }
+    RentalInquiry:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          version,
+          conversationId,
+          client,
+          managerId,
+          managerDisplayName,
+          managerRole,
+          warehouseId,
+          state,
+          bookedOrderId,
+          createdAt,
+          updatedAt,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        conversationId: { type: string, format: uuid }
+        client: { $ref: "#/components/schemas/OrderClient" }
+        managerId: { type: string, format: uuid }
+        managerDisplayName: { type: string }
+        managerRole: { type: string }
+        warehouseId: { type: [string, "null"], format: uuid }
+        state: { type: string, enum: [ACTIVE, BOOKED, ARCHIVED] }
+        bookedOrderId: { type: [string, "null"], format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CabinFacetWarehouse:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, name, city, cabinTypes, finishes, dimensions, categories]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        name: { type: string }
+        city: { type: string }
+        cabinTypes:
+          type: array
+          items: { type: string }
+        finishes:
+          type: array
+          items: { type: string }
+        dimensions:
+          type: array
+          items: { type: string }
+        categories:
+          type: array
+          items: { type: string }
+    CabinFacets:
+      type: object
+      additionalProperties: false
+      required: [warehouses]
+      properties:
+        warehouses:
+          type: array
+          items: { $ref: "#/components/schemas/CabinFacetWarehouse" }
+    CabinSearchGroup:
+      type: object
+      additionalProperties: false
+      required: [quantity]
+      properties:
+        cabinType: { type: [string, "null"], maxLength: 255 }
+        finish: { type: [string, "null"], maxLength: 255 }
+        dimensions: { type: [string, "null"], maxLength: 255 }
+        category: { type: [string, "null"], maxLength: 255 }
+        characteristics: { type: [string, "null"], maxLength: 2000 }
+        linoleum: { type: [boolean, "null"] }
+        quantity: { type: integer, minimum: 1, maximum: 30 }
+    CabinSearchRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, groups]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        groups:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items: { $ref: "#/components/schemas/CabinSearchGroup" }
+    AvailableCabin:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          version,
+          warehouseId,
+          status,
+          number,
+          rentalType,
+          dimensions,
+          finishing,
+          category,
+          characteristics,
+          linoleum,
+          passport,
+          tags,
+          updatedAt,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        warehouseId: { type: string, format: uuid }
+        status: { type: string, enum: [FREE] }
+        number: { type: string }
+        rentalType: { type: [string, "null"] }
+        dimensions: { type: [string, "null"] }
+        finishing: { type: [string, "null"] }
+        category: { type: [string, "null"] }
+        characteristics: { type: [string, "null"] }
+        linoleum: { type: [boolean, "null"] }
+        passport: { type: object, additionalProperties: true }
+        tags:
+          type: array
+          items: { type: string }
+        updatedAt: { type: string, format: date-time }
+    CabinSearchGroupResult:
+      type: object
+      additionalProperties: false
+      required: [group, cabins]
+      properties:
+        group: { $ref: "#/components/schemas/CabinSearchGroup" }
+        cabins:
+          type: array
+          items: { $ref: "#/components/schemas/AvailableCabin" }
+    CabinSearchResponse:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, expiresAt, groups]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        expiresAt:
+          type: string
+          format: date-time
+          description: Expiry of the manager-only short reservation created for this chat result.
+        groups:
+          type: array
+          maxItems: 20
+          items: { $ref: "#/components/schemas/CabinSearchGroupResult" }
+    CabinAvailabilityRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, rentalItemIds]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        rentalItemIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    CabinAvailabilityItem:
+      type: object
+      additionalProperties: false
+      required: [rentalItemId, available, reason]
+      properties:
+        rentalItemId: { type: string, format: uuid }
+        available: { type: boolean }
+        reason: { type: [string, "null"] }
+    CabinAvailabilityResponse:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, items]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/CabinAvailabilityItem" }
+    PresentationGroupInput:
+      type: object
+      additionalProperties: false
+      required: [key, label, rentalItemIds]
+      properties:
+        key: { type: string, minLength: 1, maxLength: 128 }
+        label: { type: string, minLength: 1, maxLength: 255 }
+        rentalItemIds:
+          type: array
+          minItems: 1
+          maxItems: 30
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    PublishClientPresentationRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, groups]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        groups:
+          type: array
+          minItems: 1
+          maxItems: 5
+          items: { $ref: "#/components/schemas/PresentationGroupInput" }
+    PresentationPhoto:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          mediaId,
+          generation,
+          sortOrder,
+          availableVariants,
+          thumbnailUrl,
+          contentUrl,
+        ]
+      properties:
+        mediaId: { type: string, format: uuid }
+        generation: { type: integer, format: int64, minimum: 1 }
+        sortOrder: { type: integer, minimum: 0 }
+        availableVariants:
+          type: array
+          items: { type: string }
+        thumbnailUrl: { type: string }
+        contentUrl: { type: string }
+    PresentationCabin:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          number,
+          rentalType,
+          dimensions,
+          finishing,
+          category,
+          characteristics,
+          linoleum,
+          passport,
+          tags,
+          photos,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: string }
+        rentalType: { type: [string, "null"] }
+        dimensions: { type: [string, "null"] }
+        finishing: { type: [string, "null"] }
+        category: { type: [string, "null"] }
+        characteristics: { type: [string, "null"] }
+        linoleum: { type: [boolean, "null"] }
+        passport: { type: object, additionalProperties: true }
+        tags:
+          type: array
+          items: { type: string }
+        photos:
+          type: array
+          items: { $ref: "#/components/schemas/PresentationPhoto" }
+    PresentationGroup:
+      type: object
+      additionalProperties: false
+      required: [key, label, cabins]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        cabins:
+          type: array
+          items: { $ref: "#/components/schemas/PresentationCabin" }
+    ClientPresentation:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          version,
+          revision,
+          inquiryId,
+          warehouseId,
+          state,
+          expiresAt,
+          viewUntil,
+          canConfirm,
+          publicPath,
+          bookedOrderId,
+          groups,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        revision: { type: integer, format: int64, minimum: 1 }
+        inquiryId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        state: { type: string, enum: [ACTIVE, BOOKING_PENDING, BOOKED, REVOKED] }
+        expiresAt: { type: string, format: date-time }
+        viewUntil: { type: string, format: date-time }
+        canConfirm: { type: boolean }
+        publicPath: { type: string }
+        bookedOrderId: { type: [string, "null"], format: uuid }
+        groups:
+          type: array
+          items: { $ref: "#/components/schemas/PresentationGroup" }
+    RentalSettings:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          version,
+          chatSelectionHoldMinutes,
+          presentationHoldMinutes,
+          draftReservationHoldMinutes,
+          updatedBy,
+          updatedAt,
+        ]
+      properties:
+        version: { type: integer, format: int64, minimum: 0 }
+        chatSelectionHoldMinutes: { type: integer, minimum: 1, maximum: 1440 }
+        presentationHoldMinutes: { type: integer, minimum: 5, maximum: 1440 }
+        draftReservationHoldMinutes: { type: integer, minimum: 1440, maximum: 14400 }
+        updatedBy: { type: string, format: uuid }
+        updatedAt: { type: string, format: date-time }
+    UpdateRentalSettingsRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [expectedVersion, chatSelectionHoldMinutes, presentationHoldMinutes, draftReservationHoldMinutes]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        chatSelectionHoldMinutes: { type: integer, minimum: 1, maximum: 1440 }
+        presentationHoldMinutes: { type: integer, minimum: 5, maximum: 1440 }
+        draftReservationHoldMinutes: { type: integer, minimum: 1440, maximum: 14400 }
+    ConfirmClientPresentationRequest:
+      type: object
+      additionalProperties: false
+      required: [selectedRentalItemIds]
+      properties:
+        selectedRentalItemIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    PublicClientPresentation:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          revision,
+          state,
+          expiresAt,
+          viewUntil,
+          viewOnly,
+          groups,
+          bookedOrderId,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        revision: { type: integer, format: int64, minimum: 1 }
+        state: { type: string, enum: [ACTIVE, BOOKING_PENDING, BOOKED, REVOKED] }
+        expiresAt: { type: string, format: date-time }
+        viewUntil: { type: string, format: date-time }
+        viewOnly: { type: boolean }
+        groups:
+          type: array
+          items: { $ref: "#/components/schemas/PresentationGroup" }
+        bookedOrderId: { type: [string, "null"], format: uuid }
+    PresentationBooking:
+      type: object
+      additionalProperties: false
+      required: [bookingId, state, orderId, statusPath, errorCode]
+      properties:
+        bookingId: { type: string, format: uuid }
+        state: { type: string, enum: [PENDING, COMPLETED, REJECTED] }
+        orderId: { type: [string, "null"], format: uuid }
+        statusPath: { type: string }
+        errorCode: { type: [string, "null"] }
+    RentalBookingAlert:
+      type: object
+      additionalProperties: false
+      required: [bookingId, version, inquiryId, orderId, client, confirmedAt, cabins]
+      properties:
+        bookingId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        inquiryId: { type: string, format: uuid }
+        orderId: { type: string, format: uuid }
+        client: { $ref: "#/components/schemas/OrderClient" }
+        confirmedAt: { type: string, format: date-time }
+        cabins:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/RentalBookingAlertCabin" }
+    RentalBookingAlertCabin:
+      type: object
+      additionalProperties: false
+      required: [id, number, rentalType, dimensions, finishing, category]
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: string }
+        rentalType: { type: [string, "null"] }
+        dimensions: { type: [string, "null"] }
+        finishing: { type: [string, "null"] }
+        category: { type: [string, "null"] }
+    RentalBookingAlertAction:
+      type: string
+      enum: [CONTINUE, KEEP_DRAFT]
+    RentalBookingAlertActionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, action]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        action: { $ref: "#/components/schemas/RentalBookingAlertAction" }
     ApiProblem:
       type: object
       additionalProperties: true

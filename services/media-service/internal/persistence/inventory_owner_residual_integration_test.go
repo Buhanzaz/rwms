@@ -42,18 +42,19 @@ func TestInventoryOwnerResidualPostgresDatabaseURLTargetsRequestedDatabase(t *te
 func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 	environment := testsupport.RequireRealEnvironment(t, testsupport.PostgreSQL)
 
-	t.Run("clean V1 through V7 repeat and checksum drift", func(t *testing.T) {
+	t.Run("clean V1 through V9 repeat and checksum drift", func(t *testing.T) {
 		databaseURL := testsupport.NewIsolatedPostgresDatabase(t, environment.DatabaseURL)
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		pool := openResidualPool(t, ctx, databaseURL)
-		installResidualMigrations(t, ctx, pool, 9)
+		installResidualMigrations(t, ctx, pool, 11)
 		pool.Close()
 
 		first, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open clean V1 through V7 database: %v", err)
+			t.Fatalf("open clean V1 through V9 database: %v", err)
 		}
+		assertTaskBoardV8ConstraintsValidated(t, ctx, first.Pool)
 		first.Close()
 		second, err := Open(ctx, databaseURL)
 		if err != nil {
@@ -105,12 +106,17 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			"V6__service_owner_proofs_and_soft_delete.sql", mediamigration.V6)
 		applyResidualMigration(t, ctx, pool, 9, "7", "dynamic cabin owner projection",
 			"V7__dynamic_cabin_owner_projection.sql", mediamigration.V7)
+		applyResidualMigration(t, ctx, pool, 10, "8", "task board worker media",
+			"V8__task_board_worker_media.sql", mediamigration.V8)
+		applyResidualMigration(t, ctx, pool, 11, "9", "asset import worker",
+			"V9__asset_import_worker.sql", mediamigration.V9)
 		pool.Close()
 		database, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open upgraded V7 database: %v", err)
+			t.Fatalf("open upgraded V9 database: %v", err)
 		}
 		defer database.Close()
+		assertTaskBoardV8ConstraintsValidated(t, ctx, database.Pool)
 		var active bool
 		var proofAggregateType, proofConsumerName string
 		if err := database.Pool.QueryRow(ctx, `select active,proof_aggregate_type,proof_consumer_name
@@ -181,7 +187,7 @@ func TestInventoryOwnerResidualStreamAndReconciliationGateReal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	pool := openResidualPool(t, ctx, databaseURL)
-	installResidualMigrations(t, ctx, pool, 9)
+	installResidualMigrations(t, ctx, pool, 11)
 	pool.Close()
 	database, err := Open(ctx, databaseURL)
 	if err != nil {
@@ -456,10 +462,12 @@ func installResidualMigrations(t testing.TB, ctx context.Context, pool *pgxpool.
 		{"restore runtime source guard", "V5_1__restore_runtime_source_guard.sql", mediamigration.V5_1},
 		{"service owner proofs and soft delete", "V6__service_owner_proofs_and_soft_delete.sql", mediamigration.V6},
 		{"dynamic cabin owner projection", "V7__dynamic_cabin_owner_projection.sql", mediamigration.V7},
+		{"task board worker media", "V8__task_board_worker_media.sql", mediamigration.V8},
+		{"asset import worker", "V9__asset_import_worker.sql", mediamigration.V9},
 	}
 	for index := 0; index < through; index++ {
 		migration := migrations[index]
-		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7"}
+		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9"}
 		applyResidualMigration(t, ctx, pool, index+1, versions[index], migration.description,
 			migration.script, migration.body)
 	}
@@ -477,6 +485,23 @@ func applyResidualMigration(t testing.TB, ctx context.Context, pool *pgxpool.Poo
 	values ($1,$2,$3,'SQL',$4,$5,current_user,$6,true)`, installedRank, version,
 		description, script, flywayChecksum(body), int(time.Since(started)/time.Millisecond)); err != nil {
 		t.Fatalf("record %s history: %v", script, err)
+	}
+}
+
+func assertTaskBoardV8ConstraintsValidated(t testing.TB, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	for _, name := range []string{
+		"media_asset_task_board_client_reference_check",
+		"media_asset_created_by_actor_check",
+	} {
+		var validated bool
+		if err := pool.QueryRow(ctx, `select convalidated from pg_constraint
+			where conrelid='media_asset'::regclass and conname=$1`, name).Scan(&validated); err != nil {
+			t.Fatalf("read V8 constraint %s: %v", name, err)
+		}
+		if !validated {
+			t.Fatalf("V8 constraint %s remains NOT VALID", name)
+		}
 	}
 }
 

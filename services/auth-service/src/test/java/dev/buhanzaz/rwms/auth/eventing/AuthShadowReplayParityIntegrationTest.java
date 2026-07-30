@@ -250,6 +250,10 @@ class AuthShadowReplayParityIntegrationTest {
         MutationEvidence disabled = mutationEvidence(subjectId);
         workerCredentials.disable(workerId);
         assertThat(mutationEvidence(subjectId)).isEqualTo(disabled);
+        workerCredentials.enable(workerId);
+        MutationEvidence enabled = mutationEvidence(subjectId);
+        workerCredentials.enable(workerId);
+        assertThat(mutationEvidence(subjectId)).isEqualTo(enabled);
 
         UUID adminId = profiles.findSubjectIdByUsername("admin").orElseThrow();
         MutationEvidence adminBefore = mutationEvidence(adminId);
@@ -274,11 +278,11 @@ class AuthShadowReplayParityIntegrationTest {
                        set current_version=?, last_event_id=?, updated_at=clock_timestamp()
                      where aggregate_type='WORKER_ACCESS' and aggregate_id=?
                     """,
-                    disabled.streamVersion(),
-                    disabled.lastEventId(),
+                    enabled.streamVersion(),
+                    enabled.lastEventId(),
                     subjectId.toString());
         }
-        assertThat(mutationEvidence(subjectId)).isEqualTo(disabled);
+        assertThat(mutationEvidence(subjectId)).isEqualTo(enabled);
     }
 
     private UUID createBaselineUser(String prefix) {

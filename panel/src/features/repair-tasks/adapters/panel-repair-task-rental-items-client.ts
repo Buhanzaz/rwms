@@ -9,11 +9,10 @@ import type {
   RentalItemStatus,
 } from "@/features/rental-items/model/rental-item"
 
-const DIRECT_REPAIR_EXCLUDED_STATUSES = [
+const DIRECT_REPAIR_EXCLUDED_STATUSES: RentalItemStatus[] = [
+  "RENTED",
   "AFTER_RENT",
-  "WRITTEN_OFF",
-  "WAITING_ESTIMATE_CONFIRMATION",
-] satisfies RentalItemStatus[]
+]
 
 function toOption(item: RentalItemDto) {
   return {
@@ -57,8 +56,7 @@ export const panelRepairTaskRentalItemsClient: RepairTaskRentalItemsClient = {
     const item = await getAssetRentalItem(accessToken, rentalItemId)
     if (
       item.warehouseId !== warehouseId ||
-      item.status === "WRITTEN_OFF" ||
-      item.status === "WAITING_ESTIMATE_CONFIRMATION"
+      DIRECT_REPAIR_EXCLUDED_STATUSES.includes(item.status)
     ) {
       return null
     }
