@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.maintenance.eventing.transport;
 
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceChecksum;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.HashSet;
 import java.util.Set;
@@ -34,6 +35,29 @@ public class MaintenanceInboundEnvelopeValidator {
   private static final Set<String> CORRELATION_FIELDS = Set.of("correlationId", "causationId");
   private static final Set<String> ACTOR_FIELDS =
       Set.of("subjectId", "principalType", "profileRevision");
+  private static final Set<String> BOARD_TASK_BASE_FIELDS =
+      Set.of(
+          "boardTaskId",
+          "warehouseId",
+          "externalTaskId",
+          "status",
+          "plannedDurationMinutes",
+          "deadlineAt",
+          "doneAt",
+          "deleted");
+  private static final Set<String> BOARD_TASK_CURRENT_FIELDS =
+      Set.of(
+          "boardTaskId",
+          "warehouseId",
+          "externalTaskId",
+          "status",
+          "scheduledDate",
+          "priority",
+          "pinned",
+          "plannedDurationMinutes",
+          "deadlineAt",
+          "doneAt",
+          "deleted");
   private static final Set<String> PROHIBITED_FIELDS =
       Set.of(
           "password",
@@ -138,6 +162,7 @@ public class MaintenanceInboundEnvelopeValidator {
     switch (topic) {
       case MaintenanceTransportTopics.BOARD_TASK -> validateBoardTask(aggregateId, payload);
       case MaintenanceTransportTopics.QUEUE_ENTRY -> validateQueueEntry(aggregateId, payload);
+      case MaintenanceTransportTopics.TASK_EVIDENCE -> validateTaskEvidence(aggregateId, payload);
       case MaintenanceTransportTopics.MEDIA -> validateMedia(aggregateId, payload);
       case MaintenanceTransportTopics.RENTAL_ITEM ->
         validateRentalItem(eventType, aggregateId, payload);
@@ -147,22 +172,21 @@ public class MaintenanceInboundEnvelopeValidator {
   }
 
   private void validateBoardTask(String aggregateId, JsonNode payload) {
+    boolean currentShape =
+        payload.has("scheduledDate") || payload.has("priority") || payload.has("pinned");
     requireExactObject(
         payload,
-        Set.of(
-            "boardTaskId",
-            "warehouseId",
-            "externalTaskId",
-            "status",
-            "plannedDurationMinutes",
-            "deadlineAt",
-            "doneAt",
-            "deleted"),
+        currentShape ? BOARD_TASK_CURRENT_FIELDS : BOARD_TASK_BASE_FIELDS,
         "board-task payload");
     requireIdentity(payload, "boardTaskId", aggregateId);
     requireUuid(payload, "warehouseId");
     requireNullableUuid(payload, "externalTaskId");
     requireEnum(payload, "status", Set.of("ACTIVE", "DONE", "CANCELLED"));
+    if (currentShape) {
+      requireNullableLocalDate(payload, "scheduledDate");
+      requireInt(payload, "priority", 1, 5);
+      requireBoolean(payload, "pinned");
+    }
     requireNullableInteger(payload, "plannedDurationMinutes");
     requireNullableTimestamp(payload, "deadlineAt");
     requireNullableTimestamp(payload, "doneAt");
@@ -176,7 +200,7 @@ public class MaintenanceInboundEnvelopeValidator {
             "queueEntryId",
             "taskId",
             "queueId",
-            "queueCode",
+            "queueName",
             "routeIndex",
             "queuePosition",
             "entryType",
@@ -195,7 +219,7 @@ public class MaintenanceInboundEnvelopeValidator {
     requireIdentity(payload, "queueEntryId", aggregateId);
     requireUuid(payload, "taskId");
     requireNullableUuid(payload, "queueId");
-    requireText(payload, "queueCode");
+    requireText(payload, "queueName");
     requireInteger(payload, "routeIndex");
     requireInteger(payload, "queuePosition");
     requireEnum(payload, "entryType", Set.of("REAL", "SHADOW"));
@@ -235,6 +259,49 @@ public class MaintenanceInboundEnvelopeValidator {
     requireNullableTimestamp(value, "startedAt");
     requireNullableTimestamp(value, "pausedAt");
     requireNullableTimestamp(value, "finishedAt");
+  }
+
+  private void validateTaskEvidence(String aggregateId, JsonNode payload) {
+    requireExactObject(
+        payload,
+        Set.of(
+            "evidenceId",
+            "entryId",
+            "taskId",
+            "routeIndex",
+            "warehouseId",
+            "workerId",
+            "workerGroupId",
+            "mediaId",
+            "mediaGeneration",
+            "capturedAt",
+            "recordedAt",
+            "state",
+            "sourceType",
+            "sourceId"),
+        "task-evidence payload");
+    requireIdentity(payload, "evidenceId", aggregateId);
+    requireUuid(payload, "entryId");
+    requireUuid(payload, "taskId");
+    requireInt(payload, "routeIndex", 0, Integer.MAX_VALUE);
+    requireUuid(payload, "warehouseId");
+    requireUuid(payload, "workerId");
+    requireNullableUuid(payload, "workerGroupId");
+    requireUuid(payload, "mediaId");
+    requireLong(payload, "mediaGeneration", 0);
+    requireTimestamp(payload, "capturedAt");
+    requireTimestamp(payload, "recordedAt");
+    requireEnum(payload, "state", Set.of("READY", "REVIEW_REQUIRED"));
+    JsonNode sourceType = payload.required("sourceType");
+    JsonNode sourceId = payload.required("sourceId");
+    require(
+        (sourceType.isNull() && sourceId.isNull())
+            || (sourceType.isTextual()
+                && !sourceType.stringValue().isBlank()
+                && sourceType.stringValue().length() <= 64
+                && sourceId.isTextual()),
+        "task-evidence source identity is invalid");
+    if (!sourceId.isNull()) requireUuid(payload, "sourceId");
   }
 
   private void validateTimeEvent(JsonNode value) {
@@ -284,24 +351,43 @@ public class MaintenanceInboundEnvelopeValidator {
   }
 
   private void validateMedia(String aggregateId, JsonNode payload) {
-    requireExactObject(
-        payload,
-        Set.of(
-            "mediaId",
-            "ownerType",
-            "ownerId",
-            "warehouseId",
-            "kind",
-            "status",
-            "generation",
-            "rotationDegrees"),
-        "media payload");
+    Set<String> fields =
+        new HashSet<>(
+            Set.of(
+                "mediaId",
+                "ownerType",
+                "ownerId",
+                "warehouseId",
+                "kind",
+                "status",
+                "generation",
+                "rotationDegrees"));
+    if (payload.has("folderId")) fields.add("folderId");
+    if (payload.has("clientReferenceId")) fields.add("clientReferenceId");
+    requireExactObject(payload, fields, "media payload");
     requireIdentity(payload, "mediaId", aggregateId);
-    requireLength(requireText(payload, "ownerType"), 64, "media ownerType");
+    String ownerType = requireText(payload, "ownerType");
+    requireLength(ownerType, 64, "media ownerType");
     requireLength(requireText(payload, "ownerId"), 128, "media ownerId");
     requireUuid(payload, "warehouseId");
+    if (payload.has("folderId")) requireUuid(payload, "folderId");
+    if ("TASK_BOARD_ENTRY".equals(ownerType)) {
+      requireUuid(payload, "clientReferenceId");
+    } else if (payload.has("clientReferenceId")) {
+      require(
+          payload.required("clientReferenceId").isNull(),
+          "media clientReferenceId is invalid");
+    }
     requireEnum(payload, "kind", Set.of("IMAGE", "VIDEO"));
-    requireEnum(payload, "status", Set.of("UPLOADING", "PROCESSING", "READY", "FAILED", "DELETED"));
+    if ("TASK_BOARD_ENTRY".equals(ownerType)) {
+      require(
+          "IMAGE".equals(payload.required("kind").stringValue()),
+          "Worker evidence must be an image");
+    }
+    requireEnum(
+        payload,
+        "status",
+        Set.of("UPLOADING", "PROCESSING", "READY", "FAILED", "DELETED"));
     requireLong(payload, "generation", 0);
     requireIntEnum(payload, "rotationDegrees", Set.of(0, 90, 180, 270));
   }
@@ -452,6 +538,22 @@ public class MaintenanceInboundEnvelopeValidator {
     JsonNode value = node.required(field);
     if (!value.isNull()) {
       requireTimestamp(node, field);
+    }
+  }
+
+  private static void requireNullableLocalDate(JsonNode node, String field) {
+    JsonNode value = node.required(field);
+    if (value.isNull()) {
+      return;
+    }
+    String text = requireText(node, field);
+    try {
+      LocalDate parsed = LocalDate.parse(text);
+      require(parsed.toString().equals(text), field + " must be a canonical ISO local date");
+    } catch (MaintenanceInboundValidationException exception) {
+      throw exception;
+    } catch (RuntimeException exception) {
+      throw invalid(field + " must be a canonical ISO local date", exception);
     }
   }
 

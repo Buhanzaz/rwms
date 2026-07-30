@@ -1,5 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from "react"
 
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -31,6 +32,8 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import type {
   QueueBindingRequest,
+  QueueDefinitionDto,
+  QueueDefinitionRequest,
   QueueType,
   WorkerClassDto,
   WorkerClassRequest,
@@ -49,6 +52,42 @@ function optional(value: string) {
 
 function numberOrNull(value: string) {
   return value.trim() ? Number(value) : null
+}
+
+function defaultResultPhotoMinCount(type: QueueType) {
+  return type === "HOLDING" ? 0 : 1
+}
+
+function isValidResultPhotoMinCount(value: string) {
+  const count = numberOrNull(value)
+  return count !== null && Number.isInteger(count) && count >= 0 && count <= 20
+}
+
+function normalizeBindings(bindings: QueueBindingRequest[]) {
+  return bindings.map((binding, order) => ({
+    ...binding,
+    order,
+    stopTaskOnTake: order === 0 ? false : binding.stopTaskOnTake,
+    notifyUrgent: order === 0 ? false : binding.notifyUrgent,
+  }))
+}
+
+function moveBinding(
+  bindings: QueueBindingRequest[],
+  workerClassId: string,
+  direction: -1 | 1
+) {
+  const index = bindings.findIndex(
+    (binding) => binding.workerClassId === workerClassId
+  )
+  const nextIndex = index + direction
+  if (index < 0 || nextIndex < 0 || nextIndex >= bindings.length) {
+    return bindings
+  }
+
+  const next = [...bindings]
+  ;[next[index], next[nextIndex]] = [next[nextIndex], next[index]]
+  return normalizeBindings(next)
 }
 
 function BooleanField({
@@ -82,6 +121,10 @@ function EditorShell({
   children,
   onClose,
   onSubmit,
+  submitLabel = "Сохранить",
+  pendingLabel = "Сохраняем…",
+  submitDisabled = false,
+  destructiveSubmit = false,
 }: {
   title: string
   description: string
@@ -90,6 +133,10 @@ function EditorShell({
   children: ReactNode
   onClose: () => void
   onSubmit: (event: FormEvent<HTMLFormElement>) => void
+  submitLabel?: string
+  pendingLabel?: string
+  submitDisabled?: boolean
+  destructiveSubmit?: boolean
 }) {
   return (
     <Dialog open onOpenChange={(open) => !open && !pending && onClose()}>
@@ -110,8 +157,12 @@ function EditorShell({
             >
               Отмена
             </Button>
-            <Button type="submit" disabled={pending}>
-              {pending ? "Сохраняем…" : "Сохранить"}
+            <Button
+              type="submit"
+              variant={destructiveSubmit ? "destructive" : "default"}
+              disabled={pending || submitDisabled}
+            >
+              {pending ? pendingLabel : submitLabel}
             </Button>
           </DialogFooter>
         </form>
@@ -120,110 +171,65 @@ function EditorShell({
   )
 }
 
-export function QueueEditorDialog({
-  queue,
-  classes,
+export function QueueDefinitionEditorDialog({
+  definition,
   pending,
   error,
   onClose,
   onSave,
 }: {
-  queue: WorkQueueDto | null
-  classes: WorkerClassDto[]
+  definition: QueueDefinitionDto | null
   pending: boolean
   error: string | null
   onClose: () => void
-  onSave: (request: WorkQueueRequest) => Promise<void>
+  onSave: (request: QueueDefinitionRequest) => Promise<void>
 }) {
-  const [code, setCode] = useState(queue?.code ?? "")
-  const [name, setName] = useState(queue?.name ?? "")
-  const [description, setDescription] = useState(queue?.description ?? "")
-  const [type, setType] = useState<QueueType>(queue?.type ?? "REPAIR")
-  const [active, setActive] = useState(queue?.active ?? true)
-  const [hidden, setHidden] = useState(queue?.hidden ?? false)
-  const [collapsed, setCollapsed] = useState(queue?.collapsed ?? false)
-  const [holdingPeriod, setHoldingPeriod] = useState(
-    String(queue?.holdingPeriodMinutes ?? "")
-  )
-  const [threshold, setThreshold] = useState(
-    String(queue?.notificationThreshold ?? "")
-  )
-  const [notify, setNotify] = useState(
-    queue?.notifyWhenThresholdReached ?? false
-  )
-  const [bindings, setBindings] = useState<Record<string, QueueBindingRequest>>(
-    () =>
-      Object.fromEntries(
-        (queue?.bindings ?? []).map((binding) => [
-          binding.workerClass.id,
-          {
-            workerClassId: binding.workerClass.id,
-            stopTaskOnTake: binding.stopTaskOnTake,
-          },
-        ])
-      )
-  )
+  const [name, setName] = useState(definition?.name ?? "")
+  const [description, setDescription] = useState(definition?.description ?? "")
+  const [type, setType] = useState<QueueType>(definition?.type ?? "REPAIR")
   const [validation, setValidation] = useState<string | null>(null)
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!code.trim() || !name.trim()) {
-      setValidation("Укажите код и название очереди.")
+    if (!name.trim()) {
+      setValidation("Укажите название общей очереди.")
       return
     }
     await onSave({
-      version: queue?.version ?? 0,
-      code: code.trim(),
+      version: definition?.version ?? 0,
       name: name.trim(),
       description: optional(description),
       type,
-      active,
-      hidden,
-      collapsed,
-      holdingPeriodMinutes:
-        type === "HOLDING" ? numberOrNull(holdingPeriod) : null,
-      notificationThreshold:
-        type === "HOLDING" ? numberOrNull(threshold) : null,
-      notifyWhenThresholdReached: type === "HOLDING" && notify,
-      bindings: Object.values(bindings),
     })
   }
 
   return (
     <EditorShell
-      title={queue ? "Очередь" : "Новая очередь"}
-      description="Параметры очереди и классы исполнителей."
+      title={definition ? "Общая очередь" : "Новая общая очередь"}
+      description="Название и тип задаются один раз для всей системы."
       pending={pending}
       error={validation ?? error}
       onClose={onClose}
       onSubmit={(event) => void submit(event)}
     >
-      <FieldGroup className="grid gap-4 md:grid-cols-2">
+      <FieldGroup>
         <Field>
-          <FieldLabel htmlFor="queue-code">Код</FieldLabel>
+          <FieldLabel htmlFor="queue-definition-name">Название</FieldLabel>
           <Input
-            id="queue-code"
-            value={code}
-            onChange={(event) => setCode(event.target.value)}
-            required
-          />
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="queue-name">Название</FieldLabel>
-          <Input
-            id="queue-name"
+            id="queue-definition-name"
             value={name}
+            maxLength={128}
             onChange={(event) => setName(event.target.value)}
             required
           />
         </Field>
         <Field>
-          <FieldLabel htmlFor="queue-type">Тип</FieldLabel>
+          <FieldLabel htmlFor="queue-definition-type">Тип</FieldLabel>
           <Select
             value={type}
             onValueChange={(value) => setType(value as QueueType)}
           >
-            <SelectTrigger id="queue-type" className="w-full">
+            <SelectTrigger id="queue-definition-type" className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -237,13 +243,183 @@ export function QueueEditorDialog({
             </SelectContent>
           </Select>
         </Field>
-        <Field className="md:col-span-2">
-          <FieldLabel htmlFor="queue-description">Описание</FieldLabel>
+        <Field>
+          <FieldLabel htmlFor="queue-definition-description">
+            Описание
+          </FieldLabel>
           <Textarea
-            id="queue-description"
+            id="queue-definition-description"
             value={description}
+            maxLength={1000}
             onChange={(event) => setDescription(event.target.value)}
           />
+        </Field>
+      </FieldGroup>
+    </EditorShell>
+  )
+}
+
+export function QueueEditorDialog({
+  queue,
+  definitions,
+  classes,
+  pending,
+  error,
+  onClose,
+  onSave,
+}: {
+  queue: WorkQueueDto | null
+  definitions: QueueDefinitionDto[]
+  classes: WorkerClassDto[]
+  pending: boolean
+  error: string | null
+  onClose: () => void
+  onSave: (request: WorkQueueRequest) => Promise<void>
+}) {
+  const [definitionId, setDefinitionId] = useState(queue?.definitionId ?? "")
+  const definition =
+    definitions.find((item) => item.id === definitionId) ??
+    (queue
+      ? {
+          id: queue.definitionId,
+          version: queue.definitionVersion,
+          name: queue.name,
+          description: queue.description,
+          type: queue.type,
+        }
+      : null)
+  const type = definition?.type ?? "REPAIR"
+  const [active, setActive] = useState(queue?.active ?? true)
+  const [hidden, setHidden] = useState(queue?.hidden ?? false)
+  const [collapsed, setCollapsed] = useState(queue?.collapsed ?? false)
+  const [holdingPeriod, setHoldingPeriod] = useState(
+    String(queue?.holdingPeriodMinutes ?? "")
+  )
+  const [threshold, setThreshold] = useState(
+    String(queue?.notificationThreshold ?? "")
+  )
+  const [notify, setNotify] = useState(
+    queue?.notifyWhenThresholdReached ?? false
+  )
+  const [resultPhotoMinCount, setResultPhotoMinCount] = useState(
+    String(queue?.resultPhotoMinCount ?? defaultResultPhotoMinCount("REPAIR"))
+  )
+  const [bindings, setBindings] = useState<QueueBindingRequest[]>(() =>
+    normalizeBindings(
+      [...(queue?.bindings ?? [])]
+        .sort((left, right) => left.order - right.order)
+        .map((binding) => ({
+          workerClassId: binding.workerClass.id,
+          order: binding.order,
+          stopTaskOnTake: binding.stopTaskOnTake,
+          notifyUrgent: binding.notifyUrgent,
+        }))
+    )
+  )
+  const [validation, setValidation] = useState<string | null>(null)
+  const resultPhotoMinCountInvalid =
+    !isValidResultPhotoMinCount(resultPhotoMinCount)
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!definitionId) {
+      setValidation("Выберите общую очередь.")
+      return
+    }
+    const photoMinCount = numberOrNull(resultPhotoMinCount)
+    if (photoMinCount === null || resultPhotoMinCountInvalid) {
+      setValidation("Минимум фотографий должен быть целым числом от 0 до 20.")
+      return
+    }
+    await onSave({
+      version: queue?.version ?? 0,
+      definitionId,
+      active,
+      hidden,
+      collapsed,
+      holdingPeriodMinutes:
+        type === "HOLDING" ? numberOrNull(holdingPeriod) : null,
+      notificationThreshold:
+        type === "HOLDING" ? numberOrNull(threshold) : null,
+      notifyWhenThresholdReached: type === "HOLDING" && notify,
+      resultPhotoMinCount: photoMinCount,
+      bindings: normalizeBindings(bindings),
+    })
+  }
+
+  return (
+    <EditorShell
+      title={queue ? "Очередь склада" : "Добавить очередь склада"}
+      description="Общая очередь подключается к выбранному складу без копирования названия и типа."
+      pending={pending}
+      error={validation ?? error}
+      onClose={onClose}
+      onSubmit={(event) => void submit(event)}
+    >
+      <FieldGroup>
+        <Field>
+          <FieldLabel htmlFor="warehouse-queue-definition">
+            Общая очередь
+          </FieldLabel>
+          {queue ? (
+            <>
+              <Input
+                id="warehouse-queue-definition"
+                value={definition?.name ?? queue.name}
+                disabled
+              />
+              <FieldDescription>
+                {queueTypeLabels[type]}. Название и тип изменяются в общем
+                каталоге.
+              </FieldDescription>
+            </>
+          ) : (
+            <Select
+              value={definitionId}
+              onValueChange={(value) => {
+                setDefinitionId(value)
+                const nextType =
+                  definitions.find((item) => item.id === value)?.type ??
+                  "REPAIR"
+                setResultPhotoMinCount(
+                  String(defaultResultPhotoMinCount(nextType))
+                )
+              }}
+            >
+              <SelectTrigger id="warehouse-queue-definition" className="w-full">
+                <SelectValue placeholder="Выберите очередь" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {definitions.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.name} · {queueTypeLabels[item.type]}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          )}
+        </Field>
+        <Field data-invalid={resultPhotoMinCountInvalid || undefined}>
+          <FieldLabel htmlFor="queue-result-photo-min-count">
+            Минимум фото результата
+          </FieldLabel>
+          <Input
+            id="queue-result-photo-min-count"
+            type="number"
+            min={0}
+            max={20}
+            step={1}
+            value={resultPhotoMinCount}
+            aria-invalid={resultPhotoMinCountInvalid}
+            onChange={(event) => setResultPhotoMinCount(event.target.value)}
+            required
+          />
+          <FieldDescription>
+            Завершение задания доступно после загрузки указанного количества
+            фотографий.
+          </FieldDescription>
         </Field>
         <BooleanField
           id="queue-active"
@@ -305,9 +481,15 @@ export function QueueEditorDialog({
       ) : null}
       <FieldSet>
         <FieldLegend>Классы исполнителей</FieldLegend>
+        <FieldDescription>
+          Первый выбранный класс — основной исполнитель. Остальные получают
+          связанное срочное задание в указанном порядке.
+        </FieldDescription>
         <FieldGroup className="gap-3">
           {classes.map((workerClass) => {
-            const binding = bindings[workerClass.id]
+            const binding = bindings.find(
+              (item) => item.workerClassId === workerClass.id
+            )
             return (
               <Field key={workerClass.id} className="rounded-lg border p-3">
                 <BooleanField
@@ -315,40 +497,132 @@ export function QueueEditorDialog({
                   checked={Boolean(binding)}
                   onCheckedChange={(checked) =>
                     setBindings((current) => {
-                      const next = { ...current }
-                      if (checked)
-                        next[workerClass.id] = {
-                          workerClassId: workerClass.id,
-                          stopTaskOnTake: false,
-                        }
-                      else delete next[workerClass.id]
-                      return next
+                      if (checked) {
+                        return normalizeBindings([
+                          ...current,
+                          {
+                            workerClassId: workerClass.id,
+                            order: current.length,
+                            stopTaskOnTake: false,
+                            notifyUrgent: false,
+                          },
+                        ])
+                      }
+                      return normalizeBindings(
+                        current.filter(
+                          (item) => item.workerClassId !== workerClass.id
+                        )
+                      )
                     })
                   }
                 >
                   {workerClass.name}
                 </BooleanField>
-                {binding ? (
-                  <BooleanField
-                    id={`queue-stop-${workerClass.id}`}
-                    checked={binding.stopTaskOnTake}
-                    onCheckedChange={(checked) =>
-                      setBindings((current) => ({
-                        ...current,
-                        [workerClass.id]: {
-                          ...current[workerClass.id],
-                          stopTaskOnTake: checked,
-                        },
-                      }))
-                    }
-                  >
-                    Останавливать текущую задачу при взятии
-                  </BooleanField>
+                {!workerClass.active ? (
+                  <FieldDescription>Класс отключён.</FieldDescription>
                 ) : null}
               </Field>
             )
           })}
         </FieldGroup>
+        {bindings.length > 0 ? (
+          <FieldGroup className="gap-3">
+            {bindings.map((binding, index) => {
+              const workerClass = classes.find(
+                (item) => item.id === binding.workerClassId
+              )
+              const primary = index === 0
+              if (!workerClass) return null
+
+              return (
+                <Field
+                  key={binding.workerClassId}
+                  className="rounded-lg border p-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{workerClass.name}</span>
+                      <Badge variant={primary ? "default" : "secondary"}>
+                        {primary ? "Основной" : "Вторичный"}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={index === 0}
+                        onClick={() =>
+                          setBindings((current) =>
+                            moveBinding(current, binding.workerClassId, -1)
+                          )
+                        }
+                      >
+                        Выше
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={index === bindings.length - 1}
+                        onClick={() =>
+                          setBindings((current) =>
+                            moveBinding(current, binding.workerClassId, 1)
+                          )
+                        }
+                      >
+                        Ниже
+                      </Button>
+                    </div>
+                  </div>
+                  {primary ? (
+                    <FieldDescription>
+                      Взятие задания основным исполнителем запускает связанные
+                      задания для вторичных классов.
+                    </FieldDescription>
+                  ) : (
+                    <FieldGroup className="gap-3">
+                      <BooleanField
+                        id={`queue-stop-${workerClass.id}`}
+                        checked={binding.stopTaskOnTake}
+                        onCheckedChange={(checked) =>
+                          setBindings((current) =>
+                            current.map((item) =>
+                              item.workerClassId === workerClass.id
+                                ? { ...item, stopTaskOnTake: checked }
+                                : item
+                            )
+                          )
+                        }
+                      >
+                        Останавливать текущую работу при взятии
+                      </BooleanField>
+                      <BooleanField
+                        id={`queue-urgent-${workerClass.id}`}
+                        checked={binding.notifyUrgent}
+                        onCheckedChange={(checked) =>
+                          setBindings((current) =>
+                            current.map((item) =>
+                              item.workerClassId === workerClass.id
+                                ? { ...item, notifyUrgent: checked }
+                                : item
+                            )
+                          )
+                        }
+                      >
+                        Оповещать о срочности задания
+                      </BooleanField>
+                    </FieldGroup>
+                  )}
+                </Field>
+              )
+            })}
+          </FieldGroup>
+        ) : (
+          <FieldDescription>
+            Классы исполнителей можно назначить после подключения очереди.
+          </FieldDescription>
+        )}
       </FieldSet>
     </EditorShell>
   )
@@ -367,7 +641,6 @@ export function ClassEditorDialog({
   onClose: () => void
   onSave: (request: WorkerClassRequest) => Promise<void>
 }) {
-  const [code, setCode] = useState(item?.code ?? "")
   const [name, setName] = useState(item?.name ?? "")
   const [description, setDescription] = useState(item?.description ?? "")
   const [comment, setComment] = useState(item?.comment ?? "")
@@ -376,13 +649,12 @@ export function ClassEditorDialog({
   const [validation, setValidation] = useState<string | null>(null)
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!code.trim() || !name.trim()) {
-      setValidation("Укажите код и название класса.")
+    if (!name.trim()) {
+      setValidation("Укажите название класса.")
       return
     }
     await onSave({
       version: item?.version ?? 0,
-      code: code.trim(),
       name: name.trim(),
       description: optional(description),
       comment: optional(comment),
@@ -400,14 +672,6 @@ export function ClassEditorDialog({
       onSubmit={(event) => void submit(event)}
     >
       <FieldGroup className="grid gap-4 md:grid-cols-2">
-        <Field>
-          <FieldLabel htmlFor="class-code">Код</FieldLabel>
-          <Input
-            id="class-code"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-          />
-        </Field>
         <Field>
           <FieldLabel htmlFor="class-name">Название</FieldLabel>
           <Input
@@ -579,8 +843,8 @@ export function WorkerEditorDialog({
           />
           {item?.appLogin ? (
             <FieldDescription>
-              Используйте «Пароль» для сброса или «Отключить вход» для удаления
-              логина.
+              Используйте «Пароль» для сброса или «Отключить вход» для временной
+              деактивации логина.
             </FieldDescription>
           ) : null}
         </Field>
@@ -649,22 +913,48 @@ export function GroupEditorDialog({
     item?.workerClass.id ?? classes[0]?.id ?? ""
   )
   const [active, setActive] = useState(item?.active ?? true)
-  const [members, setMembers] = useState<
-    Record<string, { enabled: boolean; role: string }>
-  >(() =>
+  const [members, setMembers] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(
-      workers.map((w) => {
-        const member = item?.members.find(
-          (m) => m.workerId === w.id && m.active
-        )
-        return [
-          w.id,
-          { enabled: Boolean(member), role: member?.roleInGroup ?? "" },
-        ]
-      })
+      workers.map((worker) => [
+        worker.id,
+        Boolean(
+          item?.members.some(
+            (member) => member.workerId === worker.id && member.active
+          )
+        ),
+      ])
     )
   )
   const [validation, setValidation] = useState<string | null>(null)
+  const eligibleWorkers = workers.filter(
+    (worker) =>
+      worker.active &&
+      worker.qualifications.some(
+        (qualification) =>
+          qualification.active && qualification.workerClass.id === workerClassId
+      )
+  )
+
+  function changeWorkerClass(nextWorkerClassId: string) {
+    setWorkerClassId(nextWorkerClassId)
+    setMembers((current) =>
+      Object.fromEntries(
+        workers.map((worker) => [
+          worker.id,
+          Boolean(
+            current[worker.id] &&
+            worker.active &&
+            worker.qualifications.some(
+              (qualification) =>
+                qualification.active &&
+                qualification.workerClass.id === nextWorkerClassId
+            )
+          ),
+        ])
+      )
+    )
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!name.trim() || !workerClassId) {
@@ -677,11 +967,10 @@ export function GroupEditorDialog({
       name: name.trim(),
       description: optional(description),
       active,
-      members: workers
-        .filter((w) => members[w.id]?.enabled)
-        .map((w) => ({
-          workerId: w.id,
-          roleInGroup: optional(members[w.id].role),
+      members: eligibleWorkers
+        .filter((worker) => members[worker.id])
+        .map((worker) => ({
+          workerId: worker.id,
           active: true,
         })),
     })
@@ -706,7 +995,7 @@ export function GroupEditorDialog({
         </Field>
         <Field>
           <FieldLabel htmlFor="group-class">Класс</FieldLabel>
-          <Select value={workerClassId} onValueChange={setWorkerClassId}>
+          <Select value={workerClassId} onValueChange={changeWorkerClass}>
             <SelectTrigger id="group-class" className="w-full">
               <SelectValue />
             </SelectTrigger>
@@ -739,39 +1028,31 @@ export function GroupEditorDialog({
       </FieldGroup>
       <FieldSet>
         <FieldLegend>Участники</FieldLegend>
+        <FieldDescription>
+          Доступны только активные рабочие с квалификацией выбранного класса.
+        </FieldDescription>
         <FieldGroup className="gap-3">
-          {workers.map((worker) => {
-            const member = members[worker.id] ?? { enabled: false, role: "" }
-            return (
-              <Field key={worker.id} className="rounded-lg border p-3">
-                <BooleanField
-                  id={`member-${worker.id}`}
-                  checked={member.enabled}
-                  onCheckedChange={(checked) =>
-                    setMembers((current) => ({
-                      ...current,
-                      [worker.id]: { ...member, enabled: checked },
-                    }))
-                  }
-                >
-                  {worker.displayName}
-                </BooleanField>
-                {member.enabled ? (
-                  <Input
-                    value={member.role}
-                    onChange={(e) =>
-                      setMembers((current) => ({
-                        ...current,
-                        [worker.id]: { ...member, role: e.target.value },
-                      }))
-                    }
-                    aria-label={`Роль в бригаде: ${worker.displayName}`}
-                    placeholder="Роль в бригаде"
-                  />
-                ) : null}
-              </Field>
-            )
-          })}
+          {eligibleWorkers.map((worker) => (
+            <Field key={worker.id} className="rounded-lg border p-3">
+              <BooleanField
+                id={`member-${worker.id}`}
+                checked={Boolean(members[worker.id])}
+                onCheckedChange={(checked) =>
+                  setMembers((current) => ({
+                    ...current,
+                    [worker.id]: checked,
+                  }))
+                }
+              >
+                {worker.displayName}
+              </BooleanField>
+            </Field>
+          ))}
+          {eligibleWorkers.length === 0 ? (
+            <FieldDescription>
+              Нет активных рабочих с этой квалификацией.
+            </FieldDescription>
+          ) : null}
         </FieldGroup>
       </FieldSet>
     </EditorShell>
@@ -828,6 +1109,173 @@ export function CredentialPasswordDialog({
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="new-password"
           />
+        </Field>
+      </FieldGroup>
+    </EditorShell>
+  )
+}
+
+const NO_CURRENT_GROUP = "__none__"
+
+export function CurrentGroupDialog({
+  worker,
+  groups,
+  pending,
+  error,
+  onClose,
+  onSave,
+}: {
+  worker: WorkerDto
+  groups: WorkerGroupDto[]
+  pending: boolean
+  error: string | null
+  onClose: () => void
+  onSave: (workerGroupId: string | null) => Promise<void>
+}) {
+  const activeMembershipGroups = groups.filter(
+    (group) =>
+      group.active &&
+      group.members.some(
+        (member) => member.workerId === worker.id && member.active
+      )
+  )
+  const initialGroupId = activeMembershipGroups.some(
+    (group) => group.id === worker.currentGroupId
+  )
+    ? worker.currentGroupId!
+    : NO_CURRENT_GROUP
+  const [selectedGroupId, setSelectedGroupId] = useState(initialGroupId)
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    await onSave(selectedGroupId === NO_CURRENT_GROUP ? null : selectedGroupId)
+  }
+
+  return (
+    <EditorShell
+      title="Текущая бригада"
+      description={`Назначение рабочего ${worker.displayName} на выбранном складе.`}
+      pending={pending}
+      error={null}
+      submitDisabled={
+        (selectedGroupId === NO_CURRENT_GROUP ? null : selectedGroupId) ===
+        worker.currentGroupId
+      }
+      onClose={onClose}
+      onSubmit={(event) => void submit(event)}
+    >
+      <FieldGroup>
+        <Field data-invalid={error ? true : undefined}>
+          <FieldLabel htmlFor="worker-current-group">
+            Текущая бригада
+          </FieldLabel>
+          <Select
+            value={selectedGroupId}
+            onValueChange={setSelectedGroupId}
+            disabled={pending}
+          >
+            <SelectTrigger
+              id="worker-current-group"
+              className="w-full"
+              aria-invalid={Boolean(error)}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value={NO_CURRENT_GROUP}>Не выбрана</SelectItem>
+                {activeMembershipGroups.map((group) => (
+                  <SelectItem
+                    key={group.id}
+                    value={group.id}
+                    disabled={group.operationalStatus === "DISABLED"}
+                  >
+                    {group.name}
+                    {group.operationalStatus === "DISABLED"
+                      ? " — недоступна"
+                      : null}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <FieldDescription>
+            Доступны только активные бригады, где участие рабочего активно.
+            Недоступную бригаду сначала нужно включить.
+          </FieldDescription>
+          {worker.currentGroupId !== null &&
+          initialGroupId === NO_CURRENT_GROUP ? (
+            <FieldDescription>
+              Текущее назначение «{worker.currentGroupName ?? "Без названия"}»
+              больше не входит в доступные активные участия.
+            </FieldDescription>
+          ) : null}
+          <FieldError>{error}</FieldError>
+        </Field>
+      </FieldGroup>
+    </EditorShell>
+  )
+}
+
+export function GroupAvailabilityDialog({
+  group,
+  pending,
+  error,
+  onClose,
+  onSave,
+}: {
+  group: WorkerGroupDto
+  pending: boolean
+  error: string | null
+  onClose: () => void
+  onSave: (reason: string) => Promise<void>
+}) {
+  const [reason, setReason] = useState("")
+  const [validation, setValidation] = useState<string | null>(null)
+  const visibleError = validation ?? error
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const normalizedReason = reason.trim()
+    if (!normalizedReason) {
+      setValidation("Укажите причину недоступности.")
+      return
+    }
+    setValidation(null)
+    await onSave(normalizedReason)
+  }
+
+  return (
+    <EditorShell
+      title={`Отключить бригаду «${group.name}»?`}
+      description="Бригада станет недоступна для новых заданий. Сервис проверит текущую работу и вернёт конфликт без локальной подмены результата."
+      pending={pending}
+      error={null}
+      submitLabel="Отключить"
+      pendingLabel="Отключаем…"
+      destructiveSubmit
+      onClose={onClose}
+      onSubmit={(event) => void submit(event)}
+    >
+      <FieldGroup>
+        <Field data-invalid={visibleError ? true : undefined}>
+          <FieldLabel htmlFor="group-unavailability-reason">Причина</FieldLabel>
+          <Textarea
+            id="group-unavailability-reason"
+            value={reason}
+            maxLength={1000}
+            disabled={pending}
+            aria-invalid={Boolean(visibleError)}
+            placeholder="Например, пересменка или техническая пауза"
+            onChange={(event) => {
+              setReason(event.target.value)
+              setValidation(null)
+            }}
+          />
+          <FieldDescription>
+            Причина будет сохранена в состоянии выбранной бригады.
+          </FieldDescription>
+          <FieldError>{visibleError}</FieldError>
         </Field>
       </FieldGroup>
     </EditorShell>

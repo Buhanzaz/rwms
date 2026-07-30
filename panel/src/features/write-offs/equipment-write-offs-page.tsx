@@ -41,13 +41,28 @@ import {
 } from "@/components/ui/select"
 import { useAuth } from "@/features/auth/use-auth"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
+import {
+  LogisticsDocumentFilters,
+  LogisticsFiltersToggle,
+} from "@/features/logistics/logistics-document-filters"
+import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import { useWarehouse } from "@/hooks/use-warehouse"
+import { cn } from "@/lib/utils"
 import type {
   EquipmentDispositionListItemDto,
   EquipmentItemDto,
 } from "@/types/equipment"
 
+import {
+  buildEquipmentWriteOffFilterOptions,
+  EMPTY_EQUIPMENT_WRITE_OFF_FILTERS,
+  equipmentWriteOffOperationLabel,
+  filterEquipmentWriteOffItems,
+  type EquipmentWriteOffFilters,
+} from "./equipment-write-off-filters"
+
 const EQUIPMENT_WRITE_OFFS_QUERY_KEY = ["equipment-write-offs"] as const
+const EMPTY_EQUIPMENT_WRITE_OFF_ITEMS: EquipmentDispositionListItemDto[] = []
 
 function equipmentWriteOffsQueryKey(warehouseId: string, search: string) {
   return [...EQUIPMENT_WRITE_OFFS_QUERY_KEY, warehouseId, search] as const
@@ -58,10 +73,6 @@ function dateLabel(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value))
-}
-
-function operationLabel(item: EquipmentDispositionListItemDto) {
-  return item.kind
 }
 
 function EquipmentDispositionMobileCard({
@@ -75,13 +86,11 @@ function EquipmentDispositionMobileCard({
         <CardTitle>{item.equipmentName}</CardTitle>
       </CardHeader>
       <CardContent className="grid grid-cols-2 gap-2 text-sm">
-        <span className="text-muted-foreground">Код</span>
-        <span>{item.equipmentCode}</span>
         <span className="text-muted-foreground">Количество</span>
         <span>{item.quantity} шт.</span>
         <span className="text-muted-foreground">Операция</span>
         <Badge className="w-fit" variant="outline">
-          {operationLabel(item)}
+          {equipmentWriteOffOperationLabel(item.kind)}
         </Badge>
         <span className="text-muted-foreground">Дата</span>
         <span>{dateLabel(item.occurredAt)}</span>
@@ -341,6 +350,10 @@ export function EquipmentWriteOffsPage() {
   const { selectedWarehouseId } = useWarehouse()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState("")
+  const [filters, setFilters] = useState<EquipmentWriteOffFilters>(
+    EMPTY_EQUIPMENT_WRITE_OFF_FILTERS
+  )
+  const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
   const [dialogOpen, setDialogOpen] = useState(false)
   const canManage = Boolean(
     selectedWarehouseId &&
@@ -359,20 +372,36 @@ export function EquipmentWriteOffsPage() {
       }),
     enabled: Boolean(selectedWarehouseId && accessToken),
   })
-  const items = listQuery.data ?? []
+  const items = listQuery.data ?? EMPTY_EQUIPMENT_WRITE_OFF_ITEMS
+  const filterOptions = useMemo(
+    () => buildEquipmentWriteOffFilterOptions(items),
+    [items]
+  )
+  const visibleItems = useMemo(
+    () => filterEquipmentWriteOffItems(items, filters),
+    [filters, items]
+  )
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       <PageToolbar>
-        <PageToolbarContent className="max-w-sm">
+        <PageToolbarContent className="max-w-xl">
           <Input
+            type="search"
             aria-label="Поиск операций оборудования"
+            name="equipment-write-offs-search"
+            autoComplete="off"
             placeholder="Наименование оборудования"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
         </PageToolbarContent>
         <PageToolbarActions>
+          <LogisticsFiltersToggle
+            open={filtersOpen}
+            controls="equipment-write-off-filters"
+            onOpenChange={setFiltersOpen}
+          />
           <Button
             disabled={!accessToken || !selectedWarehouseId || !canManage}
             onClick={() => setDialogOpen(true)}
@@ -381,6 +410,30 @@ export function EquipmentWriteOffsPage() {
           </Button>
         </PageToolbarActions>
       </PageToolbar>
+
+      <div id="equipment-write-off-filters" hidden={!filtersOpen}>
+        <LogisticsDocumentFilters
+          filters={filters}
+          stateOptions={filterOptions.operations}
+          stateLabel="Операция"
+          stateAfterExtraFilters
+          dateLabel="Дата"
+          showSchedule={false}
+          extraFilters={[
+            {
+              label: "Название",
+              options: filterOptions.names,
+              selected: filters.names,
+              onApply: (names) =>
+                setFilters((current) => ({ ...current, names })),
+            },
+          ]}
+          onChange={(nextFilters) =>
+            setFilters((current) => ({ ...current, ...nextFilters }))
+          }
+          onReset={() => setFilters(EMPTY_EQUIPMENT_WRITE_OFF_FILTERS)}
+        />
+      </div>
 
       {!selectedWarehouseId ? (
         <p className="text-sm text-muted-foreground">Склад не выбран.</p>
@@ -402,66 +455,56 @@ export function EquipmentWriteOffsPage() {
             </p>
           ) : (
             <>
-              {items.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  Операций оборудования пока нет.
-                </p>
-              ) : (
-                <>
-                  <div className="hidden min-h-full min-w-0 flex-1 md:block">
-                    <OperationsListGrid
-                      className="min-h-full"
-                      items={items}
-                      columns={[
-                        {
-                          id: "name",
-                          label: "Наименование",
-                          getSortValue: (item) => item.equipmentName,
-                          render: (item) => item.equipmentName,
-                        },
-                        {
-                          id: "code",
-                          label: "Код",
-                          getSortValue: (item) => item.equipmentCode,
-                          render: (item) => item.equipmentCode,
-                        },
-                        {
-                          id: "quantity",
-                          label: "Количество",
-                          cellClassName: "tabular-nums",
-                          getSortValue: (item) => item.quantity,
-                          render: (item) => `${item.quantity} шт.`,
-                        },
-                        {
-                          id: "kind",
-                          label: "Операция",
-                          getSortValue: (item) => item.kind,
-                          render: (item) => (
-                            <Badge variant="outline">
-                              {operationLabel(item)}
-                            </Badge>
-                          ),
-                        },
-                        {
-                          id: "date",
-                          label: "Дата",
-                          getSortValue: (item) => item.occurredAt,
-                          render: (item) => dateLabel(item.occurredAt),
-                        },
-                      ]}
-                    />
-                  </div>
+              <div
+                className={cn(
+                  "min-h-0 min-w-0 flex-1",
+                  visibleItems.length > 0 && "hidden md:block"
+                )}
+              >
+                <OperationsListGrid
+                  className="min-h-full"
+                  items={visibleItems}
+                  columns={[
+                    {
+                      id: "name",
+                      label: "Наименование",
+                      getSortValue: (item) => item.equipmentName,
+                      render: (item) => item.equipmentName,
+                    },
+                    {
+                      id: "quantity",
+                      label: "Количество",
+                      cellClassName: "tabular-nums",
+                      getSortValue: (item) => item.quantity,
+                      render: (item) => `${item.quantity} шт.`,
+                    },
+                    {
+                      id: "kind",
+                      label: "Операция",
+                      getSortValue: (item) => item.kind,
+                      render: (item) => (
+                        <Badge variant="outline">
+                          {equipmentWriteOffOperationLabel(item.kind)}
+                        </Badge>
+                      ),
+                    },
+                    {
+                      id: "date",
+                      label: "Дата",
+                      getSortValue: (item) => item.occurredAt,
+                      render: (item) => dateLabel(item.occurredAt),
+                    },
+                  ]}
+                />
+              </div>
 
-                  <div className="grid gap-3 md:hidden">
-                    {items.map((item) => (
-                      <EquipmentDispositionMobileCard
-                        key={item.id}
-                        item={item}
-                      />
-                    ))}
-                  </div>
-                </>
-              )}
+              {visibleItems.length > 0 ? (
+                <div className="grid gap-3 md:hidden">
+                  {visibleItems.map((item) => (
+                    <EquipmentDispositionMobileCard key={item.id} item={item} />
+                  ))}
+                </div>
+              ) : null}
             </>
           )}
         </div>

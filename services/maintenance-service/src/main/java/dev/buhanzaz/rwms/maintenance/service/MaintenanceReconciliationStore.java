@@ -183,8 +183,7 @@ public class MaintenanceReconciliationStore {
         || externalReferenceId.length() > 128
         || predecessorKeys == null
         || predecessorKeys.stream().anyMatch(java.util.Objects::isNull)
-        || predecessorKeys.size() != new java.util.HashSet<>(predecessorKeys).size()
-        || ("REGISTER_CATALOG_POSITION".equals(operation) && !predecessorKeys.isEmpty())) {
+        || predecessorKeys.size() != new java.util.HashSet<>(predecessorKeys).size()) {
       throw new IllegalArgumentException("Catalog-position reconciliation intent is invalid");
     }
     MaintenanceReconciliation existing =
@@ -231,6 +230,17 @@ public class MaintenanceReconciliationStore {
         reconciliations.findAllByCatalogVersionIdOrderByOperationTypeAscCatalogNodeIdAsc(
             catalogVersionId);
     if (values.isEmpty()) return Optional.empty();
+    Map<String, MaintenanceReconciliation> latestByOperationAndNode = new LinkedHashMap<>();
+    for (MaintenanceReconciliation value : values) {
+      String key = value.getOperationType() + ":" + value.getCatalogNodeId();
+      MaintenanceReconciliation current = latestByOperationAndNode.get(key);
+      if (current == null
+          || value.getCreatedAt().isAfter(current.getCreatedAt())
+          || (value.getCreatedAt().isEqual(current.getCreatedAt())
+              && value.getId().toString().compareTo(current.getId().toString()) > 0)) {
+        latestByOperationAndNode.put(key, value);
+      }
+    }
     int registrationsRequired = 0;
     int registrationsConfirmed = 0;
     int cleanupRequired = 0;
@@ -238,7 +248,7 @@ public class MaintenanceReconciliationStore {
     int attempts = 0;
     OffsetDateTime updatedAt = null;
     String state = "DELIVERED";
-    for (MaintenanceReconciliation value : values) {
+    for (MaintenanceReconciliation value : latestByOperationAndNode.values()) {
       boolean registration = "REGISTER_CATALOG_POSITION".equals(value.getOperationType());
       if (registration) {
         registrationsRequired++;
@@ -315,6 +325,47 @@ public class MaintenanceReconciliationStore {
     return resumeResult(reconciliation);
   }
 
+  /**
+   * Resumes only the exact stable work selected by an authenticated domain retry after the
+   * application service has revalidated that command's business invariants.
+   */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public boolean resumeStableQuarantined(
+      UUID repairId,
+      String dependency,
+      String operation,
+      UUID idempotencyKey,
+      UUID reviewSubjectId,
+      String reviewReason) {
+    if (repairId == null
+        || dependency == null
+        || operation == null
+        || idempotencyKey == null
+        || reviewSubjectId == null
+        || reviewReason == null
+        || reviewReason.isBlank()
+        || reviewReason.trim().length() > 2000) {
+      throw new IllegalArgumentException("Reviewed stable retry metadata is invalid");
+    }
+    MaintenanceReconciliation reconciliation =
+        reconciliations
+            .findByStableKeyForUpdate(dependency, operation, idempotencyKey)
+            .orElse(null);
+    if (reconciliation == null) return false;
+    try {
+      reconciliation.requireStableIdentity(repairId);
+    } catch (IllegalArgumentException exception) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_IDEMPOTENCY_CONFLICT",
+          "Stable reconciliation identity is bound to another repair");
+    }
+    if (!"QUARANTINED".equals(reconciliation.getState())) return false;
+    reconciliation.resume(
+        reconciliation.getReviewVersion(), reviewSubjectId, reviewReason, now());
+    reconciliations.flush();
+    return true;
+  }
+
   @Transactional(propagation = Propagation.MANDATORY)
   public Optional<WorkItem> lockNextDue() {
     return reconciliations
@@ -353,6 +404,23 @@ public class MaintenanceReconciliationStore {
     return idempotencyKeys.stream().allMatch(key -> findStable(dependency, operation, key)
         .filter(work -> "CONFIRMED".equals(work.state()))
         .isPresent());
+  }
+
+  @Transactional(propagation = Propagation.MANDATORY)
+  public boolean allCatalogPositionPredecessorsConfirmed(
+      List<UUID> idempotencyKeys) {
+    if (idempotencyKeys == null
+        || idempotencyKeys.stream().anyMatch(java.util.Objects::isNull)
+        || idempotencyKeys.size() != new java.util.HashSet<>(idempotencyKeys).size()) {
+      throw new IllegalArgumentException("Catalog predecessor keys are invalid");
+    }
+    return idempotencyKeys.stream()
+        .allMatch(
+            key ->
+                findStable("TASK_BOARD", "REGISTER_CATALOG_POSITION", key)
+                        .or(() -> findStable("TASK_BOARD", "DELETE_CATALOG_POSITION", key))
+                        .filter(work -> "CONFIRMED".equals(work.state()))
+                        .isPresent());
   }
 
   @Transactional(propagation = Propagation.MANDATORY)

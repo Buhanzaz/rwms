@@ -5,6 +5,7 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 import dev.buhanzaz.rwms.taskboard.security.*;
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardService;
 import jakarta.validation.Valid;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -24,9 +25,10 @@ public class TaskBoardController {
   public TaskBoardSnapshot snapshot(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID warehouseId,
+      @RequestParam(required = false) LocalDate date,
       @RequestParam(defaultValue = "false") boolean includeShadow) {
     taskAccess(jwt, warehouseId, false);
-    return service.snapshot(warehouseId, includeShadow);
+    return service.snapshot(warehouseId, date, includeShadow);
   }
 
   @GetMapping("/queues/{queueId}/eligible-groups")
@@ -124,6 +126,25 @@ public class TaskBoardController {
       @Valid @RequestBody MoveEntryRequest request) {
     userWrite(jwt, warehouseId);
     return service.move(warehouseId, entryId, request);
+  }
+
+  @PostMapping("/dates/swap")
+  public TaskBoardSnapshot swapDates(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID warehouseId,
+      @Valid @RequestBody SwapTaskBoardDatesRequest request) {
+    userWrite(jwt, warehouseId);
+    return service.swapDates(warehouseId, request);
+  }
+
+  @PostMapping("/tasks/{taskId}/pin")
+  public TaskBoardSnapshot pin(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID warehouseId,
+      @PathVariable UUID taskId,
+      @Valid @RequestBody PinTaskRequest request) {
+    userWrite(jwt, warehouseId);
+    return service.pin(warehouseId, taskId, request);
   }
 
   private void taskAccess(Jwt jwt, UUID id, boolean write) {

@@ -1,0 +1,190 @@
+openapi: 3.1.0
+info:
+  title: RWMS Analytics Service API
+  version: 1.0.0
+  x-rwms-owner: analytics-service
+  x-rwms-stability: kpi-v1
+  description: >-
+    Read-only warehouse KPI projection. Values are rebuilt from task-board
+    daily raw components; month, quarter and year results never average
+    already-rounded day percentages.
+servers:
+  - url: /
+security:
+  - bearerJwt: []
+tags:
+  - name: Group KPI
+paths:
+  /api/v1/warehouses/{warehouseId}/group-kpi:
+    get:
+      tags: [Group KPI]
+      operationId: getWarehouseGroupKpi
+      summary: Read group KPI for one warehouse and period
+      description: >-
+        Requires a locally validated USER principal, rwms.read and VIEW or
+        higher access to warehouseId. DAY requires year, month and day; MONTH
+        requires year and month; QUARTER requires year and quarter; YEAR
+        requires only year. Parameters not belonging to the selected type are
+        rejected. Values are rounded to two decimals only in this response.
+      parameters:
+        - $ref: '#/components/parameters/WarehouseId'
+        - $ref: '#/components/parameters/PeriodType'
+        - $ref: '#/components/parameters/Year'
+        - $ref: '#/components/parameters/Month'
+        - $ref: '#/components/parameters/Day'
+        - $ref: '#/components/parameters/Quarter'
+      responses:
+        '200':
+          description: Warehouse group KPI projection.
+          headers:
+            X-Correlation-Id: {$ref: '#/components/headers/X-Correlation-Id'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/GroupKpiResponse'}
+        '400': {$ref: '#/components/responses/InvalidPeriod'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+components:
+  securitySchemes:
+    bearerJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  headers:
+    X-Correlation-Id:
+      required: true
+      schema: {type: string, format: uuid}
+  parameters:
+    WarehouseId:
+      name: warehouseId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    PeriodType:
+      name: periodType
+      in: query
+      required: true
+      schema: {$ref: '#/components/schemas/PeriodType'}
+    Year:
+      name: year
+      in: query
+      required: true
+      schema: {type: integer, minimum: 1970, maximum: 9999}
+    Month:
+      name: month
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 12}
+    Day:
+      name: day
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 31}
+    Quarter:
+      name: quarter
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 4}
+  responses:
+    InvalidPeriod:
+      description: Period fields are missing, contradictory or not a valid calendar date.
+      headers:
+        X-Correlation-Id: {$ref: '#/components/headers/X-Correlation-Id'}
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Unauthorized:
+      description: Missing or invalid Bearer JWT.
+      headers:
+        X-Correlation-Id: {$ref: '#/components/headers/X-Correlation-Id'}
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Forbidden:
+      description: Principal lacks warehouse VIEW access or rwms.read.
+      headers:
+        X-Correlation-Id: {$ref: '#/components/headers/X-Correlation-Id'}
+      content:
+        application/problem+json:
+          schema: {$ref: '#/components/schemas/Problem'}
+  schemas:
+    PeriodType:
+      type: string
+      enum: [DAY, MONTH, QUARTER, YEAR]
+    CoverageStatus:
+      type: string
+      enum: [PROVISIONAL, PARTIAL, COMPLETE, NO_DATA]
+    NullableDate:
+      oneOf:
+        - {type: string, format: date}
+        - {type: 'null'}
+    NullablePercentage:
+      oneOf:
+        - {type: number, minimum: 0, maximum: 100, multipleOf: 0.01}
+        - {type: 'null'}
+    GroupKpi:
+      type: object
+      additionalProperties: false
+      required:
+        - workerGroupId
+        - kpi
+        - speed
+        - utilization
+        - completedTaskCount
+        - completedBudgetSeconds
+        - activeSeconds
+        - penalizedIdleSeconds
+      properties:
+        workerGroupId: {type: string, format: uuid}
+        kpi: {$ref: '#/components/schemas/NullablePercentage'}
+        speed: {$ref: '#/components/schemas/NullablePercentage'}
+        utilization: {$ref: '#/components/schemas/NullablePercentage'}
+        completedTaskCount: {type: integer, format: int64, minimum: 0}
+        completedBudgetSeconds: {type: integer, format: int64, minimum: 0}
+        activeSeconds: {type: integer, format: int64, minimum: 0}
+        penalizedIdleSeconds: {type: integer, format: int64, minimum: 0}
+    GroupKpiResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - warehouseId
+        - periodType
+        - periodStart
+        - periodEnd
+        - coverageStart
+        - coverageEnd
+        - status
+        - dataAvailableFrom
+        - formulaVersion
+        - asOf
+        - groups
+      properties:
+        warehouseId: {type: string, format: uuid}
+        periodType: {$ref: '#/components/schemas/PeriodType'}
+        periodStart: {type: string, format: date}
+        periodEnd: {type: string, format: date}
+        coverageStart: {$ref: '#/components/schemas/NullableDate'}
+        coverageEnd: {$ref: '#/components/schemas/NullableDate'}
+        status: {$ref: '#/components/schemas/CoverageStatus'}
+        dataAvailableFrom: {$ref: '#/components/schemas/NullableDate'}
+        formulaVersion: {const: kpi-v1}
+        asOf: {type: string, format: date-time}
+        groups:
+          type: array
+          items: {$ref: '#/components/schemas/GroupKpi'}
+    Problem:
+      type: object
+      required: [type, title, status, detail, instance, code, correlation]
+      properties:
+        type: {type: string, format: uri}
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string}
+        instance: {type: string, format: uri}
+        code: {type: string}
+        correlation:
+          type: object
+          required: [correlationId, causationId]
+          properties:
+            correlationId: {type: string, format: uuid}
+            causationId:
+              oneOf:
+                - {type: string, format: uuid}
+                - {type: 'null'}

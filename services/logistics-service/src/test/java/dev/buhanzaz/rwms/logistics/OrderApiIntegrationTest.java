@@ -31,6 +31,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -83,6 +84,7 @@ class OrderApiIntegrationTest {
       UUID.fromString("00000000-0000-0000-0000-000000009302");
   private static final UUID EQUIPMENT =
       UUID.fromString("00000000-0000-0000-0000-000000009401");
+  private static final AtomicInteger NEXT_TEST_PHONE = new AtomicInteger(1_000_000);
 
   @Container
   @ServiceConnection
@@ -138,15 +140,15 @@ class OrderApiIntegrationTest {
             new LogisticsDependencyGateway.OrderUnitCandidatePage(
                 List.of(), 0, 50, 0, 0));
     when(dependencies.reserveOrderUnit(
-            any(), any(), any(), any(), any(), anyString(), any(), anyString()))
+            any(), any(), any(), any(), any(), anyString(), any(), any(), anyString()))
         .thenAnswer(
             invocation ->
                 reserveRemotely(
                     invocation.getArgument(1),
                     invocation.getArgument(2),
                     invocation.getArgument(3),
-                    invocation.getArgument(6),
-                    invocation.getArgument(7)));
+                    invocation.getArgument(7),
+                    invocation.getArgument(8)));
     when(dependencies.releaseOrderUnit(any(), any(), any(), any(), anyString()))
         .thenAnswer(
             invocation ->
@@ -209,12 +211,12 @@ class OrderApiIntegrationTest {
   }
 
   @Test
-  void normalizedClientCreationReplaysAndRejectsCaseWhitespaceDuplicate()
+  void normalizedClientCreationReplaysByPhoneAndKeepsCanonicalClient()
       throws Exception {
     UUID key = UUID.randomUUID();
     String request =
         """
-        {"clientType":"INDIVIDUAL","displayName":"  Петров   А.В.  "}
+        {"clientType":"INDIVIDUAL","displayName":"  Петров   А.В.  ","phone":"+79990000001"}
         """;
     mvc.perform(
             post("/api/logistics/v1/clients")
@@ -238,11 +240,12 @@ class OrderApiIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
                     """
-                    {"clientType":"INDIVIDUAL","displayName":"петров а.в."}
+                    {"clientType":"INDIVIDUAL","displayName":"петров а.в.","phone":"+79990000001"}
                     """)
                 .with(manager(MANAGER_1, "manager-one")))
-        .andExpect(status().isConflict())
-        .andExpect(jsonPath("$.code").value("CLIENT_ALREADY_EXISTS"));
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.displayName").value("Петров А.В."));
     mvc.perform(
             get("/api/logistics/v1/clients")
                 .param("type", "INDIVIDUAL")
@@ -286,7 +289,7 @@ class OrderApiIntegrationTest {
   }
 
   @Test
-  void savingOrderLocksItAndCreatesOneDateLessShipmentForItsReservedUnits()
+  void savingOrderKeepsItEditableUntilTheDraftShipmentStartsOrGetsFurnitureTasks()
       throws Exception {
     UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент сохранённого заказа");
     selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
@@ -370,8 +373,9 @@ class OrderApiIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(updateOrderBody(3, orderClientId(orderId)))
                 .with(manager(MANAGER_1, "manager-one")))
-        .andExpect(status().isConflict())
-        .andExpect(jsonPath("$.code").value("ORDER_NOT_EDITABLE"));
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("SAVED"))
+        .andExpect(jsonPath("$.permissions.canEdit").value(true));
 
     assertAuditCount(orderId, "ORDER_SAVED", 1);
     assertThat(
@@ -383,6 +387,99 @@ class OrderApiIntegrationTest {
   }
 
   @Test
+  void startingShipmentLocksTheSavedBookingAgainstFurtherEdits() throws Exception {
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент начатой отгрузки");
+    selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
+    addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "2")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("SAVED"));
+
+    UUID shipmentId =
+        jdbc.queryForObject(
+            """
+            select id
+            from logistics_document
+            where rental_order_id=? and document_type='SHIPMENT'
+            """,
+            UUID.class,
+            orderId);
+    long shipmentVersion =
+        jdbc.queryForObject(
+            "select version from logistics_document where id=?", Long.class, shipmentId);
+    mvc.perform(
+            put("/api/logistics/v1/shipments/{documentId}/plan", shipmentId)
+                .param("expectedVersion", Long.toString(shipmentVersion))
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    """
+                    {"driverSnapshot":"Водитель","scheduledDate":"2026-07-29"}
+                    """)
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isAccepted())
+        .andExpect(jsonPath("$.state").value("PREPARING"));
+
+    long orderVersion =
+        jdbc.queryForObject("select version from rental_order where id=?", Long.class, orderId);
+    mvc.perform(
+            put("/api/logistics/v1/orders/{orderId}", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(updateOrderBody(orderVersion, orderClientId(orderId)))
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ORDER_NOT_EDITABLE"));
+  }
+
+  @Test
+  void createdShipmentFurnitureTaskLocksTheSavedBookingAgainstFurtherEdits()
+      throws Exception {
+    UUID orderId = createOrder(MANAGER_1, "manager-one", "Клиент задания на мебель");
+    selectWarehouse(orderId, MANAGER_1, WAREHOUSE_1, 0);
+    addUnit(orderId, MANAGER_1, UNIT_1, 1);
+    mvc.perform(
+            post("/api/logistics/v1/orders/{orderId}/save", orderId)
+                .param("expectedVersion", "2")
+                .header("Idempotency-Key", UUID.randomUUID())
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("SAVED"));
+
+    UUID shipmentId =
+        jdbc.queryForObject(
+            """
+            select id
+            from logistics_document
+            where rental_order_id=? and document_type='SHIPMENT'
+            """,
+            UUID.class,
+            orderId);
+    linkFurnitureMovementTask(shipmentId, UNIT_1);
+
+    mvc.perform(
+            get("/api/logistics/v1/orders/{orderId}", orderId)
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.permissions.canEdit").value(false));
+
+    long orderVersion =
+        jdbc.queryForObject("select version from rental_order where id=?", Long.class, orderId);
+    mvc.perform(
+            put("/api/logistics/v1/orders/{orderId}", orderId)
+                .header("Idempotency-Key", UUID.randomUUID())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(updateOrderBody(orderVersion, orderClientId(orderId)))
+                .with(manager(MANAGER_1, "manager-one")))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ORDER_NOT_EDITABLE"));
+  }
+
+  @Test
   void unsupportedClientTypeIsRejectedBeforeMutation() throws Exception {
     mvc.perform(
             post("/api/logistics/v1/clients")
@@ -390,7 +487,7 @@ class OrderApiIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
                     """
-                    {"clientType":"ENTREPRENEUR","displayName":"Петров А.В."}
+                    {"clientType":"ENTREPRENEUR","displayName":"Петров А.В.","phone":"+79990000001"}
                     """)
                 .with(manager(MANAGER_1, "manager-one")))
         .andExpect(status().isBadRequest());
@@ -417,7 +514,7 @@ class OrderApiIntegrationTest {
         .andExpect(status().isBadRequest());
     verify(dependencies, never())
         .reserveOrderUnit(
-            any(), any(), any(), any(), any(), anyString(), any(), anyString());
+            any(), any(), any(), any(), any(), anyString(), any(), any(), anyString());
   }
 
   @Test
@@ -429,7 +526,7 @@ class OrderApiIntegrationTest {
                     .contentType(MediaType.APPLICATION_JSON)
                     .content(
                         """
-                        {"clientType":"LEGAL_ENTITY","displayName":"ООО Существующий"}
+                        {"clientType":"LEGAL_ENTITY","displayName":"ООО Существующий","phone":"+79990000001"}
                         """)
                     .with(manager(MANAGER_1, "manager-one")))
             .andExpect(status().isCreated())
@@ -795,7 +892,7 @@ class OrderApiIntegrationTest {
 
     verify(dependencies, times(1))
         .reserveOrderUnit(
-            any(), any(), any(), any(), any(), anyString(), any(), anyString());
+            any(), any(), any(), any(), any(), anyString(), any(), any(), anyString());
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from rental_order_audit_event where order_id=? and event_type='UNIT_ADDED'",
@@ -827,14 +924,14 @@ class OrderApiIntegrationTest {
                       invocation.getArgument(1),
                       invocation.getArgument(2),
                       invocation.getArgument(3),
-                      invocation.getArgument(6),
-                      invocation.getArgument(7));
+                      invocation.getArgument(7),
+                      invocation.getArgument(8));
               if (failAfterEffect.getAndSet(false)) throw transientDependencyFailure();
               return reserved;
             })
         .when(dependencies)
         .reserveOrderUnit(
-            any(), any(), any(), any(), any(), anyString(), any(), anyString());
+            any(), any(), any(), any(), any(), anyString(), any(), any(), anyString());
 
     String body =
         """
@@ -866,7 +963,7 @@ class OrderApiIntegrationTest {
         .andExpect(jsonPath("$.unitCount").value(1));
     verify(dependencies, times(1))
         .reserveOrderUnit(
-            any(), any(), any(), any(), any(), anyString(), any(), anyString());
+            any(), any(), any(), any(), any(), anyString(), any(), any(), anyString());
     assertAuditCount(orderId, "UNIT_ADDED", 1);
     assertAuditCount(orderId, "RESERVATION_CREATED", 1);
   }
@@ -1008,7 +1105,7 @@ class OrderApiIntegrationTest {
                 null))
         .when(dependencies)
         .reserveOrderUnit(
-            any(), any(), any(), any(), any(), anyString(), any(), anyString());
+            any(), any(), any(), any(), any(), anyString(), any(), any(), anyString());
 
     long started = System.nanoTime();
     mvc.perform(
@@ -1108,12 +1205,13 @@ class OrderApiIntegrationTest {
                         """
                         {
                           "newClient": {
-                            "clientType": "LEGAL_ENTITY",
-                            "displayName": "%s"
-                          }
+                          "clientType": "LEGAL_ENTITY",
+                          "displayName": "%s",
+                          "phone": "%s"
+                        }
                         }
                         """
-                            .formatted(clientName))
+                            .formatted(clientName, nextTestPhone()))
                     .with(manager(subjectId, username)))
             .andExpect(status().isCreated())
             .andExpect(jsonPath("$.managerId").value(subjectId.toString()))
@@ -1132,10 +1230,11 @@ class OrderApiIntegrationTest {
                         """
                         {
                           "clientType": "LEGAL_ENTITY",
-                          "displayName": "%s"
+                          "displayName": "%s",
+                          "phone": "%s"
                         }
                         """
-                            .formatted(clientName))
+                            .formatted(clientName, nextTestPhone()))
                     .with(manager(subjectId, username)))
             .andExpect(status().isCreated())
             .andReturn();
@@ -1150,6 +1249,45 @@ class OrderApiIntegrationTest {
   private static String updateOrderBody(long expectedVersion, UUID clientId) {
     return "{\"expectedVersion\":%d,\"clientId\":\"%s\"}"
         .formatted(expectedVersion, clientId);
+  }
+
+  private static String nextTestPhone() {
+    return "+7999%07d".formatted(NEXT_TEST_PHONE.getAndIncrement());
+  }
+
+  private void linkFurnitureMovementTask(UUID shipmentId, UUID unitId) {
+    UUID taskId = UUID.randomUUID();
+    OffsetDateTime createdAt = now();
+    jdbc.update(
+        """
+        insert into equipment_movement_task(
+          id,version,warehouse_id,external_task_id,unit_number,deadline_at,state,
+          created_by_subject_id,idempotency_key,request_sha256,retry_count,created_at,updated_at)
+        values (?,0,?,?,?,?,?,?,?,?,0,?,?)
+        """,
+        taskId,
+        WAREHOUSE_1,
+        UUID.randomUUID(),
+        "БЫТ-001",
+        createdAt.plusDays(1),
+        "COMPLETED",
+        MANAGER_1,
+        UUID.randomUUID(),
+        "a".repeat(64),
+        createdAt,
+        createdAt);
+    jdbc.update(
+        """
+        insert into shipment_furniture_movement_task(
+          id,version,document_id,rental_item_id,unit_number,equipment_movement_task_id,line_count,created_at)
+        values (?,0,?,?,?,?,1,?)
+        """,
+        UUID.randomUUID(),
+        shipmentId,
+        unitId,
+        "БЫТ-001",
+        taskId,
+        createdAt);
   }
 
   private JsonNode selectWarehouse(
@@ -1267,6 +1405,7 @@ class OrderApiIntegrationTest {
                     .claim("scope", "rwms.read rwms.write")
                     .claim("global_role", role)
                     .claim("preferred_username", username)
+                    .claim("rentalAccess", true)
                     .claim("warehouse_access", warehouseAccess));
   }
 
@@ -1340,7 +1479,6 @@ class OrderApiIntegrationTest {
           requirement.equipmentId(),
           new LogisticsDependencyGateway.OrderEquipmentReservation(
               requirement.equipmentId(),
-              "CHAIR",
               "Стул",
               requirement.quantity(),
               10));

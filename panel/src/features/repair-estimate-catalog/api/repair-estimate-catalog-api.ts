@@ -363,11 +363,11 @@ export function createRepairEstimateCatalogIndex(
       }
       visited.add(current.id)
 
-      const explicitQueueCode = current.workQueueCode?.trim() || null
-      if (explicitQueueCode || current.routeQueueKind) {
+      const queueId = current.queueDefinitionId?.trim() || null
+      if (queueId && current.routeQueueKind) {
         return {
-          queueId: current.workQueueId ?? null,
-          queueCode: explicitQueueCode,
+          queueId,
+          queueName: current.queueDefinitionName?.trim() || null,
           queueKind: current.routeQueueKind,
         }
       }

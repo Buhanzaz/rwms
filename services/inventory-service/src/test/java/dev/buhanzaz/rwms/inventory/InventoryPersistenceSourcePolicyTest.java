@@ -18,6 +18,8 @@ class InventoryPersistenceSourcePolicyTest {
           "eventing/InventoryDeadLetterRelay.java",
           "eventing/InventoryDeadLetterStore.java",
           "eventing/InventoryEventStore.java",
+          "eventing/InventoryAssetInboxProcessor.java",
+          "eventing/InventoryAssetRetryStore.java",
           "eventing/InventoryMediaInboxProcessor.java",
           "eventing/InventoryMediaRetryStore.java",
           "eventing/InventoryOutboxStore.java");
@@ -27,7 +29,7 @@ class InventoryPersistenceSourcePolicyTest {
               + "(?:inventory_session|inventory_finding|inventory_media_fact_projection)\\b");
 
   @Test
-  void onlySixExactTechnicalEventingAdaptersMayUseLowLevelSql() throws IOException {
+  void onlyExactTechnicalEventingAdaptersMayUseLowLevelSql() throws IOException {
     Set<String> lowLevelSqlUsers = new TreeSet<>();
     try (Stream<Path> files = Files.walk(JAVA)) {
       for (Path file : files.filter(path -> path.toString().endsWith(".java")).toList()) {

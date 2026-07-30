@@ -34,6 +34,8 @@ export type OrderClient = {
   id: string
   type: OrderClientType
   displayName: string
+  phone: string | null
+  email: string | null
 }
 
 export type OrderClientSearchItem = OrderClient & {
@@ -44,7 +46,6 @@ export type OrderClientSearchItem = OrderClient & {
 
 export type OrderEquipmentContent = {
   equipmentId: string
-  equipmentCode: string
   equipmentName: string
   quantity: number
   locationKind: string
@@ -52,7 +53,6 @@ export type OrderEquipmentContent = {
 
 export type OrderDesiredEquipment = {
   equipmentId: string
-  equipmentCode: string
   equipmentName: string
   quantity: number
 }
@@ -140,7 +140,7 @@ export const ORDER_AUDIT_EVENT_TYPES = [
 export type OrderAuditEventType = (typeof ORDER_AUDIT_EVENT_TYPES)[number]
 
 export const ORDER_AUDIT_EVENT_LABELS: Record<OrderAuditEventType, string> = {
-  ORDER_CREATED: "Заказ создан",
+  ORDER_CREATED: "Бронирование создано",
   CLIENT_SELECTED: "Клиент выбран",
   CLIENT_CREATED: "Клиент создан",
   WAREHOUSE_SELECTED: "Склад выбран",
@@ -153,11 +153,11 @@ export const ORDER_AUDIT_EVENT_LABELS: Record<OrderAuditEventType, string> = {
   EQUIPMENT_INCREASED: "Количество наполнения увеличено",
   EQUIPMENT_DECREASED: "Количество наполнения уменьшено",
   WAREHOUSE_OPERATION_CREATED: "Складская операция создана",
-  ORDER_CHANGED: "Заказ изменён",
-  ORDER_SAVED: "Заказ сохранён",
-  ORDER_FULFILLED: "Заказ исполнен",
-  ORDER_CLOSED: "Заказ закрыт",
-  ORDER_CANCELLED: "Заказ отменён",
+  ORDER_CHANGED: "Бронирование изменено",
+  ORDER_SAVED: "Бронирование сохранено",
+  ORDER_FULFILLED: "Бронирование исполнено",
+  ORDER_CLOSED: "Бронирование закрыто",
+  ORDER_CANCELLED: "Бронирование отменено",
 }
 
 export type OrderAuditEvent = {
@@ -184,36 +184,47 @@ export function normalizeClientSearch(value: string) {
 export function orderUnitToRentalItem(unit: OrderRentalUnit): RentalItemDto {
   const contentsItems = unit.contents.map((content) => ({
     equipmentId: content.equipmentId,
-    equipmentCode: content.equipmentCode,
     equipmentName: content.equipmentName,
     name: content.equipmentName,
     quantity: content.quantity,
     locationKind: content.locationKind,
   }))
+  const characteristics = (unit.characteristics ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name !== "")
+    .map((name, index) => ({
+      // The logistics order snapshot still provides display names rather than
+      // catalog UUIDs. This adapter is read-only: the synthetic key is never
+      // rendered or sent in a command.
+      id: `${unit.id}:characteristic:${index}`,
+      name,
+    }))
 
   return {
     id: unit.id,
     version: unit.version,
     warehouseId: unit.warehouseId,
     number: unit.number,
+    // An order candidate is a read-only logistics snapshot. It has no
+    // composition UUIDs and cannot be opened in the passport editor.
+    rentalTypeId: "",
+    dimensionId: "",
+    finishingId: "",
     type: unit.rentalType ?? "—",
     dimensions: unit.dimensions,
     finishing: unit.finishing,
     category: unit.category,
-    characteristics: unit.characteristics,
+    characteristics,
     linoleum: unit.linoleum,
     status: unit.status,
     comment: null,
-    hasPhotos: false,
-    photoCount: 0,
-    mainPhotoUrl: null,
-    previewPhotoUrls: [],
-    locationNodeId: null,
     contents: formatRentalItemContents(contentsItems),
     contentsItems,
     shipmentDate: null,
     tenant: null,
     price: null,
+    passport: {},
     tags: unit.tags,
     createdAt: unit.createdAt,
     updatedAt: unit.updatedAt,

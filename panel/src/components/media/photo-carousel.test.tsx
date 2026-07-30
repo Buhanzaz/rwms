@@ -129,6 +129,35 @@ describe("PhotoCarousel", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
   })
 
+  it("shows shaded edge controls in the fullscreen viewer and supports zoom", async () => {
+    render(<PhotoCarousel photos={photos} title="Фото до" />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Открыть фото 1" }))
+    const dialog = await screen.findByRole("dialog")
+    const nextControl = dialog.querySelector<HTMLButtonElement>(
+      '[data-slot="photo-fullscreen-next"]'
+    )
+    const previousControl = dialog.querySelector<HTMLButtonElement>(
+      '[data-slot="photo-fullscreen-previous"]'
+    )
+
+    expect(nextControl?.className).toContain("bg-gradient-to-l")
+    expect(nextControl?.className).toContain(
+      "lg:group-hover/fullscreen-carousel:opacity-100"
+    )
+    expect(previousControl?.className).toContain("bg-gradient-to-r")
+
+    fireEvent.click(nextControl!)
+    await waitFor(() => expect(screen.getByText("2 / 2")).toBeTruthy())
+
+    const image = screen.getByRole("img", {
+      name: "Фото до, фото 2 из 2",
+    })
+    fireEvent.click(image.closest("button")!)
+
+    await waitFor(() => expect(image.style.transform).toContain("scale(2)"))
+  })
+
   it("requests LARGE for the initial fullscreen slide and every navigation", async () => {
     const onRequestFullscreen = vi.fn()
     const lazyPhotos = photos.map((photo, index) => ({
@@ -162,6 +191,56 @@ describe("PhotoCarousel", () => {
     await waitFor(() =>
       expect(onRequestFullscreen).toHaveBeenCalledWith(lazyPhotos[1])
     )
+  })
+
+  it("waits for the original when fullscreen quality requires it", async () => {
+    const onRequestFullscreen = vi.fn()
+    const lazyPhoto = {
+      id: "photo-1",
+      url: "/small-1.webp",
+      variants: { small: { url: "/small-1.webp" } },
+    }
+    const { rerender } = render(
+      <PhotoCarousel
+        photos={[lazyPhoto]}
+        title="Полный размер"
+        fullscreenQuality="original"
+        onRequestFullscreen={onRequestFullscreen}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Открыть фото 1" }))
+    await waitFor(() =>
+      expect(onRequestFullscreen).toHaveBeenCalledWith(lazyPhoto)
+    )
+    expect(
+      screen.getByText("Загрузка полноэкранной фотографии...")
+    ).toBeTruthy()
+
+    rerender(
+      <PhotoCarousel
+        photos={[
+          {
+            ...lazyPhoto,
+            variants: {
+              ...lazyPhoto.variants,
+              original: { url: "/original-1.jpg" },
+            },
+          },
+        ]}
+        title="Полный размер"
+        fullscreenQuality="original"
+        onRequestFullscreen={onRequestFullscreen}
+      />
+    )
+
+    expect(
+      (
+        await screen.findByRole("img", {
+          name: "Полный размер, фото 1 из 1",
+        })
+      ).getAttribute("src")
+    ).toBe("/original-1.jpg")
   })
 
   it("uses preview by default and original only when explicitly requested", async () => {

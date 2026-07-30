@@ -71,6 +71,7 @@ public class AuthSubjectBootstrap implements ApplicationRunner {
                     null,
                     null,
                     UserGlobalRole.SYSTEM_ADMIN,
+                    true,
                     true);
             eventStore.initialize(
                     AuthAggregateType.USER_AUTHORIZATION,

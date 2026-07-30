@@ -136,6 +136,15 @@ public class InventoryController {
     return inventory.saveInspection(jwt, inventoryId, findingId, request);
   }
 
+  @PutMapping("/sessions/{inventoryId}/findings/{findingId}/conflict-resolution")
+  public FindingView resolveConflict(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID inventoryId,
+      @PathVariable UUID findingId,
+      @Valid @RequestBody ResolveConflictRequest request) {
+    return inventory.resolveConflict(jwt, inventoryId, findingId, request);
+  }
+
   @PostMapping("/sessions/{inventoryId}/completion-preview")
   public ResponseEntity<CompletionPreview> preview(
       @AuthenticationPrincipal Jwt jwt,

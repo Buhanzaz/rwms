@@ -23,7 +23,9 @@ export function getUserManager() {
       post_logout_redirect_uri: getPanelPostLogoutRedirectUri(),
       response_type: "code",
       scope: AUTH_SCOPE,
-      automaticSilentRenew: false,
+      // With offline_access the OIDC client renews through the rotating refresh
+      // token, without navigating the panel away from the current page.
+      automaticSilentRenew: true,
       monitorSession: false,
       loadUserInfo: false,
       userStore: createSessionStore("rwms.oidc.user:"),
@@ -36,6 +38,10 @@ export function getUserManager() {
 
 export function isPanelUser(user: User) {
   return user.profile.principal_type === "USER"
+}
+
+export function hasRenewablePanelSession(user: User) {
+  return Boolean(user.refresh_token) && user.scopes.includes("offline_access")
 }
 
 export function getSafeReturnTo(value: unknown) {

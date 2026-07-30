@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.warehouse.api;
 
 import dev.buhanzaz.rwms.warehouse.security.WarehouseAuthorizer;
 import dev.buhanzaz.rwms.warehouse.service.WarehouseService;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -26,5 +27,12 @@ public class LogisticsWarehouseController {
       @AuthenticationPrincipal Jwt jwt, @PathVariable UUID id) {
     access.requireInternalLogisticsService(jwt);
     return service.logisticsIdentity(id);
+  }
+
+  @GetMapping
+  public List<LogisticsWarehouseIdentityResponse> list(
+      @AuthenticationPrincipal Jwt jwt) {
+    access.requireInternalLogisticsService(jwt);
+    return service.logisticsIdentities();
   }
 }

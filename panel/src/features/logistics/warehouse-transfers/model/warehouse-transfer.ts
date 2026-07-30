@@ -49,9 +49,54 @@ export type TransferDocument = {
   scheduledDate: string
   /** Compatibility field returned as null by logistics-service. */
   scheduledAt: null
+  /** Compatibility field returned as null by logistics-service. */
+  rentalOrderId: null
   lines: TransferLine[]
   createdAt: string
   updatedAt: string
+}
+
+export const TRANSFER_FURNITURE_READINESS_STATES = [
+  "NOT_REQUIRED",
+  "READY",
+  "AWAITING_TASK_COMPLETION",
+  "BLOCKED",
+] as const
+
+export type TransferFurnitureReadinessState =
+  (typeof TRANSFER_FURNITURE_READINESS_STATES)[number]
+
+export const TRANSFER_FURNITURE_TASK_STATES = [
+  "RESERVING",
+  "REGISTERING_TASK",
+  "AWAITING_WORKER",
+  "EXECUTING",
+  "CANCELLING",
+  "COMPLETED",
+  "CANCELLED",
+  "EXPIRED",
+  "CONFLICT",
+  "RECONCILIATION_REQUIRED",
+] as const
+
+export type TransferFurnitureTaskState =
+  (typeof TRANSFER_FURNITURE_TASK_STATES)[number]
+
+export type TransferFurnitureTaskStatus = {
+  rentalItemId: string
+  unitNumber: string
+  taskId: string
+  externalTaskId: string
+  taskBoardTaskId: string | null
+  taskState: TransferFurnitureTaskState
+  lineCount: number
+}
+
+export type TransferFurnitureReadiness = {
+  transferId: string
+  transferVersion: number
+  state: TransferFurnitureReadinessState
+  tasks: TransferFurnitureTaskStatus[]
 }
 
 export type CreateTransferLine = {
@@ -72,6 +117,15 @@ export type TransferFurnitureReplacement = {
 export type TransferMediaReference = {
   mediaId: string
   generation: number
+}
+
+export type TransferArrivalPreflight = {
+  transferId: string
+  lineId: string
+  activeRepairId: string | null
+  priorityRequired: boolean
+  movementToShipmentAvailable: boolean
+  missingQueueDefinitionIds: string[]
 }
 
 export const TRANSFER_STATE_LABELS: Record<TransferDocumentState, string> = {

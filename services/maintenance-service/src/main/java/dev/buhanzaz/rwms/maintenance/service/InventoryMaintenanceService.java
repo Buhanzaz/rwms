@@ -18,7 +18,9 @@ import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
 import dev.buhanzaz.rwms.maintenance.domain.RentalItemFactProjection;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventFactFactory;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceEventStore;
+import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceJsonbCanonicalizer;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceProjectionSnapshotFactory;
+import dev.buhanzaz.rwms.maintenance.integration.MaintenanceDependencyGateway;
 import dev.buhanzaz.rwms.maintenance.repository.CatalogNodeRepository;
 import dev.buhanzaz.rwms.maintenance.repository.CatalogVersionRepository;
 import dev.buhanzaz.rwms.maintenance.repository.InventoryRepairSourceRepository;
@@ -32,6 +34,7 @@ import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -47,6 +50,7 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.SerializationFeature;
+import tools.jackson.databind.node.ObjectNode;
 
 /** Exact-scope Stage 7 boundary. Inventory can freeze and publish, but cannot lease or sync tasks. */
 @Service
@@ -70,6 +74,8 @@ public class InventoryMaintenanceService {
   private final InventoryRepairReconciliationWriter reconciliations;
   private final MaintenanceReconciliationStore ownerProofs;
   private final InventoryRepairSourceOperationRegistrar sourceRegistrar;
+  private final MaintenanceDependencyGateway dependencies;
+  private final MaintenanceJsonbCanonicalizer canonicalizer;
   private final ObjectMapper mapper;
 
   public InventoryMaintenanceService(
@@ -87,6 +93,8 @@ public class InventoryMaintenanceService {
       InventoryRepairReconciliationWriter reconciliations,
       MaintenanceReconciliationStore ownerProofs,
       InventoryRepairSourceOperationRegistrar sourceRegistrar,
+      MaintenanceDependencyGateway dependencies,
+      MaintenanceJsonbCanonicalizer canonicalizer,
       ObjectMapper mapper) {
     this.catalogs = catalogs;
     this.catalogNodes = catalogNodes;
@@ -102,6 +110,8 @@ public class InventoryMaintenanceService {
     this.reconciliations = reconciliations;
     this.ownerProofs = ownerProofs;
     this.sourceRegistrar = sourceRegistrar;
+    this.dependencies = dependencies;
+    this.canonicalizer = canonicalizer;
     this.mapper = mapper;
   }
 
@@ -110,7 +120,7 @@ public class InventoryMaintenanceService {
     if (request.sourceRevision() < 1) {
       throw invalid("Inventory source revision must be at least one");
     }
-    String requestFingerprint = hash(request);
+    String requestFingerprint = frozenHash(request);
     InventoryRepairSource replay = sources
         .findByInventoryIdAndFindingId(request.inventoryId(), request.findingId())
         .orElse(null);
@@ -121,18 +131,21 @@ public class InventoryMaintenanceService {
       return new FreezeResult(frozenResponse(replay), true);
     }
 
-    CatalogVersion catalog = catalogs
-        .findByWarehouseIdAndState(request.warehouseId(), CatalogVersionState.ACTIVE)
-        .orElseThrow(() -> invalid("Warehouse has no active maintenance catalog"));
+    CatalogVersion catalog =
+        catalogs
+            .findFirstByStateOrderByActivatedAtDescCreatedAtDesc(CatalogVersionState.ACTIVE)
+            .orElseThrow(() -> invalid("Global maintenance catalog has no active version"));
     Map<UUID, CatalogNode> nodes = catalogNodes
-        .findAllByCatalogVersionIdOrderByCode(catalog.getId()).stream()
+        .findAllByCatalogVersionIdOrderByNameAscIdAsc(catalog.getId()).stream()
         .collect(Collectors.toMap(CatalogNode::getId, Function.identity()));
     FrozenInventoryPlanSnapshot snapshot = freezeSnapshot(request, catalog, nodes);
-    String fingerprint = hash(snapshot);
+    String fingerprint = frozenHash(snapshot);
 
     InventoryRepairSourceOperationId operationId =
         new InventoryRepairSourceOperationId(request.inventoryId(), request.findingId());
-    registerConcurrentSafe(() -> sourceRegistrar.register(operationId, requestFingerprint));
+    String canonicalRequestFingerprint = requestFingerprint;
+    registerConcurrentSafe(
+        () -> sourceRegistrar.register(operationId, canonicalRequestFingerprint));
     InventoryRepairSourceOperation operation = sourceOperations.findByIdForUpdate(operationId)
         .orElseThrow(() -> new IllegalStateException(
             "Inventory repair source operation registration failed"));
@@ -153,6 +166,48 @@ public class InventoryMaintenanceService {
         catalog.getId(), requestFingerprint, fingerprint, write(snapshot),
         write(sourceMedia(snapshot))));
     return new FreezeResult(frozenResponse(saved), false);
+  }
+
+  @Transactional(readOnly = true)
+  public InventoryRepairSnapshotsResponse repairSnapshots(
+      InventoryRepairSnapshotRequest request) {
+    List<UUID> assetIds = request.assetIds().stream().sorted().toList();
+    List<MaintenanceRepair> selected =
+        repairs.findAllByRentalItemIdInOrderByRentalItemIdAscIdAsc(assetIds).stream()
+            .sorted(Comparator.comparing(MaintenanceRepair::getRentalItemId)
+                .thenComparing(MaintenanceRepair::getId))
+            .toList();
+    List<UUID> repairIds = selected.stream().map(MaintenanceRepair::getId).toList();
+    Map<UUID, List<RepairStage>> stagesByRepair = new LinkedHashMap<>();
+    if (!repairIds.isEmpty()) {
+      for (RepairStage stage :
+          repairStages.findAllByRepairIdInOrderByRepairIdAscStageNoAscIdAsc(repairIds)) {
+        stagesByRepair.computeIfAbsent(stage.getRepairId(), ignored -> new ArrayList<>()).add(stage);
+      }
+      stagesByRepair.values().forEach(stages -> stages.sort(
+          Comparator.comparingInt(RepairStage::getStageNo).thenComparing(RepairStage::getId)));
+    }
+
+    Map<UUID, List<InventoryRepairFact>> repairsByAsset = new LinkedHashMap<>();
+    for (MaintenanceRepair repair : selected) {
+      List<RepairStage> stages = stagesByRepair.getOrDefault(repair.getId(), List.of());
+      InventoryRepairFact fact = new InventoryRepairFact(
+          repair.getId(),
+          repair.getRootRepairId() == null ? repair.getId() : repair.getRootRepairId(),
+          repair.getOrigin(),
+          repair.getKind(),
+          repair.getExecutionState(),
+          repair.getAcceptanceState(),
+          hash(inventoryPlanSnapshot(stages)));
+      repairsByAsset
+          .computeIfAbsent(repair.getRentalItemId(), ignored -> new ArrayList<>())
+          .add(fact);
+    }
+    List<InventoryRepairSnapshot> assets = assetIds.stream()
+        .map(assetId -> new InventoryRepairSnapshot(
+            assetId, List.copyOf(repairsByAsset.getOrDefault(assetId, List.of()))))
+        .toList();
+    return new InventoryRepairSnapshotsResponse(assets);
   }
 
   @Transactional
@@ -185,15 +240,61 @@ public class InventoryMaintenanceService {
       throw conflict("Current rental-item status is unsafe for maintenance queueing");
     }
     validateSnapshotMedia(findingId, request.warehouseId(), request.snapshot());
+    requireWarehouseRoutingReady(
+        request.warehouseId(), request.snapshot().stages());
 
-    MaintenanceRepair repair = repairs.saveAndFlush(MaintenanceRepair.primary(
+    MaintenanceRepair draft = MaintenanceRepair.primary(
         request.warehouseId(), request.rentalItemId(), request.rentalItemVersion(), null,
-        RepairOrigin.INVENTORY, request.dispatchDate(), null, inventoryActorJson()));
+        RepairOrigin.INVENTORY, request.dispatchDate(), "Инвентаризация", inventoryActorJson());
+    draft.selectPriority(request.snapshot().priority());
+    draft.selectMovementToShipment(
+        request.snapshot().moveFromRepairRequired());
+    draft.replaceCoverMediaId(request.snapshot().coverMediaId());
+    MaintenanceRepair repair = repairs.saveAndFlush(draft);
+    Map<UUID, List<EstimateLineResponse>> linesByQueue =
+        inventoryRepairLines(inventoryId, findingId, request.snapshot());
+    List<EstimateLineResponse> unrouted =
+        linesByQueue.remove(new UUID(0, 0));
+    if (unrouted != null && !unrouted.isEmpty()) {
+      throw invalid(
+          "Every inventory repair line must have an explicit global queue definition");
+    }
     List<RepairStage> stages = request.snapshot().stages().stream()
-        .map(stage -> new RepairStage(
-            stage.id(), repair.getId(), stage.order(), stage.kind(), stage.routing().queueId(),
-            stage.routing().queueCode(), stage.routing().queueKind(), null))
+        .map(
+            stage -> {
+              List<EstimateLineResponse> stageLines =
+                  stage.kind() == RepairStageKind.REPAIR_WORK
+                      ? linesByQueue.getOrDefault(stage.routing().queueId(), List.of())
+                      : List.of();
+              List<EstimateLineResponse> workLines = stageLines.stream()
+                  .filter(line -> line.lineType() == EstimateLineType.WORK)
+                  .toList();
+              List<EstimateLineResponse> materialLines = stageLines.stream()
+                  .filter(line -> line.lineType() == EstimateLineType.MATERIAL)
+                  .toList();
+              return new RepairStage(
+                  stage.id(),
+                  repair.getId(),
+                  stage.order(),
+                  stage.kind(),
+                  stage.routing().queueId(),
+                  stage.routing().queueName(),
+                  stage.routing().queueType(),
+                  write(workLines),
+                  write(materialLines),
+                  workLines.isEmpty() ? null : workLines.getFirst().id(),
+                  "",
+                  null);
+            })
         .toList();
+    Set<UUID> stageQueues = request.snapshot().stages().stream()
+        .filter(stage -> stage.kind() == RepairStageKind.REPAIR_WORK)
+        .map(stage -> stage.routing().queueId())
+        .collect(Collectors.toSet());
+    if (linesByQueue.entrySet().stream()
+        .anyMatch(entry -> !entry.getValue().isEmpty() && !stageQueues.contains(entry.getKey()))) {
+      throw invalid("Inventory line has no selected repair-work route");
+    }
     repairStages.saveAllAndFlush(stages);
     source.bindRepair(
         repair.getId(), request.rentalItemId(), request.rentalItemVersion(), sourceFingerprint);
@@ -225,6 +326,10 @@ public class InventoryMaintenanceService {
       CatalogVersion catalog,
       Map<UUID, CatalogNode> nodes) {
     validateMedia(request.findingId(), request.warehouseId(), request.mediaReferences());
+    validateCoverMediaSelection(request.mediaReferences(), request.coverMediaId());
+    if (request.priority() < 1 || request.priority() > 5) {
+      throw invalid("Inventory repair priority must be between 1 and 5");
+    }
     Set<UUID> lineIds = new HashSet<>();
     List<InventoryPlanLineSnapshot> lines = new ArrayList<>();
     for (InventoryPlanLineInput input : request.lines()) {
@@ -259,10 +364,15 @@ public class InventoryMaintenanceService {
         }
         validateMinorProduct(quantity, node.getPriceMinor());
         lines.add(new InventoryPlanLineSnapshot(
-            InventoryPlanLineKind.CATALOG, catalog.getId(), node.getId(), node.getCode(),
+            InventoryPlanLineKind.CATALOG, catalog.getId(), node.getId(), node.getName(),
             InventoryPlanLineType.valueOf(node.getNodeType()), node.getName(), null, unit,
             quantity, node.getPriceMinor(), normativeMinutes(node.getDurationMinutes()), routing(node),
-            normalize(input.groupComment()), List.copyOf(input.mediaReferences())));
+            normalize(input.groupComment()), List.copyOf(input.mediaReferences()),
+            node.isForcesCapitalRepair(),
+            node.getCharacteristicId() == null
+                ? null
+                : new CabinCharacteristicReference(
+                    node.getCharacteristicId(), node.getCharacteristicName())));
       } else {
         if (request.mode() != InventoryPlanMode.MANUAL) {
           throw invalid("MANUAL lines require MANUAL inventory plan mode");
@@ -285,7 +395,7 @@ public class InventoryMaintenanceService {
             InventoryPlanLineKind.MANUAL, null, null, null, input.type(), description,
             description.toLowerCase(Locale.forLanguageTag("ru-RU")), unit, quantity,
             input.unitPriceMinor(), minutes, null, normalize(input.groupComment()),
-            List.copyOf(input.mediaReferences())));
+            List.copyOf(input.mediaReferences()), false, null));
       }
     }
 
@@ -299,13 +409,67 @@ public class InventoryMaintenanceService {
     if (moveTo != moveFrom) {
       throw invalid("Movement plan requires both move-to and move-from stages");
     }
+    requireWarehouseRoutingReady(request.warehouseId(), stages);
     FrozenInventoryPlanSnapshot snapshot = new FrozenInventoryPlanSnapshot(
         catalog.getId(), request.mode(), List.copyOf(lines), List.copyOf(stages), moveTo, moveFrom,
-        List.copyOf(request.mediaReferences()));
+        List.copyOf(request.mediaReferences()), request.priority(), request.coverMediaId());
     if (sourceMedia(snapshot).size() > 100) {
       throw invalid("Inventory plan cannot reference more than 100 media objects");
     }
     return snapshot;
+  }
+
+  private void requireWarehouseRoutingReady(
+      UUID warehouseId, List<InventoryPlanStageSnapshot> stages) {
+    Map<UUID, MaintenanceDependencyGateway.RoutingQueueRequirement> requirements =
+        new LinkedHashMap<>();
+    for (InventoryPlanStageSnapshot stage : stages) {
+      String type = stage.routing().queueType().trim().toUpperCase(Locale.ROOT);
+      MaintenanceDependencyGateway.RoutingQueueRequirement requirement =
+          new MaintenanceDependencyGateway.RoutingQueueRequirement(
+              stage.routing().queueId(), type);
+      MaintenanceDependencyGateway.RoutingQueueRequirement previous =
+          requirements.putIfAbsent(requirement.queueDefinitionId(), requirement);
+      if (previous != null && !previous.equals(requirement)) {
+        throw invalid(
+            "One inventory queue definition has conflicting routing snapshots");
+      }
+    }
+    if (requirements.isEmpty()) {
+      throw invalid("Inventory repair plan requires at least one queue definition");
+    }
+    MaintenanceDependencyGateway.RoutingPreflight preflight =
+        dependencies.preflightMaintenanceRouting(
+            warehouseId, List.copyOf(requirements.values()));
+    if (preflight == null || !warehouseId.equals(preflight.warehouseId())) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Task-board omitted warehouse routing truth for the inventory repair");
+    }
+    if (!preflight.ready()) {
+      throw new MaintenanceValidationException(
+          "MAINTENANCE_ROUTING_INVALID",
+          "A required global queue is not connected to this warehouse");
+    }
+    Map<UUID, String> resolved =
+        preflight.queues().stream()
+            .collect(
+                Collectors.toMap(
+                    MaintenanceDependencyGateway.RoutingQueueSnapshot::
+                        queueDefinitionId,
+                    queue -> queue.type().trim().toUpperCase(Locale.ROOT)));
+    boolean complete =
+        resolved.size() == requirements.size()
+            && requirements.entrySet().stream()
+                .allMatch(
+                    entry ->
+                        entry.getValue().type().equals(
+                            resolved.get(entry.getKey())));
+    if (!complete) {
+      throw new MaintenanceDependencyException(
+          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+          "Task-board returned incomplete warehouse routing truth for the inventory repair");
+    }
   }
 
   private List<InventoryPlanStageSnapshot> autoStages(
@@ -325,9 +489,13 @@ public class InventoryMaintenanceService {
     }
     int order = 0;
     if (moveTo != null) result.add(stage(catalogVersionId, nodes, moveTo, order++));
+    Set<UUID> repairQueues = new HashSet<>();
     for (InventoryPlanLineSnapshot line : lines) {
-      if (line.type() != InventoryPlanLineType.WORK) continue;
+      if (line.catalogNodeId() == null || line.routing() == null) {
+        throw invalid("AUTO inventory line has no existing catalog routing");
+      }
       CatalogNode node = activeNode(nodes, line.catalogNodeId());
+      if (!repairQueues.add(line.routing().queueId())) continue;
       result.add(stage(
           catalogVersionId,
           node,
@@ -374,8 +542,9 @@ public class InventoryMaintenanceService {
 
   private InventoryPlanStageSnapshot stage(
       UUID catalogVersionId, CatalogNode node, RepairStageKind kind, int order) {
-    if (kind == RepairStageKind.REPAIR_WORK && !"WORK".equals(node.getNodeType())) {
-      throw invalid("REPAIR_WORK must reference an active WORK catalog node");
+    if (kind == RepairStageKind.REPAIR_WORK
+        && !("WORK".equals(node.getNodeType()) || "MATERIAL".equals(node.getNodeType()))) {
+      throw invalid("REPAIR_WORK must reference active WORK or MATERIAL catalog routing");
     }
     if (kind != RepairStageKind.REPAIR_WORK && !"LOCATION".equals(node.getNodeType())) {
       throw invalid("Movement stages must reference active LOCATION catalog nodes");
@@ -386,7 +555,7 @@ public class InventoryMaintenanceService {
         (catalogVersionId + ":" + node.getId() + ":" + kind + ":" + order)
             .getBytes(StandardCharsets.UTF_8));
     return new InventoryPlanStageSnapshot(
-        stageId, node.getId(), node.getCode(), kind, order, routing, node.getDurationMinutes());
+        stageId, node.getId(), node.getName(), kind, order, routing, node.getDurationMinutes());
   }
 
   private void requireHistoricalSource(
@@ -396,9 +565,10 @@ public class InventoryMaintenanceService {
         || !request.planFingerprint().equals(source.getPlanFingerprint())) {
       throw conflict("Inventory publication does not match its frozen source identity");
     }
-    String exactSnapshotFingerprint = hash(request.snapshot());
+    ObjectNode requestedSnapshot = mapper.valueToTree(request.snapshot());
+    String exactSnapshotFingerprint = frozenHash(requestedSnapshot);
     if (!exactSnapshotFingerprint.equals(source.getPlanFingerprint())
-        || !sameJson(write(request.snapshot()), source.getPlanSnapshot())) {
+        || !sameJson(write(requestedSnapshot), source.getPlanSnapshot())) {
       throw conflict("Inventory publication changed the historical maintenance plan snapshot");
     }
   }
@@ -406,7 +576,25 @@ public class InventoryMaintenanceService {
   private void validateSnapshotMedia(
       UUID findingId, UUID warehouseId, FrozenInventoryPlanSnapshot snapshot) {
     validateMedia(findingId, warehouseId, snapshot.mediaReferences());
+    validateCoverMediaSelection(snapshot.mediaReferences(), snapshot.coverMediaId());
     snapshot.lines().forEach(line -> validateMedia(findingId, warehouseId, line.mediaReferences()));
+  }
+
+  private static void validateCoverMediaSelection(
+      List<MediaReferenceInput> mediaReferences, UUID coverMediaId) {
+    if (mediaReferences == null || mediaReferences.isEmpty()) {
+      if (coverMediaId != null) {
+        throw invalid("Inventory cover photo must be null when aggregate media is empty");
+      }
+      return;
+    }
+    if (coverMediaId == null) {
+      throw invalid("Inventory plan with photos requires a cover photo");
+    }
+    if (mediaReferences.stream()
+        .noneMatch(reference -> coverMediaId.equals(reference.mediaId()))) {
+      throw invalid("Inventory cover photo must reference aggregate media");
+    }
   }
 
   private static List<MediaReferenceInput> sourceMedia(FrozenInventoryPlanSnapshot snapshot) {
@@ -472,7 +660,7 @@ public class InventoryMaintenanceService {
     value.put("dispatchDate", request.dispatchDate());
     value.put("planFingerprint", request.planFingerprint());
     value.put("snapshot", request.snapshot());
-    return hash(value);
+    return frozenHash(value);
   }
 
   private CatalogNode activeNode(Map<UUID, CatalogNode> nodes, UUID id) {
@@ -497,10 +685,7 @@ public class InventoryMaintenanceService {
     Set<UUID> visited = new HashSet<>();
     CatalogNode current = node;
     while (current != null && visited.add(current.getId())) {
-      if (current.isFurnitureCategory()
-          || ("CATEGORY".equals(current.getNodeType())
-              && current.getParentNodeId() == null
-              && "FURNITURE".equals(current.getCode()))) {
+      if (current.isFurnitureCategory()) {
         return true;
       }
       current = current.getParentNodeId() == null
@@ -514,7 +699,68 @@ public class InventoryMaintenanceService {
     return node.getRoutingQueueId() == null
         ? null
         : new RoutingSnapshot(
-            node.getRoutingQueueId(), node.getRoutingQueueCode(), node.getRoutingQueueKind());
+            node.getRoutingQueueId(), node.getRoutingQueueName(), node.getRoutingQueueType());
+  }
+
+  private Map<UUID, List<EstimateLineResponse>> inventoryRepairLines(
+      UUID inventoryId,
+      UUID findingId,
+      FrozenInventoryPlanSnapshot snapshot) {
+    Map<UUID, List<EstimateLineResponse>> result = new LinkedHashMap<>();
+    UUID unrouted = new UUID(0, 0);
+    for (int index = 0; index < snapshot.lines().size(); index++) {
+      InventoryPlanLineSnapshot line = snapshot.lines().get(index);
+      UUID lineId = UUID.nameUUIDFromBytes(
+          (inventoryId + ":" + findingId + ":line:" + index)
+              .getBytes(StandardCharsets.UTF_8));
+      BigDecimal quantity = new BigDecimal(line.quantity());
+      String quantityText = quantity.stripTrailingZeros().toPlainString();
+      long totalMinor =
+          quantity.multiply(BigDecimal.valueOf(line.unitPriceMinor()))
+              .setScale(0, RoundingMode.HALF_UP)
+              .longValueExact();
+      int duration = new BigDecimal(line.normativeMinutes())
+          .setScale(0, RoundingMode.CEILING)
+          .intValueExact();
+      CatalogNodeSnapshot catalogSnapshot =
+          line.aggregationKind() == InventoryPlanLineKind.CATALOG
+              ? new CatalogNodeSnapshot(
+                  line.catalogVersionId(),
+                  line.catalogNodeId(),
+                  line.type() == InventoryPlanLineType.WORK
+                      ? CatalogNodeType.WORK
+                      : CatalogNodeType.MATERIAL,
+                  line.catalogNodeName(),
+                  line.unit(),
+                  moneyFromMinor(line.unitPriceMinor()),
+                  duration,
+                  line.routing(),
+                  null,
+                  line.forcesCapitalRepair(),
+                  line.characteristic())
+              : null;
+      EstimateLineResponse response = new EstimateLineResponse(
+          lineId,
+          catalogSnapshot,
+          line.type() == InventoryPlanLineType.WORK
+              ? EstimateLineType.WORK
+              : EstimateLineType.MATERIAL,
+          line.description(),
+          line.unit(),
+          quantityText,
+          moneyFromMinor(line.unitPriceMinor()),
+          moneyFromMinor(totalMinor),
+          duration,
+          line.groupComment(),
+          line.mediaReferences());
+      UUID queueId = line.routing() == null ? unrouted : line.routing().queueId();
+      result.computeIfAbsent(queueId, ignored -> new ArrayList<>()).add(response);
+    }
+    return result;
+  }
+
+  private static String moneyFromMinor(long value) {
+    return BigDecimal.valueOf(value, 2).setScale(2).toPlainString();
   }
 
   private static String quantity(String value) {
@@ -604,6 +850,33 @@ public class InventoryMaintenanceService {
         "principalType", "SERVICE"));
   }
 
+  private List<Map<String, Object>> inventoryPlanSnapshot(List<RepairStage> stages) {
+    return stages.stream().map(stage -> {
+      Map<String, Object> routing = new LinkedHashMap<>();
+      routing.put("queueId", stage.getRoutingQueueId());
+      routing.put("queueName", stage.getRoutingQueueName());
+      routing.put("queueType", stage.getRoutingQueueType());
+
+      Map<String, Object> value = new LinkedHashMap<>();
+      value.put("kind", stage.getStageKind().name());
+      value.put("order", stage.getStageNo());
+      value.put("routing", routing);
+      value.put("workLines", semanticJson(stage.getWorkLines()));
+      value.put("materialLines", semanticJson(stage.getMaterialLines()));
+      value.put("primaryLineId", stage.getPrimaryLineId());
+      value.put("groupComment", stage.getGroupComment());
+      return value;
+    }).toList();
+  }
+
+  private Object semanticJson(String value) {
+    try {
+      return mapper.readValue(value, Object.class);
+    } catch (JacksonException exception) {
+      throw new IllegalStateException("Stored repair plan content is invalid", exception);
+    }
+  }
+
   private String hash(Object value) {
     try {
       String canonical = mapper.writer()
@@ -614,6 +887,10 @@ public class InventoryMaintenanceService {
       throw new IllegalArgumentException(
           "Inventory maintenance value cannot be canonicalized", exception);
     }
+  }
+
+  private String frozenHash(Object value) {
+    return canonicalizer.sha256(value);
   }
 
   private String write(Object value) {

@@ -5,9 +5,7 @@ import { resolveWarehouseSelection } from "@/contexts/warehouse-selection"
 
 const firstWarehouse: WarehouseInfo = {
   id: "00000000-0000-4000-8000-000000000001",
-  serviceId: "00000000-0000-4000-8000-000000000001",
   version: 0,
-  code: "WH_NORTH",
   name: "Северный",
   city: "Санкт-Петербург",
   address: null,
@@ -19,8 +17,7 @@ const firstWarehouse: WarehouseInfo = {
 const secondWarehouse: WarehouseInfo = {
   ...firstWarehouse,
   id: "00000000-0000-4000-8000-000000000002",
-  serviceId: "00000000-0000-4000-8000-000000000002",
-  code: "WH_SOUTH",
+  name: "Южный",
 }
 
 describe("resolveWarehouseSelection", () => {

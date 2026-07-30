@@ -5,7 +5,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Locale;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 
@@ -23,21 +22,28 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
 
   @Override
   public FurnitureEquipmentSnapshot ensureFurnitureEquipment(
-      String equipmentCode, String equipmentName) {
-    String canonicalCode = equipmentCode == null
-        ? ""
-        : equipmentCode.trim().toUpperCase(Locale.ROOT);
+      UUID catalogNodeId, String equipmentName) {
     String canonicalName = equipmentName == null ? "" : equipmentName.trim();
-    if (!canonicalCode.matches("^[A-Z0-9][A-Z0-9_-]{0,63}$")
+    if (catalogNodeId == null
         || canonicalName.isEmpty()
         || canonicalName.length() > 255) {
       throw new IllegalArgumentException("Furniture equipment identity is invalid");
     }
     return new FurnitureEquipmentSnapshot(
         UUID.nameUUIDFromBytes(
-            ("furniture-equipment:" + canonicalCode).getBytes(StandardCharsets.UTF_8)),
-        canonicalCode,
+            ("furniture-equipment:" + catalogNodeId).getBytes(StandardCharsets.UTF_8)),
         canonicalName);
+  }
+
+  @Override
+  public List<CabinCharacteristicSnapshot> cabinCharacteristics() {
+    return List.of();
+  }
+
+  @Override
+  public AppliedCabinCharacteristic applyCabinCharacteristic(
+      UUID key, UUID rentalItemId, UUID characteristicId) {
+    return new AppliedCabinCharacteristic(rentalItemId, characteristicId, true, 0);
   }
 
   @Override
@@ -85,7 +91,8 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
           HttpStatus.SERVICE_UNAVAILABLE,
           "Furniture losses require the production asset dependency");
     }
-    String status = transition.contains("FREE") ? "FREE"
+    String status = transition.contains("CAPITAL") ? "CAPITAL_REPAIR"
+        : transition.contains("FREE") ? "FREE"
         : transition.contains("WRITE_OFF") ? "WRITTEN_OFF"
         : transition.contains("WAITING") ? "WAITING_REPAIR_CHECK" : "REPAIR";
     return new AssetSnapshot(
@@ -105,15 +112,21 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   public TaskSnapshot registerTask(
       UUID key,
       UUID externalTaskId,
+      UUID sourceRepairId,
       UUID warehouseId,
       UUID rentalItemId,
+      String unitNumber,
+      java.time.LocalDate scheduledDate,
+      int priority,
+      int dailyCapacity,
       List<TaskStage> stages) {
     return task(externalTaskId, stages, 0, "ACTIVE");
   }
 
   @Override
   public TaskSnapshot updatePreStartTask(
-      UUID key, UUID externalTaskId, long expectedVersion, List<TaskStage> stages) {
+      UUID key, UUID externalTaskId, long expectedVersion, String unitNumber,
+      List<TaskStage> stages) {
     return task(externalTaskId, stages, Math.addExact(expectedVersion, 1), "ACTIVE");
   }
 
@@ -129,9 +142,55 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   }
 
   @Override
+  public TaskSnapshot relocateTask(
+      UUID key, UUID externalTaskId, long expectedVersion, UUID targetWarehouseId) {
+    return new TaskSnapshot(
+        externalTaskId, Math.addExact(expectedVersion, 1), "ACTIVE", List.of());
+  }
+
+  @Override
+  public CatalogRoutingPreflight preflightCatalogRouting(
+      List<CatalogRoutingQueueRequirement> queues) {
+    return new CatalogRoutingPreflight(
+        true,
+        List.of(),
+        List.of(),
+        queues.stream()
+            .map(
+                queue ->
+                    new QueueDefinitionSnapshot(
+                        queue.queueDefinitionId(),
+                        queue.queueDefinitionId().toString(),
+                        queue.type()))
+            .toList());
+  }
+
+  @Override
   public RoutingPreflight preflightMaintenanceRouting(
       UUID warehouseId, List<RoutingQueueRequirement> queues) {
-    return new RoutingPreflight(warehouseId, true, List.of(), List.of());
+    return new RoutingPreflight(
+        warehouseId,
+        true,
+        List.of(),
+        List.of(),
+        List.of(),
+        queues.stream()
+            .map(queue -> new RoutingQueueSnapshot(
+                queue.queueDefinitionId(),
+                deterministic("work-queue", queue.queueDefinitionId()),
+                queue.queueDefinitionId().toString(),
+                queue.type()))
+            .toList());
+  }
+
+  @Override
+  public RepairComplexityThresholds repairComplexityThresholds(UUID warehouseId) {
+    return new RepairComplexityThresholds(warehouseId, 0, 60, 180, 360);
+  }
+
+  @Override
+  public QueueCapabilities queueCapabilities(UUID warehouseId) {
+    return new QueueCapabilities(warehouseId, false, List.of());
   }
 
   @Override

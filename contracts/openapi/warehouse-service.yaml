@@ -23,7 +23,7 @@ paths:
           schema: { type: boolean, default: false }
       responses:
         '200':
-          description: Active warehouses ordered by nullable sortOrder and code.
+          description: Active warehouses ordered by nullable sortOrder, name and UUID.
           content:
             application/json:
               schema:
@@ -172,6 +172,25 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /api/internal/warehouse/v1/warehouses/logistics:
+    get:
+      operationId: listWarehouseIdentitiesForLogisticsService
+      description: >-
+        Requires principal_type SERVICE, sub and client_id both exactly
+        logistics-service, and exactly one scope: warehouse.logistics. This
+        private route returns active identities only, ordered by configured
+        warehouse order, name and UUID, so logistics can build bounded availability
+        facets without a cross-database query.
+      responses:
+        '200':
+          description: Active warehouse identities available to logistics.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/LogisticsWarehouseIdentity' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 components:
   securitySchemes:
     bearerJwt:
@@ -198,11 +217,10 @@ components:
     Warehouse:
       type: object
       additionalProperties: false
-      required: [id, version, code, name, city, address, timeZone, active, sortOrder]
+      required: [id, version, name, city, address, timeZone, active, sortOrder]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, minimum: 0 }
-        code: { type: string, pattern: '^[A-Z0-9][A-Z0-9_-]{0,63}$', maxLength: 64 }
         name: { type: string, minLength: 1, maxLength: 255 }
         city: { type: string, minLength: 1, maxLength: 255 }
         address: { type: [string, 'null'], maxLength: 1000 }
@@ -212,9 +230,8 @@ components:
     CreateWarehouseRequest:
       type: object
       additionalProperties: false
-      required: [code, name, city, timeZone]
+      required: [name, city, timeZone]
       properties:
-        code: { type: string, minLength: 1, maxLength: 64 }
         name: { type: string, minLength: 1, maxLength: 255 }
         city: { type: string, minLength: 1, maxLength: 255 }
         address: { type: [string, 'null'], maxLength: 1000 }
@@ -223,16 +240,15 @@ components:
     ReplaceWarehouseRequest:
       type: object
       additionalProperties: false
-      required: [code, name, city, timeZone, active, expectedVersion]
+      required: [expectedVersion, name, city, timeZone, active]
       properties:
-        code: { type: string, minLength: 1, maxLength: 64 }
+        expectedVersion: { type: integer, minimum: 0 }
         name: { type: string, minLength: 1, maxLength: 255 }
         city: { type: string, minLength: 1, maxLength: 255 }
         address: { type: [string, 'null'], maxLength: 1000 }
         timeZone: { type: string, minLength: 1, maxLength: 64 }
         active: { type: boolean }
         sortOrder: { type: [integer, 'null'], minimum: 0 }
-        expectedVersion: { type: integer, minimum: 0 }
     InternalWarehouseExistence:
       type: object
       additionalProperties: false
@@ -257,11 +273,13 @@ components:
     LogisticsWarehouseIdentity:
       type: object
       additionalProperties: false
-      required: [id, version, active, timeZone]
+      required: [id, version, active, name, city, timeZone]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, minimum: 0 }
         active: { type: boolean }
+        name: { type: string, minLength: 1, maxLength: 255 }
+        city: { type: string, minLength: 1, maxLength: 255 }
         timeZone:
           type: string
           minLength: 1

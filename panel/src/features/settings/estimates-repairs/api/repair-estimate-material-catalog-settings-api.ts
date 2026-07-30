@@ -13,9 +13,6 @@ const REPAIR_ESTIMATE_MATERIAL_CATALOG_SETTINGS: EstimateCatalogSettingsActionDt
   {
     id: "repair-estimate-catalog-materials",
     title: "Материалы",
-    legacyRoute: "/repair-estimate-catalog-materials",
-    legacyViewId: "RepairEstimateCatalogMaterial.view",
-    legacyClassName: "RepairEstimateMaterialCatalogView",
     sectionType: "MATERIAL",
     categoryScope: "NON_FURNITURE",
     order: 30,

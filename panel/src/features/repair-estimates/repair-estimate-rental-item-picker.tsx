@@ -50,7 +50,7 @@ function RentalItemMetadata({ item }: { item: EstimateRentalItemOptionDto }) {
   const values = [
     item.counterparty ? `Контрагент: ${item.counterparty}` : null,
     item.arrivalDate
-      ? `Прибытие: ${formatArrivalDate(item.arrivalDate)}`
+      ? `Осмотр: ${formatArrivalDate(item.arrivalDate)}`
       : null,
   ].filter((value): value is string => Boolean(value))
 
@@ -116,6 +116,10 @@ export function RepairEstimateRentalItemPicker({
       open={disabled ? false : open}
       onOpenChange={(nextOpen) => {
         if (!disabled) {
+          if (nextOpen) {
+            setSearch("")
+            setDebouncedSearch("")
+          }
           setOpen(nextOpen)
         }
       }}
@@ -130,6 +134,13 @@ export function RepairEstimateRentalItemPicker({
           aria-label="Бытовка"
           aria-expanded={open}
           aria-invalid={invalid || undefined}
+          onFocus={() => {
+            if (!disabled) {
+              setSearch("")
+              setDebouncedSearch("")
+              setOpen(true)
+            }
+          }}
           className={cn(
             "w-full justify-between font-normal",
             !selected && "text-muted-foreground"
@@ -139,7 +150,9 @@ export function RepairEstimateRentalItemPicker({
             <span className="block truncate">
               {selected?.number ?? (value ? "Загрузка..." : "Выберите бытовку")}
             </span>
-            {selected ? <RentalItemMetadata item={selected} /> : null}
+            {scope === "ESTIMATE" && selected ? (
+              <RentalItemMetadata item={selected} />
+            ) : null}
           </span>
           <HugeiconsIcon icon={UnfoldMoreIcon} data-icon="inline-end" />
         </Button>
@@ -209,7 +222,9 @@ export function RepairEstimateRentalItemPicker({
                   ) : null}
                   <span className="min-w-0 text-left">
                     <span className="block truncate">{item.number}</span>
-                    <RentalItemMetadata item={item} />
+                    {scope === "ESTIMATE" ? (
+                      <RentalItemMetadata item={item} />
+                    ) : null}
                   </span>
                 </Button>
               ))}

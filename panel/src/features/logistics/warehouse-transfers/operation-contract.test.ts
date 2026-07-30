@@ -11,6 +11,7 @@ describe("warehouse transfer UI contract mapping", () => {
       getTransfer: "getTransfer",
       createTransfer: "createTransfer",
       departLine: "departTransferLine",
+      arrivalPreflight: "getTransferArrivalPreflight",
       arriveLine: "arriveTransferLine",
       cancelTransfer: "cancelTransfer",
       reconcileDocument: "reconcileDocument",

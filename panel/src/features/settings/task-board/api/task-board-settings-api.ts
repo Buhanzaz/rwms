@@ -3,6 +3,7 @@ import { HttpTaskBoardSettingsClient } from "@/features/settings/task-board/api/
 export const taskBoardSettingsClient = new HttpTaskBoardSettingsClient()
 
 export const taskBoardSettingsKeys = {
+  queueDefinitions: ["task-board-settings", "queue-definitions"] as const,
   classes: ["task-board-settings", "classes"] as const,
   queues: (warehouseId: string) =>
     ["task-board-settings", warehouseId, "queues"] as const,

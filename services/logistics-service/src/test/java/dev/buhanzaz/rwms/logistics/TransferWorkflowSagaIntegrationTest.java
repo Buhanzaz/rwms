@@ -5,10 +5,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ArriveTransferLineRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.CabinFurnitureRequirement;
@@ -36,10 +38,13 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -57,6 +62,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
     })
 @ActiveProfiles("test")
 @Testcontainers
+@AutoConfigureMockMvc
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class TransferWorkflowSagaIntegrationTest {
   private static final UUID ORIGIN = UUID.fromString("00000000-0000-0000-0000-000000000901");
@@ -65,6 +71,8 @@ class TransferWorkflowSagaIntegrationTest {
   private static final UUID CORRELATION = UUID.fromString("00000000-0000-0000-0000-000000000904");
   private static final UUID ASSET = UUID.fromString("00000000-0000-0000-0000-000000000905");
   private static final UUID EQUIPMENT = UUID.fromString("00000000-0000-0000-0000-000000000906");
+  private static final UUID ACTIVE_REPAIR =
+      UUID.fromString("00000000-0000-0000-0000-000000000907");
 
   @Container
   @ServiceConnection
@@ -73,6 +81,7 @@ class TransferWorkflowSagaIntegrationTest {
   @Autowired LogisticsDocumentService documents;
   @Autowired TransferProcessor processor;
   @Autowired EquipmentMovementTaskService equipmentTasks;
+  @Autowired MockMvc mvc;
   @Autowired JdbcTemplate jdbc;
 
   @MockitoBean LogisticsDependencyGateway dependencies;
@@ -152,7 +161,8 @@ class TransferWorkflowSagaIntegrationTest {
             eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_TRANSFER),
             eq(fixture.documentId()),
             eq(fixture.lineId()),
-            eq(DESTINATION)))
+            eq(DESTINATION),
+            eq("FREE")))
         .thenReturn(snapshot(9, DESTINATION, "FREE", 2));
     when(dependencies.releaseOperationLease(
             any(),
@@ -166,7 +176,8 @@ class TransferWorkflowSagaIntegrationTest {
 
     UUID arrivalKey = UUID.randomUUID();
     ArriveTransferLineRequest arrivalRequest =
-        new ArriveTransferLineRequest(List.of(new MediaReferenceInput(mediaId, 3)));
+        new ArriveTransferLineRequest(
+            List.of(new MediaReferenceInput(mediaId, 3)), null, false);
     LogisticsDocumentService.CreateResult arrival =
         documents.arriveTransferLine(
             SUBJECT,
@@ -218,7 +229,238 @@ class TransferWorkflowSagaIntegrationTest {
             eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_TRANSFER),
             eq(fixture.documentId()),
             eq(fixture.lineId()),
-            eq(null));
+            eq(null),
+            eq("FREE"));
+  }
+
+  @Test
+  void carriesTheSameActiveRepairAndCompletesItBeforeMarkingTheLineArrived() {
+    TransferFixture fixture = createTransfer();
+    UUID leaseId = UUID.randomUUID();
+    UUID mediaId = UUID.randomUUID();
+    stubActiveRepairDeparture(fixture, leaseId);
+
+    documents.departTransferLine(
+        SUBJECT,
+        UUID.randomUUID(),
+        CORRELATION,
+        fixture.documentId(),
+        fixture.lineId(),
+        fixture.documentVersion(),
+        fixture.lineVersion());
+    processor.processUntilIdle(fixture.documentId());
+    var inTransit = documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER);
+    assertThat(inTransit.state()).isEqualTo(LogisticsDocumentState.IN_TRANSIT);
+    assertThat(
+            jdbc.queryForObject(
+                "select active_repair_id from logistics_document_line where id=?",
+                UUID.class,
+                fixture.lineId()))
+        .isEqualTo(ACTIVE_REPAIR);
+
+    when(dependencies.preflightTransferArrival(
+            fixture.documentId(), fixture.lineId(), ASSET, ORIGIN, DESTINATION))
+        .thenReturn(
+            new LogisticsDependencyGateway.TransferRepairArrivalPreflight(
+                ACTIVE_REPAIR, true, true, List.of()));
+    when(dependencies.readRentalItemSnapshot(ASSET))
+        .thenReturn(snapshot(8, ORIGIN, "IN_TRANSFER", 2));
+    when(dependencies.validateMediaReferences(any(), any(), any(), any(), any()))
+        .thenReturn(
+            new LogisticsDependencyGateway.MediaValidation(
+                LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_TRANSFER,
+                fixture.documentId(),
+                fixture.lineId(),
+                DESTINATION,
+                List.of(new LogisticsDependencyGateway.MediaReference(mediaId, 4))));
+    when(dependencies.applyFencedEffect(
+            any(),
+            eq(LogisticsDependencyGateway.AssetEffect.TRANSFER_ARRIVE),
+            eq(ASSET),
+            eq(8L),
+            eq(leaseId),
+            eq(17L),
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_TRANSFER),
+            eq(fixture.documentId()),
+            eq(fixture.lineId()),
+            eq(DESTINATION),
+            eq("REPAIR")))
+        .thenReturn(snapshot(9, DESTINATION, "REPAIR", 2));
+    when(dependencies.releaseOperationLease(
+            any(),
+            eq(leaseId),
+            eq(4L),
+            eq(17L),
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_TRANSFER),
+            eq(fixture.documentId()),
+            eq(fixture.lineId())))
+        .thenReturn(releasedLease(leaseId));
+    when(dependencies.completeTransferArrival(
+            any(),
+            eq(fixture.documentId()),
+            eq(fixture.lineId()),
+            eq(ASSET),
+            eq(ORIGIN),
+            eq(DESTINATION),
+            eq(2),
+            eq(true)))
+        .thenAnswer(
+            ignored -> {
+              var beforeCompletion =
+                  documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER);
+              assertThat(beforeCompletion.state()).isEqualTo(LogisticsDocumentState.ARRIVING);
+              assertThat(beforeCompletion.lines().getFirst().state())
+                  .isEqualTo(LogisticsLineState.ARRIVING);
+              verify(dependencies)
+                  .releaseOperationLease(
+                      any(),
+                      eq(leaseId),
+                      eq(4L),
+                      eq(17L),
+                      eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_TRANSFER),
+                      eq(fixture.documentId()),
+                      eq(fixture.lineId()));
+              return new LogisticsDependencyGateway.TransferRepairArrivalCompletion(
+                  ACTIVE_REPAIR, 12L, DESTINATION);
+            });
+
+    documents.arriveTransferLine(
+        SUBJECT,
+        UUID.randomUUID(),
+        CORRELATION,
+        fixture.documentId(),
+        fixture.lineId(),
+        inTransit.version(),
+        inTransit.lines().getFirst().version(),
+        new ArriveTransferLineRequest(
+            List.of(new MediaReferenceInput(mediaId, 4)), 2, true));
+    processor.processUntilIdle(fixture.documentId());
+
+    var completed = documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER);
+    assertThat(completed.state()).isEqualTo(LogisticsDocumentState.COMPLETED);
+    assertThat(completed.lines().getFirst().state()).isEqualTo(LogisticsLineState.ARRIVED);
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select transfer_asset_status,
+                       active_repair_id,
+                       active_repair_version,
+                       repair_continuation_priority,
+                       movement_to_shipment,
+                       maintenance_arrival_completed_at
+                  from logistics_document_line
+                 where id=?
+                """,
+                fixture.lineId()))
+        .containsEntry("transfer_asset_status", "REPAIR")
+        .containsEntry("active_repair_id", ACTIVE_REPAIR)
+        .containsEntry("active_repair_version", 12L)
+        .containsEntry("repair_continuation_priority", 2)
+        .containsEntry("movement_to_shipment", true)
+        .containsKey("maintenance_arrival_completed_at");
+  }
+
+  @Test
+  void blocksArrivalBeforeMutationWhenTheTargetRepairQueueIsMissing() {
+    TransferFixture fixture = createTransfer();
+    UUID leaseId = UUID.randomUUID();
+    stubActiveRepairDeparture(fixture, leaseId);
+    documents.departTransferLine(
+        SUBJECT,
+        UUID.randomUUID(),
+        CORRELATION,
+        fixture.documentId(),
+        fixture.lineId(),
+        fixture.documentVersion(),
+        fixture.lineVersion());
+    processor.processUntilIdle(fixture.documentId());
+    var inTransit = documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER);
+    UUID missingQueue = UUID.randomUUID();
+    when(dependencies.preflightTransferArrival(
+            fixture.documentId(), fixture.lineId(), ASSET, ORIGIN, DESTINATION))
+        .thenReturn(
+            new LogisticsDependencyGateway.TransferRepairArrivalPreflight(
+                ACTIVE_REPAIR, true, false, List.of(missingQueue)));
+
+    assertThatThrownBy(
+            () ->
+                documents.arriveTransferLine(
+                    SUBJECT,
+                    UUID.randomUUID(),
+                    CORRELATION,
+                    fixture.documentId(),
+                    fixture.lineId(),
+                    inTransit.version(),
+                    inTransit.lines().getFirst().version(),
+                    new ArriveTransferLineRequest(
+                        List.of(new MediaReferenceInput(UUID.randomUUID(), 1)),
+                        3,
+                        false)))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessageContaining("missing queues");
+
+    var unchanged = documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER);
+    assertThat(unchanged.state()).isEqualTo(LogisticsDocumentState.IN_TRANSIT);
+    assertThat(unchanged.lines().getFirst().state()).isEqualTo(LogisticsLineState.DEPARTED);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_media_reference where line_id=?",
+                Long.class,
+                fixture.lineId()))
+        .isZero();
+  }
+
+  @Test
+  void exposesArrivalPreflightOnlyToAnEmployeeManagingBothWarehouses()
+      throws Exception {
+    TransferFixture fixture = createTransfer();
+    UUID leaseId = UUID.randomUUID();
+    stubActiveRepairDeparture(fixture, leaseId);
+    documents.departTransferLine(
+        SUBJECT,
+        UUID.randomUUID(),
+        CORRELATION,
+        fixture.documentId(),
+        fixture.lineId(),
+        fixture.documentVersion(),
+        fixture.lineVersion());
+    processor.processUntilIdle(fixture.documentId());
+    var inTransit = documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER);
+    when(dependencies.preflightTransferArrival(
+            fixture.documentId(), fixture.lineId(), ASSET, ORIGIN, DESTINATION))
+        .thenReturn(
+            new LogisticsDependencyGateway.TransferRepairArrivalPreflight(
+                ACTIVE_REPAIR, true, false, List.of()));
+
+    mvc.perform(
+            get(
+                    "/api/logistics/v1/transfers/{documentId}/lines/{lineId}/arrival-preflight",
+                    fixture.documentId(),
+                    fixture.lineId())
+                .queryParam("expectedVersion", Long.toString(inTransit.version()))
+                .queryParam(
+                    "expectedLineVersion",
+                    Long.toString(inTransit.lines().getFirst().version()))
+                .with(manageActor(ORIGIN, DESTINATION)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.transferId").value(fixture.documentId().toString()))
+        .andExpect(jsonPath("$.lineId").value(fixture.lineId().toString()))
+        .andExpect(jsonPath("$.activeRepairId").value(ACTIVE_REPAIR.toString()))
+        .andExpect(jsonPath("$.priorityRequired").value(true))
+        .andExpect(jsonPath("$.movementToShipmentAvailable").value(false))
+        .andExpect(jsonPath("$.missingQueueDefinitionIds").isEmpty());
+
+    mvc.perform(
+            get(
+                    "/api/logistics/v1/transfers/{documentId}/lines/{lineId}/arrival-preflight",
+                    fixture.documentId(),
+                    fixture.lineId())
+                .queryParam("expectedVersion", Long.toString(inTransit.version()))
+                .queryParam(
+                    "expectedLineVersion",
+                    Long.toString(inTransit.lines().getFirst().version()))
+                .with(manageActor(ORIGIN)))
+        .andExpect(status().isForbidden());
   }
 
   @Test
@@ -269,7 +511,8 @@ class TransferWorkflowSagaIntegrationTest {
         fixture.lineId(),
         inTransit.version(),
         inTransit.lines().getFirst().version(),
-        new ArriveTransferLineRequest(List.of(new MediaReferenceInput(mediaId, 1))));
+        new ArriveTransferLineRequest(
+            List.of(new MediaReferenceInput(mediaId, 1)), null, false));
     processor.processUntilIdle(fixture.documentId());
 
     assertThat(documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER).state())
@@ -285,63 +528,32 @@ class TransferWorkflowSagaIntegrationTest {
             any(),
             any(),
             any(),
+            any(),
             any());
   }
 
   @Test
-  void cancelsRegisteredPreparationTasksBeforeClosingTheTransfer() {
+  void cancelsDraftTransferWithoutCreatingPreparationTasks() {
     TransferFixture fixture = createTransfer();
-    UUID taskId = UUID.randomUUID();
-    when(dependencies.registerPreparationTask(any(), any(), any(), any()))
-        .thenAnswer(
-            invocation ->
-                new LogisticsDependencyGateway.PreparationTask(
-                    taskId,
-                    1,
-                    ORIGIN,
-                    invocation.getArgument(1),
-                    "ACTIVE",
-                    null));
-    jdbc.update(
-        "update logistics_external_attempt set next_attempt_at=clock_timestamp() "
-            + "where document_id=? and operation_type='TRANSFER_TASK_REGISTER'",
-        fixture.documentId());
-    assertThat(processor.processUntilIdle(fixture.documentId())).isOne();
     assertThat(
             jdbc.queryForObject(
-                "select task_state from logistics_task_reference where line_id=?",
-                String.class,
-                fixture.lineId()))
-        .isEqualTo("REGISTERED");
-    verify(dependencies)
-        .registerPreparationTask(eq(ORIGIN), any(), eq(Integer.valueOf(0)), isNull());
+                "select count(*) from logistics_task_reference where document_id=?",
+                Long.class,
+                fixture.documentId()))
+        .isZero();
 
-    when(dependencies.cancelPreparationTask(any(), eq(1L)))
-        .thenAnswer(
-            invocation ->
-                new LogisticsDependencyGateway.PreparationTask(
-                    taskId,
-                    2,
-                    ORIGIN,
-                    invocation.getArgument(0),
-                    "CANCELLED",
-                    null));
-
-    var cancelling =
+    var cancelled =
         documents.cancelTransfer(
             SUBJECT,
             UUID.randomUUID(),
             CORRELATION,
             fixture.documentId(),
             documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER).version());
-    assertThat(cancelling.response().state()).isEqualTo(LogisticsDocumentState.CANCELLING);
-
-    processor.processUntilIdle(fixture.documentId());
-
-    var cancelled = documents.get(fixture.documentId(), LogisticsDocumentType.TRANSFER);
-    assertThat(cancelled.state()).isEqualTo(LogisticsDocumentState.CANCELLED);
-    assertThat(cancelled.lines()).singleElement().extracting(line -> line.state()).isEqualTo(LogisticsLineState.CANCELLED);
-    verify(dependencies).cancelPreparationTask(any(), eq(1L));
+    assertThat(cancelled.response().state()).isEqualTo(LogisticsDocumentState.CANCELLED);
+    assertThat(cancelled.response().lines())
+        .singleElement()
+        .extracting(line -> line.state())
+        .isEqualTo(LogisticsLineState.CANCELLED);
   }
 
   @Test
@@ -357,7 +569,6 @@ class TransferWorkflowSagaIntegrationTest {
                 List.of(
                     new LogisticsDependencyGateway.CabinFurnitureMovementPlanLine(
                         EQUIPMENT,
-                        "FURN-001",
                         "Стол",
                         sourceBalanceId,
                         ORIGIN,
@@ -417,6 +628,25 @@ class TransferWorkflowSagaIntegrationTest {
         .isEqualTo(EquipmentMovementTaskState.CANCELLING);
   }
 
+  @Test
+  void exposesTransferFurnitureReadinessOnlyWithReadAccessToBothWarehouses() throws Exception {
+    TransferFixture fixture = createTransfer();
+
+    mvc.perform(
+            get("/api/logistics/v1/transfers/{documentId}/furniture-readiness", fixture.documentId())
+                .with(readActor(ORIGIN, DESTINATION)))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.transferId").value(fixture.documentId().toString()))
+        .andExpect(jsonPath("$.transferVersion").value(fixture.documentVersion()))
+        .andExpect(jsonPath("$.state").value("NOT_REQUIRED"))
+        .andExpect(jsonPath("$.tasks").isEmpty());
+
+    mvc.perform(
+            get("/api/logistics/v1/transfers/{documentId}/furniture-readiness", fixture.documentId())
+                .with(readActor(ORIGIN)))
+        .andExpect(status().isForbidden());
+  }
+
   private TransferFixture createTransfer() {
     LocalDate scheduledDate = OffsetDateTime.now(ZoneOffset.UTC).toLocalDate();
     LogisticsDocumentService.CreateResult created =
@@ -437,7 +667,8 @@ class TransferWorkflowSagaIntegrationTest {
         created.response().id(),
         created.response().version(),
         created.response().lines().getFirst().id(),
-        created.response().lines().getFirst().version());
+        created.response().lines().getFirst().version(),
+        scheduledDate);
   }
 
   private void stubDeparture(TransferFixture fixture, UUID leaseId) {
@@ -446,6 +677,25 @@ class TransferWorkflowSagaIntegrationTest {
     when(dependencies.readWarehouseIdentity(DESTINATION))
         .thenReturn(
             new LogisticsDependencyGateway.WarehouseIdentity(DESTINATION, 4, true, "Asia/Vladivostok"));
+    when(dependencies.prepareTransferDeparture(
+            any(),
+            eq(fixture.documentId()),
+            eq(fixture.lineId()),
+            eq(ASSET),
+            eq(ORIGIN),
+            eq(DESTINATION)))
+        .thenReturn(
+            new LogisticsDependencyGateway.TransferRepairDeparture(
+                null, null, "FREE"));
+    when(dependencies.preflightTransferArrival(
+            eq(fixture.documentId()),
+            eq(fixture.lineId()),
+            eq(ASSET),
+            eq(ORIGIN),
+            eq(DESTINATION)))
+        .thenReturn(
+            new LogisticsDependencyGateway.TransferRepairArrivalPreflight(
+                null, false, false, List.of()));
     when(dependencies.readRentalItemSnapshot(ASSET)).thenReturn(snapshot(7, ORIGIN, "FREE", 2));
     when(dependencies.acquireOperationLease(
             any(),
@@ -465,7 +715,52 @@ class TransferWorkflowSagaIntegrationTest {
             any(),
             any(),
             any(),
+            any(),
             any()))
+        .thenReturn(snapshot(8, ORIGIN, "IN_TRANSFER", 2));
+  }
+
+  private void stubActiveRepairDeparture(TransferFixture fixture, UUID leaseId) {
+    when(dependencies.readWarehouseIdentity(ORIGIN))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseIdentity(
+                ORIGIN, 2, true, "Europe/Moscow"));
+    when(dependencies.readWarehouseIdentity(DESTINATION))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseIdentity(
+                DESTINATION, 4, true, "Asia/Vladivostok"));
+    when(dependencies.prepareTransferDeparture(
+            any(),
+            eq(fixture.documentId()),
+            eq(fixture.lineId()),
+            eq(ASSET),
+            eq(ORIGIN),
+            eq(DESTINATION)))
+        .thenReturn(
+            new LogisticsDependencyGateway.TransferRepairDeparture(
+                ACTIVE_REPAIR, 10L, "REPAIR"));
+    when(dependencies.readRentalItemSnapshot(ASSET))
+        .thenReturn(snapshot(7, ORIGIN, "CAPITAL_REPAIR", 2));
+    when(dependencies.acquireOperationLease(
+            any(),
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_TRANSFER),
+            eq(ASSET),
+            eq(7L),
+            eq(fixture.documentId()),
+            eq(fixture.lineId())))
+        .thenReturn(activeLease(leaseId));
+    when(dependencies.applyFencedEffect(
+            any(),
+            eq(LogisticsDependencyGateway.AssetEffect.TRANSFER_DEPART),
+            eq(ASSET),
+            eq(7L),
+            eq(leaseId),
+            eq(17L),
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_TRANSFER),
+            eq(fixture.documentId()),
+            eq(fixture.lineId()),
+            eq(null),
+            eq("REPAIR")))
         .thenReturn(snapshot(8, ORIGIN, "IN_TRANSFER", 2));
   }
 
@@ -499,9 +794,49 @@ class TransferWorkflowSagaIntegrationTest {
         OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(5));
   }
 
+  private static JwtRequestPostProcessor readActor(UUID... warehouseIds) {
+    return org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt()
+        .jwt(
+            value ->
+                value
+                    .subject(SUBJECT.toString())
+                    .claim("principal_type", "USER")
+                    .claim("scope", "rwms.read")
+                    .claim(
+                        "warehouse_access",
+                        java.util.Arrays.stream(warehouseIds)
+                            .map(
+                                warehouseId ->
+                                    java.util.Map.of(
+                                        "warehouseId", warehouseId.toString(), "level", "VIEW"))
+                            .toList()));
+  }
+
+  private static JwtRequestPostProcessor manageActor(UUID... warehouseIds) {
+    return org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt()
+        .jwt(
+            value ->
+                value
+                    .subject(SUBJECT.toString())
+                    .claim("principal_type", "USER")
+                    .claim("scope", "rwms.read rwms.write")
+                    .claim(
+                        "warehouse_access",
+                        java.util.Arrays.stream(warehouseIds)
+                            .map(
+                                warehouseId ->
+                                    java.util.Map.of(
+                                        "warehouseId",
+                                        warehouseId.toString(),
+                                        "level",
+                                        "MANAGE"))
+                            .toList()));
+  }
+
   private record TransferFixture(
       UUID documentId,
       long documentVersion,
       UUID lineId,
-      long lineVersion) {}
+      long lineVersion,
+      LocalDate scheduledDate) {}
 }

@@ -10,6 +10,8 @@ public interface WorkerGroupMemberRepository extends JpaRepository<WorkerGroupMe
 
   List<WorkerGroupMember> findAllByWorkerGroupIdAndActiveTrue(UUID groupId);
 
+  List<WorkerGroupMember> findAllByWorkerId(UUID workerId);
+
   boolean existsByWorkerGroupId(UUID groupId);
 
   boolean existsByWorkerId(UUID workerId);

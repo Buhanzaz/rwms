@@ -142,7 +142,7 @@ export async function moveEquipmentUsageToStock(params: {
 }): Promise<EquipmentMovementDto> {
   const idempotencyKey = uuid(
     params.idempotencyKey,
-    "Для перемещения нужен UUID Idempotency-Key."
+    "Не удалось подготовить безопасный ключ команды перемещения."
   )
   const input = params.input
   const request = {

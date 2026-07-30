@@ -1,0 +1,24 @@
+package dev.buhanzaz.rwms.logistics.inquiry.repository;
+
+import dev.buhanzaz.rwms.logistics.inquiry.domain.ClientPresentation;
+import jakarta.persistence.LockModeType;
+import java.util.Optional;
+import java.util.UUID;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+public interface ClientPresentationRepository
+    extends JpaRepository<ClientPresentation, UUID> {
+  Optional<ClientPresentation> findByInquiryId(UUID inquiryId);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("select presentation from ClientPresentation presentation where presentation.id = :id")
+  Optional<ClientPresentation> findForUpdate(@Param("id") UUID id);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      "select presentation from ClientPresentation presentation where presentation.inquiryId = :inquiryId")
+  Optional<ClientPresentation> findByInquiryIdForUpdate(@Param("inquiryId") UUID inquiryId);
+}

@@ -40,11 +40,21 @@ public class EstimatePlanStage {
   @Column(name = "routing_queue_id", nullable = false)
   private UUID routingQueueId;
 
-  @Column(name = "routing_queue_code", nullable = false, length = 64)
-  private String routingQueueCode;
+  @Column(name = "routing_queue_name", nullable = false, length = 255)
+  private String routingQueueName;
 
-  @Column(name = "routing_queue_kind", nullable = false, length = 64)
-  private String routingQueueKind;
+  @Column(name = "routing_queue_type", nullable = false, length = 64)
+  private String routingQueueType;
+
+  @Column(name = "included_line_ids", nullable = false, columnDefinition = "jsonb")
+  @JdbcTypeCode(SqlTypes.JSON)
+  private String includedLineIds;
+
+  @Column(name = "primary_line_id")
+  private UUID primaryLineId;
+
+  @Column(name = "group_comment", nullable = false, length = 2000)
+  private String groupComment;
 
   @Column(name = "task_deadline")
   private OffsetDateTime taskDeadline;
@@ -58,12 +68,41 @@ public class EstimatePlanStage {
       int stageNo,
       RepairStageKind stageKind,
       UUID routingQueueId,
-      String routingQueueCode,
-      String routingQueueKind,
+      String routingQueueName,
+      String routingQueueType,
+      OffsetDateTime taskDeadline) {
+    this(
+        id,
+        estimateId,
+        estimateRevision,
+        stageNo,
+        stageKind,
+        routingQueueId,
+        routingQueueName,
+        routingQueueType,
+        "[]",
+        null,
+        "",
+        taskDeadline);
+  }
+
+  public EstimatePlanStage(
+      UUID id,
+      UUID estimateId,
+      int estimateRevision,
+      int stageNo,
+      RepairStageKind stageKind,
+      UUID routingQueueId,
+      String routingQueueName,
+      String routingQueueType,
+      String includedLineIds,
+      UUID primaryLineId,
+      String groupComment,
       OffsetDateTime taskDeadline) {
     if (id == null || estimateId == null || estimateRevision < 1 || stageNo < 0 || stageKind == null
-        || routingQueueId == null || routingQueueCode == null || routingQueueCode.isBlank()
-        || routingQueueKind == null || routingQueueKind.isBlank()) {
+        || routingQueueId == null || routingQueueName == null || routingQueueName.isBlank()
+        || routingQueueType == null || routingQueueType.isBlank()
+        || includedLineIds == null || groupComment == null || groupComment.length() > 2000) {
       throw new IllegalArgumentException("Estimate plan stage identity is invalid");
     }
     this.id = id;
@@ -72,8 +111,11 @@ public class EstimatePlanStage {
     this.stageNo = stageNo;
     this.stageKind = stageKind;
     this.routingQueueId = routingQueueId;
-    this.routingQueueCode = routingQueueCode.trim();
-    this.routingQueueKind = routingQueueKind.trim();
+    this.routingQueueName = routingQueueName.trim();
+    this.routingQueueType = routingQueueType.trim();
+    this.includedLineIds = includedLineIds;
+    this.primaryLineId = primaryLineId;
+    this.groupComment = groupComment;
     this.taskDeadline = MaintenanceTime.postgresPrecision(taskDeadline);
   }
 
@@ -83,7 +125,10 @@ public class EstimatePlanStage {
   public int getStageNo() { return stageNo; }
   public RepairStageKind getStageKind() { return stageKind; }
   public UUID getRoutingQueueId() { return routingQueueId; }
-  public String getRoutingQueueCode() { return routingQueueCode; }
-  public String getRoutingQueueKind() { return routingQueueKind; }
+  public String getRoutingQueueName() { return routingQueueName; }
+  public String getRoutingQueueType() { return routingQueueType; }
+  public String getIncludedLineIds() { return includedLineIds; }
+  public UUID getPrimaryLineId() { return primaryLineId; }
+  public String getGroupComment() { return groupComment; }
   public OffsetDateTime getTaskDeadline() { return taskDeadline; }
 }

@@ -113,7 +113,7 @@ public class RentalOrder {
   }
 
   public boolean changeClient(OrderClient nextClient) {
-    requireDraft();
+    requireEditable();
     OrderClient requiredClient = Objects.requireNonNull(nextClient, "nextClient");
     if (Objects.equals(client.getId(), requiredClient.getId())) return false;
     client = requiredClient;
@@ -122,7 +122,7 @@ public class RentalOrder {
   }
 
   public void touch() {
-    requireDraft();
+    requireEditable();
     updatedAt = nextUpdatedAt();
   }
 
@@ -163,6 +163,17 @@ public class RentalOrder {
 
   public void requireDraft() {
     if (status != RentalOrderStatus.DRAFT) {
+      throw new IllegalStateException("Order is not editable");
+    }
+  }
+
+  /**
+   * A saved booking remains editable only while its linked rental shipment is
+   * still an untouched draft. The shipment-specific guard lives in the service
+   * layer, where the document and furniture-task locks are available.
+   */
+  public void requireEditable() {
+    if (status != RentalOrderStatus.DRAFT && status != RentalOrderStatus.SAVED) {
       throw new IllegalStateException("Order is not editable");
     }
   }

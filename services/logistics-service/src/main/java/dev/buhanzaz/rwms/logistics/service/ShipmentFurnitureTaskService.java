@@ -49,6 +49,7 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class ShipmentFurnitureTaskService {
+  private static final int DEFAULT_PLANNED_DURATION_MINUTES = 60;
   private final LogisticsDocumentRepository documents;
   private final LogisticsDocumentLineRepository documentLines;
   private final RentalOrderRepository orders;
@@ -75,13 +76,21 @@ public class ShipmentFurnitureTaskService {
 
     RentalOrder order = requiredSavedOrder(shipment);
     List<RentalOrderEquipmentRequirement> desiredRows =
-        requirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentCodeAsc(order.getId());
+        requirements
+            .findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(order.getId());
     Map<UUID, Long> orderRequirements = aggregateRequirements(desiredRows);
-    Map<UUID, List<LogisticsDependencyGateway.OrderEquipmentRequirement>> byUnit =
-        requirementsByUnit(desiredRows);
     List<LogisticsDocumentLine> lines = linesRequired(shipment.getId());
     List<ShipmentFurnitureMovementTask> links =
         taskLinks.findAllByDocument_IdOrderByUnitNumberAsc(shipment.getId());
+    if (orderRequirements.isEmpty() && links.isEmpty()) {
+      return new ShipmentFurnitureReadinessView(
+          shipment.getId(),
+          shipment.getVersion(),
+          ShipmentFurnitureReadinessState.NOT_REQUIRED,
+          List.of());
+    }
+    Map<UUID, List<LogisticsDependencyGateway.OrderEquipmentRequirement>> byUnit =
+        requirementsByUnit(desiredRows);
     Map<UUID, ShipmentFurnitureMovementTask> existingByUnit = existingByUnit(links);
     Map<UUID, EquipmentMovementTask> tasksByUnit = new LinkedHashMap<>();
     List<ShipmentFurnitureTaskStatusView> taskViews = new ArrayList<>();
@@ -175,7 +184,8 @@ public class ShipmentFurnitureTaskService {
     RentalOrder order = requiredSavedOrder(shipment);
 
     List<RentalOrderEquipmentRequirement> desiredRows =
-        requirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentCodeAsc(order.getId());
+        requirements
+            .findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(order.getId());
     Map<UUID, Long> orderRequirements = aggregateRequirements(desiredRows);
     Map<UUID, List<LogisticsDependencyGateway.OrderEquipmentRequirement>> byUnit =
         requirementsByUnit(desiredRows);
@@ -212,7 +222,7 @@ public class ShipmentFurnitureTaskService {
               new CreateEquipmentMovementTaskRequest(
                   shipment.getWarehouseId(),
                   plan.unitNumber(),
-                  null,
+                  DEFAULT_PLANNED_DURATION_MINUTES,
                   OffsetDateTime.now(ZoneOffset.UTC).plusDays(30),
                   plan.lines().stream().map(ShipmentFurnitureTaskService::toTaskLine).toList()));
       ShipmentFurnitureMovementTask link =
@@ -357,7 +367,6 @@ public class ShipmentFurnitureTaskService {
     for (LogisticsDependencyGateway.OrderFurnitureMovementPlanLine line : plan.lines()) {
       if (line == null
           || line.equipmentId() == null
-          || line.equipmentCode() == null
           || line.equipmentName() == null
           || line.sourceWarehouseId() == null
           || !warehouseId.equals(line.sourceWarehouseId())

@@ -43,6 +43,7 @@ import {
   getRepairTaskBySourceEstimateId,
   repairTaskBySourceEstimateQueryKey,
 } from "@/features/repair-tasks/api/repair-tasks-api"
+import { canEditRepairTaskPlan } from "@/features/repair-tasks/domain/repair-task-domain"
 import type { RepairTaskDto } from "@/features/repair-tasks/model/repair-task"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
 import {
@@ -50,6 +51,7 @@ import {
   type ReadyMediaReference,
 } from "@/features/media/media-service"
 import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
+import { ApiError } from "@/lib/api-client"
 
 function plansInTaskOrder(
   estimate: RepairEstimateDto,
@@ -73,7 +75,7 @@ function plansInTaskOrder(
           ...stored,
           kind: subtask.kind,
           groupComment: subtask.groupComment,
-          queueCode: subtask.queueCode,
+          queueName: subtask.queueName,
           queueId: subtask.queueId,
           routeQueueKind: subtask.routeQueueKind,
           sortOrder: subtask.sortOrder,
@@ -86,7 +88,7 @@ function plansInTaskOrder(
         includedLineIds: includedLines.map((line) => line.id),
         primaryLineId: subtask.workLines[0]?.id ?? null,
         groupComment: subtask.groupComment,
-        queueCode: subtask.queueCode,
+        queueName: subtask.queueName,
         queueId: subtask.queueId,
         routeQueueKind: subtask.routeQueueKind,
         sortOrder: subtask.sortOrder,
@@ -111,11 +113,13 @@ export function RepairEstimateCompletedWorkspace({
   warehouseId,
   estimate,
   readOnly = false,
+  authorDisplayName = "Автор недоступен",
 }: {
   accessToken: string | null
   warehouseId: string
   estimate: RepairEstimateDto
   readOnly?: boolean
+  authorDisplayName?: string
 }) {
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState(false)
@@ -146,10 +150,7 @@ export function RepairEstimateCompletedWorkspace({
   const canAmend =
     !readOnly &&
     linkedTaskQuery.isSuccess &&
-    (!linkedTask ||
-      (linkedTask.status === "QUEUED" &&
-        linkedTask.startedAt === null &&
-        linkedTask.subtasks.every((subtask) => subtask.status === "WAITING")))
+    (!linkedTask || canEditRepairTaskPlan(linkedTask))
 
   useEffect(() => {
     pendingUploadsRef.current = draft.pendingUploads
@@ -195,12 +196,33 @@ export function RepairEstimateCompletedWorkspace({
       })
       void queryClient.invalidateQueries({ queryKey: REPAIR_TASKS_QUERY_KEY })
     },
-    onError: (unknownError) =>
+    onError: (unknownError) => {
+      if (unknownError instanceof ApiError && unknownError.status === 409) {
+        void Promise.all([
+          queryClient.invalidateQueries({
+            queryKey: repairEstimateDetailQueryKey(warehouseId, estimate.id),
+          }),
+          queryClient.invalidateQueries({
+            queryKey: repairTaskBySourceEstimateQueryKey(
+              warehouseId,
+              estimate.id
+            ),
+          }),
+          queryClient.invalidateQueries({
+            queryKey: REPAIR_TASKS_QUERY_KEY,
+          }),
+        ])
+        setError(
+          "Смета или связанный ремонт уже изменены либо задание уже начато. Данные обновлены — откройте смету снова."
+        )
+        return
+      }
       setError(
         unknownError instanceof Error
           ? unknownError.message
           : "Не удалось дополнить смету"
-      ),
+      )
+    },
   })
 
   const totalAmount = useMemo(() => {
@@ -257,6 +279,12 @@ export function RepairEstimateCompletedWorkspace({
         return false
       }
       assertEstimateLinesValid(draft.lines)
+      if (
+        (draft.maintenanceMediaReferences?.length ?? 0) > 0 &&
+        !draft.coverMediaId
+      ) {
+        throw new Error("Выберите титульную фотографию")
+      }
       setError(null)
       return true
     } catch (unknownError) {
@@ -279,9 +307,18 @@ export function RepairEstimateCompletedWorkspace({
             reference.mediaId === references[index]?.mediaId &&
             reference.generation === references[index]?.generation
         )
-      return unchanged
+      const coverStillReady =
+        current.coverMediaId &&
+        references.some(
+          (reference) => reference.mediaId === current.coverMediaId
+        )
+      return unchanged && (coverStillReady || !current.coverMediaId)
         ? current
-        : { ...current, maintenanceMediaReferences: references }
+        : {
+            ...current,
+            maintenanceMediaReferences: references,
+            coverMediaId: coverStillReady ? current.coverMediaId : null,
+          }
     })
   }
 
@@ -306,6 +343,7 @@ export function RepairEstimateCompletedWorkspace({
             owner={mediaOwner}
             readOnly
             title="Фотографии сметы"
+            coverMediaId={estimate.coverMediaId ?? null}
           />
         }
         information={
@@ -315,8 +353,8 @@ export function RepairEstimateCompletedWorkspace({
             contextValue={estimate.sourceParty}
             dispatchDate={estimate.dispatchDate}
             comment={estimate.comment}
-            authorName={estimate.authorName}
-            authorLabel="Идентификатор автора"
+            authorName={authorDisplayName}
+            authorLabel="Автор"
             showComment={false}
             status={<Badge variant="secondary">Завершена</Badge>}
           />
@@ -328,7 +366,7 @@ export function RepairEstimateCompletedWorkspace({
         lowerAction={
           canAmend ? (
             <Button type="button" size="sm" onClick={beginEditing}>
-              Дополнить смету
+              Редактировать смету
             </Button>
           ) : undefined
         }
@@ -368,7 +406,9 @@ export function RepairEstimateCompletedWorkspace({
         <RepairEstimateLinesEditor
           lines={draft.lines}
           readOnly={mutationPending}
-          catalogOnly
+          customWorkLinesOnly
+          accessToken={accessToken}
+          warehouseId={warehouseId}
           onChange={(lines) => setDraft((current) => ({ ...current, lines }))}
         />
       </div>
@@ -393,7 +433,7 @@ export function RepairEstimateCompletedWorkspace({
       <Separator />
       <Field data-disabled={mutationPending}>
         <FieldLabel htmlFor="estimate-amendment-reason">
-          Причина дополнения
+          Причина изменения
         </FieldLabel>
         <Textarea
           id="estimate-amendment-reason"
@@ -466,7 +506,12 @@ export function RepairEstimateCompletedWorkspace({
             owner={mediaOwner}
             readOnly={mutationPending}
             title="Фотографии сметы"
+            coverMediaId={draft.coverMediaId ?? null}
+            requireCover
             onReadyReferencesChange={updateReadyMediaReferences}
+            onCoverMediaIdChange={(coverMediaId) =>
+              setDraft((current) => ({ ...current, coverMediaId }))
+            }
           />
         }
         information={information}
@@ -476,6 +521,8 @@ export function RepairEstimateCompletedWorkspace({
 
       <RepairEstimateCompletionDialog
         open={completionOpen && !readOnly}
+        accessToken={accessToken}
+        warehouseId={warehouseId}
         draft={draft}
         pending={mutation.isPending}
         error={error}

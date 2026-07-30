@@ -2,8 +2,10 @@ package dev.buhanzaz.rwms.taskboard;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CreateBoardTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueBindingRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueDefinitionRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RegisterExternalTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RouteStepRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.TaskSourceReferenceDto;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.WorkQueueDto;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.WorkQueueRequest;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -12,6 +14,7 @@ import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
 import com.networknt.schema.SpecVersion;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
+import dev.buhanzaz.rwms.taskboard.domain.TaskSourceType;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardAggregateType;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.service.RegistryService;
@@ -54,22 +57,7 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
 
   @Test
   void emittedCreatedEnvelopeUsesTheCanonicalKafkaContractOnly() throws Exception {
-    var queue =
-        registry.createQueue(
-            WAREHOUSE,
-            new WorkQueueRequest(
-                0L,
-                "CONTRACT",
-                "Contract",
-                null,
-                QueueType.REPAIR,
-                true,
-                false,
-                false,
-                null,
-                null,
-                false,
-                List.<QueueBindingRequest>of()));
+    var queue = createQueue("Contract");
     board.createTask(
         WAREHOUSE,
         new CreateBoardTaskRequest(
@@ -79,7 +67,7 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             null,
             null,
             null,
-            List.of(new RouteStepRequest(queue.id(), null, null, null))));
+            List.of(new RouteStepRequest(queue.definitionId(), null, null))));
 
     Map<String, Object> event =
         jdbc.queryForMap(
@@ -130,8 +118,8 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void historicalQueueEntryV1WithoutExternalTaskIdStillValidates() throws Exception {
-    var historicalFact =
+  void uuidOnlyQueueEntryV1WithoutExternalTaskIdValidates() throws Exception {
+    var queueEntryFact =
         SCHEMA_OBJECT_MAPPER.readTree(
             """
             {
@@ -154,7 +142,6 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
                 "queueEntryId": "846599f0-64ef-4381-aaf5-da9362dafb43",
                 "taskId": "bb5f3641-a284-4d46-9200-108c879d411d",
                 "queueId": null,
-                "queueCode": "LEGACY",
                 "routeIndex": 0,
                 "queuePosition": 0,
                 "entryType": "REAL",
@@ -164,6 +151,8 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
                 "pausedAt": null,
                 "doneAt": null,
                 "activeWorkSeconds": 0,
+                "originalBudgetSeconds": null,
+                "currentBudgetSeconds": null,
                 "pauseOrigin": null,
                 "assignments": [],
                 "timeEvents": [],
@@ -174,21 +163,159 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             """);
 
     JsonSchema schema = canonicalEventSchema();
-    assertThat(schema.validate(historicalFact)).isEmpty();
+    assertThat(schema.validate(queueEntryFact)).isEmpty();
 
-    var incompatibleFact = historicalFact.deepCopy();
+    var incompatibleFact = queueEntryFact.deepCopy();
     ((com.fasterxml.jackson.databind.node.ObjectNode) incompatibleFact.required("payload"))
         .put("externalTaskId", UUID.randomUUID().toString());
     assertThat(schema.validate(incompatibleFact)).isNotEmpty();
   }
 
   @Test
+  void groupKpiDayFactMatchesTheFrozenAnalyticsEnvelope() throws Exception {
+    var fact =
+        SCHEMA_OBJECT_MAPPER.readTree(
+            """
+            {
+              "envelopeVersion": 2,
+              "eventId": "8bb18b75-9e00-4f41-8317-dba208139c58",
+              "eventType": "task-board.group-kpi-day.changed.v1",
+              "eventVersion": 1,
+              "occurredAt": "2026-07-30T09:00:00Z",
+              "recordedAt": "2026-07-30T09:00:01Z",
+              "producer": "task-board-service",
+              "aggregateType": "GROUP_KPI_DAY",
+              "aggregateId": "a15c043a-3e50-4caf-b41a-4057233e357b",
+              "aggregateVersion": 4,
+              "correlation": {
+                "correlationId": "63ed5468-55ae-4587-9c58-56f66f82ccbd",
+                "causationId": null
+              },
+              "actorRef": null,
+              "payload": {
+                "evidenceId": "a15c043a-3e50-4caf-b41a-4057233e357b",
+                "warehouseId": "00000000-0000-0000-0000-000000000401",
+                "workerGroupId": "6f5a44b7-ce3a-453b-9a55-e1170c861b82",
+                "localDate": "2026-07-30",
+                "dataAvailableFrom": "2026-07-01",
+                "formulaVersion": "kpi-v1",
+                "completedBudgetSeconds": 7200,
+                "earnedRemainingSeconds": 1800,
+                "activeSeconds": 5400,
+                "penalizedIdleSeconds": 900,
+                "completedTaskCount": 3,
+                "openState": "IDLE_GRACE",
+                "openStateStartedAt": "2026-07-30T08:55:00Z",
+                "penaltyStartsAt": "2026-07-30T09:05:00Z",
+                "nextTransitionAt": "2026-07-30T09:05:00Z",
+                "asOf": "2026-07-30T09:00:00Z"
+              }
+            }
+            """);
+
+    JsonSchema schema = canonicalEventSchema();
+    assertThat(schema.validate(fact)).isEmpty();
+
+    var incompatibleFact = fact.deepCopy();
+    ((com.fasterxml.jackson.databind.node.ObjectNode) incompatibleFact.required("payload"))
+        .put("displayName", "PII must stay local");
+    assertThat(schema.validate(incompatibleFact)).isNotEmpty();
+  }
+
+  @Test
+  void workerOwnerProofAndEvidenceFactsValidateWithoutHumanReadableIdentityData()
+      throws Exception {
+    JsonSchema schema = canonicalEventSchema();
+    var ownerProof =
+        SCHEMA_OBJECT_MAPPER.readTree(
+            """
+            {
+              "envelopeVersion": 2,
+              "eventId": "cce3f05c-6211-4e49-b6d6-c44977caf860",
+              "eventType": "task-board.entry-owner-proof.changed.v1",
+              "eventVersion": 1,
+              "occurredAt": "2026-07-25T10:00:00Z",
+              "recordedAt": "2026-07-25T10:00:01Z",
+              "producer": "task-board-service",
+              "aggregateType": "TASK_BOARD_ENTRY_OWNER_PROOF",
+              "aggregateId": "7bc37f79-b2fd-4244-b2ad-bc74774c8a7f",
+              "aggregateVersion": 3,
+              "correlation": {
+                "correlationId": "626bb492-f007-4b5c-b161-6c0b3506413c",
+                "causationId": null
+              },
+              "actorRef": null,
+              "payload": {
+                "ownerType": "TASK_BOARD_ENTRY",
+                "ownerId": "7bc37f79-b2fd-4244-b2ad-bc74774c8a7f",
+                "warehouseId": "00000000-0000-0000-0000-000000000401",
+                "routeIndex": 1,
+                "active": true,
+                "allowedWorkerIds": ["844cc6a6-47a7-4c6d-926e-6ba12dd3e943"],
+                "sourceMediaReferences": [{
+                  "mediaId": "ee62854e-1b87-42bd-82a2-bf28f86db6e4",
+                  "generation": 2
+                }]
+              }
+            }
+            """);
+    assertThat(schema.validate(ownerProof)).isEmpty();
+
+    var evidence =
+        SCHEMA_OBJECT_MAPPER.readTree(
+            """
+            {
+              "envelopeVersion": 2,
+              "eventId": "e17674be-498d-4721-a6aa-d617c7cf2fb8",
+              "eventType": "task-board.task-evidence.ready.v1",
+              "eventVersion": 1,
+              "occurredAt": "2026-07-25T09:59:00Z",
+              "recordedAt": "2026-07-25T10:01:00Z",
+              "producer": "task-board-service",
+              "aggregateType": "TASK_EVIDENCE",
+              "aggregateId": "f31bbafb-d838-41ab-9323-67d9ab22b3a9",
+              "aggregateVersion": 1,
+              "correlation": {
+                "correlationId": "626bb492-f007-4b5c-b161-6c0b3506413c",
+                "causationId": "cce3f05c-6211-4e49-b6d6-c44977caf860"
+              },
+              "actorRef": {
+                "subjectId": "844cc6a6-47a7-4c6d-926e-6ba12dd3e943",
+                "principalType": "WORKER",
+                "profileRevision": null
+              },
+              "payload": {
+                "evidenceId": "f31bbafb-d838-41ab-9323-67d9ab22b3a9",
+                "entryId": "7bc37f79-b2fd-4244-b2ad-bc74774c8a7f",
+                "taskId": "988d4922-53e7-436e-ad4a-27117bf7b005",
+                "routeIndex": 1,
+                "warehouseId": "00000000-0000-0000-0000-000000000401",
+                "workerId": "844cc6a6-47a7-4c6d-926e-6ba12dd3e943",
+                "workerGroupId": null,
+                "mediaId": "ee62854e-1b87-42bd-82a2-bf28f86db6e4",
+                "mediaGeneration": 2,
+                "capturedAt": "2026-07-25T09:59:00Z",
+                "recordedAt": "2026-07-25T10:01:00Z",
+                "state": "READY",
+                "sourceType": null,
+                "sourceId": null
+              }
+            }
+            """);
+    assertThat(schema.validate(evidence)).isEmpty();
+    assertThat(evidence.toString())
+        .doesNotContain("workerName", "groupName", "displayName", "comment");
+  }
+
+  @Test
   void sourceOwnedMaintenanceFactsCorrelateNonNullExternalTaskIdAndRouteIndexWithoutChangingQueueV1()
       throws Exception {
-    var repair = createQueue("MAINTENANCE_REPAIR", "Maintenance repair");
-    var verification = createQueue("MAINTENANCE_VERIFY", "Maintenance verification");
+    var repair = createQueue("Maintenance repair");
+    var verification = createQueue("Maintenance verification");
     UUID externalTaskId = UUID.randomUUID();
-    board.registerExternalTask(
+    UUID repairId = UUID.randomUUID();
+    var source = new TaskSourceReferenceDto(TaskSourceType.MAINTENANCE_REPAIR, repairId);
+    var registration = board.registerExternalTask(
         "maintenance-service",
         new RegisterExternalTaskRequest(
             WAREHOUSE,
@@ -199,8 +326,20 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             30,
             null,
             List.of(
-                new RouteStepRequest(repair.id(), null, null, 20),
-                new RouteStepRequest(verification.id(), null, null, 10))));
+                new RouteStepRequest(repair.definitionId(), null, 20),
+                new RouteStepRequest(verification.definitionId(), null, 10)),
+            null,
+            null,
+            null,
+            source));
+
+    assertThat(
+            board.snapshot(WAREHOUSE, true).columns().stream()
+                .flatMap(column -> column.entries().stream())
+                .filter(entry -> registration.taskId().equals(entry.taskId()))
+                .map(entry -> entry.source())
+                .toList())
+        .containsOnly(source);
 
     JsonSchema schema = canonicalEventSchema();
     String boardFactBody =
@@ -255,10 +394,58 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
         .contains(
             "rwms.task-board.board-task.v1",
             "rwms.task-board.queue-entry.v1",
+            "rwms.task-board.entry-owner-proof.v1",
+            "rwms.task-board.task-evidence.v1",
             TaskBoardEventTypes.BOARD_TASK_COMPLETED,
             TaskBoardEventTypes.QUEUE_ENTRY_COMPLETED,
+            "task-board.entry-owner-proof.changed.v1",
+            "task-board.task-evidence.ready.v1",
             "task-board-events-v1.schema.json")
         .doesNotContain("rwms.domain.v1", "protocol=amqp", "displayName");
+    assertAllLocalReferencesResolve(contract, contract);
+  }
+
+  @Test
+  void canonicalOpenApiDeclaresWorkerMobileSurface() throws Exception {
+    Map<String, Object> contract = yaml("openapi/task-board-service.yaml");
+    Map<String, Object> paths = child(contract, "paths");
+    assertThat(paths)
+        .containsKeys(
+            "/worker/v1/context",
+            "/worker/v1/feed",
+            "/worker/v1/entries/{entryId}",
+            "/worker/v1/events",
+            "/worker/v1/entries/{entryId}/actions",
+            "/worker/v1/entries/{entryId}/evidence-reservations",
+            "/worker/v1/devices/{installationId}");
+
+    Map<String, Object> schemas = child(child(contract, "components"), "schemas");
+    assertThat(schemas)
+        .containsKeys(
+            "AudienceSelector",
+            "WorkerContext",
+            "WorkerFeed",
+            "WorkerTaskDetail",
+            "WorkerActionRequest",
+            "WorkerActionAppliedResult",
+            "WorkerActionConflictProblem",
+            "EvidenceReservationRequest",
+            "TaskEvidence",
+            "WorkerInvalidationEvent",
+            "WorkerDeviceRegistrationRequest");
+    assertThat(child(schemas, "WorkerActionRequest").get("required"))
+        .isEqualTo(
+            List.of(
+                "operationId",
+                "action",
+                "expectedVersion",
+                "workerGroupId",
+                "occurredAt",
+                "offlineLeaseId"));
+    assertThat(child(child(schemas, "WorkerActionRequest"), "properties"))
+        .doesNotContainKeys("workerId", "warehouseId");
+    assertThat(child(schemas, "AudienceSelector").get("required"))
+        .isEqualTo(List.of("kind", "id", "mode", "interruptOnTake"));
     assertAllLocalReferencesResolve(contract, contract);
   }
 
@@ -278,6 +465,12 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             "/internal/task-board/v1/logistics/equipment-movement-tasks",
             "/internal/task-board/v1/logistics/equipment-movement-tasks/{externalTaskId}",
             "/internal/task-board/v1/logistics/equipment-movement-tasks/{externalTaskId}/cancel");
+    assertThat(paths)
+        .doesNotContainKeys(
+            "/internal/task-board/v1/logistics/preparation-tasks",
+            "/internal/task-board/v1/logistics/preparation-tasks/{externalTaskId}",
+            "/internal/task-board/v1/logistics/preparation-tasks/{externalTaskId}/complete",
+            "/internal/task-board/v1/logistics/preparation-tasks/{externalTaskId}/cancel");
     Map<String, Object> schemas = child(child(contract, "components"), "schemas");
     Map<String, Object> movementRequest =
         child(schemas, "RegisterLogisticsEquipmentMovementTaskRequest");
@@ -285,7 +478,48 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
         .isEqualTo(List.of("warehouseId", "externalTaskId", "deadlineAt", "operations"));
     assertThat(child(movementRequest, "properties")).containsKeys("deadlineAt", "operations");
     assertThat(child(schemas, "EquipmentMovementOperation").get("required"))
-        .isEqualTo(List.of("direction", "equipmentCode", "equipmentName", "quantity"));
+        .isEqualTo(List.of("direction", "equipmentId", "equipmentName", "quantity"));
+    Map<String, Object> createTaskProperties =
+        child(child(schemas, "CreateBoardTaskRequest"), "properties");
+    Map<String, Object> externalTaskProperties =
+        child(child(schemas, "RegisterExternalTaskRequest"), "properties");
+    assertThat(createTaskProperties).doesNotContainKey("dailyCapacity");
+    assertThat(externalTaskProperties).containsKeys("dailyCapacity", "source");
+    assertThat(child(externalTaskProperties, "dailyCapacity").toString())
+        .contains("minimum=1", "type=null");
+    assertThat(
+            ((List<?>) child(schemas, "BoardEntry").get("required")).stream()
+                .map(String::valueOf)
+                .toList())
+        .contains("source");
+    assertThat(child(schemas, "TaskSourceReference").get("required"))
+        .isEqualTo(List.of("type", "sourceId"));
+    assertAllLocalReferencesResolve(contract, contract);
+  }
+
+  @Test
+  void canonicalOpenApiDeclaresOptimisticDateColumnSwap() throws Exception {
+    Map<String, Object> contract = yaml("openapi/task-board-service.yaml");
+    Map<String, Object> paths = child(contract, "paths");
+    Map<String, Object> operation =
+        child(
+            child(paths, "/warehouses/{warehouseId}/task-board/dates/swap"),
+            "post");
+    assertThat(operation.get("operationId")).isEqualTo("swapTaskBoardDates");
+    Map<String, Object> requestSchema =
+        child(
+            child(
+                child(child(operation, "requestBody"), "content"),
+                "application/json"),
+            "schema");
+    assertThat(requestSchema.get("$ref"))
+        .isEqualTo("#/components/schemas/SwapTaskBoardDatesRequest");
+
+    Map<String, Object> schemas = child(child(contract, "components"), "schemas");
+    assertThat(child(schemas, "SwapTaskBoardDatesRequest").get("required"))
+        .isEqualTo(List.of("firstDate", "secondDate", "entries"));
+    assertThat(child(schemas, "TaskBoardDateEntryExpectation").get("required"))
+        .isEqualTo(List.of("entryId", "expectedVersion", "expectedTaskVersion"));
     assertAllLocalReferencesResolve(contract, contract);
   }
 
@@ -330,21 +564,22 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
     return JSON_SCHEMA_FACTORY.getSchema(SCHEMA_OBJECT_MAPPER.readTree(Files.readString(path)));
   }
 
-  private WorkQueueDto createQueue(String code, String name) {
+  private WorkQueueDto createQueue(String name) {
+    var definition =
+        registry.createQueueDefinition(
+            new QueueDefinitionRequest(0L, name, null, QueueType.REPAIR));
     return registry.createQueue(
         WAREHOUSE,
         new WorkQueueRequest(
             0L,
-            code,
-            name,
-            null,
-            QueueType.REPAIR,
+            definition.id(),
             true,
             false,
             false,
             null,
             null,
             false,
+            null,
             List.<QueueBindingRequest>of()));
   }
 }

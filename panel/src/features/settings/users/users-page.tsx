@@ -1,8 +1,15 @@
 import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { FilterIcon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 import { toast } from "sonner"
 
 import { OperationsListGrid } from "@/components/operations-list-grid"
+import {
+  PageToolbar,
+  PageToolbarActions,
+  PageToolbarContent,
+} from "@/components/page-toolbar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -28,7 +35,15 @@ import {
   userGlobalRoleLabels,
 } from "@/features/settings/users/model/users"
 import { PasswordDialog } from "@/features/settings/users/password-dialog"
+import { UserFilters } from "@/features/settings/users/user-filters"
+import {
+  EMPTY_ADMIN_USER_FILTERS,
+  buildAdminUserFilterOptions,
+  filterAdminUsers,
+  type AdminUserFilters,
+} from "@/features/settings/users/user-filtering"
 import { UserEditorDialog } from "@/features/settings/users/user-editor-dialog"
+import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
 
@@ -50,6 +65,10 @@ export function UsersPage() {
   const { accessToken, currentUser } = useAuth()
   const { warehouses } = useWarehouse()
   const [search, setSearch] = useState("")
+  const [filters, setFilters] = useState<AdminUserFilters>(
+    EMPTY_ADMIN_USER_FILTERS
+  )
+  const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
   const [editorOpen, setEditorOpen] = useState(false)
   const [editedUser, setEditedUser] = useState<AdminUser | null>(null)
   const [passwordUser, setPasswordUser] = useState<AdminUser | null>(null)
@@ -162,22 +181,12 @@ export function UsersPage() {
   })
 
   const filteredUsers = useMemo(() => {
-    const query = search.trim().toLocaleLowerCase("ru")
-
-    if (!query) {
-      return usersQuery.data ?? []
-    }
-
-    return (usersQuery.data ?? []).filter((user) =>
-      [
-        user.username,
-        user.firstName,
-        user.lastName,
-        user.email,
-        userGlobalRoleLabels[user.globalRole],
-      ].some((value) => value?.toLocaleLowerCase("ru").includes(query))
-    )
-  }, [search, usersQuery.data])
+    return filterAdminUsers(usersQuery.data ?? [], search, filters)
+  }, [filters, search, usersQuery.data])
+  const filterOptions = useMemo(
+    () => buildAdminUserFilterOptions(usersQuery.data ?? []),
+    [usersQuery.data]
+  )
 
   const activeSystemAdministrators = (usersQuery.data ?? []).filter(
     (user) => user.active && user.globalRole === "SYSTEM_ADMIN"
@@ -215,17 +224,43 @@ export function UsersPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <Button type="button" onClick={openCreateDialog}>
-          Создать пользователя
-        </Button>
-        <Input
-          type="search"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Поиск пользователей"
-          aria-label="Поиск пользователей"
-          className="sm:ml-auto sm:max-w-sm"
+      <PageToolbar>
+        <PageToolbarContent className="max-w-xl">
+          <Input
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Логин, имя или email"
+            aria-label="Поиск пользователей"
+          />
+        </PageToolbarContent>
+        <PageToolbarActions className="w-full sm:w-auto">
+          <Button
+            type="button"
+            size="icon"
+            variant={filtersOpen ? "secondary" : "outline"}
+            aria-label={
+              filtersOpen
+                ? "Скрыть фильтры пользователей"
+                : "Показать фильтры пользователей"
+            }
+            aria-controls="users-filters"
+            aria-expanded={filtersOpen}
+            onClick={() => setFiltersOpen((current) => !current)}
+          >
+            <HugeiconsIcon icon={FilterIcon} aria-hidden="true" />
+          </Button>
+          <Button type="button" onClick={openCreateDialog}>
+            Создать пользователя
+          </Button>
+        </PageToolbarActions>
+      </PageToolbar>
+
+      <div id="users-filters" hidden={!filtersOpen}>
+        <UserFilters
+          filters={filters}
+          options={filterOptions}
+          onChange={setFilters}
         />
       </div>
 
@@ -281,6 +316,28 @@ export function UsersPage() {
                 render: (user) => (
                   <Badge variant={user.active ? "secondary" : "outline"}>
                     {user.active ? "Активен" : "Отключён"}
+                  </Badge>
+                ),
+              },
+              {
+                id: "mobile-app",
+                label: "Приложение",
+                getSortValue: (user) => (user.mobileAppAccess ? 1 : 0),
+                render: (user) => (
+                  <Badge
+                    variant={user.mobileAppAccess ? "secondary" : "outline"}
+                  >
+                    {user.mobileAppAccess ? "Разрешено" : "Нет доступа"}
+                  </Badge>
+                ),
+              },
+              {
+                id: "rental-access",
+                label: "Аренда и чат",
+                getSortValue: (user) => (user.rentalAccess ? 1 : 0),
+                render: (user) => (
+                  <Badge variant={user.rentalAccess ? "secondary" : "outline"}>
+                    {user.rentalAccess ? "Разрешено" : "Нет доступа"}
                   </Badge>
                 ),
               },
@@ -341,6 +398,14 @@ export function UsersPage() {
                   </div>
                   <p className="text-muted-foreground">
                     {userGlobalRoleLabels[user.globalRole]}
+                  </p>
+                  <p className="text-muted-foreground">
+                    Приложение:{" "}
+                    {user.mobileAppAccess ? "доступ разрешён" : "нет доступа"}
+                  </p>
+                  <p className="text-muted-foreground">
+                    Аренда и чат:{" "}
+                    {user.rentalAccess ? "доступ разрешён" : "нет доступа"}
                   </p>
                   <div className="flex gap-2">
                     <Button

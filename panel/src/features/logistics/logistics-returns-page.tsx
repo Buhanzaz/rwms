@@ -43,6 +43,7 @@ import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
 import {
   LogisticsDocumentFilters,
+  LogisticsFiltersToggle,
   type LogisticsDocumentFiltersState,
 } from "@/features/logistics/logistics-document-filters"
 import { LogisticsDriverPicker } from "@/features/logistics/logistics-driver-picker"
@@ -66,14 +67,22 @@ import {
 } from "@/features/logistics/returns/model"
 import { RequestEstimateDialog } from "@/features/logistics/returns/request-estimate-dialog"
 import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
+import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
 
-const EMPTY_FILTERS: LogisticsDocumentFiltersState<ReturnDocumentState> = {
+type ReturnFilters = LogisticsDocumentFiltersState<ReturnDocumentState> & {
+  counterparties: string[]
+  drivers: string[]
+}
+
+const EMPTY_FILTERS: ReturnFilters = {
   states: [],
   schedule: "ALL",
   dateFrom: "",
   dateTo: "",
+  counterparties: [],
+  drivers: [],
 }
 
 function commandIdentity() {
@@ -100,6 +109,16 @@ function matchesDateRange(
     return false
   }
   return true
+}
+
+function textFilterOptions(values: Iterable<string | null | undefined>) {
+  return [
+    ...new Set(
+      [...values].filter((value): value is string => Boolean(value?.trim()))
+    ),
+  ]
+    .sort((left, right) => left.localeCompare(right, "ru"))
+    .map((value) => ({ value, label: value }))
 }
 
 function statusVariant(state: ReturnDocumentState) {
@@ -141,10 +160,11 @@ function storeServiceProjection(
 export function LogisticsReturnsPage() {
   const { selectedWarehouseId } = useWarehouse()
   const { accessToken, currentUser } = useAuth()
-  const [searchParams, setSearchParams] = useSearchParams()
+  const [searchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState("")
   const [filters, setFilters] = useState(EMPTY_FILTERS)
+  const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [pickupTarget, setPickupTarget] = useState<ReturnDocument | null>(null)
   const [acceptTarget, setAcceptTarget] = useState<ReturnDocument | null>(null)
@@ -175,6 +195,20 @@ export function LogisticsReturnsPage() {
       })),
     []
   )
+  const counterpartyOptions = useMemo(
+    () =>
+      textFilterOptions(
+        (query.data ?? []).map((document) => document.partySnapshot)
+      ),
+    [query.data]
+  )
+  const driverOptions = useMemo(
+    () =>
+      textFilterOptions(
+        (query.data ?? []).map((document) => document.driverSnapshot)
+      ),
+    [query.data]
+  )
   const rows = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru")
     return (query.data ?? []).filter((document) => {
@@ -188,6 +222,18 @@ export function LogisticsReturnsPage() {
       if (
         filters.states.length > 0 &&
         !filters.states.includes(document.state)
+      ) {
+        return false
+      }
+      if (
+        filters.counterparties.length > 0 &&
+        !filters.counterparties.includes(document.partySnapshot ?? "")
+      ) {
+        return false
+      }
+      if (
+        filters.drivers.length > 0 &&
+        !filters.drivers.includes(document.driverSnapshot ?? "")
       ) {
         return false
       }
@@ -276,13 +322,6 @@ export function LogisticsReturnsPage() {
     },
   })
 
-  function clearSelection() {
-    const next = new URLSearchParams(searchParams)
-    next.delete("receiptId")
-    next.delete("returnItemId")
-    setSearchParams(next, { replace: true })
-  }
-
   function actions(document: ReturnDocument) {
     const processing =
       registerMutation.isPending &&
@@ -348,7 +387,7 @@ export function LogisticsReturnsPage() {
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       <PageToolbar>
-        <PageToolbarContent>
+        <PageToolbarContent className="max-w-xl">
           <Input
             aria-label="Поиск возвратов"
             placeholder="Заказ, бытовка, контрагент или водитель"
@@ -357,28 +396,41 @@ export function LogisticsReturnsPage() {
           />
         </PageToolbarContent>
         <PageToolbarActions>
-          {selectedDocumentId || selectedLineId ? (
-            <Button type="button" variant="outline" onClick={clearSelection}>
-              Показать все документы
-            </Button>
-          ) : null}
-          <Button
-            type="button"
-            variant="outline"
-            disabled={!accessToken || !selectedWarehouseId || query.isFetching}
-            onClick={() => void query.refetch()}
-          >
-            {query.isFetching ? "Обновляется…" : "Обновить"}
-          </Button>
+          <LogisticsFiltersToggle
+            open={filtersOpen}
+            controls="logistics-return-filters"
+            onOpenChange={setFiltersOpen}
+          />
         </PageToolbarActions>
       </PageToolbar>
 
-      <LogisticsDocumentFilters
-        filters={filters}
-        stateOptions={stateOptions}
-        dateLabel="Вывоз"
-        onChange={setFilters}
-      />
+      <div id="logistics-return-filters" hidden={!filtersOpen}>
+        <LogisticsDocumentFilters
+          filters={filters}
+          stateOptions={stateOptions}
+          dateLabel="Вывоз"
+          extraFilters={[
+            {
+              label: "Контрагент",
+              options: counterpartyOptions,
+              selected: filters.counterparties,
+              onApply: (counterparties) =>
+                setFilters((current) => ({ ...current, counterparties })),
+            },
+            {
+              label: "Водитель",
+              options: driverOptions,
+              selected: filters.drivers,
+              onApply: (drivers) =>
+                setFilters((current) => ({ ...current, drivers })),
+            },
+          ]}
+          onChange={(nextFilters) =>
+            setFilters((current) => ({ ...current, ...nextFilters }))
+          }
+          onReset={() => setFilters(EMPTY_FILTERS)}
+        />
+      </div>
 
       {!accessToken ? (
         <FieldError>Для просмотра возвратов требуется авторизация.</FieldError>
@@ -419,7 +471,7 @@ export function LogisticsReturnsPage() {
               },
               {
                 id: "party",
-                label: "От кого",
+                label: "Контрагент",
                 className: "min-w-56",
                 getSortValue: (document) => document.partySnapshot ?? "",
                 render: (document) => document.partySnapshot ?? "Не указан",

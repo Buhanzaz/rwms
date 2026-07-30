@@ -112,9 +112,10 @@ class OAuthWorkerCredentialGatewayIntegrationTest {
     UUID worker = UUID.randomUUID();
     gateway.configure(worker, UUID.randomUUID(), "worker.login", "password-123");
     gateway.reset(worker, "password-456");
+    gateway.enable(worker);
 
     assertThat(TOKEN_REQUESTS).hasValue(1);
-    assertThat(CREDENTIAL_REQUESTS).hasValue(2);
+    assertThat(CREDENTIAL_REQUESTS).hasValue(3);
     assertThat(LAST_TOKEN_FORM.get())
         .contains("grant_type=client_credentials")
         .contains("scope=worker-credentials.manage");
@@ -153,6 +154,41 @@ class OAuthWorkerCredentialGatewayIntegrationTest {
       assertThatThrownBy(() -> gateway.status(STATUS_WORKER, STATUS_WAREHOUSE))
           .isInstanceOf(RuntimeException.class);
     }
+  }
+
+  @Test
+  void deleteTreatsMissingCredentialAsAlreadyDeleted() {
+    MODE.set(Mode.MISSING_DELETE);
+    UUID workerId = UUID.randomUUID();
+
+    gateway.delete(workerId);
+    gateway.delete(workerId);
+
+    assertThat(CREDENTIAL_REQUESTS).hasValue(2);
+    assertThat(TOKEN_REQUESTS).hasValue(1);
+  }
+
+  @Test
+  void configureConflictIsReportedAsSafeLoginConflict() {
+    MODE.set(Mode.LOGIN_CONFLICT);
+
+    var worker =
+        workforce.createWorker(
+            UUID.randomUUID(),
+            new WorkerRequest(
+                0L,
+                "Conflicting login",
+                null,
+                null,
+                null,
+                true,
+                null,
+                "admin",
+                "password-123",
+                List.of()));
+
+    assertThat(worker.credentialStatus()).isEqualTo(CredentialStatus.ERROR);
+    assertThat(worker.credentialError()).isEqualTo("Логин приложения уже используется");
   }
 
   @Test
@@ -265,6 +301,13 @@ class OAuthWorkerCredentialGatewayIntegrationTest {
       APPLIED_WORKER.set(path.substring(prefix.length()));
       APPLIED_WAREHOUSE.set(jsonField(body, "warehouseId"));
       APPLIED_LOGIN.set(jsonField(body, "appLogin"));
+      if (MODE.get() == Mode.LOGIN_CONFLICT) {
+        respond(
+            exchange,
+            409,
+            "{\"type\":\"about:blank\",\"title\":\"Conflict\",\"status\":409,\"detail\":\"Конфликт уникальных или связанных данных\"}");
+        return;
+      }
       if (MODE.get() == Mode.DELAY_CREDENTIAL) {
         try {
           Thread.sleep(1_500);
@@ -272,6 +315,13 @@ class OAuthWorkerCredentialGatewayIntegrationTest {
           Thread.currentThread().interrupt();
         }
       }
+    }
+    if ("DELETE".equals(exchange.getRequestMethod()) && MODE.get() == Mode.MISSING_DELETE) {
+      respond(
+          exchange,
+          404,
+          "{\"type\":\"about:blank\",\"title\":\"Not Found\",\"status\":404,\"detail\":\"Worker credential not found\"}");
+      return;
     }
     if ("GET".equals(exchange.getRequestMethod())
         && path.endsWith("/status")) {
@@ -344,6 +394,8 @@ class OAuthWorkerCredentialGatewayIntegrationTest {
     DELAY_TOKEN,
     DELAY_CREDENTIAL,
     MALFORMED_STATUS,
-    MISROUTED_STATUS
+    MISROUTED_STATUS,
+    MISSING_DELETE,
+    LOGIN_CONFLICT
   }
 }

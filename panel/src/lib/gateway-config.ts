@@ -3,6 +3,7 @@ const HTTP_PROTOCOLS = new Set(["http:", "https:"])
 export type GatewayRuntimeConfig = {
   gatewayOrigin: string
   authAuthority: string
+  assistantApiBaseUrl: string
   taskBoardApiBaseUrl: string
   warehouseApiBaseUrl: string
   assetApiBaseUrl: string
@@ -50,6 +51,7 @@ export function createGatewayRuntimeConfig(
   return {
     gatewayOrigin,
     authAuthority: `${gatewayOrigin}/auth`,
+    assistantApiBaseUrl: `${gatewayOrigin}/api/assistant`,
     taskBoardApiBaseUrl: `${gatewayOrigin}/api/task-board`,
     warehouseApiBaseUrl: `${gatewayOrigin}/api/warehouse`,
     assetApiBaseUrl: `${gatewayOrigin}/api/asset`,

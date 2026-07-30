@@ -3,13 +3,7 @@ import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
 
 export type WarehouseInfo = {
   id: string
-  /**
-   * Transitional compile-time alias for untouched panel flows. It is always
-   * exactly the canonical warehouse UUID and is never stored or translated.
-   */
-  serviceId: string
   version: number
-  code: string
   name: string
   city: string
   address: string | null
@@ -19,7 +13,6 @@ export type WarehouseInfo = {
 }
 
 export type WarehouseWriteInput = {
-  code: string
   name: string
   city: string
   address: string | null
@@ -33,11 +26,9 @@ export type WarehouseCreateInput = Omit<WarehouseWriteInput, "active">
 const WAREHOUSES_ENDPOINT = `${getGatewayRuntimeConfig().warehouseApiBaseUrl}/v1/warehouses`
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const WAREHOUSE_CODE_PATTERN = /^[A-Z0-9][A-Z0-9_-]{0,63}$/
 const WAREHOUSE_RESPONSE_KEYS = [
   "id",
   "version",
-  "code",
   "name",
   "city",
   "address",
@@ -107,7 +98,6 @@ function parseWarehouse(value: unknown): WarehouseInfo {
   const {
     id,
     version,
-    code,
     name,
     city,
     address,
@@ -118,8 +108,6 @@ function parseWarehouse(value: unknown): WarehouseInfo {
   if (
     !isUuid(id) ||
     !isNonNegativeInteger(version) ||
-    typeof code !== "string" ||
-    !WAREHOUSE_CODE_PATTERN.test(code) ||
     !isNonEmptyString(name, 255) ||
     !isNonEmptyString(city, 255) ||
     !isNullableString(address, 1000) ||
@@ -132,9 +120,7 @@ function parseWarehouse(value: unknown): WarehouseInfo {
 
   return {
     id,
-    serviceId: id,
     version,
-    code,
     name,
     city,
     address,
@@ -146,7 +132,7 @@ function parseWarehouse(value: unknown): WarehouseInfo {
 
 function requireWarehouseId(warehouseId: string) {
   if (!isUuid(warehouseId)) {
-    throw new Error("Идентификатор склада должен быть UUID.")
+    throw new Error("Некорректный идентификатор склада.")
   }
 
   return warehouseId
@@ -162,7 +148,6 @@ function requireExpectedVersion(expectedVersion: number) {
 
 function requireWarehouseWriteInput(input: WarehouseWriteInput) {
   const valid =
-    WAREHOUSE_CODE_PATTERN.test(input.code) &&
     isNonEmptyString(input.name, 255) &&
     isNonEmptyString(input.city, 255) &&
     isNullableString(input.address, 1000) &&
@@ -177,7 +162,7 @@ function requireWarehouseWriteInput(input: WarehouseWriteInput) {
 
 function requireIdempotencyKey(idempotencyKey: string) {
   if (!isUuid(idempotencyKey)) {
-    throw new Error("Idempotency-Key должен быть UUID.")
+    throw new Error("Не удалось подготовить безопасный ключ команды.")
   }
 
   return idempotencyKey

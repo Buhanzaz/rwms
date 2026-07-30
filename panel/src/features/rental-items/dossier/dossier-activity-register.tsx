@@ -1,4 +1,6 @@
 import { useState, type FormEvent } from "react"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { FilterIcon } from "@hugeicons/core-free-icons"
 
 import { ApiError } from "@/lib/api-client"
 import { Badge } from "@/components/ui/badge"
@@ -29,6 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import {
   formatDossierActorLabel,
   type DossierActorDisplay,
@@ -94,7 +97,7 @@ function formatInstant(value: string) {
 
 function sourceLabel(activity: DossierActivity) {
   const source = activity.sourceRef
-  return `${source.producer} · ${source.aggregateType} · ${source.aggregateId}`
+  return `${source.producer} · ${source.aggregateType}`
 }
 
 function dossierErrorPresentation(error: unknown) {
@@ -140,6 +143,7 @@ export function DossierActivityFiltersPanel({
   showTechnicalFilters?: boolean
 }) {
   const [draft, setDraft] = useState(value)
+  const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -158,139 +162,148 @@ export function DossierActivityFiltersPanel({
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Фильтры истории</CardTitle>
-        <CardDescription>
-          {showTechnicalFilters
-            ? "Фильтры выполняются dossier-service. Время задаётся в RFC 3339, actor — только непрозрачным UUID."
-            : "Фильтры выполняются dossier-service по подтверждённым событиям."}
-        </CardDescription>
-      </CardHeader>
-      <form onSubmit={submit}>
-        <CardContent>
-          <FieldGroup className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <Field>
-              <FieldLabel>Код события</FieldLabel>
-              <Select
-                value={draft.activityCodes?.[0] ?? ALL_ACTIVITY_CODES}
-                onValueChange={(activityCode) =>
-                  setDraft((current) => ({
-                    ...current,
-                    activityCodes:
-                      activityCode === ALL_ACTIVITY_CODES
-                        ? undefined
-                        : [activityCode as DossierActivityCode],
-                  }))
-                }
-              >
-                <SelectTrigger className="w-full" aria-label="Код события">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value={ALL_ACTIVITY_CODES}>
-                      Все события
-                    </SelectItem>
-                    {DOSSIER_ACTIVITY_CODES.map((code) => (
-                      <SelectItem key={code} value={code}>
-                        {activityLabel[code]}
-                        {showTechnicalFilters ? ` · ${code}` : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field>
-              <FieldLabel>Источник</FieldLabel>
-              <Select
-                value={draft.sourceTypes?.[0] ?? ALL_SOURCE_TYPES}
-                onValueChange={(sourceType) =>
-                  setDraft((current) => ({
-                    ...current,
-                    sourceTypes:
-                      sourceType === ALL_SOURCE_TYPES
-                        ? undefined
-                        : [sourceType as DossierSourceType],
-                  }))
-                }
-              >
-                <SelectTrigger className="w-full" aria-label="Источник события">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value={ALL_SOURCE_TYPES}>
-                      Все источники
-                    </SelectItem>
-                    {DOSSIER_SOURCE_TYPES.map((sourceType) => (
-                      <SelectItem key={sourceType} value={sourceType}>
-                        {sourceType}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
-            {showTechnicalFilters ? (
+    <div className="flex flex-col gap-2">
+      <Button
+        type="button"
+        size="icon"
+        variant={filtersOpen ? "secondary" : "outline"}
+        className="self-start md:hidden"
+        aria-label={
+          filtersOpen ? "Скрыть фильтры истории" : "Показать фильтры истории"
+        }
+        aria-controls="dossier-activity-filters"
+        aria-expanded={filtersOpen}
+        onClick={() => setFiltersOpen((current) => !current)}
+      >
+        <HugeiconsIcon icon={FilterIcon} aria-hidden="true" />
+      </Button>
+      <Card id="dossier-activity-filters" hidden={!filtersOpen}>
+        <CardHeader>
+          <CardTitle>Фильтры истории</CardTitle>
+          <CardDescription>
+            {showTechnicalFilters
+              ? "Фильтры выполняются dossier-service. Время задаётся в RFC 3339."
+              : "Фильтры выполняются dossier-service по подтверждённым событиям."}
+          </CardDescription>
+        </CardHeader>
+        <form onSubmit={submit}>
+          <CardContent>
+            <FieldGroup className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               <Field>
-                <FieldLabel htmlFor="dossier-actor-subject-id">
-                  Actor subject UUID
+                <FieldLabel>Событие</FieldLabel>
+                <Select
+                  value={draft.activityCodes?.[0] ?? ALL_ACTIVITY_CODES}
+                  onValueChange={(activityCode) =>
+                    setDraft((current) => ({
+                      ...current,
+                      activityCodes:
+                        activityCode === ALL_ACTIVITY_CODES
+                          ? undefined
+                          : [activityCode as DossierActivityCode],
+                    }))
+                  }
+                >
+                  <SelectTrigger className="w-full" aria-label="Событие">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value={ALL_ACTIVITY_CODES}>
+                        Все события
+                      </SelectItem>
+                      {DOSSIER_ACTIVITY_CODES.map((code) => (
+                        <SelectItem key={code} value={code}>
+                          {activityLabel[code]}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <FieldLabel>Источник</FieldLabel>
+                <Select
+                  value={draft.sourceTypes?.[0] ?? ALL_SOURCE_TYPES}
+                  onValueChange={(sourceType) =>
+                    setDraft((current) => ({
+                      ...current,
+                      sourceTypes:
+                        sourceType === ALL_SOURCE_TYPES
+                          ? undefined
+                          : [sourceType as DossierSourceType],
+                    }))
+                  }
+                >
+                  <SelectTrigger
+                    className="w-full"
+                    aria-label="Источник события"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value={ALL_SOURCE_TYPES}>
+                        Все источники
+                      </SelectItem>
+                      {DOSSIER_SOURCE_TYPES.map((sourceType) => (
+                        <SelectItem key={sourceType} value={sourceType}>
+                          {sourceType}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="dossier-occurred-from">
+                  События с
                 </FieldLabel>
                 <Input
-                  id="dossier-actor-subject-id"
-                  value={draft.actorSubjectId ?? ""}
-                  placeholder="00000000-0000-0000-0000-000000000000"
+                  id="dossier-occurred-from"
+                  value={draft.occurredFrom ?? ""}
+                  placeholder="2026-07-18T00:00:00Z"
                   onChange={(event) =>
                     setDraft((current) => ({
                       ...current,
-                      actorSubjectId: event.target.value,
+                      occurredFrom: event.target.value,
                     }))
                   }
                 />
               </Field>
-            ) : null}
-            <Field>
-              <FieldLabel htmlFor="dossier-occurred-from">События с</FieldLabel>
-              <Input
-                id="dossier-occurred-from"
-                value={draft.occurredFrom ?? ""}
-                placeholder="2026-07-18T00:00:00Z"
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    occurredFrom: event.target.value,
-                  }))
-                }
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="dossier-occurred-before">
-                События до
-              </FieldLabel>
-              <Input
-                id="dossier-occurred-before"
-                value={draft.occurredBefore ?? ""}
-                placeholder="2026-07-19T00:00:00Z"
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    occurredBefore: event.target.value,
-                  }))
-                }
-              />
-            </Field>
-          </FieldGroup>
-        </CardContent>
-        <CardFooter className="flex-wrap gap-2">
-          <Button type="submit">Применить</Button>
-          <Button type="button" variant="outline" onClick={reset}>
-            Сбросить
-          </Button>
-        </CardFooter>
-      </form>
-    </Card>
+              <Field>
+                <FieldLabel htmlFor="dossier-occurred-before">
+                  События до
+                </FieldLabel>
+                <Input
+                  id="dossier-occurred-before"
+                  value={draft.occurredBefore ?? ""}
+                  placeholder="2026-07-19T00:00:00Z"
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      occurredBefore: event.target.value,
+                    }))
+                  }
+                />
+              </Field>
+            </FieldGroup>
+          </CardContent>
+          <CardFooter className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+            <Button type="submit" className="w-full sm:w-auto">
+              Применить
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full sm:w-auto"
+              onClick={reset}
+            >
+              Сбросить
+            </Button>
+          </CardFooter>
+        </form>
+      </Card>
+    </div>
   )
 }
 
@@ -345,16 +358,9 @@ function ActorCell({
           className="flex flex-col gap-1 text-xs text-muted-foreground"
           data-testid={`technical-actor-${activity.activityId}`}
         >
-          <p className="font-mono">
-            {actor.principalType} · {actor.subjectId}
-          </p>
           <p className="font-mono">actor: {actor.principalType}</p>
-          <p className="font-mono">actorId: {actor.subjectId}</p>
           <p className="font-mono">
             subject: {activity.sourceRef.aggregateType}
-          </p>
-          <p className="font-mono">
-            subjectId: {activity.sourceRef.aggregateId}
           </p>
           <p className="font-mono">
             entityType: {activity.sourceRef.aggregateType}
@@ -385,7 +391,7 @@ function ActivityTable({
         <CardTitle>Подтверждённые события</CardTitle>
         <CardDescription>
           {showTechnicalActorDetails
-            ? "Имя и роль автора получены из auth-service. Исходные Actor, subject и source reference показаны отдельно как технические данные."
+            ? "Имя и роль автора получены из auth-service. Типы автора и источника показаны отдельно как технические данные."
             : "Показаны понятное описание действия и пользователь, выполнивший его."}
         </CardDescription>
       </CardHeader>
@@ -395,8 +401,8 @@ function ActivityTable({
             <TableRow>
               <TableHead>Время</TableHead>
               <TableHead>Событие</TableHead>
-              <TableHead>Actor</TableHead>
-              <TableHead>Media</TableHead>
+              <TableHead>Автор</TableHead>
+              <TableHead>Фото</TableHead>
               {showTechnicalActorDetails ? (
                 <TableHead>Источник</TableHead>
               ) : null}
@@ -430,14 +436,9 @@ function ActivityTable({
                       {activityLabel[activity.activityCode]}
                     </Badge>
                     {showTechnicalActorDetails ? (
-                      <>
-                        <p className="mt-2 font-mono text-xs text-muted-foreground">
-                          {activity.activityCode}
-                        </p>
-                        <p className="mt-2 font-mono text-xs text-muted-foreground">
-                          {activity.activityId}
-                        </p>
-                      </>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Подтверждено dossier-service
+                      </p>
                     ) : null}
                   </TableCell>
                   <TableCell className="min-w-72 align-top">
@@ -460,15 +461,9 @@ function ActivityTable({
                           <div key={media.mediaId}>
                             <Badge variant="secondary">{media.state}</Badge>
                             {showTechnicalActorDetails ? (
-                              <>
-                                <p className="mt-1 font-mono text-xs">
-                                  {media.mediaId} · generation{" "}
-                                  {media.generation}
-                                </p>
-                                <p className="font-mono text-xs text-muted-foreground">
-                                  findingId: {media.findingId}
-                                </p>
-                              </>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                Версия {media.generation}
+                              </p>
                             ) : null}
                           </div>
                         ))}
@@ -479,14 +474,6 @@ function ActivityTable({
                     <TableCell className="min-w-80 align-top">
                       <p className="font-mono text-xs">
                         {sourceLabel(activity)}
-                      </p>
-                      {activity.sourceRef.secondaryId ? (
-                        <p className="mt-1 font-mono text-xs text-muted-foreground">
-                          secondaryId: {activity.sourceRef.secondaryId}
-                        </p>
-                      ) : null}
-                      <p className="mt-1 font-mono text-xs text-muted-foreground">
-                        warehouseId: {activity.warehouseId}
                       </p>
                     </TableCell>
                   ) : null}

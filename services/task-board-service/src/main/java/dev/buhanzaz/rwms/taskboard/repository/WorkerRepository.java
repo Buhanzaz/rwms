@@ -11,5 +11,9 @@ public interface WorkerRepository extends JpaRepository<Worker, UUID> {
 
   Optional<Worker> findByAppLoginIgnoreCase(String appLogin);
 
+  List<Worker> findAllByCurrentGroupId(UUID groupId);
+
+  boolean existsByCurrentGroupIdAndActiveTrue(UUID groupId);
+
   boolean existsByAppLoginIgnoreCaseAndIdNot(String appLogin, UUID id);
 }

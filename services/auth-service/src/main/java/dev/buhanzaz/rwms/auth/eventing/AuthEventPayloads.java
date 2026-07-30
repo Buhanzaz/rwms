@@ -26,14 +26,34 @@ public final class AuthEventPayloads {
     public record UserAuthorizationFact(
             UUID subjectId,
             boolean active,
+            boolean mobileAppAccess,
             UserGlobalRole globalRole,
             UUID profileRevision,
             List<WarehouseGrantFact> warehouseAccess) {
+
+        public UserAuthorizationFact(
+                UUID subjectId,
+                boolean active,
+                UserGlobalRole globalRole,
+                UUID profileRevision,
+                List<WarehouseGrantFact> warehouseAccess) {
+            this(
+                    subjectId,
+                    active,
+                    false,
+                    globalRole,
+                    profileRevision,
+                    warehouseAccess);
+        }
 
         public UserAuthorizationFact {
             Objects.requireNonNull(subjectId, "subjectId");
             Objects.requireNonNull(globalRole, "globalRole");
             Objects.requireNonNull(profileRevision, "profileRevision");
+            if (mobileAppAccess && !globalRole.isManagerAppEligible()) {
+                throw new IllegalArgumentException(
+                        "Mobile app access requires an eligible user role");
+            }
             warehouseAccess = List.copyOf(warehouseAccess);
             if (warehouseAccess.stream().map(WarehouseGrantFact::accessId).distinct().count()
                     != warehouseAccess.size()) {

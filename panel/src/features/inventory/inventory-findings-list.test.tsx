@@ -27,9 +27,13 @@ function finding(
     reconciliationStatus: "MATCHED",
     expectedSnapshot: null,
     currentSnapshot: null,
+    inspectionBaseline: null,
+    conflictResolution: null,
     conflicts: [],
     comment: "",
     media: [],
+    coverMediaId: null,
+    inspectionSource: "INVENTORY",
     lines: [
       {
         id: `line-${id}`,
@@ -45,6 +49,7 @@ function finding(
       },
     ],
     repairCompletionMode: null,
+    repairPriority: 3,
     movementRequired: false,
     repairPlans: [],
     publicationStatus,
@@ -66,7 +71,6 @@ function session(
     status: "COMPLETED",
     warehouse: {
       id: "spb",
-      code: "СПБ",
       name: "Склад СПБ",
       timeZone: "Europe/Moscow",
     },
@@ -82,12 +86,72 @@ function session(
     findingCount: findings.length,
     inspectedCount: findings.length,
     findings,
+    membershipMovements: [],
     statistics: null,
     publicationStatus,
   }
 }
 
 describe("inventory history publication presentation", () => {
+  it("shows one compact active-session status instead of inspection and reconciliation badges", () => {
+    render(
+      <InventoryFindingsList
+        findings={[
+          finding("СПБ-1", "NOT_REQUIRED", {
+            inspectionStatus: "NOT_INSPECTED",
+            reconciliationStatus: "MISSING",
+            currentSnapshot: {
+              rentalItemId: "rental-1",
+              number: "СПБ-1",
+              canonicalNumber: "СПБ-1",
+              warehouseId: "spb",
+              status: "FREE",
+              tenant: null,
+              passportSnapshot: {},
+              contentsSnapshot: [],
+              repairsSnapshot: [],
+            },
+          }),
+        ]}
+        canInspect
+        onOpen={vi.fn()}
+      />
+    )
+
+    const statusBadges = screen.getAllByText("Не проверено")
+    expect(statusBadges.length).toBeGreaterThan(0)
+    expect(statusBadges[0].className).toContain("w-fit")
+    expect(statusBadges[0].className).not.toContain("w-full")
+    expect(screen.queryByText("Не найдено")).toBeNull()
+    expect(screen.queryByText("Ожидает сверки")).toBeNull()
+    expect(screen.getAllByText("Свободна").length).toBeGreaterThan(0)
+  })
+
+  it("uses final inventory statuses in the completion view", () => {
+    render(
+      <InventoryFindingsList
+        findings={[
+          finding("СПБ-1", "NOT_REQUIRED", {
+            inspectionStatus: "NOT_INSPECTED",
+            reconciliationStatus: "MISSING",
+          }),
+          finding("СПБ-2", "NOT_REQUIRED"),
+          finding("СПБ-3", "NOT_REQUIRED", {
+            inspectionStatus: "READY",
+            lines: [],
+          }),
+        ]}
+        canInspect={false}
+        statusMode="COMPLETION"
+        onOpen={vi.fn()}
+      />
+    )
+
+    expect(screen.getAllByText("Не найдено").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Направлено в ремонт").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Проверено").length).toBeGreaterThan(0)
+  })
+
   it("renders localized per-finding statuses, task id, and publication error", () => {
     render(
       <InventoryFindingsList
@@ -112,7 +176,7 @@ describe("inventory history publication presentation", () => {
     expect(screen.getAllByText("Заблокирована").length).toBeGreaterThan(0)
     expect(screen.getAllByText("Ошибка передачи").length).toBeGreaterThan(0)
     expect(
-      screen.getAllByText("Задача: repair-task-42").length
+      screen.getAllByText("Задача на ремонт создана").length
     ).toBeGreaterThan(0)
     expect(
       screen.getAllByText("Бытовка относится к другому складу").length

@@ -47,7 +47,7 @@ func (repository *Repository) Delete(
 	var persistedSHA string
 	var persistedMediaID uuid.UUID
 	err = tx.QueryRow(ctx, `select request_sha256,media_id from media_command_idempotency
-		where subject_id=$1 and command_type='DELETE' and idempotency_key=$2 for update`,
+		where principal_type='USER' and subject_id=$1 and command_type='DELETE' and idempotency_key=$2 for update`,
 		command.SubjectID, command.IdempotencyKey).Scan(&persistedSHA, &persistedMediaID)
 	if err == nil {
 		if persistedSHA != command.RequestSHA256 || persistedMediaID != command.MediaID {
@@ -111,8 +111,8 @@ func (repository *Repository) Delete(
 		return AssetRecord{}, false, err
 	}
 	_, err = tx.Exec(ctx, `insert into media_command_idempotency (
-		subject_id,command_type,idempotency_key,request_sha256,media_id,created_at,expires_at)
-	values ($1,'DELETE',$2,$3,$4,$5,$6)`, command.SubjectID, command.IdempotencyKey,
+		principal_type,subject_id,command_type,idempotency_key,request_sha256,media_id,created_at,expires_at)
+	values ('USER',$1,'DELETE',$2,$3,$4,$5,$6)`, command.SubjectID, command.IdempotencyKey,
 		command.RequestSHA256, asset.ID, now, now.Add(24*time.Hour))
 	if err != nil {
 		return AssetRecord{}, false, translateConstraint(err)

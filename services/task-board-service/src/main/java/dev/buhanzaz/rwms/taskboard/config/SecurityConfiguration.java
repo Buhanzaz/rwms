@@ -40,6 +40,9 @@ public class SecurityConfiguration {
               .requestMatchers("/api/internal/task-board/v1/logistics/**")
               .hasAuthority("SCOPE_task-board.logistics");
           authorize.requestMatchers("/api/internal/**").authenticated();
+          authorize
+              .requestMatchers("/api/worker/v1/**")
+              .hasAuthority("SCOPE_worker.tasks");
           if (bypassEnabled) {
             authorize.anyRequest().permitAll();
           } else {
@@ -82,8 +85,12 @@ public class SecurityConfiguration {
         List.of(
             HttpHeaders.AUTHORIZATION,
             HttpHeaders.CONTENT_TYPE,
-            CorrelationIdFilter.HEADER_NAME));
-    configuration.setExposedHeaders(List.of(CorrelationIdFilter.HEADER_NAME));
+            HttpHeaders.IF_NONE_MATCH,
+            CorrelationIdFilter.HEADER_NAME,
+            "Idempotency-Key",
+            "Last-Event-ID"));
+    configuration.setExposedHeaders(
+        List.of(CorrelationIdFilter.HEADER_NAME, HttpHeaders.ETAG, HttpHeaders.RETRY_AFTER));
     var source = new UrlBasedCorsConfigurationSource();
     source.registerCorsConfiguration("/**", configuration);
     return source;

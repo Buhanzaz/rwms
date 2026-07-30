@@ -6,14 +6,14 @@ export type RepairWorkerDirectoryGroupDto = {
   warehouseId: string
   name: string
   active: boolean
-  queueCodes: string[]
+  queueIds: string[]
   routeQueueKinds: RepairEstimateCatalogRouteQueueKind[]
   members: RepairTaskWorkerSnapshotDto[]
 }
 
 export type RepairWorkerGroupsQuery = {
   warehouseId: string
-  queueCode: string | null
+  queueId: string | null
   routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
   purpose?: "TASK_ASSIGNMENT" | "DRIVER_DIRECTORY"
 }

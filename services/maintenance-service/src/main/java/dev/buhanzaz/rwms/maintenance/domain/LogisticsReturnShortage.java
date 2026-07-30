@@ -33,6 +33,9 @@ public class LogisticsReturnShortage {
   @Column(name = "rental_item_version_snapshot", nullable = false)
   private long rentalItemVersionSnapshot;
 
+  @Column(name = "estimate_id", nullable = false)
+  private UUID estimateId;
+
   @Column(name = "source_sha256", nullable = false, length = 64)
   private String sourceSha256;
 
@@ -75,6 +78,17 @@ public class LogisticsReturnShortage {
     value.snapshotSha256 = snapshotSha256;
     value.shortageSnapshot = shortageSnapshot;
     return value;
+  }
+
+  public void bindEstimate(UUID estimateId) {
+    if (estimateId == null) {
+      throw new IllegalArgumentException("Logistics return estimate ID is required");
+    }
+    if (this.estimateId != null && !this.estimateId.equals(estimateId)) {
+      throw new IllegalStateException(
+          "Logistics return shortage is already bound to another estimate");
+    }
+    this.estimateId = estimateId;
   }
 
   @PrePersist

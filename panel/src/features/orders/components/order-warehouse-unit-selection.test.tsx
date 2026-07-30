@@ -140,6 +140,46 @@ afterEach(() => {
 })
 
 describe("OrderWarehouseUnitSelection", () => {
+  it("keeps all free cabin categories in the booking candidates", () => {
+    const candidates: OrderUnitCandidate[] = [
+      {
+        ...candidate,
+        unit: {
+          ...candidate.unit,
+          category: "ИТР",
+          number: "БЫТ-ИТР-001",
+        },
+      },
+      {
+        ...candidate,
+        unit: {
+          ...candidate.unit,
+          id: "33333333-3333-4333-8333-333333333333",
+          category: "Обычная",
+          number: "БЫТ-ОБЫЧ-001",
+        },
+      },
+      {
+        ...candidate,
+        unit: {
+          ...candidate.unit,
+          id: "44444444-4444-4444-8444-444444444444",
+          category: "Новая",
+          number: "БЫТ-НОВ-001",
+        },
+      },
+    ]
+
+    renderView(<View currentCandidates={candidates} />)
+
+    expect(screen.getByText("БЫТ-ИТР-001")).toBeTruthy()
+    expect(screen.getByText("БЫТ-ОБЫЧ-001")).toBeTruthy()
+    expect(screen.getByText("БЫТ-НОВ-001")).toBeTruthy()
+    expect(screen.getAllByRole("button", { name: "Добавить" })).toHaveLength(
+      3
+    )
+  })
+
   it("uses the same candidate action in grid and table without exposing creation", async () => {
     const user = userEvent.setup()
     const onAdd = vi.fn()

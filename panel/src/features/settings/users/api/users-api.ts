@@ -9,15 +9,57 @@ import { bearerRequest } from "@/lib/api-client"
 
 const USERS_ENDPOINT = `${AUTHORITY}/api/admin/users`
 
+export class AdminUserResponseProtocolError extends Error {
+  constructor() {
+    super(
+      "Сервер авторизации вернул пользователя без корректного поля mobileAppAccess или rentalAccess. Обновите auth-service: сохранение доступов не подтверждено."
+    )
+    this.name = "AdminUserResponseProtocolError"
+  }
+}
+
+function requireAdminUserEntitlements(response: unknown): AdminUser {
+  if (
+    typeof response !== "object" ||
+    response === null ||
+    Array.isArray(response) ||
+    typeof (response as { mobileAppAccess?: unknown }).mobileAppAccess !==
+      "boolean" ||
+    typeof (response as { rentalAccess?: unknown }).rentalAccess !== "boolean"
+  ) {
+    throw new AdminUserResponseProtocolError()
+  }
+
+  return response as AdminUser
+}
+
+async function requestAdminUser(
+  accessToken: string,
+  input: string,
+  init?: RequestInit
+) {
+  return requireAdminUserEntitlements(
+    await bearerRequest<unknown>(accessToken, input, init)
+  )
+}
+
 export function listAdminUsers(accessToken: string) {
-  return bearerRequest<AdminUser[]>(accessToken, USERS_ENDPOINT)
+  return bearerRequest<unknown>(accessToken, USERS_ENDPOINT).then(
+    (response) => {
+      if (!Array.isArray(response)) {
+        throw new AdminUserResponseProtocolError()
+      }
+
+      return response.map(requireAdminUserEntitlements)
+    }
+  )
 }
 
 export function createAdminUser(
   accessToken: string,
   input: CreateAdminUserInput
 ) {
-  return bearerRequest<AdminUser>(accessToken, USERS_ENDPOINT, {
+  return requestAdminUser(accessToken, USERS_ENDPOINT, {
     method: "POST",
     body: JSON.stringify(input),
   })
@@ -29,7 +71,7 @@ export function updateAdminUser(
   expectedVersion: number,
   input: AdminUserProfileInput
 ) {
-  return bearerRequest<AdminUser>(
+  return requestAdminUser(
     accessToken,
     `${USERS_ENDPOINT}/${encodeURIComponent(userId)}`,
     {
@@ -61,7 +103,7 @@ export function replaceAdminUserWarehouseAccesses(
   expectedVersion: number,
   input: ReplaceWarehouseAccessesInput
 ) {
-  return bearerRequest<AdminUser>(
+  return requestAdminUser(
     accessToken,
     `${USERS_ENDPOINT}/${encodeURIComponent(userId)}/warehouse-accesses`,
     {

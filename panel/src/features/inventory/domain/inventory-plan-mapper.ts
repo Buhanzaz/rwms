@@ -7,6 +7,7 @@ import type {
 import type {
   RepairEstimateCompletionMode,
   RepairEstimateLineDto,
+  RepairPriority,
   RepairEstimateTaskPlanDto,
 } from "@/features/repair-estimates/model/repair-estimate"
 
@@ -65,14 +66,15 @@ function planLine(
 export function buildInventoryPlanSelection(input: {
   completionMode: RepairEstimateCompletionMode
   movementRequired: boolean
+  movementCatalogNodeId?: string | null
+  priority: RepairPriority
+  coverMediaId: string | null
   taskPlans: RepairEstimateTaskPlanDto[]
   lines: RepairEstimateLineDto[]
   media: InventoryMediaReference[]
 }): Exclude<InventoryPlanSelection, null> {
-  if (input.movementRequired) {
-    throw new Error(
-      "Для перемещения не задан маршрут локаций. Сохраните осмотр без перемещения."
-    )
+  if (input.movementRequired && !input.movementCatalogNodeId) {
+    throw new Error("В каталоге не настроено расположение для перемещения.")
   }
   const planCommentByLine = new Map<string, string>()
   for (const plan of input.taskPlans.filter(
@@ -99,7 +101,30 @@ export function buildInventoryPlanSelection(input: {
       (line): line is InventoryCatalogPlanLine =>
         line.aggregationKind === "CATALOG"
     )
-    return { mode: "AUTO", lines: catalogLines, stages: [] }
+    const autoWorkStageCount = input.lines.filter(
+      (line) => line.lineType === "WORK"
+    ).length
+    const stages = input.movementRequired
+      ? [
+          {
+            catalogNodeId: input.movementCatalogNodeId!,
+            kind: "MOVE_TO_REPAIR" as const,
+            order: 0,
+          },
+          {
+            catalogNodeId: input.movementCatalogNodeId!,
+            kind: "MOVE_FROM_REPAIR" as const,
+            order: autoWorkStageCount + 1,
+          },
+        ]
+      : []
+    return {
+      mode: "AUTO",
+      priority: input.priority,
+      coverMediaId: input.coverMediaId,
+      lines: catalogLines,
+      stages,
+    }
   }
   const lineById = new Map(input.lines.map((line) => [line.id, line]))
   const selected = input.taskPlans
@@ -120,13 +145,30 @@ export function buildInventoryPlanSelection(input: {
   if (unique.length !== selected.length || unique.length === 0) {
     throw new Error("Ручной план должен содержать уникальные этапы работ")
   }
+  const workStages = unique.map((catalogNodeId, index) => ({
+    catalogNodeId,
+    kind: "REPAIR_WORK" as const,
+    order: index + (input.movementRequired ? 1 : 0),
+  }))
   return {
     mode: "MANUAL",
+    priority: input.priority,
+    coverMediaId: input.coverMediaId,
     lines,
-    stages: unique.map((catalogNodeId, order) => ({
-      catalogNodeId,
-      kind: "REPAIR_WORK",
-      order,
-    })),
+    stages: input.movementRequired
+      ? [
+          {
+            catalogNodeId: input.movementCatalogNodeId!,
+            kind: "MOVE_TO_REPAIR",
+            order: 0,
+          },
+          ...workStages,
+          {
+            catalogNodeId: input.movementCatalogNodeId!,
+            kind: "MOVE_FROM_REPAIR",
+            order: workStages.length + 1,
+          },
+        ]
+      : workStages,
   }
 }

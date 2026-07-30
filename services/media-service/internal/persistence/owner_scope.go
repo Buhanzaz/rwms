@@ -7,23 +7,28 @@ import (
 )
 
 const (
-	OwnerTypeMaintenanceEstimate    = "MAINTENANCE_ESTIMATE"
-	OwnerTypeMaintenanceRepair      = "MAINTENANCE_REPAIR"
-	OwnerTypeMaintenanceAcceptance  = "MAINTENANCE_ACCEPTANCE"
-	OwnerTypeMaintenanceCatalogNode = "MAINTENANCE_CATALOG_NODE"
-	ViewerContextEstimate           = "ESTIMATE"
-	ViewerContextRepair             = "REPAIR"
-	ViewerContextAcceptance         = "ACCEPTANCE"
-	ViewerContextCatalog            = "CATALOG"
-	ViewerContextReturnInspection   = "RETURN_INSPECTION"
-	ViewerContextShipment           = "SHIPMENT"
-	ViewerContextTransfer           = "TRANSFER"
-	MaintenanceOwnerProofConsumer   = "media-service-maintenance-owner-proof-v1"
-	LogisticsOwnerProofConsumer     = "media-service-logistics-owner-proof-v1"
-	MaintenanceOwnerProofService    = "maintenance-service"
-	LogisticsOwnerProofService      = "logistics-service"
-	MaintenanceOwnerProofScope      = "media.maintenance"
-	LogisticsOwnerProofScope        = "media.logistics"
+	OwnerTypeMaintenanceEstimate      = "MAINTENANCE_ESTIMATE"
+	OwnerTypeMaintenanceRepair        = "MAINTENANCE_REPAIR"
+	OwnerTypeMaintenanceAcceptance    = "MAINTENANCE_ACCEPTANCE"
+	OwnerTypeMaintenanceCatalogNode   = "MAINTENANCE_CATALOG_NODE"
+	OwnerTypeTaskBoardEntry           = "TASK_BOARD_ENTRY"
+	ViewerContextEstimate             = "ESTIMATE"
+	ViewerContextRepair               = "REPAIR"
+	ViewerContextAcceptance           = "ACCEPTANCE"
+	ViewerContextCatalog              = "CATALOG"
+	ViewerContextReturnInspection     = "RETURN_INSPECTION"
+	ViewerContextShipment             = "SHIPMENT"
+	ViewerContextTransfer             = "TRANSFER"
+	ViewerContextWorkResult           = "WORK_RESULT"
+	MaintenanceOwnerProofConsumer     = "media-service-maintenance-owner-proof-v1"
+	LogisticsOwnerProofConsumer       = "media-service-logistics-owner-proof-v1"
+	MaintenanceOwnerProofService      = "maintenance-service"
+	LogisticsOwnerProofService        = "logistics-service"
+	MaintenanceOwnerProofScope        = "media.maintenance"
+	LogisticsOwnerProofScope          = "media.logistics"
+	TaskBoardEntryOwnerProofConsumer  = "media-service-task-board-entry-owner-proof-v1"
+	TaskBoardEntryOwnerProofTopic     = "rwms.task-board.entry-owner-proof.v1"
+	TaskBoardEntryOwnerProofAggregate = "TASK_BOARD_ENTRY_OWNER_PROOF"
 )
 
 type OwnerScopeDefinition struct {
@@ -77,6 +82,11 @@ var ownerScopeDefinitions = map[string]OwnerScopeDefinition{
 		OwnerType: OwnerTypeLogisticsTransfer, ViewerContext: ViewerContextTransfer,
 		SourceService: LogisticsOwnerProofService, ServiceScope: LogisticsOwnerProofScope,
 		ConsumerName: LogisticsOwnerProofConsumer, AggregateType: "TRANSFER", Structured: true,
+	},
+	OwnerTypeTaskBoardEntry: {
+		OwnerType: OwnerTypeTaskBoardEntry, ViewerContext: ViewerContextWorkResult,
+		ConsumerName:  TaskBoardEntryOwnerProofConsumer,
+		AggregateType: TaskBoardEntryOwnerProofAggregate,
 	},
 }
 

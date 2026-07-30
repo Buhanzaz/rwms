@@ -113,6 +113,165 @@ func TestCreateUploadReturnsOnlySameOriginContentPath(t *testing.T) {
 	}
 }
 
+func TestWorkerCreatesTaskBoardEvidenceWithServerDerivedWorkerActor(t *testing.T) {
+	warehouseID, entryID, workerID, subjectID, evidenceID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	repository := &repositoryStub{createAsset: persistence.AssetRecord{
+		ID: uuid.New(), UploadSessionID: uuid.New(), UploadExpiresAt: time.Now().Add(time.Minute),
+	}}
+	worker := auth.WorkerPrincipal{
+		SubjectID: subjectID, WorkerID: workerID, WarehouseID: warehouseID,
+		Scopes: map[string]struct{}{"worker.tasks": {}},
+	}
+	server := newTestServer(t, repository, validatorStub{err: auth.ErrForbidden, workerPrincipal: worker}, &storeStub{})
+	body := fmt.Sprintf(`{"ownerType":"TASK_BOARD_ENTRY","ownerId":"%s","clientReferenceId":"%s","warehouseId":"%s","context":"WORK_RESULT","fileName":"result.jpg","contentType":"image/jpeg","contentLength":128,"checksumSha256":"%s"}`,
+		entryID, evidenceID, warehouseID, strings.Repeat("a", 64))
+	request := httptest.NewRequest(http.MethodPost, "/api/media/v1/upload-sessions", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer worker")
+	request.Header.Set("Idempotency-Key", evidenceID.String())
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+	command := repository.createCommand
+	if command.PrincipalType != persistence.PrincipalTypeWorker || command.SubjectID != subjectID ||
+		command.WorkerID == nil || *command.WorkerID != workerID || command.Actor.SubjectID != workerID ||
+		command.ClientReferenceID == nil || *command.ClientReferenceID != evidenceID || command.OwnerID != entryID.String() {
+		t.Fatalf("worker evidence command = %#v", command)
+	}
+}
+
+func TestWorkerSourceMediaReadIsProofScopedAndRevocationFailsClosed(t *testing.T) {
+	warehouseID, entryID, workerID, subjectID, sourceMediaID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	body := []byte("source-original")
+	asset := persistence.AssetRecord{ID: sourceMediaID, WarehouseID: warehouseID, FileName: "source.jpg", Status: media.StatusReady, Generation: 3}
+	original := &persistence.VariantRecord{Variant: media.VariantOriginal, ObjectKey: "private/source", ObjectVersionID: "source-v3", ContentType: "image/jpeg", SizeBytes: int64(len(body))}
+	worker := auth.WorkerPrincipal{SubjectID: subjectID, WorkerID: workerID, WarehouseID: warehouseID, Scopes: map[string]struct{}{"worker.tasks": {}}}
+	path := "/api/media/v1/assets/" + sourceMediaID.String() + "/original?ownerType=TASK_BOARD_ENTRY&ownerId=" + entryID.String() +
+		"&warehouseId=" + warehouseID.String() + "&context=WORK_RESULT&generation=3"
+
+	t.Run("allowed exact source reference", func(t *testing.T) {
+		repository := &repositoryStub{workerOriginalAsset: asset, workerOriginalVariant: original}
+		store := &storeStub{objectBody: body, statMetadata: media.ObjectMetadata{VersionID: "source-v3", SizeBytes: int64(len(body)), ContentType: "image/jpeg"}}
+		server := newTestServer(t, repository, validatorStub{err: auth.ErrForbidden, workerPrincipal: worker}, store)
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer worker")
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !bytes.Equal(response.Body.Bytes(), body) {
+			t.Fatalf("source response = %d %q", response.Code, response.Body.Bytes())
+		}
+		if repository.workerReadEntryID != entryID || repository.workerReadWarehouseID != warehouseID ||
+			repository.workerReadWorkerID != workerID || repository.workerReadGeneration == nil || *repository.workerReadGeneration != 3 {
+			t.Fatalf("worker source read scope = entry=%s warehouse=%s worker=%s generation=%v", repository.workerReadEntryID, repository.workerReadWarehouseID, repository.workerReadWorkerID, repository.workerReadGeneration)
+		}
+	})
+
+	t.Run("proof revoked", func(t *testing.T) {
+		repository := &repositoryStub{workerOriginalErr: persistence.ErrOwnerProofMissing}
+		server := newTestServer(t, repository, validatorStub{err: auth.ErrForbidden, workerPrincipal: worker}, &storeStub{})
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer worker")
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), `"code":"MEDIA_OWNER_PROOF_REQUIRED"`) {
+			t.Fatalf("revoked source response = %d %s", response.Code, response.Body.String())
+		}
+	})
+}
+
+func TestWorkerListUsesOneCurrentProofScopedRead(t *testing.T) {
+	warehouseID, entryID, workerID, subjectID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	worker := auth.WorkerPrincipal{
+		SubjectID: subjectID, WorkerID: workerID, WarehouseID: warehouseID,
+		Scopes: map[string]struct{}{"worker.tasks": {}},
+	}
+	path := "/api/media/v1/assets?ownerType=TASK_BOARD_ENTRY&ownerId=" + entryID.String() +
+		"&warehouseId=" + warehouseID.String() + "&context=WORK_RESULT"
+	records := []persistence.AssetWithVariants{{
+		Asset: persistence.AssetRecord{
+			ID: uuid.New(), OwnerType: persistence.OwnerTypeTaskBoardEntry, OwnerID: entryID.String(),
+			WarehouseID: warehouseID, Status: media.StatusReady, Generation: 1,
+		},
+	}}
+
+	t.Run("active proof", func(t *testing.T) {
+		repository := &repositoryStub{workerListRecords: records}
+		server := newTestServer(t, repository, validatorStub{err: auth.ErrForbidden, workerPrincipal: worker}, &storeStub{})
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer worker")
+		response := httptest.NewRecorder()
+
+		server.Handler().ServeHTTP(response, request)
+
+		if response.Code != http.StatusOK || repository.workerListCalls != 1 || repository.workerAuthorizeCalls != 0 ||
+			repository.workerListEntryID != entryID || repository.workerListWarehouseID != warehouseID ||
+			repository.workerListWorkerID != workerID {
+			t.Fatalf("worker list response=%d calls=%d authorize=%d entry=%s warehouse=%s worker=%s body=%s",
+				response.Code, repository.workerListCalls, repository.workerAuthorizeCalls,
+				repository.workerListEntryID, repository.workerListWarehouseID, repository.workerListWorkerID,
+				response.Body.String())
+		}
+	})
+
+	t.Run("proof revoked before list", func(t *testing.T) {
+		repository := &repositoryStub{workerListErr: persistence.ErrOwnerProofMissing}
+		server := newTestServer(t, repository, validatorStub{err: auth.ErrForbidden, workerPrincipal: worker}, &storeStub{})
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer worker")
+		response := httptest.NewRecorder()
+
+		server.Handler().ServeHTTP(response, request)
+
+		if response.Code != http.StatusForbidden || repository.workerListCalls != 1 ||
+			!strings.Contains(response.Body.String(), `"code":"MEDIA_OWNER_PROOF_REQUIRED"`) {
+			t.Fatalf("revoked worker list response=%d calls=%d body=%s",
+				response.Code, repository.workerListCalls, response.Body.String())
+		}
+	})
+}
+
+func TestWorkerUploadStagesRecheckCurrentTaskBoardProofBeforeStorage(t *testing.T) {
+	warehouseID, entryID, workerID, subjectID, sessionID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	checksum := strings.Repeat("a", 64)
+	asset := persistence.AssetRecord{
+		ID: uuid.New(), OwnerType: persistence.OwnerTypeTaskBoardEntry, OwnerID: entryID.String(), WarehouseID: warehouseID,
+		ContentType: "image/jpeg", ExpectedLength: 8, ExpectedChecksum: checksum, UploadExpiresAt: time.Now().Add(time.Minute),
+	}
+	worker := auth.WorkerPrincipal{SubjectID: subjectID, WorkerID: workerID, WarehouseID: warehouseID, Scopes: map[string]struct{}{"worker.tasks": {}}}
+	for _, testCase := range []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{name: "content", method: http.MethodPut, path: "/api/media/v1/upload-sessions/" + sessionID.String() + "/content", body: "12345678"},
+		{name: "finalize", method: http.MethodPost, path: "/api/media/v1/upload-sessions/" + sessionID.String() + "/complete", body: `{"objectVersionId":"v1","etag":"etag","checksumSha256":"` + checksum + `"}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			repository := &repositoryStub{sessionAsset: asset, workerAuthorizeErr: persistence.ErrOwnerProofMissing}
+			store := &storeStub{}
+			server := newTestServer(t, repository, validatorStub{err: auth.ErrForbidden, workerPrincipal: worker}, store)
+			request := httptest.NewRequest(testCase.method, testCase.path, strings.NewReader(testCase.body))
+			request.Header.Set("Authorization", "Bearer worker")
+			request.Header.Set("Idempotency-Key", uuid.NewString())
+			if testCase.name == "content" {
+				request.Header.Set("Content-Type", "image/jpeg")
+			}
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), `"code":"MEDIA_OWNER_PROOF_REQUIRED"`) {
+				t.Fatalf("response = %d %s", response.Code, response.Body.String())
+			}
+			if store.putCalls != 0 || store.statCalls != 0 || store.getCalls != 0 || repository.finalizeCalls != 0 {
+				t.Fatalf("rejected proof touched media: put=%d stat=%d get=%d finalize=%d", store.putCalls, store.statCalls, store.getCalls, repository.finalizeCalls)
+			}
+		})
+	}
+}
+
 func TestCabinUploadUsesTheWarehouseOwnerScope(t *testing.T) {
 	warehouseID, cabinID, subjectID := uuid.New(), uuid.New(), uuid.New()
 	folderID := uuid.New()
@@ -1127,11 +1286,214 @@ func TestLogisticsReferenceValidationIsReadOnlyAcrossConcurrentRequests(t *testi
 	}
 }
 
+func TestLogisticsCabinPresentationSnapshotReturnsOpaqueCurrentReferences(t *testing.T) {
+	warehouseID, firstCabinID, secondCabinID := uuid.New(), uuid.New(), uuid.New()
+	firstMediaID, secondMediaID := uuid.New(), uuid.New()
+	repository := &repositoryStub{cabinPresentationRecords: []persistence.CabinPresentationSnapshotRecord{
+		{
+			CabinID: firstCabinID,
+			Photos: []persistence.CabinPresentationPhotoRecord{
+				{MediaID: firstMediaID, Generation: 3, SortOrder: 0, HasSmall: true, HasLarge: true},
+				{MediaID: secondMediaID, Generation: 2, SortOrder: 4, HasSmall: true},
+			},
+		},
+		{CabinID: secondCabinID, Photos: []persistence.CabinPresentationPhotoRecord{}},
+	}}
+	server := newTestServer(t, repository, logisticsValidatorStub(), &storeStub{})
+	body := fmt.Sprintf(`{"warehouseId":"%s","cabinIds":["%s","%s"]}`,
+		warehouseID, firstCabinID, secondCabinID)
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/internal/media/v1/logistics/cabin-presentations/snapshots", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer service")
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("snapshot response = %d %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Items []struct {
+			CabinID uuid.UUID `json:"cabinId"`
+			Photos  []struct {
+				MediaID           uuid.UUID `json:"mediaId"`
+				Generation        int       `json:"generation"`
+				SortOrder         int64     `json:"sortOrder"`
+				AvailableVariants []string  `json:"availableVariants"`
+			} `json:"photos"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode snapshot response: %v", err)
+	}
+	if len(payload.Items) != 2 || payload.Items[0].CabinID != firstCabinID ||
+		len(payload.Items[0].Photos) != 2 || payload.Items[0].Photos[0].MediaID != firstMediaID ||
+		payload.Items[0].Photos[0].Generation != 3 || payload.Items[0].Photos[0].SortOrder != 0 ||
+		!sameStrings(payload.Items[0].Photos[0].AvailableVariants, []string{"SMALL", "LARGE"}) ||
+		payload.Items[0].Photos[1].MediaID != secondMediaID ||
+		!sameStrings(payload.Items[0].Photos[1].AvailableVariants, []string{"SMALL"}) ||
+		payload.Items[1].CabinID != secondCabinID || len(payload.Items[1].Photos) != 0 {
+		t.Fatalf("snapshot payload = %#v", payload.Items)
+	}
+	if repository.cabinPresentationCalls != 1 || repository.cabinPresentationWarehouseID != warehouseID ||
+		len(repository.cabinPresentationIDs) != 2 || repository.cabinPresentationIDs[0] != firstCabinID ||
+		repository.cabinPresentationIDs[1] != secondCabinID {
+		t.Fatalf("snapshot repository call = %d %s %#v", repository.cabinPresentationCalls,
+			repository.cabinPresentationWarehouseID, repository.cabinPresentationIDs)
+	}
+	for _, forbidden := range []string{"objectKey", "sourceObjectKey", "bucket", "contentPath", "url", "signed", "fileName", "contentType", "status", "minio"} {
+		if strings.Contains(strings.ToLower(response.Body.String()), strings.ToLower(`"`+forbidden+`"`)) {
+			t.Fatalf("snapshot response leaked %q: %s", forbidden, response.Body.String())
+		}
+	}
+}
+
+func TestLogisticsCabinPresentationVariantStreamsOnlyCurrentCabinVariant(t *testing.T) {
+	warehouseID, cabinID, mediaID := uuid.New(), uuid.New(), uuid.New()
+	body := []byte("webp-bytes")
+	variant := &persistence.VariantRecord{
+		Variant: media.VariantSmall, ObjectKey: "media/private/cabin/small.webp", ObjectVersionID: "small-v3",
+		ContentType: "image/webp", SizeBytes: int64(len(body)),
+	}
+	repository := &repositoryStub{currentAsset: persistence.AssetRecord{
+		ID: mediaID, OwnerType: persistence.OwnerTypeCabin, OwnerID: cabinID.String(), WarehouseID: warehouseID,
+		Kind: media.KindImage, Status: media.StatusReady, Generation: 3,
+	}, currentVariant: variant}
+	store := &storeStub{objectBody: body, statMetadata: media.ObjectMetadata{
+		VersionID: "small-v3", SizeBytes: int64(len(body)), ContentType: "image/webp",
+	}}
+	server := newTestServer(t, repository, logisticsValidatorStub(), store)
+	request := httptest.NewRequest(http.MethodGet,
+		"/api/internal/media/v1/logistics/cabin-presentations/assets/"+mediaID.String()+
+			"/variants/SMALL/content?warehouseId="+warehouseID.String()+"&cabinId="+cabinID.String()+"&generation=3", nil)
+	request.Header.Set("Authorization", "Bearer service")
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "private, no-store" ||
+		response.Header().Get("Content-Type") != "image/webp" || response.Header().Get("X-Content-Type-Options") != "nosniff" ||
+		response.Body.String() != string(body) {
+		t.Fatalf("content response = %d headers=%#v body=%q", response.Code, response.Header(), response.Body.String())
+	}
+	if strings.Contains(response.Header().Get("Content-Disposition"), "private") ||
+		strings.Contains(response.Header().Get("Content-Disposition"), mediaID.String()) {
+		t.Fatalf("content disposition leaks media metadata: %q", response.Header().Get("Content-Disposition"))
+	}
+	if repository.currentReadCalls != 1 || repository.currentReadMediaID != mediaID ||
+		repository.currentReadOwnerType != persistence.OwnerTypeCabin || repository.currentReadOwnerID != cabinID.String() ||
+		repository.currentReadWarehouseID != warehouseID || repository.currentReadGeneration != 3 ||
+		repository.currentReadVariant != media.VariantSmall {
+		t.Fatalf("current variant read = calls:%d media:%s owner:%s/%s warehouse:%s generation:%d variant:%s",
+			repository.currentReadCalls, repository.currentReadMediaID, repository.currentReadOwnerType,
+			repository.currentReadOwnerID, repository.currentReadWarehouseID, repository.currentReadGeneration,
+			repository.currentReadVariant)
+	}
+	if store.getCalls != 1 || store.getKey != variant.ObjectKey || store.getVersion != variant.ObjectVersionID {
+		t.Fatalf("store read = calls:%d key:%q version:%q", store.getCalls, store.getKey, store.getVersion)
+	}
+}
+
+func TestLogisticsCabinPresentationEndpointsFailClosed(t *testing.T) {
+	warehouseID, cabinID, mediaID := uuid.New(), uuid.New(), uuid.New()
+	snapshotBody := fmt.Sprintf(`{"warehouseId":"%s","cabinIds":["%s","%s"]}`,
+		warehouseID, cabinID, cabinID)
+	contentPath := "/api/internal/media/v1/logistics/cabin-presentations/assets/" + mediaID.String() +
+		"/variants/SMALL/content?warehouseId=" + warehouseID.String() + "&cabinId=" + cabinID.String() + "&generation=1"
+	for _, testCase := range []struct {
+		name       string
+		method     string
+		path       string
+		body       string
+		validator  validatorStub
+		repository *repositoryStub
+		wantStatus int
+		wantCode   string
+		wantReads  int
+	}{
+		{
+			name: "missing service token", method: http.MethodPost,
+			path: "/api/internal/media/v1/logistics/cabin-presentations/snapshots", body: snapshotBody,
+			validator: validatorStub{serviceErr: auth.ErrUnauthorized}, repository: &repositoryStub{},
+			wantStatus: http.StatusUnauthorized, wantCode: "MEDIA_UNAUTHORIZED",
+		},
+		{
+			name: "public presentation route does not exist", method: http.MethodGet,
+			path:      strings.Replace(contentPath, "/api/internal/media/", "/api/media/", 1),
+			validator: logisticsValidatorStub(), repository: &repositoryStub{},
+			wantStatus: http.StatusNotFound, wantCode: "MEDIA_NOT_FOUND",
+		},
+		{
+			name: "combined service scopes are rejected", method: http.MethodPost,
+			path: "/api/internal/media/v1/logistics/cabin-presentations/snapshots", body: fmt.Sprintf(`{"warehouseId":"%s","cabinIds":["%s"]}`, warehouseID, cabinID),
+			validator: validatorStub{servicePrincipal: auth.ServicePrincipal{
+				Subject: "logistics-service", ClientID: "logistics-service",
+				Scopes: map[string]struct{}{"media.logistics": {}, "asset.logistics": {}},
+			}}, repository: &repositoryStub{}, wantStatus: http.StatusForbidden, wantCode: "MEDIA_FORBIDDEN",
+		},
+		{
+			name: "duplicate cabin IDs are rejected", method: http.MethodPost,
+			path: "/api/internal/media/v1/logistics/cabin-presentations/snapshots", body: snapshotBody,
+			validator: logisticsValidatorStub(), repository: &repositoryStub{},
+			wantStatus: http.StatusBadRequest, wantCode: "MEDIA_INVALID_CABIN_PRESENTATION",
+		},
+		{
+			name: "variant must be exactly uppercase small or large", method: http.MethodGet,
+			path:      strings.Replace(contentPath, "/SMALL/", "/small/", 1),
+			validator: logisticsValidatorStub(), repository: &repositoryStub{},
+			wantStatus: http.StatusBadRequest, wantCode: "MEDIA_INVALID_CABIN_PRESENTATION",
+		},
+		{
+			name: "owner warehouse or generation mismatch stays opaque", method: http.MethodGet,
+			path: contentPath, validator: logisticsValidatorStub(),
+			repository: &repositoryStub{currentReadErr: persistence.ErrNotFound},
+			wantStatus: http.StatusNotFound, wantCode: "MEDIA_NOT_FOUND", wantReads: 1,
+		},
+		{
+			name: "unavailable variant stays opaque", method: http.MethodGet,
+			path: contentPath, validator: logisticsValidatorStub(), repository: &repositoryStub{
+				currentAsset: persistence.AssetRecord{ID: mediaID, Kind: media.KindImage, Status: media.StatusReady, Generation: 1},
+			}, wantStatus: http.StatusNotFound, wantCode: "MEDIA_NOT_FOUND", wantReads: 1,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			store := &storeStub{}
+			server := newTestServer(t, testCase.repository, testCase.validator, store)
+			request := httptest.NewRequest(testCase.method, testCase.path, strings.NewReader(testCase.body))
+			request.Header.Set("Authorization", "Bearer service")
+			response := httptest.NewRecorder()
+
+			server.Handler().ServeHTTP(response, request)
+
+			if response.Code != testCase.wantStatus || !strings.Contains(response.Body.String(), `"code":"`+testCase.wantCode+`"`) {
+				t.Fatalf("response = %d %s", response.Code, response.Body.String())
+			}
+			if testCase.repository.cabinPresentationCalls != 0 || testCase.repository.currentReadCalls != testCase.wantReads ||
+				store.getCalls != 0 {
+				t.Fatalf("repository/storage calls = snapshots:%d variants:%d storage:%d",
+					testCase.repository.cabinPresentationCalls, testCase.repository.currentReadCalls, store.getCalls)
+			}
+		})
+	}
+}
+
 func logisticsValidatorStub() validatorStub {
 	return validatorStub{servicePrincipal: auth.ServicePrincipal{
 		Subject: "logistics-service", ClientID: "logistics-service",
 		Scopes: map[string]struct{}{"media.logistics": {}},
 	}}
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func logisticsReferenceBody(
@@ -1171,6 +1533,8 @@ func (stub readyStub) Ready(context.Context) error { return stub.err }
 type validatorStub struct {
 	principal        auth.Principal
 	err              error
+	workerPrincipal  auth.WorkerPrincipal
+	workerErr        error
 	servicePrincipal auth.ServicePrincipal
 	serviceErr       error
 }
@@ -1179,64 +1543,110 @@ func (stub validatorStub) Validate(context.Context, string) (auth.Principal, err
 	return stub.principal, stub.err
 }
 
+func (stub validatorStub) ValidateWorker(context.Context, string) (auth.WorkerPrincipal, error) {
+	if stub.workerErr != nil {
+		return auth.WorkerPrincipal{}, stub.workerErr
+	}
+	if stub.workerPrincipal.SubjectID != uuid.Nil {
+		return stub.workerPrincipal, nil
+	}
+	if stub.err != nil {
+		return auth.WorkerPrincipal{}, stub.err
+	}
+	return auth.WorkerPrincipal{}, auth.ErrForbidden
+}
+
 func (stub validatorStub) ValidateService(context.Context, string) (auth.ServicePrincipal, error) {
 	return stub.servicePrincipal, stub.serviceErr
 }
 
 type repositoryStub struct {
-	mutex                 sync.Mutex
-	contentMutex          sync.Mutex
-	contentLockErr        error
-	createAsset           persistence.AssetRecord
-	createReplay          bool
-	createErr             error
-	createCalls           int
-	createCommand         persistence.CreateUploadCommand
-	sessionAsset          persistence.AssetRecord
-	sessionErr            error
-	finalizeAsset         persistence.AssetRecord
-	finalizeReplay        bool
-	finalizeErr           error
-	finalizeFunc          func(persistence.FinalizeCommand) (persistence.AssetRecord, bool, error)
-	finalizeCalls         int
-	finalizeCommands      []persistence.FinalizeCommand
-	ownerRecords          []persistence.AssetWithVariants
-	ownerReadErr          error
-	cabinCoverRecords     []persistence.CabinCoverRecord
-	cabinCoverErr         error
-	cabinCoverCalls       int
-	cabinCoverWarehouseID uuid.UUID
-	cabinCoverIDs         []uuid.UUID
-	originalAsset         persistence.AssetRecord
-	originalVariant       *persistence.VariantRecord
-	originalReadErr       error
-	currentAsset          persistence.AssetRecord
-	currentVariant        *persistence.VariantRecord
-	currentReadErr        error
-	scopedAsset           persistence.AssetRecord
-	scopedErr             error
-	scopedCalls           int
-	scopedOwnerType       string
-	scopedOwnerID         string
-	scopedWarehouseID     uuid.UUID
-	rotateAsset           persistence.AssetRecord
-	rotateReplay          bool
-	rotateErr             error
-	rotateCalls           int
-	rotateCommand         persistence.RotateCommand
-	validationCalls       int
-	validationCommand     persistence.ValidateLogisticsReferencesCommand
-	validationErr         error
-	ownerProofRecord      persistence.ServiceOwnerProofRecord
-	ownerProofReplay      bool
-	ownerProofErr         error
-	ownerProofCalls       int
-	ownerProofCommand     persistence.ServiceOwnerProofCommand
-	deleteAsset           persistence.AssetRecord
-	deleteReplay          bool
-	deleteErr             error
-	deleteCalls           int
-	deleteCommand         persistence.DeleteCommand
+	mutex                        sync.Mutex
+	contentMutex                 sync.Mutex
+	contentLockErr               error
+	createAsset                  persistence.AssetRecord
+	createReplay                 bool
+	createErr                    error
+	createCalls                  int
+	createCommand                persistence.CreateUploadCommand
+	sessionAsset                 persistence.AssetRecord
+	sessionErr                   error
+	finalizeAsset                persistence.AssetRecord
+	finalizeReplay               bool
+	finalizeErr                  error
+	finalizeFunc                 func(persistence.FinalizeCommand) (persistence.AssetRecord, bool, error)
+	finalizeCalls                int
+	finalizeCommands             []persistence.FinalizeCommand
+	ownerRecords                 []persistence.AssetWithVariants
+	ownerReadErr                 error
+	workerListRecords            []persistence.AssetWithVariants
+	workerListErr                error
+	workerListCalls              int
+	workerListEntryID            uuid.UUID
+	workerListWarehouseID        uuid.UUID
+	workerListWorkerID           uuid.UUID
+	cabinCoverRecords            []persistence.CabinCoverRecord
+	cabinCoverErr                error
+	cabinCoverCalls              int
+	cabinCoverWarehouseID        uuid.UUID
+	cabinCoverIDs                []uuid.UUID
+	cabinPresentationRecords     []persistence.CabinPresentationSnapshotRecord
+	cabinPresentationErr         error
+	cabinPresentationCalls       int
+	cabinPresentationWarehouseID uuid.UUID
+	cabinPresentationIDs         []uuid.UUID
+	originalAsset                persistence.AssetRecord
+	originalVariant              *persistence.VariantRecord
+	originalReadErr              error
+	currentAsset                 persistence.AssetRecord
+	currentVariant               *persistence.VariantRecord
+	currentReadErr               error
+	currentReadCalls             int
+	currentReadMediaID           uuid.UUID
+	currentReadOwnerType         string
+	currentReadOwnerID           string
+	currentReadWarehouseID       uuid.UUID
+	currentReadGeneration        int
+	currentReadVariant           media.Variant
+	workerOriginalAsset          persistence.AssetRecord
+	workerOriginalVariant        *persistence.VariantRecord
+	workerOriginalErr            error
+	workerCurrentAsset           persistence.AssetRecord
+	workerCurrentVariant         *persistence.VariantRecord
+	workerCurrentErr             error
+	workerAuthorizeErr           error
+	workerAuthorizeCalls         int
+	workerEntryID                uuid.UUID
+	workerWarehouseID            uuid.UUID
+	workerID                     uuid.UUID
+	workerReadEntryID            uuid.UUID
+	workerReadWarehouseID        uuid.UUID
+	workerReadWorkerID           uuid.UUID
+	workerReadGeneration         *int
+	scopedAsset                  persistence.AssetRecord
+	scopedErr                    error
+	scopedCalls                  int
+	scopedOwnerType              string
+	scopedOwnerID                string
+	scopedWarehouseID            uuid.UUID
+	rotateAsset                  persistence.AssetRecord
+	rotateReplay                 bool
+	rotateErr                    error
+	rotateCalls                  int
+	rotateCommand                persistence.RotateCommand
+	validationCalls              int
+	validationCommand            persistence.ValidateLogisticsReferencesCommand
+	validationErr                error
+	ownerProofRecord             persistence.ServiceOwnerProofRecord
+	ownerProofReplay             bool
+	ownerProofErr                error
+	ownerProofCalls              int
+	ownerProofCommand            persistence.ServiceOwnerProofCommand
+	deleteAsset                  persistence.AssetRecord
+	deleteReplay                 bool
+	deleteErr                    error
+	deleteCalls                  int
+	deleteCommand                persistence.DeleteCommand
 }
 
 func (stub *repositoryStub) CreateUpload(_ context.Context, command persistence.CreateUploadCommand) (persistence.AssetRecord, bool, error) {
@@ -1262,7 +1672,7 @@ func (stub *repositoryStub) AcquireUploadSessionContentLock(context.Context, uui
 	}, nil
 }
 
-func (stub *repositoryStub) UploadSessionForSubject(context.Context, uuid.UUID, uuid.UUID) (persistence.AssetRecord, error) {
+func (stub *repositoryStub) UploadSessionForPrincipal(context.Context, uuid.UUID, uuid.UUID, string) (persistence.AssetRecord, error) {
 	return stub.sessionAsset, stub.sessionErr
 }
 
@@ -1293,6 +1703,20 @@ func (stub *repositoryStub) ReadOwnerAssets(_ context.Context, _, _ string, _ uu
 	return consume(stub.ownerRecords)
 }
 
+func (stub *repositoryStub) ReadTaskBoardEntryAssetsForWorker(_ context.Context, entryID, warehouseID, workerID uuid.UUID,
+	_ int, _ *uuid.UUID, consume func([]persistence.AssetWithVariants) error,
+) error {
+	stub.workerListCalls++
+	stub.workerListEntryID, stub.workerListWarehouseID, stub.workerListWorkerID = entryID, warehouseID, workerID
+	if stub.workerListErr != nil {
+		return stub.workerListErr
+	}
+	if stub.workerListRecords == nil {
+		return errors.New("unexpected ReadTaskBoardEntryAssetsForWorker")
+	}
+	return consume(stub.workerListRecords)
+}
+
 func (stub *repositoryStub) ReadCabinCovers(_ context.Context, warehouseID uuid.UUID, cabinIDs []uuid.UUID,
 	consume func([]persistence.CabinCoverRecord) error,
 ) error {
@@ -1308,6 +1732,21 @@ func (stub *repositoryStub) ReadCabinCovers(_ context.Context, warehouseID uuid.
 	return consume(stub.cabinCoverRecords)
 }
 
+func (stub *repositoryStub) ReadCabinPresentationSnapshots(_ context.Context, warehouseID uuid.UUID, cabinIDs []uuid.UUID,
+	consume func([]persistence.CabinPresentationSnapshotRecord) error,
+) error {
+	stub.cabinPresentationCalls++
+	stub.cabinPresentationWarehouseID = warehouseID
+	stub.cabinPresentationIDs = append([]uuid.UUID(nil), cabinIDs...)
+	if stub.cabinPresentationErr != nil {
+		return stub.cabinPresentationErr
+	}
+	if stub.cabinPresentationRecords == nil {
+		return errors.New("unexpected ReadCabinPresentationSnapshots")
+	}
+	return consume(stub.cabinPresentationRecords)
+}
+
 func (stub *repositoryStub) ReadOriginal(_ context.Context, _ uuid.UUID, _, _ string, _ uuid.UUID,
 	consume func(persistence.AssetRecord, *persistence.VariantRecord) error,
 ) error {
@@ -1320,9 +1759,12 @@ func (stub *repositoryStub) ReadOriginal(_ context.Context, _ uuid.UUID, _, _ st
 	return consume(stub.originalAsset, stub.originalVariant)
 }
 
-func (stub *repositoryStub) ReadCurrentVariant(_ context.Context, _ uuid.UUID, _, _ string, _ uuid.UUID, _ int,
-	_ media.Variant, consume func(persistence.AssetRecord, *persistence.VariantRecord) error,
+func (stub *repositoryStub) ReadCurrentVariant(_ context.Context, mediaID uuid.UUID, ownerType, ownerID string,
+	warehouseID uuid.UUID, generation int, variant media.Variant, consume func(persistence.AssetRecord, *persistence.VariantRecord) error,
 ) error {
+	stub.currentReadCalls++
+	stub.currentReadMediaID, stub.currentReadOwnerType, stub.currentReadOwnerID = mediaID, ownerType, ownerID
+	stub.currentReadWarehouseID, stub.currentReadGeneration, stub.currentReadVariant = warehouseID, generation, variant
 	if stub.currentReadErr != nil {
 		return stub.currentReadErr
 	}
@@ -1330,6 +1772,43 @@ func (stub *repositoryStub) ReadCurrentVariant(_ context.Context, _ uuid.UUID, _
 		return errors.New("unexpected ReadCurrentVariant")
 	}
 	return consume(stub.currentAsset, stub.currentVariant)
+}
+
+func (stub *repositoryStub) ReadTaskBoardEntryOriginalForWorker(_ context.Context, entryID, warehouseID, workerID, _ uuid.UUID, generation *int,
+	consume func(persistence.AssetRecord, *persistence.VariantRecord) error,
+) error {
+	stub.workerReadEntryID, stub.workerReadWarehouseID, stub.workerReadWorkerID = entryID, warehouseID, workerID
+	if generation != nil {
+		value := *generation
+		stub.workerReadGeneration = &value
+	}
+	if stub.workerOriginalErr != nil {
+		return stub.workerOriginalErr
+	}
+	if stub.workerOriginalAsset.ID == uuid.Nil {
+		return errors.New("unexpected ReadTaskBoardEntryOriginalForWorker")
+	}
+	return consume(stub.workerOriginalAsset, stub.workerOriginalVariant)
+}
+
+func (stub *repositoryStub) ReadTaskBoardEntryVariantForWorker(_ context.Context, entryID, warehouseID, workerID, _ uuid.UUID, generation int,
+	_ media.Variant, consume func(persistence.AssetRecord, *persistence.VariantRecord) error,
+) error {
+	stub.workerReadEntryID, stub.workerReadWarehouseID, stub.workerReadWorkerID = entryID, warehouseID, workerID
+	stub.workerReadGeneration = &generation
+	if stub.workerCurrentErr != nil {
+		return stub.workerCurrentErr
+	}
+	if stub.workerCurrentAsset.ID == uuid.Nil {
+		return errors.New("unexpected ReadTaskBoardEntryVariantForWorker")
+	}
+	return consume(stub.workerCurrentAsset, stub.workerCurrentVariant)
+}
+
+func (stub *repositoryStub) AuthorizeTaskBoardEntryWorker(_ context.Context, entryID, warehouseID, workerID uuid.UUID) error {
+	stub.workerAuthorizeCalls++
+	stub.workerEntryID, stub.workerWarehouseID, stub.workerID = entryID, warehouseID, workerID
+	return stub.workerAuthorizeErr
 }
 
 func (stub *repositoryStub) GetAssetScoped(_ context.Context, _ uuid.UUID, ownerType, ownerID string, warehouseID uuid.UUID) (persistence.AssetRecord, error) {

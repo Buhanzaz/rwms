@@ -2,6 +2,9 @@ package dev.buhanzaz.rwms.asset;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.doAnswer;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.DIMENSION_24_X_6;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.FINISHING_DVP;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.TYPE_BK_1;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateEquipmentRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateRentalItemRequest;
@@ -31,7 +34,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
@@ -98,12 +103,12 @@ class InventoryAssetCaptureSnapshotIntegrationTest {
                 new CreateRentalItemRequest(
                     warehouseId,
                     "TENANT-" + UUID.randomUUID(),
+                    TYPE_BK_1,
+                    DIMENSION_24_X_6,
+                    FINISHING_DVP,
                     null,
-                    null,
-                    null,
-                    null,
-                    null,
-                    null,
+                    List.of(),
+                    false,
                     Map.of(),
                     List.of()))
             .response();
@@ -114,6 +119,7 @@ class InventoryAssetCaptureSnapshotIntegrationTest {
             warehouseId,
             UUID.randomUUID(),
             "Арендатор А",
+            null,
             UUID.randomUUID(),
             "WMS_ADMIN"));
 
@@ -137,6 +143,9 @@ class InventoryAssetCaptureSnapshotIntegrationTest {
               assertThat(current.displayCanonicalNumber()).isEqualTo(rental.number());
               assertThat(current.identityMatchKey()).isNotBlank();
               assertThat(current.tenantSnapshot()).isEqualTo("Арендатор А");
+              assertThat(current.passportSnapshot())
+                  .containsEntry("tenant", "Арендатор А");
+              assertThat(current.contentsSnapshot()).isEmpty();
             });
 
     var crossWarehouse =
@@ -153,11 +162,19 @@ class InventoryAssetCaptureSnapshotIntegrationTest {
     UUID subjectId = UUID.randomUUID();
     var rental = service.createRentalItem(subjectId, UUID.randomUUID(),
         new CreateRentalItemRequest(
-            warehouseId, "SNAPSHOT-" + UUID.randomUUID(), null, null, null, null, null,
-            null, Map.of(), List.of())).response();
+            warehouseId,
+            "SNAPSHOT-" + UUID.randomUUID(),
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
+            null,
+            List.of(),
+            false,
+            Map.of(),
+            List.of())).response();
     var catalogResponse = service.createEquipment(subjectId, UUID.randomUUID(),
         new CreateEquipmentRequest(
-            "OLD-" + UUID.randomUUID(), "Snapshot item", EquipmentCategory.FURNITURE, null))
+            "Snapshot item", EquipmentCategory.FURNITURE, null))
         .response();
     new TransactionTemplate(transactionManager).executeWithoutResult(
         ignored -> seedStockBalance(catalogResponse.id(), warehouseId, 1));
@@ -194,20 +211,20 @@ class InventoryAssetCaptureSnapshotIntegrationTest {
       var captureFuture = executor.submit(() -> inventory.createCapture(
           new InventoryCaptureRequest(UUID.randomUUID(), 1L, "8".repeat(64), warehouseId)));
       assertThat(snapshotOpened.await(30, TimeUnit.SECONDS)).isTrue();
-      var balanceUpdate = mutationExecutor.submit(() -> jdbc.update(
+      Future<Integer> balanceUpdate = mutationExecutor.submit((Callable<Integer>) () -> jdbc.update(
           """
           update equipment_balance set quantity=2
           where equipment_id=? and rental_item_id=? and location_kind='CABIN_NON_RENTED'
           """,
           catalog.getId(), rentalItem.getId()));
-      var balanceInsert = mutationExecutor.submit(() -> jdbc.update("""
+      Future<Integer> balanceInsert = mutationExecutor.submit((Callable<Integer>) () -> jdbc.update("""
           insert into equipment_balance(
             id,version,equipment_id,warehouse_id,rental_item_id,location_kind,quantity,
             created_at,updated_at)
           values (?,0,?,?,?,'CABIN_RENTED',1,clock_timestamp(),clock_timestamp())
           """, UUID.randomUUID(), catalog.getId(), warehouseId, rentalItem.getId()));
-      var catalogUpdate = mutationExecutor.submit(() -> jdbc.update(
-          "update equipment_catalog_item set code='NEW-SNAPSHOT' where id=?", catalog.getId()));
+      Future<Integer> catalogUpdate = mutationExecutor.submit((Callable<Integer>) () -> jdbc.update(
+          "update equipment_catalog_item set name='Changed snapshot item' where id=?", catalog.getId()));
       assertThat(balanceUpdate.get(30, TimeUnit.SECONDS)).isOne();
       assertThat(balanceInsert.get(30, TimeUnit.SECONDS)).isOne();
       assertThat(catalogUpdate.get(30, TimeUnit.SECONDS)).isOne();
@@ -219,7 +236,6 @@ class InventoryAssetCaptureSnapshotIntegrationTest {
         assertThat(member.assetId()).isEqualTo(rentalItem.getId());
         assertThat(member.contentsSnapshot()).singleElement().satisfies(content -> {
           assertThat(content.quantity()).isOne();
-          assertThat(content.equipmentCode()).isEqualTo(catalog.getCode());
           assertThat(content.equipmentName()).isEqualTo(catalog.getName());
         });
       });
@@ -234,12 +250,28 @@ class InventoryAssetCaptureSnapshotIntegrationTest {
   void committedCaptureFixtureFreezesPagesAndValidationRemainsPointInTimeOnly() {
     UUID warehouseId = UUID.randomUUID();
     List<RentalItem> eligible = java.util.stream.IntStream.range(0, 205)
-        .mapToObj(index -> RentalItem.create(warehouseId, "INV-" + index, null, null, null,
-            null, null, null, "{}", "[]"))
+        .mapToObj(index -> RentalItem.create(
+            warehouseId,
+            "INV-" + index,
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
+            null,
+            null,
+            "{}",
+            "[]"))
         .toList();
     rentalItems.saveAllAndFlush(eligible);
     RentalItem excluded = RentalItem.create(
-        warehouseId, "INV-EXCLUDED", null, null, null, null, null, null, "{}", "[]");
+        warehouseId,
+        "INV-EXCLUDED",
+        TYPE_BK_1,
+        DIMENSION_24_X_6,
+        FINISHING_DVP,
+        null,
+        null,
+        "{}",
+        "[]");
     excluded.changeStatusUnderLease(RentalItemStatus.RENTED);
     rentalItems.saveAndFlush(excluded);
 

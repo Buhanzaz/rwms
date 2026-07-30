@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.asset.mapper;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.ActiveOrderReservationResponse;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.CabinCatalogValueResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.EquipmentContentResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderEquipmentContent;
@@ -10,6 +11,8 @@ import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderUnitReservationView;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCatalogItem;
 import dev.buhanzaz.rwms.asset.domain.OrderEquipmentReservation;
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservation;
+import java.util.List;
+import java.util.stream.Collectors;
 import org.mapstruct.InjectionStrategy;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
@@ -38,10 +41,15 @@ public interface OrderAssetResponseMapper {
 
   OrderRentalItem toOrderRentalItem(RentalItemResponse response);
 
+  /** The existing logistics order boundary remains textual until its own contract cutover. */
+  default String map(List<CabinCatalogValueResponse> values) {
+    if (values == null || values.isEmpty()) return null;
+    return values.stream().map(CabinCatalogValueResponse::name).collect(Collectors.joining(", "));
+  }
+
   OrderEquipmentContent toOrderEquipmentContent(EquipmentContentResponse response);
 
   @Mapping(target = "equipmentId", source = "reservation.equipmentId")
-  @Mapping(target = "equipmentCode", source = "equipment.code")
   @Mapping(target = "equipmentName", source = "equipment.name")
   @Mapping(target = "quantity", source = "reservation.quantity")
   @Mapping(target = "availableQuantity", source = "availableQuantity")

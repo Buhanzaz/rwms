@@ -44,7 +44,13 @@ const order: OrderDetail = {
   version: 7,
   number: "ORD-000001",
   status: "DRAFT",
-  client: { id: CLIENT_ID, type: "LEGAL_ENTITY", displayName: "ООО Тест" },
+  client: {
+    id: CLIENT_ID,
+    type: "LEGAL_ENTITY",
+    displayName: "ООО Тест",
+    phone: "+79990000000",
+    email: null,
+  },
   managerId: "11111111-1111-4111-8111-111111111111",
   managerDisplayName: "Менеджер",
   createdBy: "11111111-1111-4111-8111-111111111111",
@@ -61,7 +67,6 @@ const order: OrderDetail = {
       desiredContents: [
         {
           equipmentId: CHAIR_ID,
-          equipmentCode: "CHAIR",
           equipmentName: "Стул",
           quantity: 2,
         },
@@ -82,7 +87,6 @@ const order: OrderDetail = {
         contents: [
           {
             equipmentId: CHAIR_ID,
-            equipmentCode: "CHAIR",
             equipmentName: "Стул",
             quantity: 4,
             locationKind: "CABIN_NON_RENTED",
@@ -97,15 +101,14 @@ const order: OrderDetail = {
 
 function equipmentItem(
   overrides: Partial<EquipmentItemDto> &
-    Pick<EquipmentItemDto, "id" | "code" | "name">
+    Pick<EquipmentItemDto, "id" | "name">
 ): EquipmentItemDto {
-  const { id, code, name, ...rest } = overrides
+  const { id, name, ...rest } = overrides
   return {
     id,
     version: 2,
     warehouseId: WAREHOUSE_ID,
     category: "FURNITURE",
-    code,
     name,
     active: true,
     comment: null,
@@ -127,14 +130,12 @@ function equipmentItem(
 
 const desk = equipmentItem({
   id: DESK_ID,
-  code: "OFFICE_TABLE",
   name: "Стол офисный",
   availableQuantity: 2,
 })
 
 const chair = equipmentItem({
   id: CHAIR_ID,
-  code: "CHAIR",
   name: "Стул",
   availableQuantity: 6,
 })
@@ -193,8 +194,6 @@ describe("order unit contents", () => {
     })
     expect(screen.getByText("Желаемое наполнение")).toBeTruthy()
     expect(screen.queryByText(/Сейчас в бытовке:/)).toBeNull()
-    expect(screen.queryByText(/CHAIR/)).toBeNull()
-    expect(screen.queryByText(/OFFICE_TABLE/)).toBeNull()
     expect(screen.getByText(/Доступно: 2 шт\./)).toBeTruthy()
     expect(screen.queryByLabelText("Резерв до")).toBeNull()
     expect(screen.queryByText("Создать задание")).toBeNull()
@@ -255,7 +254,6 @@ describe("order unit contents", () => {
           desiredContents: [
             {
               equipmentId: CHAIR_ID,
-              equipmentCode: "CHAIR",
               equipmentName: "Стул",
               quantity: 3,
             },

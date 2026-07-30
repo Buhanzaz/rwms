@@ -18,12 +18,17 @@ const PREFILL_DEV_CREDENTIALS =
 
 export function LoginForm() {
   const search = new URLSearchParams(window.location.search);
+  const isWorkerLogin = search.get("surface") === "worker";
   const hasLoginError = search.has("error");
   const hasLoggedOut = search.has("logout");
   const [csrf, setCsrf] = useState<CsrfToken | null>(null);
   const [csrfLoaded, setCsrfLoaded] = useState(false);
 
   useEffect(() => {
+    document.title = isWorkerLogin
+      ? "Вход — RWMS Рабочий"
+      : "Вход — WMS Panel";
+
     let cancelled = false;
 
     void loadCsrfToken().then((token) => {
@@ -36,7 +41,7 @@ export function LoginForm() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isWorkerLogin]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -45,10 +50,14 @@ export function LoginForm() {
           <form method="post" action="login" className="p-6 md:p-8">
             <FieldGroup>
               <div className="flex flex-col items-center gap-2 text-center">
-                <p className="text-sm font-medium text-primary">WMS Panel</p>
+                <p className="text-sm font-medium text-primary">
+                  {isWorkerLogin ? "RWMS Рабочий" : "WMS Panel"}
+                </p>
                 <h1 className="text-2xl font-bold">Вход в систему</h1>
                 <FieldDescription>
-                  Используйте рабочую учётную запись.
+                  {isWorkerLogin
+                    ? "Введите логин и пароль рабочего из настроек доски."
+                    : "Используйте учётную запись панели."}
                 </FieldDescription>
               </div>
 
@@ -67,7 +76,9 @@ export function LoginForm() {
                   name="username"
                   type="text"
                   autoComplete="username"
-                  defaultValue={PREFILL_DEV_CREDENTIALS ? "admin" : ""}
+                  defaultValue={
+                    PREFILL_DEV_CREDENTIALS && !isWorkerLogin ? "admin" : ""
+                  }
                   aria-invalid={hasLoginError}
                   autoFocus
                   required
@@ -81,7 +92,9 @@ export function LoginForm() {
                   name="password"
                   type="password"
                   autoComplete="current-password"
-                  defaultValue={PREFILL_DEV_CREDENTIALS ? "admin" : ""}
+                  defaultValue={
+                    PREFILL_DEV_CREDENTIALS && !isWorkerLogin ? "admin" : ""
+                  }
                   aria-invalid={hasLoginError}
                   required
                 />

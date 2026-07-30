@@ -46,13 +46,23 @@ public class OAuthWorkerCredentialGateway implements WorkerCredentialGateway {
   }
 
   @Override
+  public void enable(UUID workerId) {
+    post(workerId, "/enable", null);
+  }
+
+  @Override
   public void delete(UUID workerId) {
-    client
-        .delete()
-        .uri(baseUrl + "/" + workerId)
-        .header(HttpHeaders.AUTHORIZATION, bearer())
-        .retrieve()
-        .toBodilessEntity();
+    try {
+      client
+          .delete()
+          .uri(baseUrl + "/" + workerId)
+          .header(HttpHeaders.AUTHORIZATION, bearer())
+          .retrieve()
+          .toBodilessEntity();
+    } catch (HttpClientErrorException.NotFound missing) {
+      // Deletion is an idempotent convergence operation: an absent credential is
+      // already in the requested state.
+    }
   }
 
   @Override

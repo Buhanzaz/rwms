@@ -38,7 +38,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class LogisticsFurnitureMovementPlanService {
   private static final Set<RentalItemStatus> EDITABLE_STATUSES =
       Set.of(
-          RentalItemStatus.NEW,
           RentalItemStatus.BOOKED,
           RentalItemStatus.REPAIR,
           RentalItemStatus.WAITING_REPAIR_CHECK,
@@ -205,7 +204,6 @@ public class LogisticsFurnitureMovementPlanService {
       long quantity) {
     return new CabinFurnitureMovementPlanLine(
         equipment.getId(),
-        equipment.getCode(),
         equipment.getName(),
         source.id(),
         source.warehouseId(),

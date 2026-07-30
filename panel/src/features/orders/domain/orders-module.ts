@@ -12,7 +12,6 @@ export type OrdersModuleUser = {
 
 export type OrdersModuleWarehouse = {
   id: string
-  code: string
   name: string
   city: string
   address: string | null

@@ -7,7 +7,7 @@ import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface QueueUsageReferenceRepository extends JpaRepository<QueueUsageReference, UUID> {
-  boolean existsByQueueId(UUID queueId);
+  boolean existsByDefinitionId(UUID definitionId);
 
   Optional<QueueUsageReference> findByReferenceTypeAndExternalReferenceId(
       QueueReferenceType referenceType, String externalReferenceId);

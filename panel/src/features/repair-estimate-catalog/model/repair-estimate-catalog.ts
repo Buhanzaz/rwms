@@ -11,31 +11,37 @@ export type RepairEstimateCatalogMoneyDecimal = string
 
 export type RepairEstimateFurnitureEquipmentReferenceDto = {
   equipmentId: string
-  equipmentCode: string
   equipmentName: string
+}
+
+export type RepairEstimateCabinCharacteristicReferenceDto = {
+  characteristicId: string
+  characteristicName: string
 }
 
 /** Operational panel projection of a maintenance-service catalog node. */
 export type RepairEstimateCatalogNodeDto = {
   id: string
   catalogVersionId: string
-  code: string
   name: string
+  /** Optional semantic button colour configured in the catalog settings. */
+  displayColor?: string | null
   nodeType: RepairEstimateCatalogNodeType
   parentId: string | null
-  parentCode: string | null
   active: boolean
   unit: string | null
   unitPrice: RepairEstimateCatalogMoneyDecimal | null
   durationMinutes: number | null
   showInMainMenu: boolean
   routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
-  workQueueId: string | null
-  workQueueCode: string | null
+  queueDefinitionId: string | null
+  queueDefinitionName: string | null
   includeInEstimate: boolean
   commonItem: boolean
   furnitureCategory: boolean
   furnitureEquipment: RepairEstimateFurnitureEquipmentReferenceDto | null
+  forcesCapitalRepair: boolean
+  characteristic: RepairEstimateCabinCharacteristicReferenceDto | null
   comment: string | null
 }
 
@@ -56,7 +62,7 @@ export type RepairEstimateCatalogSnapshotDto = {
 
 export type RepairEstimateCatalogEffectiveQueueBinding = {
   queueId: string | null
-  queueCode: string | null
+  queueName: string | null
   queueKind: RepairEstimateCatalogRouteQueueKind | null
 }
 

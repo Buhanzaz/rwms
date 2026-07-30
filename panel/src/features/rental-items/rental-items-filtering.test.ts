@@ -17,23 +17,24 @@ function rentalItem(id: string, type: string): RentalItemDto {
     version: 1,
     warehouseId: "warehouse-1",
     number: id,
+    rentalTypeId: `type-${id}`,
+    dimensionId: `dimension-${id}`,
+    finishingId: `finishing-${id}`,
     type,
     dimensions: "2,4 × 6",
     finishing: "ЛДСП",
     category: "Стандарт",
-    characteristics: null,
+    characteristics: [],
     linoleum: true,
     status: "FREE",
     comment: null,
-    hasPhotos: false,
-    photoCount: 0,
-    mainPhotoUrl: null,
-    locationNodeId: null,
     contents: null,
     contentsItems: [],
     shipmentDate: null,
     tenant: null,
     price: null,
+    passport: {},
+    tags: [],
   }
 }
 
@@ -56,5 +57,26 @@ describe("shared rental item filtering", () => {
 
     expect(filters).toEqual({ type: ["БК-2"] })
     expect(filterRentalItemsByFilters(items, filters)).toEqual([items[1]])
+  })
+
+  it("does not infer any legacy-prefixed fields", () => {
+    const schema = buildRentalItemsTableSchema([
+      {
+        ...rentalItem("БЫТ-001", "БК-1"),
+        legacyId: "spb-1",
+        LEGACYWarehouseId: "spb",
+        LeGaCyFutureMarker: "technical",
+      },
+    ])
+
+    for (const fieldId of [
+      "legacyId",
+      "LEGACYWarehouseId",
+      "LeGaCyFutureMarker",
+    ]) {
+      expect(schema.columns.map((column) => column.id)).not.toContain(fieldId)
+      expect(schema.filters.map((filter) => filter.id)).not.toContain(fieldId)
+      expect(schema.searchableFieldIds).not.toContain(fieldId)
+    }
   })
 })

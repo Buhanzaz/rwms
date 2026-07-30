@@ -1,3 +1,5 @@
+import { getOperationalRepairEstimateCatalog } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
+import type { RepairEstimateCatalogSnapshotDto } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 import {
   acceptMaintenanceRepair,
   createDirectMaintenanceRepair,
@@ -11,10 +13,13 @@ import {
   replaceMaintenanceRepairPlan,
   writeOffMaintenanceRepair,
   type MaintenanceAcceptanceProjection,
+  type MaintenanceEstimateLine,
+  type MaintenanceEstimateLineInput,
   type MaintenancePlanStageInput,
   type MaintenanceRepair,
   type MaintenanceRepairCommandResult,
   type MaintenanceRepairStage,
+  type MaintenanceReworkLineInput,
   type MaintenanceRoutingSnapshot,
   type MaintenanceWriteOffProjection,
 } from "@/features/repair-estimates/api/http-maintenance-lifecycle-client"
@@ -22,6 +27,7 @@ import {
   currentMaintenanceAccessToken,
   type MaintenanceAccessTokenProvider,
 } from "@/features/repair-estimates/api/maintenance-auth"
+import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
 import type {
   RepairTaskAcceptCommand,
   RepairTaskDto,
@@ -29,7 +35,10 @@ import type {
   RepairTaskWriteCommand,
 } from "@/features/repair-tasks/model/repair-task"
 import type { RepairTaskRentalItemsClient } from "@/features/repair-tasks/ports/repair-task-rental-items-client"
-import type { RepairTasksClient } from "@/features/repair-tasks/ports/repair-tasks-client"
+import {
+  RepairTaskQueueDraftPersistedError,
+  type RepairTasksClient,
+} from "@/features/repair-tasks/ports/repair-tasks-client"
 import { taskBoardSettingsClient } from "@/features/settings/task-board/api/task-board-settings-api"
 import type { WorkQueueDto } from "@/features/settings/task-board/model/task-board-settings"
 import { getTaskBoard } from "@/features/task-board/api/task-board-api"
@@ -38,6 +47,13 @@ import type {
   TaskBoardSnapshotDto,
 } from "@/features/task-board/model/task-board"
 import { ApiError } from "@/lib/api-client"
+
+function repairPriority(value: number) {
+  if (!Number.isInteger(value) || value < 1 || value > 5) {
+    throw new Error("Сервис ремонтов вернул некорректный приоритет.")
+  }
+  return value as 1 | 2 | 3 | 4 | 5
+}
 
 function statusForStage(
   stage: MaintenanceRepairStage,
@@ -54,7 +70,7 @@ function entriesByExternalTaskId(board: TaskBoardSnapshotDto | null) {
   return new Map(
     (board?.queues.flatMap((queue) => queue.entries) ?? [])
       .filter((entry) => entry.externalTaskId)
-      .map((entry) => [entry.externalTaskId!, entry])
+      .map((entry) => [`${entry.externalTaskId!}:${entry.routeIndex}`, entry])
   )
 }
 
@@ -64,6 +80,89 @@ function stageStart(entry: TaskBoardEntryDto | null) {
     ...(entry?.assignments.map((assignment) => assignment.startedAt) ?? []),
   ].filter((value): value is string => Boolean(value))
   return values.sort()[0] ?? null
+}
+
+function toRepairEstimateLine(
+  line: MaintenanceEstimateLine,
+  customQueueBinding: RepairEstimateLineDto["customQueueBinding"] = null
+): RepairEstimateLineDto {
+  const quantity = Number(line.quantity)
+  const rework =
+    line.disposition && line.lineageRootLineId
+      ? {
+          disposition: line.disposition,
+          sourceRepairId: line.sourceRepairId ?? null,
+          sourceLineId: line.sourceLineId ?? null,
+          lineageRootLineId: line.lineageRootLineId,
+        }
+      : null
+  return {
+    id: line.id,
+    sourceLineKey: line.id,
+    lineType: line.lineType,
+    description: line.description,
+    lineComment: line.comment ?? "",
+    unit: line.unit ?? "",
+    quantity: Number.isFinite(quantity) ? quantity : 0,
+    normativeMinutes: line.normativeMinutes,
+    unitPrice: line.unitPrice,
+    lineTotal: line.lineTotal,
+    catalogSnapshot: line.catalogSnapshot
+      ? {
+          nodeId: line.catalogSnapshot.nodeId,
+          name: line.catalogSnapshot.name,
+          nodeType:
+            line.catalogSnapshot.nodeType === "WORK"
+              ? "WORK"
+              : line.catalogSnapshot.nodeType === "OPTION"
+                ? "OPTION"
+                : "MATERIAL",
+          furnitureEquipment: line.catalogSnapshot.furnitureEquipment ?? null,
+        }
+      : null,
+    customQueueBinding: line.catalogSnapshot ? null : customQueueBinding,
+    maintenanceMediaReferences: [...line.mediaReferences],
+    rework,
+  }
+}
+
+function customQueueBindingFromStage(
+  stage: MaintenanceRepairStage
+): NonNullable<RepairEstimateLineDto["customQueueBinding"]> | null {
+  if (
+    stage.kind !== "REPAIR_WORK" ||
+    !stage.routing.queueId.trim() ||
+    !stage.routing.queueName.trim() ||
+    (stage.routing.queueType !== "REPAIR" &&
+      stage.routing.queueType !== "HOLDING")
+  ) {
+    return null
+  }
+  return {
+    queueId: stage.routing.queueId,
+    queueName: stage.routing.queueName,
+    queueKind: stage.routing.queueType,
+  }
+}
+
+function plannedDurationFromWorkLines(lines: RepairEstimateLineDto[]) {
+  if (lines.length === 0) return null
+  let totalMinutes = 0
+  for (const line of lines) {
+    if (
+      typeof line.normativeMinutes !== "number" ||
+      !Number.isFinite(line.normativeMinutes) ||
+      line.normativeMinutes < 0 ||
+      !Number.isFinite(line.quantity) ||
+      line.quantity <= 0
+    ) {
+      return null
+    }
+    totalMinutes += line.normativeMinutes * line.quantity
+  }
+  return Number.isSafeInteger(Math.ceil(totalMinutes))
+    ? Math.ceil(totalMinutes)
+    : null
 }
 
 function toSubtask(
@@ -81,25 +180,78 @@ function toSubtask(
           (assignment) => assignment.workerGroupId === [...groupIds][0]
         )
       : null
+  const customQueueBinding = customQueueBindingFromStage(stage)
+  const workLines = stage.workLines.map((line) =>
+    toRepairEstimateLine(line, customQueueBinding)
+  )
+  const primaryLineIndex = stage.primaryLineId
+    ? workLines.findIndex((line) => line.id === stage.primaryLineId)
+    : -1
+  if (primaryLineIndex > 0) {
+    workLines.unshift(...workLines.splice(primaryLineIndex, 1))
+  }
+  const maintenancePlannedDurationMinutes =
+    plannedDurationFromWorkLines(workLines)
   return {
     id: stage.id,
     externalTaskId: stage.taskSync.externalTaskId,
+    taskTitle: entry?.title ?? null,
+    taskText: entry?.taskText ?? null,
     kind: stage.kind,
     status: statusForStage(stage, entry),
-    workLines: [],
-    materialLines: [],
-    groupComment: "",
+    workLines,
+    materialLines: stage.materialLines.map((line) =>
+      toRepairEstimateLine(line)
+    ),
+    primaryLineId: stage.primaryLineId,
+    groupComment: stage.groupComment,
+    evidence: stage.evidence.map((evidence) => {
+      const workerAssignment = entry?.assignments.find(
+        (assignment) => assignment.workerId === evidence.workerId
+      )
+      const groupAssignment = evidence.workerGroupId
+        ? workerAssignment?.workerGroupId === evidence.workerGroupId
+          ? workerAssignment
+          : entry?.assignments.find(
+              (assignment) =>
+                assignment.workerGroupId === evidence.workerGroupId
+            )
+        : null
+      return {
+        evidenceId: evidence.evidenceId,
+        entryId: evidence.entryId,
+        workerId: evidence.workerId,
+        workerDisplayName: workerAssignment?.workerName ?? null,
+        workerGroupId: evidence.workerGroupId,
+        workerGroupName: groupAssignment?.workerGroupName ?? null,
+        mediaId: evidence.mediaId,
+        mediaGeneration: evidence.mediaGeneration,
+        capturedAt: evidence.capturedAt,
+        recordedAt: evidence.recordedAt,
+        state: evidence.state,
+      }
+    }),
     queueId: stage.routing.queueId,
-    queueCode: stage.routing.queueCode,
+    queueName: stage.routing.queueName,
     routeQueueKind:
-      stage.routing.queueKind === "MOVEMENT" ||
-      stage.routing.queueKind === "REPAIR" ||
-      stage.routing.queueKind === "HOLDING"
-        ? stage.routing.queueKind
+      stage.routing.queueType === "MOVEMENT" ||
+      stage.routing.queueType === "REPAIR" ||
+      stage.routing.queueType === "HOLDING"
+        ? stage.routing.queueType
         : null,
     sortOrder: stage.order,
+    entryType: entry?.entryType,
     queuePosition: entry?.queuePosition ?? stage.order,
-    plannedDurationMinutes: entry?.plannedDurationMinutes ?? null,
+    scheduledDate: entry?.scheduledDate,
+    priority:
+      entry && entry.priority >= 1 && entry.priority <= 5
+        ? (entry.priority as 1 | 2 | 3 | 4 | 5)
+        : undefined,
+    pinned: entry?.pinned ?? false,
+    plannedDurationMinutes:
+      maintenancePlannedDurationMinutes ??
+      entry?.plannedDurationMinutes ??
+      null,
     startedAt: stageStart(entry),
     completedAt: stage.completedAt,
     activeStartedAt: entry?.activeStartedAt ?? null,
@@ -154,7 +306,10 @@ async function toTask(
   const entries = entriesByExternalTaskId(board)
   const subtasks = repair.plan.stages
     .map((stage) =>
-      toSubtask(stage, entries.get(stage.taskSync.externalTaskId) ?? null)
+      toSubtask(
+        stage,
+        entries.get(`${stage.taskSync.externalTaskId}:${stage.order}`) ?? null
+      )
     )
     .sort((left, right) => left.sortOrder - right.sortOrder)
   const rentalItem = await rentalItemsClient.resolveById(
@@ -177,9 +332,13 @@ async function toTask(
     rentalItemId: repair.rentalItemId,
     cabinNumber: rentalItem?.number ?? "",
     actorId: repair.actor.actorId,
-    sourceParty: repair.sourceParty,
+    sourceParty:
+      repair.sourceParty ??
+      (repair.origin === "INVENTORY" ? "Инвентаризация" : null),
     dispatchDate: repair.dispatchDate,
+    priority: repairPriority(repair.priority),
     maintenanceMediaReferences: repair.mediaReferences,
+    coverMediaId: repair.coverMediaId ?? null,
     subtasks,
     sourceEstimateId: repair.estimateId,
     sourceEstimateVersion: null,
@@ -197,7 +356,7 @@ async function toTask(
 }
 
 function requireDate(value: string | null) {
-  if (!value) throw new Error("Укажите дату прибытия.")
+  if (!value) throw new Error("Не удалось определить дату создания ремонта.")
   return value
 }
 
@@ -205,37 +364,174 @@ function routeForSubtask(
   subtask: RepairTaskSubtaskDto,
   queues: WorkQueueDto[]
 ): MaintenanceRoutingSnapshot {
+  const includesCustomWork =
+    subtask.kind === "REPAIR_WORK" &&
+    subtask.workLines.some((line) => line.catalogSnapshot === null)
+  if (
+    includesCustomWork &&
+    subtask.routeQueueKind !== "REPAIR" &&
+    subtask.routeQueueKind !== "HOLDING"
+  ) {
+    throw new Error(
+      "Пользовательская работа может быть направлена только в очередь ремонта или ожидания."
+    )
+  }
   const active = queues.filter((queue) => queue.active && !queue.hidden)
   const exactById = subtask.queueId
     ? active.find((queue) => queue.id === subtask.queueId)
-    : null
-  const exactByCode =
-    !exactById && subtask.queueCode
-      ? active.find((queue) => queue.code === subtask.queueCode)
-      : null
-  const exact = exactById ?? exactByCode
+    : undefined
+  const movementCandidates =
+    !subtask.queueId &&
+    subtask.kind !== "REPAIR_WORK" &&
+    subtask.routeQueueKind === "MOVEMENT"
+      ? active.filter((queue) => queue.type === "MOVEMENT")
+      : []
+  const exact =
+    exactById ??
+    (movementCandidates.length === 1 ? movementCandidates[0] : undefined)
   if (exact) {
+    if (
+      includesCustomWork &&
+      exact.type !== "REPAIR" &&
+      exact.type !== "HOLDING"
+    ) {
+      throw new Error(
+        `Пользовательская работа не может быть направлена в очередь «${exact.name}».`
+      )
+    }
+    if (exact.type === "FURNITURE_MOVEMENT") {
+      throw new Error(
+        `Очередь «${exact.name}» предназначена для перемещения мебели и не может маршрутизировать этап ремонта.`
+      )
+    }
     return {
       queueId: exact.id,
-      queueCode: exact.code,
-      queueKind: exact.type,
+      queueName: exact.name,
+      queueType: exact.type,
     }
   }
-  const byKind = subtask.routeQueueKind
-    ? active.filter((queue) => queue.type === subtask.routeQueueKind)
-    : []
-  if (byKind.length === 1) {
-    return {
-      queueId: byKind[0].id,
-      queueCode: byKind[0].code,
-      queueKind: byKind[0].type,
-    }
+  if (movementCandidates.length > 1) {
+    throw new Error(
+      `Для этапа ${subtask.sortOrder} настройте единственную активную очередь перемещения.`
+    )
   }
-  throw new Error(
-    byKind.length > 1
-      ? `Для этапа ${subtask.sortOrder} выберите конкретную очередь.`
-      : `Для этапа ${subtask.sortOrder} не настроена активная очередь.`
-  )
+  throw new Error(`Для этапа ${subtask.sortOrder} выберите активную очередь.`)
+}
+
+function repairCatalogSnapshot(
+  line: RepairEstimateLineDto,
+  catalog: RepairEstimateCatalogSnapshotDto
+) {
+  const nodeId = line.catalogSnapshot?.nodeId
+  if (!nodeId) return null
+  const node = nodeId
+    ? catalog.nodes.find((candidate) => candidate.id === nodeId)
+    : null
+  if (!node || !node.active) {
+    throw new Error(
+      `Позиция каталога «${line.description}» не найдена в активном каталоге ремонта.`
+    )
+  }
+  if ((node.routeQueueKind as string | null) === "FURNITURE_MOVEMENT") {
+    throw new Error(
+      `Позиция каталога «${line.description}» маршрутизирована в очередь перемещения мебели.`
+    )
+  }
+  const routing =
+    node.queueDefinitionId && node.queueDefinitionName && node.routeQueueKind
+      ? {
+          queueId: node.queueDefinitionId,
+          queueName: node.queueDefinitionName,
+          queueType: node.routeQueueKind,
+        }
+      : null
+  return {
+    catalogVersionId: node.catalogVersionId,
+    nodeId: node.id,
+    nodeType: node.nodeType,
+    name: node.name,
+    unit: node.unit,
+    unitPrice: node.unitPrice,
+    durationMinutes: node.durationMinutes ?? 0,
+    routing,
+    furnitureEquipment: node.furnitureEquipment ?? null,
+    forcesCapitalRepair: node.forcesCapitalRepair,
+    characteristic: node.characteristic,
+  }
+}
+
+function lineInput(
+  line: RepairEstimateLineDto,
+  id: string,
+  catalog: RepairEstimateCatalogSnapshotDto
+): MaintenanceEstimateLineInput {
+  if (!line.description.trim()) {
+    throw new Error("Укажите описание каждой строки ремонта.")
+  }
+  const snapshot = repairCatalogSnapshot(line, catalog)
+  const lineType = snapshot
+    ? snapshot.nodeType === "WORK"
+      ? "WORK"
+      : "MATERIAL"
+    : line.lineType
+  const unit = snapshot ? snapshot.unit : line.unit?.trim() || null
+  if (!snapshot && !unit) {
+    throw new Error("Укажите единицу измерения пользовательской строки.")
+  }
+  const normativeMinutes = snapshot
+    ? snapshot.durationMinutes
+    : lineType === "MATERIAL"
+      ? 0
+      : line.normativeMinutes
+  if (
+    !snapshot &&
+    lineType === "WORK" &&
+    (!Number.isInteger(normativeMinutes) ||
+      normativeMinutes === undefined ||
+      normativeMinutes <= 0)
+  ) {
+    throw new Error("Укажите время выполнения пользовательской работы.")
+  }
+  return {
+    id,
+    catalogSnapshot: snapshot,
+    lineType,
+    description: line.description.trim(),
+    unit,
+    quantity: String(line.quantity),
+    normativeMinutes,
+    unitPrice: line.unitPrice,
+    comment: line.lineComment.trim() || null,
+    mediaReferences: [...(line.maintenanceMediaReferences ?? [])],
+  }
+}
+
+function maintenanceLineInput(
+  line: MaintenanceEstimateLine
+): MaintenanceEstimateLineInput {
+  return {
+    id: line.id,
+    catalogSnapshot: line.catalogSnapshot,
+    lineType: line.lineType,
+    description: line.description,
+    unit: line.unit,
+    quantity: line.quantity,
+    normativeMinutes: line.normativeMinutes,
+    unitPrice: line.unitPrice,
+    comment: line.comment,
+    mediaReferences: [...line.mediaReferences],
+  }
+}
+
+function uniqueMaintenanceLines(stages: MaintenanceRepairStage[]) {
+  const lines = new Map<string, MaintenanceEstimateLineInput>()
+  stages.forEach((stage) => {
+    const stageLines = [...stage.workLines, ...stage.materialLines]
+    stageLines.forEach((line) => {
+      if (!lines.has(line.id)) lines.set(line.id, maintenanceLineInput(line))
+    })
+  })
+  return [...lines.values()]
 }
 
 async function planForCommand(
@@ -247,25 +543,74 @@ async function planForCommand(
       "Локальные вложения старой панели нельзя отправить в maintenance-service."
     )
   }
-  const queues = await taskBoardSettingsClient.listQueues(
-    accessToken,
-    command.warehouseId
-  )
+  const [queues, catalog] = await Promise.all([
+    taskBoardSettingsClient.listQueues(accessToken, command.warehouseId),
+    getOperationalRepairEstimateCatalog(),
+  ])
   if (command.subtasks.length === 0) {
     throw new Error("Добавьте хотя бы один этап ремонта.")
   }
-  return command.subtasks
+  if (
+    command.maintenanceMediaReferences.length > 0 &&
+    !command.coverMediaId
+  ) {
+    throw new Error("Выберите титульную фотографию.")
+  }
+  if (
+    command.coverMediaId &&
+    !command.maintenanceMediaReferences.some(
+      (reference) => reference.mediaId === command.coverMediaId
+    )
+  ) {
+    throw new Error("Титульная фотография отсутствует среди готовых фото.")
+  }
+  const lineIdBySourceId = new Map<string, string>()
+  const lines = new Map<string, MaintenanceEstimateLineInput>()
+  const sourceLineByMaintenanceId = new Map<string, RepairEstimateLineDto>()
+  command.subtasks.forEach((subtask) => {
+    const subtaskLines = [...subtask.workLines, ...subtask.materialLines]
+    subtaskLines.forEach((line) => {
+      if (lineIdBySourceId.has(line.id)) return
+      const id = UUID_PATTERN.test(line.id)
+        ? line.id
+        : createMaintenanceIdempotencyKey()
+      lineIdBySourceId.set(line.id, id)
+      lines.set(id, lineInput(line, id, catalog))
+      sourceLineByMaintenanceId.set(id, line)
+    })
+  })
+  const maintenanceLineId = (line: RepairEstimateLineDto) => {
+    const id = lineIdBySourceId.get(line.id)
+    if (!id) {
+      throw new Error(`Этап ссылается на отсутствующую строку ${line.id}.`)
+    }
+    return id
+  }
+  const plan = command.subtasks
     .slice()
     .sort((left, right) => left.sortOrder - right.sortOrder)
-    .map<MaintenancePlanStageInput>((subtask, index) => ({
-      id: UUID_PATTERN.test(subtask.id)
-        ? subtask.id
-        : createMaintenanceIdempotencyKey(),
-      kind: subtask.kind,
-      order: index,
-      routing: routeForSubtask(subtask, queues),
-      taskDeadline: null,
-    }))
+    .map<MaintenancePlanStageInput>((subtask, index) => {
+      const primaryWorkLine = subtask.workLines.find(
+        (line) => line.lineType === "WORK"
+      )
+      return {
+        id: UUID_PATTERN.test(subtask.id)
+          ? subtask.id
+          : createMaintenanceIdempotencyKey(),
+        kind: subtask.kind,
+        order: index,
+        routing: routeForSubtask(subtask, queues),
+        includedLineIds: [...subtask.workLines, ...subtask.materialLines].map(
+          maintenanceLineId
+        ),
+        primaryLineId: primaryWorkLine
+          ? maintenanceLineId(primaryWorkLine)
+          : null,
+        groupComment: subtask.groupComment,
+        taskDeadline: null,
+      }
+    })
+  return { lines: [...lines.values()], plan, sourceLineByMaintenanceId }
 }
 
 const UUID_PATTERN =
@@ -320,10 +665,46 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
   }
 
   private async board(accessToken: string, warehouseId: string) {
-    try {
-      return await getTaskBoard(accessToken, warehouseId)
-    } catch {
-      return null
+    const initial = await getTaskBoard(accessToken, warehouseId)
+    const additional = await Promise.all(
+      initial.availableDates
+        .filter((date) => date !== initial.selectedDate)
+        .map((date) => getTaskBoard(accessToken, warehouseId, date))
+    )
+    if (additional.length === 0) return initial
+    const queueByKey = new Map(
+      initial.queues.map((queue) => [
+        queue.key,
+        { ...queue, entries: [...queue.entries] },
+      ])
+    )
+    additional.forEach((board) => {
+      board.queues.forEach((queue) => {
+        const current = queueByKey.get(queue.key)
+        if (!current) {
+          queueByKey.set(queue.key, {
+            ...queue,
+            entries: [...queue.entries],
+          })
+          return
+        }
+        const entryIds = new Set(current.entries.map((entry) => entry.id))
+        current.entries.push(
+          ...queue.entries.filter((entry) => !entryIds.has(entry.id))
+        )
+      })
+    })
+    const queues = [...queueByKey.values()]
+    const entries = queues.flatMap((queue) => queue.entries)
+    return {
+      warehouseId,
+      selectedDate: null,
+      availableDates: initial.availableDates,
+      queues,
+      totalEntries: entries.length,
+      realEntries: entries.filter((entry) => entry.entryType === "REAL").length,
+      shadowEntries: entries.filter((entry) => entry.entryType === "SHADOW")
+        .length,
     }
   }
 
@@ -451,7 +832,7 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
     accessToken: string,
     command: RepairTaskWriteCommand
   ) {
-    const plan = await planForCommand(accessToken, command)
+    const content = await planForCommand(accessToken, command)
     if (command.taskId) {
       if (command.expectedVersion === null) {
         throw new Error("Отсутствует версия ремонтного задания.")
@@ -461,8 +842,10 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
         command.warehouseId,
         command.taskId,
         command.expectedVersion,
-        plan,
-        command.maintenanceMediaReferences
+        content.lines,
+        content.plan,
+        command.maintenanceMediaReferences,
+        command.coverMediaId
       )
     }
     if (command.kind === "REWORK") {
@@ -481,8 +864,27 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
         {
           expectedVersion: command.sourceRepairTaskVersion,
           reason: command.reason.trim(),
-          plan,
+          lines: content.lines.map<MaintenanceReworkLineInput>((line) => {
+            const source = content.sourceLineByMaintenanceId.get(line.id)
+            if (
+              source?.rework?.disposition === "REPEAT" &&
+              source.rework.sourceRepairId &&
+              source.rework.sourceLineId
+            ) {
+              return {
+                id: line.id,
+                disposition: "REPEAT",
+                sourceRepairId: source.rework.sourceRepairId,
+                sourceLineId: source.rework.sourceLineId,
+                quantity: line.quantity,
+                comment: line.comment,
+              }
+            }
+            return { id: line.id, disposition: "ADDED", line }
+          }),
+          plan: content.plan,
           mediaReferences: command.maintenanceMediaReferences,
+          coverMediaId: command.coverMediaId,
         }
       )
     }
@@ -493,9 +895,11 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
         warehouseId: command.warehouseId,
         rentalItemId: command.rentalItemId,
         dispatchDate: requireDate(command.dispatchDate),
-        sourceParty: command.reason.trim() || null,
-        plan,
+        sourceParty: "WMS-панель",
+        lines: content.lines,
+        plan: content.plan,
         mediaReferences: command.maintenanceMediaReferences,
+        coverMediaId: command.coverMediaId,
       }
     )
   }
@@ -505,13 +909,14 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
     warehouseId: string,
     result: MaintenanceRepairCommandResult
   ) {
-    if (hasPermanentQueueFailure(result)) {
-      throw permanentQueueFailure(result.repair.id)
-    }
     if (result.repair.executionState !== "DRAFT") {
+      if (hasPermanentQueueFailure(result)) {
+        throw permanentQueueFailure(result.repair.id)
+      }
       return result.repair
     }
 
+    let latestDraft = result.repair
     let lastReadError: unknown
     for (const delayMs of QUEUE_CONFIRMATION_BACKOFF_MS) {
       await this.queueConfirmationWait(delayMs)
@@ -533,12 +938,44 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
       if (repair.executionState !== "DRAFT") {
         return repair
       }
+      latestDraft = repair
     }
 
-    throw new Error(
-      `Ремонт ${result.repair.id} сохранён, но его состояние в maintenance-service всё ещё ожидает подтверждения постановки в очередь.`,
-      lastReadError === undefined ? undefined : { cause: lastReadError }
-    )
+    throw new RepairTaskQueueDraftPersistedError({
+      taskId: latestDraft.id,
+      expectedVersion: latestDraft.version,
+      message: `Ремонт ${result.repair.id} сохранён, но его состояние в maintenance-service всё ещё ожидает подтверждения постановки в очередь.`,
+      cause: lastReadError,
+    })
+  }
+
+  private async recoverPersistedDraftAfterQueueFailure(
+    accessToken: string,
+    warehouseId: string,
+    draft: MaintenanceRepair,
+    queueError: unknown
+  ) {
+    let persistedDraft = draft
+    try {
+      const persisted = await getMaintenanceRepair(
+        accessToken,
+        warehouseId,
+        draft.id
+      )
+      if (persisted.executionState !== "DRAFT") {
+        return persisted
+      }
+      persistedDraft = persisted
+    } catch {
+      // The create response is still authoritative for the persisted identity.
+    }
+
+    throw new RepairTaskQueueDraftPersistedError({
+      taskId: persistedDraft.id,
+      expectedVersion: persistedDraft.version,
+      message: `Черновик ремонта ${persistedDraft.id} сохранён, но постановка в очередь не выполнена: ${queueError instanceof Error ? queueError.message : "неизвестная ошибка"}`,
+      cause: queueError,
+    })
   }
 
   async saveDraft(command: RepairTaskWriteCommand) {
@@ -553,6 +990,9 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
 
   async queue(command: RepairTaskWriteCommand) {
     const accessToken = await this.tokenProvider()
+    if (!command.priority) {
+      throw new Error("Выберите приоритет ремонта.")
+    }
     const draft = await this.saveWithToken(accessToken, command)
     let result: MaintenanceRepairCommandResult
     try {
@@ -561,12 +1001,20 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
         command.warehouseId,
         draft.id,
         draft.version,
+        command.priority,
         createMaintenanceIdempotencyKey()
       )
     } catch (error) {
-      throw new Error(
-        `Черновик ремонта ${draft.id} сохранён, но постановка в очередь не выполнена: ${error instanceof Error ? error.message : "неизвестная ошибка"}`,
-        { cause: error }
+      const repair = await this.recoverPersistedDraftAfterQueueFailure(
+        accessToken,
+        command.warehouseId,
+        draft,
+        error
+      )
+      return toTask(
+        repair,
+        this.rentalItemsClient,
+        await this.board(accessToken, command.warehouseId)
       )
     }
     const repair = await this.awaitQueueConfirmation(
@@ -607,6 +1055,11 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
         kind: stage.kind,
         order: index,
         routing: stage.routing,
+        includedLineIds: [...stage.workLines, ...stage.materialLines].map(
+          (line) => line.id
+        ),
+        primaryLineId: stage.primaryLineId,
+        groupComment: stage.groupComment,
         taskDeadline: stage.taskDeadline,
       }
     })
@@ -615,8 +1068,10 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
       command.warehouseId,
       command.taskId,
       command.expectedVersion,
+      uniqueMaintenanceLines(repair.plan.stages),
       stages,
-      repair.mediaReferences
+      repair.mediaReferences,
+      repair.coverMediaId ?? null
     )
     return toTask(
       saved,

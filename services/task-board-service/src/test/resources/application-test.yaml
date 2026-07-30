@@ -32,6 +32,11 @@ spring:
             token-uri: http://localhost:9000/oauth2/token
 
 rwms:
+  worker:
+    offline-lease-secret: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
+  task-board:
+    rollover:
+      enabled: false
   auth:
     worker-credentials-url: http://localhost:9000/api/internal/worker-credentials
     connect-timeout: 250ms

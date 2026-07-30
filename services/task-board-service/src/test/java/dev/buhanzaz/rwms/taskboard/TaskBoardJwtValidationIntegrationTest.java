@@ -26,7 +26,10 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
@@ -39,6 +42,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 @SpringBootTest
 @ActiveProfiles("test")
 @AutoConfigureMockMvc
+@Import(TaskBoardJwtValidationIntegrationTest.WorkerSecurityProbeConfiguration.class)
 class TaskBoardJwtValidationIntegrationTest {
   private static final PostgreSQLContainer POSTGRES =
       new PostgreSQLContainer("postgres:17-alpine");
@@ -122,7 +126,31 @@ class TaskBoardJwtValidationIntegrationTest {
         .andExpect(status().isUnauthorized());
   }
 
+  @Test
+  void workerSurfaceRequiresDedicatedWorkerTasksScope() throws Exception {
+    mockMvc
+        .perform(
+            get("/api/worker/v1/security-probe")
+                .header(
+                    HttpHeaders.AUTHORIZATION,
+                    bearer(token(TRUSTED, ISSUER, "rwms-services", 60, "rwms.read"))))
+        .andExpect(status().isForbidden());
+    mockMvc
+        .perform(
+            get("/api/worker/v1/security-probe")
+                .header(
+                    HttpHeaders.AUTHORIZATION,
+                    bearer(token(TRUSTED, ISSUER, "rwms-services", 60, "worker.tasks"))))
+        .andExpect(status().isNoContent());
+  }
+
   private String token(KeyMaterial key, String issuer, String audience, long expirySeconds)
+      throws Exception {
+    return token(key, issuer, audience, expirySeconds, "rwms.read");
+  }
+
+  private String token(
+      KeyMaterial key, String issuer, String audience, long expirySeconds, String scope)
       throws Exception {
     Instant now = Instant.now();
     var claims =
@@ -133,7 +161,7 @@ class TaskBoardJwtValidationIntegrationTest {
             .issueTime(Date.from(now.minusSeconds(1)))
             .expirationTime(Date.from(now.plusSeconds(expirySeconds)))
             .claim("principal_type", "USER")
-            .claim("scope", "rwms.read")
+            .claim("scope", scope)
             .build();
     var jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID("trusted").build(), claims);
     jwt.sign(new RSASSASigner(key.privateKey));
@@ -168,4 +196,20 @@ class TaskBoardJwtValidationIntegrationTest {
   }
 
   private record KeyMaterial(RSAPrivateKey privateKey, String publicJwk) {}
+
+  @TestConfiguration(proxyBeanMethods = false)
+  static class WorkerSecurityProbeConfiguration {
+
+    @Bean
+    org.springframework.web.servlet.function.RouterFunction<
+            org.springframework.web.servlet.function.ServerResponse>
+        workerSecurityProbe() {
+      return org.springframework.web.servlet.function.RouterFunctions.route()
+          .GET(
+              "/api/worker/v1/security-probe",
+              request ->
+                  org.springframework.web.servlet.function.ServerResponse.noContent().build())
+          .build();
+    }
+  }
 }

@@ -51,37 +51,34 @@ function currentRevision(estimate: MaintenanceEstimate) {
   return revision
 }
 
-function lineType(
-  value: MaintenanceEstimate["revisions"][number]["lines"][number]
-): RepairEstimateLineDto["lineType"] {
-  if (value.catalogSnapshot?.nodeType === "WORK") return "WORK"
-  if (
-    value.catalogSnapshot?.nodeType === "MATERIAL" ||
-    value.catalogSnapshot?.nodeType === "OPTION"
-  ) {
-    return "MATERIAL"
-  }
-  return "UNSPECIFIED"
-}
-
 function toEstimateLine(
-  value: MaintenanceEstimate["revisions"][number]["lines"][number]
+  value: MaintenanceEstimate["revisions"][number]["lines"][number],
+  customQueueBinding: RepairEstimateLineDto["customQueueBinding"] = null
 ): RepairEstimateLineDto {
   const quantity = Number(value.quantity)
+  const rework =
+    value.disposition && value.lineageRootLineId
+      ? {
+          disposition: value.disposition,
+          sourceRepairId: value.sourceRepairId ?? null,
+          sourceLineId: value.sourceLineId ?? null,
+          lineageRootLineId: value.lineageRootLineId,
+        }
+      : null
   return {
     id: value.id,
     sourceLineKey: value.id,
-    lineType: lineType(value),
+    lineType: value.lineType,
     description: value.description,
     lineComment: value.comment ?? "",
-    unit: value.catalogSnapshot?.unit ?? "",
+    unit: value.unit ?? "",
     quantity: Number.isFinite(quantity) ? quantity : 0,
+    normativeMinutes: value.normativeMinutes,
     unitPrice: value.unitPrice,
     lineTotal: value.lineTotal,
     catalogSnapshot: value.catalogSnapshot
       ? {
           nodeId: value.catalogSnapshot.nodeId,
-          code: value.catalogSnapshot.code,
           name: value.catalogSnapshot.name,
           nodeType:
             value.catalogSnapshot.nodeType === "WORK"
@@ -92,8 +89,44 @@ function toEstimateLine(
           furnitureEquipment: value.catalogSnapshot.furnitureEquipment ?? null,
         }
       : null,
+    customQueueBinding: value.catalogSnapshot ? null : customQueueBinding,
     maintenanceMediaReferences: value.mediaReferences,
+    rework,
   }
+}
+
+function customQueueBindingFromPlanStage(
+  stage: MaintenancePlanStageInput
+): NonNullable<RepairEstimateLineDto["customQueueBinding"]> | null {
+  if (
+    stage.kind !== "REPAIR_WORK" ||
+    !stage.routing.queueId.trim() ||
+    !stage.routing.queueName.trim() ||
+    (stage.routing.queueType !== "REPAIR" &&
+      stage.routing.queueType !== "HOLDING")
+  ) {
+    return null
+  }
+  return {
+    queueId: stage.routing.queueId,
+    queueName: stage.routing.queueName,
+    queueKind: stage.routing.queueType,
+  }
+}
+
+function customQueueBindingsByLineId(plan: MaintenancePlanStageInput[]) {
+  const bindings = new Map<
+    string,
+    NonNullable<RepairEstimateLineDto["customQueueBinding"]>
+  >()
+  plan.forEach((stage) => {
+    const binding = customQueueBindingFromPlanStage(stage)
+    if (!binding) return
+    stage.includedLineIds.forEach((lineId) => {
+      if (!bindings.has(lineId)) bindings.set(lineId, binding)
+    })
+  })
+  return bindings
 }
 
 function toEstimatePlan(
@@ -102,16 +135,16 @@ function toEstimatePlan(
   return {
     id: value.id,
     kind: value.kind,
-    includedLineIds: [],
-    primaryLineId: null,
-    groupComment: "",
+    includedLineIds: [...value.includedLineIds],
+    primaryLineId: value.primaryLineId,
+    groupComment: value.groupComment,
     queueId: value.routing.queueId,
-    queueCode: value.routing.queueCode,
+    queueName: value.routing.queueName,
     routeQueueKind:
-      value.routing.queueKind === "MOVEMENT" ||
-      value.routing.queueKind === "REPAIR" ||
-      value.routing.queueKind === "HOLDING"
-        ? value.routing.queueKind
+      value.routing.queueType === "MOVEMENT" ||
+      value.routing.queueType === "REPAIR" ||
+      value.routing.queueType === "HOLDING"
+        ? value.routing.queueType
         : null,
     sortOrder: value.order,
     generationStatus: "UNKNOWN",
@@ -125,6 +158,7 @@ async function toEstimateDto(
   deliveryState?: RepairEstimateDto["deliveryState"]
 ): Promise<RepairEstimateDto> {
   const revision = currentRevision(estimate)
+  const customQueueBindings = customQueueBindingsByLineId(revision.plan)
   const rentalItem = await rentalItemsClient.resolveById(
     estimate.warehouseId,
     estimate.rentalItemId
@@ -138,14 +172,15 @@ async function toEstimateDto(
     cabinNumber: rentalItem?.number ?? "",
     authorName: estimate.actor.actorId,
     sourceParty: revision.sourceParty ?? "",
-    destinationText: null,
-    destinationParty: null,
     dispatchDate: revision.dispatchDate,
     comment: "",
     totalAmount: revision.total,
-    lines: revision.lines.map(toEstimateLine),
+    lines: revision.lines.map((line) =>
+      toEstimateLine(line, customQueueBindings.get(line.id) ?? null)
+    ),
     media: [],
     maintenanceMediaReferences: estimate.mediaReferences,
+    coverMediaId: estimate.coverMediaId,
     repairId: estimate.repairId,
     completionMode: null,
     movementRequired: revision.plan.some(
@@ -170,8 +205,6 @@ function toSummary(estimate: RepairEstimateDto): RepairEstimateSummaryDto {
     cabinNumber: estimate.cabinNumber,
     authorName: estimate.authorName,
     sourceParty: estimate.sourceParty,
-    destinationText: null,
-    destinationParty: null,
     dispatchDate: estimate.dispatchDate,
     totalAmount: estimate.totalAmount,
     createdAt: estimate.createdAt,
@@ -180,7 +213,7 @@ function toSummary(estimate: RepairEstimateDto): RepairEstimateSummaryDto {
 }
 
 function requireDispatchDate(value: string | null) {
-  if (!value) throw new Error("Укажите дату прибытия.")
+  if (!value) throw new Error("Укажите дату осмотра.")
   return value
 }
 
@@ -193,38 +226,58 @@ function requireExpectedVersion(value: number | null) {
 
 function routeFromPlan(
   plan: RepairEstimateTaskPlanCommandDto,
-  queues: WorkQueueDto[]
+  queues: WorkQueueDto[],
+  includesCustomWork: boolean
 ): MaintenanceRoutingSnapshot {
+  if (
+    includesCustomWork &&
+    (plan.kind !== "REPAIR_WORK" ||
+      (plan.routeQueueKind !== "REPAIR" && plan.routeQueueKind !== "HOLDING"))
+  ) {
+    throw new Error(
+      "Пользовательская работа может быть направлена только в очередь ремонта или ожидания."
+    )
+  }
   const active = queues.filter((queue) => queue.active && !queue.hidden)
-  const exact = plan.queueId
+  const exactById = plan.queueId
     ? active.find((queue) => queue.id === plan.queueId)
-    : plan.queueCode
-      ? active.find((queue) => queue.code === plan.queueCode)
-      : null
+    : undefined
+  const movementCandidates =
+    !plan.queueId &&
+    plan.kind !== "REPAIR_WORK" &&
+    plan.routeQueueKind === "MOVEMENT"
+      ? active.filter((queue) => queue.type === "MOVEMENT")
+      : []
+  const exact =
+    exactById ??
+    (movementCandidates.length === 1 ? movementCandidates[0] : undefined)
   if (exact) {
+    if (
+      includesCustomWork &&
+      exact.type !== "REPAIR" &&
+      exact.type !== "HOLDING"
+    ) {
+      throw new Error(
+        `Пользовательская работа не может быть направлена в очередь «${exact.name}».`
+      )
+    }
+    if (exact.type === "FURNITURE_MOVEMENT") {
+      throw new Error(
+        `Очередь «${exact.name}» предназначена для перемещения мебели и не может маршрутизировать этап ремонта.`
+      )
+    }
     return {
       queueId: exact.id,
-      queueCode: exact.code,
-      queueKind: exact.type,
+      queueName: exact.name,
+      queueType: exact.type,
     }
   }
-
-  const byKind = plan.routeQueueKind
-    ? active.filter((queue) => queue.type === plan.routeQueueKind)
-    : []
-  if (byKind.length === 1) {
-    return {
-      queueId: byKind[0].id,
-      queueCode: byKind[0].code,
-      queueKind: byKind[0].type,
-    }
+  if (movementCandidates.length > 1) {
+    throw new Error(
+      `Для этапа ${plan.sortOrder} настройте единственную активную очередь перемещения.`
+    )
   }
-
-  throw new Error(
-    byKind.length > 1
-      ? `Для этапа ${plan.sortOrder} выберите конкретную очередь.`
-      : `Для этапа ${plan.sortOrder} не настроена активная очередь.`
-  )
+  throw new Error(`Для этапа ${plan.sortOrder} выберите активную очередь.`)
 }
 
 function catalogSnapshot(
@@ -238,17 +291,16 @@ function catalogSnapshot(
     throw new Error(`Позиция каталога «${line.description}» больше недоступна.`)
   }
   const routing =
-    node.workQueueId && node.workQueueCode && node.routeQueueKind
+    node.queueDefinitionId && node.queueDefinitionName && node.routeQueueKind
       ? {
-          queueId: node.workQueueId,
-          queueCode: node.workQueueCode,
-          queueKind: node.routeQueueKind,
+          queueId: node.queueDefinitionId,
+          queueName: node.queueDefinitionName,
+          queueType: node.routeQueueKind,
         }
       : null
   return {
     catalogVersionId: node.catalogVersionId,
     nodeId: node.id,
-    code: node.code,
     nodeType: node.nodeType,
     name: node.name,
     unit: node.unit,
@@ -256,6 +308,8 @@ function catalogSnapshot(
     durationMinutes: node.durationMinutes ?? 0,
     routing,
     furnitureEquipment: node.furnitureEquipment ?? null,
+    forcesCapitalRepair: node.forcesCapitalRepair,
+    characteristic: node.characteristic,
   }
 }
 
@@ -266,11 +320,38 @@ function toLineInput(
   if (!line.description.trim()) {
     throw new Error("Укажите описание каждой строки сметы.")
   }
+  const snapshot = catalogSnapshot(line, catalog)
+  const lineType = snapshot
+    ? snapshot.nodeType === "WORK"
+      ? "WORK"
+      : "MATERIAL"
+    : line.lineType
+  const unit = snapshot ? snapshot.unit : line.unit?.trim() || null
+  if (!snapshot && !unit) {
+    throw new Error("Укажите единицу измерения пользовательской строки.")
+  }
+  const normativeMinutes = snapshot
+    ? snapshot.durationMinutes
+    : lineType === "MATERIAL"
+      ? 0
+      : line.normativeMinutes
+  if (
+    !snapshot &&
+    lineType === "WORK" &&
+    (!Number.isInteger(normativeMinutes) ||
+      normativeMinutes === undefined ||
+      normativeMinutes <= 0)
+  ) {
+    throw new Error("Укажите время выполнения пользовательской работы.")
+  }
   return {
     id: canonicalUuid(line.id),
-    catalogSnapshot: catalogSnapshot(line, catalog),
+    catalogSnapshot: snapshot,
+    lineType,
     description: line.description.trim(),
+    unit,
     quantity: String(line.quantity),
+    normativeMinutes,
     unitPrice: line.unitPrice,
     comment: line.lineComment.trim() || null,
     mediaReferences: line.maintenanceMediaReferences ?? [],
@@ -289,25 +370,62 @@ async function serviceWrite(
       "Фото для maintenance пока недоступны: media-service не подтвердил владельца MAINTENANCE_ESTIMATE."
     )
   }
-  const taskPlans = "taskPlans" in command ? command.taskPlans : []
+  const maintenanceMediaReferences = command.maintenanceMediaReferences ?? []
+  if (maintenanceMediaReferences.length > 0 && !command.coverMediaId) {
+    throw new Error("Выберите титульную фотографию.")
+  }
+  if (
+    command.coverMediaId &&
+    !maintenanceMediaReferences.some(
+      (reference) => reference.mediaId === command.coverMediaId
+    )
+  ) {
+    throw new Error("Титульная фотография отсутствует среди готовых фото.")
+  }
+  const taskPlans = "taskPlans" in command ? (command.taskPlans ?? []) : []
   const [catalog, queues] = await Promise.all([
     getOperationalRepairEstimateCatalog(),
     taskPlans.length > 0
       ? taskBoardSettingsClient.listQueues(accessToken, command.warehouseId)
       : Promise.resolve([]),
   ])
+  const lines = command.lines.map((line) => toLineInput(line, catalog))
+  const commandLineById = new Map(command.lines.map((line) => [line.id, line]))
+  const lineIdByCommandId = new Map(
+    command.lines.map((line, index) => [line.id, lines[index].id])
+  )
+  const maintenanceLineId = (lineId: string) => {
+    const mapped = lineIdByCommandId.get(lineId)
+    if (!mapped) {
+      throw new Error(`Этап ссылается на отсутствующую строку ${lineId}.`)
+    }
+    return mapped
+  }
   return {
     dispatchDate: requireDispatchDate(command.dispatchDate),
     sourceParty: command.sourceParty.trim() || null,
-    lines: command.lines.map((line) => toLineInput(line, catalog)),
+    lines,
     plan: taskPlans.map((plan, index) => ({
       id: canonicalUuid(plan.id),
       kind: plan.kind,
       order: index,
-      routing: routeFromPlan(plan, queues),
+      routing: routeFromPlan(
+        plan,
+        queues,
+        plan.includedLineIds.some((lineId) => {
+          const line = commandLineById.get(lineId)
+          return line?.catalogSnapshot === null && line.lineType === "WORK"
+        })
+      ),
+      includedLineIds: plan.includedLineIds.map(maintenanceLineId),
+      primaryLineId: plan.primaryLineId
+        ? maintenanceLineId(plan.primaryLineId)
+        : null,
+      groupComment: plan.groupComment,
       taskDeadline: null,
     })),
-    mediaReferences: command.maintenanceMediaReferences ?? [],
+    mediaReferences: maintenanceMediaReferences,
+    coverMediaId: command.coverMediaId ?? null,
   }
 }
 
@@ -323,7 +441,7 @@ export class HttpMaintenanceRepairEstimatesAdapter implements RepairEstimatesCli
     this.tokenProvider = tokenProvider
   }
 
-  async list(query: { warehouseId: string; status: "DRAFT" | "COMPLETED" }) {
+  async list(query: { warehouseId: string; status?: "DRAFT" | "COMPLETED" }) {
     const accessToken = await this.tokenProvider()
     const page = await listMaintenanceEstimates(
       accessToken,
@@ -400,6 +518,7 @@ export class HttpMaintenanceRepairEstimatesAdapter implements RepairEstimatesCli
         command.warehouseId,
         draft.id,
         draft.version,
+        command.priority,
         createMaintenanceIdempotencyKey()
       )
       return toEstimateDto(

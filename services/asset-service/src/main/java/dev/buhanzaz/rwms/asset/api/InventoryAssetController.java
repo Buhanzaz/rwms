@@ -32,6 +32,13 @@ public class InventoryAssetController {
   private final InventoryAssetService service;
   private final AssetAuthorizer access;
 
+  @GetMapping("/assets/{assetId}")
+  public InventoryAssetCurrentSnapshot currentAssetSnapshot(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID assetId) {
+    access.requireInventoryAssetAccess(jwt);
+    return service.currentAssetSnapshot(assetId);
+  }
+
   @PostMapping("/captures")
   public ResponseEntity<InventoryCaptureResponse> createCapture(
       @AuthenticationPrincipal Jwt jwt,

@@ -200,6 +200,35 @@ public class LogisticsDocument {
     return document;
   }
 
+  /** Refreshes the live client projection while a rental shipment is still a draft. */
+  public boolean synchronizeRentalOrderParty(UUID nextClientId, String nextPartySnapshot) {
+    if (documentType != LogisticsDocumentType.SHIPMENT
+        || rentalOrderId == null
+        || state != LogisticsDocumentState.DRAFT) {
+      throw new IllegalStateException("Rental shipment draft is not editable");
+    }
+    UUID requiredClientId = Objects.requireNonNull(nextClientId, "clientId");
+    String requiredPartySnapshot = requiredSnapshot(nextPartySnapshot, "partySnapshot");
+    if (Objects.equals(clientId, requiredClientId)
+        && Objects.equals(partySnapshot, requiredPartySnapshot)) {
+      return false;
+    }
+    clientId = requiredClientId;
+    partySnapshot = requiredPartySnapshot;
+    touch();
+    return true;
+  }
+
+  /** Bumps the draft document projection when its order-backed lines changed. */
+  public void touchRentalOrderDraft() {
+    if (documentType != LogisticsDocumentType.SHIPMENT
+        || rentalOrderId == null
+        || state != LogisticsDocumentState.DRAFT) {
+      throw new IllegalStateException("Rental shipment draft is not editable");
+    }
+    touch();
+  }
+
   public static LogisticsDocument createTransfer(
       UUID warehouseId,
       UUID destinationWarehouseId,

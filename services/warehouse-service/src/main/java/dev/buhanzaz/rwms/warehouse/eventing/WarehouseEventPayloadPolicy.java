@@ -4,7 +4,6 @@ import java.time.ZoneId;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
@@ -13,8 +12,7 @@ import tools.jackson.databind.ObjectMapper;
 @Component
 public class WarehouseEventPayloadPolicy {
   private static final Set<String> FIELDS =
-      Set.of("warehouseId", "code", "timeZone", "active", "sortOrder");
-  private static final Pattern CODE = Pattern.compile("^[A-Z0-9][A-Z0-9_-]{0,63}$");
+      Set.of("warehouseId", "timeZone", "active", "sortOrder");
   private final ObjectMapper objectMapper;
   private final ObjectMapper strictObjectMapper;
 
@@ -47,9 +45,6 @@ public class WarehouseEventPayloadPolicy {
       throw new IllegalArgumentException("Warehouse event payload has an invalid shape", exception);
     }
     if (typed.warehouseId() == null) throw new IllegalArgumentException("warehouseId is required");
-    if (typed.code() == null || !CODE.matcher(typed.code()).matches()) {
-      throw new IllegalArgumentException("Warehouse event code is invalid");
-    }
     if (typed.timeZone() == null || typed.timeZone().length() > 64) {
       throw new IllegalArgumentException("Warehouse event timeZone is invalid");
     }

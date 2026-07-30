@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
-  bootstrapMaintenanceCatalog,
+  createMaintenanceCatalog,
   listMaintenanceCatalogNodes,
   listMaintenanceCatalogVersions,
   replaceMaintenanceCatalog,
   replaceMaintenanceCatalogNodes,
-  type MaintenanceCatalogBootstrapRequest,
+  type MaintenanceCreateCatalogRequest,
 } from "@/features/repair-estimate-catalog/api/http-maintenance-catalog-client"
 import type { ApiError } from "@/lib/api-client"
 
@@ -70,7 +70,6 @@ describe("maintenance catalog HTTP client", () => {
     const node = {
       id: commandId,
       catalogVersionId: versionId,
-      code: "WINDOW",
       nodeType: "WORK",
       name: "Окно",
       active: true,
@@ -84,7 +83,6 @@ describe("maintenance catalog HTTP client", () => {
       furnitureCategory: false,
       furnitureEquipment: null,
       routing: null,
-      references: [],
       canvasX: 120,
       canvasY: 340,
       comment: null,
@@ -119,9 +117,9 @@ describe("maintenance catalog HTTP client", () => {
 
     await replaceMaintenanceCatalogNodes("token", warehouseId, versionId, 4, [])
     await replaceMaintenanceCatalog("token", warehouseId, versionId, 5, [], [])
-    await bootstrapMaintenanceCatalog("token", commandId, {
+    await createMaintenanceCatalog("token", commandId, {
       warehouseId,
-    } satisfies MaintenanceCatalogBootstrapRequest)
+    } satisfies MaintenanceCreateCatalogRequest)
     expect(JSON.parse(String(fetchMock.mock.calls[0]![1]?.body))).toEqual({
       expectedVersion: 4,
       nodes: [],
@@ -138,7 +136,7 @@ describe("maintenance catalog HTTP client", () => {
       new Headers(fetchMock.mock.calls[2]![1]?.headers).get("Idempotency-Key")
     ).toBe(commandId)
     expect(new URL(String(fetchMock.mock.calls[2]![0])).pathname).toBe(
-      "/api/maintenance/v1/catalog/imports"
+      "/api/maintenance/v1/catalog/versions"
     )
     expect(JSON.parse(String(fetchMock.mock.calls[2]![1]?.body))).toEqual({
       warehouseId,

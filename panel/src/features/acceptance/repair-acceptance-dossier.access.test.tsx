@@ -69,18 +69,32 @@ describe("repair acceptance command access", () => {
     expect(screen.queryByRole("button", { name: "Списать" })).toBeNull()
   })
 
-  it("enables acceptance and rework for EDIT access", () => {
+  it("keeps rework available but waits for an acceptance photo for EDIT access", () => {
     renderDossier(true, false)
 
-    expect(screen.getByRole("button", { name: "Принять" })).toBeTruthy()
-    expect(screen.getByRole("button", { name: "Переделать" })).toBeTruthy()
+    expect(
+      (screen.getByRole("button", { name: "Принять" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true)
+    expect(
+      (screen.getByRole("button", { name: "Переделать" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false)
+    expect(
+      screen.getByText(
+        "Для приёмки добавьте хотя бы одну фотографию. На доработку можно отправить без нового фото."
+      )
+    ).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Списать" })).toBeNull()
   })
 
   it("adds cabin write-off for MANAGE access", () => {
     renderDossier(true, true)
 
-    expect(screen.getByRole("button", { name: "Принять" })).toBeTruthy()
+    expect(
+      (screen.getByRole("button", { name: "Принять" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(true)
     expect(screen.getByRole("button", { name: "Переделать" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "Списать" })).toBeTruthy()
   })

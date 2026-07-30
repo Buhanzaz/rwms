@@ -5,21 +5,13 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
-import jakarta.persistence.UniqueConstraint;
 import jakarta.validation.constraints.NotBlank;
-import java.util.Locale;
 
 @Entity
-@Table(
-    name = "worker_class",
-    uniqueConstraints = @UniqueConstraint(name = "uk_worker_class_code", columnNames = "code"))
+@Table(name = "worker_class")
 public class WorkerClass extends AbstractVersionedEntity {
   @Column(name = "revision_marker", nullable = false)
   private java.util.UUID revisionMarker = java.util.UUID.randomUUID();
-
-  @NotBlank
-  @Column(name = "code", nullable = false, length = 64)
-  private String code;
 
   @NotBlank
   @Column(name = "name", nullable = false, length = 128)
@@ -40,20 +32,11 @@ public class WorkerClass extends AbstractVersionedEntity {
   @PrePersist
   @PreUpdate
   void normalize() {
-    code = code == null ? null : code.trim().toUpperCase(Locale.ROOT);
     name = trim(name);
   }
 
   private String trim(String value) {
     return value == null ? null : value.trim();
-  }
-
-  public String getCode() {
-    return code;
-  }
-
-  public void setCode(String code) {
-    this.code = code;
   }
 
   public String getName() {

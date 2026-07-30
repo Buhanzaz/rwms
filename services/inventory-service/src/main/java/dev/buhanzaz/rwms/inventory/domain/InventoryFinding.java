@@ -4,8 +4,6 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
@@ -16,12 +14,12 @@ import java.time.ZoneOffset;
 import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
+import org.springframework.data.domain.Persistable;
 
 @Entity
 @Table(name = "inventory_finding")
-public class InventoryFinding {
+public class InventoryFinding implements Persistable<UUID> {
   @Id
-  @GeneratedValue(strategy = GenerationType.UUID)
   @Column(name = "id", nullable = false)
   private UUID id;
 
@@ -40,6 +38,9 @@ public class InventoryFinding {
 
   @Column(name = "owner_proof_active", nullable = false)
   private boolean ownerProofActive;
+
+  @Column(name = "membership_active", nullable = false)
+  private boolean membershipActive;
 
   @Enumerated(EnumType.STRING)
   @Column(name = "origin", nullable = false, length = 32)
@@ -67,6 +68,65 @@ public class InventoryFinding {
 
   @Column(name = "current_tenant_snapshot", length = 512)
   private String currentTenantSnapshot;
+
+  @Column(name = "current_display_canonical_number", length = 128)
+  private String currentDisplayCanonicalNumber;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "current_passport_snapshot", columnDefinition = "jsonb")
+  private String currentPassportSnapshot;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "current_contents_snapshot", columnDefinition = "jsonb")
+  private String currentContentsSnapshot;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "current_repairs_snapshot", columnDefinition = "jsonb")
+  private String currentRepairsSnapshot;
+
+  @Column(name = "inspection_asset_version")
+  private Long inspectionAssetVersion;
+
+  @Column(name = "inspection_warehouse_id")
+  private UUID inspectionWarehouseId;
+
+  @Column(name = "inspection_status", length = 48)
+  private String inspectionStatus;
+
+  @Column(name = "inspection_display_canonical_number", length = 128)
+  private String inspectionDisplayCanonicalNumber;
+
+  @Column(name = "inspection_tenant_snapshot", length = 512)
+  private String inspectionTenantSnapshot;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "inspection_passport_snapshot", columnDefinition = "jsonb")
+  private String inspectionPassportSnapshot;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "inspection_contents_snapshot", columnDefinition = "jsonb")
+  private String inspectionContentsSnapshot;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "inspection_repairs_snapshot", columnDefinition = "jsonb")
+  private String inspectionRepairsSnapshot;
+
+  @Enumerated(EnumType.STRING)
+  @Column(name = "conflict_resolution_strategy", length = 32)
+  private ConflictResolutionStrategy conflictResolutionStrategy;
+
+  @Column(name = "conflict_resolution_current_sha256", length = 64)
+  private String conflictResolutionCurrentSha256;
+
+  @Column(name = "conflict_resolution_reason", length = 2000)
+  private String conflictResolutionReason;
+
+  @Column(name = "conflict_resolved_at")
+  private OffsetDateTime conflictResolvedAt;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "conflict_resolved_by_actor_ref", columnDefinition = "jsonb")
+  private String conflictResolvedByActorRef;
 
   @Column(name = "display_canonical_number", nullable = false, length = 128)
   private String displayCanonicalNumber;
@@ -96,6 +156,9 @@ public class InventoryFinding {
 
   @Column(name = "maintenance_plan_fingerprint_sha256", length = 64)
   private String maintenancePlanFingerprintSha256;
+
+  @Column(name = "cover_media_id")
+  private UUID coverMediaId;
 
   @Column(name = "inspection_comment", nullable = false, length = 2000)
   private String inspectionComment;
@@ -265,6 +328,7 @@ public class InventoryFinding {
       throw new IllegalArgumentException("Finding ownership and asset snapshot are invalid");
     }
     InventoryFinding value = new InventoryFinding();
+    value.id = UUID.randomUUID();
     value.inventoryId = inventoryId;
     value.expectedItemId = expectedItemId;
     value.origin = origin;
@@ -275,6 +339,11 @@ public class InventoryFinding {
     value.currentWarehouseId = currentWarehouseId;
     value.currentStatus = nullableRequired(currentStatus, 48, "current status");
     value.currentTenantSnapshot = nullable(currentTenantSnapshot, 512, "current tenant");
+    value.currentDisplayCanonicalNumber =
+        assetId == null ? null : required(displayNumber, 128, "current display number");
+    value.currentPassportSnapshot = assetId == null ? null : "{}";
+    value.currentContentsSnapshot = assetId == null ? null : "[]";
+    value.currentRepairsSnapshot = assetId == null ? null : "[]";
     value.displayCanonicalNumber = required(displayNumber, 128, "display number");
     value.identityMatchKey = required(matchKey, 128, "identity match key");
     value.passportObservationState = ObservationPresence.ABSENT;
@@ -282,6 +351,7 @@ public class InventoryFinding {
     value.mutationState = MutationState.IDLE;
     value.inspectionComment = "";
     value.ownerProofActive = true;
+    value.membershipActive = true;
     value.actorRef = required(actorRef, 2000, "actor reference");
     return value;
   }
@@ -290,6 +360,13 @@ public class InventoryFinding {
     if (ownerProofActive == active) return false;
     ownerProofRevision = Math.addExact(ownerProofRevision, 1);
     ownerProofActive = active;
+    return true;
+  }
+
+  public boolean changeMembership(boolean active) {
+    if (membershipActive == active) return false;
+    membershipActive = active;
+    transitionOwnerProof(active);
     return true;
   }
 
@@ -327,6 +404,10 @@ public class InventoryFinding {
       UUID warehouseId,
       String status,
       String tenantSnapshot,
+      String currentDisplayNumber,
+      String passportSnapshot,
+      String contentsSnapshot,
+      String repairsSnapshot,
       ReconciliationState nextReconciliation) {
     requireIdleOrCreated();
     boolean missing =
@@ -347,7 +428,33 @@ public class InventoryFinding {
     currentWarehouseId = warehouseId;
     currentStatus = nullableRequired(status, 48, "current status");
     currentTenantSnapshot = nullable(tenantSnapshot, 512, "current tenant");
+    currentDisplayCanonicalNumber =
+        present ? required(currentDisplayNumber, 128, "current display number") : null;
+    currentPassportSnapshot =
+        present ? jsonObject(passportSnapshot, "current passport snapshot") : null;
+    currentContentsSnapshot =
+        present ? jsonArray(contentsSnapshot, "current contents snapshot") : null;
+    currentRepairsSnapshot =
+        present ? jsonArray(repairsSnapshot, "current repairs snapshot") : null;
     reconciliation = nextReconciliation;
+  }
+
+  public void refreshCurrentAsset(
+      Long currentAssetVersion,
+      UUID warehouseId,
+      String status,
+      String tenantSnapshot,
+      ReconciliationState nextReconciliation) {
+    refreshCurrentAsset(
+        currentAssetVersion,
+        warehouseId,
+        status,
+        tenantSnapshot,
+        currentAssetVersion == null ? null : displayCanonicalNumber,
+        currentAssetVersion == null ? null : "{}",
+        currentAssetVersion == null ? null : "[]",
+        currentAssetVersion == null ? null : "[]",
+        nextReconciliation);
   }
 
   public void saveInspection(
@@ -359,6 +466,7 @@ public class InventoryFinding {
       String equipmentJson,
       String planFingerprint,
       String comment,
+      UUID nextCoverMediaId,
       String nextActorRef) {
     if (nextInspection == null || nextInspection == InspectionState.NOT_INSPECTED) {
       throw new IllegalArgumentException("Inspection must be READY or WORK_STAGED");
@@ -372,9 +480,35 @@ public class InventoryFinding {
     equipmentObservation = observation(equipmentPresence, equipmentJson, true);
     maintenancePlanFingerprintSha256 =
         nextInspection == InspectionState.WORK_STAGED ? sha256(planFingerprint) : null;
+    coverMediaId = nextCoverMediaId;
     inspectionComment = normalizedComment(comment);
     if (inspectionComment == null) inspectionComment = "";
     actorRef = required(nextActorRef, 2000, "actor reference");
+    captureInspectionBaseline();
+    clearConflictResolution();
+  }
+
+  public void saveInspection(
+      InspectionState nextInspection,
+      ReconciliationState nextReconciliation,
+      ObservationPresence passportPresence,
+      String passportJson,
+      ObservationPresence equipmentPresence,
+      String equipmentJson,
+      String planFingerprint,
+      String comment,
+      String nextActorRef) {
+    saveInspection(
+        nextInspection,
+        nextReconciliation,
+        passportPresence,
+        passportJson,
+        equipmentPresence,
+        equipmentJson,
+        planFingerprint,
+        comment,
+        null,
+        nextActorRef);
   }
 
   public void saveInspection(
@@ -395,12 +529,74 @@ public class InventoryFinding {
         equipmentJson,
         planFingerprint,
         "",
+        null,
         nextActorRef);
   }
 
   public void markMissing(String nextActorRef) {
     reconciliation = ReconciliationState.MISSING;
     actorRef = required(nextActorRef, 2000, "actor reference");
+  }
+
+  public void resolveConflict(
+      ConflictResolutionStrategy strategy,
+      String currentFingerprint,
+      String reason,
+      String nextActorRef) {
+    if (inspection == InspectionState.NOT_INSPECTED) {
+      throw new IllegalStateException("An uninspected finding has no registry conflict to resolve");
+    }
+    requireIdleOrCreated();
+    if (strategy == null) {
+      throw new IllegalArgumentException("Conflict resolution strategy is required");
+    }
+    String normalizedReason = nullable(reason, 2000, "conflict resolution reason");
+    if (strategy == ConflictResolutionStrategy.KEEP_INSPECTION && normalizedReason == null) {
+      throw new IllegalArgumentException(
+          "Keeping inspection data requires a conflict resolution reason");
+    }
+    if (strategy == ConflictResolutionStrategy.ACCEPT_REGISTRY) {
+      captureInspectionBaseline();
+    }
+    conflictResolutionStrategy = strategy;
+    conflictResolutionCurrentSha256 = sha256(currentFingerprint);
+    conflictResolutionReason = normalizedReason;
+    conflictResolvedAt = OffsetDateTime.now(ZoneOffset.UTC);
+    conflictResolvedByActorRef = required(nextActorRef, 2000, "actor reference");
+    actorRef = conflictResolvedByActorRef;
+    reconciliation =
+        currentWarehouseId == null || currentStatus == null
+            ? ReconciliationState.MISSING
+            : ReconciliationState.MATCHED;
+  }
+
+  private void captureInspectionBaseline() {
+    if (assetId == null
+        || assetVersion == null
+        || currentWarehouseId == null
+        || currentStatus == null
+        || currentDisplayCanonicalNumber == null
+        || currentPassportSnapshot == null
+        || currentContentsSnapshot == null
+        || currentRepairsSnapshot == null) {
+      throw new IllegalStateException("Inspection requires a complete current asset snapshot");
+    }
+    inspectionAssetVersion = assetVersion;
+    inspectionWarehouseId = currentWarehouseId;
+    inspectionStatus = currentStatus;
+    inspectionDisplayCanonicalNumber = currentDisplayCanonicalNumber;
+    inspectionTenantSnapshot = currentTenantSnapshot;
+    inspectionPassportSnapshot = currentPassportSnapshot;
+    inspectionContentsSnapshot = currentContentsSnapshot;
+    inspectionRepairsSnapshot = currentRepairsSnapshot;
+  }
+
+  private void clearConflictResolution() {
+    conflictResolutionStrategy = null;
+    conflictResolutionCurrentSha256 = null;
+    conflictResolutionReason = null;
+    conflictResolvedAt = null;
+    conflictResolvedByActorRef = null;
   }
 
   private void requireIdle() {
@@ -478,6 +674,22 @@ public class InventoryFinding {
     return normalized;
   }
 
+  private static String jsonObject(String value, String field) {
+    String normalized = required(value, 65_536, field);
+    if (!normalized.startsWith("{")) {
+      throw new IllegalArgumentException(field + " must be a JSON object");
+    }
+    return normalized;
+  }
+
+  private static String jsonArray(String value, String field) {
+    String normalized = required(value, 262_144, field);
+    if (!normalized.startsWith("[")) {
+      throw new IllegalArgumentException(field + " must be a JSON array");
+    }
+    return normalized;
+  }
+
   @PrePersist
   void beforeInsert() {
     OffsetDateTime current = OffsetDateTime.now(ZoneOffset.UTC);
@@ -490,8 +702,14 @@ public class InventoryFinding {
     updatedAt = OffsetDateTime.now(ZoneOffset.UTC);
   }
 
+  @Override
   public UUID getId() {
     return id;
+  }
+
+  @Override
+  public boolean isNew() {
+    return createdAt == null;
   }
 
   public UUID getInventoryId() {
@@ -508,6 +726,10 @@ public class InventoryFinding {
 
   public boolean isOwnerProofActive() {
     return ownerProofActive;
+  }
+
+  public boolean isMembershipActive() {
+    return membershipActive;
   }
 
   public FindingOrigin getOrigin() {
@@ -542,6 +764,70 @@ public class InventoryFinding {
     return currentTenantSnapshot;
   }
 
+  public String getCurrentDisplayCanonicalNumber() {
+    return currentDisplayCanonicalNumber;
+  }
+
+  public String getCurrentPassportSnapshot() {
+    return currentPassportSnapshot;
+  }
+
+  public String getCurrentContentsSnapshot() {
+    return currentContentsSnapshot;
+  }
+
+  public String getCurrentRepairsSnapshot() {
+    return currentRepairsSnapshot;
+  }
+
+  public Long getInspectionAssetVersion() {
+    return inspectionAssetVersion;
+  }
+
+  public UUID getInspectionWarehouseId() {
+    return inspectionWarehouseId;
+  }
+
+  public String getInspectionStatus() {
+    return inspectionStatus;
+  }
+
+  public String getInspectionDisplayCanonicalNumber() {
+    return inspectionDisplayCanonicalNumber;
+  }
+
+  public String getInspectionTenantSnapshot() {
+    return inspectionTenantSnapshot;
+  }
+
+  public String getInspectionPassportSnapshot() {
+    return inspectionPassportSnapshot;
+  }
+
+  public String getInspectionContentsSnapshot() {
+    return inspectionContentsSnapshot;
+  }
+
+  public String getInspectionRepairsSnapshot() {
+    return inspectionRepairsSnapshot;
+  }
+
+  public ConflictResolutionStrategy getConflictResolutionStrategy() {
+    return conflictResolutionStrategy;
+  }
+
+  public String getConflictResolutionCurrentSha256() {
+    return conflictResolutionCurrentSha256;
+  }
+
+  public String getConflictResolutionReason() {
+    return conflictResolutionReason;
+  }
+
+  public OffsetDateTime getConflictResolvedAt() {
+    return conflictResolvedAt;
+  }
+
   public String getDisplayCanonicalNumber() {
     return displayCanonicalNumber;
   }
@@ -556,6 +842,10 @@ public class InventoryFinding {
 
   public String getMaintenancePlanFingerprintSha256() {
     return maintenancePlanFingerprintSha256;
+  }
+
+  public UUID getCoverMediaId() {
+    return coverMediaId;
   }
 
   public String getInspectionComment() {

@@ -161,7 +161,7 @@ class DossierContractFixtureValidationTest {
                     "QUEUE_ENTRY",
                     0,
                     """
-                    {"queueEntryId":"%s","taskId":"%s","queueId":null,"queueCode":"REPAIR","routeIndex":0,"queuePosition":0,"entryType":"REAL","status":"WAITING","plannedDurationMinutes":null,"activeStartedAt":null,"pausedAt":null,"doneAt":null,"activeWorkSeconds":0,"pauseOrigin":null,"assignments":[],"timeEvents":[],"interruptions":[],"deleted":false}
+                    {"queueEntryId":"%s","taskId":"%s","queueId":null,"routeIndex":0,"queuePosition":0,"entryType":"REAL","status":"WAITING","plannedDurationMinutes":null,"activeStartedAt":null,"pausedAt":null,"doneAt":null,"activeWorkSeconds":0,"pauseOrigin":null,"assignments":[],"timeEvents":[],"interruptions":[],"deleted":false}
                     """
                         .formatted(AGGREGATE_ID, SECONDARY_ID))));
 

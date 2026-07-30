@@ -51,6 +51,8 @@ const estimateId = "00000000-0000-4000-8000-000000000003"
 const lineId = "00000000-0000-4000-8000-000000000004"
 const planId = "00000000-0000-4000-8000-000000000005"
 const queueId = "00000000-0000-4000-8000-000000000006"
+const foreignQueueId = "00000000-0000-4000-8000-000000000016"
+const movementQueueId = "00000000-0000-4000-8000-000000000026"
 
 function estimate(
   lifecycleState: MaintenanceEstimate["lifecycle"],
@@ -72,8 +74,11 @@ function estimate(
           {
             id: lineId,
             catalogSnapshot: null,
+            lineType: "WORK",
             description: "Ручная работа",
+            unit: "ед",
             quantity: "1.5",
+            normativeMinutes: 45,
             unitPrice: "10.00",
             lineTotal: "15.00",
             comment: null,
@@ -87,9 +92,12 @@ function estimate(
             order: 0,
             routing: {
               queueId,
-              queueCode: "REPAIR",
-              queueKind: "REPAIR",
+              queueName: "Ремонт",
+              queueType: "REPAIR",
             },
+            includedLineIds: [lineId],
+            primaryLineId: lineId,
+            groupComment: "Монтажная группа",
             taskDeadline: null,
           },
         ],
@@ -127,11 +135,12 @@ const draft: RepairEstimateDraftCommand = {
     {
       id: lineId,
       sourceLineKey: lineId,
-      lineType: "UNSPECIFIED",
+      lineType: "WORK",
       description: "Ручная работа",
       lineComment: "",
-      unit: "",
+      unit: "ед",
       quantity: 1.5,
+      normativeMinutes: 45,
       unitPrice: "10.00",
       lineTotal: "15.00",
       catalogSnapshot: null,
@@ -142,6 +151,7 @@ const draft: RepairEstimateDraftCommand = {
 
 const completeCommand: CompleteRepairEstimateCommand = {
   ...draft,
+  priority: 1,
   completionMode: "MANUAL",
   movementRequired: false,
   taskPlans: [
@@ -149,10 +159,10 @@ const completeCommand: CompleteRepairEstimateCommand = {
       id: planId,
       kind: "REPAIR_WORK",
       includedLineIds: [lineId],
-      primaryLineId: null,
-      groupComment: "",
+      primaryLineId: lineId,
+      groupComment: "Монтажная группа",
       queueId,
-      queueCode: "REPAIR",
+      queueName: "Ремонт",
       routeQueueKind: "REPAIR",
       sortOrder: 10,
       generationStatus: "PENDING_GENERATION",
@@ -167,7 +177,6 @@ describe("maintenance repair estimates adapter", () => {
     listQueues.mockResolvedValue([
       {
         id: queueId,
-        code: "REPAIR",
         name: "Ремонт",
         type: "REPAIR",
         active: true,
@@ -190,7 +199,7 @@ describe("maintenance repair estimates adapter", () => {
     expect(saved.cabinNumber).toBe("CAB-17")
     expect(saved.lines[0]).toMatchObject({
       quantity: 1.5,
-      lineType: "UNSPECIFIED",
+      lineType: "WORK",
     })
     expect(lifecycle.create).toHaveBeenCalledWith(
       "token",
@@ -198,7 +207,14 @@ describe("maintenance repair estimates adapter", () => {
       expect.objectContaining({
         warehouseId,
         rentalItemId,
-        lines: [expect.objectContaining({ quantity: "1.5" })],
+        lines: [
+          expect.objectContaining({
+            quantity: "1.5",
+            lineType: "WORK",
+            unit: "ед",
+            normativeMinutes: 45,
+          }),
+        ],
       })
     )
   })
@@ -219,7 +235,221 @@ describe("maintenance repair estimates adapter", () => {
       warehouseId,
       estimateId,
       0,
+      1,
       expect.any(String)
+    )
+    expect(lifecycle.create).toHaveBeenCalledWith(
+      "token",
+      expect.any(String),
+      expect.objectContaining({
+        plan: [
+          expect.objectContaining({
+            includedLineIds: [lineId],
+            primaryLineId: lineId,
+            groupComment: "Монтажная группа",
+          }),
+        ],
+      })
+    )
+  })
+
+  it("reads stage line references, primary line and group comment back", async () => {
+    lifecycle.get.mockResolvedValue(estimate("DRAFT", 2))
+    const adapter = new HttpMaintenanceRepairEstimatesAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const loaded = await adapter.getById(estimateId, warehouseId)
+
+    expect(loaded?.taskPlans).toEqual([
+      expect.objectContaining({
+        includedLineIds: [lineId],
+        primaryLineId: lineId,
+        groupComment: "Монтажная группа",
+      }),
+    ])
+    expect(loaded?.lines[0]).toMatchObject({ normativeMinutes: 45 })
+  })
+
+  it("serializes a custom work line without a catalog snapshot and reconstructs its plan binding", async () => {
+    lifecycle.create.mockResolvedValue(estimate("DRAFT", 0))
+    const adapter = new HttpMaintenanceRepairEstimatesAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+    const customBinding = {
+      queueId,
+      queueName: "Ремонт",
+      queueKind: "REPAIR" as const,
+    }
+
+    const saved = await adapter.saveDraft({
+      ...draft,
+      lines: [
+        {
+          ...draft.lines[0],
+          lineType: "WORK",
+          customQueueBinding: customBinding,
+        },
+      ],
+      taskPlans: completeCommand.taskPlans,
+    })
+
+    expect(lifecycle.create).toHaveBeenCalledWith(
+      "token",
+      expect.any(String),
+      expect.objectContaining({
+        lines: [expect.objectContaining({ catalogSnapshot: null })],
+        plan: [
+          expect.objectContaining({
+            includedLineIds: [lineId],
+            routing: {
+              queueId,
+              queueName: "Ремонт",
+              queueType: "REPAIR",
+            },
+          }),
+        ],
+      })
+    )
+    expect(saved.lines[0]).toMatchObject({
+      lineType: "WORK",
+      catalogSnapshot: null,
+      normativeMinutes: 45,
+      customQueueBinding: customBinding,
+    })
+  })
+
+  it("does not let a custom work line resolve to a movement queue", async () => {
+    const adapter = new HttpMaintenanceRepairEstimatesAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    await expect(
+      adapter.saveDraft({
+        ...draft,
+        lines: [
+          {
+            ...draft.lines[0],
+            lineType: "WORK",
+            customQueueBinding: {
+              queueId,
+              queueName: "Перемещение на ремонт",
+              queueKind: "REPAIR",
+            },
+          },
+        ],
+        taskPlans: completeCommand.taskPlans.map((plan) => ({
+          ...plan,
+          queueName: "Перемещение на ремонт",
+          routeQueueKind: "MOVEMENT",
+        })),
+      })
+    ).rejects.toThrow("Пользовательская работа")
+    expect(lifecycle.create).not.toHaveBeenCalled()
+  })
+
+  it("rejects a custom work line before routing it to a furniture movement queue", async () => {
+    listQueues.mockResolvedValue([
+      {
+        id: queueId,
+        name: "Перемещение мебели",
+        type: "FURNITURE_MOVEMENT",
+        active: true,
+        hidden: false,
+      },
+    ])
+    const adapter = new HttpMaintenanceRepairEstimatesAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    await expect(adapter.complete(completeCommand)).rejects.toThrow(
+      "Пользовательская работа"
+    )
+    expect(lifecycle.create).not.toHaveBeenCalled()
+  })
+
+  it("rejects a route whose queue UUID is not active in the current warehouse", async () => {
+    const adapter = new HttpMaintenanceRepairEstimatesAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    await expect(
+      adapter.complete({
+        ...completeCommand,
+        taskPlans: completeCommand.taskPlans.map((plan) => ({
+          ...plan,
+          queueId: foreignQueueId,
+        })),
+      })
+    ).rejects.toThrow("выберите активную очередь")
+    expect(lifecycle.create).not.toHaveBeenCalled()
+  })
+
+  it("resolves a new movement stage to its sole configured queue UUID", async () => {
+    listQueues.mockResolvedValue([
+      {
+        id: queueId,
+        name: "Ремонт",
+        type: "REPAIR",
+        active: true,
+        hidden: false,
+      },
+      {
+        id: movementQueueId,
+        name: "Перемещение",
+        type: "MOVEMENT",
+        active: true,
+        hidden: false,
+      },
+    ])
+    lifecycle.create.mockResolvedValue(estimate("DRAFT", 0))
+    lifecycle.complete.mockRejectedValue(new Error("stop after draft"))
+    const adapter = new HttpMaintenanceRepairEstimatesAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    await expect(
+      adapter.complete({
+        ...completeCommand,
+        taskPlans: [
+          ...completeCommand.taskPlans,
+          {
+            id: "00000000-0000-4000-8000-000000000027",
+            kind: "MOVE_TO_REPAIR",
+            includedLineIds: [],
+            primaryLineId: null,
+            groupComment: "",
+            queueId: null,
+            queueName: null,
+            routeQueueKind: "MOVEMENT",
+            sortOrder: 20,
+            generationStatus: "PENDING_GENERATION",
+          },
+        ],
+      })
+    ).rejects.toThrow("stop after draft")
+
+    expect(lifecycle.create).toHaveBeenCalledWith(
+      "token",
+      expect.any(String),
+      expect.objectContaining({
+        plan: [
+          expect.anything(),
+          expect.objectContaining({
+            routing: {
+              queueId: movementQueueId,
+              queueName: "Перемещение",
+              queueType: "MOVEMENT",
+            },
+          }),
+        ],
+      })
     )
   })
 

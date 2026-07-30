@@ -59,6 +59,9 @@ final class TaskBoardPayloadSafetyValidator implements RwmsKafkaPayloadSafetyVal
       case QUEUE_USAGE_REFERENCE -> "queueUsageReferenceId";
       case BOARD_TASK -> "boardTaskId";
       case QUEUE_ENTRY -> "queueEntryId";
+      case TASK_BOARD_ENTRY_OWNER_PROOF -> "ownerId";
+      case TASK_EVIDENCE -> "evidenceId";
+      case GROUP_KPI_DAY -> "evidenceId";
     };
     JsonNode identity = payload.get(idField);
     if (identity == null || !identity.isTextual())

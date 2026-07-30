@@ -87,9 +87,6 @@ public class EquipmentMovementTaskLine {
   @Column(name = "reservation_version")
   private Long reservationVersion;
 
-  @Column(name = "equipment_code", length = 128)
-  private String equipmentCode;
-
   @Column(name = "equipment_name", length = 512)
   private String equipmentName;
 
@@ -154,7 +151,6 @@ public class EquipmentMovementTaskLine {
       UUID nextReservationId,
       long nextReservationVersion,
       UUID nextEquipmentId,
-      String nextEquipmentCode,
       String nextEquipmentName,
       String reservationState) {
     if (nextReservationId == null
@@ -172,7 +168,6 @@ public class EquipmentMovementTaskLine {
     }
     reservationId = nextReservationId;
     reservationVersion = nextReservationVersion;
-    equipmentCode = requireText(nextEquipmentCode, 128, "equipmentCode");
     equipmentName = requireText(nextEquipmentName, 512, "equipmentName");
     state = EquipmentMovementLineState.RESERVED;
     touch();

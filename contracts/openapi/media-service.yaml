@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Media Service API
-  version: 1.8.0
+  version: 1.12.0
   license: { name: UNLICENSED }
   description: >-
     Stateful Go media API. PostgreSQL owns metadata and replay state; MinIO
@@ -36,9 +36,13 @@ paths:
         sub=client_id=logistics-service and exactly media.logistics. Maintenance
         supplies a UUID ownerId. Logistics supplies documentId plus lineId and
         media-service alone derives its internal composite identity. Exact
-        proofEventId/body replay is safe. Event or owner revision regression,
-        gap, changed same-version state, event-ID reuse and a previously open
-        quarantine fail closed. The response contains no object key or URL.
+        proofEventId/canonical-body replay is safe. After the first accepted
+        proof, ownerRevision must be exactly next. aggregateVersion must
+        strictly increase but may skip source aggregate mutations that emit no
+        media proof. Aggregate regression or non-increase, owner-revision
+        regression/gap/non-increase, event-ID reuse and every quarantine other
+        than an exact legacy AGGREGATE_VERSION_GAP replay that now satisfies
+        these rules fail closed. The response contains no object key or URL.
       requestBody:
         required: true
         content:
@@ -62,6 +66,153 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /api/internal/media/v1/asset-imports/preflight:
+    post:
+      summary: Queue a durable public Yandex.Disk photo preflight
+      operationId: preflightAssetImport
+      description: >-
+        Requires only a SERVICE JWT with sub=client_id=asset-service, audience
+        rwms-services and exactly media.asset-import. The only accepted source
+        form is https://disk.yandex.ru/d/{14-character-public-key}. The public
+        URL/key and any temporary download address are never returned. The
+        asynchronous preflight recursively lists the official unauthenticated
+        public-resources API and records only bounded private job state; it
+        does not download or activate any file.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssetImportPreflightRequest' }
+      responses:
+        '202':
+          description: New or exact idempotent durable preflight job.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetImportJob' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /api/internal/media/v1/asset-imports/{jobId}:
+    get:
+      summary: Read private asset-import progress and sanitized results
+      operationId: getAssetImport
+      description: >-
+        Requires the exact asset-service/media.asset-import SERVICE identity.
+        Result counters and imported opaque media IDs are returned, but public
+        URLs, public keys, remote paths, download addresses and object-store
+        coordinates are never exposed.
+      parameters:
+        - $ref: '#/components/parameters/AssetImportJobId'
+      responses:
+        '200':
+          description: Current durable import state.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetImportJob' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /api/internal/media/v1/asset-imports/{jobId}/activate:
+    post:
+      summary: Bind preflight source rows to CABIN owners and queue ingestion
+      operationId: activateAssetImport
+      description: >-
+        Requires the exact asset-service/media.asset-import SERVICE identity.
+        Each preflight source row is bound exactly once to a current CABIN owner
+        in the job warehouse. The durable worker obtains a fresh official
+        download address only after activation, accepts JPEG/PNG/WebP bytes,
+        skips other media with a sanitized warning, and sends accepted bytes
+        through the normal immutable media ingestion and processing path.
+      parameters:
+        - $ref: '#/components/parameters/AssetImportJobId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssetImportActivationRequest' }
+      responses:
+        '202':
+          description: New or exact idempotent durable activation job.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetImportJob' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /api/internal/media/v1/asset-imports/{jobId}/retry:
+    post:
+      summary: Requeue one terminal failed asset-import phase
+      operationId: retryAssetImport
+      description: >-
+        Requires the exact asset-service/media.asset-import SERVICE identity.
+        This bodyless command is idempotent and only requeues a terminal
+        preflight or activation failure; it does not alter bindings or expose
+        remote source data.
+      parameters:
+        - $ref: '#/components/parameters/AssetImportJobId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Failed phase is queued again, or the exact retry is replayed.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetImportJob' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /api/internal/media/v1/asset-imports/{jobId}/replace-sources:
+    post:
+      summary: Replace rejected Yandex public sources and requeue preflight
+      operationId: replaceAssetImportPreflightSources
+      description: >-
+        Requires the exact asset-service/media.asset-import SERVICE identity.
+        Only a terminal PREFLIGHT failure can be corrected. Submitted public
+        URLs are write-only: media-service persists only their parsed keys,
+        never returns either URLs or keys, clears stale discovery rows, and
+        requeues the existing durable job. Active or completed ingestion cannot
+        be changed through this operation.
+      parameters:
+        - $ref: '#/components/parameters/AssetImportJobId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssetImportReplaceSourcesRequest' }
+      responses:
+        '202':
+          description: Corrected source keys are queued for fresh preflight, or the exact command is replayed.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssetImportJob' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '503': { $ref: '#/components/responses/Unavailable' }
   /api/internal/media/v1/logistics/references/validate:
@@ -92,13 +243,78 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '503': { $ref: '#/components/responses/Unavailable' }
+  /api/internal/media/v1/logistics/cabin-presentations/snapshots:
+    post:
+      summary: Read opaque current CABIN presentation snapshots for logistics
+      operationId: readLogisticsCabinPresentationSnapshots
+      description: >-
+        Requires only a SERVICE JWT with sub=client_id=logistics-service,
+        audience rwms-services and exactly media.logistics. This private,
+        read-only projection returns active canonical CABIN owner bindings and
+        only their READY IMAGE assets at the current generation. Each photo
+        contains just an opaque media ID, generation, sort order and the
+        SMALL/LARGE variants currently available for a later private stream;
+        it never exposes a browser route, object-store locator, signed URL,
+        filename, MIME type, status or processing detail.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CabinPresentationSnapshotRequest' }
+      responses:
+        '200':
+          description: Bounded snapshot records for currently bound requested cabins, ordered by request then stable photo presentation order.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CabinPresentationSnapshotPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content:
+    get:
+      summary: Stream one opaque current CABIN presentation variant for logistics
+      operationId: getLogisticsCabinPresentationVariantContent
+      description: >-
+        Requires only a SERVICE JWT with sub=client_id=logistics-service,
+        audience rwms-services and exactly media.logistics. variant is exactly
+        SMALL or LARGE. The service verifies CABIN owner type, cabinId,
+        warehouseId, READY state, exact current generation and variant
+        existence before streaming immutable bytes. Every scope, owner,
+        warehouse, state, generation and variant mismatch is a uniform 404;
+        no object-store locator or public media route is exposed.
+      parameters:
+        - $ref: '#/components/parameters/MediaId'
+        - $ref: '#/components/parameters/CabinPresentationVariant'
+        - $ref: '#/components/parameters/WarehouseId'
+        - $ref: '#/components/parameters/CabinId'
+        - $ref: '#/components/parameters/CabinPresentationGeneration'
+      responses:
+        '200':
+          description: Exact immutable current-generation derived image bytes.
+          headers:
+            Cache-Control: { schema: { const: 'private, no-store' } }
+            Content-Length: { schema: { type: integer, minimum: 1 } }
+            Content-Disposition: { schema: { type: string, pattern: '^inline;' } }
+            X-Content-Type-Options: { schema: { const: nosniff } }
+          content:
+            image/webp: { schema: { type: string, format: binary } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
   /api/media/v1/upload-sessions:
     post:
       summary: Authorize one constrained same-origin upload session
       operationId: createUploadSession
       description: >-
-        Requires USER, rwms.write and warehouse EDIT. Only a proven
-        canonical owner/context pairs declared by MediaOwnerType are accepted.
+        Requires USER with rwms.write and warehouse EDIT, or WORKER with
+        worker.tasks only for TASK_BOARD_ENTRY/WORK_RESULT and a current owner
+        proof containing its worker_id. Only proven canonical owner/context
+        pairs declared by MediaOwnerType are accepted.
         At most 100 live media assets may belong to one owner. The
         returned content path is same-origin and never reveals a MinIO origin
         or storage credential.
@@ -135,7 +351,9 @@ paths:
       summary: Stream and pin the exact authorized upload through the gateway
       operationId: uploadSessionContent
       description: >-
-        Requires the session-owning USER, rwms.write and warehouse EDIT. The
+        Requires the session-owning USER or WORKER principal authorized when
+        the session was created; authorization is rechecked against the current
+        owner proof. The
         request Content-Type and Content-Length must exactly match the upload
         session. Idempotency-Key is shared with the following completion call.
         On success the immutable MinIO version is already finalized and a
@@ -178,6 +396,10 @@ paths:
     post:
       summary: Idempotently confirm the pinned upload version
       operationId: finalizeUploadSession
+      description: >-
+        Requires the session-owning principal and rechecks the current owner
+        proof. TASK_BOARD_ENTRY finalization preserves clientReferenceId in the
+        emitted media fact so task-board can complete the reservation.
       parameters:
         - $ref: '#/components/parameters/UploadSessionId'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -266,6 +488,11 @@ paths:
       operationId: getOriginalMedia
       parameters:
         - $ref: '#/components/parameters/MediaId'
+        - name: generation
+          in: query
+          required: false
+          description: Required for a WORKER read of a sourceMediaReferences item; ignored for a result asset's current ORIGINAL.
+          schema: { type: integer, minimum: 1 }
         - $ref: '#/components/parameters/OwnerType'
         - $ref: '#/components/parameters/OwnerId'
         - $ref: '#/components/parameters/DocumentId'
@@ -274,7 +501,10 @@ paths:
         - $ref: '#/components/parameters/OwnerContext'
       responses:
         '200':
-          description: Exact immutable current-generation ORIGINAL bytes; no object-store URL or key is exposed.
+          description: >-
+            Exact immutable current-generation ORIGINAL bytes; WORKER source
+            reads use the proof-referenced generation. No object-store URL or
+            key is exposed.
           headers:
             Cache-Control: { schema: { const: 'private, no-store' } }
             Content-Length: { schema: { type: integer, minimum: 1 } }
@@ -416,6 +646,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    AssetImportJobId:
+      name: jobId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     OwnerType:
       name: ownerType
       in: query
@@ -426,7 +661,7 @@ components:
       name: ownerId
       in: query
       required: false
-      description: Required for inventory, cabin and maintenance owners; forbidden for logistics owners.
+      description: Required for inventory, cabin, maintenance and task-board owners; forbidden for logistics owners.
       schema: { type: string, format: uuid }
     DocumentId:
       name: documentId
@@ -445,6 +680,11 @@ components:
       in: query
       required: true
       schema: { type: string, format: uuid }
+    CabinId:
+      name: cabinId
+      in: query
+      required: true
+      schema: { type: string, format: uuid }
     OwnerContext:
       name: context
       in: query
@@ -456,12 +696,122 @@ components:
       in: path
       required: true
       schema: { enum: [SMALL, MEDIUM, LARGE] }
+    CabinPresentationVariant:
+      name: variant
+      in: path
+      required: true
+      description: Exact derived image variant permitted to logistics.
+      schema: { enum: [SMALL, LARGE] }
     Generation:
       name: generation
       in: query
       required: true
       schema: { type: integer, minimum: 1 }
+    CabinPresentationGeneration:
+      name: generation
+      in: query
+      required: true
+      description: Current media generation; it is represented as an int64 at the boundary and must fit the stored generation range.
+      schema: { type: integer, format: int64, minimum: 1, maximum: 2147483647 }
   schemas:
+    AssetImportPreflightRequest:
+      type: object
+      additionalProperties: false
+      required: [assetImportId, warehouseId, sources]
+      properties:
+        assetImportId:
+          description: Stable asset-service import aggregate ID; it is the durable preflight identity.
+          type: string
+          format: uuid
+        warehouseId: { type: string, format: uuid }
+        sources:
+          description: Up to five hundred distinct source rows. Recursive preflight records at most one hundred files per source and twenty-five thousand files per job. The public URL is accepted only at this command boundary and is never returned by a job.
+          type: array
+          minItems: 1
+          maxItems: 500
+          items: { $ref: '#/components/schemas/AssetImportSource' }
+    AssetImportSource:
+      type: object
+      additionalProperties: false
+      required: [sourceRowId, publicUrl]
+      properties:
+        sourceRowId: { type: string, format: uuid }
+        publicUrl:
+          description: Exact Yandex.Disk public-folder/file URL. It is write-only and never echoed.
+          type: string
+          pattern: '^https://disk\.yandex\.ru/d/[A-Za-z0-9_-]{14}$'
+    AssetImportActivationRequest:
+      type: object
+      additionalProperties: false
+      required: [bindings]
+      properties:
+        bindings:
+          description: Exactly one CABIN binding for every preflight source row.
+          type: array
+          minItems: 1
+          maxItems: 500
+          items: { $ref: '#/components/schemas/AssetImportBinding' }
+    AssetImportReplaceSourcesRequest:
+      type: object
+      additionalProperties: false
+      required: [sources]
+      properties:
+        sources:
+          description: One or more corrected write-only Yandex public URLs for existing source row IDs.
+          type: array
+          minItems: 1
+          maxItems: 500
+          items: { $ref: '#/components/schemas/AssetImportSource' }
+    AssetImportBinding:
+      type: object
+      additionalProperties: false
+      required: [sourceRowId, cabinId]
+      properties:
+        sourceRowId: { type: string, format: uuid }
+        cabinId: { type: string, format: uuid }
+    AssetImportJob:
+      type: object
+      additionalProperties: false
+      required: [jobId, assetImportId, warehouseId, status, preflightAttempts, activationAttempts, results]
+      properties:
+        jobId: { type: string, format: uuid }
+        assetImportId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        status:
+          enum: [PREFLIGHT_PENDING, PREFLIGHT_RUNNING, PREFLIGHT_READY, ACTIVATION_PENDING, ACTIVATION_RUNNING, COMPLETED, FAILED]
+        preflightAttempts: { type: integer, minimum: 0 }
+        activationAttempts: { type: integer, minimum: 0 }
+        failureCode:
+          description: Sanitized stable import failure code; no upstream URL, key or response detail is included.
+          type: string
+          pattern: '^[A-Z_]{1,64}$'
+        results:
+          type: array
+          maxItems: 500
+          items: { $ref: '#/components/schemas/AssetImportSourceResult' }
+    AssetImportSourceResult:
+      type: object
+      additionalProperties: false
+      required: [sourceRowId, prepared, downloading, imported, skipped, failed, mediaIds, warningCodes]
+      properties:
+        sourceRowId: { type: string, format: uuid }
+        prepared: { type: integer, minimum: 0 }
+        downloading: { type: integer, minimum: 0 }
+        imported: { type: integer, minimum: 0 }
+        skipped: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        mediaIds:
+          description: Opaque accepted media IDs only; no filename, remote locator, object key or download address is exposed.
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        warningCodes:
+          description: Distinct sanitized skip or ingestion-warning codes for this source row.
+          type: array
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, pattern: '^[A-Z_]{1,64}$' }
     MediaOwnerType:
       type: string
       enum:
@@ -474,9 +824,10 @@ components:
         - LOGISTICS_RETURN
         - LOGISTICS_SHIPMENT
         - LOGISTICS_TRANSFER
+        - TASK_BOARD_ENTRY
     MediaOwnerContext:
       type: string
-      enum: [INSPECTION, WAREHOUSE, ESTIMATE, REPAIR, ACCEPTANCE, CATALOG, RETURN_INSPECTION, SHIPMENT, TRANSFER]
+      enum: [INSPECTION, WAREHOUSE, ESTIMATE, REPAIR, ACCEPTANCE, CATALOG, RETURN_INSPECTION, SHIPMENT, TRANSFER, WORK_RESULT]
     MaintenanceOwnerType:
       type: string
       enum: [MAINTENANCE_ESTIMATE, MAINTENANCE_REPAIR, MAINTENANCE_ACCEPTANCE, MAINTENANCE_CATALOG_NODE]
@@ -499,8 +850,14 @@ components:
             used by the receiving dialog, never the source warehouse.
           type: string
           format: uuid
-        ownerRevision: { type: integer, minimum: 0 }
-        aggregateVersion: { type: integer, minimum: 0 }
+        ownerRevision:
+          description: The first proof establishes the baseline; each later proof is exactly the prior ownerRevision plus one.
+          type: integer
+          minimum: 0
+        aggregateVersion:
+          description: The first proof establishes the baseline; each later proof is strictly greater than the prior aggregateVersion and may skip unrelated aggregate mutations.
+          type: integer
+          minimum: 0
         proofEventId: { type: string, format: uuid }
         active: { type: boolean }
       oneOf:
@@ -525,8 +882,14 @@ components:
         documentId: { type: string, format: uuid }
         lineId: { type: string, format: uuid }
         warehouseId: { type: string, format: uuid }
-        ownerRevision: { type: integer, minimum: 0 }
-        aggregateVersion: { type: integer, minimum: 0 }
+        ownerRevision:
+          description: The applied contiguous owner-proof revision.
+          type: integer
+          minimum: 0
+        aggregateVersion:
+          description: The applied strictly increasing aggregate version; it can skip aggregate mutations without media proofs.
+          type: integer
+          minimum: 0
         proofEventId: { type: string, format: uuid }
         active: { type: boolean }
       oneOf:
@@ -583,6 +946,54 @@ components:
           minItems: 1
           maxItems: 20
           items: { $ref: '#/components/schemas/OpaqueReadyMediaReference' }
+    CabinPresentationSnapshotRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, cabinIds]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        cabinIds:
+          description: One to one hundred unique CABIN IDs whose current private presentation references are requested.
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
+    CabinPresentationSnapshotPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          description: Only requested cabins that currently have an active canonical CABIN owner binding are returned.
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CabinPresentationSnapshot' }
+    CabinPresentationSnapshot:
+      type: object
+      additionalProperties: false
+      required: [cabinId, photos]
+      properties:
+        cabinId: { type: string, format: uuid }
+        photos:
+          description: READY current-generation CABIN IMAGE assets with at least one available private presentation variant, in stable presentation order.
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/CabinPresentationPhoto' }
+    CabinPresentationPhoto:
+      type: object
+      additionalProperties: false
+      required: [mediaId, generation, sortOrder, availableVariants]
+      properties:
+        mediaId: { type: string, format: uuid }
+        generation: { type: integer, minimum: 1 }
+        sortOrder: { type: integer, format: int64 }
+        availableVariants:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items: { enum: [SMALL, LARGE] }
     CreateUploadSessionRequest:
       type: object
       additionalProperties: false
@@ -592,6 +1003,12 @@ components:
         ownerId: { type: string, format: uuid }
         documentId: { type: string, format: uuid }
         lineId: { type: string, format: uuid }
+        clientReferenceId:
+          description: >-
+            Stable task-board evidenceId. Required and trusted only for
+            TASK_BOARD_ENTRY; forbidden for every other owner type.
+          type: string
+          format: uuid
         warehouseId:
           description: >-
             Proved owner warehouse. LOGISTICS_RETURN uses the destination/receiving
@@ -616,47 +1033,53 @@ components:
           properties:
             ownerType: { const: INVENTORY_FINDING }
             context: { const: INSPECTION }
-          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }] }
+          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }, { required: [clientReferenceId] }] }
         - required: [ownerId]
           properties:
             ownerType: { const: CABIN }
             context: { const: WAREHOUSE }
-          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }] }
+          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }, { required: [clientReferenceId] }] }
         - required: [ownerId]
           properties:
             ownerType: { const: MAINTENANCE_ESTIMATE }
             context: { const: ESTIMATE }
-          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }] }
+          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }, { required: [clientReferenceId] }] }
         - required: [ownerId]
           properties:
             ownerType: { const: MAINTENANCE_REPAIR }
             context: { const: REPAIR }
-          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }] }
+          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }, { required: [clientReferenceId] }] }
         - required: [ownerId]
           properties:
             ownerType: { const: MAINTENANCE_ACCEPTANCE }
             context: { const: ACCEPTANCE }
-          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }] }
+          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }, { required: [clientReferenceId] }] }
         - required: [ownerId]
           properties:
             ownerType: { const: MAINTENANCE_CATALOG_NODE }
             context: { const: CATALOG }
-          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }] }
+          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }, { required: [clientReferenceId] }] }
         - required: [documentId, lineId]
           properties:
             ownerType: { const: LOGISTICS_RETURN }
             context: { const: RETURN_INSPECTION }
-          not: { required: [ownerId] }
+          not: { anyOf: [{ required: [ownerId] }, { required: [clientReferenceId] }] }
         - required: [documentId, lineId]
           properties:
             ownerType: { const: LOGISTICS_SHIPMENT }
             context: { const: SHIPMENT }
-          not: { required: [ownerId] }
+          not: { anyOf: [{ required: [ownerId] }, { required: [clientReferenceId] }] }
         - required: [documentId, lineId]
           properties:
             ownerType: { const: LOGISTICS_TRANSFER }
             context: { const: TRANSFER }
-          not: { required: [ownerId] }
+          not: { anyOf: [{ required: [ownerId] }, { required: [clientReferenceId] }] }
+        - required: [ownerId, clientReferenceId]
+          properties:
+            ownerType: { const: TASK_BOARD_ENTRY }
+            context: { const: WORK_RESULT }
+            contentType: { const: image/jpeg }
+          not: { anyOf: [{ required: [documentId] }, { required: [lineId] }] }
     FinalizeUploadRequest:
       type: object
       additionalProperties: false
@@ -769,13 +1192,17 @@ components:
     MediaAsset:
       type: object
       additionalProperties: false
-      required: [id, folderId, fileName, contentType, kind, status, version, generation, rotationDegrees, sortOrder, sizeBytes, createdAt, variants]
+      required: [id, folderId, clientReferenceId, fileName, contentType, kind, status, version, generation, rotationDegrees, sortOrder, sizeBytes, createdAt, variants]
       properties:
         id: { type: string, format: uuid }
         folderId:
           description: Logical photo folder shared by assets from one batch upload.
           type: string
           format: uuid
+        clientReferenceId:
+          oneOf:
+            - { type: string, format: uuid }
+            - { type: 'null' }
         fileName: { type: string, minLength: 1, maxLength: 512 }
         contentType: { type: string }
         kind: { enum: [IMAGE, VIDEO] }

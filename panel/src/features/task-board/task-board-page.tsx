@@ -16,7 +16,13 @@ import {
 } from "@dnd-kit/core"
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Add01Icon, Search01Icon } from "@hugeicons/core-free-icons"
+import {
+  Add01Icon,
+  ArrowLeft01Icon,
+  ArrowRight01Icon,
+  Calendar03Icon,
+  Search01Icon,
+} from "@hugeicons/core-free-icons"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate, useSearchParams } from "react-router-dom"
 
@@ -36,10 +42,15 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
 import { useAuth } from "@/features/auth/use-auth"
 import {
+  getKpiSettings,
+  kpiSettingsKeys,
+} from "@/features/settings/kpi/api/kpi-settings-api"
+import {
   completeTaskBoardEntry,
   getTaskBoard,
   moveTaskBoardEntry,
   pauseTaskBoardEntry,
+  pinTaskBoardEntry,
   resumeTaskBoardEntry,
   takeTaskBoardEntry,
   TASK_BOARD_QUERY_KEY,
@@ -50,6 +61,10 @@ import {
   mergeQueueCollapsedSettings,
   taskBoardTargetIndexAt,
 } from "@/features/task-board/domain/task-board-domain"
+import {
+  nextTaskTimerTransitionAt,
+  paletteForTaskBoard,
+} from "@/features/task-board/domain/task-board-kpi-presentation"
 import type {
   TaskBoardEntryDto,
   TaskBoardQueueDto,
@@ -77,6 +92,8 @@ type BoardAction =
 
 type DropPlacement = "before" | "after" | "end"
 type DropTarget = { overId: string; placement: DropPlacement }
+
+const dragActivationConstraint = { delay: 220, tolerance: 6 }
 
 const taskBoardCollisionDetection: CollisionDetection = (args) => {
   if (!args.pointerCoordinates) return closestCenter(args)
@@ -163,7 +180,6 @@ function previewMove(
     ...moved,
     queueKey: nextTarget.key,
     queueId: nextTarget.settingsQueueId,
-    queueCode: nextTarget.queueCode,
   })
 
   if (
@@ -191,6 +207,93 @@ function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback
 }
 
+function addDays(value: string, days: number) {
+  const date = new Date(`${value}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return date.toISOString().slice(0, 10)
+}
+
+function formatBoardDate(value: string) {
+  return new Intl.DateTimeFormat("ru-RU", {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+  }).format(new Date(`${value}T00:00:00`))
+}
+
+function TaskBoardDateSelector({
+  selectedDate,
+  availableDates,
+  disabled,
+  onSelect,
+}: {
+  selectedDate: string | null
+  availableDates: string[]
+  disabled: boolean
+  onSelect: (date: string) => void
+}) {
+  const firstAvailable = availableDates[0] ?? null
+  const [windowCenter, setWindowCenter] = useState(
+    selectedDate ?? firstAvailable ?? ""
+  )
+  const available = useMemo(() => new Set(availableDates), [availableDates])
+
+  if (!windowCenter) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Дат с запланированными заданиями пока нет.
+      </p>
+    )
+  }
+
+  const dates = Array.from({ length: 7 }, (_, index) =>
+    addDays(windowCenter, index - 3)
+  )
+  return (
+    <section aria-label="Дата очереди" className="flex items-center gap-2">
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        disabled={disabled}
+        aria-label="Предыдущие даты"
+        onClick={() => setWindowCenter((current) => addDays(current, -7))}
+      >
+        <HugeiconsIcon icon={ArrowLeft01Icon} />
+      </Button>
+      <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto py-1">
+        {dates.map((date) => {
+          const enabled = available.has(date)
+          return (
+            <Button
+              key={date}
+              type="button"
+              size="default"
+              variant={date === selectedDate ? "default" : "outline"}
+              className="shrink-0"
+              disabled={disabled || !enabled}
+              aria-pressed={date === selectedDate}
+              onClick={() => onSelect(date)}
+            >
+              {formatBoardDate(date)}
+            </Button>
+          )
+        })}
+      </div>
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        disabled={disabled}
+        aria-label="Следующие даты"
+        onClick={() => setWindowCenter((current) => addDays(current, 7))}
+      >
+        <HugeiconsIcon icon={ArrowRight01Icon} />
+      </Button>
+    </section>
+  )
+}
+
 export function TaskBoardPage() {
   const isMobile = useIsMobile()
   const navigate = useNavigate()
@@ -198,7 +301,7 @@ export function TaskBoardPage() {
   const queryClient = useQueryClient()
   const { accessToken, currentUser } = useAuth()
   const { selectedWarehouse } = useWarehouse()
-  const warehouseId = selectedWarehouse?.serviceId ?? null
+  const warehouseId = selectedWarehouse?.id ?? null
   const canEdit = Boolean(
     warehouseId && hasWarehouseAccess(currentUser, warehouseId, "EDIT")
   )
@@ -207,6 +310,9 @@ export function TaskBoardPage() {
   const [collapsedQueues, setCollapsedQueues] = useState<Set<string>>(
     () => new Set()
   )
+  const [entryCollapseStates, setEntryCollapseStates] = useState<
+    Map<string, boolean>
+  >(() => new Map())
   const [preview, setPreviewState] = useState<TaskBoardSnapshotDto | null>(null)
   const previewRef = useRef<TaskBoardSnapshotDto | null>(null)
   const dragBaselineRef = useRef<TaskBoardSnapshotDto | null>(null)
@@ -222,16 +328,24 @@ export function TaskBoardPage() {
   const [now, setNow] = useState(() => Date.now())
   const focusedExternalTaskId = searchParams.get("externalTaskId")
   const focusedTaskId = searchParams.get("taskId")
+  const requestedDate = searchParams.get("date")
   const collapsedSettingsRef = useRef<{
     warehouseId: string
     values: Map<string, boolean>
   } | null>(null)
 
   const boardQuery = useQuery({
-    queryKey: taskBoardQueryKey(warehouseId ?? "none"),
-    queryFn: () => getTaskBoard(accessToken!, warehouseId!),
+    queryKey: taskBoardQueryKey(warehouseId ?? "none", requestedDate),
+    queryFn: () => getTaskBoard(accessToken!, warehouseId!, requestedDate),
     enabled: Boolean(accessToken && warehouseId),
   })
+  const kpiSettingsQuery = useQuery({
+    queryKey: kpiSettingsKeys.warehouse(warehouseId ?? "none"),
+    queryFn: () => getKpiSettings(accessToken!, warehouseId!),
+    enabled: Boolean(accessToken && warehouseId),
+    staleTime: 60_000,
+  })
+  const taskBoardPalette = paletteForTaskBoard(kpiSettingsQuery.data ?? null)
 
   const setPreview = useCallback(
     (
@@ -251,6 +365,22 @@ export function TaskBoardPage() {
     []
   )
 
+  const isEntryCollapsed = useCallback(
+    (entryId: string) => entryCollapseStates.get(entryId) ?? isMobile,
+    [entryCollapseStates, isMobile]
+  )
+
+  const toggleEntryCollapsed = useCallback(
+    (entryId: string) => {
+      setEntryCollapseStates((current) => {
+        const next = new Map(current)
+        next.set(entryId, !(current.get(entryId) ?? isMobile))
+        return next
+      })
+    },
+    [isMobile]
+  )
+
   useEffect(() => {
     setPreview(boardQuery.data ? cloneBoard(boardQuery.data) : null)
   }, [boardQuery.data, setPreview])
@@ -260,7 +390,10 @@ export function TaskBoardPage() {
     const previous = collapsedSettingsRef.current
     const merged = mergeQueueCollapsedSettings({
       current: collapsedQueues,
-      previous: previous?.warehouseId === warehouseId ? previous.values : null,
+      previous:
+        previous && previous.warehouseId === warehouseId
+          ? previous.values
+          : null,
       queues: boardQuery.data.queues,
       reset: previous?.warehouseId !== warehouseId,
     })
@@ -277,6 +410,23 @@ export function TaskBoardPage() {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000)
     return () => window.clearInterval(timer)
   }, [])
+
+  const nextTimerTransitionAt = nextTaskTimerTransitionAt(
+    boardQuery.data?.queues.flatMap((queue) => queue.entries) ?? []
+  )
+  useEffect(() => {
+    if (nextTimerTransitionAt === null) return
+    const delay = Math.max(0, nextTimerTransitionAt - Date.now()) + 100
+    const timer = window.setTimeout(
+      () =>
+        void queryClient.invalidateQueries({
+          queryKey: taskBoardQueryKey(warehouseId ?? "none", requestedDate),
+          exact: true,
+        }),
+      delay
+    )
+    return () => window.clearTimeout(timer)
+  }, [nextTimerTransitionAt, queryClient, requestedDate, warehouseId])
 
   const invalidateTaskBoard = useCallback(
     () => queryClient.invalidateQueries({ queryKey: TASK_BOARD_QUERY_KEY }),
@@ -320,7 +470,12 @@ export function TaskBoardPage() {
   const dragMutation = useMutation<
     unknown,
     Error,
-    { entry: TaskBoardEntryDto; queue: TaskBoardQueueDto; targetIndex: number }
+    {
+      entry: TaskBoardEntryDto
+      queue: TaskBoardQueueDto
+      targetIndex: number
+      targetDate: string
+    }
   >({
     mutationFn: (params) => {
       if (!accessToken)
@@ -343,10 +498,33 @@ export function TaskBoardPage() {
     },
   })
 
+  const pinMutation = useMutation({
+    mutationFn: (params: { entry: TaskBoardEntryDto; pinned: boolean }) => {
+      if (!accessToken)
+        throw new Error("Не получен токен доступа к доске заданий.")
+      return pinTaskBoardEntry({ accessToken, ...params })
+    },
+    onMutate: () => setNotice(null),
+    onSuccess: async () => {
+      setError(null)
+      setNotice("Закрепление задания сохранено.")
+      await invalidateTaskBoard()
+    },
+    onError: async (unknownError) => {
+      setNotice(null)
+      setError(
+        errorMessage(unknownError, "Не удалось изменить закрепление задания")
+      )
+      await invalidateTaskBoard()
+    },
+  })
+
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(PointerSensor, {
+      activationConstraint: dragActivationConstraint,
+    }),
     useSensor(TouchSensor, {
-      activationConstraint: { delay: 220, tolerance: 6 },
+      activationConstraint: dragActivationConstraint,
     }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   )
@@ -395,6 +573,9 @@ export function TaskBoardPage() {
           .flatMap((queue) => queue.entries)
           .find((entry) => entry.id === activeEntryId) ?? null)
       : null
+  const activeEntryCollapsed = activeEntry
+    ? isEntryCollapsed(activeEntry.id)
+    : false
 
   function handleDragStart(event: DragStartEvent) {
     if (!canEdit || !previewRef.current) return
@@ -489,6 +670,8 @@ export function TaskBoardPage() {
       entry,
       queue: targetQueue,
       targetIndex: taskBoardTargetIndexAt(targetQueue.entries, activeId),
+      targetDate:
+        current.selectedDate ?? baseline.selectedDate ?? entry.scheduledDate,
     })
   }
 
@@ -512,13 +695,14 @@ export function TaskBoardPage() {
     return board ? (targetQueueForOver(board, overId)?.label ?? null) : null
   }
 
-  const busy = actionMutation.isPending || dragMutation.isPending
+  const busy =
+    actionMutation.isPending || dragMutation.isPending || pinMutation.isPending
   const actionsBusy = busy || activeEntryId !== null || !canEdit
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
       <PageToolbar>
-        <PageToolbarContent className="min-w-52 sm:max-w-sm">
+        <PageToolbarContent className="max-w-xl">
           <InputGroup>
             <InputGroupAddon>
               <HugeiconsIcon icon={Search01Icon} />
@@ -535,7 +719,27 @@ export function TaskBoardPage() {
         </PageToolbarContent>
 
         <PageToolbarActions className="w-full sm:w-auto">
+          <div className="flex basis-full items-center gap-1 sm:w-auto sm:basis-auto">
+            <Badge variant="secondary" className="h-9 px-3">
+              Текущих: {preview?.realEntries ?? 0}
+            </Badge>
+            <Badge variant="outline" className="h-9 px-3">
+              Будущих: {preview?.shadowEntries ?? 0}
+            </Badge>
+          </div>
           <div className="grid w-full grid-cols-2 gap-2 sm:contents">
+            <Button
+              type="button"
+              variant={showFuture ? "default" : "outline"}
+              className={cn(
+                "w-full sm:w-auto",
+                !showFuture && "bg-transparent dark:bg-transparent"
+              )}
+              aria-pressed={showFuture}
+              onClick={() => setShowFuture((current) => !current)}
+            >
+              Неактивные
+            </Button>
             {canEdit ? (
               <Button asChild className="w-full sm:w-auto">
                 <Link
@@ -552,29 +756,27 @@ export function TaskBoardPage() {
                 Создать задание
               </Button>
             )}
-            <Button
-              type="button"
-              variant={showFuture ? "default" : "outline"}
-              className={cn(
-                "w-full sm:w-auto",
-                !showFuture && "bg-transparent dark:bg-transparent"
-              )}
-              aria-pressed={showFuture}
-              onClick={() => setShowFuture((current) => !current)}
-            >
-              Неактивные
-            </Button>
-          </div>
-          <div className="flex basis-full items-center gap-1 sm:ml-auto sm:w-auto sm:basis-auto">
-            <Badge variant="secondary" className="h-9 px-3">
-              Текущих: {preview?.realEntries ?? 0}
-            </Badge>
-            <Badge variant="outline" className="h-9 px-3">
-              Будущих: {preview?.shadowEntries ?? 0}
-            </Badge>
           </div>
         </PageToolbarActions>
       </PageToolbar>
+
+      <div className="flex items-start gap-2 rounded-lg border bg-card p-2">
+        <HugeiconsIcon
+          icon={Calendar03Icon}
+          className="mt-2 shrink-0 text-muted-foreground"
+        />
+        <TaskBoardDateSelector
+          key={`${warehouseId ?? "none"}:${preview?.selectedDate ?? "none"}`}
+          selectedDate={preview?.selectedDate ?? null}
+          availableDates={preview?.availableDates ?? []}
+          disabled={boardQuery.isLoading || busy}
+          onSelect={(date) => {
+            const next = new URLSearchParams(searchParams)
+            next.set("date", date)
+            setSearchParams(next, { replace: true })
+          }}
+        />
+      </div>
 
       {search.trim() ? (
         <p role="status" className="text-xs text-muted-foreground">
@@ -587,7 +789,7 @@ export function TaskBoardPage() {
           role="status"
           className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
         >
-          Открыто задание, связанное с отгрузкой.
+          Открыто связанное логистическое задание.
           <Button
             type="button"
             size="sm"
@@ -693,10 +895,12 @@ export function TaskBoardPage() {
                   visibleEntries={visibleEntries}
                   now={now}
                   mobile={isMobile}
+                  canEdit={canEdit}
                   collapsed={collapsedQueues.has(queue.key)}
                   dragDisabled={!canEdit || busy || Boolean(normalizedSearch)}
                   actionPending={actionsBusy}
                   queueActionsDisabled={!canEdit || Boolean(normalizedSearch)}
+                  palette={taskBoardPalette}
                   onToggleCollapsed={(queueKey) =>
                     setCollapsedQueues((current) => {
                       const next = new Set(current)
@@ -705,10 +909,25 @@ export function TaskBoardPage() {
                       return next
                     })
                   }
-                  onDetails={(entry) =>
-                    entry.detailsHref &&
-                    navigate(entry.detailsHref, workspaceEntryNavigationOptions)
-                  }
+                  onDetails={(entry) => {
+                    if (entry.source?.type !== "MAINTENANCE_REPAIR") return
+                    navigate(
+                      `/repairs?repairId=${encodeURIComponent(entry.source.sourceId)}`,
+                      workspaceEntryNavigationOptions
+                    )
+                  }}
+                  onEdit={(entry) => {
+                    if (
+                      !canEdit ||
+                      entry.source?.type !== "MAINTENANCE_REPAIR"
+                    ) {
+                      return
+                    }
+                    navigate(
+                      `/repairs?repairId=${encodeURIComponent(entry.source.sourceId)}&edit=1`,
+                      workspaceEntryNavigationOptions
+                    )
+                  }}
                   onTake={(entry) => {
                     if (!canEdit) return
                     setTakeEntry(entry)
@@ -724,6 +943,11 @@ export function TaskBoardPage() {
                       actionMutation.mutate({ kind: "resume", entry })
                     }
                   }}
+                  onPin={(entry, pinned) => {
+                    if (canEdit) pinMutation.mutate({ entry, pinned })
+                  }}
+                  isEntryCollapsed={isEntryCollapsed}
+                  onToggleEntryCollapsed={toggleEntryCollapsed}
                   onComplete={(entry) => {
                     if (!canEdit) return
                     setCompleteEntry(entry)
@@ -735,7 +959,14 @@ export function TaskBoardPage() {
           </div>
           <DragOverlay>
             {activeEntry ? (
-              <TaskBoardCardPreview entry={activeEntry} now={now} />
+              <TaskBoardCardPreview
+                entry={activeEntry}
+                now={now}
+                mobile={isMobile}
+                canEdit={canEdit}
+                collapsed={activeEntryCollapsed}
+                palette={taskBoardPalette}
+              />
             ) : null}
           </DragOverlay>
         </DndContext>

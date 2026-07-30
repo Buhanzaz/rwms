@@ -12,12 +12,14 @@ import dev.buhanzaz.rwms.maintenance.api.MaintenanceEstimateController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceInventoryController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceLogisticsController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceRepairController;
+import dev.buhanzaz.rwms.maintenance.api.MaintenanceSettingsController;
 import dev.buhanzaz.rwms.maintenance.config.MaintenanceSecurityProblemWriter;
 import dev.buhanzaz.rwms.maintenance.config.SecurityConfiguration;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
 import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
 import dev.buhanzaz.rwms.maintenance.service.LogisticsReturnShortageService;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
+import dev.buhanzaz.rwms.maintenance.service.RepairCapacitySettingsService;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import dev.buhanzaz.rwms.platform.web.RwmsProblemDetailFactory;
 import java.util.UUID;
@@ -41,7 +43,8 @@ import org.springframework.test.web.servlet.MockMvc;
       MaintenanceEstimateController.class,
       MaintenanceInventoryController.class,
       MaintenanceLogisticsController.class,
-      MaintenanceRepairController.class
+      MaintenanceRepairController.class,
+      MaintenanceSettingsController.class
     },
     properties = {
       "rwms.cors.allowed-origins=http://localhost:5173",
@@ -62,6 +65,7 @@ class MaintenanceBearerSecurityMockMvcTest {
   @MockitoBean MaintenanceApplicationService service;
   @MockitoBean InventoryMaintenanceService inventoryService;
   @MockitoBean LogisticsReturnShortageService logisticsService;
+  @MockitoBean RepairCapacitySettingsService repairCapacitySettingsService;
   @MockitoBean JwtDecoder jwtDecoder;
 
   @Test
@@ -75,6 +79,8 @@ class MaintenanceBearerSecurityMockMvcTest {
                   .replace("{inventoryId}", ID.toString())
                   .replace("{findingId}", ID.toString())
                   .replace("{returnId}", ID.toString())
+                  .replace("{transferId}", ID.toString())
+                  .replace("{warehouseId}", ID.toString())
                   .replace("{lineId}", ID.toString()))
               .header(CorrelationIdFilter.HEADER_NAME, ID.toString()))
           .andExpect(status().isUnauthorized())
@@ -113,7 +119,9 @@ class MaintenanceBearerSecurityMockMvcTest {
             "mediaReferences":[]
           }],
           "plan":[],
-          "mediaReferences":[]
+          "mediaReferences":[],
+          "priority":3,
+          "coverMediaId":null
         }
         """;
 

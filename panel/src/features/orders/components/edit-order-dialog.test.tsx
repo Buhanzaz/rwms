@@ -49,6 +49,8 @@ const order: OrderDetail = {
     id: CLIENT_ID,
     type: "LEGAL_ENTITY",
     displayName: "ООО Тест",
+    phone: "+79990000000",
+    email: null,
   },
   managerId: "11111111-1111-4111-8111-111111111111",
   managerDisplayName: "Менеджер",
@@ -66,6 +68,8 @@ const replacementClient: OrderClientSearchItem = {
   id: REPLACEMENT_CLIENT_ID,
   type: "LEGAL_ENTITY",
   displayName: "ООО Новый клиент",
+  phone: "+79991111111",
+  email: null,
 }
 const updatedOrder: OrderDetail = {
   ...order,
@@ -136,7 +140,7 @@ describe("EditOrderDialog", () => {
 
     expect(
       screen.getByText(
-        "Выберите другого существующего клиента для изменения заказа."
+        "Выберите другого существующего клиента для изменения бронирования."
       )
     ).toBeTruthy()
     expect(screen.queryByText(/Создать нового клиента/i)).toBeNull()
@@ -157,7 +161,7 @@ describe("EditOrderDialog", () => {
     )
     expect(callbacks.onUpdated).toHaveBeenCalledWith(updatedOrder)
     expect(callbacks.onOpenChange).toHaveBeenCalledWith(false)
-    expect(toast.success).toHaveBeenCalledWith("Клиент заказа изменён.")
+    expect(toast.success).toHaveBeenCalledWith("Клиент бронирования изменён.")
   })
 
   it("keeps the dialog open and refreshes the order boundary on a stale write", async () => {
@@ -174,7 +178,7 @@ describe("EditOrderDialog", () => {
 
     expect(
       await screen.findByText(
-        "Данные заказа изменились. Актуальные значения загружены с сервера."
+        "Данные бронирования изменились. Актуальные значения загружены с сервера."
       )
     ).toBeTruthy()
     expect(callbacks.onConflict).toHaveBeenCalledOnce()

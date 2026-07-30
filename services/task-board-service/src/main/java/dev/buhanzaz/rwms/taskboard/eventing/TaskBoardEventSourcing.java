@@ -1,6 +1,9 @@
 package dev.buhanzaz.rwms.taskboard.eventing;
 
+import dev.buhanzaz.rwms.platform.contracts.CorrelationContext;
+import dev.buhanzaz.rwms.platform.contracts.OpaqueActorReference;
 import dev.buhanzaz.rwms.taskboard.domain.BoardTask;
+import dev.buhanzaz.rwms.taskboard.domain.GroupKpiDayState;
 import dev.buhanzaz.rwms.taskboard.domain.QueueEntry;
 import dev.buhanzaz.rwms.taskboard.domain.QueueUsageReference;
 import dev.buhanzaz.rwms.taskboard.domain.WorkQueue;
@@ -130,7 +133,7 @@ public class TaskBoardEventSourcing {
 
   @Transactional(propagation = Propagation.MANDATORY)
   public void created(QueueEntry value) {
-    store.initialize(TaskBoardAggregateType.QUEUE_ENTRY, value.getId(), value.getVersion(),
+    store.initialize(TaskBoardAggregateType.QUEUE_ENTRY, value.getId(), 0,
         TaskBoardEventTypes.QUEUE_ENTRY_CREATED, facts.queueEntry(value, false));
   }
 
@@ -148,5 +151,69 @@ public class TaskBoardEventSourcing {
         streamVersion,
         TaskBoardEventTypes.QUEUE_ENTRY_CHANGED,
         facts.queueEntry(value, true));
+  }
+
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void ownerProofCreated(TaskBoardEventPayloads.EntryOwnerProofFact proof) {
+    store.initialize(
+        TaskBoardAggregateType.TASK_BOARD_ENTRY_OWNER_PROOF,
+        proof.ownerId(),
+        0,
+        TaskBoardEventTypes.ENTRY_OWNER_PROOF_CHANGED,
+        proof);
+  }
+
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void ownerProofChanged(
+      TaskBoardEventPayloads.EntryOwnerProofFact proof, long streamVersion) {
+    store.append(
+        TaskBoardAggregateType.TASK_BOARD_ENTRY_OWNER_PROOF,
+        proof.ownerId(),
+        streamVersion,
+        TaskBoardEventTypes.ENTRY_OWNER_PROOF_CHANGED,
+        proof);
+  }
+
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void evidenceRecorded(
+      TaskBoardEventPayloads.TaskEvidenceFact evidence,
+      long projectionVersion,
+      UUID correlationId,
+      UUID causationId) {
+    String eventType =
+        "READY".equals(evidence.state())
+            ? TaskBoardEventTypes.TASK_EVIDENCE_READY
+            : TaskBoardEventTypes.TASK_EVIDENCE_REVIEW_REQUIRED;
+    store.initialize(
+        TaskBoardAggregateType.TASK_EVIDENCE,
+        evidence.evidenceId(),
+        projectionVersion,
+        eventType,
+        evidence,
+        new OpaqueActorReference(evidence.workerId().toString(), "WORKER", null),
+        new CorrelationContext(correlationId, causationId));
+  }
+
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void groupKpiDayCreated(GroupKpiDayState value) {
+    TaskBoardEventPayloads.GroupKpiDayFact fact = facts.groupKpiDay(value);
+    store.initialize(
+        TaskBoardAggregateType.GROUP_KPI_DAY,
+        value.getId(),
+        0,
+        TaskBoardEventTypes.GROUP_KPI_DAY_CHANGED,
+        fact);
+  }
+
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void groupKpiDayChanged(
+      GroupKpiDayState value, long streamVersion) {
+    TaskBoardEventPayloads.GroupKpiDayFact fact = facts.groupKpiDay(value);
+    store.append(
+        TaskBoardAggregateType.GROUP_KPI_DAY,
+        value.getId(),
+        streamVersion,
+        TaskBoardEventTypes.GROUP_KPI_DAY_CHANGED,
+        fact);
   }
 }

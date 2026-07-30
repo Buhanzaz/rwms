@@ -7,6 +7,8 @@ import { WarehouseProvider } from "@/contexts/warehouse-provider"
 import { RentalItemsPage } from "@/features/rental-items/rental-items-page"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { EquipmentPage } from "@/features/equipment/equipment-page"
+import { KpiPage } from "@/features/kpi/kpi-page"
+import { KpiSettingsPage } from "@/features/settings/kpi/kpi-settings-page"
 import { EstimatesRepairsSettingsPage } from "@/features/settings/estimates-repairs/estimates-repairs-settings-page"
 import { RepairEstimatesPage } from "@/features/repair-estimates/repair-estimates-page"
 import { RepairsPage } from "@/features/repairs/repairs-page"
@@ -17,10 +19,13 @@ import { EquipmentWriteOffsPage } from "@/features/write-offs/equipment-write-of
 import { UsersPage } from "@/features/settings/users/users-page"
 import { WarehouseSettingsPage } from "@/features/settings/warehouses/warehouse-settings-page"
 import { TaskBoardSettingsPage } from "@/features/settings/task-board/task-board-settings-page"
+import { CabinCompositionSettingsPage } from "@/features/settings/cabin-composition"
 import { LogisticsReturnsPage } from "@/features/logistics/logistics-returns-page"
 import { LogisticsShipmentsPage } from "@/features/logistics/logistics-shipments-page"
 import { WarehouseTransfersPage } from "@/features/logistics/warehouse-transfers/warehouse-transfers-page"
 import { OrdersRoutes } from "@/features/orders/orders-routes"
+import { AssistantPage } from "@/features/assistant/pages/assistant-page"
+import { RentalSettingsPage } from "@/features/assistant/pages/rental-settings-page"
 import {
   InventoryEntryPage,
   InventoryFinishPage,
@@ -115,6 +120,12 @@ const pages: PageConfig[] = [
     description: "Агрегированные количества списанного доп. оборудования.",
   },
   {
+    path: "/settings/kpi",
+    title: "Настройка KPI",
+    description:
+      "Складские нормативы и параметры расчёта показателей эффективности.",
+  },
+  {
     path: "/settings/estimates-repairs",
     title: "Настройка смет и ремонтов",
     description:
@@ -125,6 +136,12 @@ const pages: PageConfig[] = [
     title: "Настройка Доски задач",
     description:
       "Очереди, маршруты, исполнители и параметры отображения доски задач.",
+  },
+  {
+    path: "/settings/cabins",
+    title: "Настройки бытовок",
+    description:
+      "Типы, габариты, отделка, характеристики и связи между ними.",
   },
   {
     path: "/settings",
@@ -177,13 +194,14 @@ function AppLayout() {
       <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
         <SiteHeader />
 
-        <div className="min-h-0 flex-1 overflow-hidden p-4 lg:p-6">
+        <div className="min-h-0 flex-1 overflow-hidden p-4 lg:p-3">
           <Routes>
             <Route
               path="/warehouse/:rentalItemId"
               element={<RentalItemDetailPage />}
             />
             <Route path="/equipment" element={<EquipmentPage />} />
+            <Route path="/kpi" element={<KpiPage />} />
             <Route path="/warehouse" element={<RentalItemsPage />} />
             <Route path="/inventory" element={<InventoryEntryPage />} />
             <Route
@@ -219,11 +237,13 @@ function AppLayout() {
               element={<WarehouseTransfersPage />}
             />
             <Route path="/orders/*" element={<OrdersRoutes />} />
+            <Route path="/assistant" element={<AssistantPage />} />
             <Route path="/write-offs" element={<WriteOffsPage />} />
             <Route
               path="/write-offs/equipment"
               element={<EquipmentWriteOffsPage />}
             />
+            <Route path="/settings/kpi" element={<KpiSettingsPage />} />
             <Route
               path="/settings/estimates-repairs"
               element={<EstimatesRepairsSettingsPage />}
@@ -237,6 +257,11 @@ function AppLayout() {
               path="/settings/task-board"
               element={<TaskBoardSettingsPage />}
             />
+            <Route
+              path="/settings/cabins"
+              element={<CabinCompositionSettingsPage />}
+            />
+            <Route path="/settings/rental" element={<RentalSettingsPage />} />
 
             {pages
               .filter(
@@ -244,6 +269,7 @@ function AppLayout() {
                   ![
                     "/warehouse",
                     "/equipment",
+                    "/kpi",
                     "/inventory",
                     "/estimates",
                     "/repairs",
@@ -254,9 +280,11 @@ function AppLayout() {
                     "/logistics/transfers",
                     "/write-offs",
                     "/write-offs/equipment",
+                    "/settings/kpi",
                     "/settings/estimates-repairs",
                     "/settings/warehouses",
                     "/settings/task-board",
+                    "/settings/cabins",
                   ].includes(page.path)
               )
               .map((page) => (

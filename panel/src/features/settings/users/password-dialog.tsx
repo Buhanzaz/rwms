@@ -58,7 +58,9 @@ export function PasswordDialog({
         <DialogHeader>
           <DialogTitle>Сменить пароль</DialogTitle>
           <DialogDescription>
-            Новый пароль для пользователя {user.username}.
+            Новый пароль для пользователя {user.username}. Он используется и
+            в панели, и в приложении руководителя, если доступ к приложению
+            разрешён.
           </DialogDescription>
         </DialogHeader>
 

@@ -1,11 +1,16 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Add01Icon, ArrowLeft01Icon } from "@hugeicons/core-free-icons"
+import {
+  Add01Icon,
+  ArrowLeft01Icon,
+  FilterIcon,
+} from "@hugeicons/core-free-icons"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { MobileAppRequiredDialog } from "@/components/mobile-app-required-dialog"
 import {
   Card,
   CardContent,
@@ -19,9 +24,10 @@ import {
   PageToolbarActions,
   PageToolbarContent,
 } from "@/components/page-toolbar"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Input } from "@/components/ui/input"
 import { useAuth } from "@/features/auth/use-auth"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
+import { LogisticsDocumentFilters } from "@/features/logistics/logistics-document-filters"
 import {
   getRepairEstimate,
   listRepairEstimates,
@@ -29,11 +35,23 @@ import {
   repairEstimateListQueryKey,
 } from "@/features/repair-estimates/api/repair-estimates-api"
 import type {
-  RepairEstimateDto,
   RepairEstimateStatus,
   RepairEstimateSummaryDto,
 } from "@/features/repair-estimates/model/repair-estimate"
 import { RepairEstimateEditorWorkspace } from "@/features/repair-estimates/repair-estimate-editor-workspace"
+import {
+  EMPTY_REPAIR_ESTIMATE_LIST_FILTERS,
+  filterRepairEstimates,
+  formatRepairEstimateAuthor,
+  repairEstimateAuthorIds,
+  repairEstimateAuthorOptions,
+  textFilterOptions,
+  type RepairEstimateListFilters,
+} from "@/features/repair-estimates/repair-estimate-list-filters"
+import { listDossierActorDisplays } from "@/features/rental-items/dossier/actor/actor-display-api"
+import type { DossierActorDisplay } from "@/features/rental-items/dossier/actor/actor-display"
+import { useIsMobile } from "@/hooks/use-mobile"
+import { useResponsiveFiltersOpen } from "@/hooks/use-responsive-filters-open"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import {
   useWorkspaceBack,
@@ -50,9 +68,12 @@ function estimateStatusLabel(status: RepairEstimateStatus) {
   return status === "COMPLETED" ? "Завершена" : "Требует доработки"
 }
 
+const EMPTY_REPAIR_ESTIMATES: RepairEstimateSummaryDto[] = []
+
 export function RepairEstimatesPage() {
   const { selectedWarehouseId } = useWarehouse()
   const { accessToken, currentUser } = useAuth()
+  const isMobile = useIsMobile()
   const canEdit = Boolean(
     selectedWarehouseId &&
     hasWarehouseAccess(currentUser, selectedWarehouseId, "EDIT")
@@ -62,8 +83,13 @@ export function RepairEstimatesPage() {
   const estimateId = searchParams.get("estimateId")
   const createRequested = searchParams.get("create") === "1"
   const returnTaskId = searchParams.get("returnTaskId")
-  const [selectedStatus, setSelectedStatus] =
-    useState<RepairEstimateStatus>("DRAFT")
+  const [mobileCreateDialogRequested, setMobileCreateDialogRequested] =
+    useState(false)
+  const [search, setSearch] = useState("")
+  const [filters, setFilters] = useState<RepairEstimateListFilters>(
+    EMPTY_REPAIR_ESTIMATE_LIST_FILTERS
+  )
+  const { filtersOpen, setFiltersOpen } = useResponsiveFiltersOpen()
   const listSearchParams = new URLSearchParams(searchParams)
   listSearchParams.delete("estimateId")
   listSearchParams.delete("create")
@@ -82,13 +108,9 @@ export function RepairEstimatesPage() {
     queryFn: () => getRepairEstimate(estimateId!, selectedWarehouseId!),
     enabled: Boolean(estimateId && selectedWarehouseId),
   })
-  const effectiveStatus = detailQuery.data?.status ?? selectedStatus
   const listQuery = useQuery({
-    queryKey: repairEstimateListQueryKey(
-      selectedWarehouseId ?? "none",
-      effectiveStatus
-    ),
-    queryFn: () => listRepairEstimates(selectedWarehouseId!, effectiveStatus),
+    queryKey: repairEstimateListQueryKey(selectedWarehouseId ?? "none"),
+    queryFn: () => listRepairEstimates(selectedWarehouseId!),
     enabled: selectedWarehouseId !== null,
   })
   const unknownEstimateNotice =
@@ -111,6 +133,11 @@ export function RepairEstimatesPage() {
   }
 
   function openCreateEditor() {
+    if (isMobile) {
+      setMobileCreateDialogRequested(true)
+      return
+    }
+
     const next = new URLSearchParams(searchParams)
     next.delete("estimateId")
     next.delete("returnTaskId")
@@ -118,36 +145,73 @@ export function RepairEstimatesPage() {
     navigate(`/estimates?${next.toString()}`, workspaceEntryNavigationOptions)
   }
 
-  function closeEditor(nextStatus?: RepairEstimateStatus) {
-    if (nextStatus) {
-      setSelectedStatus(nextStatus)
-    }
+  function closeEditor() {
     clearEstimateSelection()
   }
 
-  function handleSaved(estimate: RepairEstimateDto) {
-    closeEditor(estimate.status)
+  function handleMobileCreateDialogOpenChange(open: boolean) {
+    setMobileCreateDialogRequested(open)
+    if (!open && isMobile && createRequested) {
+      clearEstimateSelection()
+    }
   }
 
-  const estimates = listQuery.data ?? []
+  function handleSaved() {
+    closeEditor()
+  }
+
+  const estimates = listQuery.data ?? EMPTY_REPAIR_ESTIMATES
+  const authorIds = useMemo(
+    () => repairEstimateAuthorIds(estimates),
+    [estimates]
+  )
+  const actorDisplaysQuery = useQuery({
+    queryKey: ["repair-estimates", "actor-displays", authorIds],
+    queryFn: () => listDossierActorDisplays(accessToken!, authorIds),
+    enabled: Boolean(accessToken && authorIds.length > 0),
+  })
+  const actorsById = useMemo(
+    () =>
+      new Map<string, DossierActorDisplay>(
+        (actorDisplaysQuery.data ?? []).map((actor) => [actor.subjectId, actor])
+      ),
+    [actorDisplaysQuery.data]
+  )
+  const sourcePartyOptions = useMemo(
+    () => textFilterOptions(estimates.map((estimate) => estimate.sourceParty)),
+    [estimates]
+  )
+  const authorOptions = useMemo(
+    () => repairEstimateAuthorOptions(estimates, actorsById),
+    [actorsById, estimates]
+  )
+  const filteredEstimates = useMemo(
+    () => filterRepairEstimates(estimates, search, filters, actorsById),
+    [actorsById, estimates, filters, search]
+  )
   const workspaceOpen = createRequested || Boolean(estimateId)
+  const mobileCreateBlocked = isMobile && createRequested
+  const mobileCreateDialogOpen =
+    isMobile && (mobileCreateBlocked || mobileCreateDialogRequested)
   const detailUnavailable = Boolean(
     estimateId && !detailQuery.isLoading && !detailQuery.data
+  )
+  const editorAvailable = Boolean(
+    workspaceOpen &&
+    selectedWarehouseId &&
+    !(createRequested && (!canEdit || isMobile)) &&
+    !returnTaskId &&
+    !detailUnavailable
   )
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
-      {workspaceOpen ? (
-        <header className="flex flex-wrap items-center gap-3">
-          <Button type="button" variant="outline" onClick={goBack}>
-            <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
-            Назад
-          </Button>
-        </header>
+      {workspaceOpen && !editorAvailable ? (
+        <EstimateWorkspaceBackToolbar onBack={goBack} />
       ) : null}
 
       {workspaceOpen && selectedWarehouseId ? (
-        createRequested && !canEdit ? (
+        mobileCreateBlocked ? null : createRequested && !canEdit ? (
           <Card>
             <CardHeader>
               <CardTitle>Создание сметы недоступно</CardTitle>
@@ -183,6 +247,14 @@ export function RepairEstimatesPage() {
             estimate={estimateId ? (detailQuery.data ?? null) : null}
             readOnly={!canEdit}
             loading={Boolean(estimateId && detailQuery.isLoading)}
+            authorDisplayName={
+              detailQuery.data
+                ? formatRepairEstimateAuthor(
+                    detailQuery.data.authorName,
+                    actorsById
+                  )
+                : undefined
+            }
             onClose={() => closeEditor()}
             onSaved={handleSaved}
           />
@@ -190,22 +262,33 @@ export function RepairEstimatesPage() {
       ) : (
         <>
           <PageToolbar>
-            <PageToolbarContent>
-              <Tabs
-                value={effectiveStatus}
-                onValueChange={(value) =>
-                  setSelectedStatus(value as RepairEstimateStatus)
-                }
-              >
-                <TabsList className="w-full sm:w-fit">
-                  <TabsTrigger value="DRAFT">Требуют доработки</TabsTrigger>
-                  <TabsTrigger value="COMPLETED">Завершённые</TabsTrigger>
-                </TabsList>
-              </Tabs>
+            <PageToolbarContent className="max-w-xl">
+              <Input
+                type="search"
+                value={search}
+                name="repair-estimates-search"
+                autoComplete="off"
+                aria-label="Поиск по номеру бытовки, полю «От кого» или автору"
+                placeholder="Номер бытовки, от кого или автор…"
+                onChange={(event) => setSearch(event.target.value)}
+              />
             </PageToolbarContent>
 
-            {canEdit ? (
-              <PageToolbarActions>
+            <PageToolbarActions className="w-full sm:w-auto">
+              <Button
+                type="button"
+                size="icon"
+                variant={filtersOpen ? "secondary" : "outline"}
+                aria-label={
+                  filtersOpen ? "Скрыть фильтры смет" : "Показать фильтры смет"
+                }
+                aria-controls="repair-estimate-filters"
+                aria-expanded={filtersOpen}
+                onClick={() => setFiltersOpen((current) => !current)}
+              >
+                <HugeiconsIcon icon={FilterIcon} aria-hidden="true" />
+              </Button>
+              {canEdit ? (
                 <Button
                   type="button"
                   disabled={!selectedWarehouseId}
@@ -214,9 +297,44 @@ export function RepairEstimatesPage() {
                   <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
                   Создать смету
                 </Button>
-              </PageToolbarActions>
-            ) : null}
+              ) : null}
+            </PageToolbarActions>
           </PageToolbar>
+
+          <div id="repair-estimate-filters" hidden={!filtersOpen}>
+            <LogisticsDocumentFilters
+              filters={filters}
+              stateOptions={[
+                { value: "DRAFT", label: "Требует доработки" },
+                { value: "COMPLETED", label: "Завершена" },
+              ]}
+              dateLabel="Создана"
+              showSchedule={false}
+              extraFilters={[
+                {
+                  label: "От кого",
+                  options: sourcePartyOptions,
+                  selected: filters.sourceParties,
+                  onApply: (sourceParties) =>
+                    setFilters((current) => ({
+                      ...current,
+                      sourceParties,
+                    })),
+                },
+                {
+                  label: "Автор",
+                  options: authorOptions,
+                  selected: filters.authorIds,
+                  onApply: (authorIds) =>
+                    setFilters((current) => ({ ...current, authorIds })),
+                },
+              ]}
+              onChange={(next) =>
+                setFilters((current) => ({ ...current, ...next }))
+              }
+              onReset={() => setFilters(EMPTY_REPAIR_ESTIMATE_LIST_FILTERS)}
+            />
+          </div>
 
           <div className="min-h-0 flex-1 overflow-auto md:flex">
             {listQuery.isLoading ? (
@@ -227,10 +345,13 @@ export function RepairEstimatesPage() {
               </p>
             ) : (
               <>
-                <div className="hidden min-h-full flex-1 md:block">
+                <div
+                  className="hidden min-h-full flex-1 md:block"
+                  hidden={filteredEstimates.length === 0}
+                >
                   <OperationsListGrid
                     className="min-h-full"
-                    items={estimates}
+                    items={filteredEstimates}
                     columns={[
                       {
                         id: "cabinNumber",
@@ -260,8 +381,16 @@ export function RepairEstimatesPage() {
                         id: "authorName",
                         label: "Автор",
                         className: "w-48",
-                        getSortValue: (estimate) => estimate.authorName,
-                        render: (estimate) => estimate.authorName,
+                        getSortValue: (estimate) =>
+                          formatRepairEstimateAuthor(
+                            estimate.authorName,
+                            actorsById
+                          ),
+                        render: (estimate) =>
+                          formatRepairEstimateAuthor(
+                            estimate.authorName,
+                            actorsById
+                          ),
                       },
                       {
                         id: "status",
@@ -293,31 +422,63 @@ export function RepairEstimatesPage() {
                   />
                 </div>
 
-                {estimates.length > 0 ? (
+                {filteredEstimates.length > 0 ? (
                   <div className="grid gap-3 md:hidden">
-                    {estimates.map((estimate) => (
+                    {filteredEstimates.map((estimate) => (
                       <EstimateMobileCard
                         key={estimate.id}
                         estimate={estimate}
+                        authorName={formatRepairEstimateAuthor(
+                          estimate.authorName,
+                          actorsById
+                        )}
                         onOpen={() => openEstimate(estimate.id)}
                       />
                     ))}
                   </div>
-                ) : null}
+                ) : (
+                  <div
+                    role="status"
+                    className="flex min-h-full w-full items-center justify-center p-6 text-center text-sm text-muted-foreground"
+                  >
+                    Сметы по заданным условиям не найдены.
+                  </div>
+                )}
               </>
             )}
           </div>
         </>
       )}
+
+      <MobileAppRequiredDialog
+        open={mobileCreateDialogOpen}
+        onOpenChange={handleMobileCreateDialogOpenChange}
+        operation="Создание сметы"
+      />
     </div>
+  )
+}
+
+function EstimateWorkspaceBackToolbar({ onBack }: { onBack: () => void }) {
+  return (
+    <PageToolbar>
+      <PageToolbarContent>
+        <Button type="button" variant="outline" onClick={onBack}>
+          <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
+          Назад
+        </Button>
+      </PageToolbarContent>
+    </PageToolbar>
   )
 }
 
 function EstimateMobileCard({
   estimate,
+  authorName,
   onOpen,
 }: {
   estimate: RepairEstimateSummaryDto
+  authorName: string
   onOpen: () => void
 }) {
   return (
@@ -339,7 +500,7 @@ function EstimateMobileCard({
         <span className="text-muted-foreground">От кого</span>
         <span>{estimate.sourceParty || "—"}</span>
         <span className="text-muted-foreground">Автор</span>
-        <span>{estimate.authorName}</span>
+        <span>{authorName}</span>
         <span className="text-muted-foreground">Статус</span>
         <span>
           <Badge

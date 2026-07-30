@@ -1,33 +1,35 @@
-import { useId, useMemo, useRef, useState, type FormEvent } from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useEffect, useId, useRef, useState, type FormEvent } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
-import {
-  Add01Icon,
-  CheckIcon,
-  MinusSignIcon,
-  PlusSignIcon,
-  UnfoldMoreIcon,
-} from "@hugeicons/core-free-icons"
+import { CheckIcon } from "@hugeicons/core-free-icons"
 
 import {
   AssetRentalItemConflictError,
   createAssetRentalItem,
   createIdempotencyKey,
+  getRentalItemCreationOptions,
+  rentalItemCreationOptionsQueryKey,
 } from "@/features/rental-items/api/asset-rental-items-api"
 import {
   cabinMediaOwner,
   createHttpMediaClient,
   type MediaAsset,
 } from "@/features/media/media-service"
+import { retryOwnerProofOperation } from "@/features/media/owner-proof-retry"
 import {
-  disposeStagedRentalItemPhotos,
   RentalItemCreationPhotoUploader,
   type StagedRentalItemPhoto,
 } from "@/features/rental-items/rental-item-creation-photo-uploader"
+import {
+  compositionCategoryOptions,
+  emptyRentalItemComposition,
+  isRentalItemCompositionComplete,
+  RentalItemCompositionFields,
+  type RentalItemCompositionCategoryMode,
+  type RentalItemCompositionFormValue,
+} from "@/features/rental-items/rental-item-composition-fields"
 import type { RentalItemDto } from "@/features/rental-items/model/rental-item"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -38,40 +40,13 @@ import {
 } from "@/components/ui/dialog"
 import {
   Field,
-  FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
-  FieldLegend,
-  FieldSet,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { useAuth } from "@/features/auth/use-auth"
 import { hasWarehouseAccess } from "@/features/auth/warehouse-access"
-import { cn } from "@/lib/utils"
-import { ApiError } from "@/lib/api-client"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
-import {
-  buildRentalItemCharacteristics,
-  DEFAULT_RENTAL_ITEM_CHARACTERISTICS,
-  getDefaultRentalItemCharacteristics,
-  getDefaultRentalItemDimensions,
-  getDefaultRentalItemFinishing,
-  getRentalItemDimensionsForType,
-  isSanblockRentalItemType,
-  NEW_RENTAL_ITEM_CATEGORY,
-  RENTAL_ITEM_CHARACTERISTIC_OPTIONS,
-  RENTAL_ITEM_FINISHING_OPTIONS,
-  RENTAL_ITEM_TYPE_OPTIONS,
-  type RentalItemCharacteristic,
-  type RentalItemCreationType,
-  type RentalItemFinishing,
-  type SanblockSettings,
-} from "@/features/rental-items/model/rental-item-create"
 
 type RentalItemCreateDialogProps = {
   open: boolean
@@ -79,80 +54,122 @@ type RentalItemCreateDialogProps = {
   onOpenChange: (open: boolean) => void
 }
 
-type LinoleumValue = "no" | "yes"
+/**
+ * The UUID-backed passport fields accepted by warehouse and inventory creation
+ * commands. Display labels are resolved from the asset-service catalog.
+ */
+export type RentalItemCreationCommand = {
+  idempotencyKey: string
+  number: string
+  rentalTypeId: string
+  dimensionId: string
+  finishingId: string
+  category: string
+  characteristicIds: string[]
+  linoleum: boolean
+}
 
-type DropdownOption<T extends string> = {
+/** The real asset identity needed to upload a cabin photograph. */
+export type CreatedRentalItemAsset = {
+  id: string
+  warehouseId: string
+  number: string
+}
+
+export type RentalItemCreationResult<T> = {
+  createdItem: CreatedRentalItemAsset
   value: T
-  label: string
+}
+
+export type RentalItemCreationDialogProps<T> = {
+  open: boolean
+  warehouseId: string
+  onOpenChange: (open: boolean) => void
+  /** Keep the warehouse permission gate in the warehouse wrapper only. */
+  canCreate?: boolean
+  title: string
+  description?: string
+  initialNumber?: string
+  numberReadOnly?: boolean
+  categoryMode?: Extract<RentalItemCompositionCategoryMode, "NEW" | "USED">
+  /** Defaults to true. Inventory attaches photos later to the inspection finding. */
+  photosEnabled?: boolean
+  submitLabel?: string
+  createRentalItem: (
+    command: RentalItemCreationCommand
+  ) => Promise<RentalItemCreationResult<T>>
+  /** Runs as soon as the cabin itself exists, before staged photos upload. */
+  onAssetCreated?: (value: T, createdItem: CreatedRentalItemAsset) => void
+  /** Runs only after all staged photos have completed (or there were none). */
+  onCompleted?: (value: T, createdItem: CreatedRentalItemAsset) => void
+  errorMessage?: (error: unknown) => string | null
 }
 
 type RentalItemCreateFormState = {
   number: string
-  type: RentalItemCreationType | ""
-  dimensions: string
-  finishing: RentalItemFinishing | ""
-  selectedCharacteristics: RentalItemCharacteristic[]
-  sanblockSettings: SanblockSettings
+  composition: RentalItemCompositionFormValue
   photos: StagedRentalItemPhoto[]
-  linoleum: LinoleumValue
 }
 
-const DEFAULT_SANBLOCK_SETTINGS: SanblockSettings = {
-  toilets: 0,
-  sinks: 0,
-  showers: 0,
-}
-
-const LINOLEUM_OPTIONS: DropdownOption<LinoleumValue>[] = [
-  {
-    value: "no",
-    label: "Нет",
-  },
-  {
-    value: "yes",
-    label: "Есть",
-  },
-]
-
-const formSectionActionButtonClassName = "w-full justify-center md:w-[16.25rem]"
 const formFooterClassName = "w-full md:w-[16.25rem] md:self-end"
+const RENTAL_ITEM_NUMBER_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N} _-]{0,127}$/u
 
-function createEmptyForm(): RentalItemCreateFormState {
-  return {
-    number: "",
-    type: "",
-    dimensions: "",
-    finishing: "",
-    selectedCharacteristics: getDefaultRentalItemCharacteristics([]),
-    sanblockSettings: DEFAULT_SANBLOCK_SETTINGS,
-    photos: [],
-    linoleum: "no",
+function disposeStagedRentalItemPhotos(
+  photos: readonly StagedRentalItemPhoto[]
+) {
+  photos.forEach((photo) => URL.revokeObjectURL(photo.previewUrl))
+}
+
+function hasStagedRentalItemTitlePhoto(
+  photos: readonly StagedRentalItemPhoto[]
+) {
+  return photos.length === 0 || photos.some((photo) => photo.title)
+}
+
+function orderStagedRentalItemPhotosForUpload(
+  photos: readonly StagedRentalItemPhoto[]
+) {
+  const titlePhoto = photos.find((photo) => photo.title)
+  if (!titlePhoto) return [...photos]
+
+  return [titlePhoto, ...photos.filter((photo) => photo.id !== titlePhoto.id)]
+}
+
+function rentalItemNumberError(number: string) {
+  const normalizedNumber = number.trim()
+
+  if (normalizedNumber.length === 0) return "Укажите номер бытовки."
+
+  if (!RENTAL_ITEM_NUMBER_PATTERN.test(normalizedNumber)) {
+    return "Номер бытовки должен содержать от 1 до 128 символов, начинаться с буквы или цифры и включать только буквы, цифры, пробелы, дефис (-) или символ подчёркивания (_)."
   }
+
+  return null
+}
+
+function createEmptyForm({
+  number = "",
+  composition = emptyRentalItemComposition(),
+}: {
+  number?: string
+  composition?: RentalItemCompositionFormValue
+} = {}): RentalItemCreateFormState {
+  return {
+    number,
+    composition,
+    photos: [],
+  }
+}
+
+function initialCompositionCategory(
+  options: Parameters<typeof compositionCategoryOptions>[0] | undefined,
+  categoryMode: Extract<RentalItemCompositionCategoryMode, "NEW" | "USED">
+) {
+  if (!options) return ""
+  return compositionCategoryOptions(options, categoryMode, "")[0] ?? ""
 }
 
 const rentalItemCreationMediaClient = createHttpMediaClient()
-
-function isRetryableOwnerMediaError(error: unknown) {
-  return (
-    error instanceof ApiError &&
-    (error.status === 409 ||
-      error.status === 503 ||
-      (error.status === 403 && error.code === "MEDIA_OWNER_PROOF_REQUIRED"))
-  )
-}
-
-async function retryOwnerMediaCommand<T>(command: () => Promise<T>) {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await command()
-    } catch (error) {
-      if (attempt >= 6 || !isRetryableOwnerMediaError(error)) throw error
-      await new Promise((resolve) =>
-        setTimeout(resolve, Math.min(250 * 2 ** attempt, 2_000))
-      )
-    }
-  }
-}
 
 async function waitForReadyCreationAsset({
   accessToken,
@@ -164,7 +181,7 @@ async function waitForReadyCreationAsset({
   mediaId: string
 }): Promise<MediaAsset> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const page = await retryOwnerMediaCommand(() =>
+    const page = await retryOwnerProofOperation(() =>
       rentalItemCreationMediaClient.listOwnerMedia(accessToken, owner, {
         limit: 100,
       })
@@ -181,312 +198,130 @@ async function waitForReadyCreationAsset({
   )
 }
 
-function hasRequiredFormFields(form: RentalItemCreateFormState) {
+function hasRequiredFormFields(
+  form: RentalItemCreateFormState,
+  photosEnabled: boolean
+) {
   return (
-    form.number.trim().length > 0 &&
-    form.type !== "" &&
-    form.dimensions !== "" &&
-    form.finishing !== ""
+    rentalItemNumberError(form.number) === null &&
+    isRentalItemCompositionComplete(form.composition) &&
+    (!photosEnabled || hasStagedRentalItemTitlePhoto(form.photos))
   )
 }
 
-function toDropdownOptions<T extends string>(
-  values: readonly T[]
-): DropdownOption<T>[] {
-  return values.map((value) => ({
-    value,
-    label: value,
-  }))
-}
-
-function FormDropdown<T extends string>({
-  value,
-  placeholder,
-  options,
-  disabled = false,
-  invalid = false,
-  onValueChange,
-}: {
-  value: T | ""
-  placeholder: string
-  options: DropdownOption<T>[]
-  disabled?: boolean
-  invalid?: boolean
-  onValueChange: (value: T) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const selectedOption = options.find((option) => option.value === value)
-
-  return (
-    <Popover
-      open={disabled ? false : open}
-      onOpenChange={(nextOpen) => {
-        if (!disabled) {
-          setOpen(nextOpen)
-        }
-      }}
-    >
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={disabled}
-          aria-invalid={invalid || undefined}
-          className={cn(
-            "h-10 w-full justify-between rounded-md border-input bg-input/20 px-3 text-sm font-normal md:h-7 md:px-2 md:text-xs/relaxed",
-            !selectedOption && "text-muted-foreground"
-          )}
-        >
-          <span className="truncate">
-            {selectedOption?.label ?? placeholder}
-          </span>
-          <HugeiconsIcon icon={UnfoldMoreIcon} data-icon="inline-end" />
-        </Button>
-      </PopoverTrigger>
-
-      <PopoverContent
-        align="start"
-        className="max-h-[min(18rem,var(--radix-popover-content-available-height))] w-[var(--radix-popover-trigger-width)] touch-pan-y gap-1 overflow-y-auto overscroll-contain rounded-lg p-1"
-        onPointerDown={(event) => event.stopPropagation()}
-        onWheel={(event) => event.stopPropagation()}
-        onTouchMove={(event) => event.stopPropagation()}
-      >
-        {options.length > 0 ? (
-          options.map((option) => (
-            <Button
-              key={option.value}
-              type="button"
-              variant={option.value === value ? "secondary" : "ghost"}
-              className="h-10 w-full justify-start rounded-md px-3 text-sm font-normal md:h-7 md:px-2 md:text-xs/relaxed"
-              onClick={() => {
-                onValueChange(option.value)
-                setOpen(false)
-              }}
-            >
-              <span className="truncate">{option.label}</span>
-            </Button>
-          ))
-        ) : (
-          <div className="px-2 py-1 text-xs text-muted-foreground">
-            Нет вариантов
-          </div>
-        )}
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-function CounterControl({
-  label,
-  value,
-  onChange,
-}: {
-  label: string
-  value: number
-  onChange: (value: number) => void
-}) {
-  return (
-    <Field
-      orientation="horizontal"
-      className="justify-between rounded-md border p-2"
-    >
-      <FieldLabel>{label}</FieldLabel>
-
-      <div className="flex items-center gap-2">
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="outline"
-          disabled={value <= 0}
-          onClick={() => onChange(Math.max(0, value - 1))}
-        >
-          <HugeiconsIcon icon={MinusSignIcon} data-icon="inline-start" />
-        </Button>
-
-        <span className="min-w-8 text-center text-sm font-medium">{value}</span>
-
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="outline"
-          onClick={() => onChange(value + 1)}
-        >
-          <HugeiconsIcon icon={PlusSignIcon} data-icon="inline-start" />
-        </Button>
-      </div>
-    </Field>
-  )
-}
-
-function RentalItemCharacteristicsDialog({
-  open,
-  defaultCharacteristics,
-  selectedCharacteristics,
-  onOpenChange,
-  onConfirm,
-}: {
-  open: boolean
-  defaultCharacteristics: RentalItemCharacteristic[]
-  selectedCharacteristics: RentalItemCharacteristic[]
-  onOpenChange: (open: boolean) => void
-  onConfirm: (characteristics: RentalItemCharacteristic[]) => void
-}) {
-  const [draftCharacteristics, setDraftCharacteristics] = useState<
-    RentalItemCharacteristic[]
-  >(selectedCharacteristics)
-
-  function toggleCharacteristic(
-    characteristic: RentalItemCharacteristic,
-    checked: boolean
-  ) {
-    setDraftCharacteristics((current) => {
-      if (checked) {
-        return current.includes(characteristic)
-          ? current
-          : [...current, characteristic]
-      }
-
-      return current.filter((value) => value !== characteristic)
-    })
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Добавить характеристики</DialogTitle>
-          <DialogDescription>
-            Выберите характеристики, которые нужно добавить к бытовке.
-          </DialogDescription>
-        </DialogHeader>
-
-        <FieldSet>
-          <FieldLegend variant="label">Доступные характеристики</FieldLegend>
-          <FieldGroup className="gap-3">
-            {RENTAL_ITEM_CHARACTERISTIC_OPTIONS.map((characteristic, index) => {
-              const isDefault = defaultCharacteristics.includes(characteristic)
-              const checked =
-                isDefault || draftCharacteristics.includes(characteristic)
-              const id = `rental-item-characteristic-${index}`
-
-              return (
-                <Field
-                  key={characteristic}
-                  data-disabled={isDefault || undefined}
-                  orientation="horizontal"
-                >
-                  <Checkbox
-                    id={id}
-                    checked={checked}
-                    disabled={isDefault}
-                    onCheckedChange={(value) =>
-                      toggleCharacteristic(characteristic, value === true)
-                    }
-                  />
-                  <FieldLabel htmlFor={id} className="font-normal">
-                    {characteristic}
-                  </FieldLabel>
-                </Field>
-              )
-            })}
-          </FieldGroup>
-        </FieldSet>
-
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-          >
-            Отмена
-          </Button>
-          <Button
-            type="button"
-            onClick={() => {
-              onConfirm(
-                getDefaultRentalItemCharacteristics(draftCharacteristics)
-              )
-              onOpenChange(false)
-            }}
-          >
-            <HugeiconsIcon icon={CheckIcon} data-icon="inline-start" />
-            Применить
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-export function RentalItemCreateDialog({
+export function RentalItemCreationDialog<T>({
   open,
   warehouseId,
   onOpenChange,
-}: RentalItemCreateDialogProps) {
+  canCreate = true,
+  title,
+  description,
+  initialNumber,
+  numberReadOnly = false,
+  categoryMode = "NEW",
+  photosEnabled = true,
+  submitLabel = "Создать бытовку",
+  createRentalItem,
+  onAssetCreated,
+  onCompleted,
+  errorMessage,
+}: RentalItemCreationDialogProps<T>) {
   const queryClient = useQueryClient()
-  const { accessToken, currentUser } = useAuth()
-  const canEditRentalItems = hasWarehouseAccess(
-    currentUser,
-    warehouseId,
-    "EDIT"
-  )
+  const { accessToken } = useAuth()
   const numberInputId = useId()
   const [form, setForm] = useState<RentalItemCreateFormState>(() =>
-    createEmptyForm()
+    createEmptyForm({ number: initialNumber })
   )
   const [submitted, setSubmitted] = useState(false)
-  const [characteristicsOpen, setCharacteristicsOpen] = useState(false)
-  const [createdItem, setCreatedItem] = useState<RentalItemDto | null>(null)
+  const [createdItem, setCreatedItem] = useState<CreatedRentalItemAsset | null>(
+    null
+  )
+  const [createdResult, setCreatedResult] =
+    useState<RentalItemCreationResult<T> | null>(null)
   const [photoUploadPending, setPhotoUploadPending] = useState(false)
   const [photoUploadError, setPhotoUploadError] = useState<string | null>(null)
   const photoFolderId = useRef(crypto.randomUUID())
+  const creationOptionsQuery = useQuery({
+    queryKey: rentalItemCreationOptionsQueryKey(warehouseId),
+    queryFn: () => getRentalItemCreationOptions(accessToken, warehouseId),
+    enabled: Boolean(open && canCreate && accessToken && warehouseId),
+  })
+  const creationOptions = creationOptionsQuery.data
+  const numberError = submitted ? rentalItemNumberError(form.number) : null
 
-  const dimensionsOptions = useMemo(() => {
-    return getRentalItemDimensionsForType(form.type)
-  }, [form.type])
+  useEffect(() => {
+    if (!open || !creationOptions) return
 
-  const selectedCharacteristicOptions = useMemo(() => {
-    return getDefaultRentalItemCharacteristics(form.selectedCharacteristics)
-  }, [form.selectedCharacteristics])
-
-  const selectedCharacteristics = useMemo(() => {
-    if (!form.type) {
-      return selectedCharacteristicOptions
+    const category = initialCompositionCategory(creationOptions, categoryMode)
+    let active = true
+    void Promise.resolve().then(() => {
+      if (!active) return
+      setForm((current) => {
+        const allowedCategories = compositionCategoryOptions(
+          creationOptions,
+          categoryMode,
+          current.composition.category
+        )
+        const nextCategory =
+          categoryMode === "NEW"
+            ? category
+            : allowedCategories.includes(current.composition.category)
+              ? current.composition.category
+              : category
+        if (nextCategory === current.composition.category) return current
+        return {
+          ...current,
+          composition: { ...current.composition, category: nextCategory },
+        }
+      })
+    })
+    return () => {
+      active = false
     }
-
-    return buildRentalItemCharacteristics({
-      selectedCharacteristics: selectedCharacteristicOptions,
-      type: form.type,
-      sanblockSettings: form.sanblockSettings,
-    })
-  }, [form.sanblockSettings, form.type, selectedCharacteristicOptions])
-
-  function refreshRentalItemQueries(item: RentalItemDto) {
-    queryClient.setQueryData(["rental-item", item.id], item)
-    void queryClient.invalidateQueries({ queryKey: ["rental-items"] })
-    void queryClient.invalidateQueries({
-      queryKey: ["rental-items-table-schema", warehouseId],
-    })
-    void queryClient.invalidateQueries({
-      queryKey: ["rental-item-filter-options", warehouseId],
-    })
-  }
+  }, [categoryMode, creationOptions, open])
 
   function resetDialogState(photos = form.photos) {
     disposeStagedRentalItemPhotos(photos)
-    setForm(createEmptyForm())
+    setForm(
+      createEmptyForm({
+        number: initialNumber,
+        composition: {
+          ...emptyRentalItemComposition(),
+          category: initialCompositionCategory(creationOptions, categoryMode),
+        },
+      })
+    )
     setSubmitted(false)
-    setCharacteristicsOpen(false)
     setCreatedItem(null)
+    setCreatedResult(null)
     setPhotoUploadError(null)
     setPhotoUploadPending(false)
     photoFolderId.current = crypto.randomUUID()
   }
 
-  async function uploadCreatedPhotos(
-    item: RentalItemDto,
+  function finishCreation(
+    result: RentalItemCreationResult<T>,
     photos: StagedRentalItemPhoto[]
   ) {
+    try {
+      onCompleted?.(result.value, result.createdItem)
+    } catch (error) {
+      setPhotoUploadError(
+        `Бытовка ${result.createdItem.number} создана, но не удалось открыть результат: ${
+          error instanceof Error ? error.message : "неизвестная ошибка"
+        }`
+      )
+      return
+    }
+    resetDialogState(photos)
+    onOpenChange(false)
+  }
+
+  async function uploadCreatedPhotos(
+    result: RentalItemCreationResult<T>,
+    photos: StagedRentalItemPhoto[]
+  ) {
+    const item = result.createdItem
     if (!accessToken) {
       setPhotoUploadError(
         "Бытовка создана, но для загрузки фото не получен токен доступа."
@@ -498,8 +333,9 @@ export function RentalItemCreateDialog({
     setPhotoUploadError(null)
     const owner = cabinMediaOwner(item.id, item.warehouseId)
     try {
-      for (const [index, photo] of photos.entries()) {
-        const result = await retryOwnerMediaCommand(() =>
+      const orderedPhotos = orderStagedRentalItemPhotosForUpload(photos)
+      for (const [index, photo] of orderedPhotos.entries()) {
+        const result = await retryOwnerProofOperation(() =>
           rentalItemCreationMediaClient.uploadFile(
             accessToken,
             owner,
@@ -515,7 +351,7 @@ export function RentalItemCreateDialog({
             owner,
             mediaId: result.asset.id,
           })
-          await retryOwnerMediaCommand(() =>
+          await retryOwnerProofOperation(() =>
             rentalItemCreationMediaClient.rotate(
               accessToken,
               owner,
@@ -527,14 +363,11 @@ export function RentalItemCreateDialog({
           )
         }
       }
-      await queryClient.invalidateQueries({
-        queryKey: ["rental-item-media"],
-      })
+      await queryClient.invalidateQueries({ queryKey: ["rental-item-media"] })
       await queryClient.invalidateQueries({
         queryKey: ["rental-item-media-covers"],
       })
-      resetDialogState(photos)
-      onOpenChange(false)
+      finishCreation(result, photos)
     } catch (error) {
       setPhotoUploadError(
         `Бытовка ${item.number} создана, но фото не загружены: ${
@@ -547,79 +380,41 @@ export function RentalItemCreateDialog({
   }
 
   const createMutation = useMutation({
-    mutationFn: (input: {
-      idempotencyKey: string
-      number: string
-      rentalType: string
-      dimensions: string
-      finishing: string
-      category: string
-      characteristics: string
-      linoleum: boolean
-      photos: StagedRentalItemPhoto[]
-    }) =>
-      createAssetRentalItem({
-        accessToken,
-        idempotencyKey: input.idempotencyKey,
-        input: {
-          warehouseId,
-          number: input.number,
-          rentalType: input.rentalType,
-          dimensions: input.dimensions,
-          finishing: input.finishing,
-          category: input.category,
-          characteristics: input.characteristics,
-          linoleum: input.linoleum,
-        },
-      }),
-    onSuccess: (item, input) => {
-      refreshRentalItemQueries(item)
-      if (input.photos.length === 0) {
-        resetDialogState([])
-        onOpenChange(false)
+    mutationFn: (
+      input: RentalItemCreationCommand & { photos: StagedRentalItemPhoto[] }
+    ) => createRentalItem(input),
+    onSuccess: (result, input) => {
+      setCreatedResult(result)
+      try {
+        onAssetCreated?.(result.value, result.createdItem)
+      } catch (error) {
+        setPhotoUploadError(
+          `Бытовка ${result.createdItem.number} создана, но не удалось обновить экран: ${
+            error instanceof Error ? error.message : "неизвестная ошибка"
+          }`
+        )
+      }
+      if (!photosEnabled || input.photos.length === 0) {
+        finishCreation(result, [])
         return
       }
-      setCreatedItem(item)
-      void uploadCreatedPhotos(item, input.photos)
+      setCreatedItem(result.createdItem)
+      void uploadCreatedPhotos(result, input.photos)
     },
   })
 
-  function updateSanblockSettings(key: keyof SanblockSettings, value: number) {
-    setForm((current) => ({
-      ...current,
-      sanblockSettings: {
-        ...current.sanblockSettings,
-        [key]: Math.max(0, value),
-      },
-    }))
-  }
-
-  function handleTypeChange(value: string) {
-    const type = value as RentalItemCreationType
-    const dimensions = getDefaultRentalItemDimensions(type)
-
-    setForm((current) => ({
-      ...current,
-      type,
-      dimensions,
-      finishing: getDefaultRentalItemFinishing(type, current.finishing),
-      selectedCharacteristics: getDefaultRentalItemCharacteristics(
-        current.selectedCharacteristics
-      ),
-      linoleum: isSanblockRentalItemType(type) ? "yes" : current.linoleum,
-    }))
-  }
+  const formControlsDisabled =
+    createMutation.isPending || photoUploadPending || createdItem !== null
 
   function handleDialogOpenChange(nextOpen: boolean) {
-    if (nextOpen && !canEditRentalItems) {
-      return
-    }
-
-    if (!nextOpen && (createMutation.isPending || photoUploadPending)) {
-      return
-    }
+    if (nextOpen && !canCreate) return
+    if (!nextOpen && (createMutation.isPending || photoUploadPending)) return
 
     if (!nextOpen) {
+      if (createdResult) {
+        finishCreation(createdResult, form.photos)
+        return
+      }
       resetDialogState()
     }
 
@@ -630,14 +425,9 @@ export function RentalItemCreateDialog({
     event.preventDefault()
     setSubmitted(true)
 
-    const type = form.type
-    const finishing = form.finishing
-
     if (
-      !hasRequiredFormFields(form) ||
-      !type ||
-      !finishing ||
-      !canEditRentalItems ||
+      !hasRequiredFormFields(form, photosEnabled) ||
+      !canCreate ||
       createdItem !== null ||
       createMutation.isPending
     ) {
@@ -647,58 +437,76 @@ export function RentalItemCreateDialog({
     createMutation.mutate({
       idempotencyKey: createIdempotencyKey(),
       number: form.number.trim(),
-      rentalType: type,
-      dimensions: form.dimensions,
-      finishing,
-      category: NEW_RENTAL_ITEM_CATEGORY,
-      characteristics: selectedCharacteristics.join(", "),
-      linoleum: form.linoleum === "yes",
-      photos: form.photos,
+      rentalTypeId: form.composition.rentalTypeId,
+      dimensionId: form.composition.dimensionId,
+      finishingId: form.composition.finishingId,
+      category: form.composition.category,
+      characteristicIds: form.composition.characteristicIds,
+      linoleum: form.composition.linoleum === "yes",
+      photos: photosEnabled ? form.photos : [],
     })
   }
 
-  return (
-    <>
-      <Dialog
-        open={open && canEditRentalItems}
-        onOpenChange={handleDialogOpenChange}
-      >
-        <DialogContent
-          className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-3xl"
-          onEscapeKeyDown={(event) => {
-            if (characteristicsOpen) {
-              event.preventDefault()
-            }
-          }}
-          onInteractOutside={(event) => {
-            if (characteristicsOpen) {
-              event.preventDefault()
-            }
-          }}
-        >
-          <DialogHeader>
-            <DialogTitle>Создание новой бытовки</DialogTitle>
-          </DialogHeader>
+  const optionsError = creationOptionsQuery.error
+    ? creationOptionsQuery.error instanceof Error
+      ? creationOptionsQuery.error.message
+      : "Не удалось загрузить настройки бытовок."
+    : null
 
+  return (
+    <Dialog open={open && canCreate} onOpenChange={handleDialogOpenChange}>
+      <DialogContent className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          {description ? (
+            <DialogDescription>{description}</DialogDescription>
+          ) : null}
+        </DialogHeader>
+
+        {!creationOptions ? (
+          <div className="flex flex-col gap-4">
+            {optionsError ? (
+              <FieldError role="alert">{optionsError}</FieldError>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Загружаем настройки бытовок…
+              </p>
+            )}
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => handleDialogOpenChange(false)}
+              >
+                Отмена
+              </Button>
+              {optionsError ? (
+                <Button
+                  type="button"
+                  onClick={() => void creationOptionsQuery.refetch()}
+                >
+                  Повторить
+                </Button>
+              ) : null}
+            </DialogFooter>
+          </div>
+        ) : (
           <form className="flex flex-col gap-5" onSubmit={submitForm}>
-            <fieldset
-              disabled={
-                createMutation.isPending ||
-                photoUploadPending ||
-                createdItem !== null
-              }
-              className="contents"
+            <div
+              aria-busy={formControlsDisabled || undefined}
+              aria-disabled={formControlsDisabled || undefined}
+              inert={formControlsDisabled || undefined}
+              className="flex min-w-0 flex-col gap-5"
             >
               <FieldGroup>
-                <Field
-                  data-invalid={submitted && form.number.trim().length === 0}
-                >
+                <Field data-invalid={numberError !== null}>
                   <FieldLabel htmlFor={numberInputId}>Номер бытовки</FieldLabel>
                   <Input
                     id={numberInputId}
                     value={form.number}
                     maxLength={128}
-                    aria-invalid={submitted && form.number.trim().length === 0}
+                    readOnly={numberReadOnly}
+                    aria-invalid={numberError !== null}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
@@ -707,176 +515,41 @@ export function RentalItemCreateDialog({
                     }
                     placeholder="Например, БЫТ-121"
                   />
-                  {submitted && form.number.trim().length === 0 ? (
-                    <FieldError>Укажите номер бытовки.</FieldError>
-                  ) : null}
+                  {numberError ? <FieldError>{numberError}</FieldError> : null}
                 </Field>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <Field data-invalid={submitted && form.type === ""}>
-                    <FieldLabel>Тип бытовки</FieldLabel>
-                    <FormDropdown
-                      value={form.type}
-                      placeholder="Выберите тип"
-                      options={toDropdownOptions(RENTAL_ITEM_TYPE_OPTIONS)}
-                      invalid={submitted && form.type === ""}
-                      onValueChange={handleTypeChange}
-                    />
-                    {submitted && form.type === "" ? (
-                      <FieldError>Выберите тип бытовки.</FieldError>
-                    ) : null}
-                  </Field>
-
-                  <Field data-invalid={submitted && form.dimensions === ""}>
-                    <FieldLabel>Габариты</FieldLabel>
-                    <FormDropdown
-                      value={form.dimensions}
-                      disabled={!form.type || dimensionsOptions.length <= 1}
-                      placeholder={
-                        form.type ? "Выберите габариты" : "Сначала выберите тип"
-                      }
-                      options={toDropdownOptions(dimensionsOptions)}
-                      invalid={submitted && form.dimensions === ""}
-                      onValueChange={(value) =>
-                        setForm((current) => ({
-                          ...current,
-                          dimensions: value,
-                        }))
-                      }
-                    />
-                    {submitted && form.dimensions === "" ? (
-                      <FieldError>Выберите габариты.</FieldError>
-                    ) : null}
-                  </Field>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <Field data-invalid={submitted && form.finishing === ""}>
-                    <FieldLabel>Отделка</FieldLabel>
-                    <FormDropdown
-                      value={form.finishing}
-                      disabled={isSanblockRentalItemType(form.type)}
-                      placeholder="Выберите отделку"
-                      options={toDropdownOptions(RENTAL_ITEM_FINISHING_OPTIONS)}
-                      invalid={submitted && form.finishing === ""}
-                      onValueChange={(value) =>
-                        setForm((current) => ({
-                          ...current,
-                          finishing: value,
-                        }))
-                      }
-                    />
-                    {isSanblockRentalItemType(form.type) ? (
-                      <FieldDescription>
-                        Для БК-Санблок отделка автоматически ПВХ.
-                      </FieldDescription>
-                    ) : null}
-                    {submitted && form.finishing === "" ? (
-                      <FieldError>Выберите отделку.</FieldError>
-                    ) : null}
-                  </Field>
-
-                  <Field>
-                    <FieldLabel>Линолеум</FieldLabel>
-                    <FormDropdown
-                      value={form.linoleum}
-                      disabled={isSanblockRentalItemType(form.type)}
-                      placeholder="Нет"
-                      options={LINOLEUM_OPTIONS}
-                      onValueChange={(value) =>
-                        setForm((current) => ({
-                          ...current,
-                          linoleum: value,
-                        }))
-                      }
-                    />
-                    {isSanblockRentalItemType(form.type) ? (
-                      <FieldDescription>
-                        Для БК-Санблок линолеум автоматически Есть.
-                      </FieldDescription>
-                    ) : null}
-                  </Field>
-                </div>
               </FieldGroup>
 
-              {isSanblockRentalItemType(form.type) ? (
-                <FieldSet>
-                  <FieldLegend>Настройки санблока</FieldLegend>
-                  <FieldGroup className="grid gap-3 md:grid-cols-3">
-                    <CounterControl
-                      label="Туалеты"
-                      value={form.sanblockSettings.toilets}
-                      onChange={(value) =>
-                        updateSanblockSettings("toilets", value)
-                      }
-                    />
-                    <CounterControl
-                      label="Раковины"
-                      value={form.sanblockSettings.sinks}
-                      onChange={(value) =>
-                        updateSanblockSettings("sinks", value)
-                      }
-                    />
-                    <CounterControl
-                      label="Душевые"
-                      value={form.sanblockSettings.showers}
-                      onChange={(value) =>
-                        updateSanblockSettings("showers", value)
-                      }
-                    />
-                  </FieldGroup>
-                </FieldSet>
-              ) : null}
-
-              <FieldSet>
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <FieldLegend>Характеристики</FieldLegend>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className={formSectionActionButtonClassName}
-                    onClick={() => setCharacteristicsOpen(true)}
-                  >
-                    <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-                    Добавить характеристики
-                  </Button>
-                </div>
-
-                {selectedCharacteristics.length > 0 ? (
-                  <div className="flex flex-wrap gap-2">
-                    {selectedCharacteristics.map((characteristic) => (
-                      <Badge key={characteristic} variant="secondary">
-                        {characteristic}
-                      </Badge>
-                    ))}
-                  </div>
-                ) : (
-                  <FieldDescription>
-                    Характеристики не выбраны.
-                  </FieldDescription>
-                )}
-              </FieldSet>
-
-              <RentalItemCreationPhotoUploader
-                photos={form.photos}
-                disabled={
-                  createMutation.isPending ||
-                  photoUploadPending ||
-                  createdItem !== null
-                }
-                onChange={(photos) =>
-                  setForm((current) => ({ ...current, photos }))
+              <RentalItemCompositionFields
+                options={creationOptions}
+                value={form.composition}
+                categoryMode={categoryMode}
+                submitted={submitted}
+                disabled={formControlsDisabled}
+                onChange={(composition) =>
+                  setForm((current) => ({ ...current, composition }))
                 }
               />
-            </fieldset>
+
+              {photosEnabled ? (
+                <RentalItemCreationPhotoUploader
+                  photos={form.photos}
+                  disabled={formControlsDisabled}
+                  titlePhotoMissing={
+                    submitted && !hasStagedRentalItemTitlePhoto(form.photos)
+                  }
+                  onChange={(photos) =>
+                    setForm((current) => ({ ...current, photos }))
+                  }
+                />
+              ) : null}
+            </div>
 
             {createMutation.isError ? (
               <FieldError>
-                {createMutation.error instanceof AssetRentalItemConflictError
-                  ? "Бытовка была изменена другим пользователем. Обновите реестр и повторите действие."
-                  : createMutation.error instanceof Error
+                {errorMessage?.(createMutation.error) ??
+                  (createMutation.error instanceof Error
                     ? createMutation.error.message
-                    : "Не удалось создать бытовку. Проверьте данные и повторите."}
+                    : "Не удалось создать бытовку. Проверьте данные и повторите.")}
               </FieldError>
             ) : null}
 
@@ -899,9 +572,11 @@ export function RentalItemCreateDialog({
                   type="button"
                   className="flex-[1.65]"
                   disabled={photoUploadPending}
-                  onClick={() =>
-                    void uploadCreatedPhotos(createdItem, form.photos)
-                  }
+                  onClick={() => {
+                    if (createdResult) {
+                      void uploadCreatedPhotos(createdResult, form.photos)
+                    }
+                  }}
                 >
                   <HugeiconsIcon icon={CheckIcon} data-icon="inline-start" />
                   {photoUploadPending
@@ -912,31 +587,82 @@ export function RentalItemCreateDialog({
                 <Button
                   type="submit"
                   className="flex-[1.65]"
-                  disabled={!canEditRentalItems || createMutation.isPending}
+                  disabled={!canCreate || createMutation.isPending}
                 >
                   <HugeiconsIcon icon={CheckIcon} data-icon="inline-start" />
-                  {createMutation.isPending ? "Создание..." : "Создать бытовку"}
+                  {createMutation.isPending ? "Создание..." : submitLabel}
                 </Button>
               )}
             </DialogFooter>
           </form>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
 
-          {characteristicsOpen ? (
-            <RentalItemCharacteristicsDialog
-              open={characteristicsOpen}
-              defaultCharacteristics={DEFAULT_RENTAL_ITEM_CHARACTERISTICS}
-              selectedCharacteristics={selectedCharacteristicOptions}
-              onOpenChange={setCharacteristicsOpen}
-              onConfirm={(characteristics) =>
-                setForm((current) => ({
-                  ...current,
-                  selectedCharacteristics: characteristics,
-                }))
-              }
-            />
-          ) : null}
-        </DialogContent>
-      </Dialog>
-    </>
+/** Warehouse entry point with its own EDIT permission gate. */
+export function RentalItemCreateDialog({
+  open,
+  warehouseId,
+  onOpenChange,
+}: RentalItemCreateDialogProps) {
+  const queryClient = useQueryClient()
+  const { accessToken, currentUser } = useAuth()
+  const canEditRentalItems = hasWarehouseAccess(
+    currentUser,
+    warehouseId,
+    "EDIT"
+  )
+
+  function refreshRentalItemQueries(item: RentalItemDto) {
+    queryClient.setQueryData(["rental-item", item.id], item)
+    void queryClient.invalidateQueries({ queryKey: ["rental-items"] })
+    void queryClient.invalidateQueries({
+      queryKey: ["rental-items-table-schema", warehouseId],
+    })
+    void queryClient.invalidateQueries({
+      queryKey: ["rental-item-filter-options", warehouseId],
+    })
+  }
+
+  return (
+    <RentalItemCreationDialog<RentalItemDto>
+      open={open}
+      warehouseId={warehouseId}
+      onOpenChange={onOpenChange}
+      canCreate={canEditRentalItems}
+      title="Создание новой бытовки"
+      createRentalItem={async (command) => {
+        const item = await createAssetRentalItem({
+          accessToken,
+          idempotencyKey: command.idempotencyKey,
+          input: {
+            warehouseId,
+            number: command.number,
+            rentalTypeId: command.rentalTypeId,
+            dimensionId: command.dimensionId,
+            finishingId: command.finishingId,
+            category: command.category,
+            characteristicIds: command.characteristicIds,
+            linoleum: command.linoleum,
+          },
+        })
+        return {
+          createdItem: {
+            id: item.id,
+            warehouseId: item.warehouseId,
+            number: item.number,
+          },
+          value: item,
+        }
+      }}
+      onAssetCreated={(item) => refreshRentalItemQueries(item)}
+      errorMessage={(error) =>
+        error instanceof AssetRentalItemConflictError
+          ? "Бытовка была изменена другим пользователем. Обновите реестр и повторите действие."
+          : null
+      }
+    />
   )
 }

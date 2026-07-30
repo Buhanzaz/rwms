@@ -14,7 +14,6 @@ import org.mapstruct.ReportingPolicy;
     unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface CatalogFurnitureReferenceMapper {
   @Mapping(target = "equipmentId", source = "furnitureEquipmentId")
-  @Mapping(target = "equipmentCode", source = "furnitureEquipmentCode")
   @Mapping(target = "equipmentName", source = "furnitureEquipmentName")
   FurnitureEquipmentReference toReference(CatalogNode node);
 }

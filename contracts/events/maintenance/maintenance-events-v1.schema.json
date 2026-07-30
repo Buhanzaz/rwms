@@ -39,6 +39,8 @@
         "maintenance.repair.stage-completed.v1",
         "maintenance.repair.pending-acceptance.v1",
         "maintenance.repair.rework-created.v1",
+        "maintenance.repair.transfer-prepared.v1",
+        "maintenance.repair.transferred.v1",
         "maintenance.repair.accepted.v1",
         "maintenance.repair.written-off.v1"
       ]
@@ -190,6 +192,8 @@
             "maintenance.repair.stage-completed.v1",
             "maintenance.repair.pending-acceptance.v1",
             "maintenance.repair.rework-created.v1",
+            "maintenance.repair.transfer-prepared.v1",
+            "maintenance.repair.transferred.v1",
             "maintenance.repair.accepted.v1",
             "maintenance.repair.written-off.v1"
           ]
@@ -293,6 +297,7 @@
         "executionState",
         "acceptanceState",
         "dispatchDate",
+        "priority",
         "stages"
       ],
       "properties": {
@@ -311,6 +316,7 @@
           "enum": ["NOT_READY", "PENDING", "IN_REWORK", "ACCEPTED", "WRITTEN_OFF"]
         },
         "dispatchDate": {"type": "string", "format": "date"},
+        "priority": {"type": "integer", "minimum": 1, "maximum": 5},
         "stages": {
           "type": "array",
           "maxItems": 1000,

@@ -48,6 +48,9 @@ public class OrderUnitReservation {
   @Column(name = "tenant_snapshot", length = 512)
   private String tenantSnapshot;
 
+  @Column(name = "draft_reservation_expires_at")
+  private OffsetDateTime draftReservationExpiresAt;
+
   @Enumerated(EnumType.STRING)
   @Column(name = "state", nullable = false, length = 16)
   private OrderUnitReservationState state;
@@ -80,7 +83,7 @@ public class OrderUnitReservation {
       UUID actorSubjectId,
       String actorRole) {
     return createInternal(
-        orderId, rentalItemId, warehouseId, null, null, actorSubjectId, actorRole);
+        orderId, rentalItemId, warehouseId, null, null, null, actorSubjectId, actorRole);
   }
 
   public static OrderUnitReservation create(
@@ -89,6 +92,7 @@ public class OrderUnitReservation {
       UUID warehouseId,
       UUID clientId,
       String tenantSnapshot,
+      OffsetDateTime draftReservationExpiresAt,
       UUID actorSubjectId,
       String actorRole) {
     return createInternal(
@@ -97,6 +101,7 @@ public class OrderUnitReservation {
         warehouseId,
         Objects.requireNonNull(clientId, "clientId"),
         requireTenantSnapshot(tenantSnapshot),
+        draftReservationExpiresAt,
         actorSubjectId,
         actorRole);
   }
@@ -107,6 +112,7 @@ public class OrderUnitReservation {
       UUID warehouseId,
       UUID clientId,
       String tenantSnapshot,
+      OffsetDateTime draftReservationExpiresAt,
       UUID actorSubjectId,
       String actorRole) {
     OrderUnitReservation reservation = new OrderUnitReservation();
@@ -115,6 +121,7 @@ public class OrderUnitReservation {
     reservation.warehouseId = Objects.requireNonNull(warehouseId, "warehouseId");
     reservation.clientId = clientId;
     reservation.tenantSnapshot = tenantSnapshot;
+    reservation.draftReservationExpiresAt = draftReservationExpiresAt;
     reservation.state = OrderUnitReservationState.ACTIVE;
     reservation.addedBySubjectId = Objects.requireNonNull(actorSubjectId, "actorSubjectId");
     reservation.addedByRole = requireRole(actorRole);
@@ -134,6 +141,26 @@ public class OrderUnitReservation {
     tenantSnapshot = requiredTenantSnapshot;
     updatedAt = now();
     return true;
+  }
+
+  /** A saved booking clears the expiry; draft retries never prolong an existing hold. */
+  public boolean synchronizeDraftReservationExpiry(OffsetDateTime nextExpiresAt) {
+    if (nextExpiresAt == null) {
+      if (draftReservationExpiresAt == null) return false;
+      draftReservationExpiresAt = null;
+      updatedAt = now();
+      return true;
+    }
+    if (draftReservationExpiresAt != null) return false;
+    draftReservationExpiresAt = nextExpiresAt;
+    updatedAt = now();
+    return true;
+  }
+
+  public boolean isDraftReservationExpiredAt(OffsetDateTime timestamp) {
+    return state == OrderUnitReservationState.ACTIVE
+        && draftReservationExpiresAt != null
+        && !draftReservationExpiresAt.isAfter(Objects.requireNonNull(timestamp, "timestamp"));
   }
 
   public boolean release(UUID actorSubjectId, String actorRole) {

@@ -13,17 +13,13 @@ import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.regex.Pattern;
 import org.hibernate.proxy.HibernateProxy;
 
 @Entity
 @Table(name = "equipment_catalog_item")
 public class EquipmentCatalogItem {
-  private static final Pattern CODE = Pattern.compile("^[A-Z0-9][A-Z0-9_-]{0,63}$");
-
   @Id
   @GeneratedValue(strategy = GenerationType.UUID)
   @Column(name = "id", nullable = false)
@@ -32,9 +28,6 @@ public class EquipmentCatalogItem {
   @Version
   @Column(name = "version", nullable = false)
   private long version;
-
-  @Column(name = "code", nullable = false, length = 64)
-  private String code;
 
   @Column(name = "name", nullable = false, length = 255)
   private String name;
@@ -57,20 +50,19 @@ public class EquipmentCatalogItem {
 
   protected EquipmentCatalogItem() {}
 
-  public static EquipmentCatalogItem create(String code, String name, EquipmentCategory category, String comment) {
+  public static EquipmentCatalogItem create(
+      String name, EquipmentCategory category, String comment) {
     EquipmentCatalogItem item = new EquipmentCatalogItem();
-    item.assign(code, name, category, true, comment);
+    item.assign(name, category, true, comment);
     return item;
   }
 
-  public boolean change(String code, String name, EquipmentCategory category, boolean active, String comment) {
-    String nextCode = canonicalCode(code);
+  public boolean change(String name, EquipmentCategory category, boolean active, String comment) {
     String nextName = required(name, "name", 255);
     String nextComment = optional(comment, 2000);
     if (category == null) throw new IllegalArgumentException("category is required");
-    if (Objects.equals(this.code, nextCode) && Objects.equals(this.name, nextName)
+    if (Objects.equals(this.name, nextName)
         && this.category == category && this.active == active && Objects.equals(this.comment, nextComment)) return false;
-    this.code = nextCode;
     this.name = nextName;
     this.category = category;
     this.active = active;
@@ -78,8 +70,7 @@ public class EquipmentCatalogItem {
     return true;
   }
 
-  private void assign(String code, String name, EquipmentCategory category, boolean active, String comment) {
-    this.code = canonicalCode(code);
+  private void assign(String name, EquipmentCategory category, boolean active, String comment) {
     this.name = required(name, "name", 255);
     if (category == null) throw new IllegalArgumentException("category is required");
     this.category = category;
@@ -88,15 +79,9 @@ public class EquipmentCatalogItem {
   }
 
   @PrePersist
-  void prePersist() { createdAt = updatedAt = OffsetDateTime.now(ZoneOffset.UTC); code = canonicalCode(code); }
+  void prePersist() { createdAt = updatedAt = OffsetDateTime.now(ZoneOffset.UTC); }
   @PreUpdate
-  void preUpdate() { updatedAt = OffsetDateTime.now(ZoneOffset.UTC); code = canonicalCode(code); }
-
-  public static String canonicalCode(String value) {
-    String normalized = required(value, "code", 64).toUpperCase(Locale.ROOT);
-    if (!CODE.matcher(normalized).matches()) throw new IllegalArgumentException("Equipment code has invalid format");
-    return normalized;
-  }
+  void preUpdate() { updatedAt = OffsetDateTime.now(ZoneOffset.UTC); }
 
   private static String required(String value, String field, int max) {
     String normalized = optional(value, max);
@@ -113,7 +98,6 @@ public class EquipmentCatalogItem {
 
   public UUID getId() { return id; }
   public long getVersion() { return version; }
-  public String getCode() { return code; }
   public String getName() { return name; }
   public EquipmentCategory getCategory() { return category; }
   public boolean isActive() { return active; }

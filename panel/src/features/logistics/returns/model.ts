@@ -69,6 +69,7 @@ export type MediaReference = {
 export type ReturnMediaLine = {
   lineId: string
   references: MediaReference[]
+  equipmentConfirmed: true
   additionalEquipment: ReturnAdditionalEquipment[]
 }
 
@@ -84,6 +85,7 @@ export type EquipmentShortage = {
 
 export type ReturnShortageLine = {
   lineId: string
+  references: MediaReference[]
   shortages: EquipmentShortage[]
 }
 

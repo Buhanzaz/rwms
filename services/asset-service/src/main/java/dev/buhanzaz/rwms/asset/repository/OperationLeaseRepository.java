@@ -5,6 +5,7 @@ import dev.buhanzaz.rwms.asset.domain.OperationLeaseState;
 import jakarta.persistence.LockModeType;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Collection;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -44,4 +45,16 @@ public interface OperationLeaseRepository extends JpaRepository<OperationLease, 
 
   @Query("select coalesce(max(lease.fencingToken), 0) from OperationLease lease where lease.rentalItemId = :rentalItemId")
   long maximumFencingToken(@Param("rentalItemId") UUID rentalItemId);
+
+  @Query(
+      """
+      select distinct lease.rentalItemId
+      from OperationLease lease
+      where lease.rentalItemId in :rentalItemIds
+        and lease.state = dev.buhanzaz.rwms.asset.domain.OperationLeaseState.ACTIVE
+        and lease.expiresAt > :now
+      """)
+  List<UUID> findAllLiveRentalItemIds(
+      @Param("rentalItemIds") Collection<UUID> rentalItemIds,
+      @Param("now") OffsetDateTime now);
 }

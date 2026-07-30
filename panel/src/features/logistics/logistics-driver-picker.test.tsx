@@ -100,7 +100,7 @@ beforeEach(() => {
       warehouseId: WAREHOUSE_ID,
       name: "Водители",
       active: true,
-      queueCodes: [],
+      queueIds: [],
       routeQueueKinds: ["MOVEMENT"],
       members: [DRIVER],
     },
@@ -120,7 +120,7 @@ describe("LogisticsDriverPicker", () => {
       expect(driverDirectoryApi.listRepairWorkerGroups).toHaveBeenCalledWith(
         {
           warehouseId: WAREHOUSE_ID,
-          queueCode: null,
+          queueId: null,
           routeQueueKind: "MOVEMENT",
           purpose: "DRIVER_DIRECTORY",
         },

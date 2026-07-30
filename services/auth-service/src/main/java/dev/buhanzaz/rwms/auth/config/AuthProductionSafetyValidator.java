@@ -46,6 +46,7 @@ public class AuthProductionSafetyValidator implements InitializingBean {
                         new Endpoint("WORKER_REDIRECT_URI", properties.workerRedirectUri()),
                         new Endpoint("WORKER_POST_LOGOUT_REDIRECT_URI", properties.workerPostLogoutRedirectUri()))
                 .forEach(this::requireHttps);
+        requireWorkerAppLinks();
     }
 
     private void requireKafkaCutover() {
@@ -137,6 +138,31 @@ public class AuthProductionSafetyValidator implements InitializingBean {
         } catch (RuntimeException exception) {
             throw new IllegalStateException(endpoint.environmentName() + " должен быть абсолютным HTTPS URI", exception);
         }
+    }
+
+    private void requireWorkerAppLinks() {
+        URI origin = URI.create(properties.workerOrigin());
+        URI redirect = URI.create(properties.workerRedirectUri());
+        URI postLogout = URI.create(properties.workerPostLogoutRedirectUri());
+        if (!sameOrigin(origin, redirect) || !sameOrigin(origin, postLogout)) {
+            throw new IllegalStateException(
+                    "WORKER_REDIRECT_URI and WORKER_POST_LOGOUT_REDIRECT_URI must use WORKER_ORIGIN");
+        }
+        if (redirect.getPath() == null
+                || redirect.getPath().isBlank()
+                || "/".equals(redirect.getPath())
+                || redirect.getQuery() != null) {
+            throw new IllegalStateException(
+                    "WORKER_REDIRECT_URI must be a dedicated query-free Android App Link");
+        }
+    }
+
+    private boolean sameOrigin(URI expected, URI actual) {
+        int expectedPort = expected.getPort() < 0 ? 443 : expected.getPort();
+        int actualPort = actual.getPort() < 0 ? 443 : actual.getPort();
+        return expected.getScheme().equalsIgnoreCase(actual.getScheme())
+                && expected.getHost().equalsIgnoreCase(actual.getHost())
+                && expectedPort == actualPort;
     }
 
     private record Endpoint(String environmentName, String value) {

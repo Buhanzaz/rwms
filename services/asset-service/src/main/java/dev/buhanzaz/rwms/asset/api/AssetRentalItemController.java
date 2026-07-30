@@ -5,6 +5,7 @@ import static dev.buhanzaz.rwms.asset.api.AssetApiModels.*;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.security.AssetAuthorizer;
 import dev.buhanzaz.rwms.asset.service.AssetService;
+import dev.buhanzaz.rwms.asset.service.CabinCompositionService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -33,6 +34,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class AssetRentalItemController {
   private final AssetService service;
+  private final CabinCompositionService composition;
   private final AssetAuthorizer access;
 
   @GetMapping
@@ -47,6 +49,13 @@ public class AssetRentalItemController {
     access.requireRead(jwt, warehouseId);
     return service.listRentalItems(
         warehouseId, page, size, search, excludedStatuses);
+  }
+
+  @GetMapping("/creation-options")
+  public RentalItemCreationOptionsResponse creationOptions(
+      @AuthenticationPrincipal Jwt jwt, @RequestParam UUID warehouseId) {
+    access.requireRead(jwt, warehouseId);
+    return composition.creationOptions();
   }
 
   @GetMapping("/{id}")

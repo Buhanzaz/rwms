@@ -58,7 +58,7 @@ export function RepairWorkInformationSnapshot({
     <FieldGroup className="gap-3">
       <SnapshotField label="Бытовка" value={cabinNumber || "—"} />
       <SnapshotField label={contextLabel} value={contextValue || "—"} />
-      <SnapshotField label="Прибытие" value={formatDateOnly(dispatchDate)} />
+      <SnapshotField label="Осмотр" value={formatDateOnly(dispatchDate)} />
       {authorName !== undefined ? (
         <SnapshotField label={authorLabel} value={authorName || "—"} />
       ) : null}

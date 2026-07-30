@@ -69,7 +69,8 @@ public class MaintenanceInboxProcessor {
       staging.markApplied(event.eventId());
       return Outcome.DUPLICATE;
     }
-    if (event.aggregateVersion() > expectedVersion) {
+    if (event.aggregateVersion() > expectedVersion
+        && !MaintenanceTransportTopics.MEDIA.equals(event.sourceTopic())) {
       quarantineGap(event, expectedVersion);
       return Outcome.VERSION_GAP;
     }
@@ -249,7 +250,22 @@ public class MaintenanceInboxProcessor {
   private void applyEffects(
       MaintenanceInboundEnvelopeValidator.ValidatedInboundEvent event) {
     if (MaintenanceTransportTopics.BOARD_TASK.equals(event.sourceTopic())) {
-      for (MaintenanceInboundEffects.TaskCorrelation correlation : correlateBoardTask(event)) {
+      List<MaintenanceInboundEffects.TaskCorrelation> correlations = correlateBoardTask(event);
+      if ("task-board.board-task.changed.v1".equals(event.eventType())) {
+        UUID externalTaskId = nullableUuid(event.payload(), "externalTaskId");
+        if (externalTaskId != null) {
+          effects.apply(
+              event.effectEvent(),
+              new MaintenanceInboundEffects.TaskCorrelation(
+                  externalTaskId,
+                  UUID.fromString(event.aggregateId()),
+                  null,
+                  event.eventId(),
+                  null));
+        }
+        return;
+      }
+      for (MaintenanceInboundEffects.TaskCorrelation correlation : correlations) {
         effects.apply(event.effectEvent(), correlation);
       }
       return;

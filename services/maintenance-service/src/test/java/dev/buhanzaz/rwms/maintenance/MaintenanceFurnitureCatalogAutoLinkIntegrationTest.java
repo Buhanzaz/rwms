@@ -70,11 +70,11 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
     UUID furnitureId = UUID.randomUUID();
     UUID chairId = UUID.randomUUID();
     UUID equipmentId = UUID.randomUUID();
-    when(dependencies.ensureFurnitureEquipment("CHAIR", "Chair"))
+    when(dependencies.ensureFurnitureEquipment(chairId, "Chair"))
         .thenAnswer(invocation -> {
           assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
           return new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
-              equipmentId, "CHAIR", "Chair");
+              equipmentId, "Chair");
         });
 
     var changed = service.replaceCatalogNodes(
@@ -83,14 +83,14 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
             0L,
             List.of(
                 furnitureCategory(furnitureId),
-                material(chairId, "CHAIR", "Chair", furnitureId, null))));
+                material(chairId, "Chair", furnitureId, null))));
 
     assertThat(changed.version()).isOne();
     assertThat(service.catalogNodes(catalogId))
         .filteredOn(node -> node.id().equals(chairId))
         .singleElement()
         .extracting(CatalogNodeResponse::furnitureEquipment)
-        .isEqualTo(new FurnitureEquipmentReference(equipmentId, "CHAIR", "Chair"));
+        .isEqualTo(new FurnitureEquipmentReference(equipmentId, "Chair"));
 
     clearInvocations(dependencies);
     var unchanged = service.replaceCatalogNodes(
@@ -101,10 +101,9 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
                 furnitureCategory(furnitureId),
                 material(
                     chairId,
-                    "CHAIR",
                     "Chair",
                     furnitureId,
-                    new FurnitureEquipmentReference(equipmentId, "CHAIR", "Chair")))));
+                    new FurnitureEquipmentReference(equipmentId, "Chair")))));
 
     assertThat(unchanged.version()).isOne();
     verifyNoInteractions(dependencies);
@@ -118,7 +117,7 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
         .satisfies(node -> {
           assertThat(node.id()).isEqualTo(chairId);
           assertThat(node.furnitureEquipment()).isEqualTo(
-              new FurnitureEquipmentReference(equipmentId, "CHAIR", "Chair"));
+              new FurnitureEquipmentReference(equipmentId, "Chair"));
         });
   }
 
@@ -132,7 +131,7 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
         new ChangeCatalogRequest(
             0L,
             List.of(material(
-                UUID.randomUUID(), "CHAIR", "Chair", missingParentId, null)),
+                UUID.randomUUID(), "Chair", missingParentId, null)),
             List.of())))
         .isInstanceOf(dev.buhanzaz.rwms.maintenance.service.MaintenanceValidationException.class)
         .hasMessageContaining("parent node is missing");
@@ -150,7 +149,7 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
     UUID chairId = UUID.randomUUID();
     UUID ordinaryMaterialId = UUID.randomUUID();
     FurnitureEquipmentReference existing =
-        new FurnitureEquipmentReference(equipmentId, "CHAIR", "Chair");
+        new FurnitureEquipmentReference(equipmentId, "Chair");
 
     service.changeCatalog(
         catalogId,
@@ -158,10 +157,9 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
             0L,
             List.of(
                 furnitureCategory(furnitureId),
-                material(chairId, "CHAIR", "Chair", furnitureId, existing),
+                material(chairId, "Chair", furnitureId, existing),
                 material(
                     ordinaryMaterialId,
-                    "PAINT",
                     "Paint",
                     null,
                     null)),
@@ -181,17 +179,19 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
   }
 
   @Test
-  void multipleMissingFurnitureItemsAreEnsuredDeterministicallyByCode() {
+  void multipleMissingFurnitureItemsAreEnsuredDeterministicallyByName() {
     UUID catalogId = insertDraftCatalog();
     UUID furnitureId = UUID.randomUUID();
     UUID chairEquipmentId = UUID.randomUUID();
     UUID tableEquipmentId = UUID.randomUUID();
-    when(dependencies.ensureFurnitureEquipment("CHAIR", "Chair"))
+    UUID tableId = UUID.randomUUID();
+    UUID chairId = UUID.randomUUID();
+    when(dependencies.ensureFurnitureEquipment(chairId, "Chair"))
         .thenReturn(new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
-            chairEquipmentId, "CHAIR", "Chair"));
-    when(dependencies.ensureFurnitureEquipment("TABLE", "Table"))
+            chairEquipmentId, "Chair"));
+    when(dependencies.ensureFurnitureEquipment(tableId, "Table"))
         .thenReturn(new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
-            tableEquipmentId, "TABLE", "Table"));
+            tableEquipmentId, "Table"));
 
     service.changeCatalog(
         catalogId,
@@ -199,13 +199,13 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
             0L,
             List.of(
                 furnitureCategory(furnitureId),
-                material(UUID.randomUUID(), "TABLE", "Table", furnitureId, null),
-                material(UUID.randomUUID(), "CHAIR", "Chair", furnitureId, null)),
+                material(tableId, "Table", furnitureId, null),
+                material(chairId, "Chair", furnitureId, null)),
             List.of()));
 
     var ordered = inOrder(dependencies);
-    ordered.verify(dependencies).ensureFurnitureEquipment("CHAIR", "Chair");
-    ordered.verify(dependencies).ensureFurnitureEquipment("TABLE", "Table");
+    ordered.verify(dependencies).ensureFurnitureEquipment(chairId, "Chair");
+    ordered.verify(dependencies).ensureFurnitureEquipment(tableId, "Table");
   }
 
   @ParameterizedTest
@@ -220,10 +220,12 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
             List.of(plainCategory(originalId)),
             List.of()));
     UUID furnitureId = UUID.randomUUID();
-    when(dependencies.ensureFurnitureEquipment("CHAIR", "Chair"))
+    UUID chairId = UUID.randomUUID();
+    UUID tableId = UUID.randomUUID();
+    when(dependencies.ensureFurnitureEquipment(chairId, "Chair"))
         .thenReturn(new MaintenanceDependencyGateway.FurnitureEquipmentSnapshot(
-            UUID.randomUUID(), "CHAIR", "Chair"));
-    when(dependencies.ensureFurnitureEquipment("TABLE", "Table"))
+            UUID.randomUUID(), "Chair"));
+    when(dependencies.ensureFurnitureEquipment(tableId, "Table"))
         .thenThrow(new MaintenanceDependencyException(
             HttpStatus.valueOf(statusCode), "Asset furniture synchronization failed"));
 
@@ -233,8 +235,8 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
             1L,
             List.of(
                 furnitureCategory(furnitureId),
-                material(UUID.randomUUID(), "TABLE", "Table", furnitureId, null),
-                material(UUID.randomUUID(), "CHAIR", "Chair", furnitureId, null)),
+                material(tableId, "Table", furnitureId, null),
+                material(chairId, "Chair", furnitureId, null)),
             List.of())))
         .isInstanceOfSatisfying(
             MaintenanceDependencyException.class,
@@ -242,8 +244,8 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
 
     assertThat(service.catalogVersion(catalogId).version()).isOne();
     assertThat(service.catalogNodes(catalogId))
-        .extracting(CatalogNodeResponse::id, CatalogNodeResponse::code)
-        .containsExactly(org.assertj.core.groups.Tuple.tuple(originalId, "ROOT"));
+        .extracting(CatalogNodeResponse::id, CatalogNodeResponse::name)
+        .containsExactly(org.assertj.core.groups.Tuple.tuple(originalId, "Root"));
   }
 
   private UUID insertDraftCatalog() {
@@ -272,7 +274,6 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
   private static CatalogNodeInput furnitureCategory(UUID id) {
     return new CatalogNodeInput(
         id,
-        "FURNITURE",
         CatalogNodeType.CATEGORY,
         "Furniture",
         true,
@@ -288,14 +289,15 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
         null,
         null,
         null,
-        List.of(),
+        null,
+        null,
+        false,
         null);
   }
 
   private static CatalogNodeInput plainCategory(UUID id) {
     return new CatalogNodeInput(
         id,
-        "ROOT",
         CatalogNodeType.CATEGORY,
         "Root",
         true,
@@ -311,19 +313,19 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
         null,
         null,
         null,
-        List.of(),
+        null,
+        null,
+        false,
         null);
   }
 
   private static CatalogNodeInput material(
       UUID id,
-      String code,
       String name,
       UUID parentId,
       FurnitureEquipmentReference furnitureEquipment) {
     return new CatalogNodeInput(
         id,
-        code,
         CatalogNodeType.MATERIAL,
         name,
         true,
@@ -339,7 +341,9 @@ class MaintenanceFurnitureCatalogAutoLinkIntegrationTest {
         null,
         null,
         null,
-        List.of(),
+        null,
+        null,
+        false,
         null);
   }
 }

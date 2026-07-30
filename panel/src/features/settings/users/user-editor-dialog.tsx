@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog"
 import {
   Field,
+  FieldContent,
   FieldDescription,
   FieldError,
   FieldGroup,
@@ -40,6 +41,7 @@ import type {
   CreateAdminUserInput,
 } from "@/features/settings/users/model/users"
 import {
+  isManagerAppEligibleRole,
   userGlobalRoleLabels,
   warehouseAccessLevelLabels,
 } from "@/features/settings/users/model/users"
@@ -95,12 +97,16 @@ export function UserEditorDialog({
     user?.globalRole ?? "VIEWER"
   )
   const [active, setActive] = useState(user?.active ?? true)
+  const [mobileAppAccess, setMobileAppAccess] = useState(
+    user?.mobileAppAccess ?? false
+  )
+  const [rentalAccess, setRentalAccess] = useState(user?.rentalAccess ?? false)
   const [accesses, setAccesses] = useState<Record<string, AccessDraft>>(() =>
     Object.fromEntries(
       warehouses.map((warehouse) => {
         const current = user?.warehouseAccesses.find(
           (access) =>
-            access.warehouseId === warehouse.serviceId && access.active
+            access.warehouseId === warehouse.id && access.active
         )
 
         return [
@@ -119,6 +125,7 @@ export function UserEditorDialog({
   const [validationError, setValidationError] = useState<string | null>(null)
 
   const title = user === null ? "Новый пользователь" : "Пользователь"
+  const managerAppEligible = isManagerAppEligibleRole(globalRole)
 
   const enabledAccessCount = useMemo(
     () => Object.values(accesses).filter((access) => access.enabled).length,
@@ -167,6 +174,8 @@ export function UserEditorDialog({
       timeZoneId: timeZoneId.trim() || null,
       active,
       globalRole,
+      mobileAppAccess: managerAppEligible ? mobileAppAccess : false,
+      rentalAccess,
     }
 
     const warehouseAccesses = warehouses.flatMap((warehouse) => {
@@ -178,7 +187,7 @@ export function UserEditorDialog({
 
       return [
         {
-          warehouseId: warehouse.serviceId,
+          warehouseId: warehouse.id,
           accessLevel: draft.accessLevel,
           comment: draft.comment.trim() || null,
           active: true,
@@ -223,9 +232,13 @@ export function UserEditorDialog({
               </FieldLabel>
               <Select
                 value={globalRole}
-                onValueChange={(value) =>
-                  setGlobalRole(value as UserGlobalRole)
-                }
+                onValueChange={(value) => {
+                  const role = value as UserGlobalRole
+                  setGlobalRole(role)
+                  if (!isManagerAppEligibleRole(role)) {
+                    setMobileAppAccess(false)
+                  }
+                }}
               >
                 <SelectTrigger id="user-global-role" className="w-full">
                   <SelectValue />
@@ -330,6 +343,43 @@ export function UserEditorDialog({
               {active && deactivationBlockedReason !== null ? (
                 <FieldDescription>{deactivationBlockedReason}</FieldDescription>
               ) : null}
+            </Field>
+
+            <Field orientation="horizontal" className="md:col-span-2">
+              <Checkbox
+                id="user-mobile-app-access"
+                checked={managerAppEligible && mobileAppAccess}
+                onCheckedChange={(checked) =>
+                  setMobileAppAccess(checked === true)
+                }
+                disabled={!managerAppEligible}
+              />
+              <div className="flex flex-col gap-1">
+                <FieldLabel htmlFor="user-mobile-app-access">
+                  Доступ к приложению руководителя
+                </FieldLabel>
+                <FieldDescription>
+                  {managerAppEligible
+                    ? "Вход выполняется тем же логином и паролем, отдельные реквизиты не создаются."
+                    : "Доступ разрешён только системному администратору, администратору WMS и руководителю склада."}
+                </FieldDescription>
+              </div>
+            </Field>
+
+            <Field orientation="horizontal" className="md:col-span-2">
+              <Checkbox
+                id="user-rental-access"
+                checked={rentalAccess}
+                onCheckedChange={(checked) => setRentalAccess(checked === true)}
+              />
+              <FieldContent>
+                <FieldLabel htmlFor="user-rental-access">
+                  Доступ к аренде и чату
+                </FieldLabel>
+                <FieldDescription>
+                  Открывает бронирования и чат для подбора бытовок.
+                </FieldDescription>
+              </FieldContent>
             </Field>
           </FieldGroup>
 

@@ -25,23 +25,29 @@ function rentalItem(status: RentalItemDto["status"]): RentalItemDto {
     version: 4,
     warehouseId: WAREHOUSE_ID,
     number: "БЫТ-042",
+    rentalTypeId: "af57f2b0-3a71-4b7f-8d2f-000000000002",
+    dimensionId: "af57f2b0-3a71-4b7f-8d2f-000000000107",
+    finishingId: "af57f2b0-3a71-4b7f-8d2f-000000000202",
     type: "БК-2",
     dimensions: "2.4x6",
     finishing: "ЛДСП",
     category: "Обычная",
-    characteristics: "Окно",
+    characteristics: [
+      {
+        id: "af57f2b0-3a71-4b7f-8d2f-000000000301",
+        name: "Пластиковое окно",
+      },
+    ],
     linoleum: true,
     status,
     comment: null,
-    hasPhotos: false,
-    photoCount: 0,
-    mainPhotoUrl: null,
-    locationNodeId: null,
     contents: null,
     contentsItems: [],
     shipmentDate: null,
     tenant: null,
     price: null,
+    passport: {},
+    tags: [],
   }
 }
 
@@ -62,7 +68,7 @@ describe("panel repair-task rental-items client", () => {
     })
   })
 
-  it("searches every direct-repair status except after-rent and locked items", async () => {
+  it("searches every direct-repair status except rented and after-rent", async () => {
     vi.mocked(listAssetRentalItems).mockResolvedValue({
       content: [rentalItem("WAREHOUSE")],
       page: 0,
@@ -95,19 +101,21 @@ describe("panel repair-task rental-items client", () => {
       search: "042",
       page: 0,
       size: 40,
-      excludeStatuses: [
-        "AFTER_RENT",
-        "WRITTEN_OFF",
-        "WAITING_ESTIMATE_CONFIRMATION",
-      ],
+      excludeStatuses: ["RENTED", "AFTER_RENT"],
     })
   })
 
-  it("rejects a maintenance-ineligible rental item", async () => {
-    vi.mocked(getAssetRentalItem).mockResolvedValue(rentalItem("WRITTEN_OFF"))
+  it.each(["RENTED", "AFTER_RENT"] as const)(
+    "rejects a maintenance-ineligible %s rental item",
+    async (status) => {
+      vi.mocked(getAssetRentalItem).mockResolvedValue(rentalItem(status))
 
-    await expect(
-      panelRepairTaskRentalItemsClient.resolveById(WAREHOUSE_ID, RENTAL_ITEM_ID)
-    ).resolves.toBeNull()
-  })
+      await expect(
+        panelRepairTaskRentalItemsClient.resolveById(
+          WAREHOUSE_ID,
+          RENTAL_ITEM_ID
+        )
+      ).resolves.toBeNull()
+    }
+  )
 })

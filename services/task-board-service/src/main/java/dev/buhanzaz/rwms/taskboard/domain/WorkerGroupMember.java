@@ -31,9 +31,6 @@ public class WorkerGroupMember extends AbstractVersionedEntity {
       foreignKey = @ForeignKey(name = "fk_worker_group_member_worker"))
   private Worker worker;
 
-  @Column(name = "role_in_group", length = 128)
-  private String roleInGroup;
-
   @Column(name = "active", nullable = false)
   private boolean active = true;
 
@@ -51,14 +48,6 @@ public class WorkerGroupMember extends AbstractVersionedEntity {
 
   public void setWorker(Worker worker) {
     this.worker = worker;
-  }
-
-  public String getRoleInGroup() {
-    return roleInGroup;
-  }
-
-  public void setRoleInGroup(String roleInGroup) {
-    this.roleInGroup = roleInGroup;
   }
 
   public boolean isActive() {

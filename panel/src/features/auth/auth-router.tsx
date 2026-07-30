@@ -3,14 +3,29 @@ import { Route, Routes } from "react-router-dom"
 import { AuthCallbackPage } from "@/features/auth/auth-callback-page"
 import { AuthProvider } from "@/features/auth/auth-provider"
 import { ProtectedApplication } from "@/features/auth/protected-application"
+import { PublicClientPresentationPage } from "@/features/assistant/pages/public-client-presentation-page"
 
 export function AuthRouter() {
   return (
-    <AuthProvider>
-      <Routes>
-        <Route path="/auth/callback" element={<AuthCallbackPage />} />
-        <Route path="*" element={<ProtectedApplication />} />
-      </Routes>
-    </AuthProvider>
+    <Routes>
+      <Route
+        path="/offer/:token"
+        element={<PublicClientPresentationPage />}
+      />
+      <Route
+        path="*"
+        element={
+          <AuthProvider>
+            <Routes>
+              <Route
+                path="/auth/callback"
+                element={<AuthCallbackPage />}
+              />
+              <Route path="*" element={<ProtectedApplication />} />
+            </Routes>
+          </AuthProvider>
+        }
+      />
+    </Routes>
   )
 }

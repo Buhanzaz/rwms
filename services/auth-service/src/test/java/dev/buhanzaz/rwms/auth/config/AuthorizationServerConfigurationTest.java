@@ -27,15 +27,15 @@ class AuthorizationServerConfigurationTest {
     @Test
     void rejectsWorkerForPanelAndUserForWorkerClient() {
         var clients = new OAuthClientProperties(List.of(publicClient("rwms-panel", PrincipalType.USER),
-                publicClient("rwms-worker", PrincipalType.WORKER)));
+                publicClient("rwms-worker-android", PrincipalType.WORKER)));
         assertThatThrownBy(() -> configuration.validateClientPrincipal(
                         "rwms-panel", PrincipalType.WORKER, clients))
                 .isInstanceOf(OAuth2AuthenticationException.class)
                 .hasMessageContaining("rwms-panel");
         assertThatThrownBy(() -> configuration.validateClientPrincipal(
-                        "rwms-worker", PrincipalType.USER, clients))
+                        "rwms-worker-android", PrincipalType.USER, clients))
                 .isInstanceOf(OAuth2AuthenticationException.class)
-                .hasMessageContaining("rwms-worker");
+                .hasMessageContaining("rwms-worker-android");
         assertThatThrownBy(() -> configuration.validateClientPrincipal(
                         "unconfigured-client", PrincipalType.USER, clients))
                 .isInstanceOf(OAuth2AuthenticationException.class)
@@ -277,6 +277,34 @@ class AuthorizationServerConfigurationTest {
     }
 
     @Test
+    void productionRequiresWorkerRedirectsOnTheConfiguredAppLinkOrigin() {
+        AuthProperties properties = new AuthProperties(
+                "https://auth.example.test/auth",
+                "https://panel.example.test",
+                "https://panel.example.test/auth/callback",
+                "https://panel.example.test/",
+                "https://worker.example.test",
+                "https://attacker.example.test/worker/oauth2redirect",
+                "https://worker.example.test/",
+                false,
+                "admin",
+                "long-production-password",
+                "auth.p12",
+                "password",
+                "rwms-auth");
+
+        assertThatThrownBy(
+                () ->
+                        new AuthProductionSafetyValidator(
+                                        properties,
+                                        productionKafkaEnvironment(),
+                                        productionKafkaProperties())
+                                .afterPropertiesSet())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("WORKER_ORIGIN");
+    }
+
+    @Test
     void productionReadsTheRealIndexedYamlDestinationShapeThroughConfigurationBinding() {
         var source = new MapConfigurationPropertySource(Map.of(
                 "rwms.platform.kafka.enabled", "true",
@@ -406,6 +434,8 @@ class AuthorizationServerConfigurationTest {
                 Set.of("rwms-services"),
                 Set.of("https://panel.example.test"),
                 Duration.ofMinutes(5),
+                Duration.ofHours(1),
+                true,
                 null,
                 null,
                 false);

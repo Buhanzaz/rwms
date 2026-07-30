@@ -81,8 +81,6 @@
   --sidebar-accent-foreground: oklch(0.218 0.008 223.9);
   --sidebar-border: oklch(0.925 0.005 214.3);
   --sidebar-ring: oklch(0.723 0.014 214.4);
-  --status-new-bg: oklch(0.93 0.08 215);
-  --status-new-fg: oklch(0.28 0.08 225);
   --status-rented-bg: oklch(0.92 0.08 260);
   --status-rented-fg: oklch(0.3 0.11 265);
   --status-after-rent-bg: oklch(0.94 0.1 85);
@@ -153,8 +151,6 @@
   --sidebar-accent-foreground: oklch(0.987 0.002 197.1);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.56 0.021 213.5);
-  --status-new-bg: oklch(0.3 0.08 225);
-  --status-new-fg: oklch(0.9 0.08 215);
   --status-rented-bg: oklch(0.31 0.11 265);
   --status-rented-fg: oklch(0.9 0.08 260);
   --status-after-rent-bg: oklch(0.33 0.08 65);

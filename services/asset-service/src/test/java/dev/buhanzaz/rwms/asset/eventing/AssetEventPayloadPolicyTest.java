@@ -51,7 +51,7 @@ class AssetEventPayloadPolicyTest {
   }
 
   @Test
-  void rejectsAWrongAggregateFamilyOrIdentity() {
+  void rejectsLegacyBusinessIdentifiersFromEquipmentFacts() {
     UUID id = UUID.randomUUID();
     var payload = mapper.createObjectNode();
     payload.put("equipmentId", id.toString());
@@ -63,9 +63,10 @@ class AssetEventPayloadPolicyTest {
             () ->
                 policy.validateNode(
                     AssetEventType.EQUIPMENT_CATALOG_CHANGED.value(),
-                    AssetAggregateType.RENTAL_ITEM,
+                    AssetAggregateType.EQUIPMENT_CATALOG,
                     id,
                     payload))
-        .isInstanceOf(IllegalArgumentException.class);
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("forbidden field");
   }
 }

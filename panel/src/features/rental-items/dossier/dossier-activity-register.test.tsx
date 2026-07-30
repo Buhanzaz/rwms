@@ -11,14 +11,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ApiError } from "@/lib/api-client"
 import { formatDossierActorLabel } from "@/features/rental-items/dossier/actor/actor-display"
-import { DossierActivityRegister } from "@/features/rental-items/dossier/dossier-activity-register"
+import {
+  DossierActivityFiltersPanel,
+  DossierActivityRegister,
+} from "@/features/rental-items/dossier/dossier-activity-register"
 import type { CabinDossierPage } from "@/features/rental-items/dossier/model/dossier-service"
+
+const viewport = vi.hoisted(() => ({ isMobile: false }))
 
 vi.mock("@/features/auth/use-auth", () => ({
   useAuth: () => ({
     accessToken: "actor-access-token",
     currentUser: { id: "50000000-0000-0000-0000-000000000001" },
   }),
+}))
+
+vi.mock("@/hooks/use-mobile", () => ({
+  useIsMobile: () => viewport.isMobile,
 }))
 
 const CABIN_ID = "10000000-0000-0000-0000-000000000001"
@@ -66,6 +75,7 @@ function renderWithQueryClient(children: ReactNode) {
 }
 
 beforeEach(() => {
+  viewport.isMobile = false
   fetchMock.mockResolvedValue(
     new Response(
       JSON.stringify([
@@ -92,7 +102,30 @@ afterEach(() => {
 })
 
 describe("DossierActivityRegister", () => {
-  it("resolves a human actor and preserves technical actor/source refs", async () => {
+  it("keeps activity filters collapsed by default on mobile", () => {
+    viewport.isMobile = true
+    render(<DossierActivityFiltersPanel value={{}} onApply={vi.fn()} />)
+
+    const toggle = screen.getByRole("button", {
+      name: "Показать фильтры истории",
+    })
+    const filters = document.getElementById("dossier-activity-filters")
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("false")
+    expect(filters).not.toBeNull()
+    expect(filters?.hasAttribute("hidden")).toBe(true)
+
+    fireEvent.click(toggle)
+
+    expect(
+      screen
+        .getByRole("button", { name: "Скрыть фильтры истории" })
+        .getAttribute("aria-expanded")
+    ).toBe("true")
+    expect(filters?.hasAttribute("hidden")).toBe(false)
+  })
+
+  it("resolves a human actor without exposing technical identifiers", async () => {
     const onLoadMore = vi.fn()
     renderWithQueryClient(
       <DossierActivityRegister
@@ -108,12 +141,10 @@ describe("DossierActivityRegister", () => {
 
     expect(screen.getByText("PARTIAL")).toBeTruthy()
     expect(screen.getByText("Загружено: 1")).toBeTruthy()
-    expect(screen.getByText("CABIN_CREATED")).toBeTruthy()
-    expect(screen.getByText(`USER · ${ACTOR_ID}`)).toBeTruthy()
-    expect(screen.getByText(`subjectId: ${CABIN_ID}`)).toBeTruthy()
-    expect(
-      screen.getByText(`asset-service · RENTAL_ITEM · ${CABIN_ID}`)
-    ).toBeTruthy()
+    expect(screen.getByText("Подтверждено dossier-service")).toBeTruthy()
+    expect(screen.getByText("asset-service · RENTAL_ITEM")).toBeTruthy()
+    expect(screen.queryByText(new RegExp(ACTOR_ID))).toBeNull()
+    expect(screen.queryByText(new RegExp(CABIN_ID))).toBeNull()
     expect(
       await screen.findByText("Администратор WMS — Иванов Иван")
     ).toBeTruthy()
@@ -166,7 +197,7 @@ describe("DossierActivityRegister", () => {
     expect(screen.getByTestId(`technical-actor-${ACTIVITY_ID}`)).toBeTruthy()
   })
 
-  it("formats last, first and optional patronymic before email, login and technical ID fallbacks", () => {
+  it("formats last, first and optional patronymic before email and login without an ID fallback", () => {
     const actor = page().activities[0].actorRef!
     const baseDisplay = {
       subjectId: ACTOR_ID,
@@ -199,9 +230,7 @@ describe("DossierActivityRegister", () => {
         email: null,
       })
     ).toBe("Администратор WMS — ivanov")
-    expect(formatDossierActorLabel(actor, undefined)).toBe(
-      `Пользователь — ${ACTOR_ID}`
-    )
+    expect(formatDossierActorLabel(actor, undefined)).toBe("Пользователь")
   })
 
   it("keeps PARTIAL visible for an empty filtered page", () => {

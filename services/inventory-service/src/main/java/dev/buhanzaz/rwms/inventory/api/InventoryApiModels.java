@@ -1,7 +1,9 @@
 package dev.buhanzaz.rwms.inventory.api;
 
 import dev.buhanzaz.rwms.inventory.domain.FindingOrigin;
+import dev.buhanzaz.rwms.inventory.domain.ConflictResolutionStrategy;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
+import dev.buhanzaz.rwms.inventory.domain.InventoryMembershipMovementType;
 import dev.buhanzaz.rwms.inventory.domain.MutationState;
 import dev.buhanzaz.rwms.inventory.domain.ObservationPresence;
 import dev.buhanzaz.rwms.inventory.domain.PublicationState;
@@ -62,6 +64,8 @@ public final class InventoryApiModels {
 
   public record PlanSelection(
       @NotBlank @Pattern(regexp = "^(AUTO|MANUAL)$") String mode,
+      @NotNull @Min(1) @Max(5) Integer priority,
+      UUID coverMediaId,
       @NotNull @Size(min = 1, max = 2000) List<@Valid PlanLineInput> lines,
       @NotNull @Size(max = 1000) List<@Valid PlanStageSelection> stages) {}
 
@@ -73,6 +77,7 @@ public final class InventoryApiModels {
       @NotNull @Valid Observation passportObservation,
       @NotNull @Valid Observation equipmentObservation,
       @NotNull @Size(max = 100) List<@Valid MediaReference> media,
+      UUID coverMediaId,
       @Valid PlanSelection planSelection) {
     public SaveInspectionRequest(
         long expectedSessionRevision,
@@ -90,9 +95,16 @@ public final class InventoryApiModels {
           passportObservation,
           equipmentObservation,
           media,
+          null,
           planSelection);
     }
   }
+
+  public record ResolveConflictRequest(
+      @Min(0) long expectedSessionRevision,
+      @Min(0) long expectedFindingRevision,
+      @NotNull ConflictResolutionStrategy strategy,
+      @Size(max = 2000) String reason) {}
 
   public record RevisionExpectation(
       @NotNull UUID findingId, @Min(0) long expectedFindingRevision) {}
@@ -149,6 +161,7 @@ public final class InventoryApiModels {
       OffsetDateTime startedAt,
       OffsetDateTime terminalAt,
       String publicationState,
+      List<MembershipMovementView> membershipMovements,
       FrozenStatistics statistics,
       CancellationAudit cancellation) {}
 
@@ -172,12 +185,25 @@ public final class InventoryApiModels {
 
   public record CancellationAudit(String reason, OffsetDateTime cancelledAt) {}
 
+  public record MembershipMovementView(
+      UUID id,
+      InventoryMembershipMovementType type,
+      UUID assetId,
+      String displayCanonicalNumber,
+      FindingOrigin origin,
+      UUID fromWarehouseId,
+      UUID toWarehouseId,
+      String status,
+      String tenantSnapshot,
+      OffsetDateTime occurredAt) {}
+
   public record FindingView(
       UUID id,
       UUID inventoryId,
       long findingRevision,
       FindingOrigin origin,
       InspectionState inspection,
+      String inspectionSource,
       ReconciliationState reconciliation,
       UUID assetId,
       Long assetVersion,
@@ -189,9 +215,12 @@ public final class InventoryApiModels {
       String planFingerprintSha256,
       String comment,
       ExpectedItemSnapshot expectedSnapshot,
+      CurrentItemSnapshot inspectionBaseline,
       CurrentItemSnapshot currentSnapshot,
       List<ConflictView> conflicts,
+      ConflictResolutionView conflictResolution,
       FrozenPlanView frozenPlan,
+      UUID coverMediaId,
       List<MediaReference> media,
       PublicationView publication) {}
 
@@ -211,14 +240,22 @@ public final class InventoryApiModels {
       UUID warehouseId,
       String status,
       String displayCanonicalNumber,
-      String tenantSnapshot) {}
+      String tenantSnapshot,
+      JsonNode passportSnapshot,
+      JsonNode contentsSnapshot,
+      JsonNode repairsSnapshot) {}
 
   public record ConflictView(String code, String message, String expected, String actual) {}
+
+  public record ConflictResolutionView(
+      ConflictResolutionStrategy strategy, String reason, OffsetDateTime resolvedAt) {}
 
   public record FrozenPlanView(
       String mode,
       UUID catalogVersionId,
       String fingerprintSha256,
+      int priority,
+      UUID coverMediaId,
       List<FrozenPlanLineView> lines,
       List<FrozenPlanStageView> stages) {}
 
@@ -240,11 +277,11 @@ public final class InventoryApiModels {
       UUID id,
       int order,
       UUID catalogNodeId,
-      String catalogNodeCode,
+      String catalogNodeName,
       String kind,
       UUID routingQueueId,
-      String routingQueueCode,
-      String routingQueueKind,
+      String routingQueueName,
+      String routingQueueType,
       boolean movementRequired,
       boolean photoRequired,
       int normativeDurationMinutes) {}

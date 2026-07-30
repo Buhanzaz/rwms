@@ -41,6 +41,12 @@ public class InternalWorkerCredentialController {
         return ResponseEntity.noContent().build();
     }
 
+    @PostMapping("/{workerId}/enable")
+    ResponseEntity<Void> enable(@PathVariable String workerId) {
+        credentials.enable(workerId);
+        return ResponseEntity.noContent().build();
+    }
+
     @DeleteMapping("/{workerId}")
     ResponseEntity<Void> delete(@PathVariable String workerId) {
         credentials.delete(workerId);

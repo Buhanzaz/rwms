@@ -1,0 +1,735 @@
+package dev.buhanzaz.rwms.assistant;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import dev.buhanzaz.rwms.assistant.api.AssistantApiModels;
+import dev.buhanzaz.rwms.assistant.domain.AssistantConversation;
+import dev.buhanzaz.rwms.assistant.domain.AssistantMessage;
+import dev.buhanzaz.rwms.assistant.domain.AssistantToolCall;
+import dev.buhanzaz.rwms.assistant.domain.AssistantToolCallStatus;
+import dev.buhanzaz.rwms.assistant.eventing.RentalInquiryArchiveService;
+import dev.buhanzaz.rwms.assistant.eventing.RentalInquiryBookedEventParser;
+import dev.buhanzaz.rwms.assistant.integration.LogisticsClient;
+import dev.buhanzaz.rwms.assistant.mapper.AssistantResponseMapperImpl;
+import dev.buhanzaz.rwms.assistant.repository.AssistantConversationRepository;
+import dev.buhanzaz.rwms.assistant.repository.AssistantEventInboxRepository;
+import dev.buhanzaz.rwms.assistant.repository.AssistantMessageRepository;
+import dev.buhanzaz.rwms.assistant.repository.AssistantToolCallRepository;
+import dev.buhanzaz.rwms.assistant.service.AssistantConversationService;
+import dev.buhanzaz.rwms.assistant.service.AssistantNotFoundException;
+import dev.buhanzaz.rwms.assistant.service.AssistantToolDefinitions;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.annotation.Transactional;
+import org.testcontainers.containers.PostgreSQLContainer;
+import tools.jackson.databind.ObjectMapper;
+
+@SpringBootTest(
+    classes = AssistantServiceApplication.class,
+    webEnvironment = SpringBootTest.WebEnvironment.NONE,
+    properties = {
+      "spring.jpa.hibernate.ddl-auto=validate",
+      "rwms.assistant.llm.api-key=test-key",
+      "rwms.assistant.llm.require-api-key-on-startup=false",
+      "rwms.assistant.kafka.enabled=false"
+    })
+@ActiveProfiles("test")
+@Transactional
+class AssistantPersistenceIntegrationTest {
+  private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
+
+  static {
+    POSTGRES.start();
+  }
+
+  @Autowired AssistantConversationRepository conversations;
+  @Autowired AssistantMessageRepository messages;
+  @Autowired AssistantToolCallRepository toolCalls;
+  @Autowired AssistantEventInboxRepository inbox;
+
+  @DynamicPropertySource
+  static void postgresProperties(DynamicPropertyRegistry registry) {
+    registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
+    registry.add("spring.datasource.username", POSTGRES::getUsername);
+    registry.add("spring.datasource.password", POSTGRES::getPassword);
+    registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
+  }
+
+  @AfterAll
+  static void stopPostgres() {
+    POSTGRES.stop();
+  }
+
+  @Test
+  void flywayValidatesConversationMessageToolAndInboxPersistenceWithIdempotentArchive() {
+    UUID owner = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    AssistantConversation conversation =
+        conversations.saveAndFlush(
+            AssistantConversation.create(
+                conversationId, owner, UUID.randomUUID(), inquiryId, "PERSON", "Client summary"));
+    AssistantMessage user = messages.saveAndFlush(AssistantMessage.user(conversationId, "Need a cabin"));
+    AssistantToolCall tool =
+        toolCalls.saveAndFlush(
+            AssistantToolCall.start(
+                conversationId,
+                user.getId(),
+                "provider-call-1",
+                "list_available_cabin_facets",
+                new ObjectMapper().createObjectNode()));
+    tool.complete(new ObjectMapper().createObjectNode().put("tool", "list_available_cabin_facets"));
+    toolCalls.saveAndFlush(tool);
+
+    AssistantConversationService service =
+        service(new CountingLogisticsClient(inquiryId, conversation.getClientId()));
+    RentalInquiryArchiveService archive = new RentalInquiryArchiveService(inbox, service);
+    RentalInquiryBookedEventParser parser = new RentalInquiryBookedEventParser(new ObjectMapper());
+    UUID eventId = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    String event =
+        """
+        {"eventId":"%s","eventType":"logistics.rental-inquiry.booked.v1",
+        "occurredAt":"2026-07-27T12:00:00Z","rentalInquiryId":"%s",
+        "conversationId":"%s","orderId":"%s"}
+        """
+            .formatted(eventId, inquiryId, conversationId, orderId);
+
+    assertThat(archive.archive(parser.parse(event))).isTrue();
+    assertThat(archive.archive(parser.parse(event))).isFalse();
+
+    assertThat(conversations.findById(conversationId).orElseThrow().isArchived()).isTrue();
+    assertThat(messages.findByConversationIdOrderByCreatedAtAscIdAsc(conversationId))
+        .extracting(AssistantMessage::getContent)
+        .containsExactly("Need a cabin");
+    assertThat(toolCalls.findByConversationIdOrderByCreatedAtAscIdAsc(conversationId))
+        .extracting(AssistantToolCall::getStatus)
+        .containsExactly(dev.buhanzaz.rwms.assistant.domain.AssistantToolCallStatus.COMPLETED);
+    assertThat(inbox.count()).isEqualTo(1);
+  }
+
+  @Test
+  void stableConversationIdReplaysWithoutSecondLogisticsCreateAndOwnerCannotReadAnotherConversation() {
+    UUID owner = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    CountingLogisticsClient logistics = new CountingLogisticsClient(inquiryId, clientId);
+    AssistantConversationService service = service(logistics);
+    AssistantApiModels.CreateConversationRequest request =
+        new AssistantApiModels.CreateConversationRequest(conversationId, clientId, null);
+
+    service.create(owner, request, "current-user-bearer");
+    service.create(owner, request, "current-user-bearer");
+
+    assertThat(logistics.creates.get()).isEqualTo(1);
+    assertThat(conversations.count()).isEqualTo(1);
+    assertThatThrownBy(() -> service.detail(UUID.randomUUID(), conversationId))
+        .isInstanceOf(AssistantNotFoundException.class);
+  }
+
+  @Test
+  void newClientReplayIsRevalidatedByTheOwningLogisticsInquiry() {
+    UUID owner = UUID.randomUUID();
+    UUID clientId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    CountingLogisticsClient logistics = new CountingLogisticsClient(inquiryId, clientId);
+    AssistantConversationService service = service(logistics);
+    AssistantApiModels.CreateConversationRequest request =
+        new AssistantApiModels.CreateConversationRequest(
+            conversationId,
+            null,
+            new AssistantApiModels.NewClientRequest(
+                "LEGAL_ENTITY",
+                "ООО Север",
+                "+79990000000",
+                null));
+
+    service.create(owner, request, "current-user-bearer");
+    service.create(owner, request, "current-user-bearer");
+
+    assertThat(logistics.creates.get()).isEqualTo(2);
+    assertThat(conversations.count()).isEqualTo(1);
+  }
+
+  @Test
+  void promptHistoryRetainsTerminalToolAuditCallsAfterTheirOwningUserMessage() {
+    UUID owner = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    conversations.saveAndFlush(
+        AssistantConversation.create(
+            conversationId, owner, UUID.randomUUID(), inquiryId, "PERSON", "Client summary"));
+    AssistantMessage firstUser =
+        messages.saveAndFlush(
+            AssistantMessage.user(
+                conversationId, "Покажи 10 свободных БК-1 с ДВП в Санкт-Петербурге"));
+    ObjectMapper objectMapper = new ObjectMapper();
+    AssistantToolCall firstTool =
+        toolCalls.saveAndFlush(
+            AssistantToolCall.start(
+                conversationId,
+                firstUser.getId(),
+                "call_facets",
+                AssistantToolDefinitions.LIST_AVAILABLE_CABIN_FACETS,
+                objectMapper.createObjectNode()));
+    firstTool.complete(
+        objectMapper
+            .createObjectNode()
+            .put("tool", AssistantToolDefinitions.LIST_AVAILABLE_CABIN_FACETS));
+    toolCalls.saveAndFlush(firstTool);
+    AssistantToolCall secondTool =
+        toolCalls.saveAndFlush(
+            AssistantToolCall.start(
+                conversationId,
+                firstUser.getId(),
+                "call_search",
+                AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
+                objectMapper.createObjectNode().put("groups", "exact")));
+    secondTool.complete(
+        objectMapper
+            .createObjectNode()
+            .put("tool", AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS));
+    toolCalls.saveAndFlush(secondTool);
+    AssistantToolCall failedTool =
+        toolCalls.saveAndFlush(
+            AssistantToolCall.start(
+                conversationId,
+                firstUser.getId(),
+                "call_failed",
+                AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
+                objectMapper.createObjectNode()));
+    failedTool.fail(
+        "LOGISTICS_UNAVAILABLE",
+        objectMapper.createObjectNode().put("code", "LOGISTICS_UNAVAILABLE"));
+    toolCalls.saveAndFlush(failedTool);
+    toolCalls.saveAndFlush(
+        AssistantToolCall.start(
+            conversationId,
+            firstUser.getId(),
+            "call_incomplete",
+            AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
+            objectMapper.createObjectNode()));
+    messages.saveAndFlush(AssistantMessage.assistant(conversationId, "Точного совпадения нет."));
+    messages.saveAndFlush(AssistantMessage.user(conversationId, "покажи все"));
+
+    List<String> persistedOrder =
+        toolCalls.findByConversationIdOrderByCreatedAtAscIdAsc(conversationId).stream()
+            .filter(
+                call ->
+                    (call.getStatus() == AssistantToolCallStatus.COMPLETED
+                            || call.getStatus() == AssistantToolCallStatus.FAILED)
+                        && call.getResultPayload() != null)
+            .map(AssistantToolCall::getProviderCallId)
+            .toList();
+    List<AssistantConversationService.PromptMessage> prompt =
+        service(new CountingLogisticsClient(inquiryId, UUID.randomUUID()))
+            .promptMessages(owner, conversationId);
+
+    AssistantConversationService.PromptMessage firstPrompt =
+        prompt.stream()
+            .filter(value -> value.content().equals(firstUser.getContent()))
+            .findFirst()
+            .orElseThrow();
+    assertThat(firstPrompt.toolCalls())
+        .extracting(AssistantConversationService.PromptToolCall::providerCallId)
+        .containsExactlyElementsOf(persistedOrder);
+    assertThat(firstPrompt.toolCalls())
+        .extracting(AssistantConversationService.PromptToolCall::result)
+        .allSatisfy(result -> assertThat(result).isNotNull());
+    assertThat(prompt)
+        .filteredOn(value -> value.role().equals("assistant"))
+        .singleElement()
+        .satisfies(value -> assertThat(value.toolCalls()).isEmpty());
+    assertThat(prompt)
+        .filteredOn(value -> value.content().equals("покажи все"))
+        .singleElement()
+        .satisfies(value -> assertThat(value.toolCalls()).isEmpty());
+  }
+
+  @Test
+  void detailMergesLatestTurnSearchCallsWithTheEarliestExpiryAndDropsEmptyExactGroupWhenAlternativesExist() {
+    UUID owner = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID firstCabinId = UUID.randomUUID();
+    UUID secondCabinId = UUID.randomUUID();
+    conversations.saveAndFlush(
+        AssistantConversation.create(
+            conversationId, owner, UUID.randomUUID(), inquiryId, "PERSON", "Client summary"));
+    AssistantMessage user =
+        messages.saveAndFlush(
+            AssistantMessage.user(conversationId, "Покажи две БК-1 с ТВП"));
+    ObjectMapper objectMapper = new ObjectMapper();
+
+    completeSearch(
+        conversationId,
+        user.getId(),
+        "exact",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","data":{"warehouseId":"%s","expiresAt":"2030-07-27T12:20:00Z","groups":[
+              {"group":{"cabinType":"БК-1","finish":"ДВП","dimensions":null,"quantity":2},
+               "cabins":[]}
+            ]}}
+            """
+                .formatted(warehouseId)));
+    completeSearch(
+        conversationId,
+        user.getId(),
+        "type-alternative",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","data":{"warehouseId":"%s","expiresAt":"2030-07-27T12:10:00Z","groups":[
+              {"group":{"cabinType":"БК-1","finish":null,"dimensions":null,"quantity":2},
+               "cabins":[{"id":"%s","number":"БЫТ-111"}]}
+            ]}}
+            """
+                .formatted(warehouseId, firstCabinId)));
+    completeSearch(
+        conversationId,
+        user.getId(),
+        "finish-alternative",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","data":{"warehouseId":"%s","expiresAt":"2030-07-27T12:15:00Z","groups":[
+              {"group":{"cabinType":null,"finish":"ДВП","dimensions":null,"quantity":2},
+               "cabins":[{"id":"%s","number":"БЫТ-071"}]}
+            ]}}
+            """
+                .formatted(warehouseId, secondCabinId)));
+
+    tools.jackson.databind.JsonNode result =
+        service(new CountingLogisticsClient(inquiryId, UUID.randomUUID()))
+            .detail(owner, conversationId)
+            .lastSearchResult();
+    tools.jackson.databind.JsonNode groups = result.path("data").path("groups");
+
+    assertThat(result.path("data").path("expiresAt").asText())
+        .isEqualTo("2030-07-27T12:10:00Z");
+    assertThat(groups.size()).isEqualTo(2);
+    assertThat(groups.get(0).path("group").path("cabinType").asText()).isEqualTo("БК-1");
+    assertThat(groups.get(0).path("cabins").get(0).path("id").asText())
+        .isEqualTo(firstCabinId.toString());
+    assertThat(groups.get(1).path("group").path("finish").asText()).isEqualTo("ДВП");
+    assertThat(groups.get(1).path("cabins").get(0).path("id").asText())
+        .isEqualTo(secondCabinId.toString());
+  }
+
+  @Test
+  void detailKeepsExactGapNoticesOnTheOwningUserTurnAndChainsOnlyAppendSearches() {
+    UUID owner = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID alternativeCabinId = UUID.randomUUID();
+    UUID appendedCabinId = UUID.randomUUID();
+    UUID replacementCabinId = UUID.randomUUID();
+    conversations.saveAndFlush(
+        AssistantConversation.create(
+            conversationId, owner, UUID.randomUUID(), inquiryId, "PERSON", "Client summary"));
+    ObjectMapper objectMapper = new ObjectMapper();
+    AssistantMessage firstTurn =
+        messages.saveAndFlush(AssistantMessage.user(conversationId, "Покажи две БК-1 с ДВП"));
+
+    completeSearch(
+        conversationId,
+        firstTurn.getId(),
+        "exact-gap",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","resultMode":"REPLACE","notices":[
+              {"code":"CABINS_NOT_FOUND","groups":[{"cabinType":"БК-1","finish":"ДВП","quantity":2}],"requestedQuantity":2,"foundQuantity":0}
+            ],"data":{"warehouseId":"%s","expiresAt":"2030-07-27T12:20:00Z","groups":[
+              {"group":{"cabinType":"БК-1","finish":"ДВП","quantity":2},"cabins":[]}
+            ]}}
+            """.formatted(warehouseId)));
+    completeSearch(
+        conversationId,
+        firstTurn.getId(),
+        "alternative",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","resultMode":"REPLACE","notices":[],"data":{"warehouseId":"%s","expiresAt":"2030-07-27T12:10:00Z","groups":[
+              {"group":{"cabinType":"БК-1","quantity":2},"cabins":[{"id":"%s","status":"FREE"}]}
+            ]}}
+            """.formatted(warehouseId, alternativeCabinId)));
+
+    AssistantMessage appendTurn =
+        messages.saveAndFlush(AssistantMessage.user(conversationId, "Да, добавь ещё БК-1"));
+    completeSearch(
+        conversationId,
+        appendTurn.getId(),
+        "append",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","resultMode":"APPEND","notices":[],"data":{"warehouseId":"%s","expiresAt":"2030-07-27T12:15:00Z","groups":[
+              {"group":{"cabinType":"БК-1","quantity":2},"cabins":[{"id":"%s","status":"FREE"}]}
+            ]}}
+            """.formatted(warehouseId, appendedCabinId)));
+
+    CountingLogisticsClient logistics = new CountingLogisticsClient(inquiryId, UUID.randomUUID());
+    AssistantConversationService service = service(logistics);
+    AssistantApiModels.ConversationDetailResponse appendDetail = service.detail(owner, conversationId);
+    AssistantApiModels.MessageResponse firstMessage =
+        appendDetail.messages().stream()
+            .filter(message -> message.id().equals(firstTurn.getId()))
+            .findFirst()
+            .orElseThrow();
+    assertThat(firstMessage.searchNotices())
+        .singleElement()
+        .satisfies(
+            notice -> {
+              assertThat(notice.path("code").asText()).isEqualTo("CABINS_NOT_FOUND");
+              assertThat(notice.path("groups").get(0).path("quantity").intValue()).isEqualTo(2);
+            });
+    assertThat(service.hasActiveSearchResult(owner, conversationId, "current-user-bearer")).isTrue();
+    logistics.clientPresentation =
+        Optional.of(new LogisticsClient.ClientPresentation(inquiryId, "ACTIVE"));
+    assertThat(service.hasActiveSearchResult(owner, conversationId, "current-user-bearer")).isFalse();
+    logistics.clientPresentation =
+        Optional.of(new LogisticsClient.ClientPresentation(inquiryId, "REVOKED"));
+    assertThat(service.hasActiveSearchResult(owner, conversationId, "current-user-bearer")).isFalse();
+    assertThat(appendDetail.lastSearchResult().path("resultMode").asText()).isEqualTo("APPEND");
+    assertThat(appendDetail.lastSearchResult().path("notices"))
+        .singleElement()
+        .satisfies(notice -> assertThat(notice.path("code").asText()).isEqualTo("CABINS_NOT_FOUND"));
+    assertThat(appendDetail.lastSearchResult().path("data").path("groups"))
+        .singleElement()
+        .satisfies(
+            group -> {
+              assertThat(group.path("cabins")).hasSize(2);
+              assertThat(group.path("cabins").get(0).path("id").asText())
+                  .isEqualTo(alternativeCabinId.toString());
+              assertThat(group.path("cabins").get(1).path("id").asText())
+                  .isEqualTo(appendedCabinId.toString());
+            });
+
+    AssistantMessage replaceTurn =
+        messages.saveAndFlush(AssistantMessage.user(conversationId, "Замени на БК-2"));
+    completeSearch(
+        conversationId,
+        replaceTurn.getId(),
+        "replace",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","resultMode":"REPLACE","notices":[],"data":{"warehouseId":"%s","expiresAt":"2030-07-27T12:10:00Z","groups":[
+              {"group":{"cabinType":"БК-2","quantity":1},"cabins":[{"id":"%s","status":"FREE"}]}
+            ]}}
+            """.formatted(warehouseId, replacementCabinId)));
+
+    tools.jackson.databind.JsonNode replacement = service.detail(owner, conversationId).lastSearchResult();
+    assertThat(replacement.path("resultMode").asText()).isEqualTo("REPLACE");
+    assertThat(replacement.path("data").path("groups"))
+        .singleElement()
+        .satisfies(
+            group ->
+                assertThat(group.path("cabins").get(0).path("id").asText())
+                    .isEqualTo(replacementCabinId.toString()));
+  }
+
+  @Test
+  void detailKeepsOtherwiseEqualSearchGroupsWithDifferentCategoriesSeparate() {
+    UUID owner = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID freeCabinId = UUID.randomUUID();
+    UUID newCabinId = UUID.randomUUID();
+    UUID orCategoriesCabinId = UUID.randomUUID();
+    UUID allCategoriesCabinId = UUID.randomUUID();
+    conversations.saveAndFlush(
+        AssistantConversation.create(
+            conversationId, owner, UUID.randomUUID(), inquiryId, "PERSON", "Client summary"));
+    AssistantMessage user =
+        messages.saveAndFlush(AssistantMessage.user(conversationId, "Покажи БК-1"));
+    ObjectMapper objectMapper = new ObjectMapper();
+
+    completeSearch(
+        conversationId,
+        user.getId(),
+        "ordinary",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","data":{"warehouseId":"%s","expiresAt":"2030-07-27T12:10:00Z","groups":[
+              {"group":{"cabinType":"БК-1","finish":null,"dimensions":null,"category":"Обычная","quantity":1},
+               "cabins":[{"id":"%s","status":"FREE"}]}
+            ]}}
+            """
+                .formatted(warehouseId, freeCabinId)));
+    completeSearch(
+        conversationId,
+        user.getId(),
+        "new-category",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","data":{"warehouseId":"%s","expiresAt":"2030-07-27T12:10:00Z","groups":[
+              {"group":{"cabinType":"БК-1","finish":null,"dimensions":null,"category":"Новая","quantity":1},
+               "cabins":[{"id":"%s","status":"FREE"}]}
+            ]}}
+            """
+                .formatted(warehouseId, newCabinId)));
+    completeSearch(
+        conversationId,
+        user.getId(),
+        "ordinary-or-itr",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","data":{"warehouseId":"%s","expiresAt":"2030-07-27T12:10:00Z","groups":[
+              {"group":{"cabinType":"БК-1","finish":null,"dimensions":null,"categories":["Обычная","ИТР"],"quantity":1},
+               "cabins":[{"id":"%s","status":"FREE"}]}
+            ]}}
+            """
+                .formatted(warehouseId, orCategoriesCabinId)));
+    completeSearch(
+        conversationId,
+        user.getId(),
+        "all-categories",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","data":{"warehouseId":"%s","expiresAt":"2030-07-27T12:10:00Z","groups":[
+              {"group":{"cabinType":"БК-1","finish":null,"dimensions":null,"quantity":1},
+               "cabins":[{"id":"%s","status":"FREE"}]}
+            ]}}
+            """
+                .formatted(warehouseId, allCategoriesCabinId)));
+
+    tools.jackson.databind.JsonNode groups =
+        service(new CountingLogisticsClient(inquiryId, UUID.randomUUID()))
+            .detail(owner, conversationId)
+            .lastSearchResult()
+            .path("data")
+            .path("groups");
+
+    assertThat(groups.size()).isEqualTo(4);
+    assertThat(groups.get(0).path("group").path("category").asText()).isEqualTo("Обычная");
+    assertThat(groups.get(0).path("cabins").get(0).path("status").asText()).isEqualTo("FREE");
+    assertThat(groups.get(1).path("group").path("category").asText()).isEqualTo("Новая");
+    assertThat(groups.get(1).path("cabins").get(0).path("status").asText()).isEqualTo("FREE");
+    assertThat(groups.get(2).path("group").path("categories"))
+        .extracting(tools.jackson.databind.JsonNode::asText)
+        .containsExactly("Обычная", "ИТР");
+    assertThat(groups.get(2).path("cabins").get(0).path("id").asText())
+        .isEqualTo(orCategoriesCabinId.toString());
+    assertThat(groups.get(3).path("group").has("categories")).isFalse();
+    assertThat(groups.get(3).path("cabins").get(0).path("id").asText())
+        .isEqualTo(allCategoriesCabinId.toString());
+  }
+
+  @Test
+  void detailKeepsOtherwiseEqualSearchGroupsWithDifferentCharacteristicsOrLinoleumSeparate() {
+    UUID owner = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID characteristicCabinId = UUID.randomUUID();
+    UUID linoleumCabinId = UUID.randomUUID();
+    UUID noLinoleumCabinId = UUID.randomUUID();
+    conversations.saveAndFlush(
+        AssistantConversation.create(
+            conversationId, owner, UUID.randomUUID(), inquiryId, "PERSON", "Client summary"));
+    AssistantMessage user =
+        messages.saveAndFlush(AssistantMessage.user(conversationId, "Покажи БК-1"));
+    ObjectMapper objectMapper = new ObjectMapper();
+
+    completeSearch(
+        conversationId,
+        user.getId(),
+        "characteristic",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","data":{"warehouseId":"%s","expiresAt":"2030-07-27T12:10:00Z","groups":[
+              {"group":{"cabinType":"БК-1","finish":null,"dimensions":null,"category":null,"characteristics":"с верандой","linoleum":true,"quantity":1},
+               "cabins":[{"id":"%s","status":"FREE"}]}
+            ]}}
+            """
+                .formatted(warehouseId, characteristicCabinId)));
+    completeSearch(
+        conversationId,
+        user.getId(),
+        "linoleum",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","data":{"warehouseId":"%s","expiresAt":"2030-07-27T12:10:00Z","groups":[
+              {"group":{"cabinType":"БК-1","finish":null,"dimensions":null,"category":null,"characteristics":"с мебелью","linoleum":true,"quantity":1},
+               "cabins":[{"id":"%s","status":"FREE"}]}
+            ]}}
+            """
+                .formatted(warehouseId, linoleumCabinId)));
+    completeSearch(
+        conversationId,
+        user.getId(),
+        "no-linoleum",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","data":{"warehouseId":"%s","expiresAt":"2030-07-27T12:10:00Z","groups":[
+              {"group":{"cabinType":"БК-1","finish":null,"dimensions":null,"category":null,"characteristics":"с мебелью","linoleum":false,"quantity":1},
+               "cabins":[{"id":"%s","status":"FREE"}]}
+            ]}}
+            """
+                .formatted(warehouseId, noLinoleumCabinId)));
+
+    tools.jackson.databind.JsonNode groups =
+        service(new CountingLogisticsClient(inquiryId, UUID.randomUUID()))
+            .detail(owner, conversationId)
+            .lastSearchResult()
+            .path("data")
+            .path("groups");
+
+    assertThat(groups.size()).isEqualTo(3);
+    assertThat(groups.get(0).path("group").path("characteristics").asText())
+        .isEqualTo("с верандой");
+    assertThat(groups.get(1).path("group").path("linoleum").booleanValue()).isTrue();
+    assertThat(groups.get(2).path("group").path("linoleum").booleanValue()).isFalse();
+    assertThat(groups.get(0).path("cabins").get(0).path("id").asText())
+        .isEqualTo(characteristicCabinId.toString());
+    assertThat(groups.get(1).path("cabins").get(0).path("id").asText())
+        .isEqualTo(linoleumCabinId.toString());
+    assertThat(groups.get(2).path("cabins").get(0).path("id").asText())
+        .isEqualTo(noLinoleumCabinId.toString());
+  }
+
+  @Test
+  void detailDoesNotRestoreSearchCarouselWhenLastTurnExpiryIsMissingMalformedOrExpired() {
+    UUID owner = UUID.randomUUID();
+    UUID conversationId = UUID.randomUUID();
+    UUID inquiryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    conversations.saveAndFlush(
+        AssistantConversation.create(
+            conversationId, owner, UUID.randomUUID(), inquiryId, "PERSON", "Client summary"));
+    ObjectMapper objectMapper = new ObjectMapper();
+
+    AssistantMessage missingExpiryTurn =
+        messages.saveAndFlush(AssistantMessage.user(conversationId, "Покажи свободные"));
+    completeSearch(
+        conversationId,
+        missingExpiryTurn.getId(),
+        "valid-before-missing",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","data":{"warehouseId":"%s","expiresAt":"2030-07-27T12:10:00Z","groups":[]}}
+            """.formatted(warehouseId)));
+    completeSearch(
+        conversationId,
+        missingExpiryTurn.getId(),
+        "missing-expiry",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","data":{"warehouseId":"%s","groups":[]}}
+            """.formatted(warehouseId)));
+
+    AssistantConversationService service =
+        service(new CountingLogisticsClient(inquiryId, UUID.randomUUID()));
+    assertThat(service.detail(owner, conversationId).lastSearchResult()).isNull();
+
+    AssistantMessage malformedExpiryTurn =
+        messages.saveAndFlush(AssistantMessage.user(conversationId, "Покажи ещё раз"));
+    completeSearch(
+        conversationId,
+        malformedExpiryTurn.getId(),
+        "valid-before-malformed",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","data":{"warehouseId":"%s","expiresAt":"2030-07-27T12:10:00Z","groups":[]}}
+            """.formatted(warehouseId)));
+    completeSearch(
+        conversationId,
+        malformedExpiryTurn.getId(),
+        "malformed-expiry",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","data":{"warehouseId":"%s","expiresAt":"not-a-date-time","groups":[]}}
+            """.formatted(warehouseId)));
+
+    assertThat(service.detail(owner, conversationId).lastSearchResult()).isNull();
+
+    AssistantMessage expiredTurn =
+        messages.saveAndFlush(AssistantMessage.user(conversationId, "Покажи старую подборку"));
+    completeSearch(
+        conversationId,
+        expiredTurn.getId(),
+        "expired",
+        objectMapper.readTree(
+            """
+            {"tool":"search_available_cabins","data":{"warehouseId":"%s","expiresAt":"2020-07-27T12:10:00Z","groups":[]}}
+            """.formatted(warehouseId)));
+
+    assertThat(service.detail(owner, conversationId).lastSearchResult()).isNull();
+  }
+
+  private void completeSearch(
+      UUID conversationId, UUID turnMessageId, String providerCallId, tools.jackson.databind.JsonNode result) {
+    AssistantToolCall call =
+        toolCalls.saveAndFlush(
+            AssistantToolCall.start(
+                conversationId,
+                turnMessageId,
+                providerCallId,
+                AssistantToolDefinitions.SEARCH_AVAILABLE_CABINS,
+                new ObjectMapper().createObjectNode()));
+    call.complete(result);
+    toolCalls.saveAndFlush(call);
+  }
+
+  private AssistantConversationService service(LogisticsClient logistics) {
+    return new AssistantConversationService(
+        conversations,
+        messages,
+        toolCalls,
+        logistics,
+        new AssistantResponseMapperImpl());
+  }
+
+  private static final class CountingLogisticsClient implements LogisticsClient {
+    private final UUID inquiryId;
+    private final UUID clientId;
+    private final AtomicInteger creates = new AtomicInteger();
+    private Optional<ClientPresentation> clientPresentation = Optional.empty();
+
+    private CountingLogisticsClient(UUID inquiryId, UUID clientId) {
+      this.inquiryId = inquiryId;
+      this.clientId = clientId;
+    }
+
+    @Override
+    public InquiryBootstrap createRentalInquiry(
+        UUID conversationId,
+        UUID requestedClientId,
+        AssistantApiModels.NewClientRequest newClient,
+        String bearerToken) {
+      creates.incrementAndGet();
+      return new InquiryBootstrap(inquiryId, clientId, "ACTIVE", "PERSON", "Client summary");
+    }
+
+    @Override
+    public tools.jackson.databind.JsonNode listAvailableCabinFacets(
+        UUID rentalInquiryId, String bearerToken) {
+      return new ObjectMapper().createObjectNode();
+    }
+
+    @Override
+    public tools.jackson.databind.JsonNode searchAvailableCabins(
+        UUID rentalInquiryId, CabinSearch search, String bearerToken) {
+      return new ObjectMapper().createObjectNode();
+    }
+
+    @Override
+    public Optional<ClientPresentation> findClientPresentation(
+        UUID rentalInquiryId, String bearerToken) {
+      return clientPresentation;
+    }
+  }
+}

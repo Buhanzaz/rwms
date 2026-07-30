@@ -58,9 +58,6 @@ public class RentalOrderEquipmentRequirement {
   @Column(name = "equipment_id", nullable = false)
   private UUID equipmentId;
 
-  @Column(name = "equipment_code", nullable = false, length = 128)
-  private String equipmentCode;
-
   @Column(name = "equipment_name", nullable = false, length = 512)
   private String equipmentName;
 
@@ -78,14 +75,12 @@ public class RentalOrderEquipmentRequirement {
       RentalOrder order,
       UUID rentalItemId,
       UUID equipmentId,
-      String equipmentCode,
       String equipmentName,
       long quantity) {
     RentalOrderEquipmentRequirement requirement = new RentalOrderEquipmentRequirement();
     requirement.order = Objects.requireNonNull(order, "order");
     requirement.rentalItemId = Objects.requireNonNull(rentalItemId, "rentalItemId");
     requirement.equipmentId = Objects.requireNonNull(equipmentId, "equipmentId");
-    requirement.equipmentCode = requireText(equipmentCode, 128, "equipmentCode");
     requirement.equipmentName = requireText(equipmentName, 512, "equipmentName");
     requirement.quantity = requireQuantity(quantity);
     requirement.createdAt = now();
@@ -93,16 +88,13 @@ public class RentalOrderEquipmentRequirement {
     return requirement;
   }
 
-  public boolean change(String nextEquipmentCode, String nextEquipmentName, long nextQuantity) {
-    String code = requireText(nextEquipmentCode, 128, "equipmentCode");
+  public boolean change(String nextEquipmentName, long nextQuantity) {
     String name = requireText(nextEquipmentName, 512, "equipmentName");
     long quantity = requireQuantity(nextQuantity);
-    if (Objects.equals(equipmentCode, code)
-        && Objects.equals(equipmentName, name)
+    if (Objects.equals(equipmentName, name)
         && this.quantity == quantity) {
       return false;
     }
-    equipmentCode = code;
     equipmentName = name;
     this.quantity = quantity;
     updatedAt = now();

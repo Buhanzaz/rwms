@@ -2,11 +2,14 @@ import type {
   RepairEstimateCompletionMode,
   RepairEstimateEditorDraft,
   RepairEstimateTaskPlanDto,
+  RepairPriority,
 } from "@/features/repair-estimates/model/repair-estimate"
 import { RepairWorkCompletionDialog } from "@/features/repair-estimates/repair-work-completion-dialog"
 
 type RepairEstimateCompletionDialogProps = {
   open: boolean
+  accessToken: string | null
+  warehouseId: string
   draft: RepairEstimateEditorDraft
   pending: boolean
   error: string | null
@@ -18,6 +21,7 @@ type RepairEstimateCompletionDialogProps = {
     completionMode: RepairEstimateCompletionMode
     movementRequired: boolean
     taskPlans: RepairEstimateTaskPlanDto[]
+    priority: RepairPriority
   }) => void
 }
 
@@ -79,6 +83,8 @@ function amendmentInitialPlans(params: {
 
 export function RepairEstimateCompletionDialog({
   open,
+  accessToken,
+  warehouseId,
   draft,
   pending,
   error,
@@ -91,6 +97,8 @@ export function RepairEstimateCompletionDialog({
   return (
     <RepairWorkCompletionDialog
       open={open}
+      accessToken={accessToken}
+      warehouseId={warehouseId}
       lines={draft.lines}
       pending={pending}
       error={error}
@@ -106,6 +114,7 @@ export function RepairEstimateCompletionDialog({
       pendingLabel="Завершение..."
       previewKey={`${mode}:${initialTaskPlans?.map((plan) => `${plan.id}:${plan.sortOrder}`).join("|") ?? "new"}`}
       allowEmpty
+      selectPriority={mode === "COMPLETE"}
       initialMovementRequired={initialMovementRequired}
       reconcileInitialPlans={
         mode === "AMEND" && initialTaskPlans

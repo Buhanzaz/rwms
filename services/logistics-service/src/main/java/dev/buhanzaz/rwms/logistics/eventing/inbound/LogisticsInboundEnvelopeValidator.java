@@ -60,6 +60,19 @@ public class LogisticsInboundEnvelopeValidator {
       Pattern.compile(
           "^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{64})$");
   private static final Pattern SHA256 = Pattern.compile("^[0-9a-f]{64}$");
+  private static final Set<String> LOGISTICS_MEDIA_OWNER_TYPES =
+      Set.of("LOGISTICS_RETURN", "LOGISTICS_TRANSFER");
+  private static final Set<String> LOGISTICS_MEDIA_FIELDS =
+      Set.of(
+          "mediaId",
+          "folderId",
+          "ownerType",
+          "ownerId",
+          "warehouseId",
+          "kind",
+          "status",
+          "generation",
+          "rotationDegrees");
 
   private final ObjectMapper mapper;
 
@@ -92,12 +105,16 @@ public class LogisticsInboundEnvelopeValidator {
       String aggregateType = requireText(root, "aggregateType");
       require(policy.aggregateType().equals(aggregateType), "Aggregate type does not belong to input topic");
       String aggregateId = requireUuid(root, "aggregateId").toString();
-      long aggregateVersion = requireLong(root, "aggregateVersion", 0);
+      long aggregateVersion =
+          requireLong(
+              root,
+              "aggregateVersion",
+              policy.payloadKind() == LogisticsInboundTransportTopics.PayloadKind.MEDIA ? 1 : 0);
       validateCorrelation(root.required("correlation"));
       validateActor(root.required("actorRef"));
       JsonNode payload = root.required("payload");
       rejectProhibitedFields(payload);
-      validatePayload(policy.payloadKind(), aggregateId, payload);
+      validatePayload(policy.payloadKind(), aggregateId, eventType, payload);
       requireKafkaKey(kafkaKey, aggregateId);
       return new ValidatedInboundEvent(
           topic,
@@ -138,14 +155,17 @@ public class LogisticsInboundEnvelopeValidator {
   }
 
   private void validatePayload(
-      LogisticsInboundTransportTopics.PayloadKind kind, String aggregateId, JsonNode payload) {
+      LogisticsInboundTransportTopics.PayloadKind kind,
+      String aggregateId,
+      String eventType,
+      JsonNode payload) {
     switch (kind) {
       case RENTAL_ITEM -> validateRentalItem(aggregateId, payload);
       case OPERATION_LEASE -> validateOperationLease(aggregateId, payload);
       case EQUIPMENT_ALLOCATION_HOLD -> validateEquipmentAllocationHold(aggregateId, payload);
       case BOARD_TASK -> validateBoardTask(aggregateId, payload);
       case MAINTENANCE_ESTIMATE -> validateMaintenanceEstimate(aggregateId, payload);
-      case MEDIA -> validateMedia(aggregateId, payload);
+      case MEDIA -> validateMedia(aggregateId, eventType, payload);
     }
   }
 
@@ -231,27 +251,60 @@ public class LogisticsInboundEnvelopeValidator {
     requireNullableUuid(payload, "repairId");
   }
 
-  private void validateMedia(String aggregateId, JsonNode payload) {
+  private void validateMedia(String aggregateId, String eventType, JsonNode payload) {
+    // The media topic is shared by every bounded context. A fact for another owner is only
+    // transport evidence here: acknowledge it without applying logistics-specific owner rules.
+    // Relevant return/transfer facts below still require the full canonical media shape.
+    if (isForeignMediaFact(payload)) {
+      return;
+    }
     requireExactObject(
         payload,
-        Set.of(
-            "mediaId",
-            "ownerType",
-            "ownerId",
-            "warehouseId",
-            "kind",
-            "status",
-            "generation",
-            "rotationDegrees"),
+        LOGISTICS_MEDIA_FIELDS,
         "media payload");
     requireIdentity(payload, "mediaId", aggregateId);
-    require("INVENTORY_FINDING".equals(requireText(payload, "ownerType")), "Unexpected media owner type");
-    requireUuid(payload, "ownerId");
+    require(
+        LOGISTICS_MEDIA_OWNER_TYPES.contains(requireText(payload, "ownerType")),
+        "Unexpected media owner type");
+    requireLogisticsMediaOwnerId(payload, "ownerId");
+    requireUuid(payload, "folderId");
     requireUuid(payload, "warehouseId");
     requireEnum(payload, "kind", Set.of("IMAGE", "VIDEO"));
-    requireEnum(payload, "status", Set.of("PROCESSING", "READY", "FAILED", "DELETED"));
+    String status = requireText(payload, "status");
+    requireEnumValue(status, Set.of("PROCESSING", "READY", "FAILED", "DELETED"), "status");
+    require(mediaEventMatchesStatus(eventType, status), "Media event status is invalid");
     requireLong(payload, "generation", 0);
     requireIntEnum(payload, "rotationDegrees", Set.of(0, 90, 180, 270));
+  }
+
+  private static boolean isForeignMediaFact(JsonNode payload) {
+    if (payload == null || !payload.isObject()) {
+      return false;
+    }
+    JsonNode ownerType = payload.path("ownerType");
+    return ownerType.isTextual() && !LOGISTICS_MEDIA_OWNER_TYPES.contains(ownerType.stringValue());
+  }
+
+  private static void requireLogisticsMediaOwnerId(JsonNode parent, String name) {
+    String value = requireText(parent, name);
+    String[] parts = value.split(":", -1);
+    require(parts.length == 2, name + " must identify a document line");
+    try {
+      UUID.fromString(parts[0]);
+      UUID.fromString(parts[1]);
+    } catch (IllegalArgumentException exception) {
+      throw invalid(name + " must identify a document line", exception);
+    }
+  }
+
+  private static boolean mediaEventMatchesStatus(String eventType, String status) {
+    return switch (eventType) {
+      case "media.media.uploaded.v1" -> "PROCESSING".equals(status);
+      case "media.media.ready.v1", "media.media.rotated.v1" -> "READY".equals(status);
+      case "media.media.failed.v1" -> "FAILED".equals(status);
+      case "media.media.deleted.v1" -> "DELETED".equals(status);
+      default -> false;
+    };
   }
 
   private void rejectProhibitedFields(JsonNode value) {
@@ -344,7 +397,11 @@ public class LogisticsInboundEnvelopeValidator {
   }
 
   private static void requireEnum(JsonNode parent, String name, Set<String> allowed) {
-    require(allowed.contains(requireText(parent, name)), name + " is invalid");
+    requireEnumValue(requireText(parent, name), allowed, name);
+  }
+
+  private static void requireEnumValue(String value, Set<String> allowed, String name) {
+    require(allowed.contains(value), name + " is invalid");
   }
 
   private static OffsetDateTime requireTimestamp(JsonNode parent, String name) {
@@ -402,5 +459,16 @@ public class LogisticsInboundEnvelopeValidator {
       OffsetDateTime recordedAt,
       String rawMessageSha256,
       String envelopeJson,
-      JsonNode payload) {}
+      JsonNode payload) {
+    /** True when this fact belongs to a logistics owner that this service currently consumes. */
+    public boolean appliesToLogistics() {
+      return !LogisticsInboundTransportTopics.MEDIA.equals(sourceTopic)
+          || !isForeignMediaFact(payload);
+    }
+
+    /** Media facts are public snapshots, so their aggregate versions are monotonic, not contiguous. */
+    public boolean isPublicMediaFact() {
+      return LogisticsInboundTransportTopics.MEDIA.equals(sourceTopic);
+    }
+  }
 }

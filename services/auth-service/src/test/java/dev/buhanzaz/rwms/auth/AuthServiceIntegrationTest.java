@@ -31,11 +31,13 @@ import com.nimbusds.jwt.SignedJWT;
 import com.jayway.jsonpath.JsonPath;
 import dev.buhanzaz.rwms.auth.api.CreateUserRequest;
 import dev.buhanzaz.rwms.auth.api.UpdateUserRequest;
+import dev.buhanzaz.rwms.auth.api.WorkerCredentialRequest;
 import dev.buhanzaz.rwms.auth.domain.AuthSubject;
 import dev.buhanzaz.rwms.auth.domain.PrincipalType;
 import dev.buhanzaz.rwms.auth.domain.UserGlobalRole;
 import dev.buhanzaz.rwms.auth.repository.AuthSubjectRepository;
 import dev.buhanzaz.rwms.auth.service.UserAdministrationService;
+import dev.buhanzaz.rwms.auth.service.WorkerCredentialService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
@@ -57,10 +59,12 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.server.authorization.client.JdbcRegisteredClientRepository;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClient;
 import org.springframework.security.oauth2.server.authorization.client.RegisteredClientRepository;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultMatcher;
 import org.springframework.web.util.UriComponentsBuilder;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -96,6 +100,12 @@ class AuthServiceIntegrationTest {
     UserAdministrationService users;
 
     @Autowired
+    WorkerCredentialService workerCredentials;
+
+    @Autowired
+    JwtDecoder jwtDecoder;
+
+    @Autowired
     JWKSource<SecurityContext> jwkSource;
 
     @Test
@@ -108,11 +118,27 @@ class AuthServiceIntegrationTest {
         var panel = clients.findByClientId("rwms-panel");
         assertThat(panel.getClientSettings().isRequireProofKey()).isTrue();
         assertThat(panel.getClientAuthenticationMethods()).extracting(Object::toString).contains("none");
-        assertThat(panel.getScopes()).contains("warehouse.read");
-        var worker = clients.findByClientId("rwms-worker");
+        assertThat(panel.getScopes()).contains("offline_access", "warehouse.read");
+        assertThat(panel.getAuthorizationGrantTypes())
+                .extracting(org.springframework.security.oauth2.core.AuthorizationGrantType::getValue)
+                .containsExactlyInAnyOrder("authorization_code", "refresh_token");
+        assertThat(panel.getTokenSettings().getAccessTokenTimeToLive())
+                .isEqualTo(java.time.Duration.ofMinutes(5));
+        assertThat(panel.getTokenSettings().getRefreshTokenTimeToLive())
+                .isEqualTo(java.time.Duration.ofDays(30));
+        assertThat(panel.getTokenSettings().isReuseRefreshTokens()).isFalse();
+        var worker = clients.findByClientId("rwms-worker-android");
         assertThat(worker.getClientSettings().isRequireProofKey()).isTrue();
-        assertThat(worker.getScopes()).contains("openid", "profile", "worker.tasks");
+        assertThat(worker.getScopes()).contains("openid", "profile", "offline_access", "worker.tasks");
         assertThat(worker.getRedirectUris()).containsExactly("http://localhost:8082/auth/callback");
+        assertThat(worker.getAuthorizationGrantTypes())
+                .extracting(org.springframework.security.oauth2.core.AuthorizationGrantType::getValue)
+                .containsExactlyInAnyOrder("authorization_code", "refresh_token");
+        assertThat(worker.getTokenSettings().getAccessTokenTimeToLive())
+                .isEqualTo(java.time.Duration.ofMinutes(5));
+        assertThat(worker.getTokenSettings().getRefreshTokenTimeToLive())
+                .isEqualTo(java.time.Duration.ofDays(30));
+        assertThat(worker.getTokenSettings().isReuseRefreshTokens()).isFalse();
         assertThat(passwordEncoder.matches(
                         "task-board-test-secret",
                         clients.findByClientId("task-board-service").getClientSecret()))
@@ -127,6 +153,84 @@ class AuthServiceIntegrationTest {
                 .extracting(org.springframework.security.oauth2.core.ClientAuthenticationMethod::getValue)
                 .containsExactly("client_secret_basic");
         assertThat(warehouseClient.getClientSecret()).isNull();
+    }
+
+    @Test
+    void workerRefreshTokensRotateAndCredentialChangesRevokeAuthorizations() throws Exception {
+        String workerId = UUID.randomUUID().toString();
+        workerCredentials.configure(
+                workerId,
+                new WorkerCredentialRequest("spb", "worker.refresh", "worker-password"));
+
+        OAuthTokens initial = authorizeWorker("worker.refresh", "worker-password");
+        assertThat(initial.expiresIn()).isBetween(295, 300);
+        assertThat(initial.refreshToken()).isNotBlank();
+        var initialJwt = jwtDecoder.decode(initial.accessToken());
+        assertThat(initialJwt.getClaimAsString("principal_type")).isEqualTo("WORKER");
+        assertThat(initialJwt.getClaimAsString("worker_id")).isEqualTo(workerId);
+        assertThat(initialJwt.getClaimAsString("warehouse_id"))
+                .isEqualTo("00000000-0000-0000-0000-000000000001");
+
+        OAuthTokens rotated = refreshWorker(initial.refreshToken(), status().isOk());
+        assertThat(rotated.refreshToken()).isNotEqualTo(initial.refreshToken());
+        assertThat(jwtDecoder.decode(rotated.accessToken()).getClaimAsString("worker_id"))
+                .isEqualTo(workerId);
+
+        refreshWorker(initial.refreshToken(), status().isBadRequest());
+
+        workerCredentials.resetPassword(workerId, "rotated-password");
+        refreshWorker(rotated.refreshToken(), status().isBadRequest());
+
+        OAuthTokens afterReset = authorizeWorker("worker.refresh", "rotated-password");
+        mvc.perform(post("/oauth2/revoke")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("client_id", "rwms-worker-android")
+                        .param("token", afterReset.refreshToken())
+                        .param("token_type_hint", "refresh_token"))
+                .andExpect(status().isOk());
+        refreshWorker(afterReset.refreshToken(), status().isBadRequest());
+
+        OAuthTokens beforeDisable = authorizeWorker("worker.refresh", "rotated-password");
+        workerCredentials.disable(workerId);
+        refreshWorker(beforeDisable.refreshToken(), status().isBadRequest());
+
+        workerCredentials.enable(workerId);
+        OAuthTokens afterEnable = authorizeWorker("worker.refresh", "rotated-password");
+        assertThat(afterEnable.refreshToken()).isNotBlank();
+    }
+
+    @Test
+    void workerAuthorizationRequiresPkceS256() throws Exception {
+        workerCredentials.configure(
+                UUID.randomUUID().toString(),
+                new WorkerCredentialRequest("spb", "worker.pkce", "worker-password"));
+        MockHttpSession session = (MockHttpSession) mvc.perform(
+                        formLogin().user("worker.pkce").password("worker-password"))
+                .andExpect(authenticated())
+                .andReturn()
+                .getRequest()
+                .getSession(false);
+
+        String location = mvc.perform(get("/oauth2/authorize")
+                        .session(session)
+                        .queryParam("response_type", "code")
+                        .queryParam("client_id", "rwms-worker-android")
+                        .queryParam("redirect_uri", "http://localhost:8082/auth/callback")
+                        .queryParam("scope", "openid profile offline_access worker.tasks")
+                        .queryParam("state", "plain-pkce-state")
+                        .queryParam(
+                                "code_challenge",
+                                "plain-code-verifier-000000000000000000000000000000")
+                        .queryParam("code_challenge_method", "plain"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn()
+                .getResponse()
+                .getHeader("Location");
+
+        assertThat(location)
+                .startsWith("http://localhost:8082/auth/callback")
+                .contains("error=invalid_request")
+                .contains("state=plain-pkce-state");
     }
 
     @Test
@@ -242,14 +346,17 @@ class AuthServiceIntegrationTest {
         assertThat(signedAccessToken.getHeader().getAlgorithm()).isEqualTo(JWSAlgorithm.RS256);
         assertThat(accessTokenClaims.getSubject()).isEqualTo(admin.getId().toString());
         assertThat(accessTokenClaims.getStringClaim("preferred_username")).isEqualTo("admin");
+        assertThat(accessTokenClaims.getBooleanClaim("rentalAccess")).isTrue();
         assertThat(idTokenClaims.getSubject()).isEqualTo(admin.getId().toString());
         assertThat(idTokenClaims.getStringClaim("preferred_username")).isEqualTo("admin");
+        assertThat(idTokenClaims.getBooleanClaim("rentalAccess")).isTrue();
 
         mvc.perform(get("/api/users/me").header("Authorization", "Bearer " + accessToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(admin.getId().toString()))
                 .andExpect(jsonPath("$.username").value("admin"))
-                .andExpect(jsonPath("$.principalType").value("USER"));
+                .andExpect(jsonPath("$.principalType").value("USER"))
+                .andExpect(jsonPath("$.rentalAccess").value(true));
         mvc.perform(get("/api/users/actor-displays")
                         .header("Authorization", "Bearer " + accessToken)
                         .queryParam("subjectId", admin.getId().toString()))
@@ -293,24 +400,25 @@ class AuthServiceIntegrationTest {
     }
 
     @Test
-    void unauthenticatedPkceRequestContinuesAfterLoginAndPreservesStateAndNonceWithoutRefreshToken()
+    void unauthenticatedPanelPkceContinuesAfterLoginAndIssuesRotatingRefreshToken()
             throws Exception {
         String verifier = "rwms-saved-request-code-verifier-000000000000000000000000";
         String challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(
                 MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII)));
-        var initial = mvc.perform(get("/oauth2/authorize")
+        var initialAuthorization = mvc.perform(get("/oauth2/authorize")
                         .queryParam("response_type", "code")
                         .queryParam("client_id", "rwms-panel")
                         .queryParam("redirect_uri", "http://localhost:8080/auth/callback")
-                        .queryParam("scope", "openid profile")
+                        .queryParam("scope", "openid profile offline_access")
                         .queryParam("state", "saved-request-state")
                         .queryParam("nonce", "saved-request-nonce")
                         .queryParam("code_challenge", challenge)
                         .queryParam("code_challenge_method", "S256"))
                 .andExpect(status().is3xxRedirection())
                 .andReturn();
-        assertThat(initial.getResponse().getHeader("Location")).endsWith("/login");
-        MockHttpSession session = (MockHttpSession) initial.getRequest().getSession(false);
+        assertThat(initialAuthorization.getResponse().getHeader("Location")).endsWith("/login");
+        MockHttpSession session =
+                (MockHttpSession) initialAuthorization.getRequest().getSession(false);
         assertThat(session).isNotNull();
 
         String continuation = mvc.perform(post("/login")
@@ -344,13 +452,53 @@ class AuthServiceIntegrationTest {
                         .param("redirect_uri", "http://localhost:8080/auth/callback")
                         .param("code_verifier", verifier))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.refresh_token").doesNotExist())
+                .andExpect(jsonPath("$.refresh_token").isNotEmpty())
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
+        OAuthTokens initialTokens = oauthTokens(tokenBody);
+        assertThat(initialTokens.expiresIn()).isBetween(295, 300);
+        assertThat(jwtDecoder.decode(initialTokens.accessToken()).getClaimAsString("principal_type"))
+                .isEqualTo("USER");
+        OAuthTokens rotated =
+                refreshPublicClient("rwms-panel", initialTokens.refreshToken(), status().isOk());
+        assertThat(rotated.refreshToken()).isNotEqualTo(initialTokens.refreshToken());
+        assertThat(jwtDecoder.decode(rotated.accessToken()).getSubject())
+                .isEqualTo(subjects.findByUsernameIgnoreCase("admin").orElseThrow().getId().toString());
+        refreshPublicClient("rwms-panel", initialTokens.refreshToken(), status().isBadRequest());
+
         String idToken = JsonPath.read(tokenBody, "$.id_token");
         assertThat(SignedJWT.parse(idToken).getJWTClaimsSet().getStringClaim("nonce"))
                 .isEqualTo("saved-request-nonce");
+    }
+
+    @Test
+    void workerAuthorizationUsesWorkerLoginSurfaceAndPreservesFailureState() throws Exception {
+        String verifier = "rwms-worker-login-surface-verifier-0000000000000000000000";
+        String challenge = Base64.getUrlEncoder().withoutPadding().encodeToString(
+                MessageDigest.getInstance("SHA-256").digest(verifier.getBytes(StandardCharsets.US_ASCII)));
+        var initial = mvc.perform(get("/oauth2/authorize")
+                        .queryParam("response_type", "code")
+                        .queryParam("client_id", "rwms-worker-android")
+                        .queryParam("redirect_uri", "http://localhost:8082/auth/callback")
+                        .queryParam("scope", "openid profile offline_access worker.tasks")
+                        .queryParam("state", "worker-login-surface-state")
+                        .queryParam("code_challenge", challenge)
+                        .queryParam("code_challenge_method", "S256"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+        MockHttpSession session = (MockHttpSession) initial.getRequest().getSession(false);
+        assertThat(session).isNotNull();
+
+        mvc.perform(get("/login").session(session))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/login?surface=worker"));
+        mvc.perform(get("/login").session(session).queryParam("surface", "worker"))
+                .andExpect(status().isOk())
+                .andExpect(forwardedUrl("/index.html"));
+        mvc.perform(get("/login").session(session).queryParam("error", ""))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/login?surface=worker&error"));
     }
 
     @Test
@@ -495,6 +643,16 @@ class AuthServiceIntegrationTest {
                         "rotated-secret",
                         subjects.findByExternalWorkerId("worker-101").orElseThrow().getPasswordHash()))
                 .isTrue();
+        mvc.perform(post("/api/internal/worker-credentials/worker-101/enable")
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/internal/worker-credentials/worker-101/status")
+                        .header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.appLogin").value("worker.101"))
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.password").doesNotExist())
+                .andExpect(jsonPath("$.passwordHash").doesNotExist());
         mvc.perform(delete("/api/internal/worker-credentials/worker-101")
                         .header("Authorization", "Bearer " + accessToken))
                 .andExpect(status().isNoContent());
@@ -664,7 +822,8 @@ class AuthServiceIntegrationTest {
                         .jwt(token -> token.subject("viewer.one"))
                         .authorities(new SimpleGrantedAuthority("ROLE_VIEWER"))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.warehouseAccesses[0].level").value("VIEW"));
+                .andExpect(jsonPath("$.warehouseAccesses[0].level").value("VIEW"))
+                .andExpect(jsonPath("$.warehouseAccesses[0].accessLevel").doesNotExist());
 
         mvc.perform(delete("/api/admin/users/{id}", userId).with(jwt()
                         .jwt(token -> token.subject("admin"))
@@ -840,6 +999,82 @@ class AuthServiceIntegrationTest {
                 .andExpect(jsonPath("$.error").value("access_denied"));
     }
 
+    private OAuthTokens authorizeWorker(String username, String password) throws Exception {
+        MockHttpSession session = (MockHttpSession) mvc.perform(
+                        formLogin().user(username).password(password))
+                .andExpect(authenticated())
+                .andReturn()
+                .getRequest()
+                .getSession(false);
+        String verifier = "rwms-worker-code-verifier-000000000000000000000000000000";
+        String challenge = Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(MessageDigest.getInstance("SHA-256")
+                        .digest(verifier.getBytes(StandardCharsets.US_ASCII)));
+        String location = mvc.perform(get("/oauth2/authorize")
+                        .session(session)
+                        .queryParam("response_type", "code")
+                        .queryParam("client_id", "rwms-worker-android")
+                        .queryParam("redirect_uri", "http://localhost:8082/auth/callback")
+                        .queryParam("scope", "openid profile offline_access worker.tasks")
+                        .queryParam("state", UUID.randomUUID().toString())
+                        .queryParam("nonce", UUID.randomUUID().toString())
+                        .queryParam("code_challenge", challenge)
+                        .queryParam("code_challenge_method", "S256"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn()
+                .getResponse()
+                .getHeader("Location");
+        String code = UriComponentsBuilder.fromUriString(location)
+                .build()
+                .getQueryParams()
+                .getFirst("code");
+        assertThat(code).isNotBlank();
+        String body = mvc.perform(post("/oauth2/token")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("grant_type", "authorization_code")
+                        .param("client_id", "rwms-worker-android")
+                        .param("code", code)
+                        .param("redirect_uri", "http://localhost:8082/auth/callback")
+                        .param("code_verifier", verifier))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        return oauthTokens(body);
+    }
+
+    private OAuthTokens refreshWorker(String refreshToken, ResultMatcher expectedStatus)
+            throws Exception {
+        return refreshPublicClient("rwms-worker-android", refreshToken, expectedStatus);
+    }
+
+    private OAuthTokens refreshPublicClient(
+            String clientId, String refreshToken, ResultMatcher expectedStatus)
+            throws Exception {
+        var result = mvc.perform(post("/oauth2/token")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .param("grant_type", "refresh_token")
+                        .param("client_id", clientId)
+                        .param("refresh_token", refreshToken))
+                .andExpect(expectedStatus)
+                .andReturn();
+        if (result.getResponse().getStatus() != 200) {
+            assertThat(JsonPath.<String>read(
+                            result.getResponse().getContentAsString(), "$.error"))
+                    .isEqualTo("invalid_grant");
+            return null;
+        }
+        return oauthTokens(result.getResponse().getContentAsString());
+    }
+
+    private OAuthTokens oauthTokens(String body) {
+        return new OAuthTokens(
+                JsonPath.read(body, "$.access_token"),
+                JsonPath.read(body, "$.refresh_token"),
+                ((Number) JsonPath.read(body, "$.expires_in")).intValue());
+    }
+
     private UsernamePasswordAuthenticationToken adminAuthentication() {
         return UsernamePasswordAuthenticationToken.authenticated("admin", "", List.of());
     }
@@ -866,4 +1101,6 @@ class AuthServiceIntegrationTest {
         jwt.sign(new RSASSASigner(signingKey.toPrivateKey()));
         return jwt.serialize();
     }
+
+    private record OAuthTokens(String accessToken, String refreshToken, int expiresIn) {}
 }

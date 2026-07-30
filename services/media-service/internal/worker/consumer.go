@@ -54,21 +54,15 @@ func (processor Processor) Process(ctx context.Context, job persistence.WorkerJo
 
 type Consumer struct {
 	repository   *persistence.Repository
-	client       processingKafkaClient
+	client       kafkaConsumerClient
 	processor    Processor
 	owner        string
 	lease        time.Duration
 	timeout      time.Duration
+	pollTimeout  time.Duration
 	logger       *slog.Logger
 	handleRecord func(context.Context, *kgo.Record) error
 	sleep        func(context.Context, time.Duration) error
-}
-
-type processingKafkaClient interface {
-	PollFetches(context.Context) kgo.Fetches
-	CommitRecords(context.Context, ...*kgo.Record) error
-	AllowRebalance()
-	Close()
 }
 
 func NewKafkaConsumer(brokers []string, group, topic string) (*kgo.Client, error) {
@@ -85,7 +79,8 @@ func NewKafkaConsumer(brokers []string, group, topic string) (*kgo.Client, error
 
 func NewConsumer(repository *persistence.Repository, client *kgo.Client, processor Processor, owner string, processingTimeout time.Duration, logger *slog.Logger) *Consumer {
 	consumer := &Consumer{repository: repository, client: client, processor: processor, owner: owner,
-		lease: processingTimeout + 30*time.Second, timeout: processingTimeout, logger: logger,
+		lease: processingTimeout + 30*time.Second, timeout: processingTimeout,
+		pollTimeout: kafkaConsumerPollTimeout, logger: logger,
 		sleep: sleepProcessingConsumer}
 	consumer.handleRecord = consumer.handle
 	return consumer
@@ -93,11 +88,20 @@ func NewConsumer(repository *persistence.Repository, client *kgo.Client, process
 
 func (consumer *Consumer) Run(ctx context.Context) error {
 	for {
-		fetches := consumer.client.PollFetches(ctx)
+		fetches, pollTimedOut := pollKafkaFetches(ctx, consumer.client, consumer.pollTimeout)
 		if ctx.Err() != nil {
+			consumer.client.AllowRebalance()
 			return nil
 		}
+		if pollTimedOut {
+			consumer.client.AllowRebalance()
+			continue
+		}
 		if errs := fetches.Errors(); len(errs) > 0 {
+			// A fetch error is still a completed poll under
+			// BlockRebalanceOnPoll. Release it before retrying so the group
+			// heartbeat can rejoin once the broker or coordinator recovers.
+			consumer.client.AllowRebalance()
 			consumer.logger.Error("poll media processing topic", "errorType", "BROKER_UNAVAILABLE")
 			continue
 		}

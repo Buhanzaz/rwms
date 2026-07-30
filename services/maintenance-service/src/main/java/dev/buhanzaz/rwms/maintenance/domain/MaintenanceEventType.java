@@ -15,6 +15,8 @@ public enum MaintenanceEventType {
   REPAIR_STAGE_COMPLETED("maintenance.repair.stage-completed.v1"),
   REPAIR_PENDING_ACCEPTANCE("maintenance.repair.pending-acceptance.v1"),
   REPAIR_REWORK_CREATED("maintenance.repair.rework-created.v1"),
+  REPAIR_TRANSFER_PREPARED("maintenance.repair.transfer-prepared.v1"),
+  REPAIR_TRANSFERRED("maintenance.repair.transferred.v1"),
   REPAIR_ACCEPTED("maintenance.repair.accepted.v1"),
   REPAIR_WRITTEN_OFF("maintenance.repair.written-off.v1");
 

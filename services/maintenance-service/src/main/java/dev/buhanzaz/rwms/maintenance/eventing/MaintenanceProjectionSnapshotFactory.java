@@ -101,10 +101,9 @@ public class MaintenanceProjectionSnapshotFactory {
     result.put("activatedAt", text(value.getActivatedAt()));
     result.put("createdAt", text(value.getCreatedAt()));
     result.put("updatedAt", text(value.getUpdatedAt()));
-    result.put("nodes", nodes.findAllByCatalogVersionIdOrderByCode(value.getId()).stream().map(node -> {
+    result.put("nodes", nodes.findAllByCatalogVersionIdOrderByNameAscIdAsc(value.getId()).stream().map(node -> {
       Map<String, Object> item = new LinkedHashMap<>();
       item.put("id", node.getId().toString());
-      item.put("code", node.getCode());
       item.put("nodeType", node.getNodeType());
       item.put("name", node.getName());
       item.put("active", node.isActive());
@@ -117,16 +116,27 @@ public class MaintenanceProjectionSnapshotFactory {
       item.put("showInMainMenu", node.isShowInMainMenu());
       item.put("canvasX", node.getCanvasX());
       item.put("canvasY", node.getCanvasY());
+      item.put("displayColor", node.getDisplayColor());
+      item.put("forcesCapitalRepair", node.isForcesCapitalRepair());
+      if (node.getCharacteristicId() == null) {
+        item.put("characteristic", null);
+      } else {
+        Map<String, Object> characteristic = new LinkedHashMap<>();
+        characteristic.put(
+            "characteristicId", node.getCharacteristicId().toString());
+        characteristic.put(
+            "characteristicName", node.getCharacteristicName());
+        item.put("characteristic", characteristic);
+      }
       if (node.getRoutingQueueId() == null) {
         item.put("routing", null);
       } else {
         Map<String, Object> routing = new LinkedHashMap<>();
         routing.put("queueId", node.getRoutingQueueId().toString());
-        routing.put("queueCode", node.getRoutingQueueCode());
-        routing.put("queueKind", node.getRoutingQueueKind());
+        routing.put("queueName", node.getRoutingQueueName());
+        routing.put("queueType", node.getRoutingQueueType());
         item.put("routing", routing);
       }
-      item.put("references", jsonValue(node.getOpaqueReferences()));
       item.put("comment", node.getComment());
       return item;
     }).toList());
@@ -155,6 +165,7 @@ public class MaintenanceProjectionSnapshotFactory {
     result.put("sourceParty", value.getSourceParty());
     result.put("comment", value.getComment());
     result.put("repairId", text(value.getRepairId()));
+    result.put("coverMediaId", text(value.getCoverMediaId()));
     result.put("completedAt", text(value.getCompletedAt()));
     result.put("actor", json(value.getActorRef()));
     result.put("createdAt", text(value.getCreatedAt()));
@@ -177,6 +188,7 @@ public class MaintenanceProjectionSnapshotFactory {
                 lineState.put("catalogNodeId", text(line.getCatalogNodeId()));
                 lineState.put("lineType", line.getLineType());
                 lineState.put("title", line.getTitle());
+                lineState.put("unit", line.getUnit());
                 lineState.put("quantity", line.getQuantity().setScale(6).toPlainString());
                 lineState.put("unitPriceMinor", line.getUnitPriceMinor());
                 lineState.put("durationMinutes", line.getDurationMinutes());
@@ -194,8 +206,11 @@ public class MaintenanceProjectionSnapshotFactory {
                 stageState.put("stageNo", stage.getStageNo());
                 stageState.put("kind", stage.getStageKind().name());
                 stageState.put("routingQueueId", stage.getRoutingQueueId().toString());
-                stageState.put("routingQueueCode", stage.getRoutingQueueCode());
-                stageState.put("routingQueueKind", stage.getRoutingQueueKind());
+                stageState.put("routingQueueName", stage.getRoutingQueueName());
+                stageState.put("routingQueueType", stage.getRoutingQueueType());
+                stageState.put("includedLineIds", stage.getIncludedLineIds());
+                stageState.put("primaryLineId", text(stage.getPrimaryLineId()));
+                stageState.put("groupComment", stage.getGroupComment());
                 stageState.put("taskDeadline", text(stage.getTaskDeadline()));
                 return stageState;
               }).toList());
@@ -217,7 +232,18 @@ public class MaintenanceProjectionSnapshotFactory {
     result.put("executionState", value.getExecutionState().name());
     result.put("acceptanceState", value.getAcceptanceState().name());
     result.put("dispatchDate", text(value.getDispatchDate()));
+    result.put("priority", value.getPriority());
     result.put("sourceParty", value.getSourceParty());
+    result.put("coverMediaId", text(value.getCoverMediaId()));
+    result.put(
+        "movementToShipment", value.isMovementToShipment());
+    result.put("transferState", value.getTransferState());
+    result.put(
+        "transferDocumentId", text(value.getTransferDocumentId()));
+    result.put("transferLineId", text(value.getTransferLineId()));
+    result.put(
+        "transferTargetWarehouseId",
+        text(value.getTransferTargetWarehouseId()));
     result.put("reworkReason", value.getReworkReason());
     result.put("decisionReason", value.getDecisionReason());
     result.put("decisionActor", value.getDecisionActorRef() == null
@@ -251,8 +277,12 @@ public class MaintenanceProjectionSnapshotFactory {
       item.put("kind", stage.getStageKind().name());
       item.put("state", stage.getState().name());
       item.put("routingQueueId", stage.getRoutingQueueId().toString());
-      item.put("routingQueueCode", stage.getRoutingQueueCode());
-      item.put("routingQueueKind", stage.getRoutingQueueKind());
+      item.put("routingQueueName", stage.getRoutingQueueName());
+      item.put("routingQueueType", stage.getRoutingQueueType());
+      item.put("workLines", stage.getWorkLines());
+      item.put("materialLines", stage.getMaterialLines());
+      item.put("primaryLineId", text(stage.getPrimaryLineId()));
+      item.put("groupComment", stage.getGroupComment());
       item.put("externalQueueEntryId", text(stage.getExternalQueueEntryId()));
       item.put("taskBoardVersion", stage.getTaskBoardVersion());
       item.put("taskGenerationState", stage.getTaskGenerationState());

@@ -1,9 +1,11 @@
 package dev.buhanzaz.rwms.asset.repository;
 
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservationState;
+import dev.buhanzaz.rwms.asset.domain.PresentationUnitHoldState;
 import dev.buhanzaz.rwms.asset.domain.RentalItem;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import jakarta.persistence.LockModeType;
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -16,6 +18,14 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface RentalItemRepository extends JpaRepository<RentalItem, UUID> {
+  boolean existsByRentalTypeId(UUID rentalTypeId);
+
+  boolean existsByDimensionId(UUID dimensionId);
+
+  boolean existsByFinishingId(UUID finishingId);
+
+  boolean existsByCategoryId(UUID categoryId);
+
   boolean existsByWarehouseIdAndIdentityMatchKey(UUID warehouseId, String identityMatchKey);
   boolean existsByWarehouseIdAndIdentityMatchKeyAndIdNot(
       UUID warehouseId, String identityMatchKey, UUID id);
@@ -31,6 +41,10 @@ public interface RentalItemRepository extends JpaRepository<RentalItem, UUID> {
   @Query("select item from RentalItem item where item.id = :id")
   Optional<RentalItem> findByIdForUpdate(@Param("id") UUID id);
 
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("select item from RentalItem item where item.id in :ids order by item.id")
+  List<RentalItem> findAllByIdInForUpdate(@Param("ids") Collection<UUID> ids);
+
   @Query(
       value =
           """
@@ -45,6 +59,10 @@ public interface RentalItemRepository extends JpaRepository<RentalItem, UUID> {
                   from OrderUnitReservation reservation
                   where reservation.rentalItemId = item.id
                     and reservation.state = :activeState
+                    and (
+                      reservation.draftReservationExpiresAt is null
+                      or reservation.draftReservationExpiresAt > :now
+                    )
                 )
                 and not exists (
                   select lease.id
@@ -53,6 +71,13 @@ public interface RentalItemRepository extends JpaRepository<RentalItem, UUID> {
                     and lease.state = dev.buhanzaz.rwms.asset.domain.OperationLeaseState.ACTIVE
                     and lease.expiresAt > current_timestamp
                 )
+                and not exists (
+                  select hold.id
+                  from PresentationUnitHold hold
+                  where hold.rentalItemId = item.id
+                    and hold.state = :activeHoldState
+                    and hold.expiresAt > :now
+                )
               )
               or exists (
                 select reservation.id
@@ -60,14 +85,16 @@ public interface RentalItemRepository extends JpaRepository<RentalItem, UUID> {
                 where reservation.rentalItemId = item.id
                   and reservation.orderId = :orderId
                   and reservation.state = :activeState
+                  and (
+                    reservation.draftReservationExpiresAt is null
+                    or reservation.draftReservationExpiresAt > :now
+                  )
               )
             )
             and (
               :search = ''
               or upper(item.number) like concat('%', :search, '%')
-              or upper(coalesce(item.rentalType, '')) like concat('%', :search, '%')
               or upper(coalesce(item.category, '')) like concat('%', :search, '%')
-              or upper(coalesce(item.characteristics, '')) like concat('%', :search, '%')
             )
           """,
       countQuery =
@@ -83,6 +110,10 @@ public interface RentalItemRepository extends JpaRepository<RentalItem, UUID> {
                   from OrderUnitReservation reservation
                   where reservation.rentalItemId = item.id
                     and reservation.state = :activeState
+                    and (
+                      reservation.draftReservationExpiresAt is null
+                      or reservation.draftReservationExpiresAt > :now
+                    )
                 )
                 and not exists (
                   select lease.id
@@ -91,6 +122,13 @@ public interface RentalItemRepository extends JpaRepository<RentalItem, UUID> {
                     and lease.state = dev.buhanzaz.rwms.asset.domain.OperationLeaseState.ACTIVE
                     and lease.expiresAt > current_timestamp
                 )
+                and not exists (
+                  select hold.id
+                  from PresentationUnitHold hold
+                  where hold.rentalItemId = item.id
+                    and hold.state = :activeHoldState
+                    and hold.expiresAt > :now
+                )
               )
               or exists (
                 select reservation.id
@@ -98,14 +136,16 @@ public interface RentalItemRepository extends JpaRepository<RentalItem, UUID> {
                 where reservation.rentalItemId = item.id
                   and reservation.orderId = :orderId
                   and reservation.state = :activeState
+                  and (
+                    reservation.draftReservationExpiresAt is null
+                    or reservation.draftReservationExpiresAt > :now
+                  )
               )
             )
             and (
               :search = ''
               or upper(item.number) like concat('%', :search, '%')
-              or upper(coalesce(item.rentalType, '')) like concat('%', :search, '%')
               or upper(coalesce(item.category, '')) like concat('%', :search, '%')
-              or upper(coalesce(item.characteristics, '')) like concat('%', :search, '%')
             )
           """)
   Page<RentalItem> findOrderCandidates(
@@ -113,6 +153,8 @@ public interface RentalItemRepository extends JpaRepository<RentalItem, UUID> {
       @Param("warehouseId") UUID warehouseId,
       @Param("reservableStatuses") Collection<RentalItemStatus> reservableStatuses,
       @Param("activeState") OrderUnitReservationState activeState,
+      @Param("activeHoldState") PresentationUnitHoldState activeHoldState,
+      @Param("now") OffsetDateTime now,
       @Param("search") String search,
       Pageable pageable);
 }

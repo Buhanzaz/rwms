@@ -36,6 +36,13 @@ public final class TaskBoardEventTypes {
   public static final String QUEUE_ENTRY_CANCELLED = "task-board.queue-entry.cancelled.v1";
   public static final String QUEUE_ENTRY_INTERRUPTED = "task-board.queue-entry.interrupted.v1";
   public static final String QUEUE_ENTRY_RETURNING = "task-board.queue-entry.returning.v1";
+  public static final String ENTRY_OWNER_PROOF_CHANGED =
+      "task-board.entry-owner-proof.changed.v1";
+  public static final String TASK_EVIDENCE_READY = "task-board.task-evidence.ready.v1";
+  public static final String TASK_EVIDENCE_REVIEW_REQUIRED =
+      "task-board.task-evidence.review-required.v1";
+  public static final String GROUP_KPI_DAY_CHANGED =
+      "task-board.group-kpi-day.changed.v1";
 
   public static final Map<TaskBoardAggregateType, Set<String>> BY_AGGREGATE = Map.of(
       TaskBoardAggregateType.WORKER_CLASS,
@@ -53,7 +60,13 @@ public final class TaskBoardEventTypes {
       TaskBoardAggregateType.QUEUE_ENTRY,
       Set.of(QUEUE_ENTRY_CREATED, QUEUE_ENTRY_CHANGED, QUEUE_ENTRY_TAKEN, QUEUE_ENTRY_PAUSED,
           QUEUE_ENTRY_RESUMED, QUEUE_ENTRY_COMPLETED, QUEUE_ENTRY_MOVED, QUEUE_ENTRY_CANCELLED,
-          QUEUE_ENTRY_INTERRUPTED, QUEUE_ENTRY_RETURNING));
+          QUEUE_ENTRY_INTERRUPTED, QUEUE_ENTRY_RETURNING),
+      TaskBoardAggregateType.TASK_BOARD_ENTRY_OWNER_PROOF,
+      Set.of(ENTRY_OWNER_PROOF_CHANGED),
+      TaskBoardAggregateType.TASK_EVIDENCE,
+      Set.of(TASK_EVIDENCE_READY, TASK_EVIDENCE_REVIEW_REQUIRED),
+      TaskBoardAggregateType.GROUP_KPI_DAY,
+      Set.of(GROUP_KPI_DAY_CHANGED));
 
   public static final Set<String> ALL = BY_AGGREGATE.values().stream()
       .flatMap(Set::stream)

@@ -31,12 +31,20 @@ const stageId = "00000000-0000-4000-8000-000000000005"
 const queueId = "00000000-0000-4000-8000-000000000006"
 const lineId = "00000000-0000-4000-8000-000000000007"
 const idempotencyKey = "00000000-0000-4000-8000-000000000008"
+const entryId = "00000000-0000-4000-8000-000000000009"
+const evidenceId = "00000000-0000-4000-8000-000000000010"
+const workerId = "00000000-0000-4000-8000-000000000011"
+const workerGroupId = "00000000-0000-4000-8000-000000000012"
+const mediaId = "00000000-0000-4000-8000-000000000013"
 
 const stage: MaintenancePlanStageInput = {
   id: stageId,
   kind: "REPAIR_WORK",
   order: 0,
-  routing: { queueId, queueCode: "REPAIR", queueKind: "REPAIR" },
+  routing: { queueId, queueName: "Ремонт", queueType: "REPAIR" },
+  includedLineIds: [lineId],
+  primaryLineId: lineId,
+  groupComment: "Сначала проверить крепления",
   taskDeadline: null,
 }
 
@@ -47,8 +55,11 @@ const estimateWrite: MaintenanceEstimateWrite = {
     {
       id: lineId,
       catalogSnapshot: null,
+      lineType: "WORK",
       description: "Проверка",
+      unit: "ед",
       quantity: "1.5",
+      normativeMinutes: 45,
       unitPrice: "10.00",
       comment: null,
       mediaReferences: [],
@@ -80,7 +91,7 @@ describe("maintenance lifecycle HTTP client", () => {
       .mockImplementation(() => Promise.resolve(json({ items: [] })))
     vi.stubGlobal("fetch", fetchMock)
 
-    await listMaintenanceEstimates("token", warehouseId, "DRAFT")
+    await listMaintenanceEstimates("token", warehouseId, "DRAFT", rentalItemId)
     await getMaintenanceEstimate("token", warehouseId, estimateId)
     await listMaintenanceRepairs("token", warehouseId, {
       executionState: "QUEUED",
@@ -103,10 +114,46 @@ describe("maintenance lifecycle HTTP client", () => {
       )
     }
     expect(String(fetchMock.mock.calls[0]![0])).toContain("lifecycle=DRAFT")
+    expect(String(fetchMock.mock.calls[0]![0])).toContain(
+      `rentalItemId=${rentalItemId}`
+    )
     expect(String(fetchMock.mock.calls[2]![0])).toContain(
       "executionState=QUEUED"
     )
     expect(String(fetchMock.mock.calls[4]![0])).toContain("state=PENDING")
+  })
+
+  it("preserves projected worker evidence in a repair stage", async () => {
+    const evidence = {
+      evidenceId,
+      entryId,
+      workerId,
+      workerGroupId,
+      mediaId,
+      mediaGeneration: 4,
+      capturedAt: "2026-07-18T09:45:00Z",
+      recordedAt: "2026-07-18T10:00:00Z",
+      state: "READY",
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json({
+          plan: {
+            stages: [
+              {
+                id: stageId,
+                evidence: [evidence],
+              },
+            ],
+          },
+        })
+      )
+    )
+
+    const response = await getMaintenanceRepair("token", warehouseId, repairId)
+
+    expect(response.plan.stages[0]?.evidence).toEqual([evidence])
   })
 
   it("sends canonical estimate create, replace, complete and amend semantics", async () => {
@@ -132,6 +179,7 @@ describe("maintenance lifecycle HTTP client", () => {
       warehouseId,
       estimateId,
       4,
+      1,
       idempotencyKey
     )
     await amendMaintenanceEstimate(
@@ -157,6 +205,13 @@ describe("maintenance lifecycle HTTP client", () => {
       warehouseId,
       rentalItemId,
       dispatchDate: "2026-07-18",
+      lines: [
+        expect.objectContaining({
+          lineType: "WORK",
+          unit: "ед",
+          normativeMinutes: 45,
+        }),
+      ],
     })
     expect(JSON.parse(String(createInit.body))).not.toHaveProperty("id")
 
@@ -168,6 +223,7 @@ describe("maintenance lifecycle HTTP client", () => {
     expect(String(completeUrl)).toContain(`/${estimateId}/complete`)
     expect(JSON.parse(String(completeInit.body))).toEqual({
       expectedVersion: 4,
+      priority: 1,
     })
     expect(new Headers(completeInit.headers).get("Idempotency-Key")).toBe(
       idempotencyKey
@@ -193,22 +249,27 @@ describe("maintenance lifecycle HTTP client", () => {
       rentalItemId,
       dispatchDate: "2026-07-18",
       sourceParty: null,
+      lines: estimateWrite.lines,
       plan: [stage],
       mediaReferences: [],
+      coverMediaId: null,
     })
     await replaceMaintenanceRepairPlan(
       "token",
       warehouseId,
       repairId,
       2,
+      estimateWrite.lines,
       [stage],
-      [{ mediaId: rentalItemId, generation: 7 }]
+      [{ mediaId: rentalItemId, generation: 7 }],
+      rentalItemId
     )
     await queueMaintenanceRepair(
       "token",
       warehouseId,
       repairId,
       3,
+      2,
       idempotencyKey
     )
     await createMaintenanceRework(
@@ -219,8 +280,14 @@ describe("maintenance lifecycle HTTP client", () => {
       {
         expectedVersion: 4,
         reason: "Переделать",
+        lines: estimateWrite.lines.map((line) => ({
+          id: line.id,
+          disposition: "ADDED" as const,
+          line,
+        })),
         plan: [stage],
         mediaReferences: [],
+        coverMediaId: null,
       }
     )
     await acceptMaintenanceRepair(
@@ -243,18 +310,32 @@ describe("maintenance lifecycle HTTP client", () => {
     )
 
     expect(requestAt(fetchMock, 0)[0]).toMatch(/\/v1\/repairs\/direct$/)
+    expect(JSON.parse(String(requestAt(fetchMock, 0)[1].body))).toMatchObject({
+      lines: estimateWrite.lines,
+      plan: [stage],
+    })
     expect(JSON.parse(String(requestAt(fetchMock, 1)[1].body))).toEqual({
       expectedVersion: 2,
+      lines: estimateWrite.lines,
       stages: [stage],
       mediaReferences: [{ mediaId: rentalItemId, generation: 7 }],
+      coverMediaId: rentalItemId,
     })
     expect(JSON.parse(String(requestAt(fetchMock, 2)[1].body))).toEqual({
       expectedVersion: 3,
+      priority: 2,
     })
     expect(String(requestAt(fetchMock, 3)[0])).toContain(`/${repairId}/reworks`)
     expect(JSON.parse(String(requestAt(fetchMock, 3)[1].body))).toMatchObject({
       expectedVersion: 4,
       reason: "Переделать",
+      lines: estimateWrite.lines.map((line) => ({
+        id: line.id,
+        disposition: "ADDED",
+        line,
+      })),
+      plan: [stage],
+      coverMediaId: null,
     })
     expect(JSON.parse(String(requestAt(fetchMock, 4)[1].body))).toEqual({
       expectedVersion: 5,

@@ -68,12 +68,12 @@ class WarehouseOutboxDeliveryIntegrationTest {
 
   @Test
   void relayPreservesPerWarehouseOrderAndOnlyPublishesApprovedSanitizedPayload() throws Exception {
-    WarehouseResponse created = create("OUTBOX-1", "Sensitive warehouse name");
+    WarehouseResponse created = create("Sensitive warehouse name");
     WarehouseResponse changed =
         service.replace(
             created.id(),
             new ReplaceWarehouseRequest(
-                "OUTBOX-1", "Changed name", "Москва", "hidden address", "Europe/Moscow", true, 3, created.version()));
+                created.version(), "Changed name", "Москва", "hidden address", "Europe/Moscow", true, 3));
     RwmsKafkaOutboundEventPublisher publisher = mock(RwmsKafkaOutboundEventPublisher.class);
     WarehouseKafkaOutboxRelay relay = new WarehouseKafkaOutboxRelay(store, properties, publisher);
 
@@ -91,7 +91,7 @@ class WarehouseOutboxDeliveryIntegrationTest {
     assertThat(first.get("eventType").stringValue()).isEqualTo(WarehouseEventType.CREATED.value());
     assertThat(second.get("eventType").stringValue()).isEqualTo(WarehouseEventType.CHANGED.value());
     assertThat(fields(first.get("payload")))
-        .containsExactlyInAnyOrder("warehouseId", "code", "timeZone", "active", "sortOrder");
+        .containsExactlyInAnyOrder("warehouseId", "timeZone", "active", "sortOrder");
     assertThat(first.toString()).doesNotContain("Sensitive warehouse name", "hidden address", "Москва");
     assertThat(
             jdbc.queryForList(
@@ -103,7 +103,7 @@ class WarehouseOutboxDeliveryIntegrationTest {
 
   @Test
   void boundedFailureMovesTheEventToDltAndOperatorRequeueIsCompareAndSet() {
-    WarehouseResponse created = create("OUTBOX-RETRY", "Retry warehouse");
+    WarehouseResponse created = create("Retry warehouse");
     UUID eventId =
         jdbc.queryForObject(
             "select event_id from outbox_event where aggregate_id=?", UUID.class, created.id().toString());
@@ -126,12 +126,12 @@ class WarehouseOutboxDeliveryIntegrationTest {
         .isEqualTo("PENDING");
   }
 
-  private WarehouseResponse create(String code, String name) {
+  private WarehouseResponse create(String name) {
     return service
         .create(
             UUID.randomUUID(),
             UUID.randomUUID(),
-            new CreateWarehouseRequest(code, name, "Москва", "hidden address", "Europe/Moscow", null))
+            new CreateWarehouseRequest(name, "Москва", "hidden address", "Europe/Moscow", null))
         .response();
   }
 

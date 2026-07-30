@@ -92,6 +92,9 @@ class UserAdministrationServiceWarehouseValidationTest {
     @Mock
     AuthResponseMapper responseMapper;
 
+    @Mock
+    AuthorizationRevocationService authorizationRevocations;
+
     private UserAdministrationService service;
     private final UsernamePasswordAuthenticationToken actor =
             UsernamePasswordAuthenticationToken.authenticated("admin", "n/a", List.of());
@@ -112,7 +115,8 @@ class UserAdministrationServiceWarehouseValidationTest {
                 credentials,
                 profiles,
                 accessNotes,
-                responseMapper);
+                responseMapper,
+                authorizationRevocations);
         AuthSubject admin = subject("admin", 0);
         ReflectionTestUtils.setField(admin, "id", ADMIN_ID);
         when(profiles.findSubjectIdByUsername(any())).thenAnswer(invocation ->

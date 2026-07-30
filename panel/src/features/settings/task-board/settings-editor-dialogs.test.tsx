@@ -1,0 +1,538 @@
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest"
+
+import {
+  CurrentGroupDialog,
+  GroupAvailabilityDialog,
+  GroupEditorDialog,
+  QueueDefinitionEditorDialog,
+  QueueEditorDialog,
+} from "@/features/settings/task-board/settings-editor-dialogs"
+import type {
+  QueueDefinitionDto,
+  WorkerClassDto,
+  WorkerDto,
+  WorkerGroupDto,
+  WorkQueueDto,
+} from "@/features/settings/task-board/model/task-board-settings"
+
+function workerClass(id: string, name: string): WorkerClassDto {
+  return {
+    id,
+    version: 1,
+    name,
+    description: null,
+    comment: null,
+    sortOrder: 1,
+    active: true,
+  }
+}
+
+const driverClass = workerClass("driver", "Водители")
+const slingerClass = workerClass("slinger", "Стропальщики")
+const generalClass = workerClass("general", "Разнорабочие")
+const movementDefinition: QueueDefinitionDto = {
+  id: "definition-movement",
+  version: 2,
+  name: "Перемещение",
+  description: null,
+  type: "MOVEMENT",
+}
+
+const queue: WorkQueueDto = {
+  id: "queue-1",
+  version: 4,
+  warehouseId: "warehouse-1",
+  definitionId: movementDefinition.id,
+  definitionVersion: movementDefinition.version,
+  name: "Перемещение",
+  description: null,
+  type: "MOVEMENT",
+  sortOrder: 3,
+  active: true,
+  hidden: false,
+  collapsed: false,
+  holdingPeriodMinutes: null,
+  notificationThreshold: null,
+  notifyWhenThresholdReached: false,
+  resultPhotoMinCount: 1,
+  bindings: [
+    {
+      id: "binding-driver",
+      version: 3,
+      workerClass: driverClass,
+      order: 0,
+      primary: true,
+      stopTaskOnTake: false,
+      notifyUrgent: false,
+    },
+    {
+      id: "binding-slinger",
+      version: 3,
+      workerClass: slingerClass,
+      order: 1,
+      primary: false,
+      stopTaskOnTake: true,
+      notifyUrgent: true,
+    },
+  ],
+}
+
+function worker(
+  id: string,
+  displayName: string,
+  classes: WorkerClassDto[],
+  active = true
+): WorkerDto {
+  return {
+    id,
+    version: 1,
+    warehouseId: "warehouse-1",
+    displayName,
+    firstName: null,
+    lastName: null,
+    middleName: null,
+    active,
+    comment: null,
+    appLogin: null,
+    credentialStatus: "NOT_CONFIGURED",
+    credentialError: null,
+    currentGroupId: null,
+    currentGroupName: null,
+    operationalAvailability: "AVAILABLE",
+    qualifications: classes.map((qualificationClass, index) => ({
+      id: `${id}-qualification-${index}`,
+      version: 1,
+      workerClass: qualificationClass,
+      active: true,
+      comment: null,
+    })),
+  }
+}
+
+function group(
+  id: string,
+  name: string,
+  member: WorkerDto,
+  {
+    active = true,
+    operationalStatus = "AVAILABLE",
+  }: {
+    active?: boolean
+    operationalStatus?: "AVAILABLE" | "DISABLED"
+  } = {}
+): WorkerGroupDto {
+  return {
+    id,
+    version: 3,
+    warehouseId: "warehouse-1",
+    workerClass: generalClass,
+    name,
+    description: null,
+    active,
+    operationalStatus,
+    unavailableSince:
+      operationalStatus === "DISABLED" ? "2026-07-30T08:00:00Z" : null,
+    unavailabilityReason:
+      operationalStatus === "DISABLED" ? "Пересменка" : null,
+    members: [
+      {
+        id: `${id}-member`,
+        version: 1,
+        workerId: member.id,
+        workerName: member.displayName,
+        active: true,
+      },
+    ],
+  }
+}
+
+const pointerCaptureDescriptors = new Map(
+  [
+    "hasPointerCapture",
+    "setPointerCapture",
+    "releasePointerCapture",
+    "scrollIntoView",
+  ].map((name) => [
+    name,
+    Object.getOwnPropertyDescriptor(HTMLElement.prototype, name),
+  ])
+)
+
+beforeAll(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class ResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  )
+  Object.defineProperties(HTMLElement.prototype, {
+    hasPointerCapture: {
+      configurable: true,
+      value: () => false,
+    },
+    setPointerCapture: {
+      configurable: true,
+      value: () => undefined,
+    },
+    releasePointerCapture: {
+      configurable: true,
+      value: () => undefined,
+    },
+    scrollIntoView: {
+      configurable: true,
+      value: () => undefined,
+    },
+  })
+})
+
+afterAll(() => {
+  vi.unstubAllGlobals()
+  for (const [name, descriptor] of pointerCaptureDescriptors) {
+    if (descriptor) {
+      Object.defineProperty(HTMLElement.prototype, name, descriptor)
+    } else {
+      Reflect.deleteProperty(HTMLElement.prototype, name)
+    }
+  }
+})
+afterEach(cleanup)
+
+describe("QueueDefinitionEditorDialog", () => {
+  it("edits the shared name and type independently from warehouse settings", async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => undefined)
+
+    render(
+      <QueueDefinitionEditorDialog
+        definition={movementDefinition}
+        pending={false}
+        error={null}
+        onClose={vi.fn()}
+        onSave={onSave}
+      />
+    )
+
+    const name = screen.getByRole("textbox", { name: "Название" })
+    await user.clear(name)
+    await user.type(name, "Водители")
+    await user.click(screen.getByRole("button", { name: "Сохранить" }))
+
+    expect(onSave).toHaveBeenCalledWith({
+      version: movementDefinition.version,
+      name: "Водители",
+      description: null,
+      type: "MOVEMENT",
+    })
+  })
+})
+
+describe("QueueEditorDialog", () => {
+  it("preserves the primary/secondary order and secondary urgent behavior", async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => undefined)
+
+    render(
+      <QueueEditorDialog
+        queue={queue}
+        definitions={[movementDefinition]}
+        classes={[driverClass, slingerClass]}
+        pending={false}
+        error={null}
+        onClose={vi.fn()}
+        onSave={onSave}
+      />
+    )
+
+    expect(screen.getByText("Основной")).toBeTruthy()
+    expect(screen.getByText("Вторичный")).toBeTruthy()
+    expect(
+      screen
+        .getByRole("checkbox", {
+          name: "Останавливать текущую работу при взятии",
+        })
+        .getAttribute("data-state")
+    ).toBe("checked")
+    expect(
+      screen
+        .getByRole("checkbox", {
+          name: "Оповещать о срочности задания",
+        })
+        .getAttribute("data-state")
+    ).toBe("checked")
+
+    await user.click(screen.getByRole("button", { name: "Сохранить" }))
+
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bindings: [
+          {
+            workerClassId: driverClass.id,
+            order: 0,
+            stopTaskOnTake: false,
+            notifyUrgent: false,
+          },
+          {
+            workerClassId: slingerClass.id,
+            order: 1,
+            stopTaskOnTake: true,
+            notifyUrgent: true,
+          },
+        ],
+      })
+    )
+  })
+
+  it("allows choosing and reordering class bindings", async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => undefined)
+
+    render(
+      <QueueEditorDialog
+        queue={null}
+        definitions={[movementDefinition]}
+        classes={[driverClass, slingerClass]}
+        pending={false}
+        error={null}
+        onClose={vi.fn()}
+        onSave={onSave}
+      />
+    )
+
+    await user.click(screen.getByRole("combobox", { name: "Общая очередь" }))
+    await user.click(
+      screen.getByRole("option", { name: "Перемещение · Перемещение" })
+    )
+    await user.click(screen.getByRole("checkbox", { name: driverClass.name }))
+    await user.click(screen.getByRole("checkbox", { name: slingerClass.name }))
+    await user.click(screen.getAllByRole("button", { name: "Выше" })[1])
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Останавливать текущую работу при взятии",
+      })
+    )
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Оповещать о срочности задания",
+      })
+    )
+    await user.click(screen.getByRole("button", { name: "Сохранить" }))
+
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        definitionId: movementDefinition.id,
+        bindings: [
+          {
+            workerClassId: slingerClass.id,
+            order: 0,
+            stopTaskOnTake: false,
+            notifyUrgent: false,
+          },
+          {
+            workerClassId: driverClass.id,
+            order: 1,
+            stopTaskOnTake: true,
+            notifyUrgent: true,
+          },
+        ],
+      })
+    )
+  })
+
+  it("rejects a result photo minimum outside the supported range", () => {
+    const onSave = vi.fn(async () => undefined)
+
+    render(
+      <QueueEditorDialog
+        queue={queue}
+        definitions={[movementDefinition]}
+        classes={[driverClass, slingerClass]}
+        pending={false}
+        error={null}
+        onClose={vi.fn()}
+        onSave={onSave}
+      />
+    )
+
+    fireEvent.change(
+      screen.getByRole("spinbutton", {
+        name: "Минимум фото результата",
+      }),
+      { target: { value: "21" } }
+    )
+    fireEvent.submit(
+      screen.getByRole("button", { name: "Сохранить" }).closest("form")!
+    )
+
+    expect(
+      screen.getByText(
+        "Минимум фотографий должен быть целым числом от 0 до 20."
+      )
+    ).toBeTruthy()
+    expect(onSave).not.toHaveBeenCalled()
+  })
+})
+
+describe("GroupEditorDialog", () => {
+  it("shows only workers qualified for the group class and has no role field", async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => undefined)
+    const generalOnly = worker("general-worker", "Только разнорабочий", [
+      generalClass,
+    ])
+    const multiQualified = worker("multi-worker", "Разнорабочий-стропальщик", [
+      generalClass,
+      slingerClass,
+    ])
+    const driver = worker("driver-worker", "Только водитель", [driverClass])
+    const inactive = worker(
+      "inactive-worker",
+      "Неактивный разнорабочий",
+      [generalClass],
+      false
+    )
+
+    render(
+      <GroupEditorDialog
+        item={null}
+        classes={[generalClass, slingerClass, driverClass]}
+        workers={[generalOnly, multiQualified, driver, inactive]}
+        pending={false}
+        error={null}
+        onClose={vi.fn()}
+        onSave={onSave}
+      />
+    )
+
+    expect(
+      screen.getByRole("checkbox", { name: generalOnly.displayName })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("checkbox", { name: multiQualified.displayName })
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("checkbox", { name: driver.displayName })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("checkbox", { name: inactive.displayName })
+    ).toBeNull()
+    expect(screen.queryByPlaceholderText("Роль в бригаде")).toBeNull()
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Название" }),
+      "Стропальщики"
+    )
+    await user.click(
+      screen.getByRole("checkbox", { name: generalOnly.displayName })
+    )
+    await user.click(
+      screen.getByRole("checkbox", { name: multiQualified.displayName })
+    )
+    await user.click(screen.getByRole("combobox", { name: "Класс" }))
+    await user.click(screen.getByRole("option", { name: slingerClass.name }))
+
+    expect(
+      screen.queryByRole("checkbox", { name: generalOnly.displayName })
+    ).toBeNull()
+    expect(
+      screen
+        .getByRole("checkbox", { name: multiQualified.displayName })
+        .getAttribute("data-state")
+    ).toBe("checked")
+
+    await user.click(screen.getByRole("button", { name: "Сохранить" }))
+
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workerClassId: slingerClass.id,
+        members: [{ workerId: multiQualified.id, active: true }],
+      })
+    )
+  })
+})
+
+describe("CurrentGroupDialog", () => {
+  it("offers only active memberships and prevents choosing a disabled group", async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => undefined)
+    const currentWorker = worker("worker-1", "Иван Петров", [generalClass])
+    const available = group("group-1", "Бригада 1", currentWorker)
+    const disabled = group("group-2", "Бригада 2", currentWorker, {
+      operationalStatus: "DISABLED",
+    })
+    const inactive = group("group-3", "Бригада 3", currentWorker, {
+      active: false,
+    })
+    const otherWorker = worker("worker-2", "Пётр Иванов", [generalClass])
+    const unrelated = group("group-4", "Чужая бригада", otherWorker)
+
+    render(
+      <CurrentGroupDialog
+        worker={currentWorker}
+        groups={[available, disabled, inactive, unrelated]}
+        pending={false}
+        error={null}
+        onClose={vi.fn()}
+        onSave={onSave}
+      />
+    )
+
+    await user.click(screen.getByRole("combobox", { name: "Текущая бригада" }))
+
+    expect(screen.getByRole("option", { name: available.name })).toBeTruthy()
+    expect(
+      screen
+        .getByRole("option", { name: `${disabled.name} — недоступна` })
+        .getAttribute("aria-disabled")
+    ).toBe("true")
+    expect(screen.queryByRole("option", { name: inactive.name })).toBeNull()
+    expect(screen.queryByRole("option", { name: unrelated.name })).toBeNull()
+
+    await user.click(screen.getByRole("option", { name: available.name }))
+    await user.click(screen.getByRole("button", { name: "Сохранить" }))
+
+    expect(onSave).toHaveBeenCalledWith(available.id)
+  })
+})
+
+describe("GroupAvailabilityDialog", () => {
+  it("requires and submits a compact unavailability reason", async () => {
+    const user = userEvent.setup()
+    const currentWorker = worker("worker-1", "Иван Петров", [generalClass])
+    const currentGroup = group("group-1", "Бригада 1", currentWorker)
+    const onSave = vi.fn(async () => undefined)
+
+    render(
+      <GroupAvailabilityDialog
+        group={currentGroup}
+        pending={false}
+        error={null}
+        onClose={vi.fn()}
+        onSave={onSave}
+      />
+    )
+
+    await user.click(screen.getByRole("button", { name: "Отключить" }))
+    expect(screen.getByText("Укажите причину недоступности.")).toBeTruthy()
+    expect(onSave).not.toHaveBeenCalled()
+
+    await user.type(
+      screen.getByRole("textbox", { name: "Причина" }),
+      "Пересменка"
+    )
+    await user.click(screen.getByRole("button", { name: "Отключить" }))
+
+    expect(onSave).toHaveBeenCalledWith("Пересменка")
+  })
+})

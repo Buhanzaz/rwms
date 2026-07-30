@@ -37,6 +37,7 @@ public class WorkerCredentialService {
     private final AuthEventStore eventStore;
     private final AuthEventFactFactory eventFacts;
     private final AuthResponseMapper responseMapper;
+    private final AuthorizationRevocationService authorizationRevocations;
 
     @Transactional
     public WorkerCredentialResponse configure(String workerId, WorkerCredentialRequest request) {
@@ -107,6 +108,7 @@ public class WorkerCredentialService {
     public void resetPassword(String workerId, String password) {
         AuthSubject subject = worker(workerId);
         long streamVersion = lockConsistentStream(subject);
+        authorizationRevocations.revokePrincipal(profiles.require(subject.getId()).username());
         if (passwordEncoder.matches(password, credentials.require(subject.getId()).passwordHash())) {
             return;
         }
@@ -131,8 +133,10 @@ public class WorkerCredentialService {
             if (!"DISABLED".equals(credentials.require(subject.getId()).status())) {
                 throw new IllegalStateException("Worker credential vault and authorization projection diverged");
             }
+            authorizationRevocations.revokePrincipal(profiles.require(subject.getId()).username());
             return;
         }
+        authorizationRevocations.revokePrincipal(profiles.require(subject.getId()).username());
         AuthSubject updated = projectionWriter.disableWorker(subject);
         eventStore.append(
                 AuthAggregateType.WORKER_ACCESS,
@@ -144,12 +148,39 @@ public class WorkerCredentialService {
     }
 
     @Transactional
+    public void enable(String workerId) {
+        AuthSubject subject = worker(workerId);
+        long streamVersion = lockConsistentStream(subject);
+        var credential = credentials.require(subject.getId());
+        if (subject.isActive()) {
+            if (!"ACTIVE".equals(credential.status())) {
+                throw new IllegalStateException(
+                        "Worker credential vault and authorization projection diverged");
+            }
+            return;
+        }
+        if (!"DISABLED".equals(credential.status())) {
+            throw new IllegalStateException(
+                    "Worker credential vault and authorization projection diverged");
+        }
+        AuthSubject updated = projectionWriter.enableWorker(subject);
+        eventStore.append(
+                AuthAggregateType.WORKER_ACCESS,
+                updated.getId(),
+                streamVersion,
+                AuthEventTypes.WORKER_CONFIGURED,
+                eventFacts.workerAccess(updated),
+                null);
+    }
+
+    @Transactional
     public void delete(String workerId) {
         AuthSubject subject = findWorker(workerId);
         if (subject == null) {
             return;
         }
         long streamVersion = lockConsistentStream(subject);
+        authorizationRevocations.revokePrincipal(profiles.require(subject.getId()).username());
         AuthSubject finalProjection = projectionWriter.prepareWorkerDeletion(subject);
         eventStore.append(
                 AuthAggregateType.WORKER_ACCESS,

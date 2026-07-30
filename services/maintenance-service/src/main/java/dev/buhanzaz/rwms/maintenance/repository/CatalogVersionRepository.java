@@ -13,20 +13,18 @@ import org.springframework.data.repository.query.Param;
 
 public interface CatalogVersionRepository extends JpaRepository<CatalogVersion, UUID> {
   @Lock(LockModeType.PESSIMISTIC_WRITE)
-  Optional<CatalogVersion> findByWarehouseIdAndSourceSha256(UUID warehouseId, String sourceSha256);
-  Optional<CatalogVersion> findByIdAndWarehouseId(UUID id, UUID warehouseId);
-  Optional<CatalogVersion> findByWarehouseIdAndState(UUID warehouseId, CatalogVersionState state);
-  List<CatalogVersion> findAllByWarehouseIdOrderByCreatedAtDesc(UUID warehouseId);
+  Optional<CatalogVersion> findFirstBySourceSha256OrderByCreatedAtDesc(String sourceSha256);
+
+  Optional<CatalogVersion> findFirstByStateOrderByActivatedAtDescCreatedAtDesc(
+      CatalogVersionState state);
+
+  List<CatalogVersion> findAllByOrderByCreatedAtDesc();
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select value from CatalogVersion value where value.id = :id")
   Optional<CatalogVersion> findByIdForUpdate(@Param("id") UUID id);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
-  @Query("""
-      select value from CatalogVersion value
-      where value.warehouseId = :warehouseId
-      order by value.id
-      """)
-  List<CatalogVersion> findAllByWarehouseIdForUpdate(@Param("warehouseId") UUID warehouseId);
+  @Query("select value from CatalogVersion value order by value.id")
+  List<CatalogVersion> findAllForUpdate();
 }

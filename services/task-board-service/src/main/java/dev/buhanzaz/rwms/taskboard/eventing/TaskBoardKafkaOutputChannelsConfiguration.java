@@ -16,6 +16,18 @@ class TaskBoardKafkaOutputChannelsConfiguration {
   @Bean(name = "rwms.task-board.queue-usage-reference.v1") MessageChannel reference() { return channel(); }
   @Bean(name = "rwms.task-board.board-task.v1") MessageChannel boardTask() { return channel(); }
   @Bean(name = "rwms.task-board.queue-entry.v1") MessageChannel queueEntry() { return channel(); }
+  @Bean(name = "rwms.task-board.entry-owner-proof.v1")
+  MessageChannel entryOwnerProof() {
+    return channel();
+  }
+  @Bean(name = "rwms.task-board.task-evidence.v1")
+  MessageChannel taskEvidence() {
+    return channel();
+  }
+  @Bean(name = "rwms.task-board.group-kpi-day.v1")
+  MessageChannel groupKpiDay() {
+    return channel();
+  }
   @Bean(name = "rwms.task-board.worker-class.v1.task-board-shadow-v1.dlt") MessageChannel workerClassDlt() { return channel(); }
   @Bean(name = "rwms.task-board.worker.v1.task-board-shadow-v1.dlt") MessageChannel workerDlt() { return channel(); }
   @Bean(name = "rwms.task-board.worker-group.v1.task-board-shadow-v1.dlt") MessageChannel workerGroupDlt() { return channel(); }
@@ -23,6 +35,18 @@ class TaskBoardKafkaOutputChannelsConfiguration {
   @Bean(name = "rwms.task-board.queue-usage-reference.v1.task-board-shadow-v1.dlt") MessageChannel referenceDlt() { return channel(); }
   @Bean(name = "rwms.task-board.board-task.v1.task-board-shadow-v1.dlt") MessageChannel boardTaskDlt() { return channel(); }
   @Bean(name = "rwms.task-board.queue-entry.v1.task-board-shadow-v1.dlt") MessageChannel queueEntryDlt() { return channel(); }
+  @Bean(name = "rwms.task-board.entry-owner-proof.v1.task-board-shadow-v1.dlt")
+  MessageChannel entryOwnerProofDlt() {
+    return channel();
+  }
+  @Bean(name = "rwms.task-board.task-evidence.v1.task-board-shadow-v1.dlt")
+  MessageChannel taskEvidenceDlt() {
+    return channel();
+  }
+  @Bean(name = "rwms.task-board.group-kpi-day.v1.task-board-shadow-v1.dlt")
+  MessageChannel groupKpiDayDlt() {
+    return channel();
+  }
 
   private MessageChannel channel() { return new DirectWithAttributesChannel(); }
 }

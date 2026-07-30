@@ -25,6 +25,7 @@ import dev.buhanzaz.rwms.logistics.repository.LogisticsGuardRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsMediaReferenceRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsReconciliationRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsReturnShortageSnapshotRepository;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -86,20 +87,25 @@ class ReturnCompletionWorkflowStore {
     if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
     LogisticsDocument document = attempt.getDocument();
     LogisticsDocumentLine line = requiredLine(attempt);
-    if (document.getState() != LogisticsDocumentState.ACCEPTING) return;
+    if (!isCompletionState(document.getState())) return;
 
     List<LogisticsMediaReference> references = mediaReferences(line);
     requireValidatedMedia(document, line, references, validation);
     OffsetDateTime completedAt = now();
     for (LogisticsMediaReference reference : references) reference.ready(completedAt);
     attempt.confirm(mediaDigest("RETURN_MEDIA_VALIDATE_RESPONSE", document, line, references), completedAt);
+    boolean shortage = document.getState() == LogisticsDocumentState.ESTIMATE_PENDING;
+    String settlementOperation =
+        shortage
+            ? LogisticsDocumentService.RETURN_ASSET_SETTLE_SHORTAGE
+            : LogisticsDocumentService.RETURN_ASSET_SETTLE_FREE;
     createAttemptIfMissing(
         document,
         line,
         LogisticsTargetService.ASSET,
-        LogisticsDocumentService.RETURN_ASSET_SETTLE_FREE,
+        settlementOperation,
         assetEffectDigest(
-            LogisticsDocumentService.RETURN_ASSET_SETTLE_FREE, document, line, activeGuard(line)),
+            settlementOperation, document, line, activeGuard(line)),
         completedAt);
   }
 
@@ -279,6 +285,15 @@ class ReturnCompletionWorkflowStore {
 
   private Optional<Work> estimateWork(
       LogisticsExternalAttempt attempt, LogisticsDocument document, LogisticsDocumentLine line) {
+    if (LogisticsDocumentService.RETURN_MEDIA_VALIDATE.equals(attempt.getOperationType())) {
+      return Optional.of(
+          Work.media(
+              attempt.getOperationId(),
+              document.getId(),
+              line.getId(),
+              document.getWarehouseId(),
+              mediaReferences(line)));
+    }
     if (LogisticsDocumentService.RETURN_ASSET_SETTLE_SHORTAGE.equals(attempt.getOperationType())) {
       return Optional.of(settlementWork(attempt, document, line, true));
     }
@@ -295,6 +310,8 @@ class ReturnCompletionWorkflowStore {
               snapshot.getWarehouseId(),
               snapshot.getRentalItemId(),
               snapshot.getRentalItemVersion(),
+              document.getScheduledDate(),
+              mediaReferences(line),
               shortages(snapshot)));
     }
     if (LogisticsDocumentService.RETURN_ASSET_ADDITIONAL_EQUIPMENT_RECEIVE.equals(
@@ -420,10 +437,18 @@ class ReturnCompletionWorkflowStore {
           attemptRepository.findByDocument_IdAndLine_IdAndOperationType(
               document.getId(), line.getId(), LogisticsDocumentService.RETURN_ASSET_LEASE_RELEASE);
       Optional<LogisticsGuard> guard = guardRepository.findByLine_Id(line.getId());
+      List<LogisticsMediaReference> media =
+          mediaReferenceRepository.findAllByLine_IdAndPurposeOrderByCreatedAtAsc(
+              line.getId(), LogisticsMediaPurpose.RETURN_INSPECTION);
       if (release.isEmpty()
           || release.get().getResult() != LogisticsExternalAttemptResult.CONFIRMED
           || guard.isEmpty()
-          || guard.get().getGuardState() != LogisticsGuardState.RELEASED) {
+          || guard.get().getGuardState() != LogisticsGuardState.RELEASED
+          || media.isEmpty()
+          || media.stream()
+              .anyMatch(
+                  reference ->
+                      reference.getReadiness() != LogisticsMediaReadiness.READY)) {
         return;
       }
     }
@@ -529,7 +554,7 @@ class ReturnCompletionWorkflowStore {
     List<LogisticsMediaReference> references =
         mediaReferenceRepository.findAllByLine_IdAndPurposeOrderByCreatedAtAsc(
             line.getId(), LogisticsMediaPurpose.RETURN_INSPECTION);
-    if (references.isEmpty()) throw malformed("Return acceptance has no media references");
+    if (references.isEmpty()) throw malformed("Return completion has no media references");
     return references;
   }
 
@@ -603,6 +628,7 @@ class ReturnCompletionWorkflowStore {
         || !expected.getWarehouseId().equals(actual.warehouseId())
         || !expected.getRentalItemId().equals(actual.rentalItemId())
         || actual.rentalItemVersion() != expected.getRentalItemVersion()
+        || actual.estimateId() == null
         || actual.snapshotSha256() == null
         || !actual.snapshotSha256().matches("[0-9a-f]{64}")
         || actual.receivedAt() == null
@@ -806,7 +832,7 @@ class ReturnCompletionWorkflowStore {
         "RETURN_ASSET_ADDITIONAL_EQUIPMENT_RECEIVE_RESPONSE", values);
   }
 
-  private static String shortageDigest(
+  private String shortageDigest(
       LogisticsDocument document,
       LogisticsDocumentLine line,
       LogisticsReturnShortageSnapshot snapshot) {
@@ -816,6 +842,14 @@ class ReturnCompletionWorkflowStore {
     values.add(snapshot.getWarehouseId().toString());
     values.add(snapshot.getRentalItemId().toString());
     values.add(Long.toString(snapshot.getRentalItemVersion()));
+    values.add(document.getScheduledDate().toString());
+    mediaSet(mediaReferences(line)).stream()
+        .sorted(Comparator.comparing(value -> value.mediaId().toString()))
+        .forEach(
+            reference -> {
+              values.add(reference.mediaId().toString());
+              values.add(Long.toString(reference.generation()));
+            });
     for (LogisticsDependencyGateway.EquipmentShortage shortage : shortages(snapshot)) {
       values.add(shortage.equipmentId().toString());
       values.add(Long.toString(shortage.missingQuantity()));
@@ -852,6 +886,7 @@ class ReturnCompletionWorkflowStore {
     values.add(source.warehouseId().toString());
     values.add(source.rentalItemId().toString());
     values.add(Long.toString(source.rentalItemVersion()));
+    values.add(source.estimateId().toString());
     source.shortages().stream()
         .sorted(Comparator.comparing(value -> value.equipmentId().toString()))
         .forEach(
@@ -915,7 +950,8 @@ class ReturnCompletionWorkflowStore {
       boolean shortage,
       List<LogisticsDependencyGateway.MediaReference> references,
       List<LogisticsDependencyGateway.EquipmentShortage> shortages,
-      List<LogisticsDependencyGateway.ReturnEquipmentReceiptLine> returnEquipment) {
+      List<LogisticsDependencyGateway.ReturnEquipmentReceiptLine> returnEquipment,
+      LocalDate dispatchDate) {
     Work(
         WorkType type,
         UUID operationId,
@@ -944,7 +980,41 @@ class ReturnCompletionWorkflowStore {
           shortage,
           references,
           shortages,
-          List.of());
+          List.of(),
+          null);
+    }
+
+    Work(
+        WorkType type,
+        UUID operationId,
+        UUID documentId,
+        UUID lineId,
+        UUID warehouseId,
+        UUID assetId,
+        long expectedAssetVersion,
+        UUID leaseId,
+        long expectedLeaseVersion,
+        long fencingToken,
+        boolean shortage,
+        List<LogisticsDependencyGateway.MediaReference> references,
+        List<LogisticsDependencyGateway.EquipmentShortage> shortages,
+        List<LogisticsDependencyGateway.ReturnEquipmentReceiptLine> returnEquipment) {
+      this(
+          type,
+          operationId,
+          documentId,
+          lineId,
+          warehouseId,
+          assetId,
+          expectedAssetVersion,
+          leaseId,
+          expectedLeaseVersion,
+          fencingToken,
+          shortage,
+          references,
+          shortages,
+          returnEquipment,
+          null);
     }
 
     static Work media(
@@ -1001,6 +1071,8 @@ class ReturnCompletionWorkflowStore {
         UUID warehouseId,
         UUID assetId,
         long assetVersion,
+        LocalDate dispatchDate,
+        List<LogisticsMediaReference> references,
         List<LogisticsDependencyGateway.EquipmentShortage> shortages) {
       return new Work(
           WorkType.MAINTENANCE,
@@ -1014,8 +1086,12 @@ class ReturnCompletionWorkflowStore {
           -1,
           -1,
           true,
+          mediaSet(references).stream()
+              .sorted(Comparator.comparing(value -> value.mediaId().toString()))
+              .toList(),
+          List.copyOf(shortages),
           List.of(),
-          List.copyOf(shortages));
+          dispatchDate);
     }
 
     static Work returnEquipment(

@@ -1,5 +1,13 @@
-import { useEffect, useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type UIEvent,
+} from "react"
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query"
+import type { CabinCoverProjection } from "@/features/media/media-service"
 import type { SortingState } from "@tanstack/react-table"
 import { Filter, Grid2X2, List, Plus, Settings2 } from "lucide-react"
 import { useNavigate, useSearchParams } from "react-router-dom"
@@ -73,6 +81,9 @@ function getStorageKey(warehouseId: string, key: string) {
 }
 
 const DESKTOP_GRID_FORMAT_MAX = 5
+const RENTAL_ITEMS_PAGE_SIZE = 200
+const RENTAL_ITEM_COVERS_BATCH_SIZE = 200
+const LOAD_MORE_SCROLL_THRESHOLD = 160
 const EMPTY_RENTAL_ITEMS: RentalItemDto[] = []
 
 function getInitialSearch(warehouseId: string) {
@@ -147,6 +158,56 @@ function sortRentalItems(
   })
 }
 
+function uniqueRentalItems(
+  pages: readonly { content: RentalItemDto[] }[] | undefined
+) {
+  if (!pages) {
+    return EMPTY_RENTAL_ITEMS
+  }
+
+  const ids = new Set<string>()
+  const items: RentalItemDto[] = []
+
+  for (const page of pages) {
+    for (const item of page.content) {
+      if (!ids.has(item.id)) {
+        ids.add(item.id)
+        items.push(item)
+      }
+    }
+  }
+
+  return items
+}
+
+function splitRentalItemIds(cabinIds: readonly string[]) {
+  const batches: string[][] = []
+
+  for (
+    let index = 0;
+    index < cabinIds.length;
+    index += RENTAL_ITEM_COVERS_BATCH_SIZE
+  ) {
+    batches.push(cabinIds.slice(index, index + RENTAL_ITEM_COVERS_BATCH_SIZE))
+  }
+
+  return batches
+}
+
+async function loadRentalItemCoverPages(
+  accessToken: string,
+  warehouseId: string,
+  cabinIds: readonly string[]
+): Promise<{ items: readonly CabinCoverProjection[] }> {
+  const pages = await Promise.all(
+    splitRentalItemIds(cabinIds).map((ids) =>
+      loadRentalItemCoverPage(accessToken, warehouseId, ids)
+    )
+  )
+
+  return { items: pages.flatMap((page) => page.items) }
+}
+
 export function RentalItemsPage() {
   const { selectedWarehouse } = useWarehouse()
 
@@ -182,7 +243,6 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
   )
 
   const [search, setSearch] = useState(() => getInitialSearch(warehouseId))
-  const [page, setPage] = useState(0)
   const [filters, setFilters] = useState<RentalItemsFiltersState>(() =>
     getInitialFilters(warehouseId)
   )
@@ -238,7 +298,7 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
     }
   }, [savedGridSize, warehouseId])
 
-  const rentalItemsQuery = useQuery({
+  const rentalItemsQuery = useInfiniteQuery({
     // Never place a bearer token in a query key: it is not an identity and may
     // be exposed by query-devtools. The authenticated subject still separates
     // cached warehouse data when a different user signs in during this session.
@@ -247,20 +307,25 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
       currentUser?.id ?? "unknown-user",
       warehouseId,
       search,
-      page,
     ],
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       listAssetRentalItems({
         accessToken,
         warehouseId,
-        page,
-        size: 200,
+        page: pageParam,
+        size: RENTAL_ITEMS_PAGE_SIZE,
         search,
       }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) =>
+      lastPage.page + 1 < lastPage.totalPages ? lastPage.page + 1 : undefined,
     enabled: status === "authenticated" && Boolean(accessToken),
   })
 
-  const loadedItems = rentalItemsQuery.data?.content ?? EMPTY_RENTAL_ITEMS
+  const loadedItems = useMemo(
+    () => uniqueRentalItems(rentalItemsQuery.data?.pages),
+    [rentalItemsQuery.data?.pages]
+  )
   const loadedItemIds = useMemo(
     () => loadedItems.map((item) => item.id),
     [loadedItems]
@@ -273,7 +338,7 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
       loadedItemIds,
     ],
     queryFn: () =>
-      loadRentalItemCoverPage(accessToken!, warehouseId, loadedItemIds),
+      loadRentalItemCoverPages(accessToken!, warehouseId, loadedItemIds),
     retry: false,
     enabled:
       status === "authenticated" &&
@@ -344,13 +409,70 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
   )
   const gridFormatSelectionAvailable =
     !isRentalItemsMobileViewport(viewport) && gridFormatMax > 1
+  const queryScopeKey = `${warehouseId}:${search}`
+  const nextPageRequestScopeRef = useRef<string | null>(null)
+  const hasLoadedPages = (rentalItemsQuery.data?.pages.length ?? 0) > 0
+  const totalRentalItems =
+    rentalItemsQuery.data?.pages[0]?.totalElements ?? 0
+
+  useEffect(() => {
+    nextPageRequestScopeRef.current = null
+  }, [queryScopeKey])
+
+  const loadNextPage = useCallback(() => {
+    if (
+      !rentalItemsQuery.hasNextPage ||
+      rentalItemsQuery.isFetchingNextPage ||
+      nextPageRequestScopeRef.current === queryScopeKey
+    ) {
+      return
+    }
+
+    nextPageRequestScopeRef.current = queryScopeKey
+    void rentalItemsQuery
+      .fetchNextPage()
+      .catch(() => undefined)
+      .finally(() => {
+        if (nextPageRequestScopeRef.current === queryScopeKey) {
+          nextPageRequestScopeRef.current = null
+        }
+      })
+  }, [queryScopeKey, rentalItemsQuery])
+
+  const handleRentalItemsScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      const target = event.target
+
+      if (!(target instanceof HTMLElement)) {
+        return
+      }
+
+      const isRentalItemsList =
+        target.matches("[data-grid-format]") ||
+        target.closest("[data-slot='rental-items-table-grid']") !== null
+      const distanceToBottom =
+        target.scrollHeight - target.scrollTop - target.clientHeight
+
+      if (
+        isRentalItemsList &&
+        target.scrollHeight > target.clientHeight &&
+        distanceToBottom <= LOAD_MORE_SCROLL_THRESHOLD
+      ) {
+        loadNextPage()
+      }
+    },
+    [loadNextPage]
+  )
 
   function openRentalItem(item: RentalItemDto) {
     navigate(`/warehouse/${item.id}`)
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
+    <div
+      className="flex h-full min-h-0 flex-col gap-4"
+      onScrollCapture={handleRentalItemsScroll}
+    >
       <div className="flex flex-col gap-4">
         {!mobileMenuToggleEnabled && activeFiltersCount > 0 ? (
           <div className="flex min-w-0 items-center gap-3">
@@ -368,7 +490,6 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
                   value={search}
                   onChange={(event) => {
                     setSearch(event.target.value)
-                    setPage(0)
                   }}
                   aria-label="Поиск по реестру склада"
                   name="rental-items-search"
@@ -526,14 +647,28 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
         <div className="flex flex-1 items-center justify-center rounded-lg border bg-card text-sm text-muted-foreground">
           Загрузка бытовок...
         </div>
-      ) : rentalItemsQuery.isError ? (
+      ) : rentalItemsQuery.isError && !hasLoadedPages ? (
         <div
           role="alert"
           className="flex flex-1 items-center justify-center rounded-lg border bg-card p-4 text-sm text-destructive"
         >
-          {rentalItemsQuery.error instanceof Error
-            ? rentalItemsQuery.error.message
-            : "Не удалось загрузить реестр бытовок."}
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <span>
+              {rentalItemsQuery.error instanceof Error
+                ? rentalItemsQuery.error.message
+                : "Не удалось загрузить реестр бытовок."}
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                void rentalItemsQuery.refetch()
+              }}
+            >
+              Повторить
+            </Button>
+          </div>
         </div>
       ) : viewMode === "table" ? (
         <RentalItemsTableView
@@ -561,40 +696,35 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
       )}
 
       {rentalItemsQuery.data ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
-          <span>
-            {rentalItemsQuery.data.totalElements === 0
-              ? "Бытовки не найдены"
-              : `Показано ${loadedItems.length} из ${rentalItemsQuery.data.totalElements}`}
-          </span>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={page === 0 || rentalItemsQuery.isFetching}
-              onClick={() => setPage((current) => Math.max(0, current - 1))}
-            >
-              Назад
-            </Button>
-            <span>
-              Страница {rentalItemsQuery.data.totalPages === 0 ? 0 : page + 1}
-              {" из "}
-              {rentalItemsQuery.data.totalPages}
-            </span>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={
-                page + 1 >= rentalItemsQuery.data.totalPages ||
-                rentalItemsQuery.isFetching
-              }
-              onClick={() => setPage((current) => current + 1)}
-            >
-              Вперёд
-            </Button>
-          </div>
+        <div className="shrink-0 text-center text-sm text-muted-foreground">
+          {totalRentalItems === 0
+            ? "Бытовки не найдены"
+            : `Загружено ${loadedItems.length} из ${totalRentalItems}`}
+        </div>
+      ) : null}
+
+      {rentalItemsQuery.isFetchingNextPage ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="shrink-0 text-center text-sm text-muted-foreground"
+        >
+          Загрузка ещё бытовок...
+        </div>
+      ) : rentalItemsQuery.isFetchNextPageError ? (
+        <div
+          role="alert"
+          className="flex shrink-0 flex-wrap items-center justify-center gap-3 text-sm text-destructive"
+        >
+          <span>Не удалось загрузить следующую страницу бытовок.</span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={loadNextPage}
+          >
+            Повторить загрузку
+          </Button>
         </div>
       ) : null}
 

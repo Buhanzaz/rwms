@@ -13,20 +13,23 @@ export type MaintenanceActorSnapshot = {
 
 export type MaintenanceRoutingSnapshot = {
   queueId: string
-  queueCode: string
-  queueKind: string
+  queueName: string
+  queueType: string
 }
 
 export type MaintenanceFurnitureEquipmentSnapshot = {
   equipmentId: string
-  equipmentCode: string
   equipmentName: string
+}
+
+export type MaintenanceCabinCharacteristicSnapshot = {
+  characteristicId: string
+  characteristicName: string
 }
 
 export type MaintenanceCatalogNodeSnapshot = {
   catalogVersionId: string
   nodeId: string
-  code: string
   nodeType:
     "CATEGORY" | "SUBCATEGORY" | "WORK" | "MATERIAL" | "LOCATION" | "OPTION"
   name: string
@@ -35,21 +38,76 @@ export type MaintenanceCatalogNodeSnapshot = {
   durationMinutes: number
   routing: MaintenanceRoutingSnapshot | null
   furnitureEquipment: MaintenanceFurnitureEquipmentSnapshot | null
+  forcesCapitalRepair: boolean
+  characteristic: MaintenanceCabinCharacteristicSnapshot | null
 }
+
+export type MaintenanceEstimateLineType = "WORK" | "MATERIAL"
 
 export type MaintenanceEstimateLineInput = {
   id: string
   catalogSnapshot: MaintenanceCatalogNodeSnapshot | null
+  lineType: MaintenanceEstimateLineType
   description: string
+  unit: string | null
   quantity: string
+  /** Required for custom work; custom MATERIAL is sent as zero. */
+  normativeMinutes?: number
   unitPrice: string
   comment: string | null
   mediaReferences: MaintenanceMediaReference[]
 }
 
-export type MaintenanceEstimateLine = MaintenanceEstimateLineInput & {
+export type MaintenanceEstimateLine = Omit<
+  MaintenanceEstimateLineInput,
+  "normativeMinutes"
+> & {
+  /** Maintenance always returns the canonical planned duration. */
+  normativeMinutes: number
   lineTotal: string
+  disposition?: MaintenanceReworkLineDisposition | null
+  sourceRepairId?: string | null
+  sourceLineId?: string | null
+  lineageRootLineId?: string | null
 }
+
+export type MaintenanceReworkLineDisposition = "ADDED" | "REPEAT"
+
+export type MaintenanceReworkLineMetadata = {
+  disposition: MaintenanceReworkLineDisposition
+  sourceRepairId: string | null
+  sourceLineId: string | null
+  lineageRootLineId: string
+}
+
+export type MaintenanceReworkCandidateLine = {
+  sourceRepairId: string
+  sourceLineId: string
+  lineageRootLineId: string
+  line: MaintenanceEstimateLine
+}
+
+export type MaintenanceReworkCandidates = {
+  items: MaintenanceReworkCandidateLine[]
+}
+
+export type MaintenanceAddedReworkLineInput = {
+  id: string
+  disposition: "ADDED"
+  line: MaintenanceEstimateLineInput
+}
+
+export type MaintenanceRepeatReworkLineInput = {
+  id: string
+  disposition: "REPEAT"
+  sourceRepairId: string
+  sourceLineId: string
+  quantity: string
+  comment: string | null
+}
+
+export type MaintenanceReworkLineInput =
+  MaintenanceAddedReworkLineInput | MaintenanceRepeatReworkLineInput
 
 export type MaintenanceRepairStageKind =
   "REPAIR_WORK" | "MOVE_TO_REPAIR" | "MOVE_FROM_REPAIR"
@@ -59,6 +117,9 @@ export type MaintenancePlanStageInput = {
   kind: MaintenanceRepairStageKind
   order: number
   routing: MaintenanceRoutingSnapshot
+  includedLineIds: string[]
+  primaryLineId: string | null
+  groupComment: string
   taskDeadline: string | null
 }
 
@@ -83,6 +144,7 @@ export type MaintenanceEstimate = {
   revisions: MaintenanceEstimateRevision[]
   repairId: string | null
   mediaReferences: MaintenanceMediaReference[]
+  coverMediaId?: string | null
   createdAt: string
   completedAt: string | null
   actor: MaintenanceActorSnapshot
@@ -101,6 +163,7 @@ export type MaintenanceEstimateWrite = {
   lines: MaintenanceEstimateLineInput[]
   plan: MaintenancePlanStageInput[]
   mediaReferences: MaintenanceMediaReference[]
+  coverMediaId?: string | null
 }
 
 export type MaintenanceDeliverySnapshot = {
@@ -124,12 +187,29 @@ export type MaintenanceTaskSyncSnapshot = {
   delivery: MaintenanceDeliverySnapshot
 }
 
+export type MaintenanceTaskEvidence = {
+  evidenceId: string
+  entryId: string
+  workerId: string
+  workerGroupId: string | null
+  mediaId: string
+  mediaGeneration: number
+  capturedAt: string
+  recordedAt: string
+  state: "READY" | "REVIEW_REQUIRED"
+}
+
 export type MaintenanceRepairStage = {
   id: string
   kind: MaintenanceRepairStageKind
   order: number
   state: "PLANNED" | "QUEUED" | "IN_PROGRESS" | "DONE" | "CANCELLED"
   routing: MaintenanceRoutingSnapshot
+  workLines: MaintenanceEstimateLine[]
+  materialLines: MaintenanceEstimateLine[]
+  primaryLineId: string | null
+  groupComment: string
+  evidence: MaintenanceTaskEvidence[]
   taskDeadline: string | null
   taskSync: MaintenanceTaskSyncSnapshot
   completedAt: string | null
@@ -163,11 +243,25 @@ export type MaintenanceRepair = {
     "NOT_READY" | "PENDING" | "IN_REWORK" | "ACCEPTED" | "WRITTEN_OFF"
   version: number
   dispatchDate: string
+  priority: number
   sourceParty: string | null
   plan: MaintenanceRepairPlan
   inventorySource: MaintenanceInventorySource | null
   lease: MaintenanceLeaseSnapshot | null
   mediaReferences: MaintenanceMediaReference[]
+  coverMediaId?: string | null
+  complexity: {
+    type: "LIGHT" | "MEDIUM" | "COMPLEX" | "CAPITAL"
+    name:
+      | "Лёгкий ремонт"
+      | "Средний ремонт"
+      | "Сложный ремонт"
+      | "Капитальный ремонт"
+    color: string
+    plannedMinutes: string
+    forcedCapital: boolean
+  }
+  movementToShipment: boolean
   createdAt: string
   updatedAt: string
   actor: MaintenanceActorSnapshot
@@ -246,7 +340,9 @@ function itemEndpoint(
 
 export function createMaintenanceIdempotencyKey() {
   if (typeof crypto === "undefined" || !("randomUUID" in crypto)) {
-    throw new Error("Браузер не поддерживает безопасные UUID команд.")
+    throw new Error(
+      "Браузер не поддерживает создание безопасного ключа команды."
+    )
   }
   return crypto.randomUUID()
 }
@@ -254,11 +350,15 @@ export function createMaintenanceIdempotencyKey() {
 export function listMaintenanceEstimates(
   accessToken: string,
   warehouseId: string,
-  lifecycle?: MaintenanceEstimate["lifecycle"]
+  lifecycle?: MaintenanceEstimate["lifecycle"],
+  rentalItemId?: string
 ) {
   return bearerRequest<MaintenancePage<MaintenanceEstimate>>(
     accessToken,
-    collectionEndpoint("estimates", warehouseId, { lifecycle })
+    collectionEndpoint("estimates", warehouseId, {
+      lifecycle,
+      rentalItemId,
+    })
   )
 }
 
@@ -307,12 +407,17 @@ export function completeMaintenanceEstimate(
   warehouseId: string,
   estimateId: string,
   expectedVersion: number,
+  priority: number,
   idempotencyKey: string
 ) {
   return bearerRequest<MaintenanceEstimateCommandResult>(
     accessToken,
     itemEndpoint("estimates", warehouseId, estimateId, "/complete"),
-    json("POST", { expectedVersion }, { "Idempotency-Key": idempotencyKey })
+    json(
+      "POST",
+      { expectedVersion, priority },
+      { "Idempotency-Key": idempotencyKey }
+    )
   )
 }
 
@@ -360,6 +465,17 @@ export function getMaintenanceRepair(
   )
 }
 
+export function getMaintenanceReworkCandidates(
+  accessToken: string,
+  warehouseId: string,
+  repairId: string
+) {
+  return bearerRequest<MaintenanceReworkCandidates>(
+    accessToken,
+    itemEndpoint("repairs", warehouseId, repairId, "/rework-candidates")
+  )
+}
+
 export function createDirectMaintenanceRepair(
   accessToken: string,
   idempotencyKey: string,
@@ -368,8 +484,10 @@ export function createDirectMaintenanceRepair(
     rentalItemId: string
     dispatchDate: string
     sourceParty: string | null
+    lines: MaintenanceEstimateLineInput[]
     plan: MaintenancePlanStageInput[]
     mediaReferences: MaintenanceMediaReference[]
+    coverMediaId: string | null
   }
 ) {
   return bearerRequest<MaintenanceRepair>(
@@ -384,13 +502,21 @@ export function replaceMaintenanceRepairPlan(
   warehouseId: string,
   repairId: string,
   expectedVersion: number,
+  lines: MaintenanceEstimateLineInput[],
   stages: MaintenancePlanStageInput[],
-  mediaReferences: MaintenanceMediaReference[]
+  mediaReferences: MaintenanceMediaReference[],
+  coverMediaId: string | null
 ) {
   return bearerRequest<MaintenanceRepair>(
     accessToken,
     itemEndpoint("repairs", warehouseId, repairId, "/plan"),
-    json("PUT", { expectedVersion, stages, mediaReferences })
+    json("PUT", {
+      expectedVersion,
+      lines,
+      stages,
+      mediaReferences,
+      coverMediaId,
+    })
   )
 }
 
@@ -399,12 +525,17 @@ export function queueMaintenanceRepair(
   warehouseId: string,
   repairId: string,
   expectedVersion: number,
+  priority: number,
   idempotencyKey: string
 ) {
   return bearerRequest<MaintenanceRepairCommandResult>(
     accessToken,
     itemEndpoint("repairs", warehouseId, repairId, "/plan"),
-    json("POST", { expectedVersion }, { "Idempotency-Key": idempotencyKey })
+    json(
+      "POST",
+      { expectedVersion, priority },
+      { "Idempotency-Key": idempotencyKey }
+    )
   )
 }
 
@@ -416,8 +547,10 @@ export function createMaintenanceRework(
   request: {
     expectedVersion: number
     reason: string
+    lines: MaintenanceReworkLineInput[]
     plan: MaintenancePlanStageInput[]
     mediaReferences: MaintenanceMediaReference[]
+    coverMediaId: string | null
   }
 ) {
   return bearerRequest<MaintenanceRepair>(

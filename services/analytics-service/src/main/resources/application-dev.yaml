@@ -1,0 +1,20 @@
+spring:
+  datasource:
+    url: ${ANALYTICS_DB_URL:jdbc:postgresql://localhost:5443/rwms_analytics}
+    username: ${ANALYTICS_DB_USERNAME:rwms_analytics}
+    password: ${ANALYTICS_DB_PASSWORD:rwms_analytics_dev}
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTH_ISSUER:http://localhost:9000}
+
+rwms:
+  platform:
+    kafka:
+      enabled: ${ANALYTICS_KAFKA_ENABLED:false}
+  analytics:
+    security:
+      dev-auth-bypass: ${ANALYTICS_DEV_AUTH_BYPASS:true}
+  cors:
+    allowed-origins: ${PANEL_ORIGIN:http://localhost:5173}

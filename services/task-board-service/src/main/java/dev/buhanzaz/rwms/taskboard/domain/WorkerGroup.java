@@ -7,11 +7,14 @@ import jakarta.persistence.ForeignKey;
 import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import java.util.UUID;
+import java.time.OffsetDateTime;
 
 @Entity
 @Table(
@@ -48,6 +51,16 @@ public class WorkerGroup extends AbstractVersionedEntity {
 
   @Column(name = "active", nullable = false)
   private boolean active = true;
+
+  @Enumerated(EnumType.STRING)
+  @Column(name = "operational_status", nullable = false, length = 32)
+  private GroupOperationalStatus operationalStatus = GroupOperationalStatus.AVAILABLE;
+
+  @Column(name = "unavailable_since")
+  private OffsetDateTime unavailableSince;
+
+  @Column(name = "unavailability_reason", length = 1000)
+  private String unavailabilityReason;
 
   public UUID getWarehouseId() {
     return warehouseId;
@@ -87,6 +100,32 @@ public class WorkerGroup extends AbstractVersionedEntity {
 
   public void setActive(boolean active) {
     this.active = active;
+  }
+
+  public GroupOperationalStatus getOperationalStatus() {
+    return operationalStatus;
+  }
+
+  public OffsetDateTime getUnavailableSince() {
+    return unavailableSince;
+  }
+
+  public String getUnavailabilityReason() {
+    return unavailabilityReason;
+  }
+
+  public void disable(OffsetDateTime at, String reason) {
+    operationalStatus = GroupOperationalStatus.DISABLED;
+    unavailableSince = at;
+    unavailabilityReason = reason == null || reason.isBlank() ? null : reason.trim();
+    touch();
+  }
+
+  public void enable() {
+    operationalStatus = GroupOperationalStatus.AVAILABLE;
+    unavailableSince = null;
+    unavailabilityReason = null;
+    touch();
   }
 
   public void touch() {

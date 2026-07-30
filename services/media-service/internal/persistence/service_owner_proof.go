@@ -47,7 +47,8 @@ type normalizedServiceOwnerProof struct {
 
 type persistedServiceOwnerProof struct {
 	normalizedServiceOwnerProof
-	Outcome string
+	Outcome     string
+	FailureCode string
 }
 
 type serviceOwnerCheckpoint struct {
@@ -64,7 +65,20 @@ type serviceOwnerCheckpoint struct {
 	ProofEventID     uuid.UUID
 	RequestSHA256    string
 	Quarantined      bool
+	QuarantineReason string
 }
+
+type serviceOwnerProofQuarantine struct {
+	ReasonCode   string
+	FirstEventID uuid.UUID
+}
+
+// serviceOwnerProofGapRecoverySubjectID identifies the media-service system
+// action that corrects only the former aggregate-version-gap validation rule.
+// It is deliberately stable rather than caller-controlled so the quarantine
+// audit row remains attributable without inventing a user principal.
+var serviceOwnerProofGapRecoverySubjectID = uuid.NewSHA1(uuid.NameSpaceURL,
+	[]byte("urn:rwms:media-service:owner-proof-aggregate-version-gap-recovery"))
 
 func (repository *Repository) UpsertServiceOwnerProof(
 	ctx context.Context,
@@ -87,41 +101,58 @@ func (repository *Repository) UpsertServiceOwnerProof(
 	if err != nil {
 		return ServiceOwnerProofRecord{}, false, err
 	}
+	recoverAggregateVersionGap := false
 	if found {
 		if priorEvent.RequestSHA256 == proof.RequestSHA256 {
+			if priorEvent.Outcome == "APPLIED" {
+				if err := tx.Commit(ctx); err != nil {
+					return ServiceOwnerProofRecord{}, false, err
+				}
+				return priorEvent.ServiceOwnerProofRecord, true, nil
+			}
+			recoverAggregateVersionGap = priorEvent.Outcome == "QUARANTINED" &&
+				priorEvent.FailureCode == "AGGREGATE_VERSION_GAP"
+			if !recoverAggregateVersionGap {
+				if err := tx.Commit(ctx); err != nil {
+					return ServiceOwnerProofRecord{}, false, err
+				}
+				return ServiceOwnerProofRecord{}, false, ErrConflict
+			}
+			// A pre-change receipt can be retried under the current monotonic
+			// aggregate-version rule. Every other quarantined receipt remains
+			// terminal for an exact replay.
+		}
+		if !recoverAggregateVersionGap {
+			if err := repository.recordServiceOwnerProofConflict(ctx, tx, proof, &priorEvent,
+				"EVENT_ID_CONFLICT"); err != nil {
+				return ServiceOwnerProofRecord{}, false, err
+			}
+			if err := repository.quarantineServiceOwnerProof(ctx, tx, priorEvent.normalizedServiceOwnerProof,
+				priorEvent.AggregateVersion, priorEvent.AggregateVersion, "EVENT_ID_CONFLICT"); err != nil {
+				return ServiceOwnerProofRecord{}, false, err
+			}
+			if err := repository.quarantineServiceOwnerProof(ctx, tx, proof,
+				proof.AggregateVersion, proof.AggregateVersion, "EVENT_ID_CONFLICT"); err != nil {
+				return ServiceOwnerProofRecord{}, false, err
+			}
 			if err := tx.Commit(ctx); err != nil {
 				return ServiceOwnerProofRecord{}, false, err
 			}
-			if priorEvent.Outcome != "APPLIED" {
-				return ServiceOwnerProofRecord{}, false, ErrConflict
-			}
-			return priorEvent.ServiceOwnerProofRecord, true, nil
+			return ServiceOwnerProofRecord{}, false, ErrConflict
 		}
-		if err := repository.recordServiceOwnerProofConflict(ctx, tx, proof, &priorEvent,
-			"EVENT_ID_CONFLICT"); err != nil {
-			return ServiceOwnerProofRecord{}, false, err
-		}
-		if err := repository.quarantineServiceOwnerProof(ctx, tx, priorEvent.normalizedServiceOwnerProof,
-			priorEvent.AggregateVersion, priorEvent.AggregateVersion, "EVENT_ID_CONFLICT"); err != nil {
-			return ServiceOwnerProofRecord{}, false, err
-		}
-		if err := repository.quarantineServiceOwnerProof(ctx, tx, proof,
-			proof.AggregateVersion, proof.AggregateVersion, "EVENT_ID_CONFLICT"); err != nil {
-			return ServiceOwnerProofRecord{}, false, err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return ServiceOwnerProofRecord{}, false, err
-		}
-		return ServiceOwnerProofRecord{}, false, ErrConflict
 	}
-	var openQuarantine bool
-	if err := tx.QueryRow(ctx, `select exists(select 1 from media_quarantined_aggregate
-		where consumer_name=$1 and aggregate_type=$2 and aggregate_id=$3
-		  and reconciled_at is null)`, proof.ConsumerName, proof.AggregateType,
-		proof.AggregateID).Scan(&openQuarantine); err != nil {
+	quarantine, openQuarantine, err := readOpenServiceOwnerProofQuarantine(ctx, tx, proof)
+	if err != nil {
 		return ServiceOwnerProofRecord{}, false, err
 	}
-	if openQuarantine {
+	if openQuarantine && (!recoverAggregateVersionGap || quarantine.ReasonCode != "VERSION_GAP" ||
+		quarantine.FirstEventID != proof.ProofEventID) {
+		if recoverAggregateVersionGap {
+			if err := tx.Commit(ctx); err != nil {
+				return ServiceOwnerProofRecord{}, false, err
+			}
+			return ServiceOwnerProofRecord{}, false, ErrConflict
+		}
 		if err := repository.rejectServiceOwnerProof(ctx, tx, proof, nil,
 			"OWNER_PROOF_QUARANTINED", proof.AggregateVersion, proof.AggregateVersion); err != nil {
 			return ServiceOwnerProofRecord{}, false, err
@@ -133,7 +164,7 @@ func (repository *Repository) UpsertServiceOwnerProof(
 	}
 
 	priorVersion, versionFound, err := readServiceOwnerProofVersion(ctx, tx, proof.OwnerType,
-		proof.InternalOwnerID, proof.AggregateVersion)
+		proof.InternalOwnerID, proof.AggregateVersion, proof.ProofEventID)
 	if err != nil {
 		return ServiceOwnerProofRecord{}, false, err
 	}
@@ -158,28 +189,33 @@ func (repository *Repository) UpsertServiceOwnerProof(
 	if checkpointFound {
 		expectedVersion = checkpoint.AggregateVersion + 1
 		switch {
-		case checkpoint.Quarantined:
+		case checkpoint.Quarantined && (!recoverAggregateVersionGap || checkpoint.QuarantineReason != "VERSION_GAP"):
 			failureCode = "OWNER_PROOF_QUARANTINED"
 			expectedVersion = proof.AggregateVersion
-		case proof.AggregateVersion > expectedVersion:
-			failureCode = "AGGREGATE_VERSION_GAP"
-		case proof.AggregateVersion < expectedVersion:
+		case proof.AggregateVersion < checkpoint.AggregateVersion:
 			failureCode = "AGGREGATE_VERSION_REGRESSION"
+			expectedVersion = checkpoint.AggregateVersion
+		case proof.AggregateVersion == checkpoint.AggregateVersion:
+			failureCode = "AGGREGATE_VERSION_CONFLICT"
+			expectedVersion = proof.AggregateVersion
 		case proof.OwnerRevision < checkpoint.OwnerRevision:
 			failureCode = "OWNER_REVISION_REGRESSION"
 			expectedVersion = proof.AggregateVersion
 		case proof.OwnerRevision > checkpoint.OwnerRevision+1:
 			failureCode = "OWNER_REVISION_GAP"
 			expectedVersion = proof.AggregateVersion
-		case proof.OwnerRevision == checkpoint.OwnerRevision &&
-			(checkpoint.WarehouseID != proof.WarehouseID || checkpoint.Active != proof.Active):
+		case proof.OwnerRevision == checkpoint.OwnerRevision:
 			failureCode = "OWNER_REVISION_CONFLICT"
 			expectedVersion = proof.AggregateVersion
 		}
-	} else if proof.AggregateVersion != 0 {
-		failureCode = "AGGREGATE_VERSION_GAP"
 	}
 	if failureCode != "" {
+		if recoverAggregateVersionGap {
+			if err := tx.Commit(ctx); err != nil {
+				return ServiceOwnerProofRecord{}, false, err
+			}
+			return ServiceOwnerProofRecord{}, false, ErrConflict
+		}
 		var prior *persistedServiceOwnerProof
 		if checkpointFound {
 			checkpointProof := checkpoint.persistedProof(proof.OwnerType, proof.InternalOwnerID)
@@ -195,7 +231,12 @@ func (repository *Repository) UpsertServiceOwnerProof(
 		return ServiceOwnerProofRecord{}, false, ErrConflict
 	}
 
-	if err := applyServiceOwnerProof(ctx, tx, proof, repository.now().UTC()); err != nil {
+	recordedAt := repository.now().UTC()
+	if recoverAggregateVersionGap {
+		if err := recoverServiceOwnerProofAggregateVersionGap(ctx, tx, proof, openQuarantine, recordedAt); err != nil {
+			return ServiceOwnerProofRecord{}, false, err
+		}
+	} else if err := applyServiceOwnerProof(ctx, tx, proof, recordedAt); err != nil {
 		return ServiceOwnerProofRecord{}, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -275,7 +316,7 @@ func readServiceOwnerProofReceipt(
 ) (persistedServiceOwnerProof, bool, error) {
 	row := tx.QueryRow(ctx, `select source_service,consumer_name,owner_type,owner_id,
 		document_id,line_id,warehouse_id,owner_revision,aggregate_type,aggregate_id,
-		aggregate_version,proof_event_id,active,request_sha256,outcome
+		aggregate_version,proof_event_id,active,request_sha256,outcome,coalesce(failure_code,'')
 		from media_service_owner_proof_receipt where proof_event_id=$1 for update`, proofEventID)
 	proof, err := scanPersistedServiceOwnerProof(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -284,18 +325,35 @@ func readServiceOwnerProofReceipt(
 	return proof, err == nil, err
 }
 
+func readOpenServiceOwnerProofQuarantine(
+	ctx context.Context,
+	tx pgx.Tx,
+	proof normalizedServiceOwnerProof,
+) (serviceOwnerProofQuarantine, bool, error) {
+	var quarantine serviceOwnerProofQuarantine
+	err := tx.QueryRow(ctx, `select reason_code,first_event_id from media_quarantined_aggregate
+		where consumer_name=$1 and aggregate_type=$2 and aggregate_id=$3
+		  and reconciled_at is null for update`, proof.ConsumerName, proof.AggregateType,
+		proof.AggregateID).Scan(&quarantine.ReasonCode, &quarantine.FirstEventID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return serviceOwnerProofQuarantine{}, false, nil
+	}
+	return quarantine, err == nil, err
+}
+
 func readServiceOwnerProofVersion(
 	ctx context.Context,
 	tx pgx.Tx,
 	ownerType, ownerID string,
 	aggregateVersion int64,
+	proofEventID uuid.UUID,
 ) (persistedServiceOwnerProof, bool, error) {
 	row := tx.QueryRow(ctx, `select source_service,consumer_name,owner_type,owner_id,
 		document_id,line_id,warehouse_id,owner_revision,aggregate_type,aggregate_id,
-		aggregate_version,proof_event_id,active,request_sha256,outcome
+		aggregate_version,proof_event_id,active,request_sha256,outcome,coalesce(failure_code,'')
 		from media_service_owner_proof_receipt
-		where owner_type=$1 and owner_id=$2 and aggregate_version=$3
-		order by received_at,proof_event_id limit 1 for update`, ownerType, ownerID, aggregateVersion)
+		where owner_type=$1 and owner_id=$2 and aggregate_version=$3 and proof_event_id <> $4
+		order by received_at,proof_event_id limit 1 for update`, ownerType, ownerID, aggregateVersion, proofEventID)
 	proof, err := scanPersistedServiceOwnerProof(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return persistedServiceOwnerProof{}, false, nil
@@ -310,7 +368,7 @@ func scanPersistedServiceOwnerProof(row rowScanner) (persistedServiceOwnerProof,
 	err := row.Scan(&proof.SourceService, &proof.ConsumerName, &proof.OwnerType, &ownerID,
 		&documentID, &lineID, &proof.WarehouseID, &proof.OwnerRevision, &proof.AggregateType,
 		&proof.AggregateID, &proof.AggregateVersion, &proof.ProofEventID, &proof.Active,
-		&proof.RequestSHA256, &proof.Outcome)
+		&proof.RequestSHA256, &proof.Outcome, &proof.FailureCode)
 	if err != nil {
 		return persistedServiceOwnerProof{}, err
 	}
@@ -338,13 +396,14 @@ func readServiceOwnerCheckpoint(
 	var checkpoint serviceOwnerCheckpoint
 	err := tx.QueryRow(ctx, `select source_service,consumer_name,aggregate_type,aggregate_id,
 		aggregate_version,owner_revision,warehouse_id,document_id,line_id,active,
-		last_proof_event_id,last_request_sha256,quarantined
+		last_proof_event_id,last_request_sha256,quarantined,coalesce(quarantine_reason,'')
 		from media_service_owner_proof_checkpoint
 		where owner_type=$1 and owner_id=$2 for update`, ownerType, ownerID).Scan(
 		&checkpoint.SourceService, &checkpoint.ConsumerName, &checkpoint.AggregateType,
 		&checkpoint.AggregateID, &checkpoint.AggregateVersion, &checkpoint.OwnerRevision,
 		&checkpoint.WarehouseID, &checkpoint.DocumentID, &checkpoint.LineID, &checkpoint.Active,
-		&checkpoint.ProofEventID, &checkpoint.RequestSHA256, &checkpoint.Quarantined)
+		&checkpoint.ProofEventID, &checkpoint.RequestSHA256, &checkpoint.Quarantined,
+		&checkpoint.QuarantineReason)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return serviceOwnerCheckpoint{}, false, nil
 	}
@@ -384,6 +443,60 @@ func applyServiceOwnerProof(
 	if err := insertServiceOwnerProofReceipt(ctx, tx, proof, "APPLIED", "", recordedAt); err != nil {
 		return err
 	}
+	return persistServiceOwnerProofState(ctx, tx, proof, recordedAt)
+}
+
+// recoverServiceOwnerProofAggregateVersionGap upgrades a receipt quarantined
+// only by the former contiguous aggregate-version rule. The caller has already
+// revalidated ownerRevision and aggregateVersion while holding the event,
+// owner and quarantine row locks.
+func recoverServiceOwnerProofAggregateVersionGap(
+	ctx context.Context,
+	tx pgx.Tx,
+	proof normalizedServiceOwnerProof,
+	openQuarantine bool,
+	recordedAt time.Time,
+) error {
+	command, err := tx.Exec(ctx, `update media_service_owner_proof_receipt
+		set outcome='APPLIED',failure_code=null
+		where proof_event_id=$1 and request_sha256=$2
+		  and outcome='QUARANTINED' and failure_code='AGGREGATE_VERSION_GAP'`,
+		proof.ProofEventID, proof.RequestSHA256)
+	if err != nil {
+		return translateConstraint(err)
+	}
+	if command.RowsAffected() != 1 {
+		return ErrConflict
+	}
+	if err := persistServiceOwnerProofState(ctx, tx, proof, recordedAt); err != nil {
+		return err
+	}
+	if !openQuarantine {
+		return nil
+	}
+	command, err = tx.Exec(ctx, `update media_quarantined_aggregate
+		set reconciled_at=clock_timestamp(),
+			resolution_reason='OWNER_PROOF_AGGREGATE_VERSION_GAP_REPLAY_RECOVERED',
+			resolved_by_subject_id=$5
+		where consumer_name=$1 and aggregate_type=$2 and aggregate_id=$3
+		  and reconciled_at is null and reason_code='VERSION_GAP' and first_event_id=$4`,
+		proof.ConsumerName, proof.AggregateType, proof.AggregateID, proof.ProofEventID,
+		serviceOwnerProofGapRecoverySubjectID)
+	if err != nil {
+		return translateConstraint(err)
+	}
+	if command.RowsAffected() != 1 {
+		return ErrConflict
+	}
+	return nil
+}
+
+func persistServiceOwnerProofState(
+	ctx context.Context,
+	tx pgx.Tx,
+	proof normalizedServiceOwnerProof,
+	recordedAt time.Time,
+) error {
 	_, err := tx.Exec(ctx, `insert into media_service_owner_proof_checkpoint (
 		owner_type,owner_id,source_service,consumer_name,aggregate_type,aggregate_id,
 		aggregate_version,owner_revision,warehouse_id,document_id,line_id,active,

@@ -56,7 +56,7 @@ public class MaintenanceCatalogController {
       @Valid @RequestBody ChangeCatalogRequest request) {
     access.requireEdit(jwt, warehouseId);
     requireWarehouse(id, warehouseId);
-    return service.changeCatalog(id, request);
+    return service.changeCatalog(id, warehouseId, request);
   }
 
   @GetMapping("/versions/{id}/nodes")
@@ -77,7 +77,7 @@ public class MaintenanceCatalogController {
       @Valid @RequestBody ReplaceCatalogNodesRequest request) {
     access.requireEdit(jwt, warehouseId);
     requireWarehouse(id, warehouseId);
-    return service.replaceCatalogNodes(id, request);
+    return service.replaceCatalogNodes(id, warehouseId, request);
   }
 
   @GetMapping("/versions/{id}/links")
@@ -98,17 +98,17 @@ public class MaintenanceCatalogController {
       @Valid @RequestBody ReplaceCatalogLinksRequest request) {
     access.requireEdit(jwt, warehouseId);
     requireWarehouse(id, warehouseId);
-    return service.replaceCatalogLinks(id, request);
+    return service.replaceCatalogLinks(id, warehouseId, request);
   }
 
-  @PostMapping("/imports")
-  public ResponseEntity<CatalogVersionResponse> bootstrapCatalog(
+  @PostMapping("/versions")
+  public ResponseEntity<CatalogVersionResponse> createCatalog(
       @AuthenticationPrincipal Jwt jwt,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
-      @Valid @RequestBody BootstrapCatalogRequest request) {
+      @Valid @RequestBody CreateCatalogRequest request) {
     access.requireManage(jwt, request.warehouseId());
     MaintenanceApplicationService.CreateResult<CatalogVersionResponse> result =
-        service.bootstrapCatalog(access.subjectId(jwt), idempotencyKey, request);
+        service.createCatalog(access.subjectId(jwt), idempotencyKey, request);
     ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
     if (result.replayed()) response.header("Idempotency-Replayed", "true");
     return response.body(result.response());
@@ -140,7 +140,8 @@ public class MaintenanceCatalogController {
     access.requireManage(jwt, warehouseId);
     requireWarehouse(id, warehouseId);
     MaintenanceApplicationService.CreateResult<CatalogVersionResponse> result =
-        service.activateCatalog(access.subjectId(jwt), idempotencyKey, id, request);
+        service.activateCatalog(
+            access.subjectId(jwt), idempotencyKey, id, warehouseId, request);
     ResponseEntity.BodyBuilder response = ResponseEntity.ok();
     if (result.replayed()) response.header("Idempotency-Replayed", "true");
     return response.body(result.response());

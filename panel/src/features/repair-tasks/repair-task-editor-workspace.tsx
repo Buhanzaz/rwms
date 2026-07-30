@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowLeft01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons"
 
+import { PageToolbar, PageToolbarActions } from "@/components/page-toolbar"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Card, CardContent } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import {
   assertEstimateLinesValid,
@@ -17,11 +20,13 @@ import {
 } from "@/features/repair-estimates/repair-estimate-catalog-picker"
 import { RepairEstimateLinesEditor } from "@/features/repair-estimates/repair-estimate-lines-editor"
 import { RepairEstimateWorkspaceLayout } from "@/features/repair-estimates/repair-estimate-workspace-layout"
+import { PreviousMaintenancePhotos } from "@/features/repair-estimates/previous-maintenance-photos"
 import {
   RepairWorkCompletionDialog,
   type RepairWorkCompletionResult,
 } from "@/features/repair-estimates/repair-work-completion-dialog"
 import { RepairWorkInformationFields } from "@/features/repair-estimates/repair-work-information-fields"
+import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
 import { CabinFurniturePanel } from "@/features/rental-items/cabin-furniture-panel"
 import {
   REPAIR_TASKS_QUERY_KEY,
@@ -40,6 +45,7 @@ import type {
   RepairTaskEditorDraft,
   RepairTaskReworkSeed,
 } from "@/features/repair-tasks/model/repair-task"
+import { RepairTaskQueueDraftPersistedError } from "@/features/repair-tasks/ports/repair-tasks-client"
 import { RepairTaskWriteOffDialog } from "@/features/repair-tasks/repair-task-write-off-dialog"
 import { workspaceEntryNavigationOptions } from "@/hooks/use-workspace-back"
 import {
@@ -47,6 +53,11 @@ import {
   type ReadyMediaReference,
 } from "@/features/media/media-service"
 import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
+import { ApiError } from "@/lib/api-client"
+import {
+  getMaintenanceReworkCandidates,
+  type MaintenanceReworkCandidateLine,
+} from "@/features/repair-estimates/api/http-maintenance-lifecycle-client"
 
 type RepairTaskEditorWorkspaceProps = {
   accessToken: string | null
@@ -58,8 +69,83 @@ type RepairTaskEditorWorkspaceProps = {
   loading?: boolean
   seed?: RepairTaskReworkSeed
   initialRentalItemId?: string
+  onBack?: () => void
   onClose: () => void
   onSaved: (task: RepairTaskDto) => void
+}
+
+function ReworkCandidates({
+  candidates,
+  selectedLineages,
+  loading,
+  error,
+  disabled,
+  onRepeat,
+}: {
+  candidates: MaintenanceReworkCandidateLine[]
+  selectedLineages: ReadonlySet<string>
+  loading: boolean
+  error: boolean
+  disabled: boolean
+  onRepeat: (candidate: MaintenanceReworkCandidateLine) => void
+}) {
+  const available = candidates.filter(
+    (candidate) => !selectedLineages.has(candidate.lineageRootLineId)
+  )
+  return (
+    <section className="mb-4 flex flex-col gap-2" aria-label="Выполненные позиции">
+      <div>
+        <h3 className="font-heading text-sm font-medium">
+          Уже выполненные позиции
+        </h3>
+        <p className="text-xs text-muted-foreground">
+          Выберите отдельно работы и материалы, которые нужно выполнить
+          повторно.
+        </p>
+      </div>
+      {loading ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Загружаем цепочку ремонта…
+        </p>
+      ) : error ? (
+        <p role="alert" className="text-sm text-destructive">
+          Не удалось загрузить выполненные позиции.
+        </p>
+      ) : available.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          Все доступные позиции уже выбраны либо в цепочке их нет.
+        </p>
+      ) : (
+        available.map((candidate) => (
+          <Card key={candidate.lineageRootLineId} size="sm">
+            <CardContent className="flex flex-wrap items-center gap-3">
+              <Badge variant="secondary">
+                {candidate.line.lineType === "WORK" ? "Работа" : "Материал"}
+              </Badge>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">
+                  {candidate.line.description}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {candidate.line.quantity} {candidate.line.unit || "ед"} ·{" "}
+                  {candidate.line.unitPrice} ₽
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={disabled}
+                onClick={() => onRepeat(candidate)}
+              >
+                Переделать
+              </Button>
+            </CardContent>
+          </Card>
+        ))
+      )}
+    </section>
+  )
 }
 
 export function RepairTaskEditorWorkspace({
@@ -72,6 +158,7 @@ export function RepairTaskEditorWorkspace({
   loading = false,
   seed,
   initialRentalItemId,
+  onBack,
   onClose,
   onSaved,
 }: RepairTaskEditorWorkspaceProps) {
@@ -82,9 +169,17 @@ export function RepairTaskEditorWorkspace({
       : `new:${warehouseId}:${initialRentalItemId ?? "unselected"}`
   if (loading) {
     return (
-      <p role="status" className="text-sm text-muted-foreground">
-        Загрузка задания...
-      </p>
+      <>
+        <PageToolbar>
+          <Button type="button" variant="outline" onClick={onBack ?? onClose}>
+            <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
+            Назад
+          </Button>
+        </PageToolbar>
+        <p role="status" className="text-sm text-muted-foreground">
+          Загрузка задания...
+        </p>
+      </>
     )
   }
   return (
@@ -98,6 +193,7 @@ export function RepairTaskEditorWorkspace({
       sourceTask={sourceTask}
       seed={seed}
       initialRentalItemId={initialRentalItemId}
+      onBack={onBack}
       onClose={onClose}
       onSaved={onSaved}
     />
@@ -113,6 +209,7 @@ function RepairTaskEditorContent({
   sourceTask,
   seed,
   initialRentalItemId,
+  onBack,
   onClose,
   onSaved,
 }: Omit<RepairTaskEditorWorkspaceProps, "loading">) {
@@ -130,12 +227,33 @@ function RepairTaskEditorContent({
         }
   )
   const planSource = task ?? sourceTask ?? null
+  const editingQueuedTask = task?.status === "QUEUED"
   const [catalogPager, setCatalogPager] =
     useState<RepairEstimateCatalogPager | null>(null)
   const [completionOpen, setCompletionOpen] = useState(false)
+  const [showBeforePhotos, setShowBeforePhotos] = useState(false)
   const [writeOffOpen, setWriteOffOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [writeOffError, setWriteOffError] = useState<string | null>(null)
+  const reworkCandidatesQuery = useQuery({
+    queryKey: [
+      "maintenance",
+      "rework-candidates",
+      warehouseId,
+      draft.sourceRepairTaskId,
+    ],
+    queryFn: () =>
+      getMaintenanceReworkCandidates(
+        accessToken!,
+        warehouseId,
+        draft.sourceRepairTaskId!
+      ),
+    enabled: Boolean(
+      accessToken &&
+        draft.kind === "REWORK" &&
+        draft.sourceRepairTaskId
+    ),
+  })
   const mediaOwner = draft.taskId
     ? maintenanceRepairMediaOwner(draft.taskId, warehouseId)
     : null
@@ -172,10 +290,74 @@ function RepairTaskEditorContent({
             reference.mediaId === references[index]?.mediaId &&
             reference.generation === references[index]?.generation
         )
-      return unchanged
+      const coverStillReady =
+        current.coverMediaId &&
+        references.some(
+          (reference) => reference.mediaId === current.coverMediaId
+        )
+      return unchanged && (coverStillReady || !current.coverMediaId)
         ? current
-        : { ...current, maintenanceMediaReferences: references }
+        : {
+            ...current,
+            maintenanceMediaReferences: references,
+            coverMediaId: coverStillReady ? current.coverMediaId : null,
+          }
     })
+  }
+
+  function normalizeReworkLines(lines: RepairEstimateLineDto[]) {
+    if (draft.kind !== "REWORK") return lines
+    return lines.map((line) =>
+      line.rework
+        ? line
+        : {
+            ...line,
+            rework: {
+              disposition: "ADDED" as const,
+              sourceRepairId: null,
+              sourceLineId: null,
+              lineageRootLineId: line.id,
+            },
+          }
+    )
+  }
+
+  function repeatCandidate(candidate: MaintenanceReworkCandidateLine) {
+    const value = candidate.line
+    const quantity = Number(value.quantity)
+    const line: RepairEstimateLineDto = {
+      id: crypto.randomUUID(),
+      sourceLineKey: candidate.sourceLineId,
+      lineType: value.lineType,
+      description: value.description,
+      lineComment: value.comment ?? "",
+      unit: value.unit ?? "",
+      quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+      normativeMinutes: value.normativeMinutes,
+      unitPrice: value.unitPrice,
+      lineTotal: value.lineTotal,
+      catalogSnapshot: value.catalogSnapshot
+        ? {
+            nodeId: value.catalogSnapshot.nodeId,
+            name: value.catalogSnapshot.name,
+            nodeType:
+              value.catalogSnapshot.nodeType === "WORK"
+                ? "WORK"
+                : "MATERIAL",
+            furnitureEquipment:
+              value.catalogSnapshot.furnitureEquipment ?? null,
+          }
+        : null,
+      customQueueBinding: null,
+      maintenanceMediaReferences: [...value.mediaReferences],
+      rework: {
+        disposition: "REPEAT",
+        sourceRepairId: candidate.sourceRepairId,
+        sourceLineId: candidate.sourceLineId,
+        lineageRootLineId: candidate.lineageRootLineId,
+      },
+    }
+    setDraft((current) => ({ ...current, lines: [...current.lines, line] }))
   }
 
   async function ensureMediaOwner() {
@@ -207,13 +389,22 @@ function RepairTaskEditorContent({
 
       return saveRepairTaskDraft({ draft, warehouseId })
     },
+    onMutate: () => setError(null),
     onSuccess: handleSuccess,
-    onError: (unknownError) =>
+    onError: (unknownError) => {
+      if (unknownError instanceof ApiError && unknownError.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: REPAIR_TASKS_QUERY_KEY })
+        setError(
+          "Ремонт уже изменён или задание уже начато. Данные обновлены — откройте ремонт снова."
+        )
+        return
+      }
       setError(
         unknownError instanceof Error
           ? unknownError.message
           : "Не удалось сохранить задание"
-      ),
+      )
+    },
   })
   const queueMutation = useMutation({
     mutationFn: (completion: RepairWorkCompletionResult) => {
@@ -224,12 +415,23 @@ function RepairTaskEditorContent({
       return queueRepairTask({ draft, warehouseId, ...completion })
     },
     onSuccess: handleSuccess,
-    onError: (unknownError) =>
+    onError: (unknownError) => {
+      if (unknownError instanceof RepairTaskQueueDraftPersistedError) {
+        setDraft((current) => ({
+          ...current,
+          taskId: unknownError.taskId,
+          expectedVersion: unknownError.expectedVersion,
+        }))
+        void queryClient.invalidateQueries({
+          queryKey: REPAIR_TASKS_QUERY_KEY,
+        })
+      }
       setError(
         unknownError instanceof Error
           ? unknownError.message
           : "Не удалось завершить задание"
-      ),
+      )
+    },
   })
   const writeOffMutation = useMutation({
     mutationFn: (writeOffReason: string) => {
@@ -251,6 +453,7 @@ function RepairTaskEditorContent({
         lines: draft.lines,
         media: draft.media,
         maintenanceMediaReferences: draft.maintenanceMediaReferences,
+        coverMediaId: draft.coverMediaId,
         pendingUploads: draft.pendingUploads,
         writeOffReason,
       })
@@ -280,6 +483,18 @@ function RepairTaskEditorContent({
     queueMutation.isPending ||
     writeOffMutation.isPending
   const interactionDisabled = readOnly || mutationPending
+  const beforePhotosButton = (
+    <Button
+      type="button"
+      variant={showBeforePhotos ? "secondary" : "outline"}
+      size="sm"
+      aria-pressed={showBeforePhotos}
+      disabled={!draft.rentalItemId}
+      onClick={() => setShowBeforePhotos((current) => !current)}
+    >
+      {showBeforePhotos ? "Скрыть до" : "Показать до"}
+    </Button>
+  )
   const totalAmount = useMemo(() => {
     try {
       return calculateEstimateTotal(draft.lines)
@@ -295,6 +510,13 @@ function RepairTaskEditorContent({
     }
     if (draft.kind === "REWORK" && !draft.reason.trim()) {
       setError("Укажите причину доработки")
+      return false
+    }
+    if (
+      draft.maintenanceMediaReferences.length > 0 &&
+      !draft.coverMediaId
+    ) {
+      setError("Выберите титульную фотографию")
       return false
     }
     if (draft.lines.length === 0 && !planSource?.subtasks.length) {
@@ -346,6 +568,8 @@ function RepairTaskEditorContent({
         dispatchDate={draft.dispatchDate}
         comment={draft.comment}
         showComment={false}
+        showContext={draft.kind === "REWORK"}
+        showDispatchDate={false}
         disabled={interactionDisabled || Boolean(task)}
         readOnly={readOnly}
         rentalItemDisabled={Boolean(task) || draft.kind === "REWORK"}
@@ -377,12 +601,33 @@ function RepairTaskEditorContent({
   const taskLines = (
     <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+        {draft.kind === "REWORK" ? (
+          <ReworkCandidates
+            candidates={reworkCandidatesQuery.data?.items ?? []}
+            selectedLineages={new Set(
+              draft.lines
+                .map((line) => line.rework?.lineageRootLineId)
+                .filter((value): value is string => Boolean(value))
+            )}
+            loading={reworkCandidatesQuery.isLoading}
+            error={reworkCandidatesQuery.isError}
+            disabled={interactionDisabled}
+            onRepeat={repeatCandidate}
+          />
+        ) : null}
         <RepairEstimateLinesEditor
           lines={draft.lines}
           readOnly={interactionDisabled}
           mode="TASK"
-          catalogOnly
-          onChange={(lines) => setDraft((current) => ({ ...current, lines }))}
+          customWorkLinesOnly
+          accessToken={accessToken}
+          warehouseId={warehouseId}
+          onChange={(lines) =>
+            setDraft((current) => ({
+              ...current,
+              lines: normalizeReworkLines(lines),
+            }))
+          }
         />
       </div>
       <div className="shrink-0">
@@ -394,6 +639,67 @@ function RepairTaskEditorContent({
     </div>
   )
 
+  const toolbarActions = (
+    <>
+      {canManage && !readOnly && !editingQueuedTask ? (
+        <Button
+          type="button"
+          variant="destructive"
+          disabled={
+            !draft.rentalItemId || mutationPending || draft.kind === "REWORK"
+          }
+          onClick={() => {
+            setWriteOffError(null)
+            setWriteOffOpen(true)
+          }}
+        >
+          Списать
+        </Button>
+      ) : null}
+      <Button
+        type="button"
+        variant="outline"
+        disabled={mutationPending}
+        onClick={closeEditor}
+      >
+        {readOnly ? "Закрыть" : "Отмена"}
+      </Button>
+      {!readOnly ? (
+        <>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={mutationPending}
+            onClick={() => {
+              if (validateDraft()) {
+                saveMutation.mutate()
+              }
+            }}
+          >
+            {saveMutation.isPending
+              ? "Сохранение..."
+              : editingQueuedTask
+                ? "Сохранить изменения"
+                : "Сохранить черновик"}
+          </Button>
+          {!editingQueuedTask ? (
+            <Button
+              type="button"
+              disabled={mutationPending}
+              onClick={() => {
+                if (validateDraft(true)) {
+                  setCompletionOpen(true)
+                }
+              }}
+            >
+              {queueMutation.isPending ? "Завершение..." : "Завершить"}
+            </Button>
+          ) : null}
+        </>
+      ) : null}
+    </>
+  )
+
   const controls = (
     <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="min-h-24 flex-1 overflow-y-auto pr-1">
@@ -401,104 +707,58 @@ function RepairTaskEditorContent({
           lines={draft.lines}
           readOnly={interactionDisabled}
           excludeFurniture
-          onChange={(lines) => setDraft((current) => ({ ...current, lines }))}
+          onChange={(lines) =>
+            setDraft((current) => ({
+              ...current,
+              lines: normalizeReworkLines(lines),
+            }))
+          }
           onPagerChange={handleCatalogPagerChange}
         />
       </div>
       <Separator />
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant={catalogPager?.canGoBack ? "default" : "outline"}
-            size="icon-sm"
-            aria-label="Предыдущая страница каталога"
-            disabled={!catalogPager?.canGoBack || interactionDisabled}
-            onClick={() => catalogPager?.goBack()}
-          >
-            <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
-          </Button>
-          <Button
-            type="button"
-            variant={catalogPager?.canGoForward ? "default" : "outline"}
-            size="icon-sm"
-            aria-label="Следующая страница каталога"
-            disabled={!catalogPager?.canGoForward || interactionDisabled}
-            onClick={() => catalogPager?.goForward()}
-          >
-            <HugeiconsIcon icon={ArrowRight01Icon} data-icon="inline-start" />
-          </Button>
-        </div>
-        <div className="flex flex-wrap justify-end gap-2">
-          {canManage && !readOnly ? (
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={
-                !draft.rentalItemId ||
-                mutationPending ||
-                draft.kind === "REWORK"
-              }
-              onClick={() => {
-                setWriteOffError(null)
-                setWriteOffOpen(true)
-              }}
-            >
-              Списать
-            </Button>
-          ) : null}
-          <Button
-            type="button"
-            variant="outline"
-            disabled={mutationPending}
-            onClick={closeEditor}
-          >
-            {readOnly ? "Закрыть" : "Отмена"}
-          </Button>
-          {!readOnly ? (
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={mutationPending}
-                onClick={() => {
-                  if (validateDraft()) {
-                    saveMutation.mutate()
-                  }
-                }}
-              >
-                {saveMutation.isPending
-                  ? "Сохранение..."
-                  : "Сохранить черновик"}
-              </Button>
-              <Button
-                type="button"
-                disabled={mutationPending}
-                onClick={() => {
-                  if (validateDraft(true)) {
-                    setCompletionOpen(true)
-                  }
-                }}
-              >
-                {queueMutation.isPending ? "Завершение..." : "Завершить"}
-              </Button>
-            </>
-          ) : null}
-        </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <Button
+          type="button"
+          variant={catalogPager?.canGoBack ? "default" : "outline"}
+          size="icon-sm"
+          aria-label="Предыдущая страница каталога"
+          disabled={!catalogPager?.canGoBack || interactionDisabled}
+          onClick={() => catalogPager?.goBack()}
+        >
+          <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
+        </Button>
+        <Button
+          type="button"
+          variant={catalogPager?.canGoForward ? "default" : "outline"}
+          size="icon-sm"
+          aria-label="Следующая страница каталога"
+          disabled={!catalogPager?.canGoForward || interactionDisabled}
+          onClick={() => catalogPager?.goForward()}
+        >
+          <HugeiconsIcon icon={ArrowRight01Icon} data-icon="inline-start" />
+        </Button>
       </div>
     </div>
   )
 
   return (
     <>
+      <PageToolbar>
+        <Button type="button" variant="outline" onClick={onBack ?? closeEditor}>
+          <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
+          Назад
+        </Button>
+        <PageToolbarActions>{toolbarActions}</PageToolbarActions>
+      </PageToolbar>
       <RepairEstimateWorkspaceLayout
         ariaLabel="Редактор ремонтного задания"
         informationDescription={
           task
-            ? "Сервис разрешает менять у черновика только план этапов."
+            ? "Работы, материалы и фотографии можно менять, пока задание не начато."
             : draft.kind === "REWORK"
               ? "Укажите причину доработки; бытовка определяется исходным ремонтом."
-              : "Выберите бытовку, источник и дату прибытия."
+              : "Выберите бытовку и составьте план ремонта."
         }
         message={
           error ? (
@@ -514,20 +774,47 @@ function RepairTaskEditorContent({
             ensureOwner={ensureMediaOwner}
             readOnly={interactionDisabled}
             title="Фотографии ремонта"
+            toolbarAction={beforePhotosButton}
+            coverMediaId={draft.coverMediaId}
+            requireCover
             onReadyReferencesChange={updateReadyMediaReferences}
+            onCoverMediaIdChange={(coverMediaId) =>
+              setDraft((current) => ({ ...current, coverMediaId }))
+            }
           />
         }
         information={information}
-        estimate={taskLines}
+        estimate={
+          showBeforePhotos ? (
+            <PreviousMaintenancePhotos
+              accessToken={accessToken}
+              warehouseId={warehouseId}
+              rentalItemId={draft.rentalItemId}
+              currentOwner={
+                draft.taskId
+                  ? {
+                      ownerType: "MAINTENANCE_REPAIR",
+                      ownerId: draft.taskId,
+                    }
+                  : null
+              }
+              currentCreatedAt={task?.createdAt ?? null}
+            />
+          ) : (
+            taskLines
+          )
+        }
         controls={controls}
       />
       <RepairWorkCompletionDialog
-        open={completionOpen && !readOnly}
+        open={completionOpen && !readOnly && !editingQueuedTask}
+        accessToken={accessToken}
+        warehouseId={warehouseId}
         lines={draft.lines}
         pending={queueMutation.isPending}
         error={completionOpen ? error : null}
         title="Завершение задания"
-        description="Выберите режим, перемещения, очереди и порядок этапов. Задание будет поставлено на доску одной командой."
+        description="Проверьте необходимость перемещения и очереди пользовательских работ."
         completeLabel="Создать задание"
         pendingLabel="Создание..."
         previewKey={`direct-repair:${draft.taskId ?? "new"}:${draft.expectedVersion ?? 0}`}
@@ -545,7 +832,7 @@ function RepairTaskEditorContent({
                   primaryLineId: null,
                   groupComment: subtask.groupComment,
                   queueId: subtask.queueId ?? null,
-                  queueCode: subtask.queueCode,
+                  queueName: subtask.queueName,
                   routeQueueKind: subtask.routeQueueKind,
                   sortOrder: subtask.sortOrder,
                   generationStatus: "UNKNOWN",

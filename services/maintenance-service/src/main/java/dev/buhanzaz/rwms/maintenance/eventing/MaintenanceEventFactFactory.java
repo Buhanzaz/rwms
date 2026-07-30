@@ -89,6 +89,7 @@ public class MaintenanceEventFactFactory {
         value.getExecutionState(),
         value.getAcceptanceState(),
         value.getDispatchDate(),
+        value.getPriority(),
         stageFacts);
   }
 

@@ -19,7 +19,6 @@ export const RENTAL_ITEM_CONTENTS_TARGETS_QUERY_KEY = [
 ] as const
 
 export const RENTAL_ITEM_CONTENTS_TRANSFER_STATUSES: RentalItemStatus[] = [
-  "NEW",
   "BOOKED",
   "REPAIR",
   "WAITING_REPAIR_CHECK",
@@ -43,7 +42,6 @@ export type RentalItemContentsTransferRow<
     EquipmentBalanceLocationKind,
 > = {
   equipmentId: string
-  code: string
   name: string
   availableQuantity: number
   sourceBalance: EquipmentBalanceDto & { locationKind: TLocationKind }
@@ -120,7 +118,6 @@ export function warehouseStockTransferRows(
       return [
         {
           equipmentId: equipment.id,
-          code: equipment.code,
           name: equipment.name,
           availableQuantity: balance.availableStock,
           sourceBalance: balance,
@@ -150,7 +147,6 @@ export function rentalItemContentsTransferRows(
         )
         .map((balance) => ({
           equipmentId: equipment.id,
-          code: equipment.code,
           name: equipment.name,
           availableQuantity: balance.availableStock,
           sourceBalance: balance,

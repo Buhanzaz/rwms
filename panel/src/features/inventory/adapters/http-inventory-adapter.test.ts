@@ -11,6 +11,7 @@ import {
   listInventorySessions,
   previewInventoryCompletion,
   publishInventoryFindings,
+  resolveInventoryFindingConflict,
   retryFindingPublication,
   saveInventoryInspection,
   startInventorySession,
@@ -40,6 +41,7 @@ const session = {
   publicationState: "NOT_REQUESTED",
   statistics: null,
   cancellation: null,
+  membershipMovements: [],
 } satisfies Omit<InventorySessionView, "findings">
 
 afterEach(() => vi.unstubAllGlobals())
@@ -109,6 +111,8 @@ describe("http inventory adapter", () => {
       comment: "",
       expectedSnapshot: null,
       currentSnapshot: null,
+      inspectionBaseline: null,
+      conflictResolution: null,
       conflicts: [],
       frozenPlan: null,
       media: [],
@@ -202,8 +206,11 @@ describe("http inventory adapter", () => {
           generation: 2,
         },
       ],
+      coverMediaId: "00000000-0000-4000-8000-000000000131",
       planSelection: {
         mode: "AUTO",
+        priority: 3,
+        coverMediaId: "00000000-0000-4000-8000-000000000131",
         lines: [
           {
             aggregationKind: "CATALOG",
@@ -243,6 +250,39 @@ describe("http inventory adapter", () => {
     })
   })
 
+  it("sends an explicit conflict resolution with both current revisions", async () => {
+    const findingId = "00000000-0000-4000-8000-000000000133"
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: findingId }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await resolveInventoryFindingConflict({
+      accessToken: "inventory-token",
+      inventoryId: session.id,
+      findingId,
+      expectedSessionRevision: 3,
+      expectedFindingRevision: 8,
+      strategy: "KEEP_INSPECTION",
+      reason: "Осмотр подтверждён кладовщиком",
+    })
+
+    const request = fetchMock.mock.calls[0]
+    expect(request[0]).toContain(
+      `/sessions/${session.id}/findings/${findingId}/conflict-resolution`
+    )
+    expect(request[1].method).toBe("PUT")
+    expect(JSON.parse(request[1].body)).toEqual({
+      expectedSessionRevision: 3,
+      expectedFindingRevision: 8,
+      strategy: "KEEP_INSPECTION",
+      reason: "Осмотр подтверждён кладовщиком",
+    })
+  })
+
   it("round-trips server preview revisions and hashes into completion", async () => {
     const view = {
       ...session,
@@ -252,7 +292,7 @@ describe("http inventory adapter", () => {
           findingRevision: 4,
         },
       ],
-    } as InventorySessionView
+    } as unknown as InventorySessionView
     const preview = {
       inventoryId: session.id,
       sessionRevision: 3,
@@ -532,6 +572,7 @@ describe("http inventory adapter", () => {
         inspection: "READY",
         comment: "",
         media: [],
+        coverMediaId: null,
         planSelection: null,
       })
     ).rejects.toMatchObject({ status: 409 })

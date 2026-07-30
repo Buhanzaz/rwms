@@ -13,7 +13,6 @@ import {
 
 export type RentalItemContentsQuantityRow = {
   equipmentId: string
-  code: string
   name: string
   availableQuantity: number
   quantity: number
@@ -63,7 +62,7 @@ export function RentalItemContentsQuantityRows({
                 <span className="min-w-0">
                   <span className="block truncate font-medium">{row.name}</span>
                   <span className="block text-xs text-muted-foreground">
-                    {row.code} · Доступно: {row.availableQuantity} шт.
+                    Доступно: {row.availableQuantity} шт.
                   </span>
                 </span>
               </FieldLabel>

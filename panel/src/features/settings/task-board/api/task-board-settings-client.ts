@@ -1,4 +1,6 @@
 import type {
+  QueueDefinitionDto,
+  QueueDefinitionRequest,
   WorkerClassDto,
   WorkerClassRequest,
   WorkerDto,
@@ -7,17 +9,27 @@ import type {
   WorkerRequest,
   WorkQueueDto,
   WorkQueueRequest,
-  ReviewedTaskBoardBootstrapResult,
 } from "@/features/settings/task-board/model/task-board-settings"
 
 export type QueueOrderItem = { queueId: string; expectedVersion: number }
 
 export interface TaskBoardSettingsClient {
-  bootstrapReviewedData(
+  listQueueDefinitions(token: string): Promise<QueueDefinitionDto[]>
+  createQueueDefinition(
     token: string,
-    warehouseId: string,
-    idempotencyKey: string
-  ): Promise<ReviewedTaskBoardBootstrapResult>
+    request: QueueDefinitionRequest
+  ): Promise<QueueDefinitionDto>
+  updateQueueDefinition(
+    token: string,
+    id: string,
+    request: QueueDefinitionRequest
+  ): Promise<QueueDefinitionDto>
+  deleteQueueDefinition(
+    token: string,
+    id: string,
+    expectedVersion: number
+  ): Promise<void>
+
   listQueues(token: string, warehouseId: string): Promise<WorkQueueDto[]>
   createQueue(
     token: string,
@@ -85,6 +97,19 @@ export interface TaskBoardSettingsClient {
     id: string,
     expectedVersion: number
   ): Promise<WorkerDto>
+  enableWorkerCredentials(
+    token: string,
+    warehouseId: string,
+    id: string,
+    expectedVersion: number
+  ): Promise<WorkerDto>
+  setWorkerCurrentGroup(
+    token: string,
+    warehouseId: string,
+    id: string,
+    expectedVersion: number,
+    workerGroupId: string | null
+  ): Promise<WorkerDto>
 
   listGroups(token: string, warehouseId: string): Promise<WorkerGroupDto[]>
   createGroup(
@@ -104,4 +129,18 @@ export interface TaskBoardSettingsClient {
     id: string,
     expectedVersion: number
   ): Promise<void>
+  disableGroup(
+    token: string,
+    warehouseId: string,
+    id: string,
+    expectedVersion: number,
+    reason: string
+  ): Promise<WorkerGroupDto>
+  enableGroup(
+    token: string,
+    warehouseId: string,
+    id: string,
+    expectedVersion: number,
+    reason: string | null
+  ): Promise<WorkerGroupDto>
 }

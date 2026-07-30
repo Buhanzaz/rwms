@@ -18,6 +18,7 @@ import {
 import {
   Carousel,
   CarouselContent,
+  CarouselDots,
   CarouselItem,
   CarouselNext,
   type CarouselApi,
@@ -218,5 +219,42 @@ describe("PhotoCarousel with real Embla", () => {
     fireEvent.click(next)
 
     expect(onParentClick).not.toHaveBeenCalled()
+  })
+
+  it("uses clickable dots to jump directly to a carousel position", async () => {
+    let api: CarouselApi
+    render(
+      <Carousel
+        setApi={(nextApi) => (api = nextApi)}
+        opts={{ containScroll: false, loop: false }}
+      >
+        <CarouselContent>
+          <CarouselItem>Бытовка 1</CarouselItem>
+          <CarouselItem>Бытовка 2</CarouselItem>
+          <CarouselItem>Бытовка 3</CarouselItem>
+        </CarouselContent>
+        <CarouselDots
+          aria-label="Навигация по бытовкам"
+          getDotLabel={(index, count) =>
+            `Перейти к бытовке ${index + 1} из ${count}`
+          }
+        />
+      </Carousel>
+    )
+
+    const firstDot = await screen.findByRole("button", {
+      name: "Перейти к бытовке 1 из 3",
+    })
+    const thirdDot = screen.getByRole("button", {
+      name: "Перейти к бытовке 3 из 3",
+    })
+    expect(firstDot.getAttribute("aria-current")).toBe("true")
+
+    fireEvent.click(thirdDot)
+
+    await waitFor(() => expect(api?.selectedScrollSnap()).toBe(2))
+    await waitFor(() =>
+      expect(thirdDot.getAttribute("aria-current")).toBe("true")
+    )
   })
 })

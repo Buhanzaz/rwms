@@ -121,12 +121,132 @@ class LogisticsInboxProcessorIntegrationTest {
         .isEqualTo(2L);
   }
 
+  @Test
+  void appliesNonContiguousPublicReturnMediaFactsWithoutCreatingAVersionGap() {
+    UUID mediaId = UUID.randomUUID();
+    UUID documentId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    LogisticsInboundEnvelopeValidator.ValidatedInboundEvent ready =
+        mediaEvent(
+            UUID.randomUUID(),
+            mediaId,
+            2,
+            "media.media.ready.v1",
+            "LOGISTICS_RETURN",
+            documentId + ":" + lineId,
+            "READY");
+    LogisticsInboundEnvelopeValidator.ValidatedInboundEvent rotated =
+        mediaEvent(
+            UUID.randomUUID(),
+            mediaId,
+            5,
+            "media.media.rotated.v1",
+            "LOGISTICS_RETURN",
+            documentId + ":" + lineId,
+            "READY");
+
+    staging.stage(ready);
+    assertThat(inbox.process(ready)).isEqualTo(LogisticsInboxProcessor.Outcome.PROCESSED);
+    staging.stage(rotated);
+    assertThat(inbox.process(rotated)).isEqualTo(LogisticsInboxProcessor.Outcome.PROCESSED);
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select last_aggregate_version from consumer_aggregate_checkpoint
+                 where consumer_group=? and aggregate_type='MEDIA' and aggregate_id=? and not blocked
+                """,
+                Long.class,
+                LogisticsInboundTransportTopics.CONSUMER_GROUP,
+                mediaId.toString()))
+        .isEqualTo(5L);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from version_gap_quarantine
+                 where consumer_group=? and aggregate_type='MEDIA' and aggregate_id=?
+                """,
+                Long.class,
+                LogisticsInboundTransportTopics.CONSUMER_GROUP,
+                mediaId.toString()))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from logistics_inbound_observation
+                 where consumer_group=? and source_topic=? and aggregate_id=?
+                """,
+                Long.class,
+                LogisticsInboundTransportTopics.CONSUMER_GROUP,
+                LogisticsInboundTransportTopics.MEDIA,
+                mediaId.toString()))
+        .isEqualTo(2L);
+  }
+
+  @Test
+  void acknowledgesAForeignMediaFactWithoutCreatingLogisticsDomainEvidence() {
+    UUID mediaId = UUID.randomUUID();
+    LogisticsInboundEnvelopeValidator.ValidatedInboundEvent foreign =
+        mediaEvent(
+            UUID.randomUUID(),
+            mediaId,
+            2,
+            "media.media.ready.v1",
+            "CABIN",
+            "foreign-cabin-owner",
+            "READY");
+
+    staging.stage(foreign);
+    assertThat(inbox.process(foreign)).isEqualTo(LogisticsInboxProcessor.Outcome.PROCESSED);
+
+    assertThat(
+            jdbc.queryForObject(
+                "select status from inbox_message where consumer_group=? and event_id=?",
+                String.class,
+                LogisticsInboundTransportTopics.CONSUMER_GROUP,
+                foreign.eventId()))
+        .isEqualTo("PROCESSED");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from consumer_aggregate_checkpoint
+                 where consumer_group=? and aggregate_type='MEDIA' and aggregate_id=?
+                """,
+                Long.class,
+                LogisticsInboundTransportTopics.CONSUMER_GROUP,
+                mediaId.toString()))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_inbound_observation where event_id=?",
+                Long.class,
+                foreign.eventId()))
+        .isZero();
+  }
+
   private LogisticsInboundEnvelopeValidator.ValidatedInboundEvent event(
       UUID eventId, UUID assetId, long version, String status) {
     byte[] raw = LogisticsInboundEnvelopeValidatorTest.rentalEvent(eventId, assetId, version, status);
     return validator.validate(
         LogisticsInboundTransportTopics.RENTAL_ITEM,
         assetId.toString().getBytes(StandardCharsets.UTF_8),
+        raw);
+  }
+
+  private LogisticsInboundEnvelopeValidator.ValidatedInboundEvent mediaEvent(
+      UUID eventId,
+      UUID mediaId,
+      long version,
+      String eventType,
+      String ownerType,
+      String ownerId,
+      String status) {
+    byte[] raw =
+        LogisticsInboundEnvelopeValidatorTest.mediaEvent(
+            eventId, mediaId, version, eventType, ownerType, ownerId, status);
+    return validator.validate(
+        LogisticsInboundTransportTopics.MEDIA,
+        mediaId.toString().getBytes(StandardCharsets.UTF_8),
         raw);
   }
 }

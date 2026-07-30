@@ -23,7 +23,8 @@ import org.hibernate.proxy.HibernateProxy;
 @Table(name = "rental_item")
 public class RentalItem {
   private static final Locale NUMBER_LOCALE = Locale.forLanguageTag("ru-RU");
-  private static final Pattern DISPLAY_NUMBER = Pattern.compile("^[\\p{L}\\p{N}][\\p{L}\\p{N} -]{0,127}$");
+  private static final String NEW_CATEGORY = "Новая";
+  private static final Pattern DISPLAY_NUMBER = Pattern.compile("^[\\p{L}\\p{N}][\\p{L}\\p{N} _-]{0,127}$");
   private static final Pattern MATCH_KEY = Pattern.compile("^[\\p{L}\\p{N}]{1,128}$");
 
   @Id
@@ -48,20 +49,24 @@ public class RentalItem {
   @Column(name = "status", nullable = false, length = 64)
   private RentalItemStatus status;
 
-  @Column(name = "rental_type", length = 255)
-  private String rentalType;
+  @Enumerated(EnumType.STRING)
+  @Column(name = "transfer_origin_status", length = 64)
+  private RentalItemStatus transferOriginStatus;
 
-  @Column(name = "dimensions", length = 255)
-  private String dimensions;
+  @Column(name = "cabin_type_id")
+  private UUID rentalTypeId;
 
-  @Column(name = "finishing", length = 255)
-  private String finishing;
+  @Column(name = "cabin_dimension_id")
+  private UUID dimensionId;
+
+  @Column(name = "cabin_finishing_id")
+  private UUID finishingId;
+
+  @Column(name = "cabin_category_id")
+  private UUID categoryId;
 
   @Column(name = "category", length = 255)
   private String category;
-
-  @Column(name = "characteristics", length = 2000)
-  private String characteristics;
 
   @Column(name = "linoleum")
   private Boolean linoleum;
@@ -86,63 +91,180 @@ public class RentalItem {
   public static RentalItem create(
       UUID warehouseId,
       String number,
-      String rentalType,
-      String dimensions,
-      String finishing,
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
       String category,
-      String characteristics,
       Boolean linoleum,
       String passportJson,
       String tagsJson) {
     if (warehouseId == null) throw new IllegalArgumentException("warehouseId is required");
-    return createWithStatus(warehouseId, number, RentalItemStatus.NEW, rentalType, dimensions,
-        finishing, category, characteristics, linoleum, passportJson, tagsJson);
+    String creationCategory =
+        category == null || category.isBlank() ? NEW_CATEGORY : category;
+    return createWithStatus(
+        warehouseId,
+        number,
+        RentalItemStatus.FREE,
+        rentalTypeId,
+        dimensionId,
+        finishingId,
+        null,
+        creationCategory,
+        linoleum,
+        passportJson,
+        tagsJson);
+  }
+
+  public static RentalItem create(
+      UUID warehouseId,
+      String number,
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
+      UUID categoryId,
+      String category,
+      Boolean linoleum,
+      String passportJson,
+      String tagsJson) {
+    String creationCategory =
+        category == null || category.isBlank() ? NEW_CATEGORY : category;
+    return createWithStatus(
+        warehouseId,
+        number,
+        RentalItemStatus.FREE,
+        rentalTypeId,
+        dimensionId,
+        finishingId,
+        categoryId,
+        creationCategory,
+        linoleum,
+        passportJson,
+        tagsJson);
   }
 
   public static RentalItem createFromInventory(
       UUID warehouseId,
       String number,
-      String rentalType,
-      String dimensions,
-      String finishing,
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
       String category,
-      String characteristics,
       Boolean linoleum,
       String passportJson,
       String tagsJson) {
-    return createWithStatus(warehouseId, number, RentalItemStatus.FREE, rentalType, dimensions,
-        finishing, category, characteristics, linoleum, passportJson, tagsJson);
+    return createWithStatus(
+        warehouseId,
+        number,
+        RentalItemStatus.FREE,
+        rentalTypeId,
+        dimensionId,
+        finishingId,
+        null,
+        category,
+        linoleum,
+        passportJson,
+        tagsJson);
+  }
+
+  public static RentalItem createFromInventory(
+      UUID warehouseId,
+      String number,
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
+      UUID categoryId,
+      String category,
+      Boolean linoleum,
+      String passportJson,
+      String tagsJson) {
+    return createWithStatus(
+        warehouseId,
+        number,
+        RentalItemStatus.FREE,
+        rentalTypeId,
+        dimensionId,
+        finishingId,
+        categoryId,
+        category,
+        linoleum,
+        passportJson,
+        tagsJson);
+  }
+
+  public static RentalItem createFromHtmlImport(
+      UUID warehouseId,
+      String number,
+      RentalItemStatus status,
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
+      UUID categoryId,
+      String category,
+      Boolean linoleum,
+      String passportJson,
+      String tagsJson) {
+    if (status == RentalItemStatus.IN_TRANSFER || status == RentalItemStatus.WRITTEN_OFF) {
+      throw new IllegalArgumentException("HTML import cannot create a fenced or terminal status");
+    }
+    return createHtmlImportItem(
+        warehouseId,
+        number,
+        status,
+        rentalTypeId,
+        dimensionId,
+        finishingId,
+        categoryId,
+        category,
+        linoleum,
+        passportJson,
+        tagsJson);
   }
 
   public boolean changePassport(
-      String rentalType,
-      String dimensions,
-      String finishing,
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
       String category,
-      String characteristics,
       Boolean linoleum,
       String passportJson,
       String tagsJson) {
-    String nextType = optional(rentalType, 255);
-    String nextDimensions = optional(dimensions, 255);
-    String nextFinishing = optional(finishing, 255);
+    return changePassport(
+        rentalTypeId,
+        dimensionId,
+        finishingId,
+        null,
+        category,
+        linoleum,
+        passportJson,
+        tagsJson);
+  }
+
+  public boolean changePassport(
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
+      UUID categoryId,
+      String category,
+      Boolean linoleum,
+      String passportJson,
+      String tagsJson) {
+    requireCabinCompositionIds(rentalTypeId, dimensionId, finishingId);
     String nextCategory = optional(category, 255);
-    String nextCharacteristics = optional(characteristics, 2000);
     String nextPassport = jsonObject(passportJson);
     String nextTags = jsonArray(tagsJson);
-    if (Objects.equals(this.rentalType, nextType)
-        && Objects.equals(this.dimensions, nextDimensions)
-        && Objects.equals(this.finishing, nextFinishing)
+    if (Objects.equals(this.rentalTypeId, rentalTypeId)
+        && Objects.equals(this.dimensionId, dimensionId)
+        && Objects.equals(this.finishingId, finishingId)
+        && Objects.equals(this.categoryId, categoryId)
         && Objects.equals(this.category, nextCategory)
-        && Objects.equals(this.characteristics, nextCharacteristics)
         && Objects.equals(this.linoleum, linoleum)
         && Objects.equals(this.passportJson, nextPassport)
         && Objects.equals(this.tagsJson, nextTags)) return false;
-    this.rentalType = nextType;
-    this.dimensions = nextDimensions;
-    this.finishing = nextFinishing;
+    this.rentalTypeId = rentalTypeId;
+    this.dimensionId = dimensionId;
+    this.finishingId = finishingId;
+    this.categoryId = categoryId;
     this.category = nextCategory;
-    this.characteristics = nextCharacteristics;
     this.linoleum = linoleum;
     this.passportJson = nextPassport;
     this.tagsJson = nextTags;
@@ -167,9 +289,47 @@ public class RentalItem {
    */
   public boolean changeStatusUnderLease(RentalItemStatus next) {
     if (next == null) throw new IllegalArgumentException("status is required");
+    if (status == RentalItemStatus.IN_TRANSFER || next == RentalItemStatus.IN_TRANSFER) {
+      throw new IllegalStateException(
+          "Transfer status must use the dedicated transfer transition");
+    }
     if (status == next) return false;
     status = next;
     return true;
+  }
+
+  public void departTransferUnderLease(RentalItemStatus restoredStatus) {
+    if (restoredStatus != RentalItemStatus.FREE
+        && restoredStatus != RentalItemStatus.REPAIR) {
+      throw new IllegalArgumentException(
+          "Transfer restoration status must be FREE or REPAIR");
+    }
+    boolean matchingFree =
+        restoredStatus == RentalItemStatus.FREE
+            && status == RentalItemStatus.FREE;
+    boolean matchingRepair =
+        restoredStatus == RentalItemStatus.REPAIR
+            && (status == RentalItemStatus.REPAIR
+                || status == RentalItemStatus.CAPITAL_REPAIR);
+    if (!matchingFree && !matchingRepair) {
+      throw new IllegalStateException(
+          "Transfer restoration status does not match the current rental-item status");
+    }
+    if (transferOriginStatus != null) {
+      throw new IllegalStateException("Rental item already has a transfer origin status");
+    }
+    transferOriginStatus = restoredStatus;
+    status = RentalItemStatus.IN_TRANSFER;
+  }
+
+  public void arriveTransferUnderLease(RentalItemStatus restoredStatus) {
+    if (status != RentalItemStatus.IN_TRANSFER
+        || transferOriginStatus == null
+        || transferOriginStatus != restoredStatus) {
+      throw new IllegalStateException("Transfer origin status does not match the restored status");
+    }
+    status = restoredStatus;
+    transferOriginStatus = null;
   }
 
   public boolean changeWarehouse(UUID nextWarehouseId) {
@@ -195,19 +355,44 @@ public class RentalItem {
   }
 
   private void assignPassport(
-      String rentalType,
-      String dimensions,
-      String finishing,
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
+      UUID categoryId,
       String category,
-      String characteristics,
       Boolean linoleum,
       String passportJson,
       String tagsJson) {
-    this.rentalType = optional(rentalType, 255);
-    this.dimensions = optional(dimensions, 255);
-    this.finishing = optional(finishing, 255);
+    requireCabinCompositionIds(rentalTypeId, dimensionId, finishingId);
+    this.rentalTypeId = rentalTypeId;
+    this.dimensionId = dimensionId;
+    this.finishingId = finishingId;
+    this.categoryId = categoryId;
     this.category = optional(category, 255);
-    this.characteristics = optional(characteristics, 2000);
+    this.linoleum = linoleum;
+    this.passportJson = jsonObject(passportJson);
+    this.tagsJson = jsonArray(tagsJson);
+  }
+
+  /**
+   * HTML can contain historically incomplete cabin records. This assignment path deliberately
+   * preserves absent composition references so the import can create the cabin for later
+   * completion in the regular editor.
+   */
+  private void assignHtmlImportPassport(
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
+      UUID categoryId,
+      String category,
+      Boolean linoleum,
+      String passportJson,
+      String tagsJson) {
+    this.rentalTypeId = rentalTypeId;
+    this.dimensionId = dimensionId;
+    this.finishingId = finishingId;
+    this.categoryId = categoryId;
+    this.category = optional(category, 255);
     this.linoleum = linoleum;
     this.passportJson = jsonObject(passportJson);
     this.tagsJson = jsonArray(tagsJson);
@@ -234,13 +419,13 @@ public class RentalItem {
     String normalized = candidate.toUpperCase(NUMBER_LOCALE);
     if (!DISPLAY_NUMBER.matcher(normalized).matches()) {
       throw new IllegalArgumentException(
-          "Rental item number must contain 1 to 128 letters, digits, spaces, or ASCII hyphens");
+          "Rental item number must contain 1 to 128 letters, digits, spaces, ASCII hyphens, or underscores");
     }
     return normalized;
   }
 
   public static String identityMatchKey(String value) {
-    String key = canonicalNumber(value).replace(" ", "").replace("-", "");
+    String key = canonicalNumber(value).replace(" ", "").replace("-", "").replace("_", "");
     if (!MATCH_KEY.matcher(key).matches()) {
       throw new IllegalArgumentException("Rental item number has no identity characters");
     }
@@ -251,11 +436,11 @@ public class RentalItem {
       UUID warehouseId,
       String number,
       RentalItemStatus status,
-      String rentalType,
-      String dimensions,
-      String finishing,
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
+      UUID categoryId,
       String category,
-      String characteristics,
       Boolean linoleum,
       String passportJson,
       String tagsJson) {
@@ -266,8 +451,52 @@ public class RentalItem {
     item.identityMatchKey = identityMatchKey(item.number);
     item.status = status;
     item.assignPassport(
-        rentalType, dimensions, finishing, category, characteristics, linoleum, passportJson, tagsJson);
+        rentalTypeId,
+        dimensionId,
+        finishingId,
+        categoryId,
+        category,
+        linoleum,
+        passportJson,
+        tagsJson);
     return item;
+  }
+
+  private static RentalItem createHtmlImportItem(
+      UUID warehouseId,
+      String number,
+      RentalItemStatus status,
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
+      UUID categoryId,
+      String category,
+      Boolean linoleum,
+      String passportJson,
+      String tagsJson) {
+    if (warehouseId == null) throw new IllegalArgumentException("warehouseId is required");
+    RentalItem item = new RentalItem();
+    item.warehouseId = warehouseId;
+    item.number = canonicalNumber(number);
+    item.identityMatchKey = identityMatchKey(item.number);
+    item.status = status;
+    item.assignHtmlImportPassport(
+        rentalTypeId,
+        dimensionId,
+        finishingId,
+        categoryId,
+        category,
+        linoleum,
+        passportJson,
+        tagsJson);
+    return item;
+  }
+
+  private static void requireCabinCompositionIds(
+      UUID rentalTypeId, UUID dimensionId, UUID finishingId) {
+    if (rentalTypeId == null || dimensionId == null || finishingId == null) {
+      throw new IllegalArgumentException("Cabin composition IDs are required");
+    }
   }
 
   private static String optional(String value, int maximum) {
@@ -300,11 +529,12 @@ public class RentalItem {
   public String getNumber() { return number; }
   public String getIdentityMatchKey() { return identityMatchKey; }
   public RentalItemStatus getStatus() { return status; }
-  public String getRentalType() { return rentalType; }
-  public String getDimensions() { return dimensions; }
-  public String getFinishing() { return finishing; }
+  public RentalItemStatus getTransferOriginStatus() { return transferOriginStatus; }
+  public UUID getRentalTypeId() { return rentalTypeId; }
+  public UUID getDimensionId() { return dimensionId; }
+  public UUID getFinishingId() { return finishingId; }
+  public UUID getCategoryId() { return categoryId; }
   public String getCategory() { return category; }
-  public String getCharacteristics() { return characteristics; }
   public Boolean getLinoleum() { return linoleum; }
   public String getGeneralComment() { return generalComment; }
   public String getPassportJson() { return passportJson; }

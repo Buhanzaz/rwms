@@ -11,7 +11,20 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties("rwms.auth.oauth")
 public record OAuthClientProperties(List<Client> clients) {
 
+    static final String ASSET_CLIENT_ID = "asset-service";
+    static final String ASSET_AUDIENCE = "rwms-services";
+    static final String ASSET_SECRET_ENVIRONMENT = "ASSET_WAREHOUSE_CLIENT_SECRET";
+    static final Set<String> ASSET_SCOPES = Set.of("warehouse.read", "media.asset-import");
     static final String INVENTORY_CLIENT_ID = "inventory-service";
+    static final String WORKER_ANDROID_CLIENT_ID = "rwms-worker-android";
+    public static final String MANAGER_ANDROID_CLIENT_ID = "rwms-manager-android";
+    static final Set<String> MANAGER_ANDROID_SCOPES = Set.of(
+            "openid",
+            "profile",
+            "offline_access",
+            "rwms.read",
+            "rwms.write",
+            "warehouse.read");
     static final String INVENTORY_AUDIENCE = "rwms-services";
     static final String INVENTORY_SECRET_ENVIRONMENT = "INVENTORY_CLIENT_SECRET";
     static final Set<String> INVENTORY_SCOPES =
@@ -56,6 +69,8 @@ public record OAuthClientProperties(List<Client> clients) {
             Set<String> audiences,
             Set<String> allowedOrigins,
             Duration accessTokenTtl,
+            Duration refreshTokenTtl,
+            Boolean reuseRefreshTokens,
             String secretEnvironment,
             String developmentSecret,
             boolean revokeAuthorizations) {
@@ -72,6 +87,10 @@ public record OAuthClientProperties(List<Client> clients) {
             audiences = copy(audiences);
             allowedOrigins = copy(allowedOrigins);
             accessTokenTtl = accessTokenTtl == null ? Duration.ofMinutes(5) : accessTokenTtl;
+            refreshTokenTtl =
+                    refreshTokenTtl == null ? Duration.ofHours(1) : refreshTokenTtl;
+            reuseRefreshTokens =
+                    reuseRefreshTokens == null ? Boolean.TRUE : reuseRefreshTokens;
         }
 
         private static Set<String> copy(Set<String> values) {
@@ -82,8 +101,16 @@ public record OAuthClientProperties(List<Client> clients) {
             return INVENTORY_CLIENT_ID.equals(clientId);
         }
 
+        boolean assetServiceClient() {
+            return ASSET_CLIENT_ID.equals(clientId);
+        }
+
         boolean logisticsServiceClient() {
             return LOGISTICS_CLIENT_ID.equals(clientId);
+        }
+
+        boolean managerAndroidClient() {
+            return MANAGER_ANDROID_CLIENT_ID.equals(clientId);
         }
 
         @Override

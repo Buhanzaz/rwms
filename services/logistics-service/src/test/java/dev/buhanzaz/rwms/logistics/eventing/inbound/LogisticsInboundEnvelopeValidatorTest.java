@@ -62,6 +62,97 @@ class LogisticsInboundEnvelopeValidatorTest {
         .hasMessageContaining("Kafka key");
   }
 
+  @Test
+  void acceptsCurrentReturnAndTransferMediaFactsWithFoldersAndStructuredOwners() {
+    UUID eventId = UUID.randomUUID();
+    UUID mediaId = UUID.randomUUID();
+    UUID documentId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+
+    LogisticsInboundEnvelopeValidator.ValidatedInboundEvent event =
+        validator.validate(
+            LogisticsInboundTransportTopics.MEDIA,
+            mediaId.toString(),
+            mediaEvent(
+                eventId,
+                mediaId,
+                2,
+                "media.media.ready.v1",
+                "LOGISTICS_RETURN",
+                documentId + ":" + lineId,
+                "READY"));
+
+    assertThat(event.appliesToLogistics()).isTrue();
+    assertThat(event.isPublicMediaFact()).isTrue();
+    assertThat(event.aggregateVersion()).isEqualTo(2);
+
+    UUID transferMediaId = UUID.randomUUID();
+    LogisticsInboundEnvelopeValidator.ValidatedInboundEvent transfer =
+        validator.validate(
+            LogisticsInboundTransportTopics.MEDIA,
+            transferMediaId.toString(),
+            mediaEvent(
+                UUID.randomUUID(),
+                transferMediaId,
+                2,
+                "media.media.ready.v1",
+                "LOGISTICS_TRANSFER",
+                UUID.randomUUID() + ":" + UUID.randomUUID(),
+                "READY"));
+
+    assertThat(transfer.appliesToLogistics()).isTrue();
+  }
+
+  @Test
+  void acknowledgesAForeignMediaOwnerBeforeApplyingLogisticsOwnerValidation() {
+    UUID eventId = UUID.randomUUID();
+    UUID mediaId = UUID.randomUUID();
+
+    LogisticsInboundEnvelopeValidator.ValidatedInboundEvent event =
+        validator.validate(
+            LogisticsInboundTransportTopics.MEDIA,
+            mediaId.toString(),
+            mediaEvent(
+                eventId,
+                mediaId,
+                2,
+                "media.media.ready.v1",
+                "CABIN",
+                "foreign-cabin-owner",
+                "READY"));
+
+    assertThat(event.appliesToLogistics()).isFalse();
+  }
+
+  @Test
+  void rejectsARelevantMediaFactWithoutItsCanonicalFolderId() {
+    UUID eventId = UUID.randomUUID();
+    UUID mediaId = UUID.randomUUID();
+    UUID documentId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    String body =
+        new String(
+                mediaEvent(
+                    eventId,
+                    mediaId,
+                    2,
+                    "media.media.ready.v1",
+                    "LOGISTICS_TRANSFER",
+                    documentId + ":" + lineId,
+                    "READY"),
+                StandardCharsets.UTF_8)
+            .replaceFirst("\\\"folderId\\\": \\\"[0-9a-f-]+\\\",\\s*", "");
+
+    assertThatThrownBy(
+            () ->
+                validator.validate(
+                    LogisticsInboundTransportTopics.MEDIA,
+                    mediaId.toString(),
+                    body.getBytes(StandardCharsets.UTF_8)))
+        .isInstanceOf(LogisticsInboundValidationException.class)
+        .hasMessageContaining("media payload fields");
+  }
+
   static byte[] rentalEvent(UUID eventId, UUID assetId, long version, String status) {
     return """
         {
@@ -88,6 +179,48 @@ class LogisticsInboundEnvelopeValidatorTest {
           }
         }
         """.formatted(eventId, assetId, version, assetId, status)
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
+  static byte[] mediaEvent(
+      UUID eventId,
+      UUID mediaId,
+      long version,
+      String eventType,
+      String ownerType,
+      String ownerId,
+      String status) {
+    return """
+        {
+          "envelopeVersion": 2,
+          "eventId": "%s",
+          "eventType": "%s",
+          "eventVersion": 1,
+          "occurredAt": null,
+          "recordedAt": "2026-07-17T08:00:00Z",
+          "producer": "media-service",
+          "aggregateType": "MEDIA",
+          "aggregateId": "%s",
+          "aggregateVersion": %d,
+          "correlation": {
+            "correlationId": "00000000-0000-0000-0000-000000000803",
+            "causationId": null
+          },
+          "actorRef": null,
+          "payload": {
+            "mediaId": "%s",
+            "folderId": "%s",
+            "ownerType": "%s",
+            "ownerId": "%s",
+            "warehouseId": "00000000-0000-0000-0000-000000000804",
+            "kind": "IMAGE",
+            "status": "%s",
+            "generation": 1,
+            "rotationDegrees": 0
+          }
+        }
+        """
+        .formatted(eventId, eventType, mediaId, version, mediaId, UUID.randomUUID(), ownerType, ownerId, status)
         .getBytes(StandardCharsets.UTF_8);
   }
 }

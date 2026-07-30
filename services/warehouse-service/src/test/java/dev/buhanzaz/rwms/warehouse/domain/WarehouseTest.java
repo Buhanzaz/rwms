@@ -10,9 +10,8 @@ class WarehouseTest {
   @Test
   void createsTheCanonicalUppercaseWarehouseCode() {
     Warehouse warehouse =
-        Warehouse.create(" wh_north-1 ", " Северный ", " Санкт-Петербург ", " ", ZoneId.of("Europe/Moscow"), null);
+        Warehouse.create(" Северный ", " Санкт-Петербург ", " ", ZoneId.of("Europe/Moscow"), null);
 
-    assertThat(warehouse.getCode()).isEqualTo("WH_NORTH-1");
     assertThat(warehouse.getName()).isEqualTo("Северный");
     assertThat(warehouse.getCity()).isEqualTo("Санкт-Петербург");
     assertThat(warehouse.getAddress()).isNull();

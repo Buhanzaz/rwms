@@ -86,4 +86,27 @@ class MaintenanceDomainCoreTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("cannot be replaced");
   }
+
+  @Test
+  void repairPriorityIsSelectedOnlyBeforeQueueing() {
+    MaintenanceRepair repair =
+        MaintenanceRepair.primary(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            0,
+            null,
+            RepairOrigin.DIRECT_REPAIR,
+            LocalDate.of(2026, 7, 24),
+            null,
+            ACTOR);
+
+    repair.selectPriority(1);
+    assertThat(repair.getPriority()).isEqualTo(1);
+    repair.queue(
+        UUID.randomUUID(), 0, 1, OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15));
+
+    assertThatThrownBy(() -> repair.selectPriority(2))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("before queueing");
+  }
 }

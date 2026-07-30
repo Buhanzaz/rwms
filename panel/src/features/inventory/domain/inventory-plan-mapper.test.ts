@@ -15,7 +15,6 @@ const catalogWork: RepairEstimateLineDto = {
   lineTotal: "2500.00",
   catalogSnapshot: {
     nodeId: "00000000-0000-4000-8000-000000000101",
-    code: "DOOR_REPLACE",
     name: "Замена двери",
     nodeType: "WORK",
     furnitureEquipment: null,
@@ -40,6 +39,8 @@ describe("inventory plan mapper", () => {
     const result = buildInventoryPlanSelection({
       completionMode: "MANUAL",
       movementRequired: false,
+      priority: 2,
+      coverMediaId: "00000000-0000-4000-8000-000000000102",
       lines: [catalogWork, manualMaterial],
       media: [
         {
@@ -54,7 +55,8 @@ describe("inventory plan mapper", () => {
           includedLineIds: [catalogWork.id, manualMaterial.id],
           primaryLineId: catalogWork.id,
           groupComment: "Плановый комментарий",
-          queueCode: "REPAIR",
+          queueId: "00000000-0000-4000-8000-000000000103",
+          queueName: "Ремонт",
           routeQueueKind: "REPAIR",
           sortOrder: 10,
           generationStatus: "PENDING_GENERATION",
@@ -92,11 +94,13 @@ describe("inventory plan mapper", () => {
       buildInventoryPlanSelection({
         completionMode: "AUTO",
         movementRequired: true,
+        priority: 3,
+        coverMediaId: null,
         taskPlans: [],
         lines: [catalogWork],
         media: [],
       })
-    ).toThrow("Для перемещения не задан маршрут локаций")
+    ).toThrow("В каталоге не настроено расположение для перемещения.")
   })
 
   it("rejects manual lines in automatic catalog mode", () => {
@@ -104,6 +108,8 @@ describe("inventory plan mapper", () => {
       buildInventoryPlanSelection({
         completionMode: "AUTO",
         movementRequired: false,
+        priority: 3,
+        coverMediaId: null,
         taskPlans: [],
         lines: [manualMaterial],
         media: [],

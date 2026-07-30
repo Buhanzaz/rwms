@@ -14,11 +14,14 @@ import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ReturnPickupRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentPlanRequest;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureReadinessView;
 import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.ShipmentFurnitureTaskResult;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferFurnitureReadinessView;
+import dev.buhanzaz.rwms.logistics.api.LogisticsApiModels.TransferArrivalPreflightView;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsDocumentType;
 import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
 import dev.buhanzaz.rwms.logistics.service.CabinFurnitureTaskService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.service.ShipmentFurnitureTaskService;
+import dev.buhanzaz.rwms.logistics.service.TransferFurnitureTaskService;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -49,6 +52,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class LogisticsController {
   private final LogisticsDocumentService service;
   private final ShipmentFurnitureTaskService shipmentFurnitureTasks;
+  private final TransferFurnitureTaskService transferFurnitureTasks;
   private final CabinFurnitureTaskService cabinFurnitureTasks;
   private final LogisticsAuthorizer access;
 
@@ -258,6 +262,13 @@ public class LogisticsController {
     return read(jwt, documentId, LogisticsDocumentType.TRANSFER);
   }
 
+  @GetMapping("/transfers/{documentId}/furniture-readiness")
+  public TransferFurnitureReadinessView getTransferFurnitureReadiness(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID documentId) {
+    read(jwt, documentId, LogisticsDocumentType.TRANSFER);
+    return transferFurnitureTasks.readiness(documentId);
+  }
+
   @PostMapping("/transfers")
   public ResponseEntity<LogisticsDocumentView> createTransfer(
       @AuthenticationPrincipal Jwt jwt,
@@ -337,6 +348,21 @@ public class LogisticsController {
             expectedVersion,
             expectedLineVersion,
             request));
+  }
+
+  @GetMapping("/transfers/{documentId}/lines/{lineId}/arrival-preflight")
+  public TransferArrivalPreflightView getTransferArrivalPreflight(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID documentId,
+      @PathVariable UUID lineId,
+      @RequestParam @Min(0) long expectedVersion,
+      @RequestParam @Min(0) long expectedLineVersion) {
+    LogisticsDocumentView current =
+        service.get(documentId, LogisticsDocumentType.TRANSFER);
+    access.requireManageBoth(
+        jwt, current.warehouseId(), current.destinationWarehouseId());
+    return service.transferArrivalPreflight(
+        documentId, lineId, expectedVersion, expectedLineVersion);
   }
 
   @PostMapping("/transfers/{documentId}/cancel")

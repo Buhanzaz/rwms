@@ -87,34 +87,29 @@ const item: RentalItemDto = {
   version: 1,
   warehouseId: WAREHOUSE_ID,
   number: "БЫТ-001",
+  rentalTypeId: "33333333-3333-4333-8333-333333333333",
+  dimensionId: "44444444-4444-4444-8444-444444444444",
+  finishingId: "55555555-5555-4555-8555-555555555555",
   type: "БК-1",
   dimensions: "2.4x6",
   finishing: "ДВП",
   category: "Новая",
-  characteristics: "Пластиковое окно",
+  characteristics: [
+    {
+      id: "66666666-6666-4666-8666-666666666666",
+      name: "Пластиковое окно",
+    },
+  ],
   linoleum: true,
   status: "WAREHOUSE",
   comment: null,
-  hasPhotos: true,
-  photoCount: 1,
-  mainPhotoUrl: "/legacy-medium.jpg",
-  previewPhotoUrls: ["/legacy-medium.jpg"],
-  legacyPhotos: [
-    {
-      id: "legacy-photo",
-      url: "/legacy-medium.jpg",
-      variants: {
-        small: { url: "/legacy-small.webp" },
-        largeWebp: { url: "/legacy-large.webp" },
-      },
-    },
-  ],
-  locationNodeId: null,
   contents: null,
   contentsItems: [],
   shipmentDate: null,
   tenant: null,
   price: null,
+  passport: {},
+  tags: [],
 }
 
 beforeAll(() => {
@@ -155,17 +150,6 @@ function renderGrid({
 }
 
 describe("RentalItemsGridView photo covers", () => {
-  it("renders the real imported SMALL URL instead of the legacy base URL", () => {
-    coverUrl.mockReturnValue({ photos: [], availability: "available" })
-
-    renderGrid()
-
-    expect(
-      screen.getByRole("img", { name: "Обложка бытовки" }).getAttribute("src")
-    ).toBe("/legacy-small.webp")
-    expect(screen.getByTestId("grid-photo-count").textContent).toBe("1")
-  })
-
   it("shows arrows and navigates through two logical service SMALL photos", async () => {
     const user = userEvent.setup()
     coverUrl.mockReturnValue({
@@ -218,14 +202,6 @@ describe("RentalItemsGridView photo covers", () => {
     }
 
     renderGrid({
-      renderedItem: {
-        ...item,
-        hasPhotos: false,
-        photoCount: 0,
-        mainPhotoUrl: null,
-        previewPhotoUrls: [],
-        legacyPhotos: [],
-      },
       mediaCovers: new Map([[CABIN_ID, projection]]),
     })
 
@@ -246,14 +222,6 @@ describe("RentalItemsGridView photo covers", () => {
     coverUrl.mockReturnValue({ photos: [], availability: "available" })
 
     renderGrid({
-      renderedItem: {
-        ...item,
-        hasPhotos: false,
-        photoCount: 0,
-        mainPhotoUrl: null,
-        previewPhotoUrls: [],
-        legacyPhotos: [],
-      },
       mediaCovers: new Map([
         [
           CABIN_ID,
@@ -273,17 +241,7 @@ describe("RentalItemsGridView photo covers", () => {
   it("shows a local service error without replacing the warehouse grid", () => {
     coverUrl.mockReturnValue({ photos: [], availability: "available" })
 
-    renderGrid({
-      renderedItem: {
-        ...item,
-        hasPhotos: false,
-        photoCount: 0,
-        mainPhotoUrl: null,
-        previewPhotoUrls: [],
-        legacyPhotos: [],
-      },
-      coverAvailability: "unavailable",
-    })
+    renderGrid({ coverAvailability: "unavailable" })
 
     expect(screen.getByText("Сервис фото недоступен")).toBeTruthy()
     expect(screen.getByText("БЫТ-001")).toBeTruthy()

@@ -73,6 +73,22 @@ class TaskBoardOpenApiParityTest {
           }
           Map<String, Object> response = resolve(document, map(success.getValue()));
           Map<String, Object> content = child(response, "content");
+          if (content.containsKey("text/event-stream")) {
+            Map<String, Object> mediaType = child(content, "text/event-stream");
+            Map<String, Object> streamSchema = child(mediaType, "schema");
+            assertThat(streamSchema.get("type"))
+                .as("%s %s event stream must be encoded as text", operationLabel, success.getKey())
+                .isEqualTo("string");
+            Map<String, Object> eventSchema =
+                resolve(document, child(mediaType, "x-rwms-event-data-schema"));
+            assertThat(eventSchema.get("type"))
+                .as(
+                    "%s %s event data must reference a concrete object schema",
+                    operationLabel,
+                    success.getKey())
+                .isEqualTo("object");
+            continue;
+          }
           Map<String, Object> mediaType = child(content, "application/json");
           Map<String, Object> declaredSchema = child(mediaType, "schema");
           String schemaReference = String.valueOf(declaredSchema.get("$ref"));
@@ -95,6 +111,30 @@ class TaskBoardOpenApiParityTest {
     Map<String, Object> apiProblem = child(schemas, "ApiProblem");
     assertThat(list(apiProblem.get("required")))
         .contains("code", "violations", "correlation");
+  }
+
+  @Test
+  void queueAndBrigadeSchemasExposeOnlyTheCurrentOrderedClassContract() throws Exception {
+    Map<String, Object> schemas = child(child(openApiDocument(), "components"), "schemas");
+
+    assertThat(schemas).doesNotContainKeys("QueueGroupBinding", "QueueGroupBindingRequest");
+
+    Map<String, Object> queue = child(schemas, "WorkQueue");
+    assertThat(child(queue, "properties")).doesNotContainKey("groupBindings");
+    assertThat(list(queue.get("required"))).doesNotContain("groupBindings");
+
+    Map<String, Object> queueRequest = child(schemas, "WorkQueueRequest");
+    assertThat(child(queueRequest, "properties")).doesNotContainKey("groupBindings");
+
+    assertThat(list(child(schemas, "QueueBinding").get("required")))
+        .contains("order", "primary", "stopTaskOnTake", "notifyUrgent");
+    assertThat(list(child(schemas, "QueueBindingRequest").get("required")))
+        .contains("order", "stopTaskOnTake", "notifyUrgent");
+
+    assertThat(child(child(schemas, "GroupMember"), "properties"))
+        .doesNotContainKey("roleInGroup");
+    assertThat(child(child(schemas, "GroupMemberRequest"), "properties"))
+        .doesNotContainKey("roleInGroup");
   }
 
   private Set<Endpoint> controllerEndpoints() throws ClassNotFoundException {

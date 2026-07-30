@@ -84,6 +84,8 @@ class AuthGatewayPrefixIntegrationTest {
         assertThat(script)
                 .contains("api/auth/csrf")
                 .contains("action:\"login\"")
-                .contains("src:\"wms-login-cover.png\"");
+                .contains("src:\"wms-login-cover.png\"")
+                .contains("RWMS Рабочий")
+                .contains("настроек доски");
     }
 }

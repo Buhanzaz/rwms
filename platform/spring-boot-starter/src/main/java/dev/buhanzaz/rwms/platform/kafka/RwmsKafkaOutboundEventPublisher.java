@@ -78,12 +78,13 @@ public class RwmsKafkaOutboundEventPublisher {
             throw new IllegalArgumentException("serialized payload must not be empty");
         }
 
-        DomainEventEnvelopeV2<Map<String, Object>> envelope = readEnvelope(serializedPayload);
-        RwmsKafkaEventMetadata metadata = RwmsKafkaEventMetadata.from(envelope);
-        if (!destination.equals(metadata.aggregateFamilyDestination())) {
+        JsonNode root = readRequiredTree(serializedPayload);
+        PublishedEnvelope envelope = readEnvelope(root);
+        RwmsKafkaEventMetadata metadata = envelope.metadata();
+        if (!metadata.matchesDestination(destination)) {
             throw new IllegalArgumentException("Kafka destination does not match the event aggregate family");
         }
-        validatePayload(envelope.eventType(), readRequiredTree(serializedPayload).get("payload"));
+        validatePayload(envelope.eventType(), envelope.payload());
 
         MessageBuilder<byte[]> messageBuilder = MessageBuilder.withPayload(serializedPayload)
                 .setHeader(
@@ -119,13 +120,38 @@ public class RwmsKafkaOutboundEventPublisher {
         }
     }
 
-    private DomainEventEnvelopeV2<Map<String, Object>> readEnvelope(byte[] serializedPayload) {
-        JsonNode root = readRequiredTree(serializedPayload);
+    private PublishedEnvelope readEnvelope(JsonNode root) {
         try {
-            return objectMapper
+            DomainEventEnvelopeV2<Map<String, Object>> envelope = objectMapper
                     .readerFor(new TypeReference<DomainEventEnvelopeV2<Map<String, Object>>>() {})
                     .readValue(root);
+            return new PublishedEnvelope(RwmsKafkaEventMetadata.from(envelope), envelope.eventType(), root.get("payload"));
         } catch (tools.jackson.core.JacksonException exception) {
+            return readFrozenTaskBoardOwnerProofEnvelope(root);
+        }
+    }
+
+    private PublishedEnvelope readFrozenTaskBoardOwnerProofEnvelope(JsonNode root) {
+        try {
+            CanonicalEnvelope envelope = objectMapper.readerFor(CanonicalEnvelope.class).readValue(root);
+            RwmsKafkaEventMetadata metadata = new RwmsKafkaEventMetadata(
+                    envelope.envelopeVersion(),
+                    envelope.eventId(),
+                    envelope.eventType(),
+                    envelope.eventVersion(),
+                    envelope.occurredAt(),
+                    envelope.aggregateType(),
+                    envelope.aggregateId(),
+                    envelope.aggregateVersion(),
+                    envelope.producer(),
+                    envelope.recordedAt(),
+                    envelope.correlation().correlationId(),
+                    envelope.correlation().causationId());
+            if (!metadata.isFrozenTaskBoardOwnerProof()) {
+                throw new IllegalArgumentException("serialized payload is not the frozen task-board owner proof contract");
+            }
+            return new PublishedEnvelope(metadata, envelope.eventType(), envelope.payload());
+        } catch (RuntimeException exception) {
             throw new IllegalArgumentException("serialized payload must be a valid DomainEventEnvelopeV2 JSON object");
         }
     }
@@ -208,4 +234,21 @@ public class RwmsKafkaOutboundEventPublisher {
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
     private abstract static class AlwaysIncludeMixin {}
+
+    private record PublishedEnvelope(RwmsKafkaEventMetadata metadata, String eventType, JsonNode payload) {}
+
+    private record CanonicalEnvelope(
+            int envelopeVersion,
+            java.util.UUID eventId,
+            String eventType,
+            int eventVersion,
+            java.time.Instant occurredAt,
+            java.time.Instant recordedAt,
+            String producer,
+            String aggregateType,
+            String aggregateId,
+            long aggregateVersion,
+            CorrelationContext correlation,
+            OpaqueActorReference actorRef,
+            JsonNode payload) {}
 }

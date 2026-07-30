@@ -19,7 +19,6 @@ public interface AssetMaintenanceResponseMapper {
   MaintenanceRentalItemSnapshot toMaintenanceSnapshot(RentalItemResponse response);
 
   @Mapping(target = "equipmentId", source = "id")
-  @Mapping(target = "equipmentCode", source = "code")
   @Mapping(target = "equipmentName", source = "name")
   MaintenanceFurnitureEquipmentResponse toMaintenanceFurnitureEquipment(
       EquipmentResponse response);

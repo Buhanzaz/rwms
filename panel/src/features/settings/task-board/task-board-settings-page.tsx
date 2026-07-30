@@ -1,12 +1,20 @@
 import { useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { HugeiconsIcon } from "@hugeicons/react"
+import {
+  Queue01Icon,
+  Sorting01Icon,
+  Task01Icon,
+  UserGroupIcon,
+  UserIcon,
+} from "@hugeicons/core-free-icons"
 import { toast } from "sonner"
 
 import { OperationsListGrid } from "@/components/operations-list-grid"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { isGlobalAdministrator } from "@/features/auth/auth-model"
 import { useAuth } from "@/features/auth/use-auth"
 import {
@@ -14,6 +22,8 @@ import {
   taskBoardSettingsKeys,
 } from "@/features/settings/task-board/api/task-board-settings-api"
 import type {
+  QueueDefinitionDto,
+  QueueDefinitionRequest,
   WorkerClassDto,
   WorkerClassRequest,
   WorkerDto,
@@ -25,13 +35,17 @@ import type {
 } from "@/features/settings/task-board/model/task-board-settings"
 import {
   credentialStatusLabels,
+  operationalAvailabilityLabels,
   queueTypeLabels,
 } from "@/features/settings/task-board/model/task-board-settings"
 import { QueueOrderSettings } from "@/features/settings/task-board/queue-order-settings"
 import {
   ClassEditorDialog,
   CredentialPasswordDialog,
+  CurrentGroupDialog,
+  GroupAvailabilityDialog,
   GroupEditorDialog,
+  QueueDefinitionEditorDialog,
   QueueEditorDialog,
   WorkerEditorDialog,
 } from "@/features/settings/task-board/settings-editor-dialogs"
@@ -40,9 +54,11 @@ import {
   isTaskBoardSettingsConflict as isConflict,
   taskBoardSettingsErrorMessage as message,
 } from "@/features/settings/task-board/task-board-settings-errors"
+import { workerCredentialToggleAction } from "@/features/settings/task-board/worker-credential-action"
 import { useWarehouse } from "@/hooks/use-warehouse"
 
 type DeleteTarget =
+  | { kind: "queue-definition"; item: QueueDefinitionDto }
   | { kind: "queue"; item: WorkQueueDto }
   | { kind: "class"; item: WorkerClassDto }
   | { kind: "group"; item: WorkerGroupDto }
@@ -63,11 +79,47 @@ function StatusBadge({ active }: { active: boolean }) {
   )
 }
 
+function QueueBindings({ queue }: { queue: WorkQueueDto }) {
+  const bindings = [...queue.bindings].sort(
+    (left, right) => left.order - right.order
+  )
+
+  if (bindings.length === 0) return "—"
+
+  return (
+    <div className="flex flex-col gap-1">
+      {bindings.map((binding, index) => (
+        <div key={binding.id} className="flex items-center gap-2">
+          <Badge variant={index === 0 ? "default" : "secondary"}>
+            {index === 0 ? "Основной" : "Вторичный"}
+          </Badge>
+          <span>{binding.workerClass.name}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const taskBoardSettingsSections = [
+  { value: "queue-definitions", label: "Каталог очередей", icon: Queue01Icon },
+  { value: "queues", label: "Очереди склада", icon: Queue01Icon },
+  { value: "order", label: "Порядок", icon: Sorting01Icon },
+  { value: "classes", label: "Классы", icon: Task01Icon },
+  { value: "groups", label: "Бригады", icon: UserGroupIcon },
+  { value: "workers", label: "Рабочие", icon: UserIcon },
+] as const
+
+type TaskBoardSettingsSection =
+  (typeof taskBoardSettingsSections)[number]["value"]
+
 export function TaskBoardSettingsPage() {
   const queryClient = useQueryClient()
   const { accessToken, currentUser } = useAuth()
   const { selectedWarehouse } = useWarehouse()
-  const warehouseId = selectedWarehouse?.serviceId ?? ""
+  const warehouseId = selectedWarehouse?.id ?? ""
+  const [queueDefinitionEditor, setQueueDefinitionEditor] = useState<
+    QueueDefinitionDto | "new" | null
+  >(null)
   const [queueEditor, setQueueEditor] = useState<WorkQueueDto | "new" | null>(
     null
   )
@@ -81,10 +133,15 @@ export function TaskBoardSettingsPage() {
     null
   )
   const [passwordWorker, setPasswordWorker] = useState<WorkerDto | null>(null)
+  const [currentGroupWorker, setCurrentGroupWorker] =
+    useState<WorkerDto | null>(null)
+  const [availabilityGroup, setAvailabilityGroup] =
+    useState<WorkerGroupDto | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [bootstrapSummary, setBootstrapSummary] = useState<string | null>(null)
-  const bootstrapIdempotencyKey = useRef<string | null>(null)
+  const [activeSection, setActiveSection] =
+    useState<TaskBoardSettingsSection>("queues")
+  const mutationInFlight = useRef(false)
 
   const explicitAccess = currentUser?.warehouseAccesses.find(
     (access) => access.warehouseId === warehouseId
@@ -96,6 +153,11 @@ export function TaskBoardSettingsPage() {
     currentUser && isGlobalAdministrator(currentUser.globalRole)
   )
 
+  const queueDefinitionsQuery = useQuery({
+    queryKey: taskBoardSettingsKeys.queueDefinitions,
+    queryFn: () => taskBoardSettingsClient.listQueueDefinitions(accessToken!),
+    enabled: Boolean(accessToken && canManage),
+  })
   const queuesQuery = useQuery({
     queryKey: taskBoardSettingsKeys.queues(warehouseId),
     queryFn: () =>
@@ -121,17 +183,23 @@ export function TaskBoardSettingsPage() {
   })
 
   function closeEditors() {
+    setQueueDefinitionEditor(null)
     setQueueEditor(null)
     setClassEditor(null)
     setWorkerEditor(null)
     setGroupEditor(null)
     setPasswordWorker(null)
+    setCurrentGroupWorker(null)
+    setAvailabilityGroup(null)
     setDeleteTarget(null)
     setActionError(null)
   }
 
   async function invalidateSettings() {
     await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: taskBoardSettingsKeys.queueDefinitions,
+      }),
       queryClient.invalidateQueries({
         queryKey: taskBoardSettingsKeys.classes,
       }),
@@ -150,9 +218,9 @@ export function TaskBoardSettingsPage() {
   const mutation = useMutation({
     mutationFn: (command: MutationCommand) => command.execute(),
     onSuccess: async (_result, command) => {
-      await invalidateSettings()
       closeEditors()
       toast.success(command.success)
+      await invalidateSettings()
     },
     onError: async (error, command) => {
       const staleSelection = command.closeOnConflict && isConflict(error)
@@ -165,56 +233,25 @@ export function TaskBoardSettingsPage() {
       }
 
       toast.error(text)
-      await invalidateSettings()
-    },
-  })
-  const bootstrapMutation = useMutation({
-    mutationFn: () => {
-      if (!accessToken || !warehouseId || !canManage) {
-        throw new Error(
-          "Для загрузки данных старой панели нужен MANAGE выбранного склада."
-        )
+      if (staleSelection) {
+        await invalidateSettings()
       }
-      const idempotencyKey =
-        bootstrapIdempotencyKey.current ?? crypto.randomUUID()
-      bootstrapIdempotencyKey.current = idempotencyKey
-      return taskBoardSettingsClient.bootstrapReviewedData(
-        accessToken,
-        warehouseId,
-        idempotencyKey
-      )
-    },
-    onSuccess: async (result) => {
-      bootstrapIdempotencyKey.current = null
-      setActionError(null)
-      setBootstrapSummary(
-        `Очереди: ${result.counts.workQueues}, классы: ${result.counts.workerClasses}, рабочие: ${result.counts.workers}, бригады: ${result.counts.workerGroups}.`
-      )
-      await invalidateSettings()
-      toast.success(
-        result.created > 0
-          ? "Проверенные данные старой панели загружены."
-          : "Проверенные данные уже были загружены; дубли не созданы."
-      )
-    },
-    onError: async (error) => {
-      const text = message(error)
-      setActionError(text)
-      toast.error(text)
-      await invalidateSettings()
     },
   })
-
   async function run(
     execute: () => Promise<unknown>,
     success: string,
     closeOnConflict = true
   ) {
+    if (mutationInFlight.current) return
+    mutationInFlight.current = true
     setActionError(null)
     try {
       await mutation.mutateAsync({ execute, success, closeOnConflict })
     } catch {
       // onError owns the visible ProblemDetail/409 presentation and refetch.
+    } finally {
+      mutationInFlight.current = false
     }
   }
 
@@ -238,6 +275,7 @@ export function TaskBoardSettingsPage() {
   }
 
   const queryError =
+    queueDefinitionsQuery.error ??
     queuesQuery.error ??
     classesQuery.error ??
     workersQuery.error ??
@@ -255,6 +293,7 @@ export function TaskBoardSettingsPage() {
     )
   }
   if (
+    queueDefinitionsQuery.isLoading ||
     queuesQuery.isLoading ||
     classesQuery.isLoading ||
     workersQuery.isLoading ||
@@ -265,6 +304,7 @@ export function TaskBoardSettingsPage() {
     )
   }
 
+  const queueDefinitions = queueDefinitionsQuery.data ?? []
   const queues = queuesQuery.data ?? []
   const classes = classesQuery.data ?? []
   const workers = workersQuery.data ?? []
@@ -284,6 +324,16 @@ export function TaskBoardSettingsPage() {
     if (!deleteTarget || !accessToken) return
     const target = deleteTarget
     switch (target.kind) {
+      case "queue-definition":
+        return run(
+          () =>
+            taskBoardSettingsClient.deleteQueueDefinition(
+              accessToken,
+              target.item.id,
+              target.item.version
+            ),
+          "Общая очередь удалена."
+        )
       case "queue":
         return run(
           () =>
@@ -341,66 +391,141 @@ export function TaskBoardSettingsPage() {
     }
   }
 
+  async function enableWorkerCredentials(worker: WorkerDto) {
+    if (!accessToken) return
+    await run(
+      () =>
+        taskBoardSettingsClient.enableWorkerCredentials(
+          accessToken,
+          warehouseId,
+          worker.id,
+          worker.version
+        ),
+      "Учётные данные включены."
+    )
+  }
+
+  async function enableGroup(group: WorkerGroupDto) {
+    if (!accessToken) return
+    await run(
+      () =>
+        taskBoardSettingsClient.enableGroup(
+          accessToken,
+          warehouseId,
+          group.id,
+          group.version,
+          null
+        ),
+      "Бригада снова доступна."
+    )
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
-      <Card size="sm">
-        <CardContent className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="font-medium">Проверенные данные старой панели</p>
-            <p className="text-sm text-muted-foreground">
-              Загружает очереди, классы, рабочих, квалификации и бригады в
-              task-board PostgreSQL. Повторный запуск не создаёт дубли.
-            </p>
-            {bootstrapSummary ? (
-              <p role="status" className="mt-1 text-sm text-muted-foreground">
-                {bootstrapSummary}
-              </p>
-            ) : null}
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            disabled={bootstrapMutation.isPending}
-            onClick={() => bootstrapMutation.mutate()}
-          >
-            {bootstrapMutation.isPending
-              ? "Загрузка…"
-              : "Загрузить данные старой панели"}
-          </Button>
-        </CardContent>
-      </Card>
-
-      <Tabs defaultValue="queues" className="flex min-h-0 flex-1 flex-col">
-        <TabsList
-          className="w-full justify-start overflow-x-auto"
-          variant="line"
+      <nav aria-label="Разделы настройки доски задач">
+        <ToggleGroup
+          type="single"
+          value={activeSection}
+          variant="outline"
+          size="lg"
+          className="grid w-full grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6"
+          onValueChange={(section) => {
+            if (section) {
+              setActiveSection(section as TaskBoardSettingsSection)
+            }
+          }}
         >
-          <TabsTrigger value="queues">Очереди</TabsTrigger>
-          <TabsTrigger value="order">Порядок</TabsTrigger>
-          <TabsTrigger value="classes">Классы</TabsTrigger>
-          <TabsTrigger value="groups">Бригады</TabsTrigger>
-          <TabsTrigger value="workers">Рабочие</TabsTrigger>
-        </TabsList>
+          {taskBoardSettingsSections.map((section) => (
+            <ToggleGroupItem
+              key={section.value}
+              value={section.value}
+              className="h-9 w-full justify-center"
+            >
+              <HugeiconsIcon icon={section.icon} data-icon="inline-start" />
+              <span className="truncate">{section.label}</span>
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      </nav>
 
-        <TabsContent
-          value="queues"
+      {activeSection === "queue-definitions" ? (
+        <section
+          aria-label="Общий каталог очередей"
           className="flex min-h-0 flex-1 flex-col gap-3"
         >
-          <div>
-            <Button onClick={() => setQueueEditor("new")}>
-              Создать очередь
+          {canManageGlobal ? (
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                onClick={() => setQueueDefinitionEditor("new")}
+              >
+                Создать общую очередь
+              </Button>
+            </div>
+          ) : null}
+          <OperationsListGrid
+            className="min-h-0 flex-1 overflow-auto"
+            items={queueDefinitions}
+            columns={[
+              {
+                id: "name",
+                label: "Название",
+                getSortValue: (item) => item.name,
+                render: (item) => item.name,
+              },
+              {
+                id: "type",
+                label: "Тип",
+                getSortValue: (item) => queueTypeLabels[item.type],
+                render: (item) => queueTypeLabels[item.type],
+              },
+              {
+                id: "description",
+                label: "Описание",
+                getSortValue: (item) => item.description,
+                render: (item) => item.description ?? "—",
+              },
+              {
+                id: "actions",
+                label: "Действия",
+                getSortValue: () => null,
+                render: (item) =>
+                  canManageGlobal
+                    ? actions(
+                        () => setQueueDefinitionEditor(item),
+                        () =>
+                          setDeleteTarget({
+                            kind: "queue-definition",
+                            item,
+                          })
+                      )
+                    : "Только просмотр",
+              },
+            ]}
+          />
+        </section>
+      ) : null}
+
+      {activeSection === "queues" ? (
+        <section
+          aria-label="Очереди склада"
+          className="flex min-h-0 flex-1 flex-col gap-3"
+        >
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              disabled={queueDefinitions.every((definition) =>
+                queues.some((queue) => queue.definitionId === definition.id)
+              )}
+              onClick={() => setQueueEditor("new")}
+            >
+              Добавить из каталога
             </Button>
           </div>
           <OperationsListGrid
             className="min-h-0 flex-1 overflow-auto"
             items={queues}
             columns={[
-              {
-                id: "code",
-                label: "Код",
-                getSortValue: (q) => q.code,
-                render: (q) => q.code,
-              },
               {
                 id: "name",
                 label: "Название",
@@ -417,8 +542,7 @@ export function TaskBoardSettingsPage() {
                 id: "classes",
                 label: "Классы",
                 getSortValue: (q) => q.bindings.length,
-                render: (q) =>
-                  q.bindings.map((b) => b.workerClass.name).join(", ") || "Все",
+                render: (q) => <QueueBindings queue={q} />,
               },
               {
                 id: "status",
@@ -438,9 +562,11 @@ export function TaskBoardSettingsPage() {
               },
             ]}
           />
-        </TabsContent>
+        </section>
+      ) : null}
 
-        <TabsContent value="order" className="flex min-h-0 flex-1">
+      {activeSection === "order" ? (
+        <section aria-label="Порядок" className="flex min-h-0 flex-1">
           <QueueOrderSettings
             key={queues.map((q) => `${q.id}:${q.version}`).join("|")}
             queues={queues}
@@ -461,15 +587,17 @@ export function TaskBoardSettingsPage() {
               )
             }}
           />
-        </TabsContent>
+        </section>
+      ) : null}
 
-        <TabsContent
-          value="classes"
+      {activeSection === "classes" ? (
+        <section
+          aria-label="Классы"
           className="flex min-h-0 flex-1 flex-col gap-3"
         >
           {canManageGlobal ? (
-            <div>
-              <Button onClick={() => setClassEditor("new")}>
+            <div className="flex justify-end">
+              <Button type="button" onClick={() => setClassEditor("new")}>
                 Создать класс
               </Button>
             </div>
@@ -478,12 +606,6 @@ export function TaskBoardSettingsPage() {
             className="min-h-0 flex-1 overflow-auto"
             items={classes}
             columns={[
-              {
-                id: "code",
-                label: "Код",
-                getSortValue: (item) => item.code,
-                render: (item) => item.code,
-              },
               {
                 id: "name",
                 label: "Название",
@@ -516,14 +638,16 @@ export function TaskBoardSettingsPage() {
               },
             ]}
           />
-        </TabsContent>
+        </section>
+      ) : null}
 
-        <TabsContent
-          value="groups"
+      {activeSection === "groups" ? (
+        <section
+          aria-label="Бригады"
           className="flex min-h-0 flex-1 flex-col gap-3"
         >
-          <div>
-            <Button onClick={() => setGroupEditor("new")}>
+          <div className="flex justify-end">
+            <Button type="button" onClick={() => setGroupEditor("new")}>
               Создать бригаду
             </Button>
           </div>
@@ -561,25 +685,88 @@ export function TaskBoardSettingsPage() {
                 render: (item) => <StatusBadge active={item.active} />,
               },
               {
+                id: "availability",
+                label: "Доступность",
+                getSortValue: (item) =>
+                  operationalAvailabilityLabels[item.operationalStatus],
+                render: (item) => (
+                  <div className="flex flex-col gap-1">
+                    <Badge
+                      variant={
+                        item.operationalStatus === "AVAILABLE"
+                          ? "secondary"
+                          : "outline"
+                      }
+                    >
+                      {operationalAvailabilityLabels[item.operationalStatus]}
+                    </Badge>
+                    {item.unavailabilityReason ? (
+                      <span className="text-xs text-muted-foreground">
+                        {item.unavailabilityReason}
+                      </span>
+                    ) : null}
+                  </div>
+                ),
+              },
+              {
                 id: "actions",
                 label: "Действия",
                 getSortValue: () => null,
-                render: (item) =>
-                  actions(
-                    () => setGroupEditor(item),
-                    () => setDeleteTarget({ kind: "group", item })
-                  ),
+                cellClassName: "w-[22rem]",
+                render: (item) => (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setGroupEditor(item)}
+                    >
+                      Изменить
+                    </Button>
+                    {item.operationalStatus === "AVAILABLE" ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={!item.active || mutation.isPending}
+                        onClick={() => setAvailabilityGroup(item)}
+                      >
+                        Отключить работу
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={!item.active || mutation.isPending}
+                        onClick={() => void enableGroup(item)}
+                      >
+                        Включить работу
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setDeleteTarget({ kind: "group", item })}
+                    >
+                      Удалить
+                    </Button>
+                  </div>
+                ),
               },
             ]}
           />
-        </TabsContent>
+        </section>
+      ) : null}
 
-        <TabsContent
-          value="workers"
+      {activeSection === "workers" ? (
+        <section
+          aria-label="Рабочие"
           className="flex min-h-0 flex-1 flex-col gap-3"
         >
-          <div>
-            <Button onClick={() => setWorkerEditor("new")}>
+          <div className="flex justify-end">
+            <Button type="button" onClick={() => setWorkerEditor("new")}>
               Создать рабочего
             </Button>
           </div>
@@ -610,6 +797,25 @@ export function TaskBoardSettingsPage() {
                 render: (item) => item.appLogin ?? "—",
               },
               {
+                id: "current-group",
+                label: "Текущая бригада",
+                getSortValue: (item) => item.currentGroupName,
+                render: (item) => (
+                  <div className="flex flex-col gap-1">
+                    <Badge
+                      variant={item.currentGroupId ? "secondary" : "outline"}
+                    >
+                      {item.currentGroupName ?? "Не выбрана"}
+                    </Badge>
+                    {item.operationalAvailability === "DISABLED" ? (
+                      <span className="text-xs text-muted-foreground">
+                        Бригада недоступна
+                      </span>
+                    ) : null}
+                  </div>
+                ),
+              },
+              {
                 id: "credentials",
                 label: "Учётные данные",
                 getSortValue: (item) =>
@@ -638,54 +844,131 @@ export function TaskBoardSettingsPage() {
                 label: "Действия",
                 getSortValue: () => null,
                 cellClassName: "w-[22rem]",
-                render: (item) => (
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setWorkerEditor(item)}
-                    >
-                      Изменить
-                    </Button>
-                    {item.appLogin ? (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setPasswordWorker(item)}
-                        >
-                          Пароль
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() =>
-                            setDeleteTarget({ kind: "credentials", item })
-                          }
-                        >
-                          Отключить вход
-                        </Button>
-                      </>
-                    ) : null}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setDeleteTarget({ kind: "worker", item })}
-                    >
-                      Удалить
-                    </Button>
-                  </div>
-                ),
+                render: (item) => {
+                  const credentialAction = workerCredentialToggleAction(
+                    item.credentialStatus
+                  )
+
+                  return (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={!item.active || mutation.isPending}
+                        onClick={() => setCurrentGroupWorker(item)}
+                      >
+                        {item.currentGroupId
+                          ? "Сменить бригаду"
+                          : "Назначить бригаду"}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setWorkerEditor(item)}
+                      >
+                        Изменить
+                      </Button>
+                      {item.appLogin ? (
+                        <>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setPasswordWorker(item)}
+                          >
+                            Пароль
+                          </Button>
+                          {credentialAction === "DISABLE" ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={() =>
+                                setDeleteTarget({ kind: "credentials", item })
+                              }
+                            >
+                              Отключить вход
+                            </Button>
+                          ) : null}
+                          {credentialAction === "ENABLE" ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              disabled={mutation.isPending}
+                              onClick={() => void enableWorkerCredentials(item)}
+                            >
+                              Включить вход
+                            </Button>
+                          ) : null}
+                        </>
+                      ) : null}
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setDeleteTarget({ kind: "worker", item })
+                        }
+                      >
+                        Удалить
+                      </Button>
+                    </div>
+                  )
+                },
               },
             ]}
           />
-        </TabsContent>
-      </Tabs>
+        </section>
+      ) : null}
 
+      {queueDefinitionEditor ? (
+        <QueueDefinitionEditorDialog
+          key={
+            queueDefinitionEditor === "new" ? "new" : queueDefinitionEditor.id
+          }
+          definition={
+            queueDefinitionEditor === "new" ? null : queueDefinitionEditor
+          }
+          pending={mutation.isPending}
+          error={actionError}
+          onClose={closeEditors}
+          onSave={async (request: QueueDefinitionRequest) => {
+            if (!accessToken) return
+            await run(
+              () =>
+                queueDefinitionEditor === "new"
+                  ? taskBoardSettingsClient.createQueueDefinition(
+                      accessToken,
+                      request
+                    )
+                  : taskBoardSettingsClient.updateQueueDefinition(
+                      accessToken,
+                      queueDefinitionEditor.id,
+                      request
+                    ),
+              "Общая очередь сохранена.",
+              queueDefinitionEditor !== "new"
+            )
+          }}
+        />
+      ) : null}
       {queueEditor ? (
         <QueueEditorDialog
           key={queueEditor === "new" ? "new" : queueEditor.id}
           queue={queueEditor === "new" ? null : queueEditor}
+          definitions={
+            queueEditor === "new"
+              ? queueDefinitions.filter(
+                  (definition) =>
+                    !queues.some(
+                      (queue) => queue.definitionId === definition.id
+                    )
+                )
+              : queueDefinitions
+          }
           classes={classes}
           pending={mutation.isPending}
           error={actionError}
@@ -820,6 +1103,55 @@ export function TaskBoardSettingsPage() {
           }}
         />
       ) : null}
+      {currentGroupWorker ? (
+        <CurrentGroupDialog
+          key={currentGroupWorker.id}
+          worker={currentGroupWorker}
+          groups={groups}
+          pending={mutation.isPending}
+          error={actionError}
+          onClose={closeEditors}
+          onSave={async (workerGroupId) => {
+            if (!accessToken) return
+            await run(
+              () =>
+                taskBoardSettingsClient.setWorkerCurrentGroup(
+                  accessToken,
+                  warehouseId,
+                  currentGroupWorker.id,
+                  currentGroupWorker.version,
+                  workerGroupId
+                ),
+              "Текущая бригада сохранена.",
+              false
+            )
+          }}
+        />
+      ) : null}
+      {availabilityGroup ? (
+        <GroupAvailabilityDialog
+          key={availabilityGroup.id}
+          group={availabilityGroup}
+          pending={mutation.isPending}
+          error={actionError}
+          onClose={closeEditors}
+          onSave={async (reason) => {
+            if (!accessToken) return
+            await run(
+              () =>
+                taskBoardSettingsClient.disableGroup(
+                  accessToken,
+                  warehouseId,
+                  availabilityGroup.id,
+                  availabilityGroup.version,
+                  reason
+                ),
+              "Бригада отключена.",
+              false
+            )
+          }}
+        />
+      ) : null}
       {deleteTarget ? (
         <SettingsDeleteDialog
           title={
@@ -830,7 +1162,9 @@ export function TaskBoardSettingsPage() {
           description={
             deleteTarget.kind === "credentials"
               ? "Рабочий больше не сможет входить в приложение. Профиль и история сохранятся."
-              : "Если запись уже используется, API отклонит удаление и предложит деактивацию."
+              : deleteTarget.kind === "queue-definition"
+                ? "Используемое определение удалить нельзя: сервис вернёт конфликт, пока остаются складские подключения или ссылки каталога."
+                : "Если запись уже используется, API отклонит удаление и предложит деактивацию."
           }
           confirmLabel={
             deleteTarget.kind === "credentials" ? "Отключить" : "Удалить"

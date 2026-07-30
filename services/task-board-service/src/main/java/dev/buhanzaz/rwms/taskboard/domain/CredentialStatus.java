@@ -4,5 +4,6 @@ public enum CredentialStatus {
   NOT_CONFIGURED,
   PENDING,
   ACTIVE,
+  DISABLED,
   ERROR
 }

@@ -2,15 +2,25 @@ import * as React from "react"
 
 const MOBILE_BREAKPOINT = 768
 const TABLET_BREAKPOINT = 1024
-const MOBILE_QUERY = `(max-width: ${MOBILE_BREAKPOINT - 1}px), (max-height: 500px) and (pointer: coarse)`
+const MOBILE_QUERY = `(max-width: ${MOBILE_BREAKPOINT - 1}px) and (pointer: coarse), (max-height: 500px) and (pointer: coarse)`
+
+function getMediaQueryList(query: string) {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return null
+  }
+
+  return window.matchMedia(query)
+}
 
 function useMatchMedia(query: string) {
   const [matches, setMatches] = React.useState(() => {
-    return window.matchMedia(query).matches
+    return getMediaQueryList(query)?.matches ?? false
   })
 
   React.useEffect(() => {
-    const mql = window.matchMedia(query)
+    const mql = getMediaQueryList(query)
+    if (!mql) return
+
     const onChange = () => {
       setMatches(mql.matches)
     }

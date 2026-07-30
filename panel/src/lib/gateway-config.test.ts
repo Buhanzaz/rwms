@@ -8,6 +8,7 @@ describe("gateway runtime boundary", () => {
     expect(createGatewayRuntimeConfig("https://panel.example.test")).toEqual({
       gatewayOrigin: "https://panel.example.test",
       authAuthority: "https://panel.example.test/auth",
+      assistantApiBaseUrl: "https://panel.example.test/api/assistant",
       taskBoardApiBaseUrl: "https://panel.example.test/api/task-board",
       warehouseApiBaseUrl: "https://panel.example.test/api/warehouse",
       assetApiBaseUrl: "https://panel.example.test/api/asset",

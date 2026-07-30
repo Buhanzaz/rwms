@@ -9,6 +9,13 @@ import type {
   ReturnLine,
 } from "@/features/logistics/returns/model"
 
+Object.defineProperties(HTMLElement.prototype, {
+  hasPointerCapture: { configurable: true, value: () => false },
+  releasePointerCapture: { configurable: true, value: () => undefined },
+  scrollIntoView: { configurable: true, value: () => undefined },
+  setPointerCapture: { configurable: true, value: () => undefined },
+})
+
 const returnApi = vi.hoisted(() => ({
   acceptUndamagedReturn: vi.fn(),
   createReturn: vi.fn(),
@@ -24,6 +31,9 @@ const rentalItemsApi = vi.hoisted(() => ({
 }))
 const ordersApi = vi.hoisted(() => ({
   getOrder: vi.fn(),
+}))
+const equipmentApi = vi.hoisted(() => ({
+  getEquipmentItems: vi.fn(),
 }))
 const authState = vi.hoisted(() => ({
   level: "EDIT" as "VIEW" | "EDIT" | "MANAGE",
@@ -87,7 +97,7 @@ vi.mock("@/features/logistics/logistics-driver-picker", () => ({
 }))
 
 vi.mock("@/api/equipment-api", () => ({
-  getEquipmentItems: vi.fn().mockResolvedValue([]),
+  getEquipmentItems: equipmentApi.getEquipmentItems,
 }))
 
 vi.mock("@/features/media/service-owner-photos", () => ({
@@ -154,6 +164,7 @@ const LINE_ID = "44444444-4444-4444-8444-444444444444"
 const ASSET_ID = "55555555-5555-4555-8555-555555555555"
 const CLIENT_ID = "66666666-6666-4666-8666-666666666666"
 const ORDER_ID = "77777777-7777-4777-8777-777777777777"
+const EQUIPMENT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab"
 const IDEMPOTENCY_KEY = "99999999-9999-4999-8999-999999999999"
 const ASSET_NUMBER = "БЫТ-041"
 const ORDER_NUMBER = "ORD-000007"
@@ -219,13 +230,21 @@ function renderPage() {
 beforeEach(() => {
   authState.level = "EDIT"
   vi.stubGlobal("crypto", { randomUUID: () => IDEMPOTENCY_KEY })
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  )
   driverDirectoryApi.listRepairWorkerGroups.mockResolvedValue([
     {
       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       warehouseId: WAREHOUSE_ID,
       name: "Водители",
       active: true,
-      queueCodes: [],
+      queueIds: [],
       routeQueueKinds: ["MOVEMENT"],
       members: [
         {
@@ -248,6 +267,15 @@ beforeEach(() => {
     number: ORDER_NUMBER,
     units: [{ unit: { id: ASSET_ID, number: ASSET_NUMBER } }],
   })
+  equipmentApi.getEquipmentItems.mockResolvedValue([
+    {
+      id: EQUIPMENT_ID,
+      warehouseId: WAREHOUSE_ID,
+      name: "Стул",
+      category: "FURNITURE",
+      active: true,
+    },
+  ])
 })
 
 afterEach(() => {
@@ -297,7 +325,19 @@ describe("LogisticsReturnsPage", () => {
     expect(screen.getAllByRole("button", { name: "Статус" })).not.toHaveLength(
       0
     )
+    expect(
+      screen.getAllByRole("button", { name: "Контрагент" })
+    ).not.toHaveLength(0)
+    expect(
+      screen.getAllByRole("button", { name: "Водитель" })
+    ).not.toHaveLength(0)
     expect(screen.getByLabelText("Вывоз с")).toBeTruthy()
+    expect(screen.getByLabelText("Вывоз по")).toBeTruthy()
+    expect(screen.queryByText("Дата", { exact: true })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Обновить" })).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Показать все документы" })
+    ).toBeNull()
     expect(
       screen.getAllByRole("button", { name: "Создать вывоз" })
     ).not.toHaveLength(0)
@@ -307,6 +347,64 @@ describe("LogisticsReturnsPage", () => {
     expect(
       screen.getAllByRole("button", { name: "Создать смету" })
     ).not.toHaveLength(0)
+  })
+
+  it("keeps the return search compact and lets the user hide filters", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findAllByText("Требуется осмотр")
+    const search = screen.getByRole("textbox", { name: "Поиск возвратов" })
+    expect(search.parentElement?.classList.contains("max-w-xl")).toBe(true)
+
+    const hideFilters = screen.getByRole("button", {
+      name: "Скрыть фильтры",
+    })
+    expect(hideFilters.getAttribute("aria-controls")).toBe(
+      "logistics-return-filters"
+    )
+    expect(hideFilters.getAttribute("aria-expanded")).toBe("true")
+
+    await user.click(hideFilters)
+
+    expect(document.getElementById("logistics-return-filters")?.hidden).toBe(
+      true
+    )
+    const showFilters = screen.getByRole("button", {
+      name: "Показать фильтры",
+    })
+    expect(showFilters.getAttribute("aria-expanded")).toBe("false")
+
+    await user.click(showFilters)
+
+    expect(document.getElementById("logistics-return-filters")?.hidden).toBe(
+      false
+    )
+  })
+
+  it("filters returns locally by the selected counterparty", async () => {
+    returnApi.listReturns.mockResolvedValue([
+      {
+        ...returnDocument(DOCUMENT_ID, "DRAFT", 2),
+        partySnapshot: "ООО Альфа",
+        driverSnapshot: "Иванов Иван",
+      },
+      {
+        ...returnDocument(INSPECTION_ID, "INSPECTION_REQUIRED", 4),
+        partySnapshot: "ООО Бета",
+        driverSnapshot: "Петров Пётр",
+      },
+    ])
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findAllByText("ООО Альфа")
+    await user.click(screen.getAllByRole("button", { name: "Контрагент" })[0]!)
+    await user.click(screen.getByRole("checkbox", { name: "ООО Альфа" }))
+    await user.click(screen.getByRole("button", { name: "Применить" }))
+
+    await waitFor(() => expect(screen.queryByText("ООО Бета")).toBeNull())
+    expect(screen.getAllByText("ООО Альфа")).not.toHaveLength(0)
   })
 
   it("opens the configured driver and date picker for a new return", async () => {
@@ -372,6 +470,19 @@ describe("LogisticsReturnsPage", () => {
       screen.getByRole("button", { name: "Подготовить Фотографии строки 1" })
     )
     await user.click(screen.getByRole("button", { name: "Принять без сметы" }))
+    expect(
+      screen.getByText(
+        "Подтвердите проверку комплектности мебели и оборудования для каждой строки."
+      )
+    ).toBeTruthy()
+    expect(returnApi.acceptUndamagedReturn).not.toHaveBeenCalled()
+
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Комплектность мебели и оборудования проверена",
+      })
+    )
+    await user.click(screen.getByRole("button", { name: "Принять без сметы" }))
 
     await waitFor(() =>
       expect(returnApi.acceptUndamagedReturn).toHaveBeenCalledWith({
@@ -388,7 +499,73 @@ describe("LogisticsReturnsPage", () => {
                 generation: 1,
               },
             ],
+            equipmentConfirmed: true,
             additionalEquipment: [],
+          },
+        ],
+      })
+    )
+  })
+
+  it("requires READY line photos and sends them with return shortages", async () => {
+    const user = userEvent.setup()
+    returnApi.requestReturnEstimate.mockResolvedValue(
+      returnDocument(INSPECTION_ID, "ESTIMATE_PENDING", 5)
+    )
+    renderPage()
+
+    await user.click(
+      (
+        await screen.findAllByRole("button", {
+          name: "Создать смету",
+        })
+      )[0]!
+    )
+    await user.click(
+      screen.getByRole("combobox", {
+        name: "Оборудование · строка 1 · позиция 1",
+      })
+    )
+    await user.click(screen.getByRole("option", { name: "Стул" }))
+    await user.click(
+      screen.getByRole("dialog").querySelector('button[type="submit"]')!
+    )
+
+    expect(
+      screen.getByText(
+        "Добавьте хотя бы одну готовую фотографию осмотра для каждой строки."
+      )
+    ).toBeTruthy()
+    expect(returnApi.requestReturnEstimate).not.toHaveBeenCalled()
+
+    await user.click(
+      screen.getByRole("button", { name: "Подготовить Фотографии строки 1" })
+    )
+    await user.click(
+      screen.getByRole("dialog").querySelector('button[type="submit"]')!
+    )
+
+    await waitFor(() =>
+      expect(returnApi.requestReturnEstimate).toHaveBeenCalledWith({
+        accessToken: "return-token",
+        documentId: INSPECTION_ID,
+        expectedVersion: 4,
+        idempotencyKey: IDEMPOTENCY_KEY,
+        lines: [
+          {
+            lineId: LINE_ID,
+            references: [
+              {
+                mediaId: "88888888-8888-4888-8888-888888888888",
+                generation: 1,
+              },
+            ],
+            shortages: [
+              {
+                equipmentId: EQUIPMENT_ID,
+                missingQuantity: 1,
+              },
+            ],
           },
         ],
       })

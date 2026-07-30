@@ -22,7 +22,7 @@ import {
 import type { RepairTaskWorkerSnapshotDto } from "@/features/repair-tasks/model/repair-task"
 
 const DRIVER_DIRECTORY_QUERY = {
-  queueCode: null,
+  queueId: null,
   routeQueueKind: "MOVEMENT" as const,
   purpose: "DRIVER_DIRECTORY" as const,
 }

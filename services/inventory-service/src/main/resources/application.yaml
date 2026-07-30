@@ -48,12 +48,17 @@ spring:
     open-in-view: false
   cloud:
     function:
-      definition: inventoryMediaFacts
+      definition: inventoryMediaFacts;inventoryAssetFacts
     stream:
       bindings:
         inventoryMediaFacts-in-0:
           destination: rwms.media.media.v1
           group: inventory-service-media-inbox-v1
+          consumer:
+            max-attempts: 1
+        inventoryAssetFacts-in-0:
+          destination: rwms.asset.rental-item.v1
+          group: inventory-service-asset-membership-v1
           consumer:
             max-attempts: 1
       kafka:
@@ -73,6 +78,10 @@ spring:
             metadata.recovery.rebootstrap.trigger.ms: 1000
         bindings:
           inventoryMediaFacts-in-0:
+            consumer:
+              enable-dlq: false
+              start-offset: earliest
+          inventoryAssetFacts-in-0:
             consumer:
               enable-dlq: false
               start-offset: earliest

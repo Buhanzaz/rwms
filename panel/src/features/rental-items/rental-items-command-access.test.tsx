@@ -29,6 +29,7 @@ const assetApi = vi.hoisted(() => ({
   updateAssetRentalItemGeneralComment: vi.fn(),
   updateAssetRentalItemStatus: vi.fn(),
   createIdempotencyKey: vi.fn(() => "33333333-3333-4333-8333-333333333333"),
+  getRentalItemCreationOptions: vi.fn(),
 }))
 
 const dossierApi = vi.hoisted(() => ({
@@ -69,7 +70,6 @@ vi.mock("@/hooks/use-warehouse", () => ({
   useWarehouse: () => ({
     selectedWarehouse: {
       id: WAREHOUSE_ID,
-      code: "MSK",
       name: "Москва",
     },
     selectedWarehouseId: WAREHOUSE_ID,
@@ -121,23 +121,29 @@ function rentalItem(overrides: Partial<RentalItemDto> = {}): RentalItemDto {
     version: 1,
     warehouseId: WAREHOUSE_ID,
     number: "БЫТ-001",
+    rentalTypeId: "33333333-3333-4333-8333-333333333333",
+    dimensionId: "44444444-4444-4444-8444-444444444444",
+    finishingId: "55555555-5555-4555-8555-555555555555",
     type: "БК-1",
     dimensions: "2.4x6",
     finishing: "ДВП",
     category: "Новая",
-    characteristics: "Пластиковое окно",
+    characteristics: [
+      {
+        id: "66666666-6666-4666-8666-666666666666",
+        name: "Пластиковое окно",
+      },
+    ],
     linoleum: false,
     status: "WAREHOUSE",
     comment: "Исходный комментарий",
-    hasPhotos: false,
-    photoCount: 0,
-    mainPhotoUrl: null,
-    locationNodeId: null,
     contents: null,
     contentsItems: [],
     shipmentDate: null,
     tenant: null,
     price: null,
+    passport: {},
+    tags: [],
     ...overrides,
   }
 }
@@ -185,6 +191,24 @@ function renderDetail(path = `/warehouse/${RENTAL_ITEM_ID}?tab=comments`) {
   )
 }
 
+async function selectRequiredComposition(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+  rentalType = "БК-1"
+) {
+  await user.click(within(dialog).getByRole("button", { name: "Выберите тип" }))
+  await user.click(screen.getByRole("button", { name: rentalType }))
+  await user.click(
+    within(dialog).getByRole("button", { name: "Выберите габариты" })
+  )
+  await user.click(screen.getByRole("button", { name: "2.4x6" }))
+  await user.click(
+    within(dialog).getByRole("button", { name: "Выберите отделку" })
+  )
+  await user.click(screen.getByRole("button", { name: "ДВП" }))
+  await user.click(within(dialog).getByRole("radio", { name: "Нет" }))
+}
+
 beforeEach(() => {
   authState.level = "VIEW"
   assetApi.listAssetRentalItems.mockResolvedValue({
@@ -197,6 +221,34 @@ beforeEach(() => {
   assetApi.getAssetRentalItem.mockResolvedValue(rentalItem())
   assetApi.listAssetRentalItemManualNotes.mockResolvedValue([])
   assetApi.createAssetRentalItem.mockResolvedValue(rentalItem())
+  assetApi.getRentalItemCreationOptions.mockResolvedValue({
+    newCategory: "Новая",
+    usedCategories: ["Обычная", "ИТР"],
+    rentalTypes: [
+      { id: "type-bk-1", name: "БК-1" },
+      { id: "type-sanblock", name: "БК-Санблок" },
+    ],
+    dimensions: [{ id: "dimension-24x6", name: "2.4x6" }],
+    finishings: [
+      { id: "finishing-dvp", name: "ДВП" },
+      { id: "finishing-pvh", name: "ПВХ" },
+    ],
+    characteristics: [
+      { id: "characteristic-window", name: "Пластиковое окно" },
+    ],
+    typeDimensions: [
+      {
+        typeId: "type-bk-1",
+        dimensionId: "dimension-24x6",
+        sortOrder: 0,
+      },
+      {
+        typeId: "type-sanblock",
+        dimensionId: "dimension-24x6",
+        sortOrder: 0,
+      },
+    ],
+  })
   assetApi.updateAssetRentalItemStatus.mockResolvedValue(
     rentalItem({ version: 2, status: "FREE" })
   )
@@ -231,6 +283,28 @@ afterEach(() => {
 })
 
 describe("rental item command access", () => {
+  it("uses the empty table grid even when the saved view is cards", async () => {
+    window.localStorage.setItem(
+      `rental-items:${WAREHOUSE_ID}:view-mode`,
+      JSON.stringify("grid")
+    )
+    const { container } = renderWithQuery(<RentalItemsPage />)
+
+    const grid = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>(
+        '[data-slot="rental-items-table-grid"]'
+      )
+      expect(element).not.toBeNull()
+      return element!
+    })
+
+    expect(
+      within(grid).getByRole("columnheader", { name: "Номер" })
+    ).toBeTruthy()
+    expect(grid.className).toContain("flex-1")
+    expect(container.querySelector("[data-grid-format]")).toBeNull()
+  })
+
   it("keeps the registry readable but hides create from VIEW access", async () => {
     renderWithQuery(<RentalItemsPage />)
 
@@ -241,6 +315,25 @@ describe("rental item command access", () => {
       screen.queryByRole("button", { name: "Добавить новую бытовку" })
     ).toBeNull()
     expect(assetApi.createAssetRentalItem).not.toHaveBeenCalled()
+  })
+
+  it("removes the warehouse pagination footer when the registry is fully loaded", async () => {
+    assetApi.listAssetRentalItems.mockResolvedValue({
+      content: [rentalItem()],
+      page: 0,
+      size: 200,
+      totalElements: 127,
+      totalPages: 1,
+    })
+
+    renderWithQuery(<RentalItemsPage />)
+
+    await screen.findByText("БЫТ-001")
+
+    expect(screen.queryByText("Показано 1 из 127")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Назад" })).toBeNull()
+    expect(screen.queryByText("Страница 1 из 1")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Вперёд" })).toBeNull()
   })
 
   it("uses one cover batch and loads owner media only after opening one cabin", async () => {
@@ -311,14 +404,7 @@ describe("rental item command access", () => {
       name: "Создание новой бытовки",
     })
     await user.type(within(dialog).getByLabelText("Номер бытовки"), "БЫТ-009")
-    await user.click(
-      within(dialog).getByRole("button", { name: "Выберите тип" })
-    )
-    await user.click(screen.getByRole("button", { name: "БК-1" }))
-    await user.click(
-      within(dialog).getByRole("button", { name: "Выберите отделку" })
-    )
-    await user.click(screen.getByRole("button", { name: "ДВП" }))
+    await selectRequiredComposition(user, dialog)
     await user.click(
       within(dialog).getByRole("button", { name: "Создать бытовку" })
     )
@@ -330,6 +416,78 @@ describe("rental item command access", () => {
           input: expect.objectContaining({
             warehouseId: WAREHOUSE_ID,
             number: "БЫТ-009",
+          }),
+        })
+      )
+    )
+  })
+
+  it("keeps the canonical warehouse cabin passport visible for a sanblock", async () => {
+    authState.level = "EDIT"
+    const user = userEvent.setup()
+    renderWithQuery(<RentalItemsPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Добавить новую бытовку" })
+    )
+    const dialog = await screen.findByRole("dialog", {
+      name: "Создание новой бытовки",
+    })
+    await user.type(within(dialog).getByLabelText("Номер бытовки"), "БЫТ-010")
+    await selectRequiredComposition(user, dialog, "БК-Санблок")
+
+    expect(
+      dialog.querySelector('[data-rental-item-section="passport"]')
+    ).not.toBeNull()
+    expect(
+      dialog.querySelector('[data-rental-item-section="sanblock-settings"]')
+    ).toBeNull()
+    expect(
+      within(dialog).getByRole("button", { name: "БК-Санблок" })
+    ).toBeTruthy()
+    expect(within(dialog).getByRole("button", { name: "2.4x6" })).toBeTruthy()
+    expect(within(dialog).getByRole("button", { name: "ДВП" })).toBeTruthy()
+    expect(within(dialog).getByRole("radio", { name: "Нет" })).toBeTruthy()
+  })
+
+  it("validates the cabin number locally and permits an underscore", async () => {
+    authState.level = "EDIT"
+    const user = userEvent.setup()
+    renderWithQuery(<RentalItemsPage />)
+
+    await user.click(
+      await screen.findByRole("button", { name: "Добавить новую бытовку" })
+    )
+    const dialog = await screen.findByRole("dialog", {
+      name: "Создание новой бытовки",
+    })
+    const numberInput = within(dialog).getByLabelText("Номер бытовки")
+    await user.type(numberInput, "тест/1")
+    await selectRequiredComposition(user, dialog)
+    await user.click(
+      within(dialog).getByRole("button", { name: "Создать бытовку" })
+    )
+
+    expect(
+      await within(dialog).findByText(
+        "Номер бытовки должен содержать от 1 до 128 символов, начинаться с буквы или цифры и включать только буквы, цифры, пробелы, дефис (-) или символ подчёркивания (_)."
+      )
+    ).toBeTruthy()
+    expect(assetApi.createAssetRentalItem).not.toHaveBeenCalled()
+
+    await user.clear(numberInput)
+    await user.type(numberInput, "тест_1")
+    await user.click(
+      within(dialog).getByRole("button", { name: "Создать бытовку" })
+    )
+
+    await waitFor(() =>
+      expect(assetApi.createAssetRentalItem).toHaveBeenCalledWith(
+        expect.objectContaining({
+          accessToken: "asset-token",
+          input: expect.objectContaining({
+            warehouseId: WAREHOUSE_ID,
+            number: "тест_1",
           }),
         })
       )
@@ -355,14 +513,7 @@ describe("rental item command access", () => {
       file
     )
     await user.type(within(dialog).getByLabelText("Номер бытовки"), "БЫТ-009")
-    await user.click(
-      within(dialog).getByRole("button", { name: "Выберите тип" })
-    )
-    await user.click(screen.getByRole("button", { name: "БК-1" }))
-    await user.click(
-      within(dialog).getByRole("button", { name: "Выберите отделку" })
-    )
-    await user.click(screen.getByRole("button", { name: "ДВП" }))
+    await selectRequiredComposition(user, dialog)
     await user.click(
       within(dialog).getByRole("button", { name: "Создать бытовку" })
     )
@@ -412,14 +563,7 @@ describe("rental item command access", () => {
       file
     )
     await user.type(within(dialog).getByLabelText("Номер бытовки"), "БЫТ-010")
-    await user.click(
-      within(dialog).getByRole("button", { name: "Выберите тип" })
-    )
-    await user.click(screen.getByRole("button", { name: "БК-1" }))
-    await user.click(
-      within(dialog).getByRole("button", { name: "Выберите отделку" })
-    )
-    await user.click(screen.getByRole("button", { name: "ДВП" }))
+    await selectRequiredComposition(user, dialog)
     await user.click(
       within(dialog).getByRole("button", { name: "Создать бытовку" })
     )

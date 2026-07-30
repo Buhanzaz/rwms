@@ -73,10 +73,13 @@ class OldPanelStockPhotoCleanupApiIntegrationTest {
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.id").value(FIRST_CABIN_ID.toString()))
         .andExpect(jsonPath("$.number").value("БЫТ-001"))
-        .andExpect(jsonPath("$.passport.source").value("old-panel-rental-items-v1"))
-        .andExpect(jsonPath("$.passport.legacyNumber").value("БЫТ-001"))
-        .andExpect(jsonPath("$.passport.hasPhotos").value(false))
-        .andExpect(jsonPath("$.passport.photoCount").value(0))
+        .andExpect(jsonPath("$.passport.source").doesNotExist())
+        .andExpect(jsonPath("$.passport.legacyId").doesNotExist())
+        .andExpect(jsonPath("$.passport.legacyWarehouseId").doesNotExist())
+        .andExpect(jsonPath("$.passport.legacyNumber").doesNotExist())
+        .andExpect(jsonPath("$.passport.locationNodeId").doesNotExist())
+        .andExpect(jsonPath("$.passport.hasPhotos").doesNotExist())
+        .andExpect(jsonPath("$.passport.photoCount").doesNotExist())
         .andExpect(jsonPath("$.passport.legacyPhotos").doesNotExist())
         .andExpect(jsonPath("$.passport.previewPhotoUrls").doesNotExist())
         .andExpect(jsonPath("$.passport.mainPhotoUrl").doesNotExist());
@@ -85,8 +88,12 @@ class OldPanelStockPhotoCleanupApiIntegrationTest {
         mvc.perform(get("/api/asset/v1/rental-items/{id}", SECOND_CABIN_ID).with(readJwt()))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.number").value("БЫТ-002"))
-            .andExpect(jsonPath("$.passport.hasPhotos").value(false))
-            .andExpect(jsonPath("$.passport.photoCount").value(0))
+            .andExpect(jsonPath("$.passport.legacyId").doesNotExist())
+            .andExpect(jsonPath("$.passport.legacyWarehouseId").doesNotExist())
+            .andExpect(jsonPath("$.passport.legacyNumber").doesNotExist())
+            .andExpect(jsonPath("$.passport.locationNodeId").doesNotExist())
+            .andExpect(jsonPath("$.passport.hasPhotos").doesNotExist())
+            .andExpect(jsonPath("$.passport.photoCount").doesNotExist())
             .andExpect(jsonPath("$.passport.legacyPhotos").doesNotExist())
             .andExpect(jsonPath("$.passport.previewPhotoUrls").doesNotExist())
             .andExpect(jsonPath("$.passport.mainPhotoUrl").doesNotExist())
@@ -108,7 +115,14 @@ class OldPanelStockPhotoCleanupApiIntegrationTest {
             .getContentAsString();
     assertThat(warehousePage)
         .doesNotContain(
-            "images.unsplash.com", "legacyPhotos", "previewPhotoUrls", "mainPhotoUrl");
+            "images.unsplash.com",
+            "old-panel-rental-items-v1",
+            "legacy",
+            "locationNodeId",
+            "hasPhotos",
+            "photoCount",
+            "previewPhotoUrls",
+            "mainPhotoUrl");
   }
 
   @Test

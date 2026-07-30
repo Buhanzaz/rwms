@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.asset.api;
 
 import dev.buhanzaz.rwms.asset.domain.BalanceLocationKind;
+import dev.buhanzaz.rwms.asset.domain.CabinCatalogKind;
 import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import jakarta.validation.Valid;
@@ -22,23 +23,96 @@ public final class AssetApiModels {
   public record CreateRentalItemRequest(
       @NotNull UUID warehouseId,
       @NotBlank @Size(max = 128) String number,
-      @Size(max = 255) String rentalType,
-      @Size(max = 255) String dimensions,
-      @Size(max = 255) String finishing,
+      @NotNull UUID rentalTypeId,
+      @NotNull UUID dimensionId,
+      @NotNull UUID finishingId,
       @Size(max = 255) String category,
-      @Size(max = 2000) String characteristics,
-      Boolean linoleum,
+      @NotNull @Size(max = 100) List<@NotNull UUID> characteristicIds,
+      @NotNull Boolean linoleum,
       Map<String, Object> passport,
       List<@NotBlank @Size(max = 128) String> tags) {}
 
+  /** UUID travels in the API; the panel renders only {@link #name()}. */
+  public record CabinCatalogValueResponse(UUID id, String name) {}
+
+  public record CabinCatalogItemResponse(
+      UUID id,
+      long version,
+      CabinCatalogKind kind,
+      String name,
+      boolean active,
+      OffsetDateTime createdAt,
+      OffsetDateTime updatedAt) {}
+
+  public record CabinTypeDimensionResponse(UUID typeId, UUID dimensionId, int sortOrder) {}
+
+  public record CabinSettingsResponse(
+      List<CabinCatalogItemResponse> types,
+      List<CabinCatalogItemResponse> dimensions,
+      List<CabinCatalogItemResponse> finishings,
+      List<CabinCatalogItemResponse> categories,
+      List<CabinCatalogItemResponse> characteristics,
+      List<CabinTypeDimensionResponse> typeDimensions) {
+    public CabinSettingsResponse(
+        List<CabinCatalogItemResponse> types,
+        List<CabinCatalogItemResponse> dimensions,
+        List<CabinCatalogItemResponse> finishings,
+        List<CabinCatalogItemResponse> characteristics,
+        List<CabinTypeDimensionResponse> typeDimensions) {
+      this(types, dimensions, finishings, List.of(), characteristics, typeDimensions);
+    }
+  }
+
+  public record CreateCabinCatalogItemRequest(
+      @NotNull CabinCatalogKind kind,
+      @NotBlank @Size(max = 255) String name) {}
+
+  public record UpdateCabinCatalogItemRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotBlank @Size(max = 255) String name,
+      boolean active) {}
+
+  public record ReplaceCabinTypeDimensionsRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotNull @Size(max = 100) List<@NotNull UUID> dimensionIds) {}
+
+  public record RentalItemCreationOptionsResponse(
+      String newCategory,
+      List<String> usedCategories,
+      List<CabinCatalogValueResponse> rentalTypes,
+      List<CabinCatalogValueResponse> dimensions,
+      List<CabinCatalogValueResponse> finishings,
+      List<CabinCatalogValueResponse> categories,
+      List<CabinCatalogValueResponse> characteristics,
+      List<CabinTypeDimensionResponse> typeDimensions) {
+    public RentalItemCreationOptionsResponse(
+        String newCategory,
+        List<String> usedCategories,
+        List<CabinCatalogValueResponse> rentalTypes,
+        List<CabinCatalogValueResponse> dimensions,
+        List<CabinCatalogValueResponse> finishings,
+        List<CabinCatalogValueResponse> characteristics,
+        List<CabinTypeDimensionResponse> typeDimensions) {
+      this(
+          newCategory,
+          usedCategories,
+          rentalTypes,
+          dimensions,
+          finishings,
+          List.of(),
+          characteristics,
+          typeDimensions);
+    }
+  }
+
   public record UpdatePassportRequest(
       @NotNull @Min(0) Long expectedVersion,
-      @Size(max = 255) String rentalType,
-      @Size(max = 255) String dimensions,
-      @Size(max = 255) String finishing,
+      @NotNull UUID rentalTypeId,
+      @NotNull UUID dimensionId,
+      @NotNull UUID finishingId,
       @Size(max = 255) String category,
-      @Size(max = 2000) String characteristics,
-      Boolean linoleum,
+      @NotNull @Size(max = 100) List<@NotNull UUID> characteristicIds,
+      @NotNull Boolean linoleum,
       Map<String, Object> passport,
       List<@NotBlank @Size(max = 128) String> tags) {}
 
@@ -49,7 +123,10 @@ public final class AssetApiModels {
 
   public record RentalItemResponse(
       UUID id, long version, UUID warehouseId, String number, RentalItemStatus status,
-      String rentalType, String dimensions, String finishing, String category, String characteristics,
+      UUID rentalTypeId, String rentalType,
+      UUID dimensionId, String dimensions,
+      UUID finishingId, String finishing,
+      String category, List<CabinCatalogValueResponse> characteristics,
       Boolean linoleum, String generalComment, Map<String, Object> passport, List<String> tags,
       List<EquipmentContentResponse> contents,
       ActiveOrderReservationResponse activeOrderReservation,
@@ -67,16 +144,21 @@ public final class AssetApiModels {
   /** Text remains in the service-local append-only store and is never a Kafka fact. */
   public record ManualNoteResponse(UUID id, UUID rentalItemId, String text, OffsetDateTime createdAt) {}
 
-  public record CreateEquipmentRequest(@NotBlank @Size(max = 64) String code, @NotBlank @Size(max = 255) String name,
-      @NotNull EquipmentCategory category, @Size(max = 2000) String comment) {}
-  public record UpdateEquipmentRequest(@NotNull @Min(0) Long expectedVersion, @NotBlank @Size(max = 64) String code,
-      @NotBlank @Size(max = 255) String name, @NotNull EquipmentCategory category, boolean active, @Size(max = 2000) String comment) {}
-  public record EquipmentResponse(UUID id, long version, String code, String name, EquipmentCategory category,
+  public record CreateEquipmentRequest(
+      @NotBlank @Size(max = 255) String name,
+      @NotNull EquipmentCategory category,
+      @Size(max = 2000) String comment) {}
+  public record UpdateEquipmentRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      @NotBlank @Size(max = 255) String name,
+      @NotNull EquipmentCategory category,
+      boolean active,
+      @Size(max = 2000) String comment) {}
+  public record EquipmentResponse(UUID id, long version, String name, EquipmentCategory category,
       boolean active, String comment, OffsetDateTime createdAt, OffsetDateTime updatedAt) {}
 
   public record EquipmentContentResponse(
       UUID equipmentId,
-      String equipmentCode,
       String equipmentName,
       long quantity,
       BalanceLocationKind locationKind) {}
@@ -110,7 +192,7 @@ public final class AssetApiModels {
   public enum Disposition { WRITE_OFF, LOSS }
   public record MovementResponse(UUID id, long version, UUID equipmentId, UUID sourceBalanceId, UUID targetBalanceId,
       long quantity, String kind, OffsetDateTime occurredAt) {}
-  public record EquipmentDispositionResponse(MovementResponse movement, String equipmentCode, String equipmentName) {}
+  public record EquipmentDispositionResponse(MovementResponse movement, String equipmentName) {}
 
   public record AcquireEquipmentHoldRequest(@NotNull UUID equipmentId, @NotNull UUID warehouseId,
       @NotBlank @Size(max = 64) String ownerType, @NotBlank @Size(max = 128) String ownerId,
@@ -134,18 +216,20 @@ public final class AssetApiModels {
   public enum MaintenanceLeaseOwnerType { MAINTENANCE_ESTIMATE, MAINTENANCE_REPAIR }
   public enum MaintenanceStatusAction {
     QUEUE_FOR_REPAIR,
+    QUEUE_FOR_CAPITAL_REPAIR,
     COMPLETE_EMPTY_ESTIMATE,
+    COMPLETE_EMPTY_REPAIR,
     MARK_PENDING_ACCEPTANCE,
     ACCEPT_REPAIR,
     WRITE_OFF
   }
-  /** Read projection deliberately excludes cabin number, passport, comments and equipment. */
+  /** Read projection exposes the canonical cabin number but excludes passport, comments and equipment. */
   public record MaintenanceRentalItemSnapshot(
-      UUID id, long version, UUID warehouseId, RentalItemStatus status) {}
+      UUID id, long version, UUID warehouseId, String number, RentalItemStatus status) {}
   public record EnsureMaintenanceFurnitureEquipmentRequest(
       @NotBlank @Size(max = 255) String equipmentName) {}
   public record MaintenanceFurnitureEquipmentResponse(
-      UUID equipmentId, String equipmentCode, String equipmentName) {}
+      UUID equipmentId, String equipmentName) {}
   public record AcquireMaintenanceOperationLeaseRequest(
       @NotNull UUID rentalItemId,
       @NotNull MaintenanceLeaseOwnerType ownerType,
@@ -163,7 +247,6 @@ public final class AssetApiModels {
       @NotNull UUID ownerId) {}
   public record MaintenanceFurnitureLoss(
       @NotNull UUID equipmentId,
-      @NotBlank @Size(max = 64) @Pattern(regexp = "^[A-Z0-9][A-Z0-9_-]{0,63}$") String equipmentCode,
       @Min(1) long quantity) {}
   public record MaintenanceFencedStatusRequest(
       @NotNull @Min(0) Long expectedVersion,
@@ -218,6 +301,12 @@ public final class AssetApiModels {
     SHIPMENT_CONFIRM,
     TRANSFER_DEPART,
     TRANSFER_ARRIVE
+  }
+
+  /** Closed transfer-restoration vocabulary; other statuses never cross this boundary. */
+  public enum TransferAssetStatus {
+    FREE,
+    REPAIR
   }
 
   /** Read projection deliberately excludes cabin number, passport and local comments. */
@@ -300,7 +389,35 @@ public final class AssetApiModels {
       @NotNull LogisticsLeaseOwnerType ownerType,
       @NotNull UUID documentId,
       @NotNull UUID lineId,
-      UUID destinationWarehouseId) {}
+      UUID destinationWarehouseId,
+      TransferAssetStatus transferAssetStatus) {
+    public LogisticsFencedEffectRequest(
+        Long expectedVersion,
+        LogisticsRentalItemAction action,
+        UUID leaseId,
+        Long fencingToken,
+        LogisticsLeaseOwnerType ownerType,
+        UUID documentId,
+        UUID lineId,
+        UUID destinationWarehouseId) {
+      this(
+          expectedVersion,
+          action,
+          leaseId,
+          fencingToken,
+          ownerType,
+          documentId,
+          lineId,
+          destinationWarehouseId,
+          null);
+    }
+  }
+
+  public record MaintenanceCharacteristicApplicationResponse(
+      UUID rentalItemId,
+      UUID characteristicId,
+      boolean added,
+      long rentalItemVersion) {}
 
   /**
    * Equipment reservation belongs to a shipment line only. Asset-service
@@ -378,7 +495,6 @@ public final class AssetApiModels {
       UUID movementId,
       UUID lineId,
       UUID equipmentId,
-      String equipmentCode,
       String equipmentName,
       UUID sourceBalanceId,
       UUID sourceWarehouseId,
@@ -444,6 +560,17 @@ public final class AssetApiModels {
       String displayCanonicalNumber,
       String identityMatchKey,
       String tenantSnapshot) {}
+  /** Current inventory-only projection; local comments and notes are deliberately absent. */
+  public record InventoryAssetCurrentSnapshot(
+      UUID assetId,
+      long version,
+      UUID warehouseId,
+      RentalItemStatus status,
+      String displayCanonicalNumber,
+      String identityMatchKey,
+      String tenantSnapshot,
+      Map<String, Object> passportSnapshot,
+      List<EquipmentContentResponse> contentsSnapshot) {}
   public record InventoryNumberResolutionResponse(
       String displayCanonicalNumber,
       String identityMatchKey,
@@ -460,7 +587,9 @@ public final class AssetApiModels {
       RentalItemStatus status,
       String displayCanonicalNumber,
       String identityMatchKey,
-      String tenantSnapshot) {}
+      String tenantSnapshot,
+      Map<String, Object> passportSnapshot,
+      List<EquipmentContentResponse> contentsSnapshot) {}
   public record InventoryValidationResponse(
       OffsetDateTime validatedAt,
       String validationDigest,
@@ -471,12 +600,12 @@ public final class AssetApiModels {
       @NotNull UUID findingId,
       @NotNull UUID warehouseId,
       @NotBlank @Size(max = 128) String number,
-      @Size(max = 255) String rentalType,
-      @Size(max = 255) String dimensions,
-      @Size(max = 255) String finishing,
+      @NotNull UUID rentalTypeId,
+      @NotNull UUID dimensionId,
+      @NotNull UUID finishingId,
       @Size(max = 255) String category,
-      @Size(max = 2000) String characteristics,
-      Boolean linoleum,
+      @NotNull @Size(max = 100) List<@NotNull UUID> characteristicIds,
+      @NotNull Boolean linoleum,
       Map<String, Object> passport,
       List<@NotBlank @Size(max = 128) String> tags) {}
   public record InventorySourceAssetResponse(
@@ -485,10 +614,10 @@ public final class AssetApiModels {
       InventoryAssetSnapshot asset) {}
 
   public record ClassifierRequest(@NotNull @Min(0) Long expectedVersion, @NotBlank @Size(max = 32) String type,
-      UUID parentId, @NotBlank @Size(max = 64) String code, @NotBlank @Size(max = 255) String name,
+      UUID parentId, @NotBlank @Size(max = 255) String name,
       boolean active, @Min(0) Integer sortOrder) {}
   public record CreateClassifierRequest(@NotBlank @Size(max = 32) String type, UUID parentId,
-      @NotBlank @Size(max = 64) String code, @NotBlank @Size(max = 255) String name, boolean active, @Min(0) Integer sortOrder) {}
-  public record ClassifierResponse(UUID id, long version, String type, UUID parentId, String code, String name,
+      @NotBlank @Size(max = 255) String name, boolean active, @Min(0) Integer sortOrder) {}
+  public record ClassifierResponse(UUID id, long version, String type, UUID parentId, String name,
       boolean active, Integer sortOrder) {}
 }

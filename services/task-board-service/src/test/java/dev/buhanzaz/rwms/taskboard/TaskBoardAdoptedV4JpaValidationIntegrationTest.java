@@ -32,6 +32,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.annotation.Transactional;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.MountableFile;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 @SpringBootTest
@@ -85,13 +86,31 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
 
   @Test
   @Transactional
-  void bootMigratesAdoptedVersionFourThroughVersionSevenAndValidatesJpa() {
+  void bootMigratesAdoptedVersionFourThroughVersionTwentyAndValidatesJpa() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(retainedDigests(jdbc)).containsExactlyInAnyOrderEntriesOf(beforeStartup);
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from flyway_schema_history "
                     + "where version='4' and type='BASELINE' and success",
+                Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history "
+                    + "where version='18' and type='SQL' and success",
+                Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history "
+                    + "where version='19' and type='SQL' and success",
+                Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history "
+                    + "where version='20' and type='SQL' and success",
                 Integer.class))
         .isOne();
     assertThat(
@@ -128,6 +147,17 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
     assertThat(jdbc.queryForObject("select count(*) from domain_event", Integer.class))
         .isEqualTo(22);
     assertThat(jdbc.queryForObject("select count(*) from outbox_event", Integer.class)).isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from board_task where external_task_id is not null "
+                    + "and not completion_deadline_enforced "
+                    + "and request_fingerprint ~ '^[0-9a-f]{64}$'",
+                Integer.class))
+        .isEqualTo(
+            jdbc.queryForObject(
+                "select count(*) from board_task where external_task_id is not null "
+                    + "and not completion_deadline_enforced",
+                Integer.class));
 
     workerClasses
         .findAll()
@@ -174,7 +204,7 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
 
   @Test
   @Transactional
-  void immutableVersionFiveQueueEntryBaselineReplaysWithOriginalV1Shape() throws Exception {
+  void versionTwentyCanonicalizesVersionFiveQueueEntryBaselineForExactReplay() throws Exception {
     var sourceCorrelatedEntry =
         entries.findAll().stream()
             .filter(item -> item.getTask().getExternalTaskId() != null)
@@ -193,6 +223,8 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
         .isEqualTo(sourceCorrelatedEntry.getTask().getId().toString());
     assertThat(payload.required("routeIndex").intValue())
         .isEqualTo(sourceCorrelatedEntry.getRouteIndex());
+    assertThat(payload.has("originalBudgetSeconds")).isTrue();
+    assertThat(payload.has("currentBudgetSeconds")).isTrue();
     assertBaselinePayload(
         "QUEUE_ENTRY",
         sourceCorrelatedEntry.getId(),
@@ -202,7 +234,8 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
   private void assertBaselinePayload(String aggregateType, UUID id, Object fact) {
     String serialized;
     try {
-      serialized = objectMapper.writeValueAsString(fact);
+      JsonNode expectedFact = objectMapper.valueToTree(fact);
+      serialized = objectMapper.writeValueAsString(expectedFact);
     } catch (tools.jackson.core.JacksonException exception) {
       throw new AssertionError("Cannot serialize expected task-board baseline fact", exception);
     }
@@ -237,6 +270,19 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
       jdbc.update(
           "update queue_usage_reference set reference_type='REPAIR_PLAN' "
               + "where reference_type='TASK_HISTORY'");
+      jdbc.execute(
+          """
+          update queue_entry entry
+          set (queue_id, queue_code) = (
+            select work_queue.id, work_queue.code
+            from work_queue
+            join board_task on board_task.warehouse_id = work_queue.warehouse_id
+            where board_task.id = entry.task_id
+            order by work_queue.sort_order, work_queue.id
+            limit 1
+          )
+          where entry.queue_id is null
+          """);
       seedRabbitCompatibilityRows(jdbc);
       apply(container, "flyway/verify-version-4.sql");
       Flyway.configure()
@@ -351,8 +397,29 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
   private static String digest(JdbcTemplate jdbc, String table) {
     String json =
         "board_task".equals(table)
-            ? "to_jsonb(row_value) - 'completion_deadline_enforced'"
-            : "to_jsonb(row_value)";
+            ? "to_jsonb(row_value) - array['completion_deadline_enforced',"
+                + "'scheduled_date','priority','pinned','request_fingerprint']"
+            : "queue_entry".equals(table)
+                ? "to_jsonb(row_value) - array['queue_code','worker_works','worker_materials',"
+                    + "'worker_comments','source_media_references','revision_marker',"
+                    + "'original_budget_seconds','current_budget_seconds']"
+                : "work_queue".equals(table)
+                    ? "to_jsonb(row_value) - array['code','result_photo_min_count',"
+                        + "'name','description','queue_type','definition_id']"
+                    : "queue_usage_reference".equals(table)
+                        ? "to_jsonb(row_value) - array['queue_id','queue_definition_id']"
+                    : "worker_class".equals(table)
+                        ? "to_jsonb(row_value) - 'code'"
+                    : "work_queue_class_binding".equals(table)
+                        ? "to_jsonb(row_value) - array['binding_order','notify_urgent']"
+                        : "worker_group_member".equals(table)
+                            ? "to_jsonb(row_value) - 'role_in_group'"
+                            : "worker".equals(table)
+                                ? "to_jsonb(row_value) - 'current_group_id'"
+                                : "worker_group".equals(table)
+                                    ? "to_jsonb(row_value) - array['operational_status',"
+                                        + "'unavailable_since','unavailability_reason']"
+                                    : "to_jsonb(row_value)";
     return jdbc.queryForObject(
         "select md5(coalesce(string_agg(("
             + json

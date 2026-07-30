@@ -15,23 +15,23 @@ function node(
   return {
     id,
     catalogVersionId: versionId,
-    code: `NODE_${id.at(-1)}`,
     name: `Узел ${id.at(-1)}`,
     nodeType: "CATEGORY",
     parentId: null,
-    parentCode: null,
     active: true,
     unit: null,
     unitPrice: null,
     durationMinutes: null,
     showInMainMenu: false,
     routeQueueKind: null,
-    workQueueId: null,
-    workQueueCode: null,
+    queueDefinitionId: null,
+    queueDefinitionName: null,
     includeInEstimate: false,
     commonItem: false,
     furnitureCategory: false,
     furnitureEquipment: null,
+    forcesCapitalRepair: false,
+    characteristic: null,
     comment: null,
     ...overrides,
   }
@@ -40,49 +40,43 @@ function node(
 describe("repair estimate furniture catalog usage", () => {
   it("allows only mapped furniture in estimates and excludes the whole furniture tree elsewhere", () => {
     const regularRoot = node("00000000-0000-4000-8000-000000000010", {
-      code: "GENERAL",
+      name: "Общее",
     })
     const furnitureRoot = node("00000000-0000-4000-8000-000000000011", {
-      code: "FURNITURE",
+      name: "Мебель",
       furnitureCategory: true,
     })
     const furnitureGroup = node("00000000-0000-4000-8000-000000000012", {
-      code: "OFFICE_FURNITURE",
+      name: "Офисная мебель",
       nodeType: "SUBCATEGORY",
       parentId: furnitureRoot.id,
-      parentCode: furnitureRoot.code,
     })
     const mappedFurniture = node("00000000-0000-4000-8000-000000000013", {
-      code: "CHAIR",
+      name: "Стул",
       nodeType: "MATERIAL",
       parentId: furnitureGroup.id,
-      parentCode: furnitureGroup.code,
       includeInEstimate: true,
       furnitureEquipment: {
         equipmentId: "00000000-0000-4000-8000-000000000101",
-        equipmentCode: "CHAIR",
         equipmentName: "Стул",
       },
     })
     const unmappedFurniture = node("00000000-0000-4000-8000-000000000014", {
-      code: "TABLE",
+      name: "Стол",
       nodeType: "MATERIAL",
       parentId: furnitureGroup.id,
-      parentCode: furnitureGroup.code,
       includeInEstimate: true,
     })
     const furnitureWork = node("00000000-0000-4000-8000-000000000015", {
-      code: "ASSEMBLE_CHAIR",
+      name: "Сборка стула",
       nodeType: "WORK",
       parentId: furnitureGroup.id,
-      parentCode: furnitureGroup.code,
       includeInEstimate: true,
     })
     const regularMaterial = node("00000000-0000-4000-8000-000000000016", {
-      code: "PAINT",
+      name: "Краска",
       nodeType: "MATERIAL",
       parentId: regularRoot.id,
-      parentCode: regularRoot.code,
       includeInEstimate: true,
     })
     const nodes = [

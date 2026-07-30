@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { MemoryRouter } from "react-router-dom"
 
 import type { CurrentUser } from "@/features/auth/auth-model"
 import type {
@@ -53,9 +54,6 @@ vi.mock(
     getRepairEstimateFurnitureCatalogSettings: async () => ({
       id: "repair-estimate-catalog-furniture",
       title: "Мебель",
-      legacyRoute: "/repair-estimate-catalog-furniture",
-      legacyViewId: "RepairEstimateCatalogFurniture.view",
-      legacyClassName: "RepairEstimateFurnitureCatalogView",
       sectionType: "MATERIAL",
       categoryScope: "FURNITURE_ONLY",
       order: 40,
@@ -82,6 +80,7 @@ const currentUser: CurrentUser = {
   email: null,
   principalType: "USER",
   globalRole: "WAREHOUSE_MANAGER",
+  rentalAccess: false,
   warehouseAccessAll: false,
   warehouseAccesses: [{ warehouseId: WAREHOUSE_ID, level: "MANAGE" }],
 }
@@ -102,25 +101,23 @@ const version: RepairEstimateCatalogVersionDto = {
 const furnitureCategory: RepairEstimateCatalogNodeDto = {
   id: CATEGORY_ID,
   catalogVersionId: VERSION_ID,
-  code: "FURNITURE",
   name: "Мебельная группа",
   nodeType: "CATEGORY",
   parentId: null,
-  parentCode: null,
   active: true,
   unit: null,
   unitPrice: null,
   durationMinutes: null,
   showInMainMenu: true,
   routeQueueKind: null,
-  workQueueId: null,
-  workQueueCode: null,
+  queueDefinitionId: null,
   routing: null,
   includeInEstimate: false,
   commonItem: false,
   furnitureCategory: true,
   furnitureEquipment: null,
-  references: [],
+  forcesCapitalRepair: false,
+  characteristic: null,
   canvasX: null,
   canvasY: null,
   comment: null,
@@ -137,18 +134,15 @@ const furnitureSection: RepairEstimateCatalogSectionDto = {
 
 const furnitureEquipment = {
   equipmentId: "00000000-0000-4000-8000-000000000005",
-  equipmentCode: "CHAIR",
   equipmentName: "Стул",
 }
 
 const existingFurniture: RepairEstimateCatalogNodeDto = {
   ...furnitureCategory,
   id: FURNITURE_ID,
-  code: "CHAIR",
   name: "Стул",
   nodeType: "MATERIAL",
   parentId: CATEGORY_ID,
-  parentCode: furnitureCategory.code,
   unit: "шт.",
   unitPrice: "100.00",
   includeInEstimate: true,
@@ -173,16 +167,18 @@ function renderPage() {
   const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries")
 
   render(
-    <QueryClientProvider client={queryClient}>
-      <EstimatesRepairsSettingsPage />
-    </QueryClientProvider>
+    <MemoryRouter initialEntries={["/settings/estimates-repairs"]}>
+      <QueryClientProvider client={queryClient}>
+        <EstimatesRepairsSettingsPage />
+      </QueryClientProvider>
+    </MemoryRouter>
   )
 
   return { invalidateQueries }
 }
 
 async function openFurnitureEditor(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByRole("button", { name: "Мебель" }))
+  await user.click(await screen.findByRole("radio", { name: "Мебель" }))
   await user.click(
     await screen.findByRole("button", { name: /^Мебельная группа/ })
   )
@@ -198,11 +194,9 @@ beforeEach(() => {
   mocks.saveFurniture.mockResolvedValue({
     ...furnitureCategory,
     id: FURNITURE_ID,
-    code: "TABLE",
     name: "Стол",
     nodeType: "MATERIAL",
     parentId: CATEGORY_ID,
-    parentCode: furnitureCategory.code,
     unit: "шт.",
     unitPrice: "0.00",
     includeInEstimate: true,
@@ -210,7 +204,6 @@ beforeEach(() => {
     furnitureCategory: false,
     furnitureEquipment: {
       equipmentId: "00000000-0000-4000-8000-000000000005",
-      equipmentCode: "TABLE",
       equipmentName: "Стол",
     },
   })
@@ -229,7 +222,7 @@ describe("automatic furniture equipment link", () => {
 
     expect(dialog.textContent).toContain("Будет создано автоматически")
     expect(dialog.textContent).toContain(
-      "автоматически создадут и привяжут строку в «Доп. оборудовании»"
+      "автоматически создаст и привяжет строку в «Доп. оборудовании»"
     )
     expect(
       screen.queryByRole("combobox", {
@@ -237,7 +230,6 @@ describe("automatic furniture equipment link", () => {
       })
     ).toBeNull()
 
-    await user.type(screen.getByRole("textbox", { name: "Код" }), "table")
     await user.type(screen.getByRole("textbox", { name: "Название" }), "Стол")
     await user.click(screen.getByRole("button", { name: "Сохранить" }))
 
@@ -249,7 +241,6 @@ describe("automatic furniture equipment link", () => {
           catalogVersionId: VERSION_ID,
         }),
         expect.objectContaining({
-          code: "table",
           name: "Стол",
           furnitureEquipment: null,
         })
@@ -276,7 +267,7 @@ describe("automatic furniture equipment link", () => {
     })
     renderPage()
 
-    await user.click(await screen.findByRole("button", { name: "Мебель" }))
+    await user.click(await screen.findByRole("radio", { name: "Мебель" }))
     await user.click(
       await screen.findByRole("button", { name: /^Мебельная группа/ })
     )
@@ -288,7 +279,7 @@ describe("automatic furniture equipment link", () => {
       name: "Редактировать: Мебель",
     })
     expect(dialog.textContent).toContain("Связано автоматически")
-    expect(dialog.textContent).toContain("CHAIR · Стул")
+    expect(dialog.textContent).toContain("Стул")
     expect(screen.queryByText("Фотографии")).toBeNull()
     expect(
       screen.queryByRole("combobox", {

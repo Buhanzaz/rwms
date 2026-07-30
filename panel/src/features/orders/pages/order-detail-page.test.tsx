@@ -49,7 +49,6 @@ vi.mock("@/features/orders/orders-module-context", () => ({
     warehouses: [
       {
         id: "22222222-2222-4222-8222-222222222222",
-        code: "MSK",
         name: "Москва",
         city: "Москва",
         address: "Складская, 1",
@@ -337,7 +336,7 @@ describe("OrderDetailPage reservation conflict", () => {
 
     await waitFor(() => expect(ordersApi.addOrderUnit).toHaveBeenCalledTimes(1))
     expect(toast.error).toHaveBeenCalledWith(
-      "Бытовка уже занята другим заказом. Список доступных бытовок обновлён."
+      "Бытовка уже занята другим бронированием. Список доступных бытовок обновлён."
     )
     await waitFor(() => {
       expect(ordersApi.getOrder.mock.calls.length).toBeGreaterThanOrEqual(2)
@@ -389,6 +388,18 @@ describe("OrderDetailPage reservation conflict", () => {
 })
 
 describe("OrderDetailPage draft actions", () => {
+  it("keeps the return control and order metadata in the page toolbar", async () => {
+    renderPage()
+
+    const back = await screen.findByRole("link", { name: "Назад" })
+    expect(back.getAttribute("href")).toBe("/orders")
+    expect(screen.getByText("Черновик")).toBeTruthy()
+    expect(screen.getByText(/Изменён/)).toBeTruthy()
+    expect(
+      screen.queryByRole("heading", { name: "Бронирование ORD-000001" })
+    ).toBeNull()
+  })
+
   it("shows only human-readable order data and history", async () => {
     const actorId = "66666666-6666-4666-8666-666666666666"
     const equipmentId = "77777777-7777-4777-8777-777777777777"
@@ -435,9 +446,11 @@ describe("OrderDetailPage draft actions", () => {
     renderPage()
 
     expect((await screen.findAllByText("Менеджер")).length).toBeGreaterThan(0)
-    expect(await screen.findByText("Заказ создан")).toBeTruthy()
+    expect(await screen.findByText("Бронирование создано")).toBeTruthy()
     expect(screen.getByText("Автор")).toBeTruthy()
-    expect(screen.getAllByText(/Номер заказа: ORD-000001/).length).toBeGreaterThan(0)
+    expect(
+      screen.getAllByText(/Номер бронирования: ORD-000001/).length
+    ).toBeGreaterThan(0)
     expect(screen.getAllByText(/Статус: Черновик/).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/Бытовка: БЫТ-001/).length).toBeGreaterThan(0)
     expect(screen.getAllByText(/Мебель: Стол/).length).toBeGreaterThan(0)
@@ -447,7 +460,7 @@ describe("OrderDetailPage draft actions", () => {
     expect(screen.queryByText("Actor:")).toBeNull()
   })
 
-  it("saves a populated order and locks its editing controls", async () => {
+  it("keeps a saved booking editable while its shipment is still a draft", async () => {
     const selectedCandidate = {
       ...candidate,
       reservationId: "66666666-6666-4666-8666-666666666666",
@@ -464,13 +477,13 @@ describe("OrderDetailPage draft actions", () => {
       status: "SAVED",
       unitCount: 1,
       units: [selectedCandidate],
-      permissions: { ...detail.permissions, canEdit: false },
+      permissions: { ...detail.permissions, canEdit: true },
     })
     const user = userEvent.setup()
     renderPage()
 
     await user.click(
-      await screen.findByRole("button", { name: "Сохранить заказ" })
+      await screen.findByRole("button", { name: "Сохранить бронирование" })
     )
 
     await waitFor(() =>
@@ -482,12 +495,17 @@ describe("OrderDetailPage draft actions", () => {
       })
     )
     expect(toast.success).toHaveBeenCalledWith(
-      "Заказ сохранён и добавлен в ожидающие отгрузки."
+      "Бронирование сохранено и добавлено в ожидающие отгрузки."
     )
     expect(
-      screen.queryByRole("button", { name: "Редактировать заказ" })
+      screen.getByRole("button", { name: "Редактировать бронирование" })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "Сохранить бронирование" })
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: "Удалить черновик" })
     ).toBeNull()
-    expect(screen.queryByRole("button", { name: "Сохранить заказ" })).toBeNull()
   })
 
   it("updates the detail projection after selecting an existing client", async () => {
@@ -512,7 +530,7 @@ describe("OrderDetailPage draft actions", () => {
     renderPage()
 
     await user.click(
-      await screen.findByRole("button", { name: "Редактировать заказ" })
+      await screen.findByRole("button", { name: "Редактировать бронирование" })
     )
     const input = screen.getByPlaceholderText("Например, ООО Петров")
     await user.clear(input)
@@ -532,7 +550,7 @@ describe("OrderDetailPage draft actions", () => {
       })
     )
     expect(await screen.findByText(replacementClient.displayName)).toBeTruthy()
-    expect(toast.success).toHaveBeenCalledWith("Клиент заказа изменён.")
+    expect(toast.success).toHaveBeenCalledWith("Клиент бронирования изменён.")
   })
 
   it("labels draft deletion as a logical cancellation and releases reservations", async () => {
@@ -546,7 +564,7 @@ describe("OrderDetailPage draft actions", () => {
     const confirmation = await screen.findByRole("alertdialog")
     expect(
       within(confirmation).getByText(
-        "Это логическое удаление: заказ будет отменён, а все активные резервирования бытовок будут освобождены. Действие фиксируется в истории."
+        "Это логическое удаление: бронирование будет отменено, а все активные резервирования бытовок будут освобождены. Действие фиксируется в истории."
       )
     ).toBeTruthy()
     expect(
@@ -566,7 +584,7 @@ describe("OrderDetailPage draft actions", () => {
       })
     )
     expect(toast.success).toHaveBeenCalledWith(
-      "Черновик удалён: заказ логически отменён, резервирования освобождены."
+      "Черновик удалён: бронирование логически отменено, резервирования освобождены."
     )
   })
 })

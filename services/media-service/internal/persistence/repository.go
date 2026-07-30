@@ -42,6 +42,37 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool, now: time.Now}
 }
 
+func normalizeActor(subjectID uuid.UUID, principalType string, actor ActorReference) (ActorReference, error) {
+	if subjectID == uuid.Nil {
+		return ActorReference{}, ErrConflict
+	}
+	if principalType == "" {
+		principalType = PrincipalTypeUser
+	}
+	if principalType != PrincipalTypeUser && principalType != PrincipalTypeWorker {
+		return ActorReference{}, ErrConflict
+	}
+	if actor.PrincipalType == "" {
+		actor.PrincipalType = principalType
+	}
+	if actor.SubjectID == uuid.Nil {
+		actor.SubjectID = subjectID
+	}
+	if actor.PrincipalType != principalType || actor.SubjectID == uuid.Nil {
+		return ActorReference{}, ErrConflict
+	}
+	return actor, nil
+}
+
+func actorForAsset(asset AssetRecord) *ActorReference {
+	if asset.CreatedBy == nil || asset.CreatedBy.SubjectID == uuid.Nil ||
+		(asset.CreatedBy.PrincipalType != PrincipalTypeUser && asset.CreatedBy.PrincipalType != PrincipalTypeWorker) {
+		return nil
+	}
+	copyOfActor := *asset.CreatedBy
+	return &copyOfActor
+}
+
 // AcquireUploadSessionContentLock serializes byte ingress for one upload
 // session across every media-service instance. The session-level advisory lock
 // is held on a dedicated pooled connection while the bounded object stream is
@@ -90,6 +121,7 @@ func (repository *Repository) AcquireUploadSessionContentLock(
 type AssetRecord struct {
 	ID                uuid.UUID
 	FolderID          uuid.UUID
+	ClientReferenceID *uuid.UUID
 	OwnerType         string
 	OwnerID           string
 	WarehouseID       uuid.UUID
@@ -112,6 +144,21 @@ type AssetRecord struct {
 	ExpectedLength    int64
 	ExpectedChecksum  string
 	UploadCompletedAt *time.Time
+	CreatedBy         *ActorReference
+}
+
+const (
+	PrincipalTypeUser   = "USER"
+	PrincipalTypeWorker = "WORKER"
+)
+
+// ActorReference is the sanitized actor identity retained for media facts.
+// It intentionally uses worker_id, not the Android OAuth subject, for WORKER
+// facts so task-board can correlate a READY evidence fact without trusting
+// client-supplied metadata.
+type ActorReference struct {
+	SubjectID     uuid.UUID
+	PrincipalType string
 }
 
 type VariantRecord struct {
@@ -146,34 +193,57 @@ type CabinPreviewRecord struct {
 }
 
 type CreateUploadCommand struct {
-	MediaID         uuid.UUID
-	FolderID        uuid.UUID
-	UploadSessionID uuid.UUID
-	SubjectID       uuid.UUID
-	IdempotencyKey  uuid.UUID
-	RequestSHA256   string
-	OwnerType       string
-	OwnerID         string
-	WarehouseID     uuid.UUID
-	Kind            media.Kind
-	FileName        string
-	ContentType     string
-	ContentLength   int64
-	ChecksumSHA256  string
-	SortOrder       int64
-	SourceObjectKey string
-	UploadExpiresAt time.Time
-	CorrelationID   uuid.UUID
+	MediaID           uuid.UUID
+	FolderID          uuid.UUID
+	UploadSessionID   uuid.UUID
+	SubjectID         uuid.UUID
+	PrincipalType     string
+	Actor             ActorReference
+	WorkerID          *uuid.UUID
+	IdempotencyKey    uuid.UUID
+	RequestSHA256     string
+	OwnerType         string
+	OwnerID           string
+	WarehouseID       uuid.UUID
+	ClientReferenceID *uuid.UUID
+	Kind              media.Kind
+	FileName          string
+	ContentType       string
+	ContentLength     int64
+	ChecksumSHA256    string
+	SortOrder         int64
+	SourceObjectKey   string
+	UploadExpiresAt   time.Time
+	CorrelationID     uuid.UUID
 }
 
 func (repository *Repository) CreateUpload(ctx context.Context, command CreateUploadCommand) (AssetRecord, bool, error) {
+	actor, err := normalizeActor(command.SubjectID, command.PrincipalType, command.Actor)
+	if err != nil {
+		return AssetRecord{}, false, err
+	}
+	command.PrincipalType = actor.PrincipalType
+	command.Actor = actor
+	if err := validateCreateActor(command); err != nil {
+		return AssetRecord{}, false, err
+	}
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return AssetRecord{}, false, err
 	}
 	defer tx.Rollback(ctx)
-	if err := lockCommand(ctx, tx, command.SubjectID, "CREATE_UPLOAD", command.IdempotencyKey); err != nil {
+	if err := lockActorCommand(ctx, tx, command.PrincipalType, command.SubjectID, "CREATE_UPLOAD", command.IdempotencyKey); err != nil {
 		return AssetRecord{}, false, err
+	}
+	if command.OwnerType == OwnerTypeTaskBoardEntry {
+		asset, replayed, err := repository.createTaskBoardEvidenceUpload(ctx, tx, command)
+		if err != nil {
+			return AssetRecord{}, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return AssetRecord{}, false, translateConstraint(err)
+		}
+		return asset, replayed, nil
 	}
 
 	if replay, found, err := repository.findCreateReplay(ctx, tx, command); err != nil {
@@ -206,22 +276,24 @@ func (repository *Repository) CreateUpload(ctx context.Context, command CreateUp
 	now := repository.now().UTC()
 	_, err = tx.Exec(ctx, `
 		insert into media_asset (
-			media_id, folder_id, owner_type, owner_id, warehouse_id, media_kind,
+			media_id, folder_id, client_reference_id, created_by_principal_type, created_by_actor_id,
+			owner_type, owner_id, warehouse_id, media_kind,
 			original_file_name, original_content_type, source_object_key,
 			processing_status, sort_order, version, next_generation, created_at, updated_at)
-		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'UPLOADING',$10,1,1,$11,$11)`,
-		assetID, folderID, command.OwnerType, command.OwnerID, command.WarehouseID, command.Kind,
-		command.FileName, command.ContentType, command.SourceObjectKey, command.SortOrder, now)
+		values ($1,$2,null,$3,$4,$5,$6,$7,$8,$9,$10,$11,'UPLOADING',$12,1,1,$13,$13)`,
+		assetID, folderID, command.PrincipalType, actor.SubjectID, command.OwnerType, command.OwnerID,
+		command.WarehouseID, command.Kind, command.FileName, command.ContentType,
+		command.SourceObjectKey, command.SortOrder, now)
 	if err != nil {
 		return AssetRecord{}, false, translateConstraint(err)
 	}
 	_, err = tx.Exec(ctx, `
 		insert into media_upload_session (
-			upload_session_id, media_id, subject_id, idempotency_key,
+			upload_session_id, media_id, principal_type, subject_id, idempotency_key,
 			expected_content_length, expected_content_type, expected_checksum_sha256,
 			expires_at, created_at)
-		values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		sessionID, assetID, command.SubjectID, command.IdempotencyKey,
+		values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		sessionID, assetID, command.PrincipalType, command.SubjectID, command.IdempotencyKey,
 		command.ContentLength, command.ContentType, command.ChecksumSHA256,
 		command.UploadExpiresAt.UTC(), now)
 	if err != nil {
@@ -229,14 +301,15 @@ func (repository *Repository) CreateUpload(ctx context.Context, command CreateUp
 	}
 	_, err = tx.Exec(ctx, `
 		insert into media_command_idempotency (
-			subject_id, command_type, idempotency_key, request_sha256,
+			principal_type, subject_id, command_type, idempotency_key, request_sha256,
 			media_id, created_at, expires_at)
-		values ($1,'CREATE_UPLOAD',$2,$3,$4,$5,$6)`,
-		command.SubjectID, command.IdempotencyKey, command.RequestSHA256, assetID, now, now.Add(24*time.Hour))
+		values ($1,$2,'CREATE_UPLOAD',$3,$4,$5,$6,$7)`,
+		command.PrincipalType, command.SubjectID, command.IdempotencyKey, command.RequestSHA256,
+		assetID, now, now.Add(24*time.Hour))
 	if err != nil {
 		return AssetRecord{}, false, translateConstraint(err)
 	}
-	if err := appendInitialEvent(ctx, tx, assetID, "media.upload.session.created.v1", command.SubjectID, command.CorrelationID, now); err != nil {
+	if err := appendInitialEventForActor(ctx, tx, assetID, "media.upload.session.created.v1", actor, command.CorrelationID, now); err != nil {
 		return AssetRecord{}, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -248,7 +321,7 @@ func (repository *Repository) CreateUpload(ctx context.Context, command CreateUp
 		ContentType: command.ContentType, SourceObjectKey: command.SourceObjectKey,
 		Status: media.StatusUploading, Version: 1, SortOrder: command.SortOrder, CreatedAt: now,
 		UploadSessionID: sessionID, UploadExpiresAt: command.UploadExpiresAt.UTC(),
-		ExpectedLength: command.ContentLength, ExpectedChecksum: command.ChecksumSHA256,
+		ExpectedLength: command.ContentLength, ExpectedChecksum: command.ChecksumSHA256, CreatedBy: &actor,
 	}, false, nil
 }
 
@@ -262,8 +335,8 @@ func (repository *Repository) findCreateReplay(
 	err := tx.QueryRow(ctx, `
 		select request_sha256, media_id
 		from media_command_idempotency
-		where subject_id=$1 and command_type='CREATE_UPLOAD' and idempotency_key=$2
-		for update`, command.SubjectID, command.IdempotencyKey).Scan(&requestSHA, &assetID)
+		where principal_type=$1 and subject_id=$2 and command_type='CREATE_UPLOAD' and idempotency_key=$3
+		for update`, command.PrincipalType, command.SubjectID, command.IdempotencyKey).Scan(&requestSHA, &assetID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AssetRecord{}, false, nil
 	}
@@ -285,13 +358,223 @@ func (repository *Repository) findCreateReplay(
 	return asset, true, err
 }
 
+func validateCreateActor(command CreateUploadCommand) error {
+	if command.OwnerType == OwnerTypeTaskBoardEntry {
+		if command.ClientReferenceID == nil || *command.ClientReferenceID == uuid.Nil || command.Kind != media.KindImage {
+			return ErrConflict
+		}
+		if command.PrincipalType == PrincipalTypeWorker {
+			if command.WorkerID == nil || *command.WorkerID == uuid.Nil ||
+				command.Actor.PrincipalType != PrincipalTypeWorker || command.IdempotencyKey != *command.ClientReferenceID {
+				return ErrConflict
+			}
+			return nil
+		}
+		if command.WorkerID != nil {
+			return ErrConflict
+		}
+		return nil
+	}
+	if command.ClientReferenceID != nil || command.WorkerID != nil || command.PrincipalType != PrincipalTypeUser {
+		return ErrConflict
+	}
+	return nil
+}
+
+func (repository *Repository) createTaskBoardEvidenceUpload(
+	ctx context.Context,
+	tx pgx.Tx,
+	command CreateUploadCommand,
+) (AssetRecord, bool, error) {
+	if err := requireOwnerBinding(ctx, tx, command.OwnerType, command.OwnerID, command.WarehouseID, repository.now()); err != nil {
+		return AssetRecord{}, false, err
+	}
+	if command.WorkerID != nil {
+		entryID, err := uuid.Parse(command.OwnerID)
+		if err != nil || entryID == uuid.Nil {
+			return AssetRecord{}, false, ErrConflict
+		}
+		if err := RequireTaskBoardEntryWorkerAccess(ctx, tx, entryID, command.WarehouseID, *command.WorkerID); err != nil {
+			return AssetRecord{}, false, err
+		}
+	}
+	if command.ClientReferenceID == nil {
+		return AssetRecord{}, false, ErrConflict
+	}
+	if _, err := tx.Exec(ctx, `select pg_advisory_xact_lock(hashtextextended($1,0))`,
+		"task-board-evidence:"+command.OwnerID+":"+command.ClientReferenceID.String()); err != nil {
+		return AssetRecord{}, false, err
+	}
+
+	var priorRequestSHA string
+	var priorAssetID uuid.UUID
+	err := tx.QueryRow(ctx, `select request_sha256,media_id from media_command_idempotency
+		where principal_type=$1 and subject_id=$2 and command_type='CREATE_UPLOAD' and idempotency_key=$3
+		for update`, command.PrincipalType, command.SubjectID, command.IdempotencyKey).
+		Scan(&priorRequestSHA, &priorAssetID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return AssetRecord{}, false, err
+	}
+	if err == nil && priorRequestSHA != command.RequestSHA256 {
+		return AssetRecord{}, false, ErrIdempotencyMismatch
+	}
+
+	asset, existing, err := taskBoardEvidenceAssetForUpdate(ctx, tx, command)
+	if err != nil {
+		return AssetRecord{}, false, err
+	}
+	now := repository.now().UTC()
+	if existing {
+		if priorAssetID != uuid.Nil && priorAssetID != asset.ID {
+			return AssetRecord{}, false, ErrIdempotencyMismatch
+		}
+		if asset.CreatedBy == nil || asset.CreatedBy.PrincipalType != command.Actor.PrincipalType ||
+			asset.CreatedBy.SubjectID != command.Actor.SubjectID || !sameTaskBoardEvidenceRequest(asset, command) {
+			return AssetRecord{}, false, ErrIdempotencyMismatch
+		}
+		if asset.Status == media.StatusUploading && asset.UploadCompletedAt == nil && !now.Before(asset.UploadExpiresAt) {
+			newSessionID := command.UploadSessionID
+			if newSessionID == uuid.Nil {
+				newSessionID = uuid.New()
+			}
+			_, err := tx.Exec(ctx, `update media_upload_session set upload_session_id=$1,
+				principal_type=$2,subject_id=$3,idempotency_key=$4,expected_content_length=$5,
+				expected_content_type=$6,expected_checksum_sha256=$7,expires_at=$8,completed_at=null,
+				created_at=$9 where media_id=$10 and principal_type=$2 and subject_id=$3`,
+				newSessionID, command.PrincipalType, command.SubjectID, command.IdempotencyKey,
+				command.ContentLength, command.ContentType, command.ChecksumSHA256,
+				command.UploadExpiresAt.UTC(), now, asset.ID)
+			if err != nil {
+				return AssetRecord{}, false, translateConstraint(err)
+			}
+			asset.UploadSessionID = newSessionID
+			asset.UploadExpiresAt = command.UploadExpiresAt.UTC()
+			asset.ExpectedLength = command.ContentLength
+			asset.ExpectedChecksum = command.ChecksumSHA256
+		}
+		_, err = tx.Exec(ctx, `update media_command_idempotency set request_sha256=$1,expires_at=$2
+			where principal_type=$3 and subject_id=$4 and command_type='CREATE_UPLOAD' and idempotency_key=$5`,
+			command.RequestSHA256, now.Add(24*time.Hour), command.PrincipalType, command.SubjectID,
+			command.IdempotencyKey)
+		if err != nil {
+			return AssetRecord{}, false, translateConstraint(err)
+		}
+		return asset, true, nil
+	}
+	if err := enforceOwnerMediaLimit(ctx, tx, command.OwnerType, command.OwnerID, command.WarehouseID, 100); err != nil {
+		return AssetRecord{}, false, err
+	}
+	assetID := command.MediaID
+	if assetID == uuid.Nil {
+		assetID = uuid.New()
+	}
+	folderID := command.FolderID
+	if folderID == uuid.Nil {
+		folderID = assetID
+	}
+	sessionID := command.UploadSessionID
+	if sessionID == uuid.Nil {
+		sessionID = uuid.New()
+	}
+	_, err = tx.Exec(ctx, `insert into media_asset (
+		media_id,folder_id,client_reference_id,created_by_principal_type,created_by_actor_id,
+		owner_type,owner_id,warehouse_id,media_kind,original_file_name,original_content_type,
+		source_object_key,processing_status,sort_order,version,next_generation,created_at,updated_at)
+	values ($1,$2,$3,$4,$5,'TASK_BOARD_ENTRY',$6,$7,$8,$9,$10,$11,'UPLOADING',$12,1,1,$13,$13)`,
+		assetID, folderID, *command.ClientReferenceID, command.Actor.PrincipalType, command.Actor.SubjectID,
+		command.OwnerID, command.WarehouseID, command.Kind, command.FileName, command.ContentType,
+		command.SourceObjectKey, command.SortOrder, now)
+	if err != nil {
+		return AssetRecord{}, false, translateConstraint(err)
+	}
+	_, err = tx.Exec(ctx, `insert into media_upload_session (
+		upload_session_id,media_id,principal_type,subject_id,idempotency_key,expected_content_length,
+		expected_content_type,expected_checksum_sha256,expires_at,created_at)
+	values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, sessionID, assetID, command.PrincipalType,
+		command.SubjectID, command.IdempotencyKey, command.ContentLength, command.ContentType,
+		command.ChecksumSHA256, command.UploadExpiresAt.UTC(), now)
+	if err != nil {
+		return AssetRecord{}, false, translateConstraint(err)
+	}
+	_, err = tx.Exec(ctx, `insert into media_command_idempotency (
+		principal_type,subject_id,command_type,idempotency_key,request_sha256,media_id,created_at,expires_at)
+	values ($1,$2,'CREATE_UPLOAD',$3,$4,$5,$6,$7)`, command.PrincipalType, command.SubjectID,
+		command.IdempotencyKey, command.RequestSHA256, assetID, now, now.Add(24*time.Hour))
+	if err != nil {
+		return AssetRecord{}, false, translateConstraint(err)
+	}
+	if err := appendInitialEventForActor(ctx, tx, assetID, "media.upload.session.created.v1", command.Actor,
+		command.CorrelationID, now); err != nil {
+		return AssetRecord{}, false, err
+	}
+	clientReferenceID := *command.ClientReferenceID
+	return AssetRecord{
+		ID: assetID, FolderID: folderID, ClientReferenceID: &clientReferenceID,
+		OwnerType: command.OwnerType, OwnerID: command.OwnerID, WarehouseID: command.WarehouseID,
+		Kind: command.Kind, FileName: command.FileName, ContentType: command.ContentType,
+		SourceObjectKey: command.SourceObjectKey, Status: media.StatusUploading, Version: 1,
+		SortOrder: command.SortOrder, CreatedAt: now, UploadSessionID: sessionID,
+		UploadExpiresAt: command.UploadExpiresAt.UTC(), ExpectedLength: command.ContentLength,
+		ExpectedChecksum: command.ChecksumSHA256, CreatedBy: &command.Actor,
+	}, false, nil
+}
+
+func taskBoardEvidenceAssetForUpdate(ctx context.Context, tx pgx.Tx, command CreateUploadCommand) (AssetRecord, bool, error) {
+	var mediaID uuid.UUID
+	var deletedAt *time.Time
+	err := tx.QueryRow(ctx, `select media_id,deleted_at from media_asset
+		where owner_type='TASK_BOARD_ENTRY' and owner_id=$1 and client_reference_id=$2 for update`,
+		command.OwnerID, *command.ClientReferenceID).Scan(&mediaID, &deletedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AssetRecord{}, false, nil
+	}
+	if err != nil {
+		return AssetRecord{}, false, err
+	}
+	if deletedAt != nil {
+		// Evidence IDs are permanent logical identifiers. A soft-deleted
+		// evidence item stays unavailable and cannot be silently replaced by
+		// a second asset using the same ID.
+		return AssetRecord{}, true, ErrConflict
+	}
+	asset, err := scanAssetWithSession(tx.QueryRow(ctx, assetWithSessionSQL+`
+		where a.media_id=$1 and media_asset_is_available(a.media_id) for update of a,s`, mediaID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AssetRecord{}, true, ErrConflict
+	}
+	if err != nil {
+		return AssetRecord{}, true, err
+	}
+	return asset, true, nil
+}
+
+func sameTaskBoardEvidenceRequest(asset AssetRecord, command CreateUploadCommand) bool {
+	return asset.OwnerType == OwnerTypeTaskBoardEntry && asset.OwnerID == command.OwnerID &&
+		asset.WarehouseID == command.WarehouseID && asset.Kind == command.Kind &&
+		asset.FileName == command.FileName && asset.ContentType == command.ContentType &&
+		asset.SortOrder == command.SortOrder && asset.ExpectedLength == command.ContentLength &&
+		asset.ExpectedChecksum == command.ChecksumSHA256 && asset.ClientReferenceID != nil &&
+		command.ClientReferenceID != nil && *asset.ClientReferenceID == *command.ClientReferenceID
+}
+
 func (repository *Repository) UploadSessionForSubject(
 	ctx context.Context,
 	sessionID, subjectID uuid.UUID,
 ) (AssetRecord, error) {
+	return repository.UploadSessionForPrincipal(ctx, sessionID, subjectID, PrincipalTypeUser)
+}
+
+func (repository *Repository) UploadSessionForPrincipal(
+	ctx context.Context,
+	sessionID, subjectID uuid.UUID,
+	principalType string,
+) (AssetRecord, error) {
+	if subjectID == uuid.Nil || (principalType != PrincipalTypeUser && principalType != PrincipalTypeWorker) {
+		return AssetRecord{}, ErrNotFound
+	}
 	asset, err := scanAssetWithSession(repository.pool.QueryRow(ctx,
-		assetWithSessionSQL+` where s.upload_session_id=$1 and s.subject_id=$2
-			and media_asset_is_available(a.media_id)`, sessionID, subjectID))
+		assetWithSessionSQL+` where s.upload_session_id=$1 and s.subject_id=$2 and s.principal_type=$3
+			and media_asset_is_available(a.media_id)`, sessionID, subjectID, principalType))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AssetRecord{}, ErrNotFound
 	}
@@ -301,6 +584,9 @@ func (repository *Repository) UploadSessionForSubject(
 type FinalizeCommand struct {
 	SessionID       uuid.UUID
 	SubjectID       uuid.UUID
+	PrincipalType   string
+	Actor           ActorReference
+	WorkerID        *uuid.UUID
 	IdempotencyKey  uuid.UUID
 	RequestSHA256   string
 	ObjectVersionID string
@@ -312,12 +598,24 @@ type FinalizeCommand struct {
 }
 
 func (repository *Repository) FinalizeUpload(ctx context.Context, command FinalizeCommand) (AssetRecord, bool, error) {
+	actor, err := normalizeActor(command.SubjectID, command.PrincipalType, command.Actor)
+	if err != nil {
+		return AssetRecord{}, false, err
+	}
+	command.PrincipalType = actor.PrincipalType
+	command.Actor = actor
+	if command.PrincipalType == PrincipalTypeWorker && (command.WorkerID == nil || *command.WorkerID == uuid.Nil) {
+		return AssetRecord{}, false, ErrConflict
+	}
+	if command.PrincipalType == PrincipalTypeUser && command.WorkerID != nil {
+		return AssetRecord{}, false, ErrConflict
+	}
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return AssetRecord{}, false, err
 	}
 	defer tx.Rollback(ctx)
-	if err := lockCommand(ctx, tx, command.SubjectID, "FINALIZE_UPLOAD", command.IdempotencyKey); err != nil {
+	if err := lockActorCommand(ctx, tx, command.PrincipalType, command.SubjectID, "FINALIZE_UPLOAD", command.IdempotencyKey); err != nil {
 		return AssetRecord{}, false, err
 	}
 
@@ -325,8 +623,8 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 	var existingSHA string
 	err = tx.QueryRow(ctx, `
 		select request_sha256, media_id from media_command_idempotency
-		where subject_id=$1 and command_type='FINALIZE_UPLOAD' and idempotency_key=$2
-		for update`, command.SubjectID, command.IdempotencyKey).Scan(&existingSHA, &assetID)
+		where principal_type=$1 and subject_id=$2 and command_type='FINALIZE_UPLOAD' and idempotency_key=$3
+		for update`, command.PrincipalType, command.SubjectID, command.IdempotencyKey).Scan(&existingSHA, &assetID)
 	if err == nil {
 		if existingSHA != command.RequestSHA256 {
 			return AssetRecord{}, false, ErrIdempotencyMismatch
@@ -337,7 +635,8 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 		}
 		var routeAssetID uuid.UUID
 		routeErr := tx.QueryRow(ctx, `select media_id from media_upload_session
-			where upload_session_id=$1 and subject_id=$2`, command.SessionID, command.SubjectID).Scan(&routeAssetID)
+			where upload_session_id=$1 and subject_id=$2 and principal_type=$3`, command.SessionID,
+			command.SubjectID, command.PrincipalType).Scan(&routeAssetID)
 		if routeErr != nil {
 			if errors.Is(routeErr, pgx.ErrNoRows) {
 				return AssetRecord{}, false, ErrIdempotencyMismatch
@@ -349,6 +648,9 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 		}
 		if proofErr := requireOwnerBinding(ctx, tx, asset.OwnerType, asset.OwnerID, asset.WarehouseID, repository.now()); proofErr != nil {
 			return AssetRecord{}, false, proofErr
+		}
+		if err := requireFinalizeWorkerAccess(ctx, tx, asset, command); err != nil {
+			return AssetRecord{}, false, err
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return AssetRecord{}, false, err
@@ -364,9 +666,9 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 	err = tx.QueryRow(ctx, `
 		select s.media_id, s.expires_at, s.completed_at from media_upload_session s
 		join media_asset a on a.media_id=s.media_id
-		where s.upload_session_id=$1 and s.subject_id=$2
+		where s.upload_session_id=$1 and s.subject_id=$2 and s.principal_type=$3
 		  and media_asset_is_available(a.media_id) for update of s`,
-		command.SessionID, command.SubjectID).Scan(&assetID, &expiresAt, &completedAt)
+		command.SessionID, command.SubjectID, command.PrincipalType).Scan(&assetID, &expiresAt, &completedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AssetRecord{}, false, ErrNotFound
 	}
@@ -381,6 +683,9 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 		return AssetRecord{}, false, err
 	}
 	if err := requireOwnerBinding(ctx, tx, asset.OwnerType, asset.OwnerID, asset.WarehouseID, repository.now()); err != nil {
+		return AssetRecord{}, false, err
+	}
+	if err := requireFinalizeWorkerAccess(ctx, tx, asset, command); err != nil {
 		return AssetRecord{}, false, err
 	}
 	if asset.Status != media.StatusUploading {
@@ -424,9 +729,9 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 	}
 	_, err = tx.Exec(ctx, `
 		insert into media_command_idempotency (
-			subject_id, command_type, idempotency_key, request_sha256, media_id, created_at, expires_at)
-		values ($1,'FINALIZE_UPLOAD',$2,$3,$4,$5,$6)`,
-		command.SubjectID, command.IdempotencyKey, command.RequestSHA256, assetID,
+			principal_type,subject_id,command_type,idempotency_key,request_sha256,media_id,created_at,expires_at)
+		values ($1,$2,'FINALIZE_UPLOAD',$3,$4,$5,$6,$7)`,
+		command.PrincipalType, command.SubjectID, command.IdempotencyKey, command.RequestSHA256, assetID,
 		repository.now().UTC(), repository.now().UTC().Add(24*time.Hour))
 	if err != nil {
 		return AssetRecord{}, false, translateConstraint(err)
@@ -434,10 +739,10 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 	now := repository.now().UTC()
 	asset.Status = media.StatusProcessing
 	uploadedID := uuid.New()
-	if err := appendEventWithID(ctx, tx, uploadedID, assetID, "media.media.uploaded.v1", command.SubjectID, command.CorrelationID, now); err != nil {
+	if err := appendEventWithIDForActor(ctx, tx, uploadedID, assetID, "media.media.uploaded.v1", actor, command.CorrelationID, now); err != nil {
 		return AssetRecord{}, false, err
 	}
-	err = insertFactOutbox(ctx, tx, uploadedID, asset, asset.Version, "media.media.uploaded.v1", &command.SubjectID, command.CorrelationID, now, generation, media.Rotation0, nil)
+	err = insertFactOutboxForActor(ctx, tx, uploadedID, asset, asset.Version, "media.media.uploaded.v1", &actor, command.CorrelationID, now, generation, media.Rotation0, nil)
 	if err != nil {
 		return AssetRecord{}, false, err
 	}
@@ -454,6 +759,21 @@ func (repository *Repository) FinalizeUpload(ctx context.Context, command Finali
 	asset.Generation = 0
 	asset.SizeBytes = &command.SizeBytes
 	return asset, false, nil
+}
+
+func requireFinalizeWorkerAccess(ctx context.Context, tx pgx.Tx, asset AssetRecord, command FinalizeCommand) error {
+	if command.PrincipalType != PrincipalTypeWorker {
+		return nil
+	}
+	if asset.OwnerType != OwnerTypeTaskBoardEntry || command.WorkerID == nil || asset.CreatedBy == nil ||
+		asset.CreatedBy.PrincipalType != PrincipalTypeWorker || asset.CreatedBy.SubjectID != command.Actor.SubjectID {
+		return ErrOwnerProofMissing
+	}
+	entryID, err := uuid.Parse(asset.OwnerID)
+	if err != nil || entryID == uuid.Nil {
+		return ErrOwnerProofMissing
+	}
+	return RequireTaskBoardEntryWorkerAccess(ctx, tx, entryID, asset.WarehouseID, *command.WorkerID)
 }
 
 type RotateCommand struct {
@@ -478,7 +798,7 @@ func (repository *Repository) Rotate(ctx context.Context, command RotateCommand)
 	var existingSHA string
 	var replayID uuid.UUID
 	err = tx.QueryRow(ctx, `select request_sha256, media_id from media_command_idempotency
-		where subject_id=$1 and command_type='ROTATE' and idempotency_key=$2 for update`,
+		where principal_type='USER' and subject_id=$1 and command_type='ROTATE' and idempotency_key=$2 for update`,
 		command.SubjectID, command.IdempotencyKey).Scan(&existingSHA, &replayID)
 	if err == nil {
 		if existingSHA != command.RequestSHA256 || replayID != command.MediaID {
@@ -537,8 +857,8 @@ func (repository *Repository) Rotate(ctx context.Context, command RotateCommand)
 		return AssetRecord{}, false, translateConstraint(err)
 	}
 	_, err = tx.Exec(ctx, `insert into media_command_idempotency (
-		subject_id, command_type, idempotency_key, request_sha256, media_id, created_at, expires_at)
-		values ($1,'ROTATE',$2,$3,$4,$5,$6)`, command.SubjectID, command.IdempotencyKey,
+		principal_type,subject_id, command_type, idempotency_key, request_sha256, media_id, created_at, expires_at)
+		values ('USER',$1,'ROTATE',$2,$3,$4,$5,$6)`, command.SubjectID, command.IdempotencyKey,
 		command.RequestSHA256, asset.ID, repository.now().UTC(), repository.now().UTC().Add(24*time.Hour))
 	if err != nil {
 		return AssetRecord{}, false, translateConstraint(err)
@@ -607,6 +927,62 @@ func (repository *Repository) ReadOwnerAssets(
 		return err
 	}
 	defer tx.Rollback(ctx)
+	records, err := readOwnerAssets(ctx, tx, ownerType, ownerID, warehouseID, limit, after, repository.now)
+	if err != nil {
+		return err
+	}
+	if err := consume(records); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// ReadTaskBoardEntryAssetsForWorker keeps the worker's active task-board
+// proof and membership row locked through the complete list callback. It must
+// be used instead of AuthorizeTaskBoardEntryWorker followed by ReadOwnerAssets:
+// a proof update between those transactions could otherwise expose a result
+// asset after the worker has been removed or the entry has been revoked.
+func (repository *Repository) ReadTaskBoardEntryAssetsForWorker(
+	ctx context.Context,
+	entryID, warehouseID, workerID uuid.UUID,
+	limit int,
+	after *uuid.UUID,
+	consume func([]AssetWithVariants) error,
+) error {
+	if entryID == uuid.Nil || warehouseID == uuid.Nil || workerID == uuid.Nil || consume == nil {
+		return ErrConflict
+	}
+	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := RequireTaskBoardEntryWorkerAccess(ctx, tx, entryID, warehouseID, workerID); err != nil {
+		return err
+	}
+	records, err := readOwnerAssets(ctx, tx, OwnerTypeTaskBoardEntry, entryID.String(), warehouseID,
+		limit, after, repository.now)
+	if err != nil {
+		return err
+	}
+	if err := consume(records); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func readOwnerAssets(
+	ctx context.Context,
+	tx pgx.Tx,
+	ownerType, ownerID string,
+	warehouseID uuid.UUID,
+	limit int,
+	after *uuid.UUID,
+	now func() time.Time,
+) ([]AssetWithVariants, error) {
+	if limit < 1 || limit > 100 {
+		return nil, ErrConflict
+	}
 	var cursorKind int
 	var cursorSort int64
 	var cursorCreated time.Time
@@ -618,10 +994,10 @@ func (repository *Repository) ReadOwnerAssets(
 			  and a.deleted_at is null and media_asset_is_available(a.media_id)`,
 			*after, ownerType, ownerID, warehouseID).Scan(&cursorKind, &cursorSort, &cursorCreated, &cursorID)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrConflict
+			return nil, ErrConflict
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	rows, err := tx.Query(ctx, `/* media_public_owner_read */
@@ -666,7 +1042,7 @@ func (repository *Repository) ReadOwnerAssets(
 			a.media_id,variant.variant`, ownerType, ownerID, warehouseID, after,
 		cursorKind, cursorSort, cursorCreated, limit)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var records []AssetWithVariants
 	byID := make(map[uuid.UUID]int)
@@ -683,7 +1059,7 @@ func (repository *Repository) ReadOwnerAssets(
 			&variant.ObjectVersionID, &variant.ContentType, &variant.SizeBytes, &variant.Width,
 			&variant.Height, &variant.Checksum); err != nil {
 			rows.Close()
-			return err
+			return nil, err
 		}
 		index, exists := byID[asset.ID]
 		if !exists {
@@ -698,19 +1074,16 @@ func (repository *Repository) ReadOwnerAssets(
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return err
+		return nil, err
 	}
 	rows.Close()
 	if len(records) == 0 {
 		if err := requireOwnerBinding(ctx, tx, ownerType, ownerID, warehouseID,
-			repository.now()); err != nil {
-			return err
+			now()); err != nil {
+			return nil, err
 		}
 	}
-	if err := consume(records); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return records, nil
 }
 
 // ReadCabinCovers returns one bounded, warehouse-scoped cover projection per
@@ -1075,6 +1448,193 @@ func (repository *Repository) ReadCurrentVariant(
 	return tx.Commit(ctx)
 }
 
+// ReadTaskBoardEntryOriginalForWorker admits a worker either to a result asset
+// owned directly by the entry or to one exact source media generation named in
+// the current entry proof. The latter intentionally does not grant a general
+// read capability for the source asset's own owner scope.
+func (repository *Repository) ReadTaskBoardEntryOriginalForWorker(
+	ctx context.Context,
+	entryID, warehouseID, workerID, mediaID uuid.UUID,
+	generation *int,
+	consume func(AssetRecord, *VariantRecord) error,
+) error {
+	if consume == nil {
+		return ErrConflict
+	}
+	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := RequireTaskBoardEntryWorkerAccess(ctx, tx, entryID, warehouseID, workerID); err != nil {
+		return err
+	}
+	asset, original, found, err := readTaskBoardResultOriginal(ctx, tx, entryID, warehouseID, mediaID, generation)
+	if err != nil {
+		return err
+	}
+	if !found && generation != nil {
+		asset, original, found, err = readTaskBoardSourceOriginal(ctx, tx, entryID, warehouseID, mediaID, *generation)
+		if err != nil {
+			return err
+		}
+	}
+	if !found {
+		return ErrNotFound
+	}
+	if err := consume(asset, original); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (repository *Repository) ReadTaskBoardEntryVariantForWorker(
+	ctx context.Context,
+	entryID, warehouseID, workerID, mediaID uuid.UUID,
+	generation int,
+	requestedVariant media.Variant,
+	consume func(AssetRecord, *VariantRecord) error,
+) error {
+	if consume == nil || generation <= 0 {
+		return ErrConflict
+	}
+	switch requestedVariant {
+	case media.VariantSmall, media.VariantMedium, media.VariantLarge:
+	default:
+		return ErrConflict
+	}
+	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := RequireTaskBoardEntryWorkerAccess(ctx, tx, entryID, warehouseID, workerID); err != nil {
+		return err
+	}
+	asset, variant, found, err := readTaskBoardResultVariant(ctx, tx, entryID, warehouseID, mediaID, generation, requestedVariant)
+	if err != nil {
+		return err
+	}
+	if !found {
+		asset, variant, found, err = readTaskBoardSourceVariant(ctx, tx, entryID, warehouseID, mediaID, generation, requestedVariant)
+		if err != nil {
+			return err
+		}
+	}
+	if !found {
+		return ErrNotFound
+	}
+	if err := consume(asset, variant); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func readTaskBoardResultOriginal(ctx context.Context, tx pgx.Tx, entryID, warehouseID, mediaID uuid.UUID, generation *int) (AssetRecord, *VariantRecord, bool, error) {
+	var asset AssetRecord
+	var hasVariant bool
+	var variant VariantRecord
+	var variantName string
+	query := `select a.media_id,a.folder_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
+		a.original_file_name,a.original_content_type,a.source_object_key,
+		coalesce(a.source_version_id,''),coalesce(a.source_etag,''),coalesce(a.source_checksum_sha256,''),
+		a.processing_status,a.version,a.current_generation,a.rotation_degrees,a.sort_order,a.size_bytes,a.created_at,
+		(variant.media_id is not null),coalesce(variant.variant,''),coalesce(variant.object_key,''),
+		coalesce(variant.object_version_id,''),coalesce(variant.content_type,''),coalesce(variant.size_bytes,0),
+		variant.width,variant.height,coalesce(variant.checksum_sha256,'')
+		from media_asset a left join media_variant variant on variant.media_id=a.media_id
+		and variant.generation=a.current_generation and variant.variant='ORIGINAL'
+		where a.media_id=$1 and a.owner_type='TASK_BOARD_ENTRY' and a.owner_id=$2 and a.warehouse_id=$3
+		and a.deleted_at is null and media_asset_is_available(a.media_id)`
+	args := []any{mediaID, entryID.String(), warehouseID}
+	if generation != nil {
+		query += ` and a.current_generation=$4`
+		args = append(args, *generation)
+	}
+	err := tx.QueryRow(ctx, query, args...).Scan(&asset.ID, &asset.FolderID, &asset.OwnerType, &asset.OwnerID,
+		&asset.WarehouseID, &asset.Kind, &asset.FileName, &asset.ContentType, &asset.SourceObjectKey,
+		&asset.SourceVersionID, &asset.SourceETag, &asset.SourceChecksum, &asset.Status, &asset.Version,
+		&asset.Generation, &asset.Rotation, &asset.SortOrder, &asset.SizeBytes, &asset.CreatedAt, &hasVariant,
+		&variantName, &variant.ObjectKey, &variant.ObjectVersionID, &variant.ContentType, &variant.SizeBytes,
+		&variant.Width, &variant.Height, &variant.Checksum)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AssetRecord{}, nil, false, nil
+	}
+	if err != nil {
+		return AssetRecord{}, nil, false, err
+	}
+	if hasVariant {
+		variant.Variant = media.Variant(variantName)
+		return asset, &variant, true, nil
+	}
+	return asset, nil, true, nil
+}
+
+func readTaskBoardSourceOriginal(ctx context.Context, tx pgx.Tx, entryID, warehouseID, mediaID uuid.UUID, generation int) (AssetRecord, *VariantRecord, bool, error) {
+	asset, variant, found, err := readTaskBoardSourceVariant(ctx, tx, entryID, warehouseID, mediaID, generation, media.VariantOriginal)
+	return asset, variant, found, err
+}
+
+func readTaskBoardResultVariant(ctx context.Context, tx pgx.Tx, entryID, warehouseID, mediaID uuid.UUID, generation int, requestedVariant media.Variant) (AssetRecord, *VariantRecord, bool, error) {
+	return readTaskBoardWorkerVariant(ctx, tx, `from media_asset a
+		left join media_variant variant on variant.media_id=a.media_id and variant.generation=$4 and variant.variant=$5
+		where a.media_id=$1 and a.owner_type='TASK_BOARD_ENTRY' and a.owner_id=$2 and a.warehouse_id=$3
+		and a.current_generation=$4 and a.deleted_at is null and media_asset_is_available(a.media_id)`,
+		mediaID, entryID.String(), warehouseID, generation, requestedVariant)
+}
+
+func readTaskBoardSourceVariant(ctx context.Context, tx pgx.Tx, entryID, warehouseID, mediaID uuid.UUID, generation int, requestedVariant media.Variant) (AssetRecord, *VariantRecord, bool, error) {
+	asset, variant, found, err := readTaskBoardWorkerVariant(ctx, tx, `from media_task_board_entry_source_media_reference source
+		join media_asset a on a.media_id=source.media_id
+		left join media_variant variant on variant.media_id=a.media_id and variant.generation=source.generation and variant.variant=$5
+		where source.entry_id=$1 and source.media_id=$2 and source.generation=$4 and a.warehouse_id=$3
+		and a.deleted_at is null and media_asset_is_available(a.media_id)`,
+		entryID, mediaID, warehouseID, generation, requestedVariant)
+	if found {
+		// A source reference pins an immutable historical generation. Surface
+		// that exact generation to the worker-only callback rather than the
+		// source asset's possibly newer current generation. A later rotation may
+		// leave the asset PROCESSING while this immutable referenced variant is
+		// still ready to display, so status follows the pinned variant too.
+		asset.Generation = generation
+		if variant != nil {
+			asset.Status = media.StatusReady
+		}
+	}
+	return asset, variant, found, err
+}
+
+func readTaskBoardWorkerVariant(ctx context.Context, tx pgx.Tx, fromAndWhere string, first, second, warehouseID any, generation int, requestedVariant media.Variant) (AssetRecord, *VariantRecord, bool, error) {
+	var asset AssetRecord
+	var hasVariant bool
+	var variant VariantRecord
+	var variantName string
+	query := `select a.media_id,a.folder_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
+		a.original_file_name,a.original_content_type,a.source_object_key,
+		coalesce(a.source_version_id,''),coalesce(a.source_etag,''),coalesce(a.source_checksum_sha256,''),
+		a.processing_status,a.version,a.current_generation,a.rotation_degrees,a.sort_order,a.size_bytes,a.created_at,
+		(variant.media_id is not null),coalesce(variant.variant,''),coalesce(variant.object_key,''),
+		coalesce(variant.object_version_id,''),coalesce(variant.content_type,''),coalesce(variant.size_bytes,0),
+		variant.width,variant.height,coalesce(variant.checksum_sha256,'') ` + fromAndWhere
+	err := tx.QueryRow(ctx, query, first, second, warehouseID, generation, requestedVariant).Scan(
+		&asset.ID, &asset.FolderID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
+		&asset.FileName, &asset.ContentType, &asset.SourceObjectKey, &asset.SourceVersionID, &asset.SourceETag,
+		&asset.SourceChecksum, &asset.Status, &asset.Version, &asset.Generation, &asset.Rotation, &asset.SortOrder,
+		&asset.SizeBytes, &asset.CreatedAt, &hasVariant, &variantName, &variant.ObjectKey, &variant.ObjectVersionID,
+		&variant.ContentType, &variant.SizeBytes, &variant.Width, &variant.Height, &variant.Checksum)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AssetRecord{}, nil, false, nil
+	}
+	if err != nil {
+		return AssetRecord{}, nil, false, err
+	}
+	if hasVariant {
+		variant.Variant = media.Variant(variantName)
+		return asset, &variant, true, nil
+	}
+	return asset, nil, true, nil
+}
+
 func (repository *Repository) Variants(ctx context.Context, mediaID uuid.UUID, generation int, includeOriginal bool) ([]VariantRecord, error) {
 	rows, err := repository.pool.Query(ctx, `select (variant.media_id is not null),
 		coalesce(variant.variant,''),coalesce(variant.object_key,''),
@@ -1136,13 +1696,15 @@ func (repository *Repository) assetForUpdate(ctx context.Context, tx pgx.Tx, med
 	return asset, err
 }
 
-const assetSQL = `select a.media_id,a.folder_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
+const assetSQL = `select a.media_id,a.folder_id,a.client_reference_id,a.created_by_principal_type,a.created_by_actor_id,
+	a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
 	a.original_file_name,a.original_content_type,a.source_object_key,
 	coalesce(a.source_version_id,''),coalesce(a.source_etag,''),coalesce(a.source_checksum_sha256,''),
 	a.processing_status,a.version,a.current_generation,a.rotation_degrees,
 	a.sort_order,a.size_bytes,a.created_at from media_asset a`
 
-const assetWithSessionSQL = `select a.media_id,a.folder_id,a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
+const assetWithSessionSQL = `select a.media_id,a.folder_id,a.client_reference_id,a.created_by_principal_type,a.created_by_actor_id,
+	a.owner_type,a.owner_id,a.warehouse_id,a.media_kind,
 	a.original_file_name,a.original_content_type,a.source_object_key,
 	coalesce(a.source_version_id,''),coalesce(a.source_etag,''),coalesce(a.source_checksum_sha256,''),
 	a.processing_status,a.version,a.current_generation,a.rotation_degrees,
@@ -1156,11 +1718,17 @@ type rowScanner interface {
 
 func scanAsset(row rowScanner) (AssetRecord, error) {
 	var asset AssetRecord
-	err := row.Scan(&asset.ID, &asset.FolderID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
+	var actorType *string
+	var actorID *uuid.UUID
+	err := row.Scan(&asset.ID, &asset.FolderID, &asset.ClientReferenceID, &actorType, &actorID,
+		&asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
 		&asset.FileName, &asset.ContentType, &asset.SourceObjectKey,
 		&asset.SourceVersionID, &asset.SourceETag, &asset.SourceChecksum,
 		&asset.Status, &asset.Version, &asset.Generation, &asset.Rotation,
 		&asset.SortOrder, &asset.SizeBytes, &asset.CreatedAt)
+	if err == nil && actorType != nil && actorID != nil {
+		asset.CreatedBy = &ActorReference{SubjectID: *actorID, PrincipalType: *actorType}
+	}
 	return asset, err
 }
 
@@ -1182,13 +1750,19 @@ func validSHA256(value string) bool {
 
 func scanAssetWithSession(row rowScanner) (AssetRecord, error) {
 	var asset AssetRecord
-	err := row.Scan(&asset.ID, &asset.FolderID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
+	var actorType *string
+	var actorID *uuid.UUID
+	err := row.Scan(&asset.ID, &asset.FolderID, &asset.ClientReferenceID, &actorType, &actorID,
+		&asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
 		&asset.FileName, &asset.ContentType, &asset.SourceObjectKey,
 		&asset.SourceVersionID, &asset.SourceETag, &asset.SourceChecksum,
 		&asset.Status, &asset.Version, &asset.Generation, &asset.Rotation,
 		&asset.SortOrder, &asset.SizeBytes, &asset.CreatedAt, &asset.UploadSessionID,
 		&asset.UploadExpiresAt, &asset.ExpectedLength, &asset.ExpectedChecksum,
 		&asset.UploadCompletedAt)
+	if err == nil && actorType != nil && actorID != nil {
+		asset.CreatedBy = &ActorReference{SubjectID: *actorID, PrincipalType: *actorType}
+	}
 	return asset, err
 }
 
@@ -1249,18 +1823,38 @@ func enforceOwnerMediaLimit(ctx context.Context, tx pgx.Tx, ownerType, ownerID s
 }
 
 func lockCommand(ctx context.Context, tx pgx.Tx, subjectID uuid.UUID, commandType string, idempotencyKey uuid.UUID) error {
+	return lockActorCommand(ctx, tx, PrincipalTypeUser, subjectID, commandType, idempotencyKey)
+}
+
+func lockActorCommand(ctx context.Context, tx pgx.Tx, principalType string, subjectID uuid.UUID, commandType string, idempotencyKey uuid.UUID) error {
+	if subjectID == uuid.Nil || (principalType != PrincipalTypeUser && principalType != PrincipalTypeWorker) {
+		return ErrConflict
+	}
 	_, err := tx.Exec(ctx, `select pg_advisory_xact_lock(hashtextextended($1,0))`,
-		subjectID.String()+":"+commandType+":"+idempotencyKey.String())
+		principalType+":"+subjectID.String()+":"+commandType+":"+idempotencyKey.String())
 	return err
 }
 
 func appendInitialEvent(ctx context.Context, tx pgx.Tx, aggregateID uuid.UUID, eventType string, subjectID, correlationID uuid.UUID, recordedAt time.Time) error {
+	return appendInitialEventForActor(ctx, tx, aggregateID, eventType,
+		ActorReference{SubjectID: subjectID, PrincipalType: PrincipalTypeUser}, correlationID, recordedAt)
+}
+
+func appendInitialEventForActor(ctx context.Context, tx pgx.Tx, aggregateID uuid.UUID, eventType string, actor ActorReference, correlationID uuid.UUID, recordedAt time.Time) error {
+	return appendInitialEventWithIDForActor(ctx, tx, uuid.New(), aggregateID, eventType, &actor, correlationID, recordedAt)
+}
+
+// appendInitialEventWithIDForActor supports trusted server-side ingestion
+// paths which have no user/worker actor (for example, a service-owned remote
+// import). The event still enters the normal immutable stream and snapshot;
+// it simply records a nil actorRef rather than inventing a user identity.
+func appendInitialEventWithIDForActor(ctx context.Context, tx pgx.Tx, eventID, aggregateID uuid.UUID, eventType string, actor *ActorReference, correlationID uuid.UUID, recordedAt time.Time) error {
 	_, err := tx.Exec(ctx, `insert into media_event_stream_head (aggregate_type,aggregate_id,stream_version,updated_at)
 		values ('MEDIA',$1,1,$2)`, aggregateID, recordedAt)
 	if err != nil {
 		return translateConstraint(err)
 	}
-	return insertDomainEvent(ctx, tx, uuid.New(), aggregateID, 1, eventType, &subjectID, correlationID, recordedAt)
+	return insertDomainEventForActor(ctx, tx, eventID, aggregateID, 1, eventType, actor, correlationID, recordedAt)
 }
 
 func appendEvent(ctx context.Context, tx pgx.Tx, aggregateID uuid.UUID, eventType string, subjectID, correlationID uuid.UUID, recordedAt time.Time) error {
@@ -1268,11 +1862,16 @@ func appendEvent(ctx context.Context, tx pgx.Tx, aggregateID uuid.UUID, eventTyp
 }
 
 func appendEventWithID(ctx context.Context, tx pgx.Tx, eventID, aggregateID uuid.UUID, eventType string, subjectID, correlationID uuid.UUID, recordedAt time.Time) error {
+	return appendEventWithIDForActor(ctx, tx, eventID, aggregateID, eventType,
+		ActorReference{SubjectID: subjectID, PrincipalType: PrincipalTypeUser}, correlationID, recordedAt)
+}
+
+func appendEventWithIDForActor(ctx context.Context, tx pgx.Tx, eventID, aggregateID uuid.UUID, eventType string, actor ActorReference, correlationID uuid.UUID, recordedAt time.Time) error {
 	version, err := advanceDomainStream(ctx, tx, aggregateID, recordedAt)
 	if err != nil {
 		return err
 	}
-	return insertDomainEvent(ctx, tx, eventID, aggregateID, version, eventType, &subjectID, correlationID, recordedAt)
+	return insertDomainEventForActor(ctx, tx, eventID, aggregateID, version, eventType, &actor, correlationID, recordedAt)
 }
 
 func advanceDomainStream(ctx context.Context, tx pgx.Tx, aggregateID uuid.UUID, recordedAt time.Time) (int64, error) {
@@ -1298,13 +1897,21 @@ func fullAggregateState(ctx context.Context, database queryer, aggregateID uuid.
 }
 
 func insertDomainEvent(ctx context.Context, tx pgx.Tx, eventID, aggregateID uuid.UUID, version int64, eventType string, subjectID *uuid.UUID, correlationID uuid.UUID, recordedAt time.Time) error {
+	var actor *ActorReference
+	if subjectID != nil {
+		actor = &ActorReference{SubjectID: *subjectID, PrincipalType: PrincipalTypeUser}
+	}
+	return insertDomainEventForActor(ctx, tx, eventID, aggregateID, version, eventType, actor, correlationID, recordedAt)
+}
+
+func insertDomainEventForActor(ctx context.Context, tx pgx.Tx, eventID, aggregateID uuid.UUID, version int64, eventType string, actorReference *ActorReference, correlationID uuid.UUID, recordedAt time.Time) error {
 	body, checksum, err := fullAggregateState(ctx, tx, aggregateID)
 	if err != nil {
 		return err
 	}
 	var actor any
-	if subjectID != nil {
-		actorBody, _, actorErr := canonicalJSON(map[string]any{"subjectId": *subjectID, "principalType": "USER", "profileRevision": nil})
+	if actorReference != nil {
+		actorBody, _, actorErr := canonicalJSON(map[string]any{"subjectId": actorReference.SubjectID, "principalType": actorReference.PrincipalType, "profileRevision": nil})
 		if actorErr != nil {
 			return actorErr
 		}
@@ -1338,17 +1945,32 @@ func canonicalJSON(value any) ([]byte, string, error) {
 }
 
 func factPayload(asset AssetRecord, status media.Status, generation int, rotation media.Rotation) map[string]any {
-	return map[string]any{
+	payload := map[string]any{
 		"mediaId": asset.ID, "folderId": asset.FolderID, "ownerType": asset.OwnerType, "ownerId": asset.OwnerID,
 		"warehouseId": asset.WarehouseID, "kind": asset.Kind, "status": status,
 		"generation": generation, "rotationDegrees": rotation,
 	}
+	// The v1 media fact is consumed by services with an exact legacy payload
+	// allowlist. Preserve its byte shape for all existing owners; the stable
+	// evidence reference belongs only to the new task-board owner scope.
+	if asset.OwnerType == OwnerTypeTaskBoardEntry && asset.ClientReferenceID != nil {
+		payload["clientReferenceId"] = *asset.ClientReferenceID
+	}
+	return payload
 }
 
 func envelope(eventID uuid.UUID, eventType, aggregateType string, aggregateID uuid.UUID, aggregateVersion int64, subjectID *uuid.UUID, correlationID uuid.UUID, recordedAt time.Time, payload any) (json.RawMessage, string, error) {
-	var actor any
+	var actor *ActorReference
 	if subjectID != nil {
-		actor = map[string]any{"subjectId": *subjectID, "principalType": "USER", "profileRevision": nil}
+		actor = &ActorReference{SubjectID: *subjectID, PrincipalType: PrincipalTypeUser}
+	}
+	return envelopeForActor(eventID, eventType, aggregateType, aggregateID, aggregateVersion, actor, correlationID, recordedAt, payload)
+}
+
+func envelopeForActor(eventID uuid.UUID, eventType, aggregateType string, aggregateID uuid.UUID, aggregateVersion int64, actorReference *ActorReference, correlationID uuid.UUID, recordedAt time.Time, payload any) (json.RawMessage, string, error) {
+	var actor any
+	if actorReference != nil {
+		actor = map[string]any{"subjectId": actorReference.SubjectID, "principalType": actorReference.PrincipalType, "profileRevision": nil}
 	}
 	value := map[string]any{
 		"envelopeVersion": 2, "eventId": eventID, "eventType": eventType, "eventVersion": 1,
@@ -1362,7 +1984,15 @@ func envelope(eventID uuid.UUID, eventType, aggregateType string, aggregateID uu
 }
 
 func insertFactOutbox(ctx context.Context, tx pgx.Tx, eventID uuid.UUID, asset AssetRecord, version int64, eventType string, subjectID *uuid.UUID, correlationID uuid.UUID, recordedAt time.Time, generation int, rotation media.Rotation, dependency *uuid.UUID) error {
-	body, checksum, err := envelope(eventID, eventType, "MEDIA", asset.ID, version, subjectID, correlationID, recordedAt, factPayload(asset, asset.Status, generation, rotation))
+	var actor *ActorReference
+	if subjectID != nil {
+		actor = &ActorReference{SubjectID: *subjectID, PrincipalType: PrincipalTypeUser}
+	}
+	return insertFactOutboxForActor(ctx, tx, eventID, asset, version, eventType, actor, correlationID, recordedAt, generation, rotation, dependency)
+}
+
+func insertFactOutboxForActor(ctx context.Context, tx pgx.Tx, eventID uuid.UUID, asset AssetRecord, version int64, eventType string, actor *ActorReference, correlationID uuid.UUID, recordedAt time.Time, generation int, rotation media.Rotation, dependency *uuid.UUID) error {
+	body, checksum, err := envelopeForActor(eventID, eventType, "MEDIA", asset.ID, version, actor, correlationID, recordedAt, factPayload(asset, asset.Status, generation, rotation))
 	if err != nil {
 		return err
 	}

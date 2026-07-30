@@ -22,7 +22,6 @@ type RentalItemsFiltersProps = {
 }
 
 const statusOptionClassName: Record<string, string> = {
-  Новая: "bg-[var(--status-new-bg)] text-[var(--status-new-fg)]",
   Аренда: "bg-[var(--status-rented-bg)] text-[var(--status-rented-fg)]",
   "Ожидает осмотра":
     "bg-[var(--status-after-rent-bg)] text-[var(--status-after-rent-fg)]",
@@ -104,8 +103,7 @@ function FilterButton({
       <PopoverTrigger asChild>
         <Button
           variant={selectedValues.length ? "secondary" : "outline"}
-          size="sm"
-          className="h-8 justify-start gap-2"
+          className="h-9 w-full justify-start gap-2 sm:w-auto"
         >
           <span>{definition.label}</span>
           {selectedValues.length > 0 && (
@@ -123,14 +121,12 @@ function FilterButton({
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Поиск в фильтре..."
-            className="h-8"
           />
 
           <div className="flex gap-2">
             <Button
               variant="outline"
-              size="sm"
-              className="h-8 flex-1"
+              className="h-9 flex-1"
               onClick={() => setDraftValues(values)}
             >
               Выбрать все
@@ -138,8 +134,7 @@ function FilterButton({
 
             <Button
               variant="outline"
-              size="sm"
-              className="h-8 flex-1"
+              className="h-9 flex-1"
               onClick={() => setDraftValues([])}
             >
               Снять
@@ -171,13 +166,11 @@ function FilterButton({
           </div>
 
           <div className="flex justify-between gap-2">
-            <Button variant="ghost" size="sm" onClick={clear}>
+            <Button variant="ghost" onClick={clear}>
               Очистить
             </Button>
 
-            <Button size="sm" onClick={apply}>
-              Применить
-            </Button>
+            <Button onClick={apply}>Применить</Button>
           </div>
         </div>
       </PopoverContent>
@@ -198,7 +191,7 @@ export function RentalItemsFilters({
   }
 
   return (
-    <div className="flex flex-wrap gap-2 rounded-lg border bg-card p-2">
+    <div className="flex flex-col gap-2 rounded-lg border bg-card p-2 sm:flex-row sm:flex-wrap">
       {options.map((definition) => (
         <FilterButton
           key={definition.id}

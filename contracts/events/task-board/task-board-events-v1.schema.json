@@ -45,7 +45,11 @@
       "task-board.queue-entry.moved.v1",
       "task-board.queue-entry.cancelled.v1",
       "task-board.queue-entry.interrupted.v1",
-      "task-board.queue-entry.returning.v1"
+      "task-board.queue-entry.returning.v1",
+      "task-board.entry-owner-proof.changed.v1",
+      "task-board.task-evidence.ready.v1",
+      "task-board.task-evidence.review-required.v1",
+      "task-board.group-kpi-day.changed.v1"
     ]},
     "eventVersion": {"const": 1},
     "occurredAt": {"$ref": "#/$defs/nullableDateTime"},
@@ -53,7 +57,8 @@
     "producer": {"const": "task-board-service"},
     "aggregateType": {"enum": [
       "WORKER_CLASS", "WORKER", "WORKER_GROUP", "WORK_QUEUE",
-      "QUEUE_USAGE_REFERENCE", "BOARD_TASK", "QUEUE_ENTRY"
+      "QUEUE_USAGE_REFERENCE", "BOARD_TASK", "QUEUE_ENTRY",
+      "TASK_BOARD_ENTRY_OWNER_PROOF", "TASK_EVIDENCE", "GROUP_KPI_DAY"
     ]},
     "aggregateId": {"type": "string", "format": "uuid"},
     "aggregateVersion": {"type": "integer", "minimum": 0},
@@ -66,7 +71,10 @@
       {"$ref": "#/$defs/workQueueFact"},
       {"$ref": "#/$defs/queueUsageReferenceFact"},
       {"$ref": "#/$defs/boardTaskFact"},
-      {"$ref": "#/$defs/queueEntryFact"}
+      {"$ref": "#/$defs/queueEntryFact"},
+      {"$ref": "#/$defs/entryOwnerProofFact"},
+      {"$ref": "#/$defs/taskEvidenceFact"},
+      {"$ref": "#/$defs/groupKpiDayFact"}
     ]}
   },
   "oneOf": [
@@ -76,7 +84,10 @@
     {"$ref": "#/$defs/workQueueEnvelope"},
     {"$ref": "#/$defs/queueUsageReferenceEnvelope"},
     {"$ref": "#/$defs/boardTaskEnvelope"},
-    {"$ref": "#/$defs/queueEntryEnvelope"}
+    {"$ref": "#/$defs/queueEntryEnvelope"},
+    {"$ref": "#/$defs/entryOwnerProofEnvelope"},
+    {"$ref": "#/$defs/taskEvidenceEnvelope"},
+    {"$ref": "#/$defs/groupKpiDayEnvelope"}
   ],
   "x-rwms-topics": [
     "rwms.task-board.worker-class.v1",
@@ -85,7 +96,10 @@
     "rwms.task-board.work-queue.v1",
     "rwms.task-board.queue-usage-reference.v1",
     "rwms.task-board.board-task.v1",
-    "rwms.task-board.queue-entry.v1"
+    "rwms.task-board.queue-entry.v1",
+    "rwms.task-board.entry-owner-proof.v1",
+    "rwms.task-board.task-evidence.v1",
+    "rwms.task-board.group-kpi-day.v1"
   ],
   "x-rwms-cutover": {
     "baselinePublished": false,
@@ -208,13 +222,36 @@
         "payload": {"$ref": "#/$defs/queueEntryFact"}
       }
     },
+    "entryOwnerProofEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "TASK_BOARD_ENTRY_OWNER_PROOF"},
+        "eventType": {"const": "task-board.entry-owner-proof.changed.v1"},
+        "payload": {"$ref": "#/$defs/entryOwnerProofFact"}
+      }
+    },
+    "taskEvidenceEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "TASK_EVIDENCE"},
+        "eventType": {"enum": [
+          "task-board.task-evidence.ready.v1",
+          "task-board.task-evidence.review-required.v1"
+        ]},
+        "payload": {"$ref": "#/$defs/taskEvidenceFact"}
+      }
+    },
+    "groupKpiDayEnvelope": {
+      "properties": {
+        "aggregateType": {"const": "GROUP_KPI_DAY"},
+        "eventType": {"const": "task-board.group-kpi-day.changed.v1"},
+        "payload": {"$ref": "#/$defs/groupKpiDayFact"}
+      }
+    },
     "workerClassFact": {
       "type": "object", "additionalProperties": false,
-      "required": ["workerClassId", "revisionMarker", "code", "sortOrder", "active", "deleted"],
+      "required": ["workerClassId", "revisionMarker", "sortOrder", "active", "deleted"],
       "properties": {
         "workerClassId": {"type": "string", "format": "uuid"},
         "revisionMarker": {"type": "string", "format": "uuid"},
-        "code": {"type": "string"},
         "sortOrder": {"type": "integer"},
         "active": {"type": "boolean"},
         "deleted": {"type": "boolean"}
@@ -232,12 +269,13 @@
     },
     "workerFact": {
       "type": "object", "additionalProperties": false,
-      "required": ["workerId", "warehouseId", "active", "profileRevision", "qualifications", "deleted"],
+      "required": ["workerId", "warehouseId", "active", "profileRevision", "currentGroupId", "qualifications", "deleted"],
       "properties": {
         "workerId": {"type": "string", "format": "uuid"},
         "warehouseId": {"type": "string", "format": "uuid"},
         "active": {"type": "boolean"},
         "profileRevision": {"type": "string", "format": "uuid"},
+        "currentGroupId": {"$ref": "#/$defs/nullableUuid"},
         "qualifications": {"type": "array", "items": {"$ref": "#/$defs/qualificationFact"}},
         "deleted": {"type": "boolean"}
       }
@@ -254,31 +292,48 @@
     },
     "workerGroupFact": {
       "type": "object", "additionalProperties": false,
-      "required": ["workerGroupId", "revisionMarker", "warehouseId", "workerClassId", "active", "members", "deleted"],
+      "required": ["workerGroupId", "revisionMarker", "warehouseId", "workerClassId", "active", "operationalStatus", "members", "deleted"],
       "properties": {
         "workerGroupId": {"type": "string", "format": "uuid"},
         "revisionMarker": {"type": "string", "format": "uuid"},
         "warehouseId": {"type": "string", "format": "uuid"},
         "workerClassId": {"type": "string", "format": "uuid"},
         "active": {"type": "boolean"},
+        "operationalStatus": {"type": "string", "enum": ["AVAILABLE", "DISABLED"]},
         "members": {"type": "array", "items": {"$ref": "#/$defs/groupMemberFact"}},
         "deleted": {"type": "boolean"}
       }
     },
     "queueBindingFact": {
       "type": "object", "additionalProperties": false,
-      "required": ["bindingId", "version", "workerClassId", "stopTaskOnTake"],
+      "required": [
+        "bindingId", "version", "workerClassId", "bindingOrder",
+        "stopTaskOnTake", "notifyUrgent"
+      ],
       "properties": {
         "bindingId": {"type": "string", "format": "uuid"},
         "version": {"type": "integer", "minimum": 0},
         "workerClassId": {"type": "string", "format": "uuid"},
+        "bindingOrder": {"type": "integer", "minimum": 0},
+        "stopTaskOnTake": {"type": "boolean"},
+        "notifyUrgent": {"type": "boolean"}
+      }
+    },
+    "queueGroupBindingFact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["bindingId", "version", "workerGroupId", "availabilityMode", "stopTaskOnTake"],
+      "properties": {
+        "bindingId": {"type": "string", "format": "uuid"},
+        "version": {"type": "integer", "minimum": 0},
+        "workerGroupId": {"type": "string", "format": "uuid"},
+        "availabilityMode": {"enum": ["AVAILABLE", "MANDATORY"]},
         "stopTaskOnTake": {"type": "boolean"}
       }
     },
     "workQueueFact": {
       "type": "object", "additionalProperties": false,
       "required": [
-        "workQueueId", "revisionMarker", "warehouseId", "code", "queueType", "sortOrder",
+        "workQueueId", "revisionMarker", "warehouseId", "queueType", "sortOrder",
         "active", "hidden", "collapsed", "holdingPeriodMinutes", "notificationThreshold",
         "notifyWhenThresholdReached", "classBindings", "deleted"
       ],
@@ -286,8 +341,7 @@
         "workQueueId": {"type": "string", "format": "uuid"},
         "revisionMarker": {"type": "string", "format": "uuid"},
         "warehouseId": {"type": "string", "format": "uuid"},
-        "code": {"type": "string"},
-        "queueType": {"enum": ["MOVEMENT", "REPAIR", "HOLDING"]},
+        "queueType": {"enum": ["MOVEMENT", "REPAIR", "HOLDING", "FURNITURE_MOVEMENT"]},
         "sortOrder": {"type": "integer"},
         "active": {"type": "boolean"},
         "hidden": {"type": "boolean"},
@@ -295,7 +349,13 @@
         "holdingPeriodMinutes": {"$ref": "#/$defs/nullableInteger"},
         "notificationThreshold": {"$ref": "#/$defs/nullableInteger"},
         "notifyWhenThresholdReached": {"type": "boolean"},
+        "resultPhotoMinCount": {"type": "integer", "minimum": 0, "maximum": 20},
         "classBindings": {"type": "array", "items": {"$ref": "#/$defs/queueBindingFact"}},
+        "groupBindings": {
+          "description": "Legacy stored event compatibility only; new work-queue facts omit this field.",
+          "type": "array",
+          "items": {"$ref": "#/$defs/queueGroupBindingFact"}
+        },
         "deleted": {"type": "boolean"}
       }
     },
@@ -322,6 +382,9 @@
         "warehouseId": {"type": "string", "format": "uuid"},
         "externalTaskId": {"$ref": "#/$defs/nullableUuid"},
         "status": {"enum": ["ACTIVE", "DONE", "CANCELLED"]},
+        "scheduledDate": {"type": "string", "format": "date"},
+        "priority": {"type": "integer", "minimum": 1, "maximum": 5},
+        "pinned": {"type": "boolean"},
         "plannedDurationMinutes": {"$ref": "#/$defs/nullableInteger"},
         "deadlineAt": {"$ref": "#/$defs/nullableDateTime"},
         "doneAt": {"$ref": "#/$defs/nullableDateTime"},
@@ -381,15 +444,15 @@
     "queueEntryFact": {
       "type": "object", "additionalProperties": false,
       "required": [
-        "queueEntryId", "taskId", "queueId", "queueCode", "routeIndex", "queuePosition",
+        "queueEntryId", "taskId", "queueId", "routeIndex", "queuePosition",
         "entryType", "status", "plannedDurationMinutes", "activeStartedAt", "pausedAt", "doneAt",
-        "activeWorkSeconds", "pauseOrigin", "assignments", "timeEvents", "interruptions", "deleted"
+        "activeWorkSeconds", "originalBudgetSeconds", "currentBudgetSeconds",
+        "pauseOrigin", "assignments", "timeEvents", "interruptions", "deleted"
       ],
       "properties": {
         "queueEntryId": {"type": "string", "format": "uuid"},
         "taskId": {"type": "string", "format": "uuid"},
         "queueId": {"$ref": "#/$defs/nullableUuid"},
-        "queueCode": {"type": "string"},
         "routeIndex": {"type": "integer"},
         "queuePosition": {"type": "integer"},
         "entryType": {"enum": ["REAL", "SHADOW"]},
@@ -399,11 +462,123 @@
         "pausedAt": {"$ref": "#/$defs/nullableDateTime"},
         "doneAt": {"$ref": "#/$defs/nullableDateTime"},
         "activeWorkSeconds": {"type": "integer", "minimum": 0},
+        "originalBudgetSeconds": {
+          "oneOf": [{"type": "integer", "format": "int64", "minimum": 1}, {"type": "null"}]
+        },
+        "currentBudgetSeconds": {
+          "oneOf": [{"type": "integer", "format": "int64", "minimum": 1}, {"type": "null"}]
+        },
         "pauseOrigin": {"oneOf": [{"enum": ["MANUAL", "AUTO"]}, {"type": "null"}]},
         "assignments": {"type": "array", "items": {"$ref": "#/$defs/assignmentFact"}},
         "timeEvents": {"type": "array", "items": {"$ref": "#/$defs/timeEventFact"}},
         "interruptions": {"type": "array", "items": {"$ref": "#/$defs/interruptionFact"}},
         "deleted": {"type": "boolean"}
+      }
+    },
+    "ownerMediaReferenceFact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mediaId", "generation"],
+      "properties": {
+        "mediaId": {"type": "string", "format": "uuid"},
+        "generation": {"type": "integer", "minimum": 1}
+      }
+    },
+    "entryOwnerProofFact": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "ownerType", "ownerId", "warehouseId", "routeIndex", "active",
+        "allowedWorkerIds", "sourceMediaReferences"
+      ],
+      "properties": {
+        "ownerType": {"const": "TASK_BOARD_ENTRY"},
+        "ownerId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "routeIndex": {"type": "integer", "minimum": 0},
+        "active": {"type": "boolean"},
+        "allowedWorkerIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "format": "uuid"}
+        },
+        "sourceMediaReferences": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/ownerMediaReferenceFact"}
+        }
+      }
+    },
+    "taskEvidenceFact": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "evidenceId", "entryId", "taskId", "routeIndex", "warehouseId",
+        "workerId", "workerGroupId", "mediaId", "mediaGeneration", "capturedAt",
+        "recordedAt", "state", "sourceType", "sourceId"
+      ],
+      "properties": {
+        "evidenceId": {"type": "string", "format": "uuid"},
+        "entryId": {"type": "string", "format": "uuid"},
+        "taskId": {"type": "string", "format": "uuid"},
+        "routeIndex": {"type": "integer", "minimum": 0},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "workerId": {"type": "string", "format": "uuid"},
+        "workerGroupId": {"$ref": "#/$defs/nullableUuid"},
+        "mediaId": {"type": "string", "format": "uuid"},
+        "mediaGeneration": {"type": "integer", "minimum": 1},
+        "capturedAt": {"type": "string", "format": "date-time"},
+        "recordedAt": {"type": "string", "format": "date-time"},
+        "state": {"enum": ["READY", "REVIEW_REQUIRED"]},
+        "sourceType": {
+          "oneOf": [
+            {"const": "MAINTENANCE_REPAIR"},
+            {"type": "null"}
+          ]
+        },
+        "sourceId": {"$ref": "#/$defs/nullableUuid"}
+      }
+    },
+    "groupKpiDayFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidenceId",
+        "warehouseId",
+        "workerGroupId",
+        "localDate",
+        "dataAvailableFrom",
+        "formulaVersion",
+        "completedBudgetSeconds",
+        "earnedRemainingSeconds",
+        "activeSeconds",
+        "penalizedIdleSeconds",
+        "completedTaskCount",
+        "openState",
+        "openStateStartedAt",
+        "penaltyStartsAt",
+        "nextTransitionAt",
+        "asOf"
+      ],
+      "properties": {
+        "evidenceId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "workerGroupId": {"type": "string", "format": "uuid"},
+        "localDate": {"type": "string", "format": "date"},
+        "dataAvailableFrom": {"type": "string", "format": "date"},
+        "formulaVersion": {"const": "kpi-v1"},
+        "completedBudgetSeconds": {"type": "integer", "format": "int64", "minimum": 0},
+        "earnedRemainingSeconds": {"type": "integer", "format": "int64", "minimum": 0},
+        "activeSeconds": {"type": "integer", "format": "int64", "minimum": 0},
+        "penalizedIdleSeconds": {"type": "integer", "format": "int64", "minimum": 0},
+        "completedTaskCount": {"type": "integer", "format": "int64", "minimum": 0},
+        "openState": {
+          "oneOf": [
+            {"enum": ["WORKING", "IDLE_GRACE", "IDLE_PENALIZED", "EXCLUDED"]},
+            {"type": "null"}
+          ]
+        },
+        "openStateStartedAt": {"$ref": "#/$defs/nullableDateTime"},
+        "penaltyStartsAt": {"$ref": "#/$defs/nullableDateTime"},
+        "nextTransitionAt": {"$ref": "#/$defs/nullableDateTime"},
+        "asOf": {"type": "string", "format": "date-time"}
       }
     }
   }

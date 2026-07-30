@@ -17,7 +17,8 @@ import tools.jackson.databind.ObjectMapper;
 public class AssetEventPayloadPolicy {
   private static final Set<String> FORBIDDEN = Set.of(
       "comment", "generalcomment", "notetext", "note", "text", "tenant", "media", "url", "photo",
-      "name", "displayname", "email", "login", "password", "secret", "token", "reason", "actor");
+      "name", "displayname", "email", "login", "password", "secret", "token", "reason", "actor",
+      "code", "equipmentcode", "classifiercode");
   private static final Map<AssetAggregateType, String> ID_FIELDS = Map.of(
       AssetAggregateType.RENTAL_ITEM, "rentalItemId",
       AssetAggregateType.EQUIPMENT_CATALOG, "equipmentId",

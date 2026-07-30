@@ -14,6 +14,15 @@ import org.springframework.data.repository.query.Param;
 
 public interface RepairStageRepository extends JpaRepository<RepairStage, UUID> {
   List<RepairStage> findAllByRepairIdOrderByStageNo(UUID repairId);
+  @Query(
+      """
+      select stage from RepairStage stage
+       where stage.repairId in :repairIds
+       order by stage.repairId, stage.stageNo, stage.id
+      """)
+  List<RepairStage> findAllByRepairIdInOrderByRepairIdAscStageNoAscIdAsc(
+      @Param("repairIds") Collection<UUID> repairIds);
+  Optional<RepairStage> findByRepairIdAndStageNo(UUID repairId, int stageNo);
   Optional<RepairStage> findByExternalQueueEntryId(UUID externalQueueEntryId);
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select value from RepairStage value where value.externalQueueEntryId = :entryId")

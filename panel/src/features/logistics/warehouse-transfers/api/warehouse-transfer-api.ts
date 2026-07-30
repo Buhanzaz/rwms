@@ -11,6 +11,10 @@ export const WAREHOUSE_TRANSFERS_QUERY_KEY = [
   "logistics",
   "warehouse-transfers",
 ] as const
+export const TRANSFER_FURNITURE_READINESS_QUERY_KEY = [
+  "logistics",
+  "transfer-furniture-readiness",
+] as const
 
 export const warehouseTransferClient = new HttpWarehouseTransferClient()
 
@@ -21,6 +25,15 @@ export const listWarehouseTransfers = (
 
 export const getWarehouseTransfer = (accessToken: string, documentId: string) =>
   warehouseTransferClient.get(accessToken, documentId)
+
+export const getWarehouseTransferFurnitureReadiness = (
+  accessToken: string,
+  documentId: string
+) => warehouseTransferClient.getFurnitureReadiness(accessToken, documentId)
+
+export const getWarehouseTransferArrivalPreflight = (
+  input: Omit<TransferLineCommand, "idempotencyKey">
+) => warehouseTransferClient.getArrivalPreflight(input)
 
 export const createWarehouseTransfer = (input: TransferCreateCommand) =>
   warehouseTransferClient.create(input)

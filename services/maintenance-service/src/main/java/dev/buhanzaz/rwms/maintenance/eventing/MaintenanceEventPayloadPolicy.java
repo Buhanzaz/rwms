@@ -55,6 +55,7 @@ public class MaintenanceEventPayloadPolicy {
       "executionState",
       "acceptanceState",
       "dispatchDate",
+      "priority",
       "stages");
   private static final Set<String> REPAIR_STAGE_FIELDS = Set.of(
       "stageId", "kind", "order", "state", "queueId", "taskSync");
@@ -104,19 +105,6 @@ public class MaintenanceEventPayloadPolicy {
     this.strictMapper = mapper.rebuild()
         .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
         .build();
-  }
-
-  /** Temporary compatibility entry point for the application owner while typed-fact adoption lands. */
-  public JsonNode validate(Map<String, ?> payload) {
-    if (payload == null) {
-      throw new IllegalArgumentException("Maintenance integration payload is required");
-    }
-    JsonNode node = mapper.valueToTree(payload);
-    if (!node.isObject()) {
-      throw new IllegalArgumentException("Maintenance integration payload must be an object");
-    }
-    validateSensitiveValues(node);
-    return node;
   }
 
   public JsonNode validateAndConvert(
@@ -170,6 +158,8 @@ public class MaintenanceEventPayloadPolicy {
           REPAIR_STAGE_COMPLETED,
           REPAIR_PENDING_ACCEPTANCE,
           REPAIR_REWORK_CREATED,
+          REPAIR_TRANSFER_PREPARED,
+          REPAIR_TRANSFERRED,
           REPAIR_ACCEPTED,
           REPAIR_WRITTEN_OFF -> MaintenanceAggregateType.REPAIR;
     };

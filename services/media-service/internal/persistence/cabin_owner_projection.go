@@ -424,7 +424,7 @@ func validateCabinOwnerMessage(message CabinOwnerMessage) error {
 
 func validRentalItemStatus(status string) bool {
 	switch status {
-	case "NEW", "RENTED", "BOOKED", "REPAIR", "WAITING_REPAIR_CHECK", "WRITTEN_OFF",
+	case "RENTED", "BOOKED", "REPAIR", "WAITING_REPAIR_CHECK", "WRITTEN_OFF",
 		"CAPITAL_REPAIR", "AFTER_RENT", "WAITING_ESTIMATE_CONFIRMATION", "SALE",
 		"USED_SALE", "RESERVED", "FREE", "WAREHOUSE", "OWN_NEEDS", "IN_TRANSFER":
 		return true

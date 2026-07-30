@@ -67,15 +67,6 @@ public class ShipmentProcessor {
                     work.lineId(),
                     work.quantity(),
                     work.expectedStockVersion()));
-        case TASK_REGISTER ->
-            store.confirmTaskRegistration(
-                work.operationId(),
-                dependencies.registerPreparationTask(work.warehouseId(), work.externalTaskId(), 0, null));
-        case TASK_COMPLETE ->
-            store.confirmTaskCompletion(
-                work.operationId(),
-                dependencies.completePreparationTask(
-                    work.externalTaskId(), work.expectedTaskVersion()));
         case HOLD_COMMAND ->
             confirmHoldCommand(work);
         case EFFECT ->
@@ -92,10 +83,6 @@ public class ShipmentProcessor {
                     work.documentId(),
                     work.lineId(),
                     work.warehouseId()));
-        case TASK_CANCEL ->
-            store.confirmTaskCancellation(
-                work.operationId(),
-                dependencies.cancelPreparationTask(work.externalTaskId(), work.expectedTaskVersion()));
         case LEASE_RELEASE ->
             store.confirmLeaseRelease(
                 work.operationId(),
