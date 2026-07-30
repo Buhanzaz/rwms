@@ -3,11 +3,11 @@ package dev.buhanzaz.rwms.asset.api;
 import static dev.buhanzaz.rwms.asset.api.AssetApiModels.*;
 
 import dev.buhanzaz.rwms.asset.mapper.AssetMaintenanceResponseMapper;
+import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
 import dev.buhanzaz.rwms.asset.security.AssetAuthorizer;
 import dev.buhanzaz.rwms.asset.service.AssetService;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Size;
+import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -41,14 +41,43 @@ public class MaintenanceAssetController {
     return responseMapper.toMaintenanceSnapshot(service.rentalItem(id));
   }
 
-  @PutMapping("/equipment-catalog/{equipmentCode}")
-  public MaintenanceFurnitureEquipmentResponse ensureFurnitureEquipment(
+  @GetMapping("/cabin-characteristics")
+  public List<CabinCatalogValueResponse> cabinCharacteristics(
+      @AuthenticationPrincipal Jwt jwt) {
+    access.requireMaintenanceAssetAccess(jwt);
+    return service.maintenanceCabinCharacteristics();
+  }
+
+  @PutMapping(
+      "/rental-items/{rentalItemId}/characteristics/{characteristicId}")
+  public ResponseEntity<MaintenanceCharacteristicApplicationResponse> applyCharacteristic(
       @AuthenticationPrincipal Jwt jwt,
-      @PathVariable @NotBlank @Size(max = 64) String equipmentCode,
+      @PathVariable UUID rentalItemId,
+      @PathVariable UUID characteristicId,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey) {
+    return idempotentOk(
+        service.applyMaintenanceCharacteristic(
+            access.maintenanceSubjectId(jwt),
+            idempotencyKey,
+            rentalItemId,
+            characteristicId));
+  }
+
+  @PostMapping("/equipment-catalog")
+  public ResponseEntity<MaintenanceFurnitureEquipmentResponse> createFurnitureEquipment(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
       @Valid @RequestBody EnsureMaintenanceFurnitureEquipmentRequest request) {
     access.requireMaintenanceAssetAccess(jwt);
-    return responseMapper.toMaintenanceFurnitureEquipment(
-        service.ensureMaintenanceFurnitureEquipment(equipmentCode, request));
+    AssetService.CreateResult<EquipmentResponse> result =
+        service.createEquipment(
+            access.maintenanceSubjectId(jwt),
+            idempotencyKey,
+            new CreateEquipmentRequest(
+                request.equipmentName(), EquipmentCategory.FURNITURE, null));
+    return created(
+        new AssetService.CreateResult<>(
+            responseMapper.toMaintenanceFurnitureEquipment(result.response()), result.replayed()));
   }
 
   @PostMapping("/operation-leases")
@@ -96,6 +125,12 @@ public class MaintenanceAssetController {
 
   private static <T> ResponseEntity<T> idempotentOk(AssetService.CreateResult<T> result) {
     ResponseEntity.BodyBuilder response = ResponseEntity.ok();
+    if (result.replayed()) response.header("Idempotency-Replayed", "true");
+    return response.body(result.response());
+  }
+
+  private static <T> ResponseEntity<T> created(AssetService.CreateResult<T> result) {
+    ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.CREATED);
     if (result.replayed()) response.header("Idempotency-Replayed", "true");
     return response.body(result.response());
   }

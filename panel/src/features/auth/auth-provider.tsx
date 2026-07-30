@@ -12,11 +12,18 @@ import { getCurrentUser } from "@/features/auth/current-user-api"
 import {
   getSafeReturnTo,
   getUserManager,
+  hasRenewablePanelSession,
   isPanelUser,
 } from "@/features/auth/oidc-client"
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Ошибка авторизации"
+}
+
+class PanelPrincipalError extends Error {
+  constructor() {
+    super("Панель доступна только учётным записям пользователей.")
+  }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -43,14 +50,30 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
 
       if (!isPanelUser(user)) {
         await manager.removeUser()
-        throw new Error("Панель доступна только учётным записям пользователей.")
+        throw new PanelPrincipalError()
       }
+
+      // Sessions issued before refresh-token support cannot be renewed. Replace
+      // them immediately on page load instead of interrupting an open form when
+      // their five-minute access token expires.
+      if (!hasRenewablePanelSession(user)) {
+        await manager.removeUser()
+        setOidcUser(null)
+        setCurrentUser(null)
+        setStatus("unauthenticated")
+        return
+      }
+
+      // A refresh-token renewal emits userLoaded. Publish the fresh token before
+      // loading the profile, so in-flight panel UI stays mounted and subsequent
+      // API requests do not keep using an expired bearer token.
+      setOidcUser(user)
 
       const profile = await getCurrentUser(user.access_token)
 
       if (profile.principalType !== "USER") {
         await manager.removeUser()
-        throw new Error("Панель доступна только учётным записям пользователей.")
+        throw new PanelPrincipalError()
       }
 
       setOidcUser(user)
@@ -82,6 +105,22 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
 
     void restoreSession()
 
+    const handleUserLoaded = (user: User) => {
+      void acceptUser(user).catch((renewError) => {
+        if (renewError instanceof PanelPrincipalError) {
+          setOidcUser(null)
+          setCurrentUser(null)
+          setError(getErrorMessage(renewError))
+          setStatus("unauthenticated")
+          return
+        }
+
+        // The token was refreshed successfully. A transient /me failure must
+        // not turn it into a logout or unmount the application.
+        setError(getErrorMessage(renewError))
+      })
+    }
+
     const handleExpired = () => {
       void manager.removeUser()
       setOidcUser(null)
@@ -90,10 +129,12 @@ function OidcAuthProvider({ children }: { children: ReactNode }) {
     }
 
     manager.events.addAccessTokenExpired(handleExpired)
+    manager.events.addUserLoaded(handleUserLoaded)
 
     return () => {
       cancelled = true
       manager.events.removeAccessTokenExpired(handleExpired)
+      manager.events.removeUserLoaded(handleUserLoaded)
     }
   }, [acceptUser, manager])
 

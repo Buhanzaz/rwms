@@ -8,7 +8,10 @@ import type {
   TaskBoardQueueDto,
   TaskBoardQueueKind,
   TaskBoardSnapshotDto,
+  TaskBoardSourceDto,
   TaskBoardTaskStatus,
+  TaskBoardTimerSnapshotDto,
+  TaskBoardTimerState,
 } from "@/features/task-board/model/task-board"
 import { bearerRequest } from "@/lib/api-client"
 import { getGatewayRuntimeConfig } from "@/lib/gateway-config"
@@ -45,6 +48,27 @@ function integer(value: unknown) {
   return value as number
 }
 
+function signedInteger(value: unknown) {
+  if (!Number.isSafeInteger(value)) invalid()
+  return value as number
+}
+
+function finiteNumber(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) invalid()
+  return value
+}
+
+function priority(value: unknown) {
+  const candidate = integer(value)
+  if (candidate < 1 || candidate > 5) invalid()
+  return candidate
+}
+
+function boolean(value: unknown) {
+  if (typeof value !== "boolean") invalid()
+  return value
+}
+
 function oneOf<T extends string>(value: unknown, values: readonly T[]): T {
   const candidate = text(value)
   if (!values.includes(candidate as T)) invalid()
@@ -73,10 +97,47 @@ function assignment(value: unknown): TaskBoardAssignmentDto {
   }
 }
 
-function detailsHref(externalTaskId: string | null) {
-  return externalTaskId
-    ? `/repairs?repairId=${encodeURIComponent(externalTaskId)}`
+function taskSource(value: unknown): TaskBoardSourceDto | null {
+  if (value === null || value === undefined) return null
+
+  const source = object(value)
+  if (source.type !== "MAINTENANCE_REPAIR") return null
+
+  return {
+    type: "MAINTENANCE_REPAIR",
+    sourceId: text(source.sourceId),
+  }
+}
+
+function detailsHref(source: TaskBoardSourceDto | null) {
+  return source?.type === "MAINTENANCE_REPAIR"
+    ? `/repairs?repairId=${encodeURIComponent(source.sourceId)}`
     : null
+}
+
+function timerSnapshot(value: unknown): TaskBoardTimerSnapshotDto | null {
+  if (value === null) return null
+  const source = object(value)
+  return {
+    countedActiveSeconds: integer(source.countedActiveSeconds),
+    remainingSeconds:
+      source.remainingSeconds === null
+        ? null
+        : signedInteger(source.remainingSeconds),
+    remainingPercent:
+      source.remainingPercent === null
+        ? null
+        : finiteNumber(source.remainingPercent),
+    timerState: oneOf<TaskBoardTimerState>(source.timerState, [
+      "WORKING",
+      "BREAK",
+      "OFF_SHIFT",
+      "PAUSED",
+      "DONE",
+    ]),
+    nextTransitionAt: nullableText(source.nextTransitionAt),
+    serverTime: text(source.serverTime),
+  }
 }
 
 function entry(
@@ -86,19 +147,20 @@ function entry(
 ): TaskBoardEntryDto {
   const source = object(value)
   const externalTaskId = nullableText(source.externalTaskId)
+  const entrySource = taskSource(source.source)
   return {
     id: text(source.id),
     version: integer(source.version),
     warehouseId,
     queueKey,
-    queueId: nullableText(source.queueId),
-    queueCode: text(source.queueCode),
+    queueId: text(source.queueId),
     entryType: oneOf<TaskBoardEntryType>(source.entryType, ["REAL", "SHADOW"]),
     routeIndex: integer(source.routeIndex),
     routeLength: 1,
     queuePosition: integer(source.queuePosition),
     taskId: text(source.taskId),
     externalTaskId,
+    source: entrySource,
     taskVersion: integer(source.taskVersion),
     title: text(source.title),
     unitNumber: nullableText(source.unitNumber),
@@ -107,6 +169,9 @@ function entry(
       "DONE",
       "CANCELLED",
     ]),
+    scheduledDate: text(source.scheduledDate),
+    priority: priority(source.priority),
+    pinned: boolean(source.pinned),
     status: oneOf<TaskBoardEntryStatus>(source.status, [
       "WAITING",
       "IN_PROGRESS",
@@ -122,8 +187,9 @@ function entry(
     activeStartedAt: nullableText(source.activeStartedAt),
     pausedAt: nullableText(source.pausedAt),
     activeWorkSeconds: integer(source.activeWorkSeconds),
+    timerSnapshot: timerSnapshot(source.timerSnapshot),
     assignments: list(source.assignments).map(assignment),
-    detailsHref: detailsHref(externalTaskId),
+    detailsHref: detailsHref(entrySource),
   }
 }
 
@@ -132,25 +198,21 @@ function parseBoard(value: unknown): TaskBoardSnapshotDto {
   const warehouseId = text(source.warehouseId)
   const queues: TaskBoardQueueDto[] = list(source.columns).map((value) => {
     const column = object(value)
-    const queueId = nullableText(column.queueId)
-    const queueCode = text(column.queueCode)
-    const key = queueId ?? `virtual:${queueCode}`
-    const queueType = nullableText(column.queueType)
-    const kind: TaskBoardQueueKind =
-      queueType === "MOVEMENT" ||
-      queueType === "REPAIR" ||
-      queueType === "HOLDING"
-        ? queueType
-        : "UNASSIGNED"
+    const queueId = text(column.queueId)
+    const kind = oneOf<TaskBoardQueueKind>(column.queueType, [
+      "MOVEMENT",
+      "REPAIR",
+      "HOLDING",
+      "FURNITURE_MOVEMENT",
+    ])
     return {
-      key,
+      key: queueId,
       label: text(column.queueName),
       kind,
-      queueCode,
       settingsQueueId: queueId,
       settingsCollapsed: false,
       entries: list(column.entries).map((value) =>
-        entry(value, warehouseId, key)
+        entry(value, warehouseId, queueId)
       ),
     }
   })
@@ -167,6 +229,8 @@ function parseBoard(value: unknown): TaskBoardSnapshotDto {
   })
   return {
     warehouseId,
+    selectedDate: nullableText(source.selectedDate),
+    availableDates: list(source.availableDates).map(text),
     queues,
     totalEntries: entries.length,
     realEntries: entries.filter((item) => item.entryType === "REAL").length,
@@ -187,12 +251,19 @@ function command(entry: TaskBoardEntryDto, effect: string, body: unknown) {
 
 export async function getHttpTaskBoard(
   accessToken: string,
-  warehouseId: string
+  warehouseId: string,
+  date?: string | null
 ) {
+  const endpoint = new URL(
+    `${TASK_BOARD_API}/warehouses/${encodeURIComponent(warehouseId)}/task-board`,
+    window.location.origin
+  )
+  endpoint.searchParams.set("includeShadow", "true")
+  if (date) endpoint.searchParams.set("date", date)
   return parseBoard(
     await bearerRequest<unknown>(
       accessToken,
-      `${TASK_BOARD_API}/warehouses/${encodeURIComponent(warehouseId)}/task-board?includeShadow=true`
+      `${endpoint.pathname}${endpoint.search}`
     )
   )
 }
@@ -211,17 +282,38 @@ export function listHttpEligibleWorkerGroups(
 export function moveHttpTaskBoardEntry(
   accessToken: string,
   entry: TaskBoardEntryDto,
-  targetQueueId: string | null,
-  targetIndex: number
+  targetQueueId: string,
+  targetIndex: number,
+  targetDate: string
 ) {
   const request = command(entry, "move", {
     expectedVersion: entry.version,
+    expectedTaskVersion: entry.taskVersion,
     targetQueueId,
     targetIndex,
+    targetDate,
   })
   return bearerRequest<unknown>(accessToken, request.url, request.init).then(
     parseBoard
   )
+}
+
+export function pinHttpTaskBoardEntry(
+  accessToken: string,
+  entry: TaskBoardEntryDto,
+  pinned: boolean
+) {
+  return bearerRequest<unknown>(
+    accessToken,
+    `${TASK_BOARD_API}/warehouses/${encodeURIComponent(entry.warehouseId)}/task-board/tasks/${encodeURIComponent(entry.taskId)}/pin`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        expectedTaskVersion: entry.taskVersion,
+        pinned,
+      }),
+    }
+  ).then(parseBoard)
 }
 
 export function takeHttpTaskBoardEntry(

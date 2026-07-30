@@ -36,7 +36,7 @@
       "required": ["subjectId", "principalType", "profileRevision"],
       "properties": {
         "subjectId": {"type": "string", "format": "uuid"},
-        "principalType": {"const": "USER"},
+        "principalType": {"enum": ["USER", "WORKER"]},
         "profileRevision": {"oneOf": [{"type": "string"}, {"type": "null"}]}
       }
     },
@@ -46,9 +46,10 @@
       "properties": {
         "mediaId": {"type": "string", "format": "uuid"},
         "folderId": {"type": "string", "format": "uuid"},
-        "ownerType": {"enum": ["INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR", "MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN", "LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER"]},
+        "ownerType": {"enum": ["INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR", "MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN", "LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "TASK_BOARD_ENTRY"]},
         "ownerId": {"type": "string", "maxLength": 128},
         "warehouseId": {"type": "string", "format": "uuid"},
+        "clientReferenceId": {"oneOf": [{"type": "string", "format": "uuid"}, {"type": "null"}]},
         "kind": {"enum": ["IMAGE", "VIDEO"]},
         "status": {"enum": ["PROCESSING", "READY", "FAILED", "DELETED"]},
         "generation": {"type": "integer", "minimum": 0},
@@ -59,6 +60,17 @@
           "if": {"properties": {"ownerType": {"enum": ["LOGISTICS_RETURN", "LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER"]}}},
           "then": {"properties": {"ownerId": {"pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"}}},
           "else": {"properties": {"ownerId": {"format": "uuid"}}}
+        },
+        {
+          "if": {"properties": {"ownerType": {"const": "TASK_BOARD_ENTRY"}}, "required": ["ownerType"]},
+          "then": {
+            "required": ["clientReferenceId"],
+            "properties": {
+              "clientReferenceId": {"type": "string", "format": "uuid"},
+              "kind": {"const": "IMAGE"}
+            }
+          },
+          "else": {"properties": {"clientReferenceId": {"type": "null"}}}
         }
       ]
     }

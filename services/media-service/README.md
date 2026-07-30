@@ -29,12 +29,14 @@ Flyway is external to this process. Apply
 `db/migration/V5__media_photo_folders.sql` and
 `V5_1__restore_runtime_source_guard.sql`, then
 `db/migration/V6__service_owner_proofs_and_soft_delete.sql`, then
-`db/migration/V7__dynamic_cabin_owner_projection.sql` before starting the
-service. The Go application never migrates, baselines, repairs or silently
-adopts a database.
+`db/migration/V7__dynamic_cabin_owner_projection.sql`, then
+`db/migration/V8__task_board_worker_media.sql` and
+`db/migration/V9__asset_import_worker.sql` before starting the service. The
+Go application never migrates, baselines, repairs or silently adopts a
+database.
 
-- New local/test databases migrate through V1 to V7.
-- A database already at the exact V6 history is upgraded by applying V7.
+- New local/test databases migrate through V1 to V9.
+- A database already at the exact V8 history is upgraded by applying V9.
 - `baselineOnMigrate` must remain `false`; a non-empty unversioned database is
   rejected.
 - Startup verifies both successful Flyway history rows, their versions,
@@ -145,6 +147,28 @@ public registration or administrative bypass:
 MEDIA_DATABASE_URL=... media-service reconcile-inventory-owner reviewed-batch.json
 ```
 
+## Private Yandex.Disk asset imports
+
+`asset-service` may call the private asset-import endpoints only with an exact
+SERVICE JWT (`sub=client_id=asset-service`, audience `rwms-services`, sole
+scope `media.asset-import`). Preflight accepts only
+`https://disk.yandex.ru/d/<14-character-key>`, stores the parsed key and
+resource state privately, and recursively lists the official public-resources
+API without OAuth. It never downloads while preflighting.
+
+Activation binds every source row to a current CABIN owner, then the durable
+worker obtains a fresh download address, follows only HTTPS Yandex-domain
+targets whose DNS addresses are public, limits redirects and response time,
+and never logs a URL/key/href. JPEG, PNG and WebP are sent through the normal
+versioned ingress, owner-proof, 100-assets-per-owner, processing and outbox
+invariants. Video, folder ZIP and every other type are retained only as a
+sanitized skipped warning. The worker retries transient Yandex and service
+dependency failures up to three attempts; a terminal phase can be retried by its private idempotent
+endpoint. Per job, imports are bounded to 500 source rows, 100 discovered files
+per source and 25,000 discovered files total. Recursive public-resource metadata
+enumeration is also capped at 64 pages per source; every downloaded byte is
+bounded by `MEDIA_MAX_UPLOAD_BYTES`.
+
 The CABIN stream must start with `asset.rental-item.created.v1` version 0.
 Passport, status, warehouse and logistics-effect facts carry the complete
 sanitized owner proof; comment and manual-note facts are ordering markers.
@@ -160,11 +184,16 @@ MEDIA_DATABASE_URL=... media-service reconcile-cabin-owner reviewed-batch.json
 
 Maintenance and logistics services establish their own scopes through
 `POST /api/internal/media/v1/owner-proofs` with exact service identity/scope.
-Receipts and aggregate checkpoints require a version-0 bootstrap followed by
-contiguous aggregate versions. Owner revisions are monotonic; changed equal
-revisions, gaps, regressions and event-ID conflicts quarantine the owner. For
-returns the proof warehouse is the receiving destination. For transfer-line
-acceptance it is `destinationWarehouseId`, never the source warehouse.
+The first receipt establishes a baseline. Every later owner proof requires the
+exact next owner revision, while its aggregate version must strictly advance
+but may skip aggregate mutations that do not emit a media proof. Exact event
+and payload replay is idempotent; owner-revision non-increase/gap/regression,
+aggregate-version non-increase/regression and event-ID conflicts quarantine the
+owner. An exact replay of a receipt quarantined only by the former
+`AGGREGATE_VERSION_GAP` rule is re-evaluated under these rules and can recover;
+no other quarantine cause is relaxed. For returns the proof warehouse is the
+receiving destination. For transfer-line acceptance it is
+`destinationWarehouseId`, never the source warehouse.
 
 The PostgreSQL transport outbox publishes only exact stored bytes. Broker
 outages return rows to `PENDING` with bounded DB backoff and never exhaust into
@@ -174,10 +203,9 @@ retries; validation is terminal on its actual attempt. A DLT record uses the
 source processing-job UUID key for a valid request, or deterministic UUIDv5 in
 the OID namespace over SHA-256 of the raw bytes for an invalid request.
 
-## Private logistics readiness validation
+## Private logistics media boundaries
 
-`POST /api/internal/media/v1/logistics/references/validate` is the only Stage
-8 media receiver. It requires the exact `logistics-service` SERVICE JWT with
+`POST /api/internal/media/v1/logistics/references/validate` requires the exact `logistics-service` SERVICE JWT with
 matching `sub`/`client_id` and one `media.logistics` scope. The request derives
 an opaque owner ID from `documentId:lineId`, permits only
 `LOGISTICS_RETURN`, `LOGISTICS_SHIPMENT` and `LOGISTICS_TRANSFER`, and validates
@@ -190,6 +218,20 @@ filename, MIME type, processing state or retention policy. It is read-only:
 no upload, owner binding mutation, event, outbox, Kafka consumer or object
 storage call is made.
 
+`POST /api/internal/media/v1/logistics/cabin-presentations/snapshots` uses the
+same exact SERVICE identity and scope. It accepts one to one hundred unique
+CABIN IDs for one warehouse and returns only current canonical bindings plus
+READY/current image `{mediaId,generation,sortOrder,availableVariants}`
+references. No browser path, object-store coordinate, signed URL, filename,
+MIME type or processing data is returned.
+
+`GET /api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content`
+is the paired private byte stream. `variant` is exactly `SMALL` or `LARGE`; the
+request must name the CABIN, warehouse and current generation. Every owner,
+warehouse, state, generation and variant mismatch is an opaque 404. There is
+no public logistics presentation-media route; logistics owns any later
+browser-facing proxy.
+
 ## Local verification
 
 The build host needs Go 1.25, CGO, libvips, FFmpeg and FFprobe.
@@ -201,6 +243,6 @@ go build -trimpath -o /tmp/rwms-media-service ./cmd/media-service
 ```
 
 Migration verification must run separately with Flyway and PostgreSQL and cover
-clean V1+V2 install, V1-to-V2 upgrade, repeat, checksum drift and non-empty
+clean V1-to-V9 install, V8-to-V9 upgrade, repeat, checksum drift and non-empty
 unversioned rejection. MinIO integration checks must use a versioned local/test
 bucket; Kafka checks must use the canonical topics and broker acknowledgements.

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/analytics/analytics-sanitized-dlt-v1.schema.json",
+  "title": "RWMS analytics projection sanitized DLT v1",
+  "description": "Hash-only permanent rejection metadata. Source payloads, actor values, warehouse values and raw errors are forbidden.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "failureId",
+    "failureCode",
+    "sourceTopic",
+    "sourcePartition",
+    "sourceOffset",
+    "recordKeySha256",
+    "messageSha256",
+    "eventId",
+    "recordedAt"
+  ],
+  "properties": {
+    "failureId": {"type": "string", "format": "uuid"},
+    "failureCode": {
+      "enum": [
+        "INVALID_ENVELOPE",
+        "INVALID_PAYLOAD",
+        "RECORD_KEY_MISMATCH",
+        "EVENT_IDENTITY_CONFLICT",
+        "SOURCE_COORDINATE_CONFLICT",
+        "MISSING_AGGREGATE_VERSION",
+        "PROCESSING_FAILED"
+      ]
+    },
+    "sourceTopic": {"const": "rwms.task-board.group-kpi-day.v1"},
+    "sourcePartition": {"type": "integer", "minimum": 0},
+    "sourceOffset": {"type": "integer", "format": "int64", "minimum": 0},
+    "recordKeySha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "messageSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "eventId": {
+      "oneOf": [
+        {"type": "string", "format": "uuid"},
+        {"type": "null"}
+      ]
+    },
+    "recordedAt": {"type": "string", "format": "date-time"}
+  },
+  "x-rwms-prohibitedFields": [
+    "rawBody",
+    "payload",
+    "recordKey",
+    "actorRef",
+    "warehouseId",
+    "workerGroupId",
+    "rawError",
+    "authorization",
+    "password",
+    "secret",
+    "token",
+    "jwt"
+  ]
+}

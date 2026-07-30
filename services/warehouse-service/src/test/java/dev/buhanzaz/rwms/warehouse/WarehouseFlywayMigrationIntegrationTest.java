@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.UUID;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.FlywayException;
 import org.flywaydb.core.api.configuration.FluentConfiguration;
@@ -42,7 +43,7 @@ class WarehouseFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndOwnsOnlyWarehouseOutboxAndIdempotencyData() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isOne();
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -54,22 +55,105 @@ class WarehouseFlywayMigrationIntegrationTest {
     assertThat(toRegclass("inbox_message")).isNull();
     assertThat(toRegclass("warehouse_location")).isNull();
     assertThat(toRegclass("warehouse_topology")).isNull();
+    assertThat(columnExists("warehouse", "code")).isFalse();
     assertThat(
             jdbc.queryForList(
                 """
-                select id::text || '|' || code || '|' || name || '|' || city || '|'
+                select id::text || '|' || name || '|' || city || '|'
                        || coalesce(address, '<null>') || '|' || time_zone || '|' || active::text
                        || '|' || coalesce(sort_order::text, '<null>')
                   from warehouse order by id
                 """,
                 String.class))
         .containsExactly(
-            "00000000-0000-0000-0000-000000000001|WH_00000000000000000000000000000001|СПБ|Санкт-Петербург|<null>|Europe/Moscow|true|<null>",
-            "00000000-0000-0000-0000-000000000002|WH_00000000000000000000000000000002|Москва|Москва|<null>|Europe/Moscow|true|<null>");
+            "00000000-0000-0000-0000-000000000001|СПБ|Санкт-Петербург|<null>|Europe/Moscow|true|<null>",
+            "00000000-0000-0000-0000-000000000002|Москва|Москва|<null>|Europe/Moscow|true|<null>");
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from outbox_event", Integer.class))
         .isZero();
+  }
+
+  @Test
+  void versionTwoSanitizesHistoricalOutboxAndIdempotencyBodiesBeforeDroppingCode() {
+    Flyway versionOne = configuration(MIGRATIONS).target("1").load();
+    assertThat(versionOne.migrate().migrationsExecuted).isOne();
+    UUID warehouseId = UUID.randomUUID();
+    UUID eventId = UUID.randomUUID();
+    String envelope =
+        "{\"payload\":{\"warehouseId\":\""
+            + warehouseId
+            + "\",\"code\":\"LEGACY\",\"timeZone\":\"Europe/Moscow\",\"active\":true,\"sortOrder\":null}}";
+    jdbc.update(
+        """
+        insert into warehouse(
+          id,version,code,name,city,address,time_zone,active,sort_order,created_at,updated_at)
+        values (?,0,'LEGACY','Legacy warehouse','Москва',null,'Europe/Moscow',true,null,
+          clock_timestamp(),clock_timestamp())
+        """,
+        warehouseId);
+    jdbc.update(
+        """
+        insert into outbox_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,event_version,topic,
+          occurred_at,recorded_at,envelope_body,envelope_sha256,status,attempt_count,next_attempt_at,created_at)
+        values (?,'WAREHOUSE',?,0,'warehouse.warehouse.created.v1',1,
+          'rwms.warehouse.warehouse.v1',clock_timestamp(),clock_timestamp(),?::jsonb,
+          encode(sha256(convert_to(?::jsonb::text,'UTF8')),'hex'),'PENDING',0,
+          clock_timestamp(),clock_timestamp())
+        """,
+        eventId,
+        warehouseId.toString(),
+        envelope,
+        envelope);
+    UUID subjectId = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into idempotency_record(
+          subject_id,idempotency_key,request_sha256,response_status,response_body,warehouse_id,
+          created_at,expires_at)
+        values (?,?,
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',201,?::jsonb,?,
+          clock_timestamp(),clock_timestamp()+interval '1 hour')
+        """,
+        subjectId,
+        idempotencyKey,
+        "{\"id\":\"" + warehouseId + "\",\"code\":\"LEGACY\"}",
+        warehouseId);
+
+    Flyway versionTwo = flyway(MIGRATIONS);
+    assertThat(versionTwo.migrate().migrationsExecuted).isOne();
+    versionTwo.validate();
+
+    assertThat(columnExists("warehouse", "code")).isFalse();
+    assertThat(jdbc.queryForObject(
+        "select jsonb_exists(envelope_body->'payload', 'code') from outbox_event where event_id=?",
+        Boolean.class,
+        eventId)).isFalse();
+    assertThat(jdbc.queryForObject(
+        "select jsonb_exists(response_body, 'code') from idempotency_record where subject_id=? and idempotency_key=?",
+        Boolean.class,
+        subjectId,
+        idempotencyKey)).isFalse();
+    assertThat(jdbc.queryForObject(
+        """
+        select envelope_sha256=encode(sha256(convert_to(envelope_body::text,'UTF8')),'hex')
+        from outbox_event where event_id=?
+        """,
+        Boolean.class,
+        eventId)).isTrue();
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    update outbox_event
+                    set envelope_body=envelope_body || '{\"migrationProbe\":true}'::jsonb
+                    where event_id=?
+                    """,
+                    eventId))
+        .isInstanceOf(RuntimeException.class)
+        .hasMessageContaining("immutable");
   }
 
   @Test
@@ -84,7 +168,7 @@ class WarehouseFlywayMigrationIntegrationTest {
     Files.writeString(
         migration,
         Files.readString(migration)
-            .replace("code varchar(64) NOT NULL", "code varchar(63) NOT NULL"));
+            .replace("name varchar(255) NOT NULL", "name varchar(254) NOT NULL"));
 
     assertThatThrownBy(() -> flyway(location).validate())
         .isInstanceOf(FlywayValidateException.class)
@@ -124,6 +208,20 @@ class WarehouseFlywayMigrationIntegrationTest {
 
   private String toRegclass(String table) {
     return jdbc.queryForObject("select to_regclass(?)", String.class, "public." + table);
+  }
+
+  private boolean columnExists(String table, String column) {
+    Integer count =
+        jdbc.queryForObject(
+            """
+            select count(*)
+            from information_schema.columns
+            where table_schema='public' and table_name=? and column_name=?
+            """,
+            Integer.class,
+            table,
+            column);
+    return count != null && count == 1;
   }
 
   private java.net.URL requireResource(String path) {

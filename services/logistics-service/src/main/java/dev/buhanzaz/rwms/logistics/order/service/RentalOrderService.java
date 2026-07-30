@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.logistics.order.service;
 
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import dev.buhanzaz.rwms.logistics.inquiry.service.RentalSettingsService;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.AddOrderUnitRequest;
 import dev.buhanzaz.rwms.logistics.order.api.OrderApiModels.CreateOrderRequest;
@@ -36,6 +37,8 @@ import dev.buhanzaz.rwms.logistics.order.security.OrderAuthorizer;
 import jakarta.persistence.criteria.Predicate;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -84,6 +87,7 @@ public class RentalOrderService {
   private final RentalOrderResponseMapper mapper;
   private final LogisticsDependencyGateway dependencies;
   private final LogisticsDocumentService documents;
+  private final RentalSettingsService rentalSettings;
 
   public OrderPageResponse list(
       OrderActor actor,
@@ -324,9 +328,8 @@ public class RentalOrderService {
     }
 
     RentalOrder order = lockedOrder(orderId);
-    access.requireMutable(actor, order);
+    requireEditable(actor, order);
     requireVersion(order, request.expectedVersion());
-    order.requireDraft();
     OrderClient nextClient = clientService.required(request.clientId());
     OrderClient previousClient = order.getClient();
     if (!order.changeClient(nextClient)) {
@@ -335,6 +338,7 @@ public class RentalOrderService {
     }
 
     orders.saveAndFlush(order);
+    synchronizeSavedShipmentDraft(order, actor);
     audit.append(
         orderId,
         OrderAuditEventType.CLIENT_SELECTED,
@@ -431,9 +435,8 @@ public class RentalOrderService {
     }
 
     RentalOrder order = lockedOrder(orderId);
-    access.requireMutable(actor, order);
+    requireEditable(actor, order);
     requireVersion(order, request.expectedVersion());
-    order.requireDraft();
     UUID warehouseId = requiredWarehouse(order);
     List<LogisticsDependencyGateway.OrderUnitReservation> currentUnits =
         readUnits(order);
@@ -453,6 +456,7 @@ public class RentalOrderService {
               request.unitId(),
               order.getClient().getId(),
               order.getClient().getDisplayName(),
+              draftReservationExpiresAt(order, actor),
               actor.subjectId(),
               actor.role());
       requireReservation(reservation, orderId, request.unitId(), warehouseId, "ACTIVE");
@@ -461,6 +465,7 @@ public class RentalOrderService {
         throw invalidDependencyResponse();
       }
       ensureUnitAddedEvidence(order, reservation, actor);
+      synchronizeSavedShipmentDraft(order, actor);
       remember(actor, ADD_UNIT, idempotencyKey, checksum, order);
       return new MutationResult(detail(order, actor, readUnits(order)), false);
     } catch (LogisticsDependencyException exception) {
@@ -500,14 +505,22 @@ public class RentalOrderService {
           detail(replayedOrder, actor, readUnits(replayedOrder)), true);
     }
     RentalOrder order = lockedOrder(orderId);
-    access.requireMutable(actor, order);
+    requireEditable(actor, order);
     requireVersion(order, expectedVersion);
-    order.requireDraft();
     UUID warehouseId = requiredWarehouse(order);
+    List<LogisticsDependencyGateway.OrderUnitReservation> currentUnits = readUnits(order);
     LogisticsDependencyGateway.OrderUnitReservation current =
-        findCurrentUnit(orderId, unitId, readUnits(order));
+        findCurrentUnit(orderId, unitId, currentUnits);
+    if (order.getStatus() == RentalOrderStatus.SAVED
+        && current != null
+        && currentUnits.size() == 1) {
+      throw conflict(
+          "ORDER_UNITS_REQUIRED",
+          "Сохранённое бронирование должно содержать хотя бы одну бытовку");
+    }
     List<RentalOrderEquipmentRequirement> existingRequirements =
-        equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentCodeAsc(orderId);
+        equipmentRequirements
+            .findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(orderId);
     Map<UUID, Long> remainingRequirements =
         aggregateRequirements(existingRequirements, unitId, Map.of());
     try {
@@ -553,6 +566,7 @@ public class RentalOrderService {
         }
         changed(order, actor, furnitureChanged ? "unitsAndDesiredEquipment" : "units");
       }
+      synchronizeSavedShipmentDraft(order, actor);
       remember(actor, REMOVE_UNIT, idempotencyKey, checksum, order);
       return new MutationResult(detail(order, actor, readUnits(order)), recorded);
     } catch (LogisticsDependencyException exception) {
@@ -586,14 +600,14 @@ public class RentalOrderService {
     }
 
     RentalOrder order = lockedOrder(orderId);
-    access.requireMutable(actor, order);
+    requireEditable(actor, order);
     requireVersion(order, request.expectedVersion());
-    order.requireDraft();
     UUID warehouseId = requiredWarehouse(order);
     LogisticsDependencyGateway.OrderUnitReservation unit =
         requireCurrentUnit(orderId, unitId, readUnits(order));
     List<RentalOrderEquipmentRequirement> existing =
-        equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentCodeAsc(orderId);
+        equipmentRequirements
+            .findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(orderId);
     Map<UUID, Long> aggregate = aggregateRequirements(existing, unitId, desired);
     List<LogisticsDependencyGateway.OrderEquipmentReservation> reservations;
     try {
@@ -682,7 +696,8 @@ public class RentalOrderService {
       throw invalidDependencyResponse();
     }
     List<RentalOrderEquipmentRequirement> existingRequirements =
-        equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentCodeAsc(orderId);
+        equipmentRequirements
+            .findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(orderId);
     if (order.getWarehouseId() != null) {
       List<LogisticsDependencyGateway.OrderEquipmentReservation> furnitureReservations;
       try {
@@ -778,7 +793,7 @@ public class RentalOrderService {
     if (firstSave) {
       access.requireMutable(actor, order);
     } else if (order.getStatus() == RentalOrderStatus.SAVED) {
-      access.requireWarehouseEdit(actor, requiredWarehouse(order));
+      requireEditable(actor, order);
     } else {
       throw conflict("ORDER_NOT_EDITABLE", "Заказ больше нельзя сохранять");
     }
@@ -829,6 +844,7 @@ public class RentalOrderService {
                 current.unitId(),
                 order.getClient().getId(),
                 order.getClient().getDisplayName(),
+                null,
                 actor.subjectId(),
                 actor.role());
         requireReservation(
@@ -914,8 +930,6 @@ public class RentalOrderService {
     for (LogisticsDependencyGateway.OrderEquipmentReservation reservation : reservations) {
       if (reservation == null
           || reservation.equipmentId() == null
-          || reservation.equipmentCode() == null
-          || reservation.equipmentCode().isBlank()
           || reservation.equipmentName() == null
           || reservation.equipmentName().isBlank()
           || reservation.quantity() < 1
@@ -952,9 +966,8 @@ public class RentalOrderService {
       long nextQuantity = desired.getOrDefault(requirement.getEquipmentId(), 0L);
       LogisticsDependencyGateway.OrderEquipmentReservation reservation =
           reservations.get(requirement.getEquipmentId());
-      String nextCode = reservation == null ? requirement.getEquipmentCode() : reservation.equipmentCode();
       String nextName = reservation == null ? requirement.getEquipmentName() : reservation.equipmentName();
-      if (requirement.change(nextCode, nextName, nextQuantity)) {
+      if (requirement.change(nextName, nextQuantity)) {
         changedRequirements.add(requirement);
         appendDesiredEquipmentEvidence(
             order.getId(),
@@ -979,7 +992,6 @@ public class RentalOrderService {
               order,
               unitId,
               entry.getKey(),
-              reservation.equipmentCode(),
               reservation.equipmentName(),
               entry.getValue());
       changedRequirements.add(created);
@@ -1183,7 +1195,7 @@ public class RentalOrderService {
         summary.updatedAt(),
         units.stream().map(unit -> unit(unit, desiredByUnit)).toList(),
         new OrderPermissions(
-            access.canEdit(actor, order), actor.canViewOtherManagers()));
+            canEdit(actor, order), actor.canViewOtherManagers()));
   }
 
   private OrderUnitResponse unit(
@@ -1200,7 +1212,8 @@ public class RentalOrderService {
       RentalOrder order) {
     Map<UUID, List<OrderDesiredEquipmentResponse>> values = new LinkedHashMap<>();
     for (RentalOrderEquipmentRequirement requirement :
-        equipmentRequirements.findAllByOrder_IdOrderByRentalItemIdAscEquipmentCodeAsc(order.getId())) {
+        equipmentRequirements
+            .findAllByOrder_IdOrderByRentalItemIdAscEquipmentNameAscEquipmentIdAsc(order.getId())) {
       if (requirement.getQuantity() < 1) {
         continue;
       }
@@ -1235,7 +1248,6 @@ public class RentalOrderService {
                 content ->
                     new OrderEquipmentContentResponse(
                         content.equipmentId(),
-                        content.equipmentCode(),
                         content.equipmentName(),
                         content.quantity(),
                         content.locationKind()))
@@ -1326,6 +1338,40 @@ public class RentalOrderService {
       throw conflict("ORDER_WAREHOUSE_REQUIRED", "Сначала выберите склад заказа");
     }
     return order.getWarehouseId();
+  }
+
+  private void requireEditable(OrderActor actor, RentalOrder order) {
+    access.requireEditable(actor, order);
+    order.requireEditable();
+    if (order.getStatus() == RentalOrderStatus.SAVED
+        && !documents.lockRentalOrderShipmentDraftForOrderEditing(order.getId())) {
+      throw conflict(
+          "ORDER_NOT_EDITABLE",
+          "Бронирование нельзя изменить после начала отгрузки или создания задания на мебель");
+    }
+  }
+
+  private boolean canEdit(OrderActor actor, RentalOrder order) {
+    if (!access.canEdit(actor, order)) {
+      return false;
+    }
+    return order.getStatus() == RentalOrderStatus.DRAFT
+        || documents.isRentalOrderShipmentDraftEditable(order.getId());
+  }
+
+  private OffsetDateTime draftReservationExpiresAt(RentalOrder order, OrderActor actor) {
+    if (order.getStatus() != RentalOrderStatus.DRAFT) {
+      return null;
+    }
+    return OffsetDateTime.now(ZoneOffset.UTC)
+        .truncatedTo(ChronoUnit.MICROS)
+        .plusMinutes(rentalSettings.draftReservationHoldMinutes(actor));
+  }
+
+  private void synchronizeSavedShipmentDraft(RentalOrder order, OrderActor actor) {
+    if (order.getStatus() == RentalOrderStatus.SAVED) {
+      documents.synchronizeRentalOrderShipmentDraft(actor.subjectId(), order, readUnits(order));
+    }
   }
 
   private static void requireVersion(RentalOrder order, long expectedVersion) {

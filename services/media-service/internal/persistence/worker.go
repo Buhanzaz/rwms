@@ -705,18 +705,12 @@ func (repository *Repository) ReleaseProcessingLeases(ctx context.Context, owner
 }
 
 func lockWorkerState(ctx context.Context, tx pgx.Tx, job WorkerJob) (AssetRecord, error) {
-	var asset AssetRecord
-	err := tx.QueryRow(ctx, assetSQL+` join media_processing_job job on job.media_id=a.media_id
+	asset, err := scanAsset(tx.QueryRow(ctx, assetSQL+` join media_processing_job job on job.media_id=a.media_id
 		where job.processing_job_id=$1 and job.job_status='RUNNING' and job.lease_token=$2
 		  and job.lease_fence=$3 and a.processing_status='PROCESSING'
 		  and a.pending_generation=job.generation and media_asset_is_available(a.media_id)
 		for update of a,job`,
-		job.JobID, job.LeaseToken, job.LeaseFence).Scan(
-		&asset.ID, &asset.FolderID, &asset.OwnerType, &asset.OwnerID, &asset.WarehouseID, &asset.Kind,
-		&asset.FileName, &asset.ContentType, &asset.SourceObjectKey,
-		&asset.SourceVersionID, &asset.SourceETag, &asset.SourceChecksum,
-		&asset.Status, &asset.Version, &asset.Generation, &asset.Rotation,
-		&asset.SortOrder, &asset.SizeBytes, &asset.CreatedAt)
+		job.JobID, job.LeaseToken, job.LeaseFence))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AssetRecord{}, ErrLeaseLost
 	}
@@ -730,11 +724,12 @@ func (repository *Repository) appendSystemFact(ctx context.Context, tx pgx.Tx, j
 	if err != nil {
 		return err
 	}
-	if err := insertDomainEvent(ctx, tx, eventID, asset.ID, streamVersion, eventType, nil,
+	actor := actorForAsset(asset)
+	if err := insertDomainEventForActor(ctx, tx, eventID, asset.ID, streamVersion, eventType, actor,
 		job.CorrelationID, recordedAt); err != nil {
 		return err
 	}
-	return insertFactOutbox(ctx, tx, eventID, asset, asset.Version, eventType, nil,
+	return insertFactOutboxForActor(ctx, tx, eventID, asset, asset.Version, eventType, actor,
 		job.CorrelationID, recordedAt, job.Generation, job.Rotation, nil)
 }
 

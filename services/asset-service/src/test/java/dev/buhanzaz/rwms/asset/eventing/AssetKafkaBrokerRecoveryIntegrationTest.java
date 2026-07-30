@@ -1,6 +1,9 @@
 package dev.buhanzaz.rwms.asset.eventing;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.DIMENSION_24_X_6;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.FINISHING_DVP;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.TYPE_BK_1;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateRentalItemRequest;
 import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
@@ -86,7 +89,16 @@ class AssetKafkaBrokerRecoveryIntegrationTest {
         subjectId,
         UUID.randomUUID(),
         new CreateRentalItemRequest(
-            UUID.randomUUID(), "kafka-" + UUID.randomUUID(), null, null, null, null, null, null, java.util.Map.of(), List.of()))
+            UUID.randomUUID(),
+            "kafka-" + UUID.randomUUID(),
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
+            null,
+            List.of(),
+            false,
+            java.util.Map.of(),
+            List.of()))
         .response();
     UUID eventId = jdbc.queryForObject(
         "select event_id from outbox_event where aggregate_type='RENTAL_ITEM' and aggregate_id=?", UUID.class,

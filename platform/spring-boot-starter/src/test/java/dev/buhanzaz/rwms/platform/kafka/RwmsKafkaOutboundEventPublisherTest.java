@@ -14,6 +14,7 @@ import dev.buhanzaz.rwms.platform.contracts.CorrelationContext;
 import dev.buhanzaz.rwms.platform.contracts.DomainEventEnvelopeV2;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -29,6 +30,7 @@ import tools.jackson.databind.json.JsonMapper;
 class RwmsKafkaOutboundEventPublisherTest {
 
     private static final String DESTINATION = "rwms.task-board.board-task.v1";
+    private static final String OWNER_PROOF_DESTINATION = "rwms.task-board.entry-owner-proof.v1";
 
     private final ObjectMapper objectMapper = JsonMapper.builder().build();
     private final StreamBridge streamBridge = mock(StreamBridge.class);
@@ -135,6 +137,25 @@ class RwmsKafkaOutboundEventPublisherTest {
                         null,
                         Map.of()))
                 .withMessageContaining("aggregateType");
+    }
+
+    @Test
+    void publishesFrozenTaskBoardOwnerProofOnlyToItsContractDestination() {
+        RwmsKafkaOutboundEventPublisher ownerProofPublisher = new RwmsKafkaOutboundEventPublisher(
+                streamBridge,
+                objectMapper,
+                new RwmsKafkaProperties(
+                        true, List.of(OWNER_PROOF_DESTINATION, "rwms.task-board.task-board-entry-owner-proof.v1")),
+                allowEventTypes("task-board.entry-owner-proof.changed.v1"));
+        when(streamBridge.send(eq(OWNER_PROOF_DESTINATION), any(Message.class))).thenReturn(true);
+
+        ownerProofPublisher.publishSerializedV2(OWNER_PROOF_DESTINATION, ownerProofSerializedEnvelope());
+
+        verify(streamBridge).send(eq(OWNER_PROOF_DESTINATION), any(Message.class));
+        assertThatExceptionOfType(IllegalArgumentException.class)
+                .isThrownBy(() -> ownerProofPublisher.publishSerializedV2(
+                        "rwms.task-board.task-board-entry-owner-proof.v1", ownerProofSerializedEnvelope()))
+                .withMessageContaining("aggregate family");
     }
 
     @Test
@@ -310,6 +331,31 @@ class RwmsKafkaOutboundEventPublisherTest {
                 new CorrelationContext(UUID.fromString("30000000-0000-0000-0000-000000000003"), null),
                 null,
                 Map.of("status", "ACTIVE"));
+    }
+
+    private byte[] ownerProofSerializedEnvelope() {
+        try {
+            Map<String, Object> correlation = new LinkedHashMap<>();
+            correlation.put("correlationId", "60000000-0000-0000-0000-000000000006");
+            correlation.put("causationId", null);
+            Map<String, Object> envelope = new LinkedHashMap<>();
+            envelope.put("envelopeVersion", 2);
+            envelope.put("eventId", "40000000-0000-0000-0000-000000000004");
+            envelope.put("eventType", "task-board.entry-owner-proof.changed.v1");
+            envelope.put("eventVersion", 1);
+            envelope.put("occurredAt", null);
+            envelope.put("recordedAt", "2026-07-26T09:00:00Z");
+            envelope.put("producer", "task-board-service");
+            envelope.put("aggregateType", "TASK_BOARD_ENTRY_OWNER_PROOF");
+            envelope.put("aggregateId", "50000000-0000-0000-0000-000000000005");
+            envelope.put("aggregateVersion", 1);
+            envelope.put("correlation", correlation);
+            envelope.put("actorRef", null);
+            envelope.put("payload", Map.of("active", true));
+            return objectMapper.writeValueAsBytes(envelope);
+        } catch (tools.jackson.core.JacksonException exception) {
+            throw new AssertionError("test owner proof cannot be serialized", exception);
+        }
     }
 
     private static DomainEventEnvelopeV2<Map<String, Object>> envelopeWithPayload(Map<String, Object> payload) {

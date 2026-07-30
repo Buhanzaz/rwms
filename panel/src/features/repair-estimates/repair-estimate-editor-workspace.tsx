@@ -1,6 +1,11 @@
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useMemo, useState, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
+import {
+  PageToolbar,
+  PageToolbarActions,
+  PageToolbarContent,
+} from "@/components/page-toolbar"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -22,6 +27,7 @@ import type {
   RepairEstimateCompletionMode,
   RepairEstimateDto,
   RepairEstimateEditorDraft,
+  RepairPriority,
   RepairEstimateTaskPlanDto,
 } from "@/features/repair-estimates/model/repair-estimate"
 import {
@@ -32,6 +38,7 @@ import { RepairEstimateCompletionDialog } from "@/features/repair-estimates/repa
 import { RepairEstimateCompletedWorkspace } from "@/features/repair-estimates/repair-estimate-completed-workspace"
 import { RepairEstimateLinesEditor } from "@/features/repair-estimates/repair-estimate-lines-editor"
 import { RepairEstimateWorkspaceLayout } from "@/features/repair-estimates/repair-estimate-workspace-layout"
+import { PreviousMaintenancePhotos } from "@/features/repair-estimates/previous-maintenance-photos"
 import { RepairWorkInformationFields } from "@/features/repair-estimates/repair-work-information-fields"
 import { CabinFurniturePanel } from "@/features/rental-items/cabin-furniture-panel"
 import { REPAIR_TASKS_QUERY_KEY } from "@/features/repair-tasks/api/repair-tasks-api"
@@ -50,6 +57,31 @@ export type RepairEstimateEditorWorkspaceProps = {
   onClose: () => void
   onSaved: (estimate: RepairEstimateDto) => void | Promise<void>
   initialRentalItemId?: string
+  authorDisplayName?: string
+}
+
+function RepairEstimateEditorToolbar({
+  onClose,
+  actions,
+}: {
+  onClose: () => void
+  actions?: ReactNode
+}) {
+  return (
+    <PageToolbar>
+      <PageToolbarContent>
+        <Button type="button" variant="outline" onClick={onClose}>
+          <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
+          Назад
+        </Button>
+      </PageToolbarContent>
+      {actions ? (
+        <PageToolbarActions className="w-full sm:w-auto">
+          {actions}
+        </PageToolbarActions>
+      ) : null}
+    </PageToolbar>
+  )
 }
 
 export function RepairEstimateEditorWorkspace({
@@ -61,6 +93,7 @@ export function RepairEstimateEditorWorkspace({
   onClose,
   onSaved,
   initialRentalItemId,
+  authorDisplayName,
 }: RepairEstimateEditorWorkspaceProps) {
   const editorKey = estimate
     ? `${estimate.id}:${estimate.version}`
@@ -68,21 +101,28 @@ export function RepairEstimateEditorWorkspace({
 
   if (loading) {
     return (
-      <p role="status" className="text-sm text-muted-foreground">
-        Загрузка сметы...
-      </p>
+      <>
+        <RepairEstimateEditorToolbar onClose={onClose} />
+        <p role="status" className="text-sm text-muted-foreground">
+          Загрузка сметы...
+        </p>
+      </>
     )
   }
 
   if (estimate?.status === "COMPLETED") {
     return (
-      <RepairEstimateCompletedWorkspace
-        key={editorKey}
-        accessToken={accessToken}
-        warehouseId={warehouseId}
-        estimate={estimate}
-        readOnly={readOnly}
-      />
+      <>
+        <RepairEstimateEditorToolbar onClose={onClose} />
+        <RepairEstimateCompletedWorkspace
+          key={editorKey}
+          accessToken={accessToken}
+          warehouseId={warehouseId}
+          estimate={estimate}
+          readOnly={readOnly}
+          authorDisplayName={authorDisplayName}
+        />
+      </>
     )
   }
 
@@ -121,6 +161,7 @@ function RepairEstimateEditorContent({
   const [catalogPager, setCatalogPager] =
     useState<RepairEstimateCatalogPager | null>(null)
   const [completionOpen, setCompletionOpen] = useState(false)
+  const [showBeforePhotos, setShowBeforePhotos] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const mediaOwner = draft.estimateId
     ? maintenanceEstimateMediaOwner(draft.estimateId, warehouseId)
@@ -136,9 +177,18 @@ function RepairEstimateEditorContent({
             reference.mediaId === references[index]?.mediaId &&
             reference.generation === references[index]?.generation
         )
-      return unchanged
+      const coverStillReady =
+        current.coverMediaId &&
+        references.some(
+          (reference) => reference.mediaId === current.coverMediaId
+        )
+      return unchanged && (coverStillReady || !current.coverMediaId)
         ? current
-        : { ...current, maintenanceMediaReferences: references }
+        : {
+            ...current,
+            maintenanceMediaReferences: references,
+            coverMediaId: coverStillReady ? current.coverMediaId : null,
+          }
     })
   }
 
@@ -204,6 +254,7 @@ function RepairEstimateEditorContent({
       completionMode: RepairEstimateCompletionMode
       movementRequired: boolean
       taskPlans: RepairEstimateTaskPlanDto[]
+      priority: RepairPriority
     }) => {
       if (readOnly) {
         throw new Error("Для завершения сметы нужен доступ EDIT")
@@ -265,6 +316,12 @@ function RepairEstimateEditorContent({
 
     try {
       assertEstimateLinesValid(draft.lines)
+      if (
+        (draft.maintenanceMediaReferences?.length ?? 0) > 0 &&
+        !draft.coverMediaId
+      ) {
+        throw new Error("Выберите титульную фотографию")
+      }
       setError(null)
       return true
     } catch (unknownError) {
@@ -283,6 +340,18 @@ function RepairEstimateEditorContent({
 
   const mutationPending = saveMutation.isPending || completeMutation.isPending
   const interactionDisabled = readOnly || mutationPending
+  const beforePhotosButton = (
+    <Button
+      type="button"
+      variant={showBeforePhotos ? "secondary" : "outline"}
+      size="sm"
+      aria-pressed={showBeforePhotos}
+      disabled={!draft.rentalItemId}
+      onClick={() => setShowBeforePhotos((current) => !current)}
+    >
+      {showBeforePhotos ? "Скрыть до" : "Показать до"}
+    </Button>
+  )
   const handleCatalogPagerChange = useCallback(
     (nextPager: RepairEstimateCatalogPager | null) => {
       setCatalogPager(nextPager)
@@ -336,7 +405,9 @@ function RepairEstimateEditorContent({
         <RepairEstimateLinesEditor
           lines={draft.lines}
           readOnly={interactionDisabled}
-          catalogOnly
+          customWorkLinesOnly
+          accessToken={accessToken}
+          warehouseId={warehouseId}
           onChange={(lines) => setDraft((current) => ({ ...current, lines }))}
         />
       </div>
@@ -347,6 +418,51 @@ function RepairEstimateEditorContent({
         </div>
       </div>
     </div>
+  )
+
+  const editorActions = readOnly ? (
+    <Button
+      type="button"
+      variant="outline"
+      disabled={mutationPending}
+      onClick={closeEditor}
+    >
+      Закрыть
+    </Button>
+  ) : (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        disabled={mutationPending}
+        onClick={closeEditor}
+      >
+        Отмена
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        disabled={mutationPending}
+        onClick={() => {
+          if (validateDraft()) {
+            saveMutation.mutate()
+          }
+        }}
+      >
+        {saveMutation.isPending ? "Сохранение..." : "Сохранить черновик"}
+      </Button>
+      <Button
+        type="button"
+        disabled={mutationPending}
+        onClick={() => {
+          if (validateDraft()) {
+            setCompletionOpen(true)
+          }
+        }}
+      >
+        Завершить
+      </Button>
+    </>
   )
 
   const controls = (
@@ -366,10 +482,9 @@ function RepairEstimateEditorContent({
         </div>
       )}
 
-      <Separator />
-
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        {!readOnly ? (
+      {!readOnly ? (
+        <>
+          <Separator />
           <div className="flex items-center gap-2">
             <Button
               type="button"
@@ -392,52 +507,17 @@ function RepairEstimateEditorContent({
               <HugeiconsIcon icon={ArrowRight01Icon} />
             </Button>
           </div>
-        ) : null}
-        <div className="flex flex-wrap justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={mutationPending}
-            onClick={closeEditor}
-          >
-            {readOnly ? "Закрыть" : "Отмена"}
-          </Button>
-          {!readOnly ? (
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={mutationPending}
-                onClick={() => {
-                  if (validateDraft()) {
-                    saveMutation.mutate()
-                  }
-                }}
-              >
-                {saveMutation.isPending
-                  ? "Сохранение..."
-                  : "Сохранить черновик"}
-              </Button>
-              <Button
-                type="button"
-                disabled={mutationPending}
-                onClick={() => {
-                  if (validateDraft()) {
-                    setCompletionOpen(true)
-                  }
-                }}
-              >
-                Завершить
-              </Button>
-            </>
-          ) : null}
-        </div>
-      </div>
+        </>
+      ) : null}
     </div>
   )
 
   return (
     <>
+      <RepairEstimateEditorToolbar
+        onClose={closeEditor}
+        actions={editorActions}
+      />
       <RepairEstimateWorkspaceLayout
         message={
           error ? (
@@ -453,16 +533,43 @@ function RepairEstimateEditorContent({
             ensureOwner={ensureMediaOwner}
             readOnly={interactionDisabled}
             title="Фотографии сметы"
+            toolbarAction={beforePhotosButton}
+            coverMediaId={draft.coverMediaId ?? null}
+            requireCover
             onReadyReferencesChange={updateReadyMediaReferences}
+            onCoverMediaIdChange={(coverMediaId) =>
+              setDraft((current) => ({ ...current, coverMediaId }))
+            }
           />
         }
         information={information}
-        estimate={estimateLines}
+        estimate={
+          showBeforePhotos ? (
+            <PreviousMaintenancePhotos
+              accessToken={accessToken}
+              warehouseId={warehouseId}
+              rentalItemId={draft.rentalItemId}
+              currentOwner={
+                draft.estimateId
+                  ? {
+                      ownerType: "MAINTENANCE_ESTIMATE",
+                      ownerId: draft.estimateId,
+                    }
+                  : null
+              }
+              currentCreatedAt={estimate?.createdAt ?? null}
+            />
+          ) : (
+            estimateLines
+          )
+        }
         controls={controls}
       />
 
       <RepairEstimateCompletionDialog
         open={completionOpen && !readOnly}
+        accessToken={accessToken}
+        warehouseId={warehouseId}
         draft={draft}
         pending={completeMutation.isPending}
         error={error}

@@ -37,15 +37,10 @@ export type StagedRentalItemPhoto = Readonly<{
   rotationDegrees: MediaRotationDegrees
   commandKeys: MediaUploadCommandKeys
   rotateKey: string
+  title: boolean
 }>
 
-export function disposeStagedRentalItemPhotos(
-  photos: readonly StagedRentalItemPhoto[]
-) {
-  photos.forEach((photo) => URL.revokeObjectURL(photo.previewUrl))
-}
-
-function stagePhoto(file: File): StagedRentalItemPhoto {
+function stagePhoto(file: File, title = false): StagedRentalItemPhoto {
   return {
     id: crypto.randomUUID(),
     file,
@@ -56,6 +51,7 @@ function stagePhoto(file: File): StagedRentalItemPhoto {
       uploadAndFinalize: crypto.randomUUID(),
     },
     rotateKey: crypto.randomUUID(),
+    title,
   }
 }
 
@@ -70,10 +66,12 @@ function rotatePhoto(photo: StagedRentalItemPhoto): StagedRentalItemPhoto {
 export function RentalItemCreationPhotoUploader({
   photos,
   disabled = false,
+  titlePhotoMissing = false,
   onChange,
 }: {
   photos: StagedRentalItemPhoto[]
   disabled?: boolean
+  titlePhotoMissing?: boolean
   onChange: (photos: StagedRentalItemPhoto[]) => void
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -93,7 +91,11 @@ export function RentalItemCreationPhotoUploader({
     const remaining = Math.max(0, MAX_CREATION_PHOTOS - photos.length)
     const selected = valid.slice(0, remaining)
     if (selected.length > 0) {
-      onChange([...photos, ...selected.map(stagePhoto)])
+      const titleAlreadySelected = photos.some((photo) => photo.title)
+      const stagedPhotos = selected.map((file, index) =>
+        stagePhoto(file, !titleAlreadySelected && index === 0)
+      )
+      onChange([...photos, ...stagedPhotos])
     }
     if (valid.length !== candidates.length) {
       setError("Поддерживаются только JPEG, PNG и WebP.")
@@ -113,8 +115,27 @@ export function RentalItemCreationPhotoUploader({
 
   function removePhoto(photo: StagedRentalItemPhoto) {
     URL.revokeObjectURL(photo.previewUrl)
-    onChange(photos.filter((candidate) => candidate.id !== photo.id))
+    const remainingPhotos = photos.filter(
+      (candidate) => candidate.id !== photo.id
+    )
+    onChange(
+      photo.title && remainingPhotos.length > 0
+        ? remainingPhotos.map((candidate, index) => ({
+            ...candidate,
+            title: index === 0,
+          }))
+        : remainingPhotos
+    )
     if (previewId === photo.id) setPreviewId(null)
+  }
+
+  function selectTitlePhoto(photoId: string) {
+    onChange(
+      photos.map((photo) => ({
+        ...photo,
+        title: photo.id === photoId,
+      }))
+    )
   }
 
   return (
@@ -176,77 +197,98 @@ export function RentalItemCreationPhotoUploader({
             сформирует media-service.
           </FieldDescription>
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {photos.map((photo) => (
-              <article
-                key={photo.id}
-                className="overflow-hidden rounded-lg border bg-card"
-              >
-                <button
-                  type="button"
-                  className="block aspect-[4/3] w-full overflow-hidden bg-muted"
-                  onClick={() => setPreviewId(photo.id)}
+          <>
+            <FieldDescription>
+              Выберите титульное фото. Оно обведено цветом и будет показано
+              первым.
+            </FieldDescription>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {photos.map((photo) => (
+                <article
+                  key={photo.id}
+                  className={cn(
+                    "overflow-hidden rounded-lg border bg-card",
+                    photo.title && "border-primary ring-2 ring-primary/30"
+                  )}
                 >
-                  <img
-                    src={photo.previewUrl}
-                    alt={photo.file.name}
-                    className="size-full object-cover transition-transform"
-                    style={{ transform: `rotate(${photo.rotationDegrees}deg)` }}
-                  />
-                </button>
-                <div className="flex items-center justify-between gap-2 p-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-xs font-medium">
-                      {photo.file.name}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      Поворот: {photo.rotationDegrees}°
+                  <button
+                    type="button"
+                    className="block aspect-[4/3] w-full overflow-hidden bg-muted"
+                    aria-label={`Выбрать титульным ${photo.file.name}`}
+                    aria-pressed={photo.title}
+                    disabled={disabled}
+                    onClick={() => selectTitlePhoto(photo.id)}
+                  >
+                    <img
+                      src={photo.previewUrl}
+                      alt={photo.file.name}
+                      className="size-full object-cover transition-transform"
+                      style={{
+                        transform: `rotate(${photo.rotationDegrees}deg)`,
+                      }}
+                    />
+                  </button>
+                  <div className="flex flex-col gap-2 p-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-medium">
+                          {photo.file.name}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          Поворот: {photo.rotationDegrees}°
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 gap-1">
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label={`Просмотреть ${photo.file.name}`}
+                          onClick={() => setPreviewId(photo.id)}
+                        >
+                          <HugeiconsIcon icon={EyeIcon} />
+                        </Button>
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label={`Повернуть ${photo.file.name}`}
+                          disabled={disabled}
+                          onClick={() =>
+                            onChange(
+                              photos.map((candidate) =>
+                                candidate.id === photo.id
+                                  ? rotatePhoto(candidate)
+                                  : candidate
+                              )
+                            )
+                          }
+                        >
+                          <HugeiconsIcon icon={RotateClockwiseIcon} />
+                        </Button>
+                        <Button
+                          type="button"
+                          size="icon-sm"
+                          variant="ghost"
+                          aria-label={`Удалить ${photo.file.name}`}
+                          disabled={disabled}
+                          onClick={() => removePhoto(photo)}
+                        >
+                          <HugeiconsIcon icon={Delete02Icon} />
+                        </Button>
+                      </div>
                     </div>
                   </div>
-                  <div className="flex shrink-0 gap-1">
-                    <Button
-                      type="button"
-                      size="icon-sm"
-                      variant="ghost"
-                      aria-label={`Просмотреть ${photo.file.name}`}
-                      onClick={() => setPreviewId(photo.id)}
-                    >
-                      <HugeiconsIcon icon={EyeIcon} />
-                    </Button>
-                    <Button
-                      type="button"
-                      size="icon-sm"
-                      variant="ghost"
-                      aria-label={`Повернуть ${photo.file.name}`}
-                      disabled={disabled}
-                      onClick={() =>
-                        onChange(
-                          photos.map((candidate) =>
-                            candidate.id === photo.id
-                              ? rotatePhoto(candidate)
-                              : candidate
-                          )
-                        )
-                      }
-                    >
-                      <HugeiconsIcon icon={RotateClockwiseIcon} />
-                    </Button>
-                    <Button
-                      type="button"
-                      size="icon-sm"
-                      variant="ghost"
-                      aria-label={`Удалить ${photo.file.name}`}
-                      disabled={disabled}
-                      onClick={() => removePhoto(photo)}
-                    >
-                      <HugeiconsIcon icon={Delete02Icon} />
-                    </Button>
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
+                </article>
+              ))}
+            </div>
+          </>
         )}
+        {titlePhotoMissing ? (
+          <FieldError role="alert">
+            Выберите титульное фото перед созданием бытовки.
+          </FieldError>
+        ) : null}
         {error ? <FieldError role="alert">{error}</FieldError> : null}
       </FieldSet>
 

@@ -5,6 +5,7 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CancelTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CancelledTaskDto;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.PreStartUpdateTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RegisterExternalTaskRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RelocateExternalTaskRequest;
 
 import dev.buhanzaz.rwms.taskboard.security.TaskSyncAuthorizer;
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardService;
@@ -58,5 +59,14 @@ public class InternalTaskSyncController {
       @PathVariable UUID externalTaskId,
       @Valid @RequestBody CancelTaskRequest request) {
     return service.cancelExternalTask(access.requireTaskSync(jwt), externalTaskId, request);
+  }
+
+  @PostMapping("/{externalTaskId}/relocate")
+  public BoardTaskRegistrationDto relocate(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID externalTaskId,
+      @Valid @RequestBody RelocateExternalTaskRequest request) {
+    return service.relocateExternalTask(
+        access.requireTaskSync(jwt), externalTaskId, request);
   }
 }

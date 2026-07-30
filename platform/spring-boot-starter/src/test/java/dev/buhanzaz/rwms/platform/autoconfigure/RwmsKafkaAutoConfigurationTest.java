@@ -43,6 +43,18 @@ class RwmsKafkaAutoConfigurationTest {
     }
 
     @Test
+    void supportsKafkaConsumersThatDoNotPublishCanonicalDomainEvents() {
+        contextRunner
+                .withPropertyValues(
+                        "rwms.platform.kafka.enabled=true",
+                        "rwms.platform.kafka.publisher-enabled=false")
+                .run(context -> {
+                    assertThat(context).doesNotHaveBean(RwmsKafkaProperties.class);
+                    assertThat(context).doesNotHaveBean(RwmsKafkaOutboundEventPublisher.class);
+                });
+    }
+
+    @Test
     void refusesStartupWithoutAnExactDestinationAllowList() {
         contextRunner
                 .withPropertyValues("rwms.platform.kafka.enabled=true")

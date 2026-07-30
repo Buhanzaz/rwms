@@ -213,7 +213,10 @@ class TaskBoardSecurityPolicyTest {
             "rwms.task-board.work-queue.v1",
             "rwms.task-board.queue-usage-reference.v1",
             "rwms.task-board.board-task.v1",
-            "rwms.task-board.queue-entry.v1");
+            "rwms.task-board.queue-entry.v1",
+            "rwms.task-board.entry-owner-proof.v1",
+            "rwms.task-board.task-evidence.v1",
+            "rwms.task-board.group-kpi-day.v1");
     for (int index = 0; index < destinations.size(); index++) {
       environment.setProperty(
           "rwms.platform.kafka.destinations[" + index + "]", destinations.get(index));
@@ -239,9 +242,11 @@ class TaskBoardSecurityPolicyTest {
             "taskBoardWorkQueueEvents",
             "taskBoardQueueUsageReferenceEvents",
             "taskBoardBoardTaskEvents",
-            "taskBoardQueueEntryEvents");
+            "taskBoardQueueEntryEvents",
+            "taskBoardMediaEvents",
+            "taskBoardWarehouseEvents");
     environment.setProperty("spring.cloud.function.definition", String.join(";", functions));
-    for (int index = 0; index < functions.size(); index++) {
+    for (int index = 0; index < 7; index++) {
       String binding = functions.get(index) + "-in-0";
       String prefix = "spring.cloud.stream.bindings." + binding;
       environment.setProperty(prefix + ".destination", destinations.get(index));
@@ -253,6 +258,30 @@ class TaskBoardSecurityPolicyTest {
           kafkaPrefix + ".common-error-handler-bean-name",
           "taskBoardFailClosedConsumerErrorHandler");
     }
+    String mediaBinding = "taskBoardMediaEvents-in-0";
+    String mediaPrefix = "spring.cloud.stream.bindings." + mediaBinding;
+    environment.setProperty(mediaPrefix + ".destination", "rwms.media.media.v1");
+    environment.setProperty(mediaPrefix + ".group", "task-board-worker-evidence-v1");
+    environment.setProperty(mediaPrefix + ".consumer.max-attempts", "1");
+    String mediaKafkaPrefix =
+        "spring.cloud.stream.kafka.bindings." + mediaBinding + ".consumer";
+    environment.setProperty(mediaKafkaPrefix + ".enable-dlq", "false");
+    environment.setProperty(
+        mediaKafkaPrefix + ".common-error-handler-bean-name",
+        "taskBoardFailClosedConsumerErrorHandler");
+    String warehouseBinding = "taskBoardWarehouseEvents-in-0";
+    String warehousePrefix = "spring.cloud.stream.bindings." + warehouseBinding;
+    environment.setProperty(
+        warehousePrefix + ".destination", "rwms.warehouse.warehouse.v1");
+    environment.setProperty(
+        warehousePrefix + ".group", "task-board-warehouse-metadata-v1");
+    environment.setProperty(warehousePrefix + ".consumer.max-attempts", "1");
+    String warehouseKafkaPrefix =
+        "spring.cloud.stream.kafka.bindings." + warehouseBinding + ".consumer";
+    environment.setProperty(warehouseKafkaPrefix + ".enable-dlq", "false");
+    environment.setProperty(
+        warehouseKafkaPrefix + ".common-error-handler-bean-name",
+        "taskBoardFailClosedConsumerErrorHandler");
     return environment;
   }
 

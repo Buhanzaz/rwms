@@ -76,23 +76,37 @@ func TestServiceOwnerProofAndSoftDeleteIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("gap and owner revision anomalies remain quarantined", func(t *testing.T) {
-		gapOwnerID := uuid.New()
-		gap := ServiceOwnerProofCommand{
+	t.Run("aggregate version may skip but must strictly advance", func(t *testing.T) {
+		ownerID, warehouseID := uuid.New(), uuid.New()
+		initial := ServiceOwnerProofCommand{
 			SourceService: MaintenanceOwnerProofService,
-			OwnerType:     OwnerTypeMaintenanceRepair, OwnerID: gapOwnerID,
-			WarehouseID: uuid.New(), OwnerRevision: 0, AggregateVersion: 2,
+			OwnerType:     OwnerTypeMaintenanceRepair, OwnerID: ownerID,
+			WarehouseID: warehouseID, OwnerRevision: 0, AggregateVersion: 0,
 			ProofEventID: uuid.New(), Active: true,
 		}
-		if _, _, err := repository.UpsertServiceOwnerProof(ctx, gap); !errors.Is(err, ErrConflict) {
-			t.Fatalf("initial aggregate gap error = %v, want ErrConflict", err)
+		if _, _, err := repository.UpsertServiceOwnerProof(ctx, initial); err != nil {
+			t.Fatalf("initial aggregate proof: %v", err)
 		}
-		gap.AggregateVersion = 0
-		gap.ProofEventID = uuid.New()
-		if _, _, err := repository.UpsertServiceOwnerProof(ctx, gap); !errors.Is(err, ErrConflict) {
-			t.Fatalf("post-gap bootstrap error = %v, want durable ErrConflict", err)
+		skipped := initial
+		skipped.ProofEventID = uuid.New()
+		skipped.OwnerRevision = 1
+		skipped.AggregateVersion = 3
+		if record, replayed, err := repository.UpsertServiceOwnerProof(ctx, skipped); err != nil || replayed ||
+			record.AggregateVersion != 3 || record.OwnerRevision != 1 {
+			t.Fatalf("skipped aggregate proof = %#v replayed:%v error:%v", record, replayed, err)
 		}
+		stale := skipped
+		stale.ProofEventID = uuid.New()
+		stale.OwnerRevision = 2
+		stale.AggregateVersion = 2
+		if _, _, err := repository.UpsertServiceOwnerProof(ctx, stale); !errors.Is(err, ErrConflict) {
+			t.Fatalf("aggregate regression error = %v, want ErrConflict", err)
+		}
+		assertServiceOwnerProofReceiptFailure(t, ctx, database, stale.ProofEventID,
+			"AGGREGATE_VERSION_REGRESSION")
+	})
 
+	t.Run("owner revisions must be exactly next", func(t *testing.T) {
 		ownerID, warehouseID := uuid.New(), uuid.New()
 		initial := ServiceOwnerProofCommand{
 			SourceService: MaintenanceOwnerProofService,
@@ -103,32 +117,140 @@ func TestServiceOwnerProofAndSoftDeleteIntegration(t *testing.T) {
 		if _, _, err := repository.UpsertServiceOwnerProof(ctx, initial); err != nil {
 			t.Fatalf("initial owner revision proof: %v", err)
 		}
+		nonIncreasing := initial
+		nonIncreasing.ProofEventID = uuid.New()
+		nonIncreasing.AggregateVersion = 3
+		if _, _, err := repository.UpsertServiceOwnerProof(ctx, nonIncreasing); !errors.Is(err, ErrConflict) {
+			t.Fatalf("non-increasing owner revision error = %v, want ErrConflict", err)
+		}
+		assertServiceOwnerProofReceiptFailure(t, ctx, database, nonIncreasing.ProofEventID,
+			"OWNER_REVISION_CONFLICT")
+
+		gapOwnerID := uuid.New()
 		ownerGap := initial
+		ownerGap.OwnerID = gapOwnerID
 		ownerGap.ProofEventID = uuid.New()
-		ownerGap.AggregateVersion = 1
 		ownerGap.OwnerRevision = 5
+		ownerGap.AggregateVersion = 3
+		if _, _, err := repository.UpsertServiceOwnerProof(ctx, ownerGap); err != nil {
+			t.Fatalf("owner revision gap baseline proof: %v", err)
+		}
+		ownerGap.ProofEventID = uuid.New()
+		ownerGap.OwnerRevision = 7
+		ownerGap.AggregateVersion = 4
 		if _, _, err := repository.UpsertServiceOwnerProof(ctx, ownerGap); !errors.Is(err, ErrConflict) {
 			t.Fatalf("owner revision gap error = %v, want ErrConflict", err)
 		}
+		assertServiceOwnerProofReceiptFailure(t, ctx, database, ownerGap.ProofEventID, "OWNER_REVISION_GAP")
 
 		regressionOwnerID := uuid.New()
-		regression := ServiceOwnerProofCommand{
-			SourceService: MaintenanceOwnerProofService,
-			OwnerType:     OwnerTypeMaintenanceCatalogNode, OwnerID: regressionOwnerID,
-			WarehouseID: warehouseID, OwnerRevision: 3, AggregateVersion: 0,
-			ProofEventID: uuid.New(), Active: true,
-		}
-		if _, _, err := repository.UpsertServiceOwnerProof(ctx, regression); err != nil {
-			t.Fatalf("regression baseline proof: %v", err)
-		}
-		regression.AggregateVersion = 1
-		regression.OwnerRevision = 2
+		regression := initial
+		regression.OwnerID = regressionOwnerID
 		regression.ProofEventID = uuid.New()
+		if _, _, err := repository.UpsertServiceOwnerProof(ctx, regression); err != nil {
+			t.Fatalf("owner revision regression baseline proof: %v", err)
+		}
+		regression.ProofEventID = uuid.New()
+		regression.OwnerRevision = 2
+		regression.AggregateVersion = 3
 		if _, _, err := repository.UpsertServiceOwnerProof(ctx, regression); !errors.Is(err, ErrConflict) {
 			t.Fatalf("owner revision regression error = %v, want ErrConflict", err)
 		}
+		assertServiceOwnerProofReceiptFailure(t, ctx, database, regression.ProofEventID,
+			"OWNER_REVISION_REGRESSION")
+	})
 
-		eventConflictOwnerID := uuid.New()
+	t.Run("legacy aggregate-version-gap replay recovers under the current rule", func(t *testing.T) {
+		ownerID, warehouseID := uuid.New(), uuid.New()
+		initial := ServiceOwnerProofCommand{
+			SourceService: MaintenanceOwnerProofService,
+			OwnerType:     OwnerTypeMaintenanceCatalogNode, OwnerID: ownerID,
+			WarehouseID: warehouseID, OwnerRevision: 0, AggregateVersion: 0,
+			ProofEventID: uuid.New(), Active: true,
+		}
+		if _, _, err := repository.UpsertServiceOwnerProof(ctx, initial); err != nil {
+			t.Fatalf("legacy recovery baseline proof: %v", err)
+		}
+		legacyGap := initial
+		legacyGap.ProofEventID = uuid.New()
+		legacyGap.OwnerRevision = 1
+		legacyGap.AggregateVersion = 3
+		seedLegacyAggregateVersionGap(t, ctx, database, repository, legacyGap)
+		assertServiceOwnerProofReceiptFailure(t, ctx, database, legacyGap.ProofEventID,
+			"AGGREGATE_VERSION_GAP")
+
+		if record, replayed, err := repository.UpsertServiceOwnerProof(ctx, legacyGap); err != nil || replayed ||
+			record.AggregateVersion != legacyGap.AggregateVersion || record.OwnerRevision != legacyGap.OwnerRevision {
+			t.Fatalf("legacy aggregate gap replay = %#v replayed:%v error:%v", record, replayed, err)
+		}
+		if _, replayed, err := repository.UpsertServiceOwnerProof(ctx, legacyGap); err != nil || !replayed {
+			t.Fatalf("recovered proof exact replay = %v, %v", replayed, err)
+		}
+
+		var outcome, failureCode string
+		if err := database.Pool.QueryRow(ctx, `select outcome,coalesce(failure_code,'')
+			from media_service_owner_proof_receipt where proof_event_id=$1`, legacyGap.ProofEventID).
+			Scan(&outcome, &failureCode); err != nil || outcome != "APPLIED" || failureCode != "" {
+			t.Fatalf("recovered receipt outcome=%q failure=%q error=%v", outcome, failureCode, err)
+		}
+		var openQuarantines int
+		if err := database.Pool.QueryRow(ctx, `select count(*) from media_quarantined_aggregate
+			where consumer_name=$1 and aggregate_type='CATALOG_NODE' and aggregate_id=$2
+			  and reconciled_at is null`, MaintenanceOwnerProofConsumer, ownerID).
+			Scan(&openQuarantines); err != nil || openQuarantines != 0 {
+			t.Fatalf("recovered proof open quarantines=%d error=%v", openQuarantines, err)
+		}
+		var aggregateVersion, ownerRevision int64
+		var active, quarantined bool
+		if err := database.Pool.QueryRow(ctx, `select aggregate_version,owner_revision,active,quarantined
+			from media_service_owner_proof_checkpoint where owner_type=$1 and owner_id=$2`,
+			legacyGap.OwnerType, ownerID.String()).Scan(&aggregateVersion, &ownerRevision, &active, &quarantined); err != nil ||
+			aggregateVersion != 3 || ownerRevision != 1 || !active || quarantined {
+			t.Fatalf("recovered checkpoint aggregate=%d owner=%d active=%v quarantined=%v error=%v",
+				aggregateVersion, ownerRevision, active, quarantined, err)
+		}
+	})
+
+	t.Run("legacy aggregate-version-gap replay does not override another quarantine", func(t *testing.T) {
+		ownerID, warehouseID := uuid.New(), uuid.New()
+		initial := ServiceOwnerProofCommand{
+			SourceService: MaintenanceOwnerProofService,
+			OwnerType:     OwnerTypeMaintenanceRepair, OwnerID: ownerID,
+			WarehouseID: warehouseID, OwnerRevision: 0, AggregateVersion: 0,
+			ProofEventID: uuid.New(), Active: true,
+		}
+		if _, _, err := repository.UpsertServiceOwnerProof(ctx, initial); err != nil {
+			t.Fatalf("other-quarantine baseline proof: %v", err)
+		}
+		legacyGap := initial
+		legacyGap.ProofEventID = uuid.New()
+		legacyGap.OwnerRevision = 1
+		legacyGap.AggregateVersion = 3
+		seedLegacyAggregateVersionGap(t, ctx, database, repository, legacyGap)
+
+		blocked := legacyGap
+		blocked.ProofEventID = uuid.New()
+		blocked.OwnerRevision = 2
+		blocked.AggregateVersion = 4
+		if _, _, err := repository.UpsertServiceOwnerProof(ctx, blocked); !errors.Is(err, ErrConflict) {
+			t.Fatalf("proof while quarantined error = %v, want ErrConflict", err)
+		}
+		if _, _, err := repository.UpsertServiceOwnerProof(ctx, legacyGap); !errors.Is(err, ErrConflict) {
+			t.Fatalf("legacy replay over another quarantine error = %v, want ErrConflict", err)
+		}
+		assertServiceOwnerProofReceiptFailure(t, ctx, database, legacyGap.ProofEventID,
+			"AGGREGATE_VERSION_GAP")
+		var reason string
+		if err := database.Pool.QueryRow(ctx, `select reason_code from media_quarantined_aggregate
+			where consumer_name=$1 and aggregate_type='REPAIR' and aggregate_id=$2
+			  and reconciled_at is null`, MaintenanceOwnerProofConsumer, ownerID).Scan(&reason); err != nil ||
+			reason != "OWNER_PROOF_QUARANTINED" {
+			t.Fatalf("other quarantine reason=%q error=%v", reason, err)
+		}
+	})
+
+	t.Run("event ID reuse remains quarantined", func(t *testing.T) {
+		eventConflictOwnerID, warehouseID := uuid.New(), uuid.New()
 		eventConflict := ServiceOwnerProofCommand{
 			SourceService: MaintenanceOwnerProofService,
 			OwnerType:     OwnerTypeMaintenanceRepair, OwnerID: eventConflictOwnerID,
@@ -245,4 +367,52 @@ func TestServiceOwnerProofAndSoftDeleteIntegration(t *testing.T) {
 				deletedFacts, variants, sourceObjectKey, create.SourceObjectKey)
 		}
 	})
+}
+
+func seedLegacyAggregateVersionGap(
+	t *testing.T,
+	ctx context.Context,
+	database *Database,
+	repository *Repository,
+	command ServiceOwnerProofCommand,
+) {
+	t.Helper()
+	proof, err := normalizeServiceOwnerProof(command)
+	if err != nil {
+		t.Fatalf("normalize legacy aggregate gap: %v", err)
+	}
+	tx, err := database.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin legacy aggregate gap seed: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	checkpoint, found, err := readServiceOwnerCheckpoint(ctx, tx, proof.OwnerType, proof.InternalOwnerID)
+	if err != nil || !found {
+		t.Fatalf("read legacy aggregate gap checkpoint found=%v error=%v", found, err)
+	}
+	prior := checkpoint.persistedProof(proof.OwnerType, proof.InternalOwnerID)
+	if err := repository.rejectServiceOwnerProof(ctx, tx, proof, &prior,
+		"AGGREGATE_VERSION_GAP", checkpoint.AggregateVersion+1, proof.AggregateVersion); err != nil {
+		t.Fatalf("seed legacy aggregate gap: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit legacy aggregate gap seed: %v", err)
+	}
+}
+
+func assertServiceOwnerProofReceiptFailure(
+	t *testing.T,
+	ctx context.Context,
+	database *Database,
+	proofEventID uuid.UUID,
+	wantFailureCode string,
+) {
+	t.Helper()
+	var outcome, failureCode string
+	if err := database.Pool.QueryRow(ctx, `select outcome,coalesce(failure_code,'')
+		from media_service_owner_proof_receipt where proof_event_id=$1`, proofEventID).
+		Scan(&outcome, &failureCode); err != nil || outcome != "QUARANTINED" || failureCode != wantFailureCode {
+		t.Fatalf("receipt %s outcome=%q failure=%q error=%v; want QUARANTINED/%q",
+			proofEventID, outcome, failureCode, err, wantFailureCode)
+	}
 }

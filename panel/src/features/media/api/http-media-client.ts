@@ -259,7 +259,7 @@ export class HttpMediaClient implements MediaClient {
       throw new Error("Media file metadata is invalid")
     }
     if (folderId !== undefined && !UUID.test(folderId)) {
-      throw new Error("Media folder ID is invalid")
+      throw new Error("Некорректная папка медиафайлов.")
     }
     const checksumSha256 = await this.#sha256(file)
     if (!SHA256.test(checksumSha256)) {
@@ -455,7 +455,8 @@ export class HttpMediaClient implements MediaClient {
     }
     const response = await this.#fetch(input, { ...init, headers })
     if (!response.ok) {
-      throw new ApiError(await readProblemDetail(response), response.status)
+      const problem = await readProblemDetail(response)
+      throw new ApiError(problem.message, response.status, problem.code)
     }
     return response
   }
@@ -923,14 +924,19 @@ function requireExactContentType(value: unknown, expected: string) {
 async function readProblemDetail(response: Response) {
   const fallback = `Запрос завершился с ошибкой ${response.status}`
   const contentType = response.headers.get("Content-Type") ?? ""
-  if (!contentType.includes("json"))
-    return (await response.text()).trim() || fallback
+  if (!contentType.includes("json")) {
+    return { message: (await response.text()).trim() || fallback, code: null }
+  }
   const body = (await response.json()) as {
     detail?: unknown
     message?: unknown
+    code?: unknown
   }
   const detail = body.detail ?? body.message
-  return typeof detail === "string" && detail.trim() ? detail : fallback
+  return {
+    message: typeof detail === "string" && detail.trim() ? detail : fallback,
+    code: typeof body.code === "string" && body.code.trim() ? body.code : null,
+  }
 }
 
 async function browserSha256(blob: Blob) {

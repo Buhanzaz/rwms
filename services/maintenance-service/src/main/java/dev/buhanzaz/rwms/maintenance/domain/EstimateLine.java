@@ -40,6 +40,9 @@ public class EstimateLine {
   @Column(name = "title", nullable = false, length = 1000)
   private String title;
 
+  @Column(name = "unit", length = 32)
+  private String unit;
+
   @Column(name = "quantity", nullable = false, precision = 20, scale = 6)
   private BigDecimal quantity;
 
@@ -75,6 +78,7 @@ public class EstimateLine {
       UUID catalogNodeId,
       String lineType,
       String title,
+      String unit,
       BigDecimal quantity,
       long unitPriceMinor,
       Integer durationMinutes,
@@ -86,6 +90,22 @@ public class EstimateLine {
     if (quantity == null || quantity.signum() <= 0 || unitPriceMinor < 0) throw new IllegalArgumentException("Estimate line amount is invalid");
     if (durationMinutes != null && durationMinutes < 0) throw new IllegalArgumentException("durationMinutes is invalid");
     if (id == null) throw new IllegalArgumentException("Estimate line ID is required");
+    if (!"WORK".equals(lineType) && !"MATERIAL".equals(lineType)) {
+      throw new IllegalArgumentException("Estimate line type is invalid");
+    }
+    String normalizedUnit = optional(unit, 32);
+    if (catalogSnapshot == null) {
+      if (normalizedUnit == null) {
+        throw new IllegalArgumentException("Custom estimate line unit is required");
+      }
+      if ("WORK".equals(lineType)
+          && (durationMinutes == null || durationMinutes < 1 || durationMinutes > 525600)) {
+        throw new IllegalArgumentException("Custom estimate work duration is invalid");
+      }
+      if ("MATERIAL".equals(lineType) && !Integer.valueOf(0).equals(durationMinutes)) {
+        throw new IllegalArgumentException("Custom estimate material duration must be zero");
+      }
+    }
     this.id = id;
     this.estimateId = estimateId;
     this.estimateRevision = estimateRevision;
@@ -93,6 +113,7 @@ public class EstimateLine {
     this.catalogNodeId = catalogNodeId;
     this.lineType = lineType;
     this.title = title.trim();
+    this.unit = normalizedUnit;
     this.quantity = quantity.stripTrailingZeros();
     this.unitPriceMinor = unitPriceMinor;
     this.durationMinutes = durationMinutes;
@@ -116,6 +137,7 @@ public class EstimateLine {
   public UUID getCatalogNodeId() { return catalogNodeId; }
   public String getLineType() { return lineType; }
   public String getTitle() { return title; }
+  public String getUnit() { return unit; }
   public BigDecimal getQuantity() { return quantity; }
   public long getUnitPriceMinor() { return unitPriceMinor; }
   public Integer getDurationMinutes() { return durationMinutes; }

@@ -21,6 +21,7 @@ export type CurrentUser = {
   email: string | null
   principalType: "USER"
   globalRole: UserGlobalRole
+  rentalAccess: boolean
   warehouseAccessAll: boolean
   warehouseAccesses: CurrentUserWarehouseAccess[]
 }

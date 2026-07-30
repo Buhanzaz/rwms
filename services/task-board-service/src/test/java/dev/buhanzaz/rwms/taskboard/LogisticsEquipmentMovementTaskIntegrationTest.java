@@ -4,6 +4,7 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CancelLogisticsEquipment
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CreateBoardTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.EquipmentMovementOperation;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.MoveEntryRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueDefinitionRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RegisterLogisticsEquipmentMovementTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RouteStepRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.TakeEntryRequest;
@@ -19,6 +20,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.buhanzaz.rwms.taskboard.api.ApiModels.BoardEntryDto;
+import dev.buhanzaz.rwms.taskboard.api.ApiModels.WorkQueueDto;
 import dev.buhanzaz.rwms.taskboard.domain.EquipmentMovementDirection;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
 import dev.buhanzaz.rwms.taskboard.domain.TaskStatus;
@@ -51,6 +53,10 @@ import tools.jackson.databind.ObjectMapper;
 class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationTestSupport {
   private static final UUID WAREHOUSE =
       UUID.fromString("00000000-0000-0000-0000-000000000603");
+  private static final UUID OFFICE_TABLE_ID =
+      UUID.fromString("00000000-0000-0000-0000-000000000604");
+  private static final UUID BENCH_ID =
+      UUID.fromString("00000000-0000-0000-0000-000000000605");
   private static final String BASE_PATH =
       "/api/internal/task-board/v1/logistics/equipment-movement-tasks";
 
@@ -62,10 +68,29 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
   @Autowired TaskBoardService board;
   @Autowired BoardTaskRepository tasks;
   @Autowired QueueEntryRepository entries;
+  private WorkQueueDto furnitureQueue;
 
   @BeforeEach
   void setUp() {
     cleanTaskBoardFixtures(jdbc);
+    var definition =
+        registry.createQueueDefinition(
+            new QueueDefinitionRequest(
+                0L, "Перемещение мебели", null, QueueType.FURNITURE_MOVEMENT));
+    furnitureQueue =
+        registry.createQueue(
+            WAREHOUSE,
+            new WorkQueueRequest(
+                0L,
+                definition.id(),
+                true,
+                false,
+                false,
+                null,
+                null,
+                false,
+                null,
+                List.of()));
   }
 
   @Test
@@ -93,11 +118,26 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
     assertThat(task.isCompletionDeadlineEnforced()).isTrue();
     assertThat(task.getTitle()).isEqualTo("Перемещение мебели — бытовка БЫТ-011");
     assertThat(task.getDescription())
-        .contains("Занести в бытовку: Стол офисный (OFFICE_TABLE) — 2 шт.")
-        .contains("Вынести из бытовки: Лавка (BENCH) — 1 шт.");
+        .contains("Занести в бытовку: Стол офисный — 2 шт.")
+        .contains("Вынести из бытовки: Лавка — 1 шт.");
     var route = entries.findAllByTaskIdOrderByRouteIndexAsc(taskId);
     assertThat(route).hasSize(1);
-    assertThat(route.getFirst().getQueue()).isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "select queue_id from queue_entry where id=?", UUID.class, route.getFirst().getId()))
+        .isEqualTo(furnitureQueue.id());
+        assertThat(
+            jdbc.queryForObject(
+                """
+                select definition.name
+                  from queue_entry entry
+                  join work_queue queue on queue.id=entry.queue_id
+                  join queue_definition definition on definition.id=queue.definition_id
+                 where entry.id=?
+                """,
+                String.class,
+                route.getFirst().getId()))
+        .isEqualTo("Перемещение мебели");
     assertThat(route.getFirst().getTaskText()).isEqualTo(task.getDescription());
     assertThat(
             jdbc.queryForObject(
@@ -133,13 +173,6 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
     mvc.perform(get(BASE_PATH + "/{externalTaskId}", externalTaskId).with(logisticsJwt()))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.taskId").value(taskId.toString()));
-    mvc.perform(
-            get(
-                    "/api/internal/task-board/v1/logistics/preparation-tasks/{externalTaskId}",
-                    externalTaskId)
-                .with(logisticsJwt()))
-        .andExpect(status().isNotFound());
-
     CancelLogisticsEquipmentMovementTaskRequest cancel =
         new CancelLogisticsEquipmentMovementTaskRequest(first.required("taskVersion").longValue());
     mvc.perform(
@@ -187,21 +220,22 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
 
   @Test
   void onlyEquipmentMovementTaskCompletionIsFencedAtDeadline() {
+    var definition =
+        registry.createQueueDefinition(
+            new QueueDefinitionRequest(0L, "Movement", null, QueueType.MOVEMENT));
     var queue =
         registry.createQueue(
             WAREHOUSE,
             new WorkQueueRequest(
                 0L,
-                "MOVEMENT",
-                "Movement",
-                null,
-                QueueType.MOVEMENT,
+                definition.id(),
                 true,
                 false,
                 false,
                 null,
                 null,
                 false,
+                null,
                 List.of()));
     var worker =
         workforce.createWorker(
@@ -228,7 +262,7 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
             null,
             null,
             OffsetDateTime.now().minusDays(1),
-            List.of(new RouteStepRequest(queue.id(), null, "Generic", null))));
+            List.of(new RouteStepRequest(queue.definitionId(), "Generic", null))));
     BoardEntryDto generic = entry(genericExternalTaskId);
     generic =
         board.take(
@@ -247,10 +281,16 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
         board.registerLogisticsEquipmentMovementTask(
             movementRequest(UUID.randomUUID(), OffsetDateTime.now().plusDays(1), 2L));
     var movementEntry = entries.findAllByTaskIdOrderByRouteIndexAsc(movement.taskId()).getFirst();
+    var movementTask = tasks.findById(movement.taskId()).orElseThrow();
     board.move(
         WAREHOUSE,
         movementEntry.getId(),
-        new MoveEntryRequest(movementEntry.getVersion(), queue.id(), 0));
+        new MoveEntryRequest(
+            movementEntry.getVersion(),
+            movementTask.getVersion(),
+            queue.id(),
+            0,
+            movementTask.getScheduledDate()));
     movementEntry = entries.findById(movementEntry.getId()).orElseThrow();
     BoardEntryDto started =
         board.take(
@@ -280,11 +320,11 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
         List.of(
             new EquipmentMovementOperation(
                 EquipmentMovementDirection.BRING_TO_CABIN,
-                "OFFICE_TABLE",
+                OFFICE_TABLE_ID,
                 "Стол офисный",
                 officeTableQuantity),
             new EquipmentMovementOperation(
-                EquipmentMovementDirection.TAKE_FROM_CABIN, "BENCH", "Лавка", 1L)));
+                EquipmentMovementDirection.TAKE_FROM_CABIN, BENCH_ID, "Лавка", 1L)));
   }
 
   private BoardEntryDto entry(UUID externalTaskId) {

@@ -14,5 +14,52 @@ public record UpdateUserRequest(
         @Email @Size(max = 255) String email,
         @Size(max = 64) String timeZoneId,
         @NotNull Boolean active,
-        @NotNull UserGlobalRole globalRole) {
+        @NotNull UserGlobalRole globalRole,
+        Boolean mobileAppAccess,
+        Boolean rentalAccess) {
+
+    public UpdateUserRequest(
+            Integer expectedVersion,
+            String username,
+            String firstName,
+            String lastName,
+            String email,
+            String timeZoneId,
+            Boolean active,
+            UserGlobalRole globalRole) {
+        this(
+                expectedVersion,
+                username,
+                firstName,
+                lastName,
+                email,
+                timeZoneId,
+                active,
+                globalRole,
+                null,
+                null);
+    }
+
+    public UpdateUserRequest(
+            Integer expectedVersion,
+            String username,
+            String firstName,
+            String lastName,
+            String email,
+            String timeZoneId,
+            Boolean active,
+            UserGlobalRole globalRole,
+            Boolean mobileAppAccess) {
+        this(
+                expectedVersion,
+                username,
+                firstName,
+                lastName,
+                email,
+                timeZoneId,
+                active,
+                globalRole,
+                mobileAppAccess,
+                null);
+    }
 }

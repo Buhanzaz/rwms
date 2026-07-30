@@ -1,8 +1,7 @@
-import { useMemo, useState, type FormEvent } from "react"
+import { useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -11,21 +10,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Field,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field"
+import { Field, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import {
   INVENTORY_QUERY_KEY,
   addInventoryRentalItem,
@@ -39,39 +25,12 @@ import type {
   InventorySessionDto,
 } from "@/features/inventory/model/inventory"
 import {
-  DEFAULT_RENTAL_ITEM_CHARACTERISTICS,
-  INVENTORY_RENTAL_ITEM_CATEGORIES,
-  RENTAL_ITEM_FINISHING_OPTIONS,
-  RENTAL_ITEM_TYPE_OPTIONS,
-  getDefaultRentalItemDimensions,
-  getDefaultRentalItemFinishing,
-  getRentalItemDimensionsForType,
-  type RentalItemCreationType,
-  type RentalItemFinishing,
-} from "@/features/rental-items/model/rental-item-create"
+  RentalItemCreationDialog,
+  type RentalItemCreationCommand,
+} from "@/features/rental-items/rental-item-create-dialog"
 import { ApiError } from "@/lib/api-client"
 
 type CreateCondition = "NEW" | "USED"
-
-type CreateForm = {
-  condition: CreateCondition
-  category: (typeof INVENTORY_RENTAL_ITEM_CATEGORIES)[number]
-  type: RentalItemCreationType | ""
-  dimensions: string
-  finishing: RentalItemFinishing | ""
-  linoleum: boolean
-}
-
-function emptyCreateForm(condition: CreateCondition): CreateForm {
-  return {
-    condition,
-    category: condition === "NEW" ? "Новая" : "Обычная",
-    type: "",
-    dimensions: "",
-    finishing: "",
-    linoleum: false,
-  }
-}
 
 function commandError(error: unknown) {
   if (error instanceof ApiError && error.status === 409) {
@@ -100,20 +59,18 @@ export function InventoryAddDialog({
   const [number, setNumber] = useState("")
   const [notFoundNumber, setNotFoundNumber] = useState<string | null>(null)
   const [findingId, setFindingId] = useState<string | null>(null)
-  const [form, setForm] = useState<CreateForm | null>(null)
-  const [submitted, setSubmitted] = useState(false)
+  const [notFoundSession, setNotFoundSession] =
+    useState<InventorySessionDto | null>(null)
+  const [createCondition, setCreateCondition] =
+    useState<CreateCondition | null>(null)
   const [message, setMessage] = useState<string | null>(null)
-  const dimensions = useMemo(
-    () => getRentalItemDimensionsForType(form?.type ?? ""),
-    [form?.type]
-  )
 
   function reset() {
     setNumber("")
     setNotFoundNumber(null)
     setFindingId(null)
-    setForm(null)
-    setSubmitted(false)
+    setNotFoundSession(null)
+    setCreateCondition(null)
     setMessage(null)
   }
 
@@ -140,8 +97,13 @@ export function InventoryAddDialog({
         return
       }
       if (resolution.kind === "NOT_FOUND") {
+        queryClient.setQueryData(
+          inventoryDetailQueryKey(resolution.session.id),
+          resolution.session
+        )
         setNotFoundNumber(resolution.canonicalNumber)
         setFindingId(createInventoryFindingId())
+        setNotFoundSession(resolution.session)
         setMessage(null)
         return
       }
@@ -158,54 +120,99 @@ export function InventoryAddDialog({
     },
   })
 
-  const createMutation = useMutation({
-    mutationFn: () => {
-      if (
-        !form ||
-        !notFoundNumber ||
-        !findingId ||
-        !form.type ||
-        !form.finishing
-      ) {
-        throw new Error("Заполните паспортные данные")
-      }
-      return addInventoryRentalItem({
-        inventoryId: session.id,
-        expectedVersion: session.version,
-        actor,
-        findingId,
-        condition: form.condition,
-        rentalItem: {
-          number: notFoundNumber,
-          type: form.type,
-          dimensions: form.dimensions,
-          finishing: form.finishing,
-          category: form.condition === "NEW" ? "Новая" : form.category,
-          characteristics: [...DEFAULT_RENTAL_ITEM_CHARACTERISTICS],
-          linoleum: form.linoleum,
-        },
-      })
-    },
-    onSuccess: (result) => {
-      void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
-      reset()
-      onOpenChange(false)
-      onResolved(result.session, result.finding)
-    },
-  })
+  async function createAndAttachRentalItem(command: RentalItemCreationCommand) {
+    if (!notFoundNumber || !findingId || !createCondition || !notFoundSession) {
+      throw new Error("Сначала найдите номер бытовки и выберите её состояние.")
+    }
 
-  function submitCreate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setSubmitted(true)
-    if (!form?.type || !form.dimensions || !form.finishing) return
-    createMutation.mutate()
+    const result = await addInventoryRentalItem({
+      inventoryId: notFoundSession.id,
+      expectedVersion: notFoundSession.version,
+      actor,
+      findingId,
+      condition: createCondition,
+      rentalItem: {
+        number: notFoundNumber,
+        rentalTypeId: command.rentalTypeId,
+        dimensionId: command.dimensionId,
+        finishingId: command.finishingId,
+        category: command.category,
+        characteristicIds: command.characteristicIds,
+        linoleum: command.linoleum,
+      },
+    })
+    const snapshot = result.rentalItem ?? result.finding.currentSnapshot
+    if (!snapshot || !snapshot.warehouseId) {
+      throw new Error(
+        "Бытовка добавлена в инвентаризацию, но сервис не вернул её идентификатор."
+      )
+    }
+    const assetId =
+      "assetId" in snapshot ? snapshot.assetId : snapshot.rentalItemId
+    const assetNumber =
+      "displayCanonicalNumber" in snapshot
+        ? snapshot.displayCanonicalNumber
+        : snapshot.number
+    if (!assetId) {
+      throw new Error(
+        "Бытовка добавлена в инвентаризацию, но сервис не вернул её идентификатор."
+      )
+    }
+
+    return {
+      createdItem: {
+        id: assetId,
+        warehouseId: snapshot.warehouseId,
+        number: assetNumber,
+      },
+      value: result,
+    }
   }
 
-  const pending = resolveMutation.isPending || createMutation.isPending
-  const error =
-    commandError(resolveMutation.error) ||
-    commandError(createMutation.error) ||
-    message
+  function completeInventoryAddition(result: {
+    session: InventorySessionDto
+    finding: InventoryFindingDto
+  }) {
+    queryClient.setQueryData(
+      inventoryDetailQueryKey(result.session.id),
+      result.session
+    )
+    void queryClient.invalidateQueries({ queryKey: INVENTORY_QUERY_KEY })
+    onResolved(result.session, result.finding)
+  }
+
+  const pending = resolveMutation.isPending
+  const error = commandError(resolveMutation.error) || message
+
+  if (createCondition && notFoundNumber && findingId && notFoundSession) {
+    const isNew = createCondition === "NEW"
+    return (
+      <RentalItemCreationDialog
+        open={open}
+        warehouseId={notFoundSession.warehouseId}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) {
+            reset()
+            onOpenChange(false)
+          }
+        }}
+        title={isNew ? "Создание новой бытовки" : "Создание б/у бытовки"}
+        description={
+          isNew
+            ? "Бытовка будет добавлена как новая и сразу прикреплена к этой инвентаризации."
+            : "Бытовка будет добавлена как б/у и сразу прикреплена к этой инвентаризации."
+        }
+        initialNumber={notFoundNumber}
+        numberReadOnly
+        categoryMode={isNew ? "NEW" : "USED"}
+        photosEnabled={false}
+        submitLabel="Создать и осмотреть"
+        createRentalItem={createAndAttachRentalItem}
+        errorMessage={commandError}
+        onCompleted={completeInventoryAddition}
+      />
+    )
+  }
 
   return (
     <Dialog
@@ -223,197 +230,7 @@ export function InventoryAddDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {form ? (
-          <form className="flex flex-col gap-4" onSubmit={submitCreate}>
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="inventory-new-number">Номер</FieldLabel>
-                <Input
-                  id="inventory-new-number"
-                  value={notFoundNumber ?? ""}
-                  readOnly
-                />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor="inventory-new-category">
-                  Категория
-                </FieldLabel>
-                <Select
-                  value={form.condition === "NEW" ? "Новая" : form.category}
-                  disabled={form.condition === "NEW"}
-                  onValueChange={(value) =>
-                    setForm((current) =>
-                      current
-                        ? {
-                            ...current,
-                            category: value as CreateForm["category"],
-                          }
-                        : current
-                    )
-                  }
-                >
-                  <SelectTrigger id="inventory-new-category" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {INVENTORY_RENTAL_ITEM_CATEGORIES.map((category) => (
-                        <SelectItem key={category} value={category}>
-                          {category}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field data-invalid={submitted && !form.type}>
-                <FieldLabel htmlFor="inventory-new-type">Тип</FieldLabel>
-                <Select
-                  value={form.type}
-                  onValueChange={(value) => {
-                    const type = value as RentalItemCreationType
-                    setForm((current) =>
-                      current
-                        ? {
-                            ...current,
-                            type,
-                            dimensions: getDefaultRentalItemDimensions(type),
-                            finishing: getDefaultRentalItemFinishing(
-                              type,
-                              current.finishing
-                            ),
-                          }
-                        : current
-                    )
-                  }}
-                >
-                  <SelectTrigger
-                    id="inventory-new-type"
-                    className="w-full"
-                    aria-invalid={submitted && !form.type}
-                  >
-                    <SelectValue placeholder="Выберите тип" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {RENTAL_ITEM_TYPE_OPTIONS.map((type) => (
-                        <SelectItem key={type} value={type}>
-                          {type}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-                {submitted && !form.type ? (
-                  <FieldError>Выберите тип.</FieldError>
-                ) : null}
-              </Field>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field data-invalid={submitted && !form.dimensions}>
-                  <FieldLabel htmlFor="inventory-new-dimensions">
-                    Габариты
-                  </FieldLabel>
-                  <Select
-                    disabled={!form.type}
-                    value={form.dimensions}
-                    onValueChange={(value) =>
-                      setForm((current) =>
-                        current ? { ...current, dimensions: value } : current
-                      )
-                    }
-                  >
-                    <SelectTrigger
-                      id="inventory-new-dimensions"
-                      className="w-full"
-                    >
-                      <SelectValue placeholder="Выберите" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {dimensions.map((item) => (
-                          <SelectItem key={item} value={item}>
-                            {item}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field data-invalid={submitted && !form.finishing}>
-                  <FieldLabel htmlFor="inventory-new-finishing">
-                    Отделка
-                  </FieldLabel>
-                  <Select
-                    value={form.finishing}
-                    onValueChange={(value) =>
-                      setForm((current) =>
-                        current
-                          ? {
-                              ...current,
-                              finishing: value as RentalItemFinishing,
-                            }
-                          : current
-                      )
-                    }
-                  >
-                    <SelectTrigger
-                      id="inventory-new-finishing"
-                      className="w-full"
-                    >
-                      <SelectValue placeholder="Выберите" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {RENTAL_ITEM_FINISHING_OPTIONS.map((item) => (
-                          <SelectItem key={item} value={item}>
-                            {item}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
-              </div>
-              <Field orientation="horizontal">
-                <Checkbox
-                  id="inventory-new-linoleum"
-                  checked={form.linoleum}
-                  onCheckedChange={(checked) =>
-                    setForm((current) =>
-                      current
-                        ? { ...current, linoleum: checked === true }
-                        : current
-                    )
-                  }
-                />
-                <FieldLabel
-                  htmlFor="inventory-new-linoleum"
-                  className="font-normal"
-                >
-                  Линолеум
-                </FieldLabel>
-              </Field>
-            </FieldGroup>
-            {error ? (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            ) : null}
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={pending}
-                onClick={() => setForm(null)}
-              >
-                Назад
-              </Button>
-              <Button type="submit" disabled={pending}>
-                {pending ? "Создаём..." : "Создать и осмотреть"}
-              </Button>
-            </DialogFooter>
-          </form>
-        ) : notFoundNumber ? (
+        {notFoundNumber ? (
           <div className="flex flex-col gap-4">
             <p>
               Номер <strong>{notFoundNumber}</strong> не найден. Какую бытовку
@@ -423,14 +240,11 @@ export function InventoryAddDialog({
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setForm(emptyCreateForm("USED"))}
+                onClick={() => setCreateCondition("USED")}
               >
                 Добавить б/у
               </Button>
-              <Button
-                type="button"
-                onClick={() => setForm(emptyCreateForm("NEW"))}
-              >
+              <Button type="button" onClick={() => setCreateCondition("NEW")}>
                 Добавить новую
               </Button>
             </DialogFooter>
@@ -447,22 +261,22 @@ export function InventoryAddDialog({
                 value={number}
                 onChange={(event) => setNumber(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && number.trim())
+                  if (event.key === "Enter" && number.trim()) {
                     resolveMutation.mutate()
+                  }
                 }}
               />
             </Field>
-            {error ? (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            ) : null}
+            {error ? <FieldError role="alert">{error}</FieldError> : null}
             <DialogFooter>
               <Button
                 type="button"
                 variant="outline"
                 disabled={pending}
-                onClick={() => onOpenChange(false)}
+                onClick={() => {
+                  reset()
+                  onOpenChange(false)
+                }}
               >
                 Отмена
               </Button>

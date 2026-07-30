@@ -29,6 +29,7 @@ public final class OrderAssetApiModels {
       @NotNull UUID rentalItemId,
       @NotNull UUID clientId,
       @NotBlank @Size(max = 512) String tenantSnapshot,
+      OffsetDateTime draftReservationExpiresAt,
       @NotNull UUID actorSubjectId,
       @NotBlank
           @Size(max = 32)
@@ -53,7 +54,6 @@ public final class OrderAssetApiModels {
 
   public record OrderEquipmentReservationView(
       UUID equipmentId,
-      String equipmentCode,
       String equipmentName,
       long quantity,
       long availableQuantity) {}
@@ -68,7 +68,6 @@ public final class OrderAssetApiModels {
 
   public record OrderFurnitureMovementPlanLine(
       UUID equipmentId,
-      String equipmentCode,
       String equipmentName,
       UUID sourceBalanceId,
       UUID sourceWarehouseId,
@@ -88,7 +87,6 @@ public final class OrderAssetApiModels {
 
   public record OrderEquipmentContent(
       UUID equipmentId,
-      String equipmentCode,
       String equipmentName,
       long quantity,
       BalanceLocationKind locationKind) {}

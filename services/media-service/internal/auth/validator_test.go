@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -41,6 +42,52 @@ func TestValidatorAcceptsValidRS256UserToken(t *testing.T) {
 	}
 	if got := fixture.requests.Load(); got != 1 {
 		t.Fatalf("JWKS requests = %d, want 1", got)
+	}
+}
+
+func TestValidatorAcceptsNarrowWorkerTaskToken(t *testing.T) {
+	fixture := newJWTFixture(t)
+	warehouseID := uuid.New()
+	workerID := uuid.New()
+	claims := fixture.validWorkerClaims(warehouseID, workerID)
+
+	principal, err := fixture.validator.ValidateWorker(context.Background(), "Bearer "+fixture.sign(t, testKeyID, claims, jwt.SigningMethodRS256))
+	if err != nil {
+		t.Fatalf("ValidateWorker() error = %v", err)
+	}
+	if principal.WorkerID != workerID || principal.WarehouseID != warehouseID {
+		t.Fatalf("worker principal = %#v", principal)
+	}
+	if err := principal.RequireTaskAccess(warehouseID); err != nil {
+		t.Fatalf("RequireTaskAccess() error = %v", err)
+	}
+	if err := principal.RequireTaskAccess(uuid.New()); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("cross-warehouse RequireTaskAccess() error = %v, want forbidden", err)
+	}
+}
+
+func TestValidatorRejectsWorkerTokenWithoutExactWorkerClaims(t *testing.T) {
+	fixture := newJWTFixture(t)
+	warehouseID := uuid.New()
+	workerID := uuid.New()
+	tests := []struct {
+		name   string
+		mutate func(jwt.MapClaims)
+	}{
+		{name: "missing worker scope", mutate: func(claims jwt.MapClaims) { claims["scope"] = "openid profile" }},
+		{name: "user principal", mutate: func(claims jwt.MapClaims) { claims["principal_type"] = "USER" }},
+		{name: "noncanonical worker id", mutate: func(claims jwt.MapClaims) { claims["worker_id"] = strings.ToUpper(workerID.String()) }},
+		{name: "missing warehouse", mutate: func(claims jwt.MapClaims) { delete(claims, "warehouse_id") }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			claims := fixture.validWorkerClaims(warehouseID, workerID)
+			test.mutate(claims)
+			_, err := fixture.validator.ValidateWorker(context.Background(), "Bearer "+fixture.sign(t, testKeyID, claims, jwt.SigningMethodRS256))
+			if !errors.Is(err, ErrForbidden) {
+				t.Fatalf("ValidateWorker() error = %v, want forbidden", err)
+			}
+		})
 	}
 }
 
@@ -416,6 +463,16 @@ func (fixture *jwtFixture) validServiceClaims(scope string) jwt.MapClaims {
 		"exp":            now.Add(5 * time.Minute).Unix(),
 		"principal_type": "SERVICE",
 		"scope":          scope,
+	}
+}
+
+func (fixture *jwtFixture) validWorkerClaims(warehouseID, workerID uuid.UUID) jwt.MapClaims {
+	now := time.Now()
+	return jwt.MapClaims{
+		"iss": fixture.issuer, "aud": fixture.audience, "sub": uuid.NewString(),
+		"iat": now.Add(-time.Minute).Unix(), "nbf": now.Add(-time.Minute).Unix(), "exp": now.Add(5 * time.Minute).Unix(),
+		"principal_type": "WORKER", "worker_id": workerID.String(), "warehouse_id": warehouseID.String(),
+		"scope": "openid profile worker.tasks",
 	}
 }
 

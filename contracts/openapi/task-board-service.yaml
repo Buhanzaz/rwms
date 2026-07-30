@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Task Board Service API
-  version: 1.0.0
+  version: 1.3.0
   description: >-
     Canonical F2 inventory of the active task-board, workforce and queue
     registry HTTP API. All warehouse-scoped operations validate the warehouse
@@ -15,6 +15,56 @@ servers:
 security:
   - bearerJwt: []
 paths:
+  /queue-definitions:
+    get:
+      operationId: listQueueDefinitions
+      description: >-
+        Returns the single system-wide queue catalog. Definitions are not
+        warehouse-owned and are never copied when a warehouse is created.
+      responses:
+        '200': { $ref: '#/components/responses/QueueDefinitionListOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: createQueueDefinition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QueueDefinitionRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/QueueDefinitionCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /queue-definitions/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    put:
+      operationId: updateQueueDefinition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QueueDefinitionRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/QueueDefinitionOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      operationId: deleteQueueDefinition
+      parameters:
+        - $ref: '#/components/parameters/ExpectedVersion'
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /warehouses/{warehouseId}/work-queues:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -75,29 +125,25 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /warehouses/{warehouseId}/reviewed-bootstrap:
+  /warehouses/{warehouseId}/queue-capabilities:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
-      - $ref: '#/components/parameters/IdempotencyKey'
-    post:
-      operationId: bootstrapReviewedTaskBoard
+    get:
+      operationId: getWarehouseQueueCapabilities
       description: >-
-        Requires USER, rwms.write and MANAGE. Imports the packaged, hash-validated
-        old-panel queue and workforce registries for the canonical Saint Petersburg
-        or Moscow warehouse. Exact rows are reused; conflicting identities or values
-        fail atomically with 409. The stable idempotency identity is warehouseId plus
-        the packaged sourceSha256, so exact-state replay is independent of the optional
-        Idempotency-Key and does not use a key journal. Credentials, tasks, schedules
-        and notifications are never created.
+        Reports process capabilities from active, visible warehouse bindings.
+        movementToShipmentAvailable is true only when this warehouse has an
+        active visible binding to a MOVEMENT queue definition.
       responses:
-        '200': { $ref: '#/components/responses/ReviewedBootstrapOk' }
+        '200': { $ref: '#/components/responses/WarehouseQueueCapabilitiesOk' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-  /internal/work-queues/{queueId}/references:
+  /internal/queue-definitions/{queueDefinitionId}/references:
     parameters:
-      - $ref: '#/components/parameters/QueueId'
+      - name: queueDefinitionId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
     post:
       operationId: registerQueueReference
       description: Requires SERVICE, queue-registry.write and an allow-listed client_id.
@@ -113,7 +159,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /internal/work-queues/references/{type}/{externalReferenceId}:
+  /internal/queue-definitions/references/{type}/{externalReferenceId}:
     parameters:
       - $ref: '#/components/parameters/QueueReferenceType'
       - $ref: '#/components/parameters/ExternalReferenceId'
@@ -134,11 +180,11 @@ paths:
       description: >-
         Read-only private bulk check for maintenance-service. Requires a SERVICE
         token whose sub and client_id are both maintenance-service and whose scope
-        list is exactly task-board.task-sync. Each requested queue must exist under
-        the requested warehouse with the exact id, code and type and must be active
-        and non-hidden. Missing ids and mismatched fields are returned explicitly;
-        ready is false whenever either list is non-empty. The operation never
-        creates, updates or reserves a queue.
+        list is exactly task-board.task-sync. Every queueDefinitionId is resolved
+        to this warehouse's binding; no name or legacy identifier lookup is
+        performed. The binding must be active and visible. Missing global
+        definitions, missing warehouse bindings and mismatches are returned
+        separately. The operation never creates, updates or reserves a queue.
       requestBody:
         required: true
         content:
@@ -149,6 +195,48 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /internal/task-board/v1/maintenance/catalog-routing-preflight:
+    post:
+      operationId: preflightMaintenanceCatalogRouting
+      description: >-
+        Validates category-to-queue links against global queue definitions
+        without requiring any warehouse binding. This is the catalog boundary;
+        warehouse routing is validated separately by routing-preflight.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CatalogRoutingPreflightRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/CatalogRoutingPreflightOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /internal/task-board/v1/warehouses/{warehouseId}/queue-capabilities:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: getInternalWarehouseQueueCapabilities
+      description: Private maintenance-service view of stable warehouse process capabilities.
+      responses:
+        '200': { $ref: '#/components/responses/WarehouseQueueCapabilitiesOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /internal/task-board/v1/warehouses/{warehouseId}/repair-complexity:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: getInternalRepairComplexityThresholds
+      description: >-
+        Returns the selected warehouse's three strictly increasing thresholds.
+        Classification uses upper-bound inclusion: total minutes less than or
+        equal to light are light; then less than or equal to medium; then less
+        than or equal to complex; larger totals are capital repairs.
+      responses:
+        '200': { $ref: '#/components/responses/RepairComplexityThresholdsOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /worker-classes:
     get:
       operationId: listWorkerClasses
@@ -200,10 +288,117 @@ paths:
           in: query
           required: false
           schema: { type: boolean, default: false }
+        - name: date
+          in: query
+          required: false
+          description: Requested operational queue date. Defaults to today when available, otherwise the nearest available date.
+          schema: { type: string, format: date }
       responses:
         '200': { $ref: '#/components/responses/TaskBoardSnapshotOk' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /warehouses/{warehouseId}/task-board/kpi-settings:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: getWarehouseKpiSettings
+      description: Returns KPI settings only for the selected warehouse.
+      responses:
+        '200': { $ref: '#/components/responses/KpiSettingsOk' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /warehouses/{warehouseId}/task-board/kpi-settings/palette:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    put:
+      operationId: replaceWarehouseKpiPalette
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SaveKpiPaletteRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/KpiSettingsOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board/kpi-settings/work-schedule:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    put:
+      operationId: replacePendingWarehouseKpiWorkSchedule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SaveKpiWorkScheduleRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/KpiSettingsOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board/kpi-settings/repair-complexity:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    put:
+      operationId: replaceWarehouseRepairComplexityThresholds
+      description: >-
+        Replaces the selected warehouse's three strictly increasing boundaries.
+        Defaults are 60, 180 and 360 minutes. Classification uses upper-bound
+        inclusion consistently: <= light, <= medium, <= complex, then capital.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SaveRepairComplexityThresholdsRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/KpiSettingsOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board/kpi-settings/work-schedule/pending:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    delete:
+      operationId: deletePendingWarehouseKpiWorkSchedule
+      parameters:
+        - $ref: '#/components/parameters/ExpectedVersion'
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board/kpi-settings/activate:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    post:
+      operationId: activateWarehouseKpiSettings
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ActivateKpiSettingsRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/KpiSettingsOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /warehouses/{warehouseId}/task-board/queues/{queueId}/eligible-groups:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -291,7 +486,10 @@ paths:
         maintenance-service client_id and whose granted scope is exactly
         task-board.task-sync. externalTaskId is mandatory. Identical replay by
         the same authenticated source returns the existing registration;
-        changed immutable input or another source returns 409.
+        changed immutable input or another source returns 409. When
+        dailyCapacity is supplied, task-board selects the first date on or
+        after the requested/default scheduledDate with available maintenance
+        capacity and returns that selected scheduledDate.
       requestBody:
         required: true
         content:
@@ -307,98 +505,6 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
-  /internal/task-board/v1/logistics/preparation-tasks:
-    post:
-      operationId: registerLogisticsPreparationTask
-      description: >-
-        Private only. Requires exactly the logistics-service SERVICE principal
-        with one task-board.logistics scope. externalTaskId is the stable
-        registration identity: the identical request replays the immutable
-        snapshot and changed input conflicts. Logistics cannot select a queue,
-        worker, route or free-form task text; task-board creates the work in
-        its own UNASSIGNED column.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/RegisterLogisticsPreparationTaskRequest' }
-      responses:
-        '201':
-          description: Source-owned task registration or identical replay.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/LogisticsTaskSnapshot' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { $ref: '#/components/responses/Conflict' }
-  /internal/task-board/v1/logistics/preparation-tasks/{externalTaskId}:
-    parameters:
-      - $ref: '#/components/parameters/ExternalTaskId'
-    get:
-      operationId: getLogisticsPreparationTask
-      description: Returns only the logistics-service-owned immutable task/status snapshot.
-      responses:
-        '200':
-          description: Current source-owned logistics preparation task.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/LogisticsTaskSnapshot' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-  /internal/task-board/v1/logistics/preparation-tasks/{externalTaskId}/complete:
-    parameters:
-      - $ref: '#/components/parameters/ExternalTaskId'
-    post:
-      operationId: completeLogisticsPreparationTask
-      description: >-
-        Completes only the matching unfinished logistics preparation task when
-        logistics confirms physical shipment. The task version provides CAS;
-        an identical retry returns the current DONE snapshot without a second
-        completion event.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/CompleteLogisticsPreparationTaskRequest' }
-      responses:
-        '200':
-          description: Current source-owned logistics task snapshot.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/LogisticsTaskSnapshot' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-  /internal/task-board/v1/logistics/preparation-tasks/{externalTaskId}/cancel:
-    parameters:
-      - $ref: '#/components/parameters/ExternalTaskId'
-    post:
-      operationId: cancelLogisticsPreparationTask
-      description: >-
-        Cancels only the matching unfinished logistics preparation task. The
-        cancellation reason is a task-board-owned safe code, not caller text.
-        An identical retry returns the current CANCELLED snapshot without a
-        second cancellation event.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/CancelLogisticsPreparationTaskRequest' }
-      responses:
-        '200':
-          description: Current source-owned logistics task snapshot.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/LogisticsTaskSnapshot' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
   /internal/task-board/v1/logistics/equipment-movement-tasks:
     post:
       operationId: registerLogisticsEquipmentMovementTask
@@ -407,8 +513,10 @@ paths:
         with one task-board.logistics scope. The immutable typed operations and
         mandatory deadlineAt form the registration identity. Logistics cannot
         set a queue, worker, route, title, description or free-form task text;
-        task-board generates the board task in its own UNASSIGNED column. Only
-        this task family rejects worker completion at or after deadlineAt.
+        task-board routes the task into the warehouse's single active visible
+        FURNITURE_MOVEMENT queue and rejects creation when that routing is absent
+        or ambiguous. Only this task family rejects worker completion at or after
+        deadlineAt.
       requestBody:
         required: true
         content:
@@ -530,6 +638,34 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /internal/task-board/v1/tasks/{externalTaskId}/relocate:
+    parameters:
+      - $ref: '#/components/parameters/ExternalTaskId'
+    post:
+      operationId: relocateExternalBoardTask
+      description: >-
+        Atomically moves a maintenance-owned task and its complete route to the
+        target warehouse by resolving every existing queueDefinitionId to an
+        active visible target binding. Entry identities, statuses, assignments,
+        content and history are preserved. If any binding is absent or
+        unavailable, no task or entry is changed. An identical retry is served
+        from the durable relocation receipt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RelocateExternalTaskRequest' }
+      responses:
+        '200':
+          description: Relocated source-owned task registration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BoardTaskRegistration' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /warehouses/{warehouseId}/task-board/entries/{entryId}/take:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -614,6 +750,254 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board/dates/swap:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    post:
+      operationId: swapTaskBoardDates
+      description: >-
+        Requires USER, rwms.write and EDIT. Exchanges the scheduled dates of the
+        two complete visual date columns while preserving every queue and queue
+        position. The request must include every REAL and SHADOW entry returned by
+        the two current includeShadow=true snapshots, together with its entry and
+        owning task versions; a missing, duplicate or stale expectation returns 409.
+        The date is owned by BoardTask, so every route step of an affected task
+        receives its new date without a queue move. Tasks with an in-progress or
+        paused route step cannot be exchanged. The response is the refreshed firstDate
+        snapshot, which now contains the cards that were previously on secondDate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SwapTaskBoardDatesRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/TaskBoardSnapshotOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/task-board/tasks/{taskId}/pin:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - name: taskId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: setTaskPinned
+      description: Pins or unpins the task in every route queue without changing its current position.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PinTaskRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/TaskBoardSnapshotOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /worker/v1/context:
+    get:
+      operationId: getWorkerContext
+      description: >-
+        Returns the authenticated worker profile, current memberships,
+        qualifications, visible categories, server-time anchor and a
+        server-issued 24-hour offline lease. The worker and warehouse are
+        derived exclusively from the worker JWT.
+      responses:
+        '200':
+          description: Current authenticated worker context.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerContext' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /worker/v1/feed:
+    get:
+      operationId: getWorkerFeed
+      description: >-
+        Returns only entries matched by at least one current audience selector,
+        including group assignments visible to the authenticated worker.
+        Cursors are opaque. If-None-Match applies to the requested page.
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            oneOf:
+              - { type: string, minLength: 1, maxLength: 512 }
+              - { type: 'null' }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 50 }
+        - name: If-None-Match
+          in: header
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 256 }
+      responses:
+        '200':
+          description: Current page of the authenticated worker feed.
+          headers:
+            ETag:
+              required: true
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerFeed' }
+        '304':
+          description: The requested feed page has not changed.
+          headers:
+            ETag:
+              required: true
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /worker/v1/entries/{entryId}:
+    parameters:
+      - $ref: '#/components/parameters/EntryId'
+    get:
+      operationId: getWorkerTaskDetail
+      description: >-
+        Returns a sanitized worker-visible task snapshot. An entry without a
+        matching current audience selector is indistinguishable from a missing
+        entry and is never disclosed.
+      responses:
+        '200':
+          description: Current worker-visible entry detail.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerTaskDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /worker/v1/events:
+    get:
+      operationId: streamWorkerEvents
+      description: >-
+        Streams authorization-filtered invalidations only. Event payloads
+        contain identifiers and revisions, never the task snapshot. Clients
+        reconnect with Last-Event-ID and fetch the affected resource.
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        '200':
+          description: Server-sent worker invalidation event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              x-rwms-event-data-schema:
+                $ref: '#/components/schemas/WorkerInvalidationEvent'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /worker/v1/entries/{entryId}/actions:
+    parameters:
+      - $ref: '#/components/parameters/EntryId'
+    post:
+      operationId: applyWorkerAction
+      description: >-
+        Applies or replays a worker transition. Idempotency-Key must equal the
+        request operationId. The worker identity is derived from the JWT;
+        occurredAt is accepted only when it falls inside the referenced lease.
+      parameters:
+        - $ref: '#/components/parameters/WorkerIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkerActionRequest' }
+      responses:
+        '200':
+          description: Applied command or byte-equivalent idempotent replay.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerActionAppliedResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Stale, expired-lease, changed-replay or invalid-state conflict.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/WorkerActionConflictProblem' }
+  /worker/v1/entries/{entryId}/evidence-reservations:
+    parameters:
+      - $ref: '#/components/parameters/EntryId'
+    post:
+      operationId: reserveWorkerTaskEvidence
+      description: >-
+        Reserves a stable evidenceId before media upload. Idempotency-Key must
+        equal operationId. Worker and group metadata are derived and validated
+        by task-board; client-supplied actor metadata is not accepted.
+      parameters:
+        - $ref: '#/components/parameters/WorkerIdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EvidenceReservationRequest' }
+      responses:
+        '200':
+          description: Existing reservation returned for an identical replay.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskEvidence' }
+        '201':
+          description: Evidence reservation created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskEvidence' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /worker/v1/devices/{installationId}:
+    parameters:
+      - name: installationId
+        in: path
+        required: true
+        schema: { type: string, minLength: 1, maxLength: 128 }
+    put:
+      operationId: registerWorkerDevice
+      description: >-
+        Creates or replaces the authenticated worker binding for this
+        installation. A registration is never transferable between workers.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkerDeviceRegistrationRequest' }
+      responses:
+        '200':
+          description: Current device registration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerDeviceRegistration' }
+        '201':
+          description: Device registration created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerDeviceRegistration' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      operationId: unregisterWorkerDevice
+      description: Removes only the authenticated worker's installation binding.
+      responses:
+        '204': { $ref: '#/components/responses/NoContent' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /warehouses/{warehouseId}/workers:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -660,6 +1044,24 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '502': { $ref: '#/components/responses/BadGateway' }
+  /warehouses/{warehouseId}/workers/{id}/current-group:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/Id'
+    put:
+      operationId: setWorkerCurrentGroup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetCurrentGroupRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/WorkerOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /warehouses/{warehouseId}/workers/{id}/credentials/reset:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -695,6 +1097,22 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '502': { $ref: '#/components/responses/BadGateway' }
+  /warehouses/{warehouseId}/workers/{id}/credentials/enable:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: enableWorkerCredentials
+      requestBody:
+        $ref: '#/components/requestBodies/VersionCommand'
+      responses:
+        '200': { $ref: '#/components/responses/WorkerOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '502': { $ref: '#/components/responses/BadGateway' }
   /warehouses/{warehouseId}/workers/{id}/credentials/reconcile-disable:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -703,8 +1121,9 @@ paths:
       operationId: reconcileWorkerCredentialDisable
       description: >-
         Reconcile an expired or failed credential operation against auth-service state;
-        configure/reset may converge to ACTIVE, while disable/clear/legacy states are
-        forced to NOT_CONFIGURED.
+        Configure/reset and legacy recovery converge to the current auth-service
+        state. Disable preserves the application login, while explicit clear
+        converges to NOT_CONFIGURED.
       requestBody:
         $ref: '#/components/requestBodies/VersionCommand'
       responses:
@@ -775,6 +1194,42 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/worker-groups/{id}/disable:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: disableWorkerGroup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GroupAvailabilityRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/WorkerGroupOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /warehouses/{warehouseId}/worker-groups/{id}/enable:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+      - $ref: '#/components/parameters/Id'
+    post:
+      operationId: enableWorkerGroup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GroupAvailabilityRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/WorkerGroupOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 components:
   securitySchemes:
     bearerJwt:
@@ -831,6 +1286,14 @@ components:
         bound to warehouseId and the packaged sourceSha256 and therefore spans
         retries that use different keys.
       schema: { type: string, minLength: 1, maxLength: 128 }
+    WorkerIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        Stable UUID for the logical worker command. It must exactly equal the
+        operationId in the request body.
+      schema: { type: string, format: uuid }
   requestBodies:
     WorkQueue:
       required: true
@@ -858,13 +1321,152 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/VersionCommand' }
   schemas:
+    KpiPaletteRange:
+      type: object
+      required: [fromPercent, toPercent, color]
+      properties:
+        fromPercent: { type: integer, minimum: 0, maximum: 99 }
+        toPercent: { type: integer, minimum: 1, maximum: 100 }
+        color: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
+      additionalProperties: false
+    KpiPalette:
+      type: object
+      required: [version, ranges, overdueColor]
+      properties:
+        version: { type: integer, format: int64, minimum: 0 }
+        ranges:
+          type: array
+          minItems: 1
+          maxItems: 6
+          items: { $ref: '#/components/schemas/KpiPaletteRange' }
+        overdueColor: { type: string, pattern: '^#[0-9A-F]{6}$' }
+      additionalProperties: false
+    KpiWorkBreak:
+      type: object
+      required: [start, end]
+      properties:
+        start: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
+        end: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
+      additionalProperties: false
+    KpiWorkSchedule:
+      type: object
+      required: [id, version, effectiveFrom, shiftStart, shiftEnd, daysOff, breaks]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        effectiveFrom: { type: string, format: date }
+        shiftStart: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
+        shiftEnd: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
+        daysOff:
+          type: array
+          maxItems: 7
+          uniqueItems: true
+          items: { type: integer, minimum: 1, maximum: 7 }
+        breaks:
+          type: array
+          maxItems: 20
+          items: { $ref: '#/components/schemas/KpiWorkBreak' }
+      additionalProperties: false
+    WarehouseKpiSettings:
+      type: object
+      required: [warehouseId, timeZone, status, version, dataAvailableFrom, repairComplexity, palette, activeSchedule, pendingSchedule]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        timeZone: { type: string, minLength: 1, maxLength: 64 }
+        status: { type: string, enum: [UNCONFIGURED, DRAFT, SCHEDULED, ACTIVE] }
+        version: { type: integer, format: int64, minimum: 0 }
+        dataAvailableFrom:
+          oneOf:
+            - { type: string, format: date }
+            - { type: 'null' }
+        repairComplexity:
+          $ref: '#/components/schemas/RepairComplexityThresholds'
+        palette:
+          oneOf:
+            - { $ref: '#/components/schemas/KpiPalette' }
+            - { type: 'null' }
+        activeSchedule:
+          oneOf:
+            - { $ref: '#/components/schemas/KpiWorkSchedule' }
+            - { type: 'null' }
+        pendingSchedule:
+          oneOf:
+            - { $ref: '#/components/schemas/KpiWorkSchedule' }
+            - { type: 'null' }
+      additionalProperties: false
+    RepairComplexityThresholds:
+      type: object
+      required: [lightBoundaryMinutes, mediumBoundaryMinutes, complexBoundaryMinutes]
+      properties:
+        lightBoundaryMinutes: { type: integer, minimum: 1, default: 60 }
+        mediumBoundaryMinutes: { type: integer, minimum: 1, default: 180 }
+        complexBoundaryMinutes: { type: integer, minimum: 1, default: 360 }
+      description: >-
+        Strictly increasing upper bounds. A total equal to a boundary remains
+        in the lower complexity band.
+      additionalProperties: false
+    RepairComplexityThresholdsResponse:
+      type: object
+      required: [warehouseId, settingsVersion, lightBoundaryMinutes, mediumBoundaryMinutes, complexBoundaryMinutes]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        settingsVersion: { type: integer, format: int64, minimum: 0 }
+        lightBoundaryMinutes: { type: integer, minimum: 1 }
+        mediumBoundaryMinutes: { type: integer, minimum: 1 }
+        complexBoundaryMinutes: { type: integer, minimum: 1 }
+      additionalProperties: false
+    SaveKpiPaletteRequest:
+      type: object
+      required: [expectedVersion, ranges, overdueColor]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        ranges:
+          type: array
+          minItems: 1
+          maxItems: 6
+          items: { $ref: '#/components/schemas/KpiPaletteRange' }
+        overdueColor: { type: string, pattern: '^#[0-9A-Fa-f]{6}$' }
+      additionalProperties: false
+    SaveKpiWorkScheduleRequest:
+      type: object
+      required: [expectedVersion, effectiveFrom, shiftStart, shiftEnd, daysOff, breaks]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        effectiveFrom: { type: string, format: date }
+        shiftStart: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
+        shiftEnd: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
+        daysOff:
+          type: array
+          maxItems: 7
+          uniqueItems: true
+          items: { type: integer, minimum: 1, maximum: 7 }
+        breaks:
+          type: array
+          maxItems: 20
+          items: { $ref: '#/components/schemas/KpiWorkBreak' }
+      additionalProperties: false
+    SaveRepairComplexityThresholdsRequest:
+      type: object
+      required: [expectedVersion, lightBoundaryMinutes, mediumBoundaryMinutes, complexBoundaryMinutes]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        lightBoundaryMinutes: { type: integer, minimum: 1 }
+        mediumBoundaryMinutes: { type: integer, minimum: 1 }
+        complexBoundaryMinutes: { type: integer, minimum: 1 }
+      description: Values must satisfy lightBoundaryMinutes < mediumBoundaryMinutes < complexBoundaryMinutes.
+      additionalProperties: false
+    ActivateKpiSettingsRequest:
+      type: object
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+      additionalProperties: false
     WorkerClass:
       type: object
-      required: [id, version, code, name, description, comment, sortOrder, active]
+      required: [id, version, name, description, comment, sortOrder, active]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
-        code: { type: string }
         name: { type: string }
         description: { oneOf: [{ type: string }, { type: 'null' }] }
         comment: { oneOf: [{ type: string }, { type: 'null' }] }
@@ -874,26 +1476,61 @@ components:
     WorkerClassList:
       type: array
       items: { $ref: '#/components/schemas/WorkerClass' }
+    QueueDefinition:
+      type: object
+      required: [id, version, name, description, type]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        name: { type: string, minLength: 1, maxLength: 128 }
+        description: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
+        type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
+      additionalProperties: false
+    QueueDefinitionList:
+      type: array
+      items: { $ref: '#/components/schemas/QueueDefinition' }
+    QueueDefinitionRequest:
+      type: object
+      required: [version, name, type]
+      properties:
+        version: { type: integer, format: int64, minimum: 0 }
+        name: { type: string, minLength: 1, maxLength: 128 }
+        description: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
+        type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
+      additionalProperties: false
     QueueBinding:
       type: object
-      required: [id, version, workerClass, stopTaskOnTake]
+      required: [id, version, workerClass, order, primary, stopTaskOnTake, notifyUrgent]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
         workerClass: { $ref: '#/components/schemas/WorkerClass' }
+        order: { type: integer, minimum: 0 }
+        primary: { type: boolean }
         stopTaskOnTake: { type: boolean }
+        notifyUrgent: { type: boolean }
+      additionalProperties: false
+    AudienceSelector:
+      type: object
+      required: [kind, id, mode, interruptOnTake]
+      properties:
+        kind: { type: string, enum: [WORKER_CLASS, WORKER_GROUP] }
+        id: { type: string, format: uuid }
+        mode: { type: string, enum: [AVAILABLE, MANDATORY] }
+        interruptOnTake: { type: boolean }
       additionalProperties: false
     WorkQueue:
       type: object
-      required: [id, version, warehouseId, code, name, description, type, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, bindings]
+      required: [id, version, warehouseId, definitionId, definitionVersion, name, description, type, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, resultPhotoMinCount, bindings]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
         warehouseId: { type: string, format: uuid }
-        code: { type: string }
+        definitionId: { type: string, format: uuid }
+        definitionVersion: { type: integer, format: int64, minimum: 0 }
         name: { type: string }
         description: { oneOf: [{ type: string }, { type: 'null' }] }
-        type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING] }
+        type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
         sortOrder: { type: integer }
         active: { type: boolean }
         hidden: { type: boolean }
@@ -901,6 +1538,7 @@ components:
         holdingPeriodMinutes: { oneOf: [{ type: integer }, { type: 'null' }] }
         notificationThreshold: { oneOf: [{ type: integer }, { type: 'null' }] }
         notifyWhenThresholdReached: { type: boolean }
+        resultPhotoMinCount: { type: integer, minimum: 0, maximum: 20 }
         bindings:
           type: array
           items: { $ref: '#/components/schemas/QueueBinding' }
@@ -908,13 +1546,30 @@ components:
     WorkQueueList:
       type: array
       items: { $ref: '#/components/schemas/WorkQueue' }
+    MovementQueueCapability:
+      type: object
+      required: [queueDefinitionId, workQueueId]
+      properties:
+        queueDefinitionId: { type: string, format: uuid }
+        workQueueId: { type: string, format: uuid }
+      additionalProperties: false
+    WarehouseQueueCapabilities:
+      type: object
+      required: [warehouseId, movementToShipmentAvailable, movementQueueDefinitions]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        movementToShipmentAvailable: { type: boolean }
+        movementQueueDefinitions:
+          type: array
+          items: { $ref: '#/components/schemas/MovementQueueCapability' }
+      additionalProperties: false
     QueueReference:
       type: object
-      required: [id, version, queueId, type, externalReferenceId]
+      required: [id, version, queueDefinitionId, type, externalReferenceId]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
-        queueId: { type: string, format: uuid }
+        queueDefinitionId: { type: string, format: uuid }
         type: { type: string, enum: [REPAIR_PLAN, CATALOG_POSITION] }
         externalReferenceId: { type: string }
       additionalProperties: false
@@ -930,7 +1585,7 @@ components:
       additionalProperties: false
     Worker:
       type: object
-      required: [id, version, warehouseId, displayName, firstName, lastName, middleName, active, comment, appLogin, credentialStatus, credentialError, qualifications]
+      required: [id, version, warehouseId, displayName, firstName, lastName, middleName, active, comment, appLogin, credentialStatus, credentialError, currentGroupId, currentGroupName, operationalAvailability, qualifications]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
@@ -942,8 +1597,11 @@ components:
         active: { type: boolean }
         comment: { oneOf: [{ type: string }, { type: 'null' }] }
         appLogin: { oneOf: [{ type: string }, { type: 'null' }] }
-        credentialStatus: { type: string, enum: [NOT_CONFIGURED, PENDING, ACTIVE, ERROR] }
+        credentialStatus: { type: string, enum: [NOT_CONFIGURED, PENDING, ACTIVE, DISABLED, ERROR] }
         credentialError: { oneOf: [{ type: string }, { type: 'null' }] }
+        currentGroupId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        currentGroupName: { oneOf: [{ type: string }, { type: 'null' }] }
+        operationalAvailability: { type: string, enum: [AVAILABLE, DISABLED] }
         qualifications:
           type: array
           items: { $ref: '#/components/schemas/Qualification' }
@@ -953,18 +1611,17 @@ components:
       items: { $ref: '#/components/schemas/Worker' }
     GroupMember:
       type: object
-      required: [id, version, workerId, workerName, roleInGroup, active]
+      required: [id, version, workerId, workerName, active]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
         workerId: { type: string, format: uuid }
         workerName: { type: string }
-        roleInGroup: { oneOf: [{ type: string }, { type: 'null' }] }
         active: { type: boolean }
       additionalProperties: false
     WorkerGroup:
       type: object
-      required: [id, version, warehouseId, workerClass, name, description, active, members]
+      required: [id, version, warehouseId, workerClass, name, description, active, operationalStatus, unavailableSince, unavailabilityReason, members]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
@@ -973,6 +1630,9 @@ components:
         name: { type: string }
         description: { oneOf: [{ type: string }, { type: 'null' }] }
         active: { type: boolean }
+        operationalStatus: { type: string, enum: [AVAILABLE, DISABLED] }
+        unavailableSince: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        unavailabilityReason: { oneOf: [{ type: string }, { type: 'null' }] }
         members:
           type: array
           items: { $ref: '#/components/schemas/GroupMember' }
@@ -980,36 +1640,58 @@ components:
     WorkerGroupList:
       type: array
       items: { $ref: '#/components/schemas/WorkerGroup' }
-    ReviewedBootstrapCounts:
-      type: object
-      required: [workerClasses, workQueues, queueBindings, workers, qualifications, workerGroups, memberships]
-      properties:
-        workerClasses: { type: integer, minimum: 0 }
-        workQueues: { type: integer, minimum: 0 }
-        queueBindings: { type: integer, minimum: 0 }
-        workers: { type: integer, minimum: 0 }
-        qualifications: { type: integer, minimum: 0 }
-        workerGroups: { type: integer, minimum: 0 }
-        memberships: { type: integer, minimum: 0 }
-      additionalProperties: false
-    ReviewedBootstrapResponse:
-      type: object
-      required: [warehouseId, sourceSha256, created, reused, conflicts, counts]
-      properties:
-        warehouseId: { type: string, format: uuid }
-        sourceSha256: { type: string, pattern: '^[0-9a-f]{64}$' }
-        created: { type: integer, minimum: 0 }
-        reused: { type: integer, minimum: 0 }
-        conflicts: { type: integer, minimum: 0 }
-        counts: { $ref: '#/components/schemas/ReviewedBootstrapCounts' }
-      additionalProperties: false
     MaintenanceRoutingQueueRequirement:
       type: object
-      required: [queueId, code, type]
+      required: [queueDefinitionId, type]
       properties:
-        queueId: { type: string, format: uuid }
-        code: { type: string, minLength: 1, maxLength: 64 }
-        type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING] }
+        queueDefinitionId: { type: string, format: uuid }
+        type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
+      additionalProperties: false
+    CatalogRoutingPreflightRequest:
+      type: object
+      required: [queues]
+      properties:
+        queues:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/MaintenanceRoutingQueueRequirement' }
+      additionalProperties: false
+    CatalogRoutingMismatch:
+      type: object
+      required: [queueDefinitionId, fields]
+      properties:
+        queueDefinitionId: { type: string, format: uuid }
+        fields:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/MaintenanceRoutingMismatchField' }
+      additionalProperties: false
+    CatalogRoutingResolvedDefinition:
+      type: object
+      required: [queueDefinitionId, name, type]
+      properties:
+        queueDefinitionId: { type: string, format: uuid }
+        name: { type: string }
+        type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
+      additionalProperties: false
+    CatalogRoutingPreflightResponse:
+      type: object
+      required: [ready, missingQueueDefinitionIds, mismatches, resolvedDefinitions]
+      properties:
+        ready: { type: boolean }
+        missingQueueDefinitionIds:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        mismatches:
+          type: array
+          items: { $ref: '#/components/schemas/CatalogRoutingMismatch' }
+        resolvedDefinitions:
+          type: array
+          items: { $ref: '#/components/schemas/CatalogRoutingResolvedDefinition' }
       additionalProperties: false
     MaintenanceRoutingPreflightRequest:
       type: object
@@ -1020,17 +1702,18 @@ components:
           type: array
           minItems: 1
           maxItems: 100
-          description: Queue identifiers must be unique within the request.
+          description: >-
+            Global definition identifiers must be unique within the request.
           items: { $ref: '#/components/schemas/MaintenanceRoutingQueueRequirement' }
       additionalProperties: false
     MaintenanceRoutingMismatchField:
       type: string
-      enum: [WAREHOUSE_ID, CODE, TYPE, ACTIVE, HIDDEN]
+      enum: [TYPE, ACTIVE, HIDDEN]
     MaintenanceRoutingMismatch:
       type: object
-      required: [queueId, fields]
+      required: [queueDefinitionId, fields]
       properties:
-        queueId: { type: string, format: uuid }
+        queueDefinitionId: { type: string, format: uuid }
         fields:
           type: array
           minItems: 1
@@ -1039,17 +1722,33 @@ components:
       additionalProperties: false
     MaintenanceRoutingPreflightResponse:
       type: object
-      required: [warehouseId, ready, missingQueueIds, mismatches]
+      required: [warehouseId, ready, missingQueueDefinitionIds, missingWarehouseBindingDefinitionIds, mismatches, resolvedQueues]
       properties:
         warehouseId: { type: string, format: uuid }
         ready: { type: boolean }
-        missingQueueIds:
+        missingQueueDefinitionIds:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        missingWarehouseBindingDefinitionIds:
           type: array
           uniqueItems: true
           items: { type: string, format: uuid }
         mismatches:
           type: array
           items: { $ref: '#/components/schemas/MaintenanceRoutingMismatch' }
+        resolvedQueues:
+          type: array
+          items: { $ref: '#/components/schemas/MaintenanceRoutingResolvedQueue' }
+      additionalProperties: false
+    MaintenanceRoutingResolvedQueue:
+      type: object
+      required: [queueDefinitionId, workQueueId, name, type]
+      properties:
+        queueDefinitionId: { type: string, format: uuid }
+        workQueueId: { type: string, format: uuid }
+        name: { type: string }
+        type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
       additionalProperties: false
     Assignment:
       type: object
@@ -1067,20 +1766,34 @@ components:
         pausedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
         finishedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
       additionalProperties: false
+    TaskTimerSnapshot:
+      type: object
+      required: [countedActiveSeconds, remainingSeconds, remainingPercent, timerState, nextTransitionAt, serverTime]
+      properties:
+        countedActiveSeconds: { type: integer, format: int64, minimum: 0 }
+        remainingSeconds: { oneOf: [{ type: integer, format: int64 }, { type: 'null' }] }
+        remainingPercent: { oneOf: [{ type: number }, { type: 'null' }] }
+        timerState: { type: string, enum: [WORKING, BREAK, OFF_SHIFT, PAUSED, DONE] }
+        nextTransitionAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        serverTime: { type: string, format: date-time }
+      additionalProperties: false
     BoardEntry:
       type: object
-      required: [id, version, taskId, externalTaskId, taskVersion, title, unitNumber, taskStatus, queueId, queueCode, routeIndex, queuePosition, entryType, status, taskText, plannedDurationMinutes, activeStartedAt, pausedAt, activeWorkSeconds, assignments]
+      required: [id, version, taskId, externalTaskId, source, taskVersion, title, unitNumber, taskStatus, scheduledDate, priority, pinned, queueId, routeIndex, queuePosition, entryType, status, taskText, plannedDurationMinutes, activeStartedAt, pausedAt, activeWorkSeconds, audienceSelectors, assignments, timerSnapshot]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
         taskId: { type: string, format: uuid }
         externalTaskId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        source: { oneOf: [{ $ref: '#/components/schemas/TaskSourceReference' }, { type: 'null' }] }
         taskVersion: { type: integer, format: int64 }
         title: { type: string }
         unitNumber: { oneOf: [{ type: string }, { type: 'null' }] }
         taskStatus: { type: string, enum: [ACTIVE, DONE, CANCELLED] }
-        queueId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
-        queueCode: { type: string }
+        scheduledDate: { type: string, format: date }
+        priority: { type: integer, minimum: 1, maximum: 5 }
+        pinned: { type: boolean }
+        queueId: { type: string, format: uuid }
         routeIndex: { type: integer }
         queuePosition: { type: integer }
         entryType: { type: string, enum: [REAL, SHADOW] }
@@ -1090,29 +1803,46 @@ components:
         activeStartedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
         pausedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
         activeWorkSeconds: { type: integer, format: int64, minimum: 0 }
+        audienceSelectors:
+          type: array
+          items: { $ref: '#/components/schemas/AudienceSelector' }
         assignments:
           type: array
           items: { $ref: '#/components/schemas/Assignment' }
+        timerSnapshot:
+          oneOf:
+            - { $ref: '#/components/schemas/TaskTimerSnapshot' }
+            - { type: 'null' }
+      additionalProperties: false
+    TaskSourceReference:
+      type: object
+      required: [type, sourceId]
+      properties:
+        type: { type: string, enum: [MAINTENANCE_REPAIR] }
+        sourceId: { type: string, format: uuid }
       additionalProperties: false
     BoardColumn:
       type: object
-      required: [queueId, queueCode, queueName, queueType, sortOrder, virtual, entries]
+      required: [queueId, queueName, queueType, sortOrder, entries]
       properties:
-        queueId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
-        queueCode: { type: string }
+        queueId: { type: string, format: uuid }
         queueName: { type: string }
-        queueType: { oneOf: [{ type: string, enum: [MOVEMENT, REPAIR, HOLDING] }, { type: 'null' }] }
+        queueType: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
         sortOrder: { type: integer }
-        virtual: { type: boolean }
         entries:
           type: array
           items: { $ref: '#/components/schemas/BoardEntry' }
       additionalProperties: false
     TaskBoardSnapshot:
       type: object
-      required: [warehouseId, columns]
+      required: [warehouseId, selectedDate, availableDates, columns]
       properties:
         warehouseId: { type: string, format: uuid }
+        selectedDate: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        availableDates:
+          type: array
+          uniqueItems: true
+          items: { type: string, format: date }
         columns:
           type: array
           items: { $ref: '#/components/schemas/BoardColumn' }
@@ -1137,10 +1867,9 @@ components:
       items: { $ref: '#/components/schemas/TimeEvent' }
     WorkerClassRequest:
       type: object
-      required: [version, code, name]
+      required: [version, name]
       properties:
         version: { type: integer, format: int64, minimum: 0 }
-        code: { type: string, minLength: 1, maxLength: 64 }
         name: { type: string, minLength: 1, maxLength: 128 }
         description: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
         comment: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
@@ -1149,26 +1878,36 @@ components:
       additionalProperties: false
     QueueBindingRequest:
       type: object
-      required: [workerClassId]
+      required: [workerClassId, order, stopTaskOnTake, notifyUrgent]
       properties:
         workerClassId: { type: string, format: uuid }
+        order: { type: integer, minimum: 0 }
         stopTaskOnTake: { type: boolean }
+        notifyUrgent: { type: boolean }
       additionalProperties: false
     WorkQueueRequest:
       type: object
-      required: [version, code, name, type]
+      required: [version, definitionId]
       properties:
         version: { type: integer, format: int64, minimum: 0 }
-        code: { type: string, minLength: 1, maxLength: 64 }
-        name: { type: string, minLength: 1, maxLength: 128 }
-        description: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
-        type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING] }
+        definitionId:
+          type: string
+          format: uuid
+          description: Stable global queue definition attached to this warehouse.
         active: { type: boolean }
         hidden: { type: boolean }
         collapsed: { type: boolean }
         holdingPeriodMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
         notificationThreshold: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
         notifyWhenThresholdReached: { type: boolean }
+        resultPhotoMinCount:
+          oneOf:
+            - { type: integer, minimum: 0, maximum: 20 }
+            - { type: 'null' }
+          description: >-
+            Required READY result photos before completion. When omitted on
+            create, the service defaults MOVEMENT and REPAIR to 1 and HOLDING
+            to 0.
         bindings:
           oneOf:
             - type: array
@@ -1224,6 +1963,13 @@ components:
               items: { $ref: '#/components/schemas/QualificationRequest' }
             - type: 'null'
       additionalProperties: false
+    SetCurrentGroupRequest:
+      type: object
+      required: [expectedVersion, workerGroupId]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        workerGroupId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+      additionalProperties: false
     CredentialPasswordRequest:
       type: object
       required: [expectedVersion, password]
@@ -1236,7 +1982,6 @@ components:
       required: [workerId]
       properties:
         workerId: { type: string, format: uuid }
-        roleInGroup: { oneOf: [{ type: string, maxLength: 128 }, { type: 'null' }] }
         active: { type: boolean }
       additionalProperties: false
     WorkerGroupRequest:
@@ -1254,13 +1999,95 @@ components:
               items: { $ref: '#/components/schemas/GroupMemberRequest' }
             - type: 'null'
       additionalProperties: false
+    GroupAvailabilityRequest:
+      type: object
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        reason: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
+      additionalProperties: false
     RouteStepRequest:
       type: object
+      required: [queueDefinitionId]
       properties:
-        queueId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
-        queueCode: { oneOf: [{ type: string, maxLength: 64 }, { type: 'null' }] }
+        queueDefinitionId:
+          type: string
+          format: uuid
+          description: >-
+            Stable global definition. The service resolves the selected
+            warehouse's binding and never routes by a display name.
         taskText: { oneOf: [{ type: string, maxLength: 2000 }, { type: 'null' }] }
         plannedDurationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        works:
+          description: Sanitized immutable work snapshot shown to workers; prices are forbidden.
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/TaskWorkSnapshotRequest' }
+        materials:
+          description: Sanitized immutable material snapshot shown to workers.
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/TaskMaterialSnapshotRequest' }
+        comments:
+          description: Sanitized immutable worker-visible comments.
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/TaskCommentSnapshotRequest' }
+        sourceMedia:
+          description: Immutable source media identities; object storage coordinates are forbidden.
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/TaskSourceMediaSnapshotRequest' }
+        audienceSelectors:
+          description: >-
+            Explicit union of worker-class and worker-group audiences. Null
+            uses the queue bindings as AVAILABLE class defaults; an explicit
+            empty list is rejected.
+          oneOf:
+            - type: array
+              minItems: 1
+              uniqueItems: true
+              items: { $ref: '#/components/schemas/AudienceSelector' }
+            - type: 'null'
+      additionalProperties: false
+    TaskWorkSnapshotRequest:
+      type: object
+      required: [id, name, quantity, unit, durationMinutes, comment]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 1000 }
+        quantity: { type: number, minimum: 0 }
+        unit: { oneOf: [{ type: string, maxLength: 32 }, { type: 'null' }] }
+        durationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        comment: { oneOf: [{ type: string, maxLength: 2000 }, { type: 'null' }] }
+      additionalProperties: false
+    TaskMaterialSnapshotRequest:
+      type: object
+      required: [id, name, quantity, unit]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 1000 }
+        quantity: { type: number, minimum: 0 }
+        unit: { oneOf: [{ type: string, maxLength: 32 }, { type: 'null' }] }
+      additionalProperties: false
+    TaskCommentSnapshotRequest:
+      type: object
+      required: [id, text, authorDisplayName, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        text: { type: string, minLength: 1, maxLength: 2000 }
+        authorDisplayName: { oneOf: [{ type: string, maxLength: 256 }, { type: 'null' }] }
+        createdAt: { type: string, format: date-time }
+      additionalProperties: false
+    TaskSourceMediaSnapshotRequest:
+      type: object
+      required: [mediaId, generation, contentType, capturedAt, recordedAt]
+      properties:
+        mediaId: { type: string, format: uuid }
+        generation: { type: integer, format: int64, minimum: 1 }
+        contentType: { oneOf: [{ type: string, maxLength: 128 }, { type: 'null' }] }
+        capturedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        recordedAt: { type: string, format: date-time }
       additionalProperties: false
     CreateBoardTaskRequest:
       type: object
@@ -1272,6 +2099,8 @@ components:
         description: { oneOf: [{ type: string, maxLength: 2000 }, { type: 'null' }] }
         plannedDurationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
         deadlineAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        scheduledDate: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        priority: { oneOf: [{ type: integer, minimum: 1, maximum: 5 }, { type: 'null' }] }
         route:
           type: array
           minItems: 1
@@ -1283,50 +2112,41 @@ components:
       properties:
         warehouseId: { type: string, format: uuid }
         externalTaskId: { type: string, format: uuid }
+        source:
+          description: >-
+            Optional immutable source aggregate. At present only a
+            maintenance-service registration may declare a MAINTENANCE_REPAIR
+            source; other source-owned tasks remain without a panel link.
+          oneOf: [{ $ref: '#/components/schemas/TaskSourceReference' }, { type: 'null' }]
         title: { type: string, minLength: 1, maxLength: 256 }
         unitNumber: { oneOf: [{ type: string, maxLength: 64 }, { type: 'null' }] }
         description: { oneOf: [{ type: string, maxLength: 2000 }, { type: 'null' }] }
         plannedDurationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
         deadlineAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        scheduledDate: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        priority: { oneOf: [{ type: integer, minimum: 1, maximum: 5 }, { type: 'null' }] }
+        dailyCapacity:
+          description: >-
+            Optional positive maintenance-service daily capacity. For the exact
+            maintenance-service source, registration selects the first calendar
+            date on or after scheduledDate (or its default) with fewer ACTIVE
+            maintenance source tasks for this warehouse; the response reports
+            the selected scheduledDate. Other source identities ignore it.
+          oneOf: [{ type: integer, minimum: 1 }, { type: 'null' }]
         route:
           type: array
           minItems: 1
           items: { $ref: '#/components/schemas/RouteStepRequest' }
-      additionalProperties: false
-    RegisterLogisticsPreparationTaskRequest:
-      type: object
-      required: [warehouseId, externalTaskId]
-      properties:
-        warehouseId: { type: string, format: uuid }
-        externalTaskId: { type: string, format: uuid }
-        plannedDurationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
-        deadlineAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
-      additionalProperties: false
-    CancelLogisticsPreparationTaskRequest:
-      type: object
-      required: [expectedTaskVersion]
-      properties:
-        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
-      additionalProperties: false
-    CompleteLogisticsPreparationTaskRequest:
-      type: object
-      required: [expectedTaskVersion]
-      properties:
-        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
       additionalProperties: false
     EquipmentMovementDirection:
       type: string
       enum: [BRING_TO_CABIN, TAKE_FROM_CABIN]
     EquipmentMovementOperation:
       type: object
-      required: [direction, equipmentCode, equipmentName, quantity]
+      required: [direction, equipmentId, equipmentName, quantity]
       properties:
         direction: { $ref: '#/components/schemas/EquipmentMovementDirection' }
-        equipmentCode:
-          type: string
-          minLength: 1
-          maxLength: 64
-          pattern: '^[A-Z0-9][A-Z0-9_-]{0,63}$'
+        equipmentId: { type: string, format: uuid }
         equipmentName: { type: string, minLength: 1, maxLength: 255 }
         quantity: { type: integer, format: int64, minimum: 1 }
       additionalProperties: false
@@ -1377,6 +2197,13 @@ components:
           minItems: 1
           items: { $ref: '#/components/schemas/RouteStepRequest' }
       additionalProperties: false
+    RelocateExternalTaskRequest:
+      type: object
+      required: [expectedTaskVersion, targetWarehouseId]
+      properties:
+        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
+        targetWarehouseId: { type: string, format: uuid }
+      additionalProperties: false
     TakeEntryRequest:
       type: object
       required: [expectedVersion]
@@ -1400,11 +2227,40 @@ components:
       additionalProperties: false
     MoveEntryRequest:
       type: object
-      required: [expectedVersion, targetIndex]
+      required: [expectedVersion, expectedTaskVersion, targetQueueId, targetIndex, targetDate]
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
-        targetQueueId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
+        targetQueueId: { type: string, format: uuid }
         targetIndex: { type: integer, minimum: 0 }
+        targetDate: { type: string, format: date }
+      additionalProperties: false
+    SwapTaskBoardDatesRequest:
+      type: object
+      required: [firstDate, secondDate, entries]
+      properties:
+        firstDate: { type: string, format: date }
+        secondDate: { type: string, format: date }
+        entries:
+          type: array
+          minItems: 1
+          maxItems: 2000
+          items: { $ref: '#/components/schemas/TaskBoardDateEntryExpectation' }
+      additionalProperties: false
+    TaskBoardDateEntryExpectation:
+      type: object
+      required: [entryId, expectedVersion, expectedTaskVersion]
+      properties:
+        entryId: { type: string, format: uuid }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
+      additionalProperties: false
+    PinTaskRequest:
+      type: object
+      required: [expectedTaskVersion, pinned]
+      properties:
+        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
+        pinned: { type: boolean }
       additionalProperties: false
     CancelTaskRequest:
       type: object
@@ -1425,7 +2281,7 @@ components:
       additionalProperties: false
     BoardTaskRegistration:
       type: object
-      required: [taskId, taskVersion, warehouseId, externalTaskId, title, unitNumber, description, status, plannedDurationMinutes, deadlineAt, doneAt, route]
+      required: [taskId, taskVersion, warehouseId, externalTaskId, title, unitNumber, description, status, plannedDurationMinutes, deadlineAt, scheduledDate, priority, pinned, doneAt, route]
       properties:
         taskId: { type: string, format: uuid }
         taskVersion: { type: integer, format: int64, minimum: 0 }
@@ -1437,6 +2293,9 @@ components:
         status: { type: string, enum: [ACTIVE, DONE, CANCELLED] }
         plannedDurationMinutes: { oneOf: [{ type: integer }, { type: 'null' }] }
         deadlineAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        scheduledDate: { type: string, format: date }
+        priority: { type: integer, minimum: 1, maximum: 5 }
+        pinned: { type: boolean }
         doneAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
         route:
           type: array
@@ -1444,18 +2303,385 @@ components:
       additionalProperties: false
     RegisteredRouteStep:
       type: object
-      required: [entryId, entryVersion, queueId, queueCode, routeIndex, queuePosition, entryType, status, taskText, plannedDurationMinutes]
+      required: [entryId, entryVersion, queueDefinitionId, workQueueId, queueName, routeIndex, queuePosition, entryType, status, taskText, plannedDurationMinutes]
       properties:
         entryId: { type: string, format: uuid }
         entryVersion: { type: integer, format: int64, minimum: 0 }
-        queueId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
-        queueCode: { oneOf: [{ type: string }, { type: 'null' }] }
+        queueDefinitionId: { type: string, format: uuid }
+        workQueueId: { type: string, format: uuid }
+        queueName: { type: string }
         routeIndex: { type: integer, minimum: 0 }
         queuePosition: { type: integer, minimum: 0 }
         entryType: { type: string, enum: [REAL, SHADOW] }
         status: { type: string, enum: [WAITING, IN_PROGRESS, PAUSED, DONE, CANCELLED] }
         taskText: { oneOf: [{ type: string }, { type: 'null' }] }
         plannedDurationMinutes: { oneOf: [{ type: integer }, { type: 'null' }] }
+      additionalProperties: false
+    WorkerIdentity:
+      type: object
+      required: [id, warehouseId, login, displayName]
+      properties:
+        id: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        login: { type: string, minLength: 1 }
+        displayName: { type: string, minLength: 1 }
+      additionalProperties: false
+    WorkerGroupSummary:
+      type: object
+      required: [id, name, workerClassId, workerClassName]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1 }
+        workerClassId: { type: string, format: uuid }
+        workerClassName: { type: string, minLength: 1 }
+      additionalProperties: false
+    WorkerQualificationSummary:
+      type: object
+      required: [workerClassId, name]
+      properties:
+        workerClassId: { type: string, format: uuid }
+        name: { type: string, minLength: 1 }
+      additionalProperties: false
+    WorkerCategory:
+      type: object
+      required: [queueId, name, type, sortOrder, audienceModes, resultPhotoMinCount]
+      properties:
+        queueId: { type: string, format: uuid }
+        name: { type: string, minLength: 1 }
+        type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
+        sortOrder: { type: integer }
+        audienceModes:
+          type: array
+          uniqueItems: true
+          items: { type: string, enum: [AVAILABLE, MANDATORY] }
+        resultPhotoMinCount: { type: integer, minimum: 0, maximum: 20 }
+      additionalProperties: false
+    WorkerOfflineLease:
+      type: object
+      required: [id, issuedAt, expiresAt, syncRevision]
+      properties:
+        id: { type: string, format: uuid }
+        issuedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        syncRevision: { type: integer, format: int64, minimum: 0 }
+      additionalProperties: false
+    WorkerContext:
+      type: object
+      required: [worker, currentGroup, operationalAvailability, groups, qualifications, categories, serverTime, revision, offlineLease]
+      properties:
+        worker: { $ref: '#/components/schemas/WorkerIdentity' }
+        currentGroup:
+          oneOf:
+            - { $ref: '#/components/schemas/WorkerGroupSummary' }
+            - { type: 'null' }
+        operationalAvailability: { type: string, enum: [AVAILABLE, DISABLED] }
+        groups:
+          type: array
+          items: { $ref: '#/components/schemas/WorkerGroupSummary' }
+        qualifications:
+          type: array
+          items: { $ref: '#/components/schemas/WorkerQualificationSummary' }
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/WorkerCategory' }
+        serverTime: { type: string, format: date-time }
+        revision: { type: integer, format: int64, minimum: 0 }
+        offlineLease: { $ref: '#/components/schemas/WorkerOfflineLease' }
+      additionalProperties: false
+    WorkerAssignmentSnapshot:
+      type: object
+      required: [id, workerId, workerName, workerGroupId, workerGroupName, status, assignedAt, startedAt, pausedAt, finishedAt]
+      properties:
+        id: { type: string, format: uuid }
+        workerId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        workerName: { oneOf: [{ type: string }, { type: 'null' }] }
+        workerGroupId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        workerGroupName: { oneOf: [{ type: string }, { type: 'null' }] }
+        status: { type: string, enum: [ACTIVE, PAUSED, DONE, CANCELLED] }
+        assignedAt: { type: string, format: date-time }
+        startedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        pausedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        finishedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+      additionalProperties: false
+    WorkerFeedEntry:
+      type: object
+      required: [entryId, version, taskId, routeIndex, title, unitNumber, taskText, scheduledDate, deadlineAt, priority, queuePosition, status, availabilityMode, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, assignments, readyEvidenceCount, resultPhotoMinCount]
+      properties:
+        entryId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        taskId: { type: string, format: uuid }
+        routeIndex: { type: integer, minimum: 0 }
+        title: { type: string, minLength: 1 }
+        unitNumber: { oneOf: [{ type: string }, { type: 'null' }] }
+        taskText: { oneOf: [{ type: string }, { type: 'null' }] }
+        scheduledDate: { type: string, format: date }
+        deadlineAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        priority: { type: integer, minimum: 1, maximum: 5 }
+        queuePosition: { type: integer, minimum: 0 }
+        status: { type: string, enum: [WAITING, IN_PROGRESS, PAUSED, DONE, CANCELLED] }
+        availabilityMode: { type: string, enum: [AVAILABLE, MANDATORY] }
+        plannedDurationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        activeStartedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        activeWorkSeconds: { type: integer, format: int64, minimum: 0 }
+        timerSnapshot:
+          oneOf:
+            - { $ref: '#/components/schemas/TaskTimerSnapshot' }
+            - { type: 'null' }
+        assignments:
+          type: array
+          items: { $ref: '#/components/schemas/WorkerAssignmentSnapshot' }
+        readyEvidenceCount: { type: integer, minimum: 0 }
+        resultPhotoMinCount: { type: integer, minimum: 0, maximum: 20 }
+      additionalProperties: false
+    WorkerFeedCategory:
+      type: object
+      required: [category, entries]
+      properties:
+        category: { $ref: '#/components/schemas/WorkerCategory' }
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/WorkerFeedEntry' }
+      additionalProperties: false
+    WorkerFeed:
+      type: object
+      required: [revision, serverTime, categories, nextCursor]
+      properties:
+        revision: { type: integer, format: int64, minimum: 0 }
+        serverTime: { type: string, format: date-time }
+        categories:
+          type: array
+          items: { $ref: '#/components/schemas/WorkerFeedCategory' }
+        nextCursor:
+          oneOf:
+            - { type: string, minLength: 1, maxLength: 512 }
+            - { type: 'null' }
+      additionalProperties: false
+    WorkerTaskObject:
+      type: object
+      required: [kind, id, label]
+      properties:
+        kind: { type: string, enum: [CABIN, EQUIPMENT, OTHER] }
+        id: { oneOf: [{ type: string }, { type: 'null' }] }
+        label: { type: string, minLength: 1 }
+      additionalProperties: false
+    WorkerMaterial:
+      type: object
+      required: [id, name, quantity, unit]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1 }
+        quantity: { type: number, minimum: 0 }
+        unit: { oneOf: [{ type: string }, { type: 'null' }] }
+      additionalProperties: false
+    WorkerWork:
+      type: object
+      required: [id, name, quantity, unit, durationMinutes, comment]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, minLength: 1 }
+        quantity: { type: number, minimum: 0 }
+        unit: { oneOf: [{ type: string }, { type: 'null' }] }
+        durationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        comment: { oneOf: [{ type: string }, { type: 'null' }] }
+      additionalProperties: false
+    WorkerVisibleComment:
+      type: object
+      required: [id, text, authorDisplayName, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        text: { type: string, minLength: 1 }
+        authorDisplayName: { oneOf: [{ type: string }, { type: 'null' }] }
+        createdAt: { type: string, format: date-time }
+      additionalProperties: false
+    WorkerMediaReference:
+      type: object
+      required: [mediaId, generation, kind, contentType, readPath, thumbnailPath, capturedAt, recordedAt]
+      properties:
+        mediaId: { type: string, format: uuid }
+        generation: { type: integer, format: int64, minimum: 1 }
+        kind: { type: string, enum: [SOURCE, RESULT] }
+        contentType: { type: string }
+        readPath:
+          type: string
+          format: uri-reference
+          pattern: '^/api/media/'
+        thumbnailPath:
+          oneOf:
+            - { type: string, format: uri-reference, pattern: '^/api/media/' }
+            - { type: 'null' }
+        capturedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        recordedAt: { type: string, format: date-time }
+      additionalProperties: false
+    WorkerRelatedStep:
+      type: object
+      required: [entryId, routeIndex, queueName, taskText, status]
+      properties:
+        entryId: { type: string, format: uuid }
+        routeIndex: { type: integer, minimum: 0 }
+        queueName: { type: string }
+        taskText: { oneOf: [{ type: string }, { type: 'null' }] }
+        status: { type: string, enum: [WAITING, IN_PROGRESS, PAUSED, DONE, CANCELLED] }
+      additionalProperties: false
+    TaskEvidence:
+      type: object
+      required: [evidenceId, version, entryId, routeIndex, workerId, workerGroupId, capturedAt, recordedAt, state, mediaId, mediaGeneration, reviewReason, contentType, readPath, thumbnailPath]
+      properties:
+        evidenceId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        entryId: { type: string, format: uuid }
+        routeIndex: { type: integer, minimum: 0 }
+        workerId: { type: string, format: uuid }
+        workerGroupId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        capturedAt: { type: string, format: date-time }
+        recordedAt: { type: string, format: date-time }
+        state: { type: string, enum: [RESERVED, UPLOADING, READY, REVIEW_REQUIRED, REJECTED] }
+        mediaId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        mediaGeneration: { oneOf: [{ type: integer, format: int64, minimum: 1 }, { type: 'null' }] }
+        reviewReason: { oneOf: [{ type: string }, { type: 'null' }] }
+        contentType: { oneOf: [{ type: string }, { type: 'null' }] }
+        readPath:
+          oneOf:
+            - { type: string, format: uri-reference, pattern: '^/api/media/' }
+            - { type: 'null' }
+        thumbnailPath:
+          oneOf:
+            - { type: string, format: uri-reference, pattern: '^/api/media/' }
+            - { type: 'null' }
+      additionalProperties: false
+    WorkerTaskDetail:
+      type: object
+      required: [entryId, version, taskId, routeIndex, title, description, object, taskText, scheduledDate, deadlineAt, priority, queuePosition, status, availabilityMode, plannedDurationMinutes, activeStartedAt, activeWorkSeconds, timerSnapshot, audienceSelectors, assignments, works, materials, comments, sourceMedia, evidence, relatedSteps, resultPhotoMinCount, completionAllowed]
+      properties:
+        entryId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        taskId: { type: string, format: uuid }
+        routeIndex: { type: integer, minimum: 0 }
+        title: { type: string, minLength: 1 }
+        description: { oneOf: [{ type: string }, { type: 'null' }] }
+        object: { oneOf: [{ $ref: '#/components/schemas/WorkerTaskObject' }, { type: 'null' }] }
+        taskText: { oneOf: [{ type: string }, { type: 'null' }] }
+        scheduledDate: { type: string, format: date }
+        deadlineAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        priority: { type: integer, minimum: 1, maximum: 5 }
+        queuePosition: { type: integer, minimum: 0 }
+        status: { type: string, enum: [WAITING, IN_PROGRESS, PAUSED, DONE, CANCELLED] }
+        availabilityMode: { type: string, enum: [AVAILABLE, MANDATORY] }
+        plannedDurationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        activeStartedAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+        activeWorkSeconds: { type: integer, format: int64, minimum: 0 }
+        timerSnapshot:
+          oneOf:
+            - { $ref: '#/components/schemas/TaskTimerSnapshot' }
+            - { type: 'null' }
+        audienceSelectors:
+          type: array
+          items: { $ref: '#/components/schemas/AudienceSelector' }
+        assignments:
+          type: array
+          items: { $ref: '#/components/schemas/WorkerAssignmentSnapshot' }
+        works:
+          type: array
+          items: { $ref: '#/components/schemas/WorkerWork' }
+        materials:
+          type: array
+          items: { $ref: '#/components/schemas/WorkerMaterial' }
+        comments:
+          type: array
+          items: { $ref: '#/components/schemas/WorkerVisibleComment' }
+        sourceMedia:
+          type: array
+          items: { $ref: '#/components/schemas/WorkerMediaReference' }
+        evidence:
+          type: array
+          items: { $ref: '#/components/schemas/TaskEvidence' }
+        relatedSteps:
+          type: array
+          items: { $ref: '#/components/schemas/WorkerRelatedStep' }
+        resultPhotoMinCount: { type: integer, minimum: 0, maximum: 20 }
+        completionAllowed: { type: boolean }
+      additionalProperties: false
+    WorkerActionRequest:
+      type: object
+      required: [operationId, action, expectedVersion, workerGroupId, occurredAt, offlineLeaseId]
+      properties:
+        operationId: { type: string, format: uuid }
+        action: { type: string, enum: [TAKE, PAUSE, RESUME, COMPLETE] }
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        workerGroupId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        occurredAt: { type: string, format: date-time }
+        offlineLeaseId: { type: string, format: uuid }
+      additionalProperties: false
+    WorkerActionAppliedResult:
+      type: object
+      required: [outcome, currentVersion, entry]
+      properties:
+        outcome: { type: string, enum: [APPLIED, REPLAYED] }
+        currentVersion: { type: integer, format: int64, minimum: 0 }
+        entry: { $ref: '#/components/schemas/WorkerTaskDetail' }
+      additionalProperties: false
+    WorkerActionConflictProblem:
+      type: object
+      required: [type, title, status, detail, instance, code, violations, correlation, outcome, currentVersion, currentEntry]
+      properties:
+        type: { type: string, format: uri-reference }
+        title: { type: string, minLength: 1 }
+        status: { type: integer, const: 409 }
+        detail: { oneOf: [{ type: string }, { type: 'null' }] }
+        instance: { oneOf: [{ type: string, format: uri-reference }, { type: 'null' }] }
+        code: { type: string, minLength: 1 }
+        violations:
+          type: array
+          items: { $ref: '#/components/schemas/FieldViolation' }
+        correlation: { $ref: '#/components/schemas/CorrelationContext' }
+        outcome: { type: string, const: CONFLICT }
+        currentVersion: { type: integer, format: int64, minimum: 0 }
+        currentEntry:
+          oneOf:
+            - { $ref: '#/components/schemas/WorkerTaskDetail' }
+            - { type: 'null' }
+      additionalProperties: false
+    EvidenceReservationRequest:
+      type: object
+      required: [operationId, evidenceId, routeIndex, capturedAt, offlineLeaseId, contentType, sizeBytes, sha256]
+      properties:
+        operationId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        routeIndex: { type: integer, minimum: 0 }
+        capturedAt: { type: string, format: date-time }
+        offlineLeaseId: { type: string, format: uuid }
+        contentType: { type: string, const: image/jpeg }
+        sizeBytes: { type: integer, format: int64, minimum: 1, maximum: 15728640 }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+      additionalProperties: false
+    WorkerInvalidationEvent:
+      type: object
+      required: [eventId, revision, type, entryId, occurredAt]
+      properties:
+        eventId: { type: string, format: uuid }
+        revision: { type: integer, format: int64, minimum: 0 }
+        type: { type: string, enum: [CONTEXT_CHANGED, FEED_CHANGED, ENTRY_CHANGED, DEVICE_REVOKED] }
+        entryId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
+        occurredAt: { type: string, format: date-time }
+      additionalProperties: false
+    WorkerDeviceRegistrationRequest:
+      type: object
+      required: [provider, token, appVersion, sdkInt, locale]
+      properties:
+        provider: { type: string, const: FCM }
+        token: { type: string, minLength: 1, maxLength: 4096, writeOnly: true }
+        appVersion: { type: string, minLength: 1, maxLength: 64 }
+        sdkInt: { type: integer, minimum: 23, maximum: 1000 }
+        locale: { type: string, minLength: 2, maxLength: 35 }
+      additionalProperties: false
+    WorkerDeviceRegistration:
+      type: object
+      required: [installationId, provider, status, registeredAt, updatedAt]
+      properties:
+        installationId: { type: string, minLength: 1, maxLength: 128 }
+        provider: { type: string, const: FCM }
+        status: { type: string, enum: [ACTIVE, REVOKED] }
+        registeredAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
       additionalProperties: false
     FieldViolation:
       type: object
@@ -1488,6 +2714,16 @@ components:
         correlation: { $ref: '#/components/schemas/CorrelationContext' }
       additionalProperties: false
   responses:
+    KpiSettingsOk:
+      description: KPI settings scoped to the selected warehouse
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WarehouseKpiSettings' }
+    RepairComplexityThresholdsOk:
+      description: Repair complexity thresholds scoped to the selected warehouse
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/RepairComplexityThresholdsResponse' }
     WorkerClassOk:
       description: Worker class
       content:
@@ -1503,6 +2739,21 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/WorkerClassList' }
+    QueueDefinitionOk:
+      description: Global queue definition
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/QueueDefinition' }
+    QueueDefinitionCreated:
+      description: Global queue definition created
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/QueueDefinition' }
+    QueueDefinitionListOk:
+      description: System-wide queue definition catalog
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/QueueDefinitionList' }
     WorkQueueOk:
       description: Work queue
       content:
@@ -1518,11 +2769,16 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/WorkQueueList' }
-    ReviewedBootstrapOk:
-      description: Reviewed bootstrap import or identical replay result
+    WarehouseQueueCapabilitiesOk:
+      description: Process capabilities for the selected warehouse bindings
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ReviewedBootstrapResponse' }
+          schema: { $ref: '#/components/schemas/WarehouseQueueCapabilities' }
+    CatalogRoutingPreflightOk:
+      description: Exact read-only global catalog routing prerequisite report
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/CatalogRoutingPreflightResponse' }
     MaintenanceRoutingPreflightOk:
       description: Exact read-only maintenance routing prerequisite report
       content:

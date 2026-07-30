@@ -1,5 +1,6 @@
 import { useId, useRef, useState } from "react"
 import {
+  CheckmarkCircle02Icon,
   Delete02Icon,
   ImageUploadIcon,
   RotateLeft01Icon,
@@ -43,19 +44,27 @@ export function ServiceMediaManagerDialog({
   items,
   maxItems = 20,
   pending = false,
+  coverMediaId = null,
+  requireCover = false,
   onOpenChange,
   onAddFiles,
   onRemove,
   onRotate,
+  onSelectCover,
+  onConfirm,
 }: {
   open: boolean
   items: readonly ServiceMediaManagerItem[]
   maxItems?: number
   pending?: boolean
+  coverMediaId?: string | null
+  requireCover?: boolean
   onOpenChange: (open: boolean) => void
   onAddFiles: (files: File[]) => void
   onRemove: (item: ServiceMediaManagerItem) => void
   onRotate: (item: ServiceMediaManagerItem, direction: "LEFT" | "RIGHT") => void
+  onSelectCover?: (item: ServiceMediaManagerItem) => void
+  onConfirm?: () => void
 }) {
   const inputId = useId()
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -79,6 +88,9 @@ export function ServiceMediaManagerDialog({
           <DialogTitle>Добавить фото</DialogTitle>
           <DialogDescription>
             Выберите изображения, проверьте поворот и удалите лишние.
+            {requireCover
+              ? " Затем укажите титульную фотографию."
+              : ""}
           </DialogDescription>
         </DialogHeader>
 
@@ -175,7 +187,12 @@ export function ServiceMediaManagerDialog({
               const quarterTurn =
                 item.rotationDegrees === 90 || item.rotationDegrees === 270
               return (
-                <Card key={item.id} size="sm" className="min-w-0">
+                <Card
+                  key={item.id}
+                  size="sm"
+                  data-cover={coverMediaId === item.id}
+                  className="min-w-0 data-[cover=true]:ring-2 data-[cover=true]:ring-primary"
+                >
                   <CardHeader className="min-w-0">
                     <CardTitle className="min-w-0 truncate">
                       {index + 1}. {item.fileName}
@@ -201,7 +218,7 @@ export function ServiceMediaManagerDialog({
                       )}
                     </div>
                   </CardContent>
-                  <CardFooter className="justify-between gap-2">
+                  <CardFooter className="flex-wrap justify-between gap-2">
                     <div className="flex gap-1">
                       <Button
                         type="button"
@@ -224,6 +241,28 @@ export function ServiceMediaManagerDialog({
                         <HugeiconsIcon icon={RotateRight01Icon} />
                       </Button>
                     </div>
+                    {onSelectCover ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={
+                          coverMediaId === item.id ? "default" : "outline"
+                        }
+                        disabled={pending || item.pending}
+                        aria-pressed={coverMediaId === item.id}
+                        onClick={() => onSelectCover(item)}
+                      >
+                        {coverMediaId === item.id ? (
+                          <HugeiconsIcon
+                            icon={CheckmarkCircle02Icon}
+                            data-icon="inline-start"
+                          />
+                        ) : null}
+                        {coverMediaId === item.id
+                          ? "Титульное"
+                          : "Выбрать титульным"}
+                      </Button>
+                    ) : null}
                     <Button
                       type="button"
                       size="icon-sm"
@@ -242,11 +281,21 @@ export function ServiceMediaManagerDialog({
         )}
 
         <DialogFooter>
+          {requireCover && items.length > 0 && !coverMediaId ? (
+            <p role="alert" className="mr-auto text-sm text-destructive">
+              Выберите титульную фотографию.
+            </p>
+          ) : null}
           <Button
             type="button"
             variant="outline"
-            disabled={pending}
-            onClick={() => onOpenChange(false)}
+            disabled={
+              pending || (requireCover && items.length > 0 && !coverMediaId)
+            }
+            onClick={() => {
+              if (onConfirm) onConfirm()
+              else onOpenChange(false)
+            }}
           >
             Готово
           </Button>

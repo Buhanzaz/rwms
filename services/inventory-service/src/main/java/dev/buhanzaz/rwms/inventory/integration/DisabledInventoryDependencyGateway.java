@@ -2,6 +2,7 @@ package dev.buhanzaz.rwms.inventory.integration;
 
 import dev.buhanzaz.rwms.inventory.service.InventoryException;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import tools.jackson.databind.JsonNode;
 
@@ -36,12 +37,22 @@ final class DisabledInventoryDependencyGateway implements InventoryDependencyGat
   }
 
   @Override
+  public Optional<LiveAssetSnapshot> currentAsset(UUID assetId) {
+    throw unavailable();
+  }
+
+  @Override
   public SourceAsset createSourceAsset(UUID key, JsonNode request) {
     throw unavailable();
   }
 
   @Override
   public Validation validateAssets(List<UUID> assetIds) {
+    throw unavailable();
+  }
+
+  @Override
+  public RepairSnapshots repairSnapshots(List<UUID> assetIds) {
     throw unavailable();
   }
 

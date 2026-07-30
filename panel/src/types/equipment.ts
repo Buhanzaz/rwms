@@ -27,7 +27,6 @@ export type EquipmentItemDto = {
   version: number
   warehouseId: string
   category: EquipmentCategory
-  code: string
   name: string
   active: boolean
   comment: string | null
@@ -87,7 +86,6 @@ export type EquipmentMovementDto = {
 }
 
 export type EquipmentDispositionDto = EquipmentMovementDto & {
-  equipmentCode: string
   equipmentName: string
 }
 

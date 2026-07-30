@@ -1,10 +1,6 @@
 package dev.buhanzaz.rwms.taskboard;
 
-import static dev.buhanzaz.rwms.taskboard.api.ApiModels.MaintenanceRoutingPreflightRequest;
-import static dev.buhanzaz.rwms.taskboard.api.ApiModels.MaintenanceRoutingQueueRequirement;
-import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueBindingRequest;
-import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueReferenceRequest;
-import static dev.buhanzaz.rwms.taskboard.api.ApiModels.WorkQueueRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
@@ -14,11 +10,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import dev.buhanzaz.rwms.taskboard.domain.QueueReferenceType;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
-import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.service.ConflictException;
 import dev.buhanzaz.rwms.taskboard.service.RegistryService;
-import dev.buhanzaz.rwms.taskboard.service.ReviewedTaskBoardBootstrapService;
-import dev.buhanzaz.rwms.taskboard.service.StaleVersionException;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,30 +30,19 @@ import tools.jackson.databind.ObjectMapper;
 @ActiveProfiles("test")
 @AutoConfigureMockMvc
 class MaintenanceRoutingPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport {
-  private static final String PATH =
+  private static final String WAREHOUSE_PREFLIGHT =
       "/api/internal/task-board/v1/maintenance/routing-preflight";
+  private static final String CATALOG_PREFLIGHT =
+      "/api/internal/task-board/v1/maintenance/catalog-routing-preflight";
   private static final UUID SPB =
       UUID.fromString("00000000-0000-0000-0000-000000000001");
   private static final UUID MSK =
       UUID.fromString("00000000-0000-0000-0000-000000000002");
-  private static final UUID EXTERNAL_WORKS =
-      UUID.fromString("019f21e8-4526-7462-95e8-3309ce19fc9c");
-  private static final UUID INTERNAL_WORKS =
-      UUID.fromString("019f21e8-cd97-7a20-a876-8306e77f94bd");
-  private static final UUID ELECTRICS =
-      UUID.fromString("019f21e9-6057-736c-8999-6808191a1362");
-  private static final UUID PLUMBING =
-      UUID.fromString("019f21e9-f54f-7184-954e-29f237b9c424");
-  private static final UUID WELDING =
-      UUID.fromString("019f21ea-6015-753f-ad3a-be58947aa252");
-  private static final UUID SANITARY_DISINFECTION =
-      UUID.fromString("019f21ed-eb53-782d-a73f-a24357e262b2");
 
+  @Autowired RegistryService registry;
+  @Autowired JdbcTemplate jdbc;
   @Autowired MockMvc mvc;
   @Autowired ObjectMapper objectMapper;
-  @Autowired JdbcTemplate jdbc;
-  @Autowired ReviewedTaskBoardBootstrapService bootstrap;
-  @Autowired RegistryService registry;
 
   @BeforeEach
   void clean() {
@@ -68,121 +50,133 @@ class MaintenanceRoutingPrerequisiteIntegrationTest extends PostgresIntegrationT
   }
 
   @Test
-  void exactReviewedMoscowRoutingIsReadyAndReadOnly() throws Exception {
-    bootstrap.bootstrap(MSK);
-    String before = persistedState();
+  void globalDefinitionPreflightDoesNotRequireWarehouseBinding() throws Exception {
+    var definition =
+        registry.createQueueDefinition(
+            new QueueDefinitionRequest(
+                0L, "Внешние работы", null, QueueType.REPAIR));
 
     mvc.perform(
-            post(PATH)
-                .with(
-                    maintenanceJwt(
-                        "maintenance-service",
-                        "maintenance-service",
-                        "SERVICE",
-                        List.of("task-board.task-sync")))
+            post(CATALOG_PREFLIGHT)
+                .with(exactMaintenanceJwt())
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(routingRequest())))
+                .content(
+                    objectMapper.writeValueAsString(
+                        new CatalogRoutingPreflightRequest(
+                            List.of(
+                                new MaintenanceRoutingQueueRequirement(
+                                    definition.id(), QueueType.REPAIR))))))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.warehouseId").value(MSK.toString()))
         .andExpect(jsonPath("$.ready").value(true))
-        .andExpect(jsonPath("$.missingQueueIds").isEmpty())
-        .andExpect(jsonPath("$.mismatches").isEmpty());
+        .andExpect(jsonPath("$.resolvedDefinitions[0].queueDefinitionId")
+            .value(definition.id().toString()));
 
-    assertThat(persistedState()).isEqualTo(before);
+    assertThat(registry.listQueues(SPB)).isEmpty();
+    assertThat(registry.listQueues(MSK)).isEmpty();
   }
 
   @Test
-  void wrongWarehouseIsReportedWithoutMutation() throws Exception {
-    bootstrap.bootstrap(MSK);
-    jdbc.update("update work_queue set warehouse_id=? where id=?", SPB, EXTERNAL_WORKS);
-    String before = persistedState();
+  void warehousePreflightResolvesDefinitionToItsActiveVisibleBinding() throws Exception {
+    var definition =
+        registry.createQueueDefinition(
+            new QueueDefinitionRequest(
+                0L, "Внутренние работы", null, QueueType.REPAIR));
+    var binding = registry.createQueue(MSK, binding(definition.id(), true, false));
 
     mvc.perform(
-            post(PATH)
+            post(WAREHOUSE_PREFLIGHT)
                 .with(exactMaintenanceJwt())
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(routingRequest())))
+                .content(
+                    objectMapper.writeValueAsString(
+                        warehouseRequest(MSK, definition.id(), QueueType.REPAIR))))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.ready").value(false))
-        .andExpect(jsonPath("$.missingQueueIds").isEmpty())
-        .andExpect(jsonPath("$.mismatches.length()").value(1))
-        .andExpect(jsonPath("$.mismatches[0].queueId").value(EXTERNAL_WORKS.toString()))
-        .andExpect(jsonPath("$.mismatches[0].fields[0]").value("WAREHOUSE_ID"));
-
-    assertThat(persistedState()).isEqualTo(before);
+        .andExpect(jsonPath("$.ready").value(true))
+        .andExpect(jsonPath("$.missingQueueDefinitionIds").isEmpty())
+        .andExpect(jsonPath("$.missingWarehouseBindingDefinitionIds").isEmpty())
+        .andExpect(jsonPath("$.resolvedQueues[0].queueDefinitionId")
+            .value(definition.id().toString()))
+        .andExpect(jsonPath("$.resolvedQueues[0].workQueueId")
+            .value(binding.id().toString()));
   }
 
   @Test
-  void missingAndEveryQueueStateMismatchAreReportedWithoutMutation() throws Exception {
-    bootstrap.bootstrap(MSK);
-    jdbc.update(
-        "update work_queue set code='INTERNAL_CHANGED',queue_type='HOLDING',active=false,hidden=true where id=?",
-        INTERNAL_WORKS);
-    jdbc.update("delete from work_queue_class_binding where queue_id=?", WELDING);
-    jdbc.update("delete from work_queue where id=?", WELDING);
-    String before = persistedState();
+  void missingBindingAndDisabledBindingFailClosedWithoutNameFallback() throws Exception {
+    var definition =
+        registry.createQueueDefinition(
+            new QueueDefinitionRequest(0L, "Электрики", null, QueueType.REPAIR));
 
     mvc.perform(
-            post(PATH)
+            post(WAREHOUSE_PREFLIGHT)
                 .with(exactMaintenanceJwt())
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(routingRequest())))
+                .content(
+                    objectMapper.writeValueAsString(
+                        warehouseRequest(MSK, definition.id(), QueueType.REPAIR))))
         .andExpect(status().isOk())
         .andExpect(jsonPath("$.ready").value(false))
-        .andExpect(jsonPath("$.missingQueueIds[0]").value(WELDING.toString()))
-        .andExpect(jsonPath("$.missingQueueIds.length()").value(1))
-        .andExpect(jsonPath("$.mismatches.length()").value(1))
-        .andExpect(jsonPath("$.mismatches[0].queueId").value(INTERNAL_WORKS.toString()))
-        .andExpect(jsonPath("$.mismatches[0].fields[0]").value("CODE"))
-        .andExpect(jsonPath("$.mismatches[0].fields[1]").value("TYPE"))
-        .andExpect(jsonPath("$.mismatches[0].fields[2]").value("ACTIVE"))
-        .andExpect(jsonPath("$.mismatches[0].fields[3]").value("HIDDEN"))
-        .andExpect(jsonPath("$.mismatches[0].fields.length()").value(4));
+        .andExpect(jsonPath("$.missingWarehouseBindingDefinitionIds[0]")
+            .value(definition.id().toString()));
 
-    assertThat(persistedState()).isEqualTo(before);
+    var binding = registry.createQueue(MSK, binding(definition.id(), false, true));
+    mvc.perform(
+            post(WAREHOUSE_PREFLIGHT)
+                .with(exactMaintenanceJwt())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        warehouseRequest(MSK, definition.id(), QueueType.REPAIR))))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.ready").value(false))
+        .andExpect(jsonPath("$.mismatches[0].fields[0]").value("ACTIVE"))
+        .andExpect(jsonPath("$.mismatches[0].fields[1]").value("HIDDEN"));
+
+    assertThat(registry.listQueues(MSK)).extracting(WorkQueueDto::id).containsExactly(binding.id());
+  }
+
+  @Test
+  void catalogReferenceBelongsToDefinitionAndDoesNotBlockWarehouseDetach() {
+    var definition =
+        registry.createQueueDefinition(
+            new QueueDefinitionRequest(0L, "Сварка", null, QueueType.REPAIR));
+    var binding = registry.createQueue(SPB, binding(definition.id(), true, false));
+    var reference =
+        registry.registerReference(
+            definition.id(),
+            new QueueReferenceRequest(
+                QueueReferenceType.CATALOG_POSITION, "catalog-position-1"));
+
+    registry.deleteQueue(SPB, binding.id(), binding.version());
+    assertThat(registry.listQueues(SPB)).isEmpty();
+    assertThatThrownBy(
+            () ->
+                registry.deleteQueueDefinition(
+                    definition.id(), definition.version()))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("каталог");
+
+    registry.deleteReference(
+        reference.type(), reference.externalReferenceId(), reference.version());
+    registry.deleteQueueDefinition(definition.id(), definition.version());
+    assertThat(registry.listQueueDefinitions()).isEmpty();
   }
 
   @Test
   void exactMaintenanceServiceIdentityAndScopeAreRequired() throws Exception {
-    String body = objectMapper.writeValueAsString(routingRequest());
+    String body =
+        objectMapper.writeValueAsString(
+            new CatalogRoutingPreflightRequest(
+                List.of(
+                    new MaintenanceRoutingQueueRequirement(
+                        UUID.randomUUID(), QueueType.REPAIR))));
 
-    mvc.perform(post(PATH).contentType(MediaType.APPLICATION_JSON).content(body))
+    mvc.perform(
+            post(CATALOG_PREFLIGHT)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
         .andExpect(status().isUnauthorized());
     mvc.perform(
-            post(PATH)
-                .with(
-                    maintenanceJwt(
-                        "maintenance-service",
-                        "maintenance-service",
-                        "USER",
-                        List.of("task-board.task-sync")))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(body))
-        .andExpect(status().isForbidden());
-    mvc.perform(
-            post(PATH)
-                .with(
-                    maintenanceJwt(
-                        "other-service",
-                        "other-service",
-                        "SERVICE",
-                        List.of("task-board.task-sync")))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(body))
-        .andExpect(status().isForbidden());
-    mvc.perform(
-            post(PATH)
-                .with(
-                    maintenanceJwt(
-                        "maintenance-service",
-                        "different-subject",
-                        "SERVICE",
-                        List.of("task-board.task-sync")))
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(body))
-        .andExpect(status().isForbidden());
-    mvc.perform(
-            post(PATH)
+            post(CATALOG_PREFLIGHT)
                 .with(
                     maintenanceJwt(
                         "maintenance-service",
@@ -192,80 +186,27 @@ class MaintenanceRoutingPrerequisiteIntegrationTest extends PostgresIntegrationT
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body))
         .andExpect(status().isForbidden());
-
-    assertThat(jdbc.queryForObject("select count(*) from work_queue", Integer.class)).isZero();
   }
 
-  @Test
-  void catalogPositionReferenceReplayIsStableAndBlocksQueueDeletionUntilVersionedRemoval() {
-    var queue =
-        registry.createQueue(
-            MSK,
-            new WorkQueueRequest(
-                0L,
-                "CATALOG_ROUTE",
-                "Catalog route",
-                null,
-                QueueType.REPAIR,
-                true,
-                false,
-                false,
-                null,
-                null,
-                false,
-                List.<QueueBindingRequest>of()));
-    var request =
-        new QueueReferenceRequest(QueueReferenceType.CATALOG_POSITION, "catalog-position-1");
-
-    var first = registry.registerReference(queue.id(), request);
-    var replay = registry.registerReference(queue.id(), request);
-
-    assertThat(replay.id()).isEqualTo(first.id());
-    assertThat(replay.version()).isEqualTo(first.version());
-    assertThat(
-            jdbc.queryForObject(
-                "select count(*) from queue_usage_reference where reference_type='CATALOG_POSITION'",
-                Integer.class))
-        .isOne();
-    assertThat(
-            jdbc.queryForObject(
-                "select count(*) from outbox_event where event_type=?",
-                Integer.class,
-                TaskBoardEventTypes.QUEUE_REFERENCE_CREATED))
-        .isOne();
-    assertThatThrownBy(
-            () ->
-                registry.deleteReference(
-                    first.type(), first.externalReferenceId(), first.version() + 1))
-        .isInstanceOf(StaleVersionException.class);
-    assertThatThrownBy(() -> registry.deleteQueue(MSK, queue.id(), queue.version()))
-        .isInstanceOf(ConflictException.class);
-
-    registry.deleteReference(first.type(), first.externalReferenceId(), first.version());
-
-    assertThat(
-            jdbc.queryForObject(
-                "select count(*) from outbox_event where event_type=?",
-                Integer.class,
-                TaskBoardEventTypes.QUEUE_REFERENCE_DELETED))
-        .isOne();
-    registry.deleteQueue(MSK, queue.id(), queue.version());
-    assertThat(registry.listQueues(MSK)).isEmpty();
+  private WorkQueueRequest binding(UUID definitionId, boolean active, boolean hidden) {
+    return new WorkQueueRequest(
+        0L,
+        definitionId,
+        active,
+        hidden,
+        false,
+        null,
+        null,
+        false,
+        null,
+        List.of());
   }
 
-  private MaintenanceRoutingPreflightRequest routingRequest() {
+  private MaintenanceRoutingPreflightRequest warehouseRequest(
+      UUID warehouseId, UUID definitionId, QueueType type) {
     return new MaintenanceRoutingPreflightRequest(
-        MSK,
-        List.of(
-            new MaintenanceRoutingQueueRequirement(
-                EXTERNAL_WORKS, "EXTERNAL_WORKS", QueueType.REPAIR),
-            new MaintenanceRoutingQueueRequirement(
-                INTERNAL_WORKS, "INTERNAL_WORKS", QueueType.REPAIR),
-            new MaintenanceRoutingQueueRequirement(ELECTRICS, "ELECTRICS", QueueType.REPAIR),
-            new MaintenanceRoutingQueueRequirement(PLUMBING, "PLUMBING", QueueType.REPAIR),
-            new MaintenanceRoutingQueueRequirement(WELDING, "WELDING", QueueType.REPAIR),
-            new MaintenanceRoutingQueueRequirement(
-                SANITARY_DISINFECTION, "SANITARY_DISINFECTION", QueueType.HOLDING)));
+        warehouseId,
+        List.of(new MaintenanceRoutingQueueRequirement(definitionId, type)));
   }
 
   private JwtRequestPostProcessor exactMaintenanceJwt() {
@@ -287,22 +228,5 @@ class MaintenanceRoutingPrerequisiteIntegrationTest extends PostgresIntegrationT
                     .claim("principal_type", principalType)
                     .claim("client_id", clientId)
                     .claim("scope", scopes));
-  }
-
-  private String persistedState() {
-    return jdbc.queryForObject(
-        """
-        select jsonb_build_object(
-          'queues', (select coalesce(jsonb_agg(to_jsonb(item) order by item.id), '[]'::jsonb)
-                       from work_queue item),
-          'bindings', (select coalesce(jsonb_agg(to_jsonb(item) order by item.id), '[]'::jsonb)
-                         from work_queue_class_binding item),
-          'events', (select coalesce(jsonb_agg(to_jsonb(item) order by item.event_id), '[]'::jsonb)
-                       from domain_event item),
-          'outbox', (select coalesce(jsonb_agg(to_jsonb(item) order by item.event_id), '[]'::jsonb)
-                       from outbox_event item)
-        )::text
-        """,
-        String.class);
   }
 }

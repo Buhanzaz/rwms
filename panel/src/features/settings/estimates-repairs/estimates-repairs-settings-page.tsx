@@ -1,13 +1,20 @@
-import { useId, useMemo, useRef, useState, type ReactNode } from "react"
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
+import { useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import {
   Add01Icon,
   AlertCircleIcon,
-  ArrowLeft01Icon,
-  ArrowRight01Icon,
   CanvasIcon,
+  ColorPickerIcon,
   DatabaseAddIcon,
   Delete01Icon,
   FloppyDiskIcon,
@@ -43,13 +50,35 @@ import {
   saveRepairEstimateWorkCatalogItem,
 } from "@/features/settings/estimates-repairs/api/repair-estimate-work-catalog-settings-api"
 import {
-  bootstrapRepairEstimateCatalog,
+  createRepairEstimateCatalog,
   getCurrentRepairEstimateCatalog,
   getItemsForCategory,
+  getRepairEstimateCatalogSnapshot,
   getRepairEstimateCatalogSectionItems,
+  REPAIR_ESTIMATE_CATALOG_DISPLAY_COLOR_GROUPS,
+  saveRepairEstimateCatalogDisplayColors,
   saveRepairEstimateCatalogCanvasChanges,
 } from "@/features/settings/estimates-repairs/api/repair-estimate-catalog-store"
+import {
+  getRepairComplexityColors,
+  saveRepairComplexityColors,
+  type RepairComplexityColorsDto,
+} from "@/features/settings/estimates-repairs/api/repair-complexity-colors-api"
+import type {
+  RepairEstimateCatalogDisplayColorGroup,
+  RepairEstimateCatalogDisplayColors,
+} from "@/features/settings/estimates-repairs/api/repair-estimate-catalog-store"
+import {
+  taskBoardSettingsClient,
+  taskBoardSettingsKeys,
+} from "@/features/settings/task-board/api/task-board-settings-api"
+import {
+  queueTypeLabels,
+  type QueueDefinitionDto,
+} from "@/features/settings/task-board/model/task-board-settings"
+import { getCabinSettings } from "@/features/rental-items/api/asset-rental-items-api"
 import { REPAIR_ESTIMATE_CATALOG_QUERY_KEY } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
+import { formatMoneyDecimal } from "@/features/repair-estimates/domain/repair-estimate-domain"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -77,6 +106,14 @@ import {
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -95,14 +132,13 @@ import type {
   RepairEstimateCatalogNodeMutation,
   RepairEstimateCatalogNodeType,
   RepairEstimateCatalogRequest,
+  RepairEstimateCatalogRouteQueueKind,
   RepairEstimateCatalogSectionDto,
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
 import {
   repairEstimateCatalogLinkTypeLabel,
   repairEstimateCatalogNodeTypeLabel,
 } from "@/features/settings/estimates-repairs/model/repair-estimate-catalog"
-
-type SettingsAction = EstimateCatalogSettingsActionDto & { group: "estimate" }
 
 type EstimateScreen =
   | { level: "root" }
@@ -160,9 +196,63 @@ const CANVAS_NODE_WIDTH = 256
 const CANVAS_NODE_MIN_HEIGHT = 208
 const CANVAS_ANCHOR_INSET = 1
 const CATALOG_COMMENT_MAX_LENGTH = 2000
+const NO_ROUTE_QUEUE_VALUE = "__NO_ROUTE_QUEUE__"
+const DISPLAY_COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/
+const DISPLAY_COLOR_PICKER_FALLBACK = "#64748B"
+const REPAIR_COMPLEXITY_COLOR_FIELDS = [
+  { key: "lightColor", label: "Лёгкий ремонт" },
+  { key: "mediumColor", label: "Средний ремонт" },
+  { key: "complexColor", label: "Сложный ремонт" },
+  { key: "capitalColor", label: "Капитальный ремонт" },
+] as const
+
+const REPAIR_ESTIMATE_CATALOG_COLOR_SETTINGS: EstimateCatalogSettingsActionDto =
+  {
+    id: "repair-estimate-catalog-colors",
+    title: "Цветовая индикация кнопок",
+    sectionType: "COLORS",
+    categoryScope: "ALL",
+    order: 5,
+  }
+
+const DISPLAY_COLOR_GROUP_COPY: Record<
+  RepairEstimateCatalogDisplayColorGroup,
+  { title: string; description: string }
+> = {
+  CATEGORY: {
+    title: "Категории",
+    description: "Верхний уровень каталога, кроме ветки мебели.",
+  },
+  SUBCATEGORY: {
+    title: "Подкатегории",
+    description: "Вложенные разделы каталога.",
+  },
+  WORK: {
+    title: "Работы",
+    description: "Кнопки работ в каталоге.",
+  },
+  MATERIAL: {
+    title: "Материалы",
+    description: "Кнопки материалов в каталоге.",
+  },
+  FURNITURE: {
+    title: "Мебель",
+    description: "Вся ветка мебели, включая её категории и позиции.",
+  },
+  OPTION: {
+    title: "Опции",
+    description: "Дополнительные варианты и переходы каталога.",
+  },
+  LOCATION: {
+    title: "Расположение",
+    description: "Кнопки местоположения материалов.",
+  },
+}
 
 function getEstimateActionIcon(id: EstimateCatalogSettingsActionDto["id"]) {
   switch (id) {
+    case "repair-estimate-catalog-colors":
+      return ColorPickerIcon
     case "repair-estimate-catalog-canvas":
       return CanvasIcon
     case "repair-estimate-catalog-works":
@@ -183,6 +273,7 @@ function getSectionKind(action: EstimateCatalogSettingsActionDto) {
     case "repair-estimate-catalog-furniture":
       return "furniture"
     case "repair-estimate-catalog-canvas":
+    case "repair-estimate-catalog-colors":
       return null
   }
 }
@@ -192,6 +283,8 @@ async function getEstimateActionData(
   action: EstimateCatalogSettingsActionDto
 ) {
   switch (action.id) {
+    case "repair-estimate-catalog-colors":
+      return getRepairEstimateCatalogCanvasSettingsData(request)
     case "repair-estimate-catalog-canvas":
       return getRepairEstimateCatalogCanvasSettingsData(request)
     case "repair-estimate-catalog-works":
@@ -209,36 +302,50 @@ function isSectionData(
   return "kind" in data
 }
 
-function SettingsActionButton({
-  action,
-  onClick,
+function EstimateActionNavigation({
+  actions,
+  activeActionId,
+  onSelect,
 }: {
-  action: SettingsAction
-  onClick: (action: SettingsAction) => void
+  actions: EstimateCatalogSettingsActionDto[]
+  activeActionId: EstimateCatalogSettingsActionDto["id"] | null
+  onSelect: (action: EstimateCatalogSettingsActionDto) => void
 }) {
-  const Icon = getEstimateActionIcon(action.id)
-
   return (
-    <Button
-      type="button"
-      variant="outline"
-      className="h-auto min-h-16 w-full justify-between gap-3 px-3 py-3 text-left"
-      onClick={() => onClick(action)}
-    >
-      <span className="flex min-w-0 items-center gap-3">
-        <HugeiconsIcon icon={Icon} data-icon="inline-start" />
-        <span className="flex min-w-0 flex-col items-start gap-0.5">
-          <span className="max-w-full truncate">{action.title}</span>
-          <span
-            aria-hidden="true"
-            className="text-xs font-normal text-muted-foreground"
-          >
-            Открыть раздел
-          </span>
-        </span>
-      </span>
-      <HugeiconsIcon icon={ArrowRight01Icon} data-icon="inline-end" />
-    </Button>
+    <nav aria-label="Разделы каталога смет">
+      <ToggleGroup
+        type="single"
+        value={activeActionId ?? ""}
+        variant="outline"
+        size="default"
+        className="grid w-full grid-cols-2 gap-2 lg:grid-cols-5"
+        onValueChange={(actionId) => {
+          if (!actionId) {
+            return
+          }
+
+          const action = actions.find((candidate) => candidate.id === actionId)
+          if (action) {
+            onSelect(action)
+          }
+        }}
+      >
+        {actions.map((action) => {
+          const Icon = getEstimateActionIcon(action.id)
+
+          return (
+            <ToggleGroupItem
+              key={action.id}
+              value={action.id}
+              className="h-9 w-full justify-center px-3 text-sm"
+            >
+              <HugeiconsIcon icon={Icon} data-icon="inline-start" />
+              <span className="truncate">{action.title}</span>
+            </ToggleGroupItem>
+          )
+        })}
+      </ToggleGroup>
+    </nav>
   )
 }
 
@@ -289,29 +396,6 @@ function CatalogNavigationState({
         <CardFooter className="flex-wrap gap-2">{children}</CardFooter>
       )}
     </Card>
-  )
-}
-
-function SettingsSection({
-  title,
-  count,
-  children,
-}: {
-  title: string
-  count: number
-  children: ReactNode
-}) {
-  return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card">
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <h2 className="truncate text-lg font-semibold">{title}</h2>
-          <Badge variant="secondary">{count} шт.</Badge>
-        </div>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-auto p-4">{children}</div>
-    </section>
   )
 }
 
@@ -546,8 +630,8 @@ function createNodeMutation(
 ): RepairEstimateCatalogNodeMutation {
   return {
     id: node.id,
-    code: node.code,
     name: node.name,
+    displayColor: node.displayColor ?? null,
     nodeType: node.nodeType,
     parentId: node.parentId,
     active: node.active,
@@ -557,11 +641,12 @@ function createNodeMutation(
     showInMainMenu: node.showInMainMenu,
     routeQueueKind: node.routeQueueKind,
     routing: node.routing,
-    references: node.references,
     includeInEstimate: node.includeInEstimate,
     commonItem: node.commonItem,
     furnitureCategory: node.furnitureCategory,
     furnitureEquipment: node.furnitureEquipment,
+    forcesCapitalRepair: node.forcesCapitalRepair,
+    characteristicId: node.characteristic?.characteristicId ?? null,
     canvasX: node.canvasX,
     canvasY: node.canvasY,
     comment: node.comment,
@@ -578,8 +663,8 @@ function createBlankNodeMutation({
   const priced = nodeType === "WORK" || nodeType === "MATERIAL"
 
   return {
-    code: "",
     name: "",
+    displayColor: null,
     nodeType,
     parentId,
     active: true,
@@ -592,6 +677,8 @@ function createBlankNodeMutation({
     commonItem: false,
     furnitureCategory: false,
     furnitureEquipment: null,
+    forcesCapitalRepair: false,
+    characteristicId: null,
     canvasX: null,
     canvasY: null,
     comment: null,
@@ -662,11 +749,97 @@ function NodeEditorDialogContent({
   const fieldIdPrefix = useId()
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState(state.value)
+  const [characteristicLinked, setCharacteristicLinked] = useState(
+    state.value.nodeType === "MATERIAL" && state.value.characteristicId !== null
+  )
   const [error, setError] = useState<string | null>(null)
   const priced = draft.nodeType === "WORK" || draft.nodeType === "MATERIAL"
   const furnitureMaterial = state.furnitureTree && draft.nodeType === "MATERIAL"
+  const categoryRouting = draft.nodeType === "CATEGORY"
+  const materialCharacteristic = draft.nodeType === "MATERIAL"
   const commentLength = (draft.comment ?? "").length
   const commentTooLong = commentLength > CATALOG_COMMENT_MAX_LENGTH
+  const routingQueuesQuery = useQuery({
+    queryKey: taskBoardSettingsKeys.queueDefinitions,
+    queryFn: () =>
+      taskBoardSettingsClient.listQueueDefinitions(state.request.accessToken),
+    enabled: categoryRouting,
+  })
+  const routingQueues = useMemo(
+    () =>
+      (routingQueuesQuery.data ?? [])
+        .filter(
+          (
+            queue
+          ): queue is QueueDefinitionDto & {
+            type: RepairEstimateCatalogRouteQueueKind
+          } => queue.type !== "FURNITURE_MOVEMENT"
+        )
+        .sort(
+          (left, right) =>
+            left.name.localeCompare(right.name, "ru") ||
+            left.id.localeCompare(right.id)
+        ),
+    [routingQueuesQuery.data]
+  )
+  const characteristicsQuery = useQuery({
+    queryKey: ["asset", "cabin-settings", "characteristics"],
+    queryFn: () => getCabinSettings(state.request.accessToken),
+    enabled: materialCharacteristic,
+  })
+  const characteristics = useMemo(
+    () =>
+      (characteristicsQuery.data?.characteristics ?? [])
+        .filter(
+          (characteristic) =>
+            characteristic.active ||
+            characteristic.id === draft.characteristicId
+        )
+        .sort(
+          (left, right) =>
+            left.name.localeCompare(right.name, "ru") ||
+            left.id.localeCompare(right.id)
+        ),
+    [characteristicsQuery.data, draft.characteristicId]
+  )
+  const selectedRoutingQueue =
+    draft.routing === null || draft.routing === undefined
+      ? null
+      : (routingQueues.find((queue) => queue.id === draft.routing?.queueId) ??
+        null)
+  const routingUnavailable =
+    categoryRouting &&
+    draft.routing !== null &&
+    draft.routing !== undefined &&
+    selectedRoutingQueue === null &&
+    !routingQueuesQuery.isFetching &&
+    !routingQueuesQuery.isError
+  const routingSaveBlocked =
+    categoryRouting &&
+    (routingQueuesQuery.isFetching ||
+      routingQueuesQuery.isError ||
+      routingUnavailable)
+  const characteristicSaveBlocked =
+    materialCharacteristic &&
+    characteristicLinked &&
+    (characteristicsQuery.isFetching ||
+      characteristicsQuery.isError ||
+      !draft.characteristicId ||
+      !characteristics.some(
+        (characteristic) => characteristic.id === draft.characteristicId
+      ))
+  const draftForSave =
+    categoryRouting && selectedRoutingQueue !== null
+      ? {
+          ...draft,
+          routeQueueKind: selectedRoutingQueue.type,
+          routing: {
+            queueId: selectedRoutingQueue.id,
+            queueName: selectedRoutingQueue.name,
+            queueType: selectedRoutingQueue.type,
+          },
+        }
+      : draft
 
   function notifySaved() {
     if (furnitureMaterial) {
@@ -702,8 +875,13 @@ function NodeEditorDialogContent({
           className="contents"
           onSubmit={(event) => {
             event.preventDefault()
-            if (!mutation.isPending && !commentTooLong) {
-              mutation.mutate(draft)
+            if (
+              !mutation.isPending &&
+              !commentTooLong &&
+              !routingSaveBlocked &&
+              !characteristicSaveBlocked
+            ) {
+              mutation.mutate(draftForSave)
             }
           }}
         >
@@ -714,7 +892,7 @@ function NodeEditorDialogContent({
                 <NativeSelect
                   id={`${fieldIdPrefix}-type`}
                   value={draft.nodeType}
-                  onChange={(value) =>
+                  onChange={(value) => {
                     setDraft((current) => ({
                       ...current,
                       nodeType: value as RepairEstimateCatalogNodeType,
@@ -734,8 +912,15 @@ function NodeEditorDialogContent({
                         value === "MATERIAL"
                           ? current.furnitureEquipment
                           : null,
+                      forcesCapitalRepair:
+                        value === "WORK" ? current.forcesCapitalRepair : false,
+                      characteristicId:
+                        value === "MATERIAL" ? current.characteristicId : null,
                     }))
-                  }
+                    if (value !== "MATERIAL") {
+                      setCharacteristicLinked(false)
+                    }
+                  }}
                 >
                   {(
                     [
@@ -756,23 +941,6 @@ function NodeEditorDialogContent({
 
             <div className="grid gap-3 md:grid-cols-2">
               <Field>
-                <FieldLabel htmlFor={`${fieldIdPrefix}-code`}>Код</FieldLabel>
-                <Input
-                  id={`${fieldIdPrefix}-code`}
-                  value={draft.code}
-                  onChange={(event) =>
-                    setDraft((current) => ({
-                      ...current,
-                      code: event.target.value,
-                    }))
-                  }
-                />
-                <FieldDescription>
-                  Латиница, цифры, «_» или «-».
-                </FieldDescription>
-              </Field>
-
-              <Field>
                 <FieldLabel htmlFor={`${fieldIdPrefix}-name`}>
                   Название
                 </FieldLabel>
@@ -788,6 +956,107 @@ function NodeEditorDialogContent({
                 />
               </Field>
             </div>
+
+            {categoryRouting && (
+              <Field
+                data-invalid={
+                  routingQueuesQuery.isError || routingUnavailable || undefined
+                }
+                data-disabled={
+                  routingQueuesQuery.isFetching || mutation.isPending
+                }
+              >
+                <FieldLabel htmlFor={`${fieldIdPrefix}-routing-queue`}>
+                  Очередь доски задач
+                </FieldLabel>
+                <Select
+                  value={
+                    selectedRoutingQueue?.id ??
+                    draft.routing?.queueId ??
+                    NO_ROUTE_QUEUE_VALUE
+                  }
+                  disabled={
+                    routingQueuesQuery.isFetching ||
+                    routingQueuesQuery.isError ||
+                    mutation.isPending
+                  }
+                  onValueChange={(queueId) => {
+                    if (queueId === NO_ROUTE_QUEUE_VALUE) {
+                      setDraft((current) => ({
+                        ...current,
+                        routeQueueKind: null,
+                        routing: null,
+                      }))
+                      return
+                    }
+
+                    const queue = routingQueues.find(
+                      (candidate) => candidate.id === queueId
+                    )
+                    if (!queue) {
+                      return
+                    }
+
+                    setDraft((current) => ({
+                      ...current,
+                      routeQueueKind: queue.type,
+                      routing: {
+                        queueId: queue.id,
+                        queueName: queue.name,
+                        queueType: queue.type,
+                      },
+                    }))
+                  }}
+                >
+                  <SelectTrigger
+                    id={`${fieldIdPrefix}-routing-queue`}
+                    className="w-full"
+                    aria-invalid={
+                      routingQueuesQuery.isError ||
+                      routingUnavailable ||
+                      undefined
+                    }
+                  >
+                    <SelectValue placeholder="Выберите очередь" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value={NO_ROUTE_QUEUE_VALUE}>
+                        Без очереди (очистить привязку)
+                      </SelectItem>
+                      {routingQueues.map((queue) => (
+                        <SelectItem key={queue.id} value={queue.id}>
+                          {queue.name} · {queueTypeLabels[queue.type]}
+                        </SelectItem>
+                      ))}
+                      {routingUnavailable && draft.routing && (
+                        <SelectItem value={draft.routing.queueId} disabled>
+                          {draft.routing.queueName} ·{" "}
+                          {queueTypeLabels[draft.routing.queueType]}{" "}
+                          (недоступна)
+                        </SelectItem>
+                      )}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription>
+                  Категория связывается с единым определением очереди. На каждом
+                  складе должна быть подключена соответствующая очередь.
+                </FieldDescription>
+                {routingQueuesQuery.isError && (
+                  <FieldError>
+                    Не удалось проверить очереди доски задач. Повторно откройте
+                    редактор после восстановления сервиса.
+                  </FieldError>
+                )}
+                {routingUnavailable && (
+                  <FieldError>
+                    Текущее определение очереди удалено. Выберите существующее
+                    определение либо очистите привязку.
+                  </FieldError>
+                )}
+              </Field>
+            )}
 
             <div className="grid gap-3 md:grid-cols-2">
               <Field>
@@ -837,7 +1106,6 @@ function NodeEditorDialogContent({
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="secondary">Связано автоматически</Badge>
                     <span className="text-sm">
-                      {draft.furnitureEquipment.equipmentCode} ·{" "}
                       {draft.furnitureEquipment.equipmentName}
                     </span>
                   </div>
@@ -845,13 +1113,101 @@ function NodeEditorDialogContent({
                   <Badge variant="outline">Будет создано автоматически</Badge>
                 )}
                 <FieldDescription>
-                  После сохранения код и название мебели автоматически создадут
-                  и привяжут строку в «Доп. оборудовании» настроек склада. При
-                  завершении сметы количество будет снято с дополнительного
-                  оборудования бытовки.
+                  После сохранения название мебели автоматически создаст и
+                  привяжет строку в «Доп. оборудовании» настроек склада. При
+                  завершении сметы количество будет снято с оборудования
+                  бытовки.
                 </FieldDescription>
               </Field>
             )}
+
+            {materialCharacteristic ? (
+              <FieldGroup>
+                <BooleanField
+                  title="Связать с характеристикой"
+                  checked={characteristicLinked}
+                  disabled={mutation.isPending}
+                  onCheckedChange={(checked) => {
+                    setCharacteristicLinked(checked)
+                    setDraft((current) => ({
+                      ...current,
+                      characteristicId: checked
+                        ? (current.characteristicId ??
+                          characteristics[0]?.id ??
+                          "")
+                        : null,
+                    }))
+                  }}
+                />
+                {characteristicLinked ? (
+                  <Field
+                    data-invalid={
+                      characteristicsQuery.isError ||
+                      (!characteristicsQuery.isFetching &&
+                        !draft.characteristicId) ||
+                      undefined
+                    }
+                    data-disabled={
+                      characteristicsQuery.isFetching || mutation.isPending
+                    }
+                  >
+                    <FieldLabel
+                      htmlFor={`${fieldIdPrefix}-cabin-characteristic`}
+                    >
+                      Характеристика бытовки
+                    </FieldLabel>
+                    <Select
+                      value={draft.characteristicId || undefined}
+                      disabled={
+                        characteristicsQuery.isFetching ||
+                        characteristicsQuery.isError ||
+                        mutation.isPending
+                      }
+                      onValueChange={(characteristicId) =>
+                        setDraft((current) => ({
+                          ...current,
+                          characteristicId,
+                        }))
+                      }
+                    >
+                      <SelectTrigger
+                        id={`${fieldIdPrefix}-cabin-characteristic`}
+                        className="w-full"
+                      >
+                        <SelectValue placeholder="Выберите характеристику" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {characteristics.map((characteristic) => (
+                            <SelectItem
+                              key={characteristic.id}
+                              value={characteristic.id}
+                            >
+                              {characteristic.name}
+                              {!characteristic.active ? " (отключена)" : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FieldDescription>
+                      После успешной приёмки результата эта характеристика будет
+                      добавлена бытовке.
+                    </FieldDescription>
+                    {characteristicsQuery.isError ? (
+                      <FieldError>
+                        Не удалось загрузить характеристики из asset-service.
+                      </FieldError>
+                    ) : !characteristicsQuery.isFetching &&
+                      characteristics.length === 0 ? (
+                      <FieldError>
+                        В справочнике бытовок нет доступных характеристик.
+                      </FieldError>
+                    ) : null}
+                  </Field>
+                ) : null}
+              </FieldGroup>
+            ) : null}
 
             <div className="grid gap-3 md:grid-cols-2">
               {draft.nodeType === "WORK" && (
@@ -921,6 +1277,18 @@ function NodeEditorDialogContent({
                   }
                 />
               )}
+              {draft.nodeType === "WORK" ? (
+                <BooleanField
+                  title="Автоматически переводит бытовку в капитальный ремонт"
+                  checked={draft.forcesCapitalRepair}
+                  onCheckedChange={(checked) =>
+                    setDraft((current) => ({
+                      ...current,
+                      forcesCapitalRepair: checked,
+                    }))
+                  }
+                />
+              ) : null}
             </FieldGroup>
 
             <Field data-invalid={commentTooLong || undefined}>
@@ -959,7 +1327,12 @@ function NodeEditorDialogContent({
             </Button>
             <Button
               type="submit"
-              disabled={mutation.isPending || commentTooLong}
+              disabled={
+                mutation.isPending ||
+                commentTooLong ||
+                routingSaveBlocked ||
+                characteristicSaveBlocked
+              }
             >
               {state.submitLabel}
             </Button>
@@ -1061,7 +1434,9 @@ function EstimateActionCategoryMenu({
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <CatalogMeta nodeCount={nodeCount} linkCount={linkCount} />
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <CatalogMeta nodeCount={nodeCount} linkCount={linkCount} />
+        </div>
         {canCreateCategory && (
           <Button
             type="button"
@@ -1088,24 +1463,21 @@ function EstimateActionCategoryMenu({
         )}
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {dataQuery.data.categories.map((category) => (
-          <button
+          <Button
             key={category.id}
             type="button"
-            className="flex min-h-28 flex-col items-start justify-between gap-4 rounded-lg border bg-background p-4 text-left transition-colors hover:bg-accent"
+            variant="outline"
+            size="default"
+            className="w-full justify-between"
             onClick={() => onOpenCategory(category.id)}
           >
-            <span className="flex w-full items-center justify-between gap-2">
-              <span className="min-w-0 truncate font-medium">
-                {category.name}
-              </span>
-              <HugeiconsIcon icon={ArrowRight01Icon} />
-            </span>
-            <Badge variant="secondary">
+            <span className="min-w-0 truncate">{category.name}</span>
+            <Badge variant="secondary" className="shrink-0">
               {categoryItemCount(dataQuery.data, category.id)} записей
             </Badge>
-          </button>
+          </Button>
         ))}
       </div>
 
@@ -1275,9 +1647,162 @@ function getCurveMidpoint(
   }
 }
 
+function catalogQueueIdKey(queueId: string) {
+  return `id:${queueId}`
+}
+
+function getCatalogNodeQueueLabel(
+  node: RepairEstimateCatalogNodeDto,
+  queueLabels: ReadonlyMap<string, string>
+) {
+  const queueId = node.routing?.queueId ?? node.queueDefinitionId
+
+  if (queueId !== null) {
+    const queueLabel = queueLabels.get(catalogQueueIdKey(queueId))
+    if (queueLabel) {
+      return queueLabel
+    }
+  }
+
+  return node.routing?.queueName ?? "Не привязана"
+}
+
+function CatalogCanvasNodeMetric({
+  label,
+  value,
+  numeric = false,
+}: {
+  label: string
+  value: string
+  numeric?: boolean
+}) {
+  return (
+    <div className="contents">
+      <dt className="min-w-0 border-r bg-muted/30 px-2 py-1.5 text-xs leading-snug text-foreground">
+        {label}
+      </dt>
+      <dd
+        className={cn(
+          "min-w-0 px-2 py-1.5 text-xs leading-snug font-medium break-words text-foreground",
+          numeric && "tabular-nums"
+        )}
+      >
+        {value}
+      </dd>
+    </div>
+  )
+}
+
+function CatalogCanvasNodeMetrics({ children }: { children: ReactNode }) {
+  return (
+    <dl className="grid grid-cols-2 overflow-hidden rounded-md border [&>div:not(:last-child)>*]:border-b">
+      {children}
+    </dl>
+  )
+}
+
+function CatalogCanvasNodeMetadata({
+  node,
+  queueLabels,
+}: {
+  node: RepairEstimateCatalogNodeDto
+  queueLabels: ReadonlyMap<string, string>
+}) {
+  const statusMetric = (
+    <CatalogCanvasNodeMetric
+      label="Активно"
+      value={node.active ? "Да" : "Нет"}
+    />
+  )
+  const estimateMetric = (
+    <CatalogCanvasNodeMetric
+      label="Учёт в смете"
+      value={node.includeInEstimate ? "Да" : "Нет"}
+    />
+  )
+  const unitMetric = (
+    <CatalogCanvasNodeMetric label="Единица" value={node.unit || "—"} />
+  )
+  const priceMetric = (
+    <CatalogCanvasNodeMetric
+      label="Цена"
+      value={
+        node.unitPrice === null
+          ? "—"
+          : `${formatMoneyDecimal(node.unitPrice)} ₽`
+      }
+      numeric
+    />
+  )
+
+  return (
+    <div className="flex flex-1 flex-col gap-2">
+      {node.nodeType === "CATEGORY" && (
+        <CatalogCanvasNodeMetrics>
+          {statusMetric}
+          <CatalogCanvasNodeMetric
+            label="Очередь"
+            value={getCatalogNodeQueueLabel(node, queueLabels)}
+          />
+        </CatalogCanvasNodeMetrics>
+      )}
+
+      {node.nodeType === "SUBCATEGORY" && (
+        <CatalogCanvasNodeMetrics>{statusMetric}</CatalogCanvasNodeMetrics>
+      )}
+
+      {node.nodeType === "WORK" && (
+        <CatalogCanvasNodeMetrics>
+          {unitMetric}
+          {priceMetric}
+          <CatalogCanvasNodeMetric
+            label="Длительность"
+            value={
+              node.durationMinutes === null
+                ? "—"
+                : `${node.durationMinutes} мин`
+            }
+            numeric
+          />
+          {statusMetric}
+          {estimateMetric}
+        </CatalogCanvasNodeMetrics>
+      )}
+
+      {node.nodeType === "MATERIAL" && (
+        <CatalogCanvasNodeMetrics>
+          {unitMetric}
+          {priceMetric}
+          {statusMetric}
+          {estimateMetric}
+        </CatalogCanvasNodeMetrics>
+      )}
+
+      {(node.nodeType === "LOCATION" || node.nodeType === "OPTION") && (
+        <CatalogCanvasNodeMetrics>
+          {unitMetric}
+          {statusMetric}
+        </CatalogCanvasNodeMetrics>
+      )}
+
+      {(node.commonItem || node.comment) && (
+        <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+          {node.commonItem && <span>Общий элемент</span>}
+          {node.comment && (
+            <span className="break-words whitespace-pre-wrap">
+              {node.comment}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function CatalogCanvas({
   nodes,
   links,
+  queueLabels,
   readOnly,
   selectedNodeId,
   selectedLinkId,
@@ -1294,6 +1819,7 @@ function CatalogCanvas({
 }: {
   nodes: RepairEstimateCatalogNodeDto[]
   links: RepairEstimateCatalogLinkDto[]
+  queueLabels: ReadonlyMap<string, string>
   readOnly: boolean
   selectedNodeId: string | null
   selectedLinkId: string | null
@@ -1866,16 +2392,7 @@ function CatalogCanvas({
               {repairEstimateCatalogNodeTypeLabel(node.nodeType)}
             </Badge>
           </div>
-          <span className="flex flex-1 flex-col gap-1 text-xs text-muted-foreground">
-            <span>Единица: {node.unit ?? ""}</span>
-            <span>Активно: {node.active ? "Да" : "Нет"}</span>
-            {node.commonItem && <span>Общий</span>}
-            {node.comment && (
-              <span className="break-words whitespace-pre-wrap">
-                {node.comment}
-              </span>
-            )}
-          </span>
+          <CatalogCanvasNodeMetadata node={node} queueLabels={queueLabels} />
           {!readOnly && (
             <Button
               type="button"
@@ -1935,6 +2452,31 @@ function CatalogCanvasCategoryEditor({
     queryKey: canvasQueryKey,
     queryFn: () => getRepairEstimateCatalogCanvasSettingsData(request),
   })
+  const hasRoutedCategory =
+    canvasQuery.data?.nodes.some(
+      (node) =>
+        node.nodeType === "CATEGORY" &&
+        (node.routing !== null || node.queueDefinitionId !== null)
+    ) ?? false
+  const routingQueuesQuery = useQuery({
+    queryKey: taskBoardSettingsKeys.queueDefinitions,
+    queryFn: () =>
+      taskBoardSettingsClient.listQueueDefinitions(request.accessToken),
+    enabled: hasRoutedCategory,
+  })
+  const routingQueueLabels = useMemo(() => {
+    const labels = new Map<string, string>()
+
+    for (const queue of routingQueuesQuery.data ?? []) {
+      if (queue.type === "FURNITURE_MOVEMENT") {
+        continue
+      }
+
+      labels.set(catalogQueueIdKey(queue.id), queue.name)
+    }
+
+    return labels
+  }, [routingQueuesQuery.data])
 
   const invalidate = () => {
     void queryClient.invalidateQueries({
@@ -2065,16 +2607,13 @@ function CatalogCanvasCategoryEditor({
   }
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <div className="flex flex-col gap-3">
-        <div className="min-w-0">
-          <h2 className="truncate text-lg font-semibold">{category.name}</h2>
-        </div>
-        {readOnly ? (
-          <p className="text-sm text-muted-foreground">
-            У вас нет права редактировать каталог выбранного склада.
-          </p>
-        ) : (
-          <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <CatalogMeta
+            nodeCount={canvasNodes.length}
+            linkCount={canvasLinks.length}
+          />
+          {!readOnly && (
             <fieldset className="flex w-fit items-center gap-3 rounded-lg border bg-muted/30 p-1.5">
               <legend className="sr-only">Тип стрелки</legend>
               <span className="pl-1 text-sm font-medium text-foreground">
@@ -2106,68 +2645,70 @@ function CatalogCanvasCategoryEditor({
                 ))}
               </ToggleGroup>
             </fieldset>
-            <div className="flex flex-wrap items-center gap-2 lg:ml-auto lg:justify-end">
-              {draftLinkStart !== null && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setDraftLinkStart(null)}
-                >
-                  Отменить стрелку
-                </Button>
-              )}
+          )}
+        </div>
+        {readOnly ? (
+          <span className="text-sm text-muted-foreground">Только просмотр</span>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            {draftLinkStart !== null && (
               <Button
                 type="button"
                 variant="outline"
-                onClick={() =>
-                  setNodeDialogState({
-                    title: "Добавить блок",
-                    description: category.name,
-                    submitLabel: "Сохранить",
-                    allowTypeSelect: true,
-                    request,
-                    furnitureTree: category.furnitureCategory,
-                    value: createBlankNodeMutation({
-                      nodeType: "WORK",
-                      parentId: category.id,
-                    }),
-                    save: (input) =>
-                      saveRepairEstimateCatalogCanvasNode(request, input),
-                  })
-                }
+                onClick={() => setDraftLinkStart(null)}
               >
-                <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
-                Блок
+                Отменить стрелку
               </Button>
-              <Button
-                type="button"
-                disabled={
-                  !hasPendingCanvasChanges || saveCanvasMutation.isPending
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() =>
+                setNodeDialogState({
+                  title: "Добавить блок",
+                  description: category.name,
+                  submitLabel: "Сохранить",
+                  allowTypeSelect: true,
+                  request,
+                  furnitureTree: category.furnitureCategory,
+                  value: createBlankNodeMutation({
+                    nodeType: "WORK",
+                    parentId: category.id,
+                  }),
+                  save: (input) =>
+                    saveRepairEstimateCatalogCanvasNode(request, input),
+                })
+              }
+            >
+              <HugeiconsIcon icon={Add01Icon} data-icon="inline-start" />
+              Блок
+            </Button>
+            <Button
+              type="button"
+              disabled={
+                !hasPendingCanvasChanges || saveCanvasMutation.isPending
+              }
+              onClick={() =>
+                saveCanvasMutation.mutate({
+                  nodePositions: Object.entries(pendingNodePositions).map(
+                    ([nodeId, position]) => ({ nodeId, ...position })
+                  ),
+                  addedLinks: pendingLinks.map(({ input }) => input),
+                  deletedLinkIds,
+                })
+              }
+            >
+              <HugeiconsIcon
+                icon={
+                  saveCanvasMutation.isPending ? Loading03Icon : FloppyDiskIcon
                 }
-                onClick={() =>
-                  saveCanvasMutation.mutate({
-                    nodePositions: Object.entries(pendingNodePositions).map(
-                      ([nodeId, position]) => ({ nodeId, ...position })
-                    ),
-                    addedLinks: pendingLinks.map(({ input }) => input),
-                    deletedLinkIds,
-                  })
+                data-icon="inline-start"
+                className={
+                  saveCanvasMutation.isPending ? "animate-spin" : undefined
                 }
-              >
-                <HugeiconsIcon
-                  icon={
-                    saveCanvasMutation.isPending
-                      ? Loading03Icon
-                      : FloppyDiskIcon
-                  }
-                  data-icon="inline-start"
-                  className={
-                    saveCanvasMutation.isPending ? "animate-spin" : undefined
-                  }
-                />
-                {saveCanvasMutation.isPending ? "Сохраняем…" : "Сохранить"}
-              </Button>
-            </div>
+              />
+              {saveCanvasMutation.isPending ? "Сохраняем…" : "Сохранить"}
+            </Button>
           </div>
         )}
       </div>
@@ -2176,6 +2717,7 @@ function CatalogCanvasCategoryEditor({
         <CatalogCanvas
           nodes={canvasNodes}
           links={canvasLinks}
+          queueLabels={routingQueueLabels}
           readOnly={readOnly}
           selectedNodeId={selectedNodeId}
           selectedLinkId={selectedLinkId}
@@ -2384,7 +2926,7 @@ function CatalogItemsTable({
             {section.kind === "furniture" && (
               <td className="px-3 py-2">
                 {item.furnitureEquipment
-                  ? `${item.furnitureEquipment.equipmentCode} · ${item.furnitureEquipment.equipmentName}`
+                  ? item.furnitureEquipment.equipmentName
                   : "Не привязано"}
               </td>
             )}
@@ -2512,6 +3054,8 @@ function CatalogSectionCategoryEditor({
   }
 
   const items = getItemsForCategory(section, categoryId)
+  const nodeCount = getRepairEstimateCatalogSectionItems(section).length
+  const linkCount = section.links.length
   const save = (input: RepairEstimateCatalogNodeMutation) => {
     switch (kind) {
       case "works":
@@ -2528,8 +3072,8 @@ function CatalogSectionCategoryEditor({
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="min-w-0">
-          <h2 className="truncate text-lg font-semibold">{category.name}</h2>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <CatalogMeta nodeCount={nodeCount} linkCount={linkCount} />
         </div>
         {!readOnly ? (
           <Button
@@ -2626,80 +3170,465 @@ function EstimateCategoryEditor({
   )
 }
 
-function BreadcrumbTitle({
-  action,
-  categoryName,
+function normalizeDisplayColor(value: string | null | undefined) {
+  if (value === null || value === undefined || value.trim() === "") {
+    return null
+  }
+
+  const normalized = value.trim().toUpperCase()
+  return DISPLAY_COLOR_PATTERN.test(normalized) ? normalized : null
+}
+
+function isCatalogFurnitureTreeNode(
+  node: RepairEstimateCatalogNodeDto,
+  nodesById: ReadonlyMap<string, RepairEstimateCatalogNodeDto>
+) {
+  const visited = new Set<string>()
+  let current: RepairEstimateCatalogNodeDto | undefined = node
+
+  while (current) {
+    if (current.furnitureCategory) return true
+    if (!current.parentId || visited.has(current.id)) return false
+    visited.add(current.id)
+    current = nodesById.get(current.parentId)
+  }
+
+  return false
+}
+
+function catalogDisplayColorGroup(
+  node: RepairEstimateCatalogNodeDto,
+  nodesById: ReadonlyMap<string, RepairEstimateCatalogNodeDto>
+): RepairEstimateCatalogDisplayColorGroup {
+  if (isCatalogFurnitureTreeNode(node, nodesById)) {
+    return "FURNITURE"
+  }
+
+  return node.nodeType
+}
+
+function catalogDisplayColors(
+  nodes: RepairEstimateCatalogNodeDto[]
+): RepairEstimateCatalogDisplayColors {
+  const colors = {} as RepairEstimateCatalogDisplayColors
+  const nodesById = new Map(nodes.map((node) => [node.id, node]))
+
+  for (const group of REPAIR_ESTIMATE_CATALOG_DISPLAY_COLOR_GROUPS) {
+    const values = new Set(
+      nodes
+        .filter((node) => catalogDisplayColorGroup(node, nodesById) === group)
+        .map((node) => normalizeDisplayColor(node.displayColor))
+        .filter((color): color is string => color !== null)
+    )
+    colors[group] = values.size === 1 ? [...values][0] : null
+  }
+
+  return colors
+}
+
+function CatalogDisplayColorSettings({
+  request,
+  readOnly,
 }: {
-  action: EstimateCatalogSettingsActionDto
-  categoryName?: string
+  request: RepairEstimateCatalogRequest
+  readOnly: boolean
 }) {
+  const snapshotQueryKey = [
+    ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
+    request.warehouseId,
+    request.catalogVersionId,
+    "display-colors",
+  ] as const
+  const snapshotQuery = useQuery({
+    queryKey: snapshotQueryKey,
+    queryFn: () => getRepairEstimateCatalogSnapshot(request),
+  })
+
+  if (snapshotQuery.isLoading) {
+    return <SectionSkeleton label="Загружаем цвета кнопок каталога…" />
+  }
+
+  if (snapshotQuery.error) {
+    return (
+      <ErrorBox>
+        {snapshotQuery.error instanceof Error
+          ? snapshotQuery.error.message
+          : "Не удалось загрузить цвета кнопок каталога."}
+      </ErrorBox>
+    )
+  }
+
+  if (!snapshotQuery.data) {
+    return <SectionSkeleton label="Загружаем цвета кнопок каталога…" />
+  }
+
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
-      <span className="text-muted-foreground">Настройка смет</span>
-      <span className="text-muted-foreground">/</span>
-      <span className="font-medium">{action.title}</span>
-      {categoryName && (
-        <>
-          <span className="text-muted-foreground">/</span>
-          <span className="font-medium">{categoryName}</span>
-        </>
+    <CatalogDisplayColorForm
+      key={`${request.catalogVersionId}:${snapshotQuery.dataUpdatedAt}`}
+      request={request}
+      readOnly={readOnly}
+      snapshotQueryKey={snapshotQueryKey}
+      initialColors={catalogDisplayColors(snapshotQuery.data.nodes)}
+    />
+  )
+}
+
+function CatalogDisplayColorForm({
+  request,
+  readOnly,
+  snapshotQueryKey,
+  initialColors,
+}: {
+  request: RepairEstimateCatalogRequest
+  readOnly: boolean
+  snapshotQueryKey: readonly unknown[]
+  initialColors: RepairEstimateCatalogDisplayColors
+}) {
+  const queryClient = useQueryClient()
+  const fieldIdPrefix = useId()
+  const [draftColors, setDraftColors] =
+    useState<RepairEstimateCatalogDisplayColors>(initialColors)
+  const [error, setError] = useState<string | null>(null)
+  const invalidGroups = REPAIR_ESTIMATE_CATALOG_DISPLAY_COLOR_GROUPS.filter(
+    (group) => {
+      const value = draftColors[group]
+      return value !== null && normalizeDisplayColor(value) === null
+    }
+  )
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      saveRepairEstimateCatalogDisplayColors(request, draftColors),
+    onSuccess: (snapshot) => {
+      queryClient.setQueryData(snapshotQueryKey, snapshot)
+      void queryClient.invalidateQueries({
+        queryKey: REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
+      })
+      setError(null)
+      toast.success("Цветовая индикация каталога сохранена.")
+    },
+    onError: (mutationError) => {
+      setError(
+        mutationError instanceof Error
+          ? mutationError.message
+          : "Не удалось сохранить цвета кнопок."
+      )
+    },
+  })
+
+  return (
+    <form
+      className="flex min-h-0 flex-1 flex-col gap-4"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (
+          !readOnly &&
+          invalidGroups.length === 0 &&
+          !saveMutation.isPending
+        ) {
+          saveMutation.mutate()
+        }
+      }}
+    >
+      <p className="text-sm text-muted-foreground">
+        Цвет применяется ко всем текущим кнопкам соответствующего типа в
+        каталоге. Оставьте значение пустым, чтобы вернуть стандартное
+        оформление.
+      </p>
+
+      <FieldGroup>
+        {REPAIR_ESTIMATE_CATALOG_DISPLAY_COLOR_GROUPS.map((group) => {
+          const copy = DISPLAY_COLOR_GROUP_COPY[group]
+          const value = draftColors[group]
+          const invalid =
+            value !== null && normalizeDisplayColor(value) === null
+          const id = `${fieldIdPrefix}-${group.toLowerCase()}`
+
+          return (
+            <Field
+              key={group}
+              data-invalid={invalid || undefined}
+              data-disabled={readOnly || saveMutation.isPending || undefined}
+              className="rounded-lg border p-3"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <FieldLabel htmlFor={id}>{copy.title}</FieldLabel>
+                  <FieldDescription>{copy.description}</FieldDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    aria-label={`Выбрать цвет: ${copy.title}`}
+                    type="color"
+                    value={
+                      normalizeDisplayColor(value) ??
+                      DISPLAY_COLOR_PICKER_FALLBACK
+                    }
+                    disabled={readOnly || saveMutation.isPending}
+                    onChange={(event) =>
+                      setDraftColors((current) => ({
+                        ...current,
+                        [group]: event.target.value.toUpperCase(),
+                      }))
+                    }
+                    className="size-9 shrink-0"
+                  />
+                  <Input
+                    id={id}
+                    aria-label={`HTML-цвет: ${copy.title}`}
+                    value={value ?? ""}
+                    placeholder="#RRGGBB"
+                    disabled={readOnly || saveMutation.isPending}
+                    aria-invalid={invalid || undefined}
+                    onChange={(event) =>
+                      setDraftColors((current) => ({
+                        ...current,
+                        [group]: event.target.value,
+                      }))
+                    }
+                    className="w-28"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={
+                      readOnly || saveMutation.isPending || value === null
+                    }
+                    onClick={() =>
+                      setDraftColors((current) => ({
+                        ...current,
+                        [group]: null,
+                      }))
+                    }
+                  >
+                    Сбросить
+                  </Button>
+                </div>
+              </div>
+              {invalid && (
+                <FieldError>Укажите цвет в формате #RRGGBB.</FieldError>
+              )}
+            </Field>
+          )
+        })}
+      </FieldGroup>
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      {!readOnly ? (
+        <div className="flex justify-end">
+          <Button
+            type="submit"
+            disabled={invalidGroups.length > 0 || saveMutation.isPending}
+          >
+            <HugeiconsIcon icon={FloppyDiskIcon} data-icon="inline-start" />
+            Сохранить цвета
+          </Button>
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">Только просмотр</p>
       )}
-    </div>
+    </form>
+  )
+}
+
+function RepairComplexityColorSettings({
+  request,
+  readOnly,
+}: {
+  request: RepairEstimateCatalogRequest
+  readOnly: boolean
+}) {
+  const queryKey = [
+    "maintenance",
+    "repair-complexity-colors",
+    request.warehouseId,
+  ] as const
+  const colorsQuery = useQuery({
+    queryKey,
+    queryFn: () =>
+      getRepairComplexityColors(request.accessToken, request.warehouseId),
+  })
+
+  if (colorsQuery.error) {
+    return (
+      <ErrorBox>
+        {colorsQuery.error instanceof Error
+          ? colorsQuery.error.message
+          : "Не удалось загрузить цвета типов ремонта."}
+      </ErrorBox>
+    )
+  }
+  if (colorsQuery.isLoading || !colorsQuery.data) {
+    return <SectionSkeleton label="Загружаем цвета типов ремонта…" />
+  }
+
+  return (
+    <RepairComplexityColorForm
+      key={`${request.warehouseId}:${colorsQuery.data.version}`}
+      request={request}
+      readOnly={readOnly}
+      queryKey={queryKey}
+      initialColors={colorsQuery.data}
+    />
+  )
+}
+
+function RepairComplexityColorForm({
+  request,
+  readOnly,
+  queryKey,
+  initialColors,
+}: {
+  request: RepairEstimateCatalogRequest
+  readOnly: boolean
+  queryKey: readonly string[]
+  initialColors: RepairComplexityColorsDto
+}) {
+  const queryClient = useQueryClient()
+  const fieldIdPrefix = useId()
+  const [draft, setDraft] = useState<RepairComplexityColorsDto>(initialColors)
+  const [error, setError] = useState<string | null>(null)
+  const invalid = REPAIR_COMPLEXITY_COLOR_FIELDS.some(
+    ({ key }) => !DISPLAY_COLOR_PATTERN.test(draft[key])
+  )
+  const mutation = useMutation({
+    mutationFn: () =>
+      saveRepairComplexityColors(request.accessToken, request.warehouseId, {
+        version: draft.version,
+        lightColor: draft.lightColor,
+        mediumColor: draft.mediumColor,
+        complexColor: draft.complexColor,
+        capitalColor: draft.capitalColor,
+      }),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(queryKey, saved)
+      setDraft(saved)
+      setError(null)
+      toast.success("Цвета типов ремонта сохранены.")
+    },
+    onError: (mutationError) => {
+      setError(
+        mutationError instanceof Error
+          ? mutationError.message
+          : "Не удалось сохранить цвета типов ремонта."
+      )
+    },
+  })
+
+  return (
+    <form
+      className="flex flex-col gap-4"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (!readOnly && !invalid && !mutation.isPending) {
+          mutation.mutate()
+        }
+      }}
+    >
+      <div>
+        <h3 className="font-heading text-base font-medium">
+          Цвета типов ремонта
+        </h3>
+        <p className="text-sm text-muted-foreground">
+          Единая палитра используется во всех плашках сложности ремонта.
+        </p>
+      </div>
+      <FieldGroup>
+        {REPAIR_COMPLEXITY_COLOR_FIELDS.map(({ key, label }) => {
+          const value = draft[key]
+          const fieldInvalid = !DISPLAY_COLOR_PATTERN.test(value)
+          const id = `${fieldIdPrefix}-${key}`
+          return (
+            <Field
+              key={key}
+              data-invalid={fieldInvalid || undefined}
+              data-disabled={readOnly || mutation.isPending || undefined}
+              className="rounded-lg border p-3"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <FieldLabel htmlFor={id}>{label}</FieldLabel>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="color"
+                    aria-label={`Выбрать цвет: ${label}`}
+                    value={
+                      DISPLAY_COLOR_PATTERN.test(value)
+                        ? value
+                        : DISPLAY_COLOR_PICKER_FALLBACK
+                    }
+                    disabled={readOnly || mutation.isPending}
+                    className="size-9 shrink-0"
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        [key]: event.target.value.toUpperCase(),
+                      }))
+                    }
+                  />
+                  <Input
+                    id={id}
+                    value={value}
+                    aria-invalid={fieldInvalid || undefined}
+                    disabled={readOnly || mutation.isPending}
+                    className="w-28"
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        [key]: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+              {fieldInvalid ? (
+                <FieldError>Укажите цвет в формате #RRGGBB.</FieldError>
+              ) : null}
+            </Field>
+          )
+        })}
+      </FieldGroup>
+      {error ? <ErrorBox>{error}</ErrorBox> : null}
+      {!readOnly ? (
+        <div className="flex justify-end">
+          <Button type="submit" disabled={invalid || mutation.isPending}>
+            <HugeiconsIcon icon={FloppyDiskIcon} data-icon="inline-start" />
+            Сохранить цвета типов ремонта
+          </Button>
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">Только просмотр</p>
+      )}
+    </form>
   )
 }
 
 function EstimateDrilldownView({
   request,
   screen,
-  onBack,
   onOpenCategory,
   readOnly,
 }: {
   request: RepairEstimateCatalogRequest
   screen: Exclude<EstimateScreen, { level: "root" }>
-  onBack: () => void
   onOpenCategory: (categoryId: string) => void
   readOnly: boolean
 }) {
-  const categoryNameQuery = useQuery({
-    queryKey: [
-      ...REPAIR_ESTIMATE_CATALOG_QUERY_KEY,
-      request.warehouseId,
-      request.catalogVersionId,
-      "category-title",
-      screen.action.id,
-      screen.level === "category" ? screen.categoryId : null,
-    ],
-    queryFn: () => getEstimateActionData(request, screen.action),
-    enabled: screen.level === "category",
-  })
-
-  const categoryName =
-    screen.level === "category"
-      ? categoryNameQuery.data?.categories.find(
-          (category) => category.id === screen.categoryId
-        )?.name
-      : undefined
-
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card">
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <Button
-            type="button"
-            variant="outline"
-            className="items-center gap-1.5"
-            onClick={onBack}
-          >
-            <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
-            <span className="leading-none">Назад</span>
-          </Button>
-          <BreadcrumbTitle action={screen.action} categoryName={categoryName} />
-        </div>
-      </div>
-
+    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-card">
       <div className="min-h-0 flex-1 overflow-auto p-4">
-        {screen.level === "action" ? (
+        {screen.action.id === "repair-estimate-catalog-colors" ? (
+          <div className="flex flex-col gap-8">
+            <RepairComplexityColorSettings
+              request={request}
+              readOnly={readOnly}
+            />
+            <CatalogDisplayColorSettings
+              request={request}
+              readOnly={readOnly}
+            />
+          </div>
+        ) : screen.level === "action" ? (
           <EstimateActionCategoryMenu
             request={request}
             action={screen.action}
@@ -2720,6 +3649,7 @@ function EstimateDrilldownView({
 }
 
 export function EstimatesRepairsSettingsPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const { accessToken, currentUser } = useAuth()
   const { selectedWarehouseId } = useWarehouse()
   const queryClient = useQueryClient()
@@ -2728,6 +3658,31 @@ export function EstimatesRepairsSettingsPage() {
   })
   const [commandError, setCommandError] = useState<string | null>(null)
   const commandIdempotencyKeys = useRef(new Map<string, string>())
+  const initialCatalogActionId = useRef(searchParams.get("catalog"))
+  const hasSelectedInitialEstimateAction = useRef(false)
+
+  useEffect(() => {
+    if (
+      estimateScreen.level === "root" &&
+      !hasSelectedInitialEstimateAction.current
+    ) {
+      return
+    }
+
+    const activeCatalogAction =
+      estimateScreen.level === "root" ? null : estimateScreen.action.id
+    if (searchParams.get("catalog") === activeCatalogAction) {
+      return
+    }
+
+    const nextSearchParams = new URLSearchParams(searchParams)
+    if (activeCatalogAction === null) {
+      nextSearchParams.delete("catalog")
+    } else {
+      nextSearchParams.set("catalog", activeCatalogAction)
+    }
+    setSearchParams(nextSearchParams, { replace: true })
+  }, [estimateScreen, searchParams, setSearchParams])
 
   function commandIdempotencyKey(signature: string) {
     const existing = commandIdempotencyKeys.current.get(signature)
@@ -2773,21 +3728,21 @@ export function EstimatesRepairsSettingsPage() {
     })
   }
 
-  const bootstrapMutation = useMutation({
+  const createCatalogMutation = useMutation({
     mutationFn: () => {
       if (!accessToken) {
         throw new Error("Не получен токен доступа к maintenance-service.")
       }
       if (!selectedWarehouseId) {
-        throw new Error("Выберите склад для создания базового каталога.")
-      }
-      if (!canManage) {
         throw new Error(
-          "Недостаточно прав для создания базового каталога выбранного склада."
+          "Выберите склад, чтобы проверить право на создание единого каталога."
         )
       }
-      const signature = `bootstrap:${selectedWarehouseId}`
-      return bootstrapRepairEstimateCatalog(
+      if (!canManage) {
+        throw new Error("Недостаточно прав для создания единого каталога.")
+      }
+      const signature = "create-global-catalog"
+      return createRepairEstimateCatalog(
         accessToken,
         selectedWarehouseId,
         commandIdempotencyKey(signature)
@@ -2801,9 +3756,7 @@ export function EstimatesRepairsSettingsPage() {
     },
     onError: (error) => {
       setCommandError(
-        error instanceof Error
-          ? error.message
-          : "Не удалось создать базовый каталог."
+        error instanceof Error ? error.message : "Не удалось создать каталог."
       )
     },
   })
@@ -2830,6 +3783,7 @@ export function EstimatesRepairsSettingsPage() {
 
   const estimateActions = useMemo(() => {
     return [
+      REPAIR_ESTIMATE_CATALOG_COLOR_SETTINGS,
       catalogCanvasQuery.data,
       workCatalogQuery.data,
       materialCatalogQuery.data,
@@ -2839,13 +3793,38 @@ export function EstimatesRepairsSettingsPage() {
         Boolean(action)
       )
       .sort((left, right) => left.order - right.order)
-      .map((action) => ({ ...action, group: "estimate" as const }))
   }, [
     catalogCanvasQuery.data,
     furnitureCatalogQuery.data,
     materialCatalogQuery.data,
     workCatalogQuery.data,
   ])
+
+  useEffect(() => {
+    if (
+      hasSelectedInitialEstimateAction.current ||
+      estimateScreen.level !== "root" ||
+      !catalogRequest ||
+      !currentCatalog ||
+      estimateActions.length !== 5
+    ) {
+      return
+    }
+
+    const requestedAction = estimateActions.find(
+      (action) => action.id === initialCatalogActionId.current
+    )
+    const defaultAction = estimateActions.find(
+      (action) => action.id === "repair-estimate-catalog-canvas"
+    )
+    const action = requestedAction ?? defaultAction
+    if (!action) {
+      return
+    }
+
+    hasSelectedInitialEstimateAction.current = true
+    setEstimateScreen({ level: "action", action })
+  }, [catalogRequest, currentCatalog, estimateActions, estimateScreen.level])
 
   const estimateLoading =
     catalogCanvasQuery.isLoading ||
@@ -2867,142 +3846,142 @@ export function EstimatesRepairsSettingsPage() {
     void queryClient.invalidateQueries({ queryKey: ["estimate-settings"] })
   }
 
+  const activeEstimateActionId =
+    estimateScreen.level === "root" ? null : estimateScreen.action.id
+  const openEstimateAction = (action: EstimateCatalogSettingsActionDto) => {
+    setEstimateScreen({ level: "action", action })
+  }
+  const estimateActionNavigation =
+    estimateActions.length === 5 ? (
+      <EstimateActionNavigation
+        actions={estimateActions}
+        activeActionId={activeEstimateActionId}
+        onSelect={openEstimateAction}
+      />
+    ) : null
+
   if (estimateScreen.level !== "root") {
     if (!catalogRequest || !currentCatalog) {
-      return <ErrorBox>Выберите склад с доступным каталогом смет.</ErrorBox>
+      return (
+        <ErrorBox>
+          Выберите склад, чтобы открыть единый каталог смет с доступными для
+          него очередями.
+        </ErrorBox>
+      )
     }
     return (
-      <EstimateDrilldownView
-        request={catalogRequest}
-        screen={estimateScreen}
-        readOnly={!canEdit}
-        onBack={() => {
-          if (estimateScreen.level === "category") {
-            setEstimateScreen({
-              level: "action",
-              action: estimateScreen.action,
-            })
-            return
+      <div className="flex h-full min-h-0 flex-col gap-3">
+        {estimateActionNavigation}
+        <EstimateDrilldownView
+          request={catalogRequest}
+          screen={estimateScreen}
+          readOnly={
+            estimateScreen.action.id === "repair-estimate-catalog-colors"
+              ? !canManage
+              : !canEdit
           }
-
-          setEstimateScreen({ level: "root" })
-        }}
-        onOpenCategory={(categoryId) =>
-          setEstimateScreen({
-            level: "category",
-            action: estimateScreen.action,
-            categoryId,
-          })
-        }
-      />
+          onOpenCategory={(categoryId) =>
+            setEstimateScreen({
+              level: "category",
+              action: estimateScreen.action,
+              categoryId,
+            })
+          }
+        />
+      </div>
     )
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
-      <SettingsSection title="Настройка смет" count={4}>
-        {!accessToken || !selectedWarehouseId ? (
-          <CatalogNavigationState
-            kind="error"
-            title="Разделы каталога недоступны"
-            description={
-              !accessToken
-                ? "Не получен токен доступа к maintenance-service."
-                : "Выберите склад, чтобы загрузить его каталог смет."
-            }
-          />
-        ) : catalogQuery.isLoading ? (
-          <SectionSkeleton label="Загружаем каталог смет…" />
-        ) : catalogQuery.error ? (
-          <CatalogNavigationState
-            kind="error"
-            title="Не удалось загрузить каталог смет"
-            description={
-              catalogQuery.error instanceof Error
-                ? `Причина: ${catalogQuery.error.message}`
-                : "Сервис каталога временно недоступен."
-            }
+    <div className="flex h-full min-h-0 flex-col gap-3">
+      {!accessToken || !selectedWarehouseId ? (
+        <CatalogNavigationState
+          kind="error"
+          title="Разделы каталога недоступны"
+          description={
+            !accessToken
+              ? "Не получен токен доступа к maintenance-service."
+              : "Выберите склад для проверки доступа и загрузки его очередей. Каталог смет общий для всех складов."
+          }
+        />
+      ) : catalogQuery.isLoading ? (
+        <SectionSkeleton label="Загружаем каталог смет…" />
+      ) : catalogQuery.error ? (
+        <CatalogNavigationState
+          kind="error"
+          title="Не удалось загрузить каталог смет"
+          description={
+            catalogQuery.error instanceof Error
+              ? `Причина: ${catalogQuery.error.message}`
+              : "Сервис каталога временно недоступен."
+          }
+        >
+          <Button
+            type="button"
+            variant="outline"
+            disabled={catalogQuery.isFetching}
+            onClick={() => void catalogQuery.refetch()}
           >
+            <HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" />
+            Повторить загрузку
+          </Button>
+        </CatalogNavigationState>
+      ) : !catalogRequest || !currentCatalog ? (
+        <CatalogNavigationState
+          kind="empty"
+          title="Каталог смет ещё не создан"
+          description={
+            canManage
+              ? "Создайте единый каталог — категории, работы, материалы и связи будут общими для всех складов."
+              : "Единый каталог ещё не создан. Обратитесь к пользователю с правом управления или проверьте снова."
+          }
+        >
+          {canManage && (
             <Button
               type="button"
-              variant="outline"
-              disabled={catalogQuery.isFetching}
-              onClick={() => void catalogQuery.refetch()}
+              disabled={createCatalogMutation.isPending}
+              onClick={() => createCatalogMutation.mutate()}
             >
-              <HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" />
-              Повторить загрузку
+              <HugeiconsIcon icon={DatabaseAddIcon} data-icon="inline-start" />
+              Создать единый каталог
             </Button>
-          </CatalogNavigationState>
-        ) : !catalogRequest || !currentCatalog ? (
-          <CatalogNavigationState
-            kind="empty"
-            title="Каталог смет ещё не создан"
-            description={
-              canManage
-                ? "Создайте базовый каталог для выбранного склада — после этого откроются конструктор, работы, материалы и мебель."
-                : "Для выбранного склада нет каталога. Обратитесь к пользователю с правом управления или проверьте снова."
-            }
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            disabled={catalogQuery.isFetching}
+            onClick={() => refreshCatalog()}
           >
-            {canManage && (
-              <Button
-                type="button"
-                disabled={bootstrapMutation.isPending}
-                onClick={() => bootstrapMutation.mutate()}
-              >
-                <HugeiconsIcon
-                  icon={DatabaseAddIcon}
-                  data-icon="inline-start"
-                />
-                Создать первый каталог
-              </Button>
-            )}
-            <Button
-              type="button"
-              variant="outline"
-              disabled={catalogQuery.isFetching}
-              onClick={() => refreshCatalog()}
-            >
-              <HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" />
-              Проверить снова
-            </Button>
-            {commandError && <ErrorBox>{commandError}</ErrorBox>}
-          </CatalogNavigationState>
-        ) : estimateLoading ? (
-          <SectionSkeleton label="Подготавливаем разделы каталога смет…" />
-        ) : estimateError || estimateActions.length !== 4 ? (
-          <CatalogNavigationState
-            kind="error"
-            title="Не удалось загрузить разделы каталога"
-            description={
-              estimateError instanceof Error
-                ? `Причина: ${estimateError.message}`
-                : "Не все разделы каталога доступны. Повторите загрузку."
-            }
+            <HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" />
+            Проверить снова
+          </Button>
+          {commandError && <ErrorBox>{commandError}</ErrorBox>}
+        </CatalogNavigationState>
+      ) : estimateLoading ? (
+        <SectionSkeleton label="Подготавливаем разделы каталога смет…" />
+      ) : estimateError || estimateActions.length !== 5 ? (
+        <CatalogNavigationState
+          kind="error"
+          title="Не удалось загрузить разделы каталога"
+          description={
+            estimateError instanceof Error
+              ? `Причина: ${estimateError.message}`
+              : "Не все разделы каталога доступны. Повторите загрузку."
+          }
+        >
+          <Button
+            type="button"
+            variant="outline"
+            disabled={estimateRefreshing}
+            onClick={refreshEstimateActions}
           >
-            <Button
-              type="button"
-              variant="outline"
-              disabled={estimateRefreshing}
-              onClick={refreshEstimateActions}
-            >
-              <HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" />
-              Повторить загрузку
-            </Button>
-          </CatalogNavigationState>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {estimateActions.map((action) => (
-              <SettingsActionButton
-                key={action.id}
-                action={action}
-                onClick={(selected) =>
-                  setEstimateScreen({ level: "action", action: selected })
-                }
-              />
-            ))}
-          </div>
-        )}
-      </SettingsSection>
+            <HugeiconsIcon icon={Refresh01Icon} data-icon="inline-start" />
+            Повторить загрузку
+          </Button>
+        </CatalogNavigationState>
+      ) : (
+        estimateActionNavigation
+      )}
     </div>
   )
 }

@@ -60,7 +60,7 @@ type RepairEstimateWorkspaceLayoutProps = {
 
 export function RepairEstimateWorkspaceLayout({
   ariaLabel = "Редактор сметы",
-  informationDescription = "Заполните бытовку, отправителя, дату прибытия и общий комментарий.",
+  informationDescription = "Заполните бытовку, отправителя, дату осмотра и общий комментарий.",
   catalogDescription = "Выберите работу или материал для добавления в смету.",
   message,
   photos,
@@ -124,6 +124,7 @@ type RepairWorkDetailWorkspaceLayoutProps = {
   lowerDescription?: string
   lowerAction?: ReactNode
   lowerContent: ReactNode
+  bareLowerContent?: boolean
 }
 
 export function RepairWorkDetailWorkspaceLayout({
@@ -138,6 +139,7 @@ export function RepairWorkDetailWorkspaceLayout({
   lowerDescription,
   lowerAction,
   lowerContent,
+  bareLowerContent = false,
 }: RepairWorkDetailWorkspaceLayoutProps) {
   return (
     <section
@@ -169,22 +171,35 @@ export function RepairWorkDetailWorkspaceLayout({
           {information}
         </WorkspacePanel>
 
-        <WorkspacePanel
-          title={lowerTitle}
-          description={lowerDescription}
-          action={lowerAction}
-          className={cn(
-            "order-3 xl:col-span-2 xl:col-start-1 xl:row-start-2",
-            mobileContentFlow && "overflow-visible xl:overflow-hidden"
-          )}
-          contentClassName={cn(
-            mobileContentFlow
-              ? "overflow-visible xl:overflow-y-auto"
-              : "overflow-y-auto"
-          )}
-        >
-          {lowerContent}
-        </WorkspacePanel>
+        {bareLowerContent ? (
+          <div
+            className={cn(
+              "order-3 min-h-0 p-px xl:col-span-2 xl:col-start-1 xl:row-start-2",
+              mobileContentFlow
+                ? "overflow-visible xl:overflow-y-auto"
+                : "overflow-y-auto"
+            )}
+          >
+            {lowerContent}
+          </div>
+        ) : (
+          <WorkspacePanel
+            title={lowerTitle}
+            description={lowerDescription}
+            action={lowerAction}
+            className={cn(
+              "order-3 xl:col-span-2 xl:col-start-1 xl:row-start-2",
+              mobileContentFlow && "overflow-visible xl:overflow-hidden"
+            )}
+            contentClassName={cn(
+              mobileContentFlow
+                ? "overflow-visible xl:overflow-y-auto"
+                : "overflow-y-auto"
+            )}
+          >
+            {lowerContent}
+          </WorkspacePanel>
+        )}
       </div>
     </section>
   )

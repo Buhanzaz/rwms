@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.taskboard.service;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 
 import dev.buhanzaz.rwms.taskboard.domain.QueueReferenceType;
+import dev.buhanzaz.rwms.taskboard.domain.QueueDefinition;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
 import dev.buhanzaz.rwms.taskboard.domain.QueueUsageReference;
 import dev.buhanzaz.rwms.taskboard.domain.WorkQueue;
@@ -12,11 +13,11 @@ import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardAggregateType;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventSourcing;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardProjectionWriter;
+import dev.buhanzaz.rwms.taskboard.mapper.QueueRegistryMapper;
 import dev.buhanzaz.rwms.taskboard.repository.*;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -25,6 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class RegistryService {
   private final WorkerClassRepository classes;
+  private final QueueDefinitionRepository definitions;
   private final WorkQueueRepository queues;
   private final WorkQueueClassBindingRepository bindings;
   private final QueueEntryRepository entries;
@@ -35,9 +37,11 @@ public class RegistryService {
   private final JdbcTemplate jdbc;
   private final TaskBoardEventSourcing eventSourcing;
   private final TaskBoardProjectionWriter projectionWriter;
+  private final QueueRegistryMapper mapper;
 
   public RegistryService(
       WorkerClassRepository classes,
+      QueueDefinitionRepository definitions,
       WorkQueueRepository queues,
       WorkQueueClassBindingRepository bindings,
       QueueEntryRepository entries,
@@ -47,8 +51,10 @@ public class RegistryService {
       WorkerClassAssignmentRepository qualifications,
       JdbcTemplate jdbc,
       TaskBoardEventSourcing eventSourcing,
-      TaskBoardProjectionWriter projectionWriter) {
+      TaskBoardProjectionWriter projectionWriter,
+      QueueRegistryMapper mapper) {
     this.classes = classes;
+    this.definitions = definitions;
     this.queues = queues;
     this.bindings = bindings;
     this.entries = entries;
@@ -59,16 +65,16 @@ public class RegistryService {
     this.jdbc = jdbc;
     this.eventSourcing = eventSourcing;
     this.projectionWriter = projectionWriter;
+    this.mapper = mapper;
   }
 
   @Transactional(readOnly = true)
   public List<WorkerClassDto> listClasses() {
-    return classes.findAllByOrderBySortOrderAscNameAsc().stream().map(this::dto).toList();
+    return classes.findAllByOrderBySortOrderAscNameAscIdAsc().stream().map(this::dto).toList();
   }
 
   @Transactional
   public WorkerClassDto createClass(WorkerClassRequest request) {
-    ensureClassCode(request.code(), null);
     var entity = new WorkerClass();
     apply(entity, request);
     entity = projectionWriter.saveAndFlush(classes, entity);
@@ -82,7 +88,6 @@ public class RegistryService {
     var entity = requireClass(id);
     checkVersion(entity.getVersion(), request.version(), "Класс рабочего");
     long streamVersion = eventSourcing.lock(TaskBoardAggregateType.WORKER_CLASS, id);
-    ensureClassCode(request.code(), id);
     apply(entity, request);
     entity.touch();
     entity = projectionWriter.save(classes, entity);
@@ -108,23 +113,128 @@ public class RegistryService {
 
   @Transactional(readOnly = true)
   public List<WorkQueueDto> listQueues(UUID warehouseId) {
-    return queues.findAllByWarehouseIdOrderBySortOrderAscNameAsc(warehouseId).stream()
+    return queues.findAllOrderedByWarehouseId(warehouseId).stream()
+        .map(this::dto)
+        .toList();
+  }
+
+  @Transactional(readOnly = true)
+  public List<QueueDefinitionDto> listQueueDefinitions() {
+    return definitions.findAllByOrderByNameAscTypeAscIdAsc().stream()
         .map(this::dto)
         .toList();
   }
 
   @Transactional
+  public QueueDefinitionDto createQueueDefinition(QueueDefinitionRequest request) {
+    String normalizedName = QueueDefinition.normalizeName(request.name());
+    lockQueueDefinitionIdentity(normalizedName, request.type());
+    if (definitions.existsByNormalizedNameAndType(normalizedName, request.type())) {
+      throw new ConflictException("Общая очередь с таким названием и типом уже существует");
+    }
+    var definition = new QueueDefinition();
+    apply(definition, request);
+    definition = projectionWriter.saveAndFlush(definitions, definition);
+    projectionWriter.refresh(definition);
+    return dto(definition);
+  }
+
+  @Transactional
+  public QueueDefinitionDto updateQueueDefinition(
+      UUID id, QueueDefinitionRequest request) {
+    QueueDefinition definition = requireQueueDefinition(id);
+    checkVersion(definition.getVersion(), request.version(), "Общая очередь");
+    String normalizedName = QueueDefinition.normalizeName(request.name());
+    lockQueueDefinitionIdentity(normalizedName, request.type());
+    definitions
+        .findByNormalizedNameAndType(normalizedName, request.type())
+        .filter(existing -> !existing.getId().equals(id))
+        .ifPresent(
+            ignored -> {
+              throw new ConflictException(
+                  "Общая очередь с таким названием и типом уже существует");
+            });
+
+    QueueType previousType = definition.getType();
+    List<WorkQueue> connected = queues.findAllByDefinitionIdOrderByWarehouseIdAscIdAsc(id);
+    var streamVersions =
+        previousType == request.type()
+            ? java.util.Map.<UUID, Long>of()
+            : eventSourcingVersions(
+                TaskBoardAggregateType.WORK_QUEUE,
+                connected.stream().map(WorkQueue::getId).toList());
+    apply(definition, request);
+    definition.touch();
+    definition = projectionWriter.saveAndFlush(definitions, definition);
+
+    if (previousType != request.type()) {
+      for (WorkQueue queue : connected) {
+        if (request.type() != QueueType.HOLDING) {
+          queue.setHoldingPeriodMinutes(null);
+          queue.setNotificationThreshold(null);
+          queue.setNotifyWhenThresholdReached(false);
+        }
+        queue.touch();
+        projectionWriter.save(queues, queue);
+      }
+      projectionWriter.flush();
+      for (WorkQueue queue : connected) {
+        eventSourcing.queueChanged(
+            queue,
+            streamVersions.get(queue.getId()),
+            TaskBoardEventTypes.WORK_QUEUE_CHANGED);
+      }
+    }
+    return dto(definition);
+  }
+
+  @Transactional
+  public void deleteQueueDefinition(UUID id, long expectedVersion) {
+    QueueDefinition definition = requireQueueDefinition(id);
+    checkVersion(definition.getVersion(), expectedVersion, "Общая очередь");
+    if (queues.existsByDefinitionId(id)) {
+      throw new ConflictException(
+          "Подключённую к складу общую очередь удалить нельзя");
+    }
+    if (references.existsByDefinitionId(id)) {
+      throw new ConflictException(
+          "Общая очередь используется каталогом и не может быть удалена");
+    }
+    projectionWriter.delete(definitions, definition);
+    projectionWriter.flush();
+  }
+
+  @Transactional(readOnly = true)
+  public WarehouseQueueCapabilities queueCapabilities(UUID warehouseId) {
+    List<MovementQueueCapability> movementQueues =
+        queues.findAllActiveOrderedByWarehouseId(warehouseId).stream()
+            .filter(queue -> !queue.isHidden())
+            .filter(queue -> queue.getType() == QueueType.MOVEMENT)
+            .map(
+                queue ->
+                    new MovementQueueCapability(
+                        queue.getDefinition().getId(), queue.getId()))
+            .toList();
+    return new WarehouseQueueCapabilities(
+        warehouseId, !movementQueues.isEmpty(), movementQueues);
+  }
+
+  @Transactional
   public WorkQueueDto createQueue(UUID warehouseId, WorkQueueRequest request) {
     lockQueueOrder(warehouseId);
-    var existing = queues.findAllByWarehouseIdOrderBySortOrderAscNameAsc(warehouseId);
+    QueueDefinition definition = requireQueueDefinition(request.definitionId());
+    if (queues.existsByWarehouseIdAndDefinitionId(warehouseId, definition.getId())) {
+      throw new ConflictException("Общая очередь уже подключена к этому складу");
+    }
+    var existing = queues.findAllOrderedByWarehouseId(warehouseId);
     var streamVersions =
         eventSourcingVersions(
             TaskBoardAggregateType.WORK_QUEUE,
             existing.stream().map(WorkQueue::getId).toList());
     var orderBefore = queueOrders(existing);
-    ensureQueueCode(warehouseId, request.code(), null);
     var queue = new WorkQueue();
     queue.setWarehouseId(warehouseId);
+    queue.setDefinition(definition);
     queue.setSortOrder(nextRegularSortOrder(warehouseId));
     apply(queue, request, false);
     queue = projectionWriter.save(queues, queue);
@@ -139,7 +249,7 @@ public class RegistryService {
   @Transactional
   public WorkQueueDto updateQueue(UUID warehouseId, UUID id, WorkQueueRequest request) {
     lockQueueOrder(warehouseId);
-    var current = queues.findAllByWarehouseIdOrderBySortOrderAscNameAsc(warehouseId);
+    var current = queues.findAllOrderedByWarehouseId(warehouseId);
     var streamVersions =
         eventSourcingVersions(
             TaskBoardAggregateType.WORK_QUEUE,
@@ -147,9 +257,10 @@ public class RegistryService {
     var orderBefore = queueOrders(current);
     var queue = requireQueue(warehouseId, id);
     checkVersion(queue.getVersion(), request.version(), "Очередь");
-    if (!queue.getCode().equalsIgnoreCase(request.code()) && !isQueueEmpty(id))
-      throw new ConflictException("Код используемой очереди менять нельзя");
-    ensureQueueCode(warehouseId, request.code(), id);
+    if (!queue.getDefinition().getId().equals(request.definitionId())) {
+      throw new ConflictException(
+          "Общее определение существующего складского подключения изменять нельзя");
+    }
     apply(queue, request, true);
     queue.touch();
     queue = projectionWriter.save(queues, queue);
@@ -165,7 +276,7 @@ public class RegistryService {
   @Transactional
   public List<WorkQueueDto> reorder(UUID warehouseId, QueueOrderRequest request) {
     lockQueueOrder(warehouseId);
-    var current = queues.findAllByWarehouseIdOrderBySortOrderAscNameAsc(warehouseId);
+    var current = queues.findAllOrderedByWarehouseId(warehouseId);
     var streamVersions = eventSourcingVersions(TaskBoardAggregateType.WORK_QUEUE, current.stream()
         .map(WorkQueue::getId).toList());
     if (request.queues().size() != current.size())
@@ -198,7 +309,7 @@ public class RegistryService {
     projectionWriter.saveAll(queues, current);
     projectionWriter.flush();
     projectionWriter.clear();
-    var reordered = queues.findAllByWarehouseIdOrderBySortOrderAscNameAsc(warehouseId);
+    var reordered = queues.findAllOrderedByWarehouseId(warehouseId);
     reordered.forEach(queue -> eventSourcing.queueChanged(
         queue, streamVersions.get(queue.getId()), TaskBoardEventTypes.WORK_QUEUE_REORDERED));
     return reordered.stream().map(this::dto).toList();
@@ -207,7 +318,7 @@ public class RegistryService {
   @Transactional
   public void deleteQueue(UUID warehouseId, UUID id, long expectedVersion) {
     lockQueueOrder(warehouseId);
-    var current = queues.findAllByWarehouseIdOrderBySortOrderAscNameAsc(warehouseId);
+    var current = queues.findAllOrderedByWarehouseId(warehouseId);
     var streamVersions =
         eventSourcingVersions(
             TaskBoardAggregateType.WORK_QUEUE,
@@ -242,15 +353,30 @@ public class RegistryService {
     return queues.findById(id).orElseThrow(() -> new NotFoundException("Очередь не найдена"));
   }
 
+  public QueueDefinition requireQueueDefinition(UUID id) {
+    return definitions
+        .findById(id)
+        .orElseThrow(() -> new NotFoundException("Общая очередь не найдена"));
+  }
+
+  public WorkQueue requireWarehouseBinding(UUID warehouseId, UUID definitionId) {
+    return queues
+        .findByWarehouseIdAndDefinitionId(warehouseId, definitionId)
+        .orElseThrow(
+            () ->
+                new ConflictException(
+                    "Общая очередь не подключена к целевому складу"));
+  }
+
   public boolean isQueueEmpty(UUID id) {
     return !entries.existsByQueueId(id)
-        && !events.existsByQueueEntryQueueId(id)
-        && !references.existsByQueueId(id);
+        && !events.existsByQueueEntryQueueId(id);
   }
 
   @Transactional
-  public QueueReferenceDto registerReference(UUID queueId, QueueReferenceRequest request) {
-    WorkQueue queue = requireQueue(queueId);
+  public QueueReferenceDto registerReference(
+      UUID queueDefinitionId, QueueReferenceRequest request) {
+    QueueDefinition definition = requireQueueDefinition(queueDefinitionId);
     String externalReferenceId = request.externalReferenceId().trim();
     jdbc.queryForObject(
         "select pg_advisory_xact_lock(hashtextextended(?, 0))",
@@ -260,13 +386,14 @@ public class RegistryService {
         references.findByReferenceTypeAndExternalReferenceId(request.type(), externalReferenceId);
     if (existing.isPresent()) {
       QueueUsageReference reference = existing.get();
-      if (!reference.getQueue().getId().equals(queueId)) {
-        throw new ConflictException("Внешняя ссылка уже закреплена за другой очередью");
+      if (!reference.getDefinition().getId().equals(queueDefinitionId)) {
+        throw new ConflictException(
+            "Внешняя ссылка уже закреплена за другой общей очередью");
       }
       return referenceDto(reference);
     }
     QueueUsageReference reference = new QueueUsageReference();
-    reference.setQueue(queue);
+    reference.setDefinition(definition);
     reference.setReferenceType(request.type());
     reference.setExternalReferenceId(externalReferenceId);
     reference = projectionWriter.save(references, reference);
@@ -301,6 +428,13 @@ public class RegistryService {
         "work-queue-order:" + warehouseId);
   }
 
+  private void lockQueueDefinitionIdentity(String normalizedName, QueueType type) {
+    jdbc.queryForObject(
+        "select pg_advisory_xact_lock(hashtextextended(?, 0))",
+        Object.class,
+        "queue-definition:" + type + ":" + normalizedName);
+  }
+
   private java.util.Map<UUID, Long> eventSourcingVersions(
       TaskBoardAggregateType type, List<UUID> aggregateIds) {
     var versions = new LinkedHashMap<UUID, Long>();
@@ -325,7 +459,7 @@ public class RegistryService {
       java.util.Map<UUID, Long> streamVersions) {
     projectionWriter.flush();
     for (WorkQueue value :
-        queues.findAllByWarehouseIdOrderBySortOrderAscNameAsc(warehouseId)) {
+        queues.findAllOrderedByWarehouseId(warehouseId)) {
       Integer previous = orderBefore.get(value.getId());
       if (!value.getId().equals(excludedQueueId)
           && previous != null
@@ -339,7 +473,6 @@ public class RegistryService {
   }
 
   private void apply(WorkerClass entity, WorkerClassRequest r) {
-    entity.setCode(r.code());
     entity.setName(r.name());
     entity.setDescription(r.description());
     entity.setComment(r.comment());
@@ -347,36 +480,60 @@ public class RegistryService {
     entity.setActive(r.active());
   }
 
+  private void apply(QueueDefinition entity, QueueDefinitionRequest request) {
+    entity.setName(request.name());
+    entity.setDescription(request.description());
+    entity.setType(request.type());
+  }
+
   private void apply(WorkQueue q, WorkQueueRequest r, boolean update) {
-    q.setCode(r.code());
-    q.setName(r.name());
-    q.setDescription(r.description());
-    q.setType(r.type());
     q.setActive(r.active());
     q.setHidden(r.hidden());
     q.setCollapsed(r.collapsed());
-    boolean holding = r.type() == QueueType.HOLDING;
+    boolean holding = q.getType() == QueueType.HOLDING;
     q.setHoldingPeriodMinutes(holding ? r.holdingPeriodMinutes() : null);
     q.setNotificationThreshold(holding ? r.notificationThreshold() : null);
     q.setNotifyWhenThresholdReached(holding && r.notifyWhenThresholdReached());
+    if (r.resultPhotoMinCount() != null) {
+      q.setResultPhotoMinCount(r.resultPhotoMinCount());
+    } else if (!update) {
+      q.setResultPhotoMinCount(holding ? 0 : 1);
+    }
   }
 
   private void replaceBindings(WorkQueue queue, List<QueueBindingRequest> requested) {
-    projectionWriter.deleteAll(bindings, bindings.findAllByQueueId(queue.getId()));
+    var existing = bindings.findAllByQueueId(queue.getId());
+    projectionWriter.deleteAll(bindings, existing);
+    if (!existing.isEmpty()) {
+      projectionWriter.flush();
+    }
     if (requested == null) return;
     var unique = new LinkedHashMap<UUID, QueueBindingRequest>();
-    requested.forEach(r -> unique.put(r.workerClassId(), r));
+    requested.stream()
+        .sorted(
+            java.util.Comparator.comparingInt(QueueBindingRequest::order)
+                .thenComparing(request -> request.workerClassId().toString()))
+        .forEach(
+            request -> {
+              if (unique.putIfAbsent(request.workerClassId(), request) != null) {
+                throw new ConflictException("Класс рабочего указан в очереди повторно");
+              }
+            });
+    int order = 0;
     for (var r : unique.values()) {
       var b = new WorkQueueClassBinding();
       b.setQueue(queue);
       b.setWorkerClass(requireClass(r.workerClassId()));
+      b.setBindingOrder(order);
       b.setStopTaskOnTake(r.stopTaskOnTake());
+      b.setNotifyUrgent(order > 0 && r.notifyUrgent());
       projectionWriter.save(bindings, b);
+      order++;
     }
   }
 
   private void normalizeOrder(UUID warehouseId) {
-    var ordered = queues.findAllByWarehouseIdOrderBySortOrderAscNameAsc(warehouseId);
+    var ordered = queues.findAllOrderedByWarehouseId(warehouseId);
     var result = new ArrayList<WorkQueue>();
     ordered.stream().filter(q -> q.getType() != QueueType.HOLDING).forEach(result::add);
     ordered.stream().filter(q -> q.getType() == QueueType.HOLDING).forEach(result::add);
@@ -394,7 +551,7 @@ public class RegistryService {
   }
 
   private int nextRegularSortOrder(UUID warehouseId) {
-    return queues.findAllByWarehouseIdOrderBySortOrderAscNameAsc(warehouseId).stream()
+    return queues.findAllOrderedByWarehouseId(warehouseId).stream()
             .filter(q -> q.getType() != QueueType.HOLDING)
             .mapToInt(WorkQueue::getSortOrder)
             .max()
@@ -402,60 +559,20 @@ public class RegistryService {
         + 10;
   }
 
-  private void ensureClassCode(String code, UUID id) {
-    if (classes.existsByCodeIgnoreCaseAndIdNot(
-        code.trim().toUpperCase(Locale.ROOT), id == null ? new UUID(0, 0) : id))
-      throw new ConflictException("Код класса уже используется");
-  }
-
-  private void ensureQueueCode(UUID warehouseId, String code, UUID id) {
-    if (queues.existsByWarehouseIdAndCodeIgnoreCaseAndIdNot(
-        warehouseId, code.trim().toUpperCase(Locale.ROOT), id == null ? new UUID(0, 0) : id))
-      throw new ConflictException("Код очереди уже используется на складе");
-  }
-
   public WorkerClassDto dto(WorkerClass e) {
-    return new WorkerClassDto(
-        e.getId(),
-        e.getVersion(),
-        e.getCode(),
-        e.getName(),
-        e.getDescription(),
-        e.getComment(),
-        e.getSortOrder(),
-        e.isActive());
+    return mapper.toWorkerClassDto(e);
   }
 
   public WorkQueueDto dto(WorkQueue q) {
-    return new WorkQueueDto(
-        q.getId(),
-        q.getVersion(),
-        q.getWarehouseId(),
-        q.getCode(),
-        q.getName(),
-        q.getDescription(),
-        q.getType(),
-        q.getSortOrder(),
-        q.isActive(),
-        q.isHidden(),
-        q.isCollapsed(),
-        q.getHoldingPeriodMinutes(),
-        q.getNotificationThreshold(),
-        q.isNotifyWhenThresholdReached(),
-        bindings.findAllByQueueId(q.getId()).stream()
-            .map(
-                b ->
-                    new QueueBindingDto(
-                        b.getId(), b.getVersion(), dto(b.getWorkerClass()), b.isStopTaskOnTake()))
-            .toList());
+    return mapper.toWorkQueueDto(
+        q, bindings.findAllByQueueIdOrderByBindingOrderAscIdAsc(q.getId()));
+  }
+
+  public QueueDefinitionDto dto(QueueDefinition definition) {
+    return mapper.toQueueDefinitionDto(definition);
   }
 
   private QueueReferenceDto referenceDto(QueueUsageReference reference) {
-    return new QueueReferenceDto(
-        reference.getId(),
-        reference.getVersion(),
-        reference.getQueue().getId(),
-        reference.getReferenceType(),
-        reference.getExternalReferenceId());
+    return mapper.toQueueReferenceDto(reference);
   }
 }

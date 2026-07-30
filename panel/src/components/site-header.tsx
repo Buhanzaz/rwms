@@ -14,8 +14,15 @@ import {
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import {
+  resolveHeaderBreadcrumbs,
+  type HeaderBreadcrumb,
+} from "@/components/site-header-breadcrumbs"
+import { canShowWarehouseHtmlImport } from "@/components/site-header-html-import-access"
 import { EquipmentItemCountBadge } from "@/features/equipment/equipment-item-count-badge"
 import { useAuth } from "@/features/auth/use-auth"
+import { getOrder, ORDERS_QUERY_KEY } from "@/features/orders/api/orders-api"
+import { HtmlImportHeaderAction } from "@/features/rental-items/html-import/html-import-workspace"
 import { getAssetRentalItem } from "@/features/rental-items/api/asset-rental-items-api"
 import {
   getRepairTask,
@@ -24,163 +31,14 @@ import {
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { cn } from "@/lib/utils"
 
-type HeaderBreadcrumb = {
-  title: string
-  to?: string
-}
-
-type RentalItemHeaderBreadcrumb = {
-  city: string
-  number: string
-}
-
-const routeTitles = [
-  { path: "/settings/estimates-repairs", title: "Настройка смет и ремонтов" },
-  { path: "/settings/task-board", title: "Настройка доски задач" },
-  { path: "/warehouse", title: "Склад" },
-  { path: "/equipment", title: "Доп. оборудование" },
-  { path: "/inventory", title: "Инвентаризация" },
-  { path: "/logistics/returns", title: "Возврат из аренды" },
-  { path: "/logistics/shipments", title: "Отгрузка в аренду" },
-  { path: "/logistics/transfers", title: "Перемещения" },
-  { path: "/estimates", title: "Сметы" },
-  { path: "/repairs", title: "Ремонты" },
-  { path: "/task-board", title: "Доска задач" },
-  { path: "/acceptance", title: "Приёмка и доработки" },
-  { path: "/write-offs", title: "Списание" },
-  { path: "/settings", title: "Настройки" },
-  { path: "/kpi", title: "KPI" },
-] as const
-
-function resolveHeaderBreadcrumbs(
-  pathname: string,
-  search: string,
-  rentalItemBreadcrumb: RentalItemHeaderBreadcrumb | null,
-  repairCabinNumber: string | null
-): HeaderBreadcrumb[] {
-  const searchParams = new URLSearchParams(search)
-
-  if (pathname.startsWith("/warehouse/")) {
-    if (rentalItemBreadcrumb === null) {
-      return [{ title: "Склад", to: "/warehouse" }]
-    }
-
-    return [
-      { title: "Склад", to: "/warehouse" },
-      { title: rentalItemBreadcrumb.city, to: "/warehouse" },
-      { title: rentalItemBreadcrumb.number },
-    ]
-  }
-
-  if (pathname === "/settings/estimates-repairs") {
-    return [
-      { title: "Настройки", to: "/settings" },
-      { title: "Настройка смет и ремонтов" },
-    ]
-  }
-
-  if (pathname === "/logistics/returns") {
-    return [{ title: "Логистика" }, { title: "Возврат из аренды" }]
-  }
-
-  if (pathname === "/logistics/shipments") {
-    return [{ title: "Логистика" }, { title: "Отгрузка в аренду" }]
-  }
-
-  if (pathname === "/logistics/transfers") {
-    return [{ title: "Логистика" }, { title: "Перемещения" }]
-  }
-
-  if (pathname === "/settings/task-board") {
-    return [
-      { title: "Настройки", to: "/settings" },
-      { title: "Настройка доски задач" },
-    ]
-  }
-
-  const inventoryHistoryMatch = /^\/inventory\/history\/([^/]+)$/.exec(pathname)
-  if (inventoryHistoryMatch) {
-    return [
-      { title: "Инвентаризация", to: "/inventory" },
-      { title: "История", to: "/inventory/history" },
-      { title: "Результат" },
-    ]
-  }
-
-  if (pathname === "/inventory/history") {
-    return [{ title: "Инвентаризация", to: "/inventory" }, { title: "История" }]
-  }
-
-  const inventoryFinishMatch = /^\/inventory\/([^/]+)\/finish$/.exec(pathname)
-  if (inventoryFinishMatch) {
-    return [
-      { title: "Инвентаризация", to: "/inventory" },
-      { title: "Сессия", to: `/inventory/${inventoryFinishMatch[1]}` },
-      { title: "Сверка" },
-    ]
-  }
-
-  if (/^\/inventory\/[^/]+$/.test(pathname)) {
-    return [{ title: "Инвентаризация", to: "/inventory" }, { title: "Сессия" }]
-  }
-
-  if (pathname === "/acceptance" && searchParams.has("acceptanceId")) {
-    return [
-      { title: "Приёмка и доработки", to: "/acceptance" },
-      { title: repairCabinNumber ?? "Бытовка" },
-    ]
-  }
-
-  if (pathname === "/write-offs" && searchParams.has("writeOffId")) {
-    return [
-      { title: "Списание" },
-      { title: "Склад", to: "/write-offs" },
-      { title: repairCabinNumber ?? "Бытовка" },
-    ]
-  }
-
-  if (pathname === "/write-offs") {
-    return [{ title: "Списание", to: "/write-offs" }, { title: "Склад" }]
-  }
-
-  if (pathname === "/write-offs/equipment") {
-    return [
-      { title: "Списание", to: "/write-offs" },
-      { title: "Доп. оборудование" },
-    ]
-  }
-
-  if (pathname === "/estimates" && searchParams.has("estimateId")) {
-    return [{ title: "Сметы", to: "/estimates" }, { title: "Смета" }]
-  }
-
-  if (pathname === "/estimates" && searchParams.get("create") === "1") {
-    return [{ title: "Сметы", to: "/estimates" }, { title: "Новая смета" }]
-  }
-
-  if (pathname === "/repairs" && searchParams.has("repairId")) {
-    return [{ title: "Ремонты", to: "/repairs" }, { title: "Задание" }]
-  }
-
-  if (pathname === "/repairs" && searchParams.get("create") === "1") {
-    return [{ title: "Ремонты", to: "/repairs" }, { title: "Новое задание" }]
-  }
-
-  if (pathname === "/") {
-    return [{ title: "Главная" }]
-  }
-
-  return [
-    {
-      title:
-        routeTitles.find((route) => pathname === route.path)?.title ??
-        "WMS Panel",
-    },
-  ]
-}
-
 function getRentalItemId(pathname: string) {
   const match = /^\/warehouse\/([^/]+)$/.exec(pathname)
+
+  return match?.[1] ?? null
+}
+
+function getOrderId(pathname: string) {
+  const match = /^\/orders\/([0-9a-f-]{36})$/i.exec(pathname)
 
   return match?.[1] ?? null
 }
@@ -188,10 +46,11 @@ function getRentalItemId(pathname: string) {
 export function SiteHeader() {
   const { pathname, search } = useLocation()
   const navigate = useNavigate()
-  const { accessToken } = useAuth()
+  const { accessToken, currentUser } = useAuth()
   const { selectedWarehouse, warehouses } = useWarehouse()
   const searchParams = new URLSearchParams(search)
   const rentalItemId = getRentalItemId(pathname)
+  const orderId = getOrderId(pathname)
   const repairTaskId =
     pathname === "/acceptance"
       ? searchParams.get("acceptanceId")
@@ -202,6 +61,16 @@ export function SiteHeader() {
     queryKey: ["rental-item", rentalItemId],
     queryFn: () => getAssetRentalItem(accessToken, rentalItemId ?? ""),
     enabled: rentalItemId !== null && accessToken !== null,
+  })
+  const orderQuery = useQuery({
+    queryKey: [
+      ...ORDERS_QUERY_KEY,
+      "detail",
+      currentUser?.id ?? "anonymous",
+      orderId,
+    ],
+    queryFn: () => getOrder(accessToken!, orderId!),
+    enabled: Boolean(accessToken && currentUser && orderId),
   })
   const rentalItem = rentalItemQuery.data ?? null
   const repairTaskQuery = useQuery({
@@ -228,11 +97,17 @@ export function SiteHeader() {
     pathname,
     search,
     rentalItemBreadcrumb,
-    repairTaskQuery.data?.cabinNumber ?? null
+    repairTaskQuery.data?.cabinNumber ?? null,
+    orderQuery.data?.number ?? null
   )
   const isNested = breadcrumbs.length > 1
   const useSlashSeparator = rentalItemId !== null
   const isWarehouseList = pathname === "/warehouse"
+  const canImportWarehouseHtml = canShowWarehouseHtmlImport(
+    pathname,
+    currentUser,
+    selectedWarehouse?.id ?? null
+  )
   const warehouseToolbarCollapsed =
     new URLSearchParams(search).get("toolbar") === "collapsed"
 
@@ -258,7 +133,7 @@ export function SiteHeader() {
 
   return (
     <header className="flex h-(--header-height) shrink-0 items-center border-b">
-      <div className="flex min-w-0 flex-1 items-center gap-2 px-4 lg:px-6">
+      <div className="flex min-w-0 flex-1 items-center gap-2 px-4 lg:px-3">
         <SidebarTrigger
           className="shrink-0 hover:bg-muted hover:text-foreground active:bg-muted"
           aria-label="Открыть или свернуть меню"
@@ -289,6 +164,13 @@ export function SiteHeader() {
             })}
           </BreadcrumbList>
         </Breadcrumb>
+
+        {canImportWarehouseHtml && selectedWarehouse ? (
+          <HtmlImportHeaderAction
+            warehouseId={selectedWarehouse.id}
+            warehouseName={selectedWarehouse.name}
+          />
+        ) : null}
 
         {isWarehouseList ? (
           <Button

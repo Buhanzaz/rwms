@@ -132,10 +132,16 @@ func TestOpenAPIParsesAndExposesOnlyApprovedRuntimePaths(t *testing.T) {
 	}
 	paths := objectAt(t, document, "paths")
 	approved := map[string]string{
-		"/health/live":                        "get",
-		"/health/ready":                       "get",
-		"/api/internal/media/v1/owner-proofs": "post",
-		"/api/internal/media/v1/logistics/references/validate":      "post",
+		"/health/live":                                                   "get",
+		"/health/ready":                                                  "get",
+		"/api/internal/media/v1/owner-proofs":                            "post",
+		"/api/internal/media/v1/asset-imports/preflight":                 "post",
+		"/api/internal/media/v1/asset-imports/{jobId}":                   "get",
+		"/api/internal/media/v1/asset-imports/{jobId}/activate":          "post",
+		"/api/internal/media/v1/asset-imports/{jobId}/retry":             "post",
+		"/api/internal/media/v1/logistics/references/validate":           "post",
+		"/api/internal/media/v1/logistics/cabin-presentations/snapshots": "post",
+		"/api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content": "get",
 		"/api/media/v1/upload-sessions":                             "post",
 		"/api/media/v1/upload-sessions/{uploadSessionId}/content":   "put",
 		"/api/media/v1/upload-sessions/{uploadSessionId}/complete":  "post",
@@ -225,13 +231,13 @@ func TestPublicMediaContractExposesAllCanonicalOwnerScopes(t *testing.T) {
 	if got := stringSliceAt(t, ownerType, "enum"); !equalStrings(got, []string{
 		"INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR",
 		"MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN",
-		"LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER",
+		"LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "TASK_BOARD_ENTRY",
 	}) {
 		t.Fatalf("media owner types = %#v", got)
 	}
 	if got := stringSliceAt(t, ownerContext, "enum"); !equalStrings(got, []string{
 		"INSPECTION", "WAREHOUSE", "ESTIMATE", "REPAIR", "ACCEPTANCE", "CATALOG",
-		"RETURN_INSPECTION", "SHIPMENT", "TRANSFER",
+		"RETURN_INSPECTION", "SHIPMENT", "TRANSFER", "WORK_RESULT",
 	}) {
 		t.Fatalf("media owner contexts = %#v", got)
 	}
@@ -252,7 +258,7 @@ func TestPublicMediaContractExposesAllCanonicalOwnerScopes(t *testing.T) {
 		t.Fatal("media asset folderId must be required")
 	}
 	pairs, ok := upload["oneOf"].([]any)
-	if !ok || len(pairs) != 9 {
+	if !ok || len(pairs) != 10 {
 		t.Fatalf("upload owner scope pairs = %#v", upload["oneOf"])
 	}
 	wire, err := json.Marshal(pairs)
@@ -269,6 +275,7 @@ func TestPublicMediaContractExposesAllCanonicalOwnerScopes(t *testing.T) {
 		`"ownerType":{"const":"LOGISTICS_RETURN"}`, `"context":{"const":"RETURN_INSPECTION"}`,
 		`"ownerType":{"const":"LOGISTICS_SHIPMENT"}`, `"context":{"const":"SHIPMENT"}`,
 		`"ownerType":{"const":"LOGISTICS_TRANSFER"}`, `"context":{"const":"TRANSFER"}`,
+		`"ownerType":{"const":"TASK_BOARD_ENTRY"}`, `"context":{"const":"WORK_RESULT"}`,
 	} {
 		if !strings.Contains(string(wire), required) {
 			t.Errorf("upload owner scope pairs do not contain %s: %s", required, wire)
@@ -314,6 +321,63 @@ func TestLogisticsReferenceValidationContractIsPrivateAndOpaque(t *testing.T) {
 	properties := objectAt(t, reference, "properties")
 	if len(properties) != 2 || properties["mediaId"] == nil || properties["generation"] == nil {
 		t.Fatalf("opaque reference properties = %#v", properties)
+	}
+}
+
+func TestLogisticsCabinPresentationContractIsPrivateAndOpaque(t *testing.T) {
+	root := repositoryRoot(t)
+	var document map[string]any
+	if err := yaml.Unmarshal(readContract(t, filepath.Join(root, "contracts", "openapi", "media-service.yaml")), &document); err != nil {
+		t.Fatalf("decode media-service.yaml: %v", err)
+	}
+	paths := objectAt(t, document, "paths")
+	snapshot := objectAt(t, objectAt(t, paths,
+		"/api/internal/media/v1/logistics/cabin-presentations/snapshots"), "post")
+	if got := stringAt(t, snapshot, "operationId"); got != "readLogisticsCabinPresentationSnapshots" {
+		t.Fatalf("snapshot operationId = %q", got)
+	}
+	content := objectAt(t, objectAt(t, paths,
+		"/api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content"), "get")
+	if got := stringAt(t, content, "operationId"); got != "getLogisticsCabinPresentationVariantContent" {
+		t.Fatalf("content operationId = %q", got)
+	}
+	responses := objectAt(t, content, "responses")
+	if responses["404"] == nil {
+		t.Fatal("private cabin presentation content route must fold mismatches into 404")
+	}
+
+	schemas := objectAt(t, objectAt(t, document, "components"), "schemas")
+	request := objectAt(t, schemas, "CabinPresentationSnapshotRequest")
+	if request["additionalProperties"] != false {
+		t.Fatal("cabin presentation request allows undeclared properties")
+	}
+	requestCabinIDs := objectAt(t, objectAt(t, request, "properties"), "cabinIds")
+	if requestCabinIDs["minItems"] != 1 || requestCabinIDs["maxItems"] != 100 || requestCabinIDs["uniqueItems"] != true {
+		t.Fatalf("cabin presentation request bounds = %#v", requestCabinIDs)
+	}
+	for name, schemaName := range map[string]string{
+		"snapshot page": "CabinPresentationSnapshotPage",
+		"snapshot":      "CabinPresentationSnapshot",
+		"photo":         "CabinPresentationPhoto",
+	} {
+		schema := objectAt(t, schemas, schemaName)
+		if schema["additionalProperties"] != false {
+			t.Errorf("%s allows undeclared properties", name)
+		}
+		properties := objectAt(t, schema, "properties")
+		for _, forbidden := range []string{"url", "contentPath", "objectKey", "sourceObjectKey", "bucket", "path", "signedUrl", "fileName", "contentType", "status"} {
+			if _, present := properties[forbidden]; present {
+				t.Errorf("%s exposes forbidden %q", name, forbidden)
+			}
+		}
+	}
+	photoProperties := objectAt(t, objectAt(t, schemas, "CabinPresentationPhoto"), "properties")
+	variants := objectAt(t, photoProperties, "availableVariants")
+	if variants["minItems"] != 1 || variants["maxItems"] != 2 || variants["uniqueItems"] != true {
+		t.Fatalf("availableVariants bounds = %#v", variants)
+	}
+	if got := stringSliceAt(t, objectAt(t, variants, "items"), "enum"); !equalStrings(got, []string{"SMALL", "LARGE"}) {
+		t.Fatalf("availableVariants enum = %#v", got)
 	}
 }
 
@@ -368,7 +432,7 @@ func TestLegacyUnionSchemaCarriesTheExpandedOwnerEnum(t *testing.T) {
 	if got := stringSliceAt(t, ownerType, "enum"); !equalStrings(got, []string{
 		"INVENTORY_FINDING", "CABIN", "MAINTENANCE_ESTIMATE", "MAINTENANCE_REPAIR",
 		"MAINTENANCE_ACCEPTANCE", "MAINTENANCE_CATALOG_NODE", "LOGISTICS_RETURN",
-		"LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER",
+		"LOGISTICS_SHIPMENT", "LOGISTICS_TRANSFER", "TASK_BOARD_ENTRY",
 	}) {
 		t.Fatalf("legacy union media owner types = %#v", got)
 	}

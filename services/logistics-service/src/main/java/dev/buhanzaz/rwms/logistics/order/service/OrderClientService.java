@@ -14,6 +14,7 @@ import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -31,6 +32,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class OrderClientService {
   private static final String CREATE_CLIENT = "CREATE_CLIENT";
   private static final String CREATE_ORDER_CLIENT = "CREATE_ORDER_CLIENT";
+  private static final Pattern E164 = Pattern.compile("^\\+[1-9][0-9]{6,14}$");
 
   private final OrderClientRepository clients;
   private final RentalOrderResponseMapper mapper;
@@ -45,8 +47,19 @@ public class OrderClientService {
           if (type != null) predicates.add(builder.equal(root.get("clientType"), type));
           if (!normalizedSearch.isEmpty()) {
             predicates.add(
-                builder.like(
-                    root.get("normalizedName"), "%" + escapeLike(normalizedSearch) + "%", '\\'));
+                builder.or(
+                    builder.like(
+                        root.get("normalizedName"),
+                        "%" + escapeLike(normalizedSearch) + "%",
+                        '\\'),
+                    builder.like(
+                        root.get("normalizedPhone"),
+                        "%" + escapeLike(normalizedSearch) + "%",
+                        '\\'),
+                    builder.like(
+                        root.get("normalizedEmail"),
+                        "%" + escapeLike(normalizedSearch) + "%",
+                        '\\')));
           }
           return builder.and(predicates.toArray(Predicate[]::new));
         };
@@ -72,7 +85,9 @@ public class OrderClientService {
             idempotencyKey,
             CREATE_CLIENT,
             request.clientType(),
-            request.displayName());
+            request.displayName(),
+            request.phone(),
+            request.email());
     return new CreateResult(mapper.toClientResponse(result.client()), result.replayed());
   }
 
@@ -84,7 +99,9 @@ public class OrderClientService {
         idempotencyKey,
         CREATE_ORDER_CLIENT,
         request.clientType(),
-        request.displayName());
+        request.displayName(),
+        request.phone(),
+        request.email());
   }
 
   public OrderClient required(UUID clientId) {
@@ -101,15 +118,24 @@ public class OrderClientService {
       UUID idempotencyKey,
       String scope,
       ClientType type,
-      String requestedDisplayName) {
+      String requestedDisplayName,
+      String requestedPhone,
+      String requestedEmail) {
     if (actor == null || idempotencyKey == null || type == null) {
       throw new IllegalArgumentException("Client actor, type and Idempotency-Key are required");
     }
     String displayName = normalizeDisplayName(requestedDisplayName);
     String normalizedName = normalizeName(displayName);
+    String normalizedPhone = normalizePhone(requestedPhone);
+    String normalizedEmail = normalizeEmail(requestedEmail);
     String checksum =
         OrderCommandChecksum.sha256(
-            scope, List.of(type.name(), normalizedName));
+            scope,
+            List.of(
+                type.name(),
+                normalizedName,
+                normalizedPhone,
+                normalizedEmail == null ? "" : normalizedEmail));
     UUID scopedKey = OrderCommandChecksum.scopedKey(idempotencyKey, scope);
     clients.acquireTransactionLock(
         "order-client:idempotency:" + actor.subjectId() + ":" + scopedKey);
@@ -126,13 +152,11 @@ public class OrderClientService {
       return new CreatedClient(replay, true);
     }
 
-    clients.acquireTransactionLock("order-client:name:" + type + ":" + normalizedName);
+    clients.acquireTransactionLock("order-client:phone:" + type + ":" + normalizedPhone);
     OrderClient duplicate =
-        clients.findByClientTypeAndNormalizedName(type, normalizedName).orElse(null);
+        clients.findByClientTypeAndNormalizedPhone(type, normalizedPhone).orElse(null);
     if (duplicate != null) {
-      throw conflict(
-          "CLIENT_ALREADY_EXISTS",
-          "Клиент с таким типом и названием уже существует");
+      return new CreatedClient(duplicate, true);
     }
     OrderClient client =
         clients.saveAndFlush(
@@ -140,6 +164,10 @@ public class OrderClientService {
                 type,
                 displayName,
                 normalizedName,
+                normalizedPhone,
+                normalizedPhone,
+                normalizedEmail,
+                normalizedEmail,
                 actor.subjectId(),
                 scopedKey,
                 checksum));
@@ -151,6 +179,33 @@ public class OrderClientService {
         .replaceAll("[\\p{Z}\\s]+", " ")
         .trim()
         .toLowerCase(Locale.ROOT);
+  }
+
+  public static String normalizePhone(String value) {
+    String raw =
+        Normalizer.normalize(value == null ? "" : value, Normalizer.Form.NFKC).trim();
+    boolean explicitPlus = raw.startsWith("+");
+    String digits = raw.replaceAll("[^0-9]", "");
+    if (!explicitPlus && digits.length() == 11 && digits.startsWith("8")) {
+      digits = "7" + digits.substring(1);
+    }
+    String normalized = "+" + digits;
+    if (!E164.matcher(normalized).matches()) {
+      throw new IllegalArgumentException("phone is invalid");
+    }
+    return normalized;
+  }
+
+  public static String normalizeEmail(String value) {
+    if (value == null || value.isBlank()) return null;
+    String normalized =
+        Normalizer.normalize(value, Normalizer.Form.NFKC).trim().toLowerCase(Locale.ROOT);
+    if (normalized.length() > 320
+        || normalized.indexOf('@') < 1
+        || normalized.endsWith("@")) {
+      throw new IllegalArgumentException("email is invalid");
+    }
+    return normalized;
   }
 
   private static String normalizeDisplayName(String value) {

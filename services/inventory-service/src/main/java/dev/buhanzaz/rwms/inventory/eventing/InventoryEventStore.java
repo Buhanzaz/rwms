@@ -207,7 +207,7 @@ public class InventoryEventStore {
         insert into domain_event(
           event_id,aggregate_type,aggregate_id,aggregate_version,event_type,event_version,
           occurred_at,recorded_at,correlation_id,causation_id,actor_ref,event_body,event_sha256)
-        values (?,?,?,?,?,1,null,?,?,?,?,?::jsonb,?)
+        values (?,?,?,?,?,1,null,?,?,?,?::jsonb,?::jsonb,?)
         """,
         eventId,
         aggregateType,

@@ -119,6 +119,8 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
       UUID warehouseId,
       UUID rentalItemId,
       long rentalItemVersion,
+      java.time.LocalDate dispatchDate,
+      java.util.List<MediaReference> mediaReferences,
       java.util.List<EquipmentShortage> shortages) {
     throw unavailable();
   }
@@ -143,28 +145,6 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
       long expectedHoldVersion,
       UUID shipmentId,
       UUID shipmentLineId) {
-    throw unavailable();
-  }
-
-  @Override
-  public PreparationTask registerPreparationTask(
-      UUID warehouseId, UUID externalTaskId, Integer plannedDurationMinutes, java.time.OffsetDateTime deadlineAt) {
-    throw unavailable();
-  }
-
-  @Override
-  public PreparationTask readPreparationTask(UUID externalTaskId) {
-    throw unavailable();
-  }
-
-  @Override
-  public PreparationTask completePreparationTask(
-      UUID externalTaskId, long expectedTaskVersion) {
-    throw unavailable();
-  }
-
-  @Override
-  public PreparationTask cancelPreparationTask(UUID externalTaskId, long expectedTaskVersion) {
     throw unavailable();
   }
 
@@ -242,6 +222,7 @@ final class DisabledLogisticsDependencyGateway implements LogisticsDependencyGat
       UUID unitId,
       UUID clientId,
       String tenantSnapshot,
+      java.time.OffsetDateTime draftReservationExpiresAt,
       UUID actorSubjectId,
       String actorRole) {
     throw unavailable();

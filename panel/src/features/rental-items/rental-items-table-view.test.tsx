@@ -12,6 +12,10 @@ import type {
   RentalItemsColumnConfig,
   RentalItemsTableSchema,
 } from "@/features/rental-items/model/rental-item"
+import {
+  buildRentalItemsTableSchema,
+  normalizeRentalItemsColumnConfig,
+} from "@/features/rental-items/model/rental-item"
 
 afterEach(cleanup)
 
@@ -23,23 +27,26 @@ function rentalItem(
     version: 1,
     warehouseId: "warehouse-1",
     number: "БЫТ-001",
+    rentalTypeId: "type-1",
+    dimensionId: "dimension-1",
+    finishingId: "finishing-1",
     type: "БК-1",
     dimensions: "2,4 × 6",
     finishing: "ЛДСП",
     category: "Стандарт",
-    characteristics: "Пластиковое окно",
+    characteristics: [
+      { id: "characteristic-window", name: "Пластиковое окно" },
+    ],
     linoleum: true,
     status: "WAREHOUSE",
     comment: null,
-    hasPhotos: false,
-    photoCount: 0,
-    mainPhotoUrl: null,
-    locationNodeId: null,
     contents: null,
     contentsItems,
     shipmentDate: null,
     tenant: null,
     price: null,
+    passport: {},
+    tags: [],
   }
 }
 
@@ -71,6 +78,21 @@ const photosTableSchema: RentalItemsTableSchema = {
   columns: [photosColumn],
   filters: [],
   searchableFieldIds: [],
+}
+
+const characteristicsColumn: RentalItemsColumnConfig = {
+  id: "characteristics",
+  label: "Характеристики",
+  visible: true,
+  locked: false,
+  searchable: true,
+  dataType: "text",
+}
+
+const characteristicsTableSchema: RentalItemsTableSchema = {
+  columns: [characteristicsColumn],
+  filters: [],
+  searchableFieldIds: ["characteristics"],
 }
 
 describe("rental items table cells", () => {
@@ -167,6 +189,117 @@ describe("rental items table cells", () => {
 })
 
 describe("rental items table actions", () => {
+  it("keeps characteristics default-visible when the asset response contains an array", () => {
+    const schema = buildRentalItemsTableSchema([rentalItem([])])
+    const columns = normalizeRentalItemsColumnConfig(schema.columns, [])
+
+    expect(schema.columns).toContainEqual(
+      expect.objectContaining({
+        id: "characteristics",
+        label: "Характеристики",
+        visible: true,
+      })
+    )
+    expect(columns).toContainEqual(
+      expect.objectContaining({ id: "characteristics", visible: true })
+    )
+  })
+
+  it("keeps the full-height table grid and its header when there are no cabins", () => {
+    const { container } = render(
+      <RentalItemsTableView
+        schema={tableSchema}
+        items={[]}
+        sorting={[]}
+        onSortingChange={vi.fn()}
+        onOpenPhotos={vi.fn()}
+        onOpenItem={vi.fn()}
+        columnsConfig={[numberColumn]}
+        mediaCovers={new Map()}
+      />
+    )
+
+    const grid = container.querySelector<HTMLElement>(
+      '[data-slot="rental-items-table-grid"]'
+    )
+    expect(grid).not.toBeNull()
+    expect(screen.getByRole("columnheader", { name: "Номер" })).toBeTruthy()
+    expect(grid?.className).toContain("flex-1")
+    expect(grid?.querySelector("table")?.className).not.toContain("min-h-full")
+    expect(screen.queryByText("Бытовки не найдены.")).toBeNull()
+    expect(grid?.querySelector("tbody")?.children).toHaveLength(0)
+  })
+
+  it("keeps a single filtered cabin at the standard row height", () => {
+    const { container } = render(
+      <RentalItemsTableView
+        schema={tableSchema}
+        items={[rentalItem([])]}
+        sorting={[]}
+        onSortingChange={vi.fn()}
+        onOpenPhotos={vi.fn()}
+        onOpenItem={vi.fn()}
+        columnsConfig={[numberColumn]}
+        mediaCovers={new Map()}
+      />
+    )
+
+    const grid = container.querySelector<HTMLElement>(
+      '[data-slot="rental-items-table-grid"]'
+    )
+    const resultRow = grid?.querySelector("tbody tr")
+
+    expect(grid?.className).toContain("flex-1")
+    expect(grid?.querySelector("table")?.className).not.toContain("min-h-full")
+    expect(resultRow?.className).toContain("h-[49px]")
+    expect(screen.getByText("БЫТ-001")).toBeTruthy()
+  })
+
+  it("renders characteristics as neutral wrapping tags instead of one text line", () => {
+    render(
+      <RentalItemsTableView
+        schema={characteristicsTableSchema}
+        items={[
+          {
+            ...rentalItem([]),
+            characteristics: [
+              { id: "characteristic-window", name: "Пластиковое окно" },
+              {
+                id: "characteristic-electricity-uzo",
+                name: "Электрика КК + УЗО",
+              },
+              {
+                id: "characteristic-electricity-meter",
+                name: "Электрика КК + счетчик",
+              },
+            ],
+          },
+        ]}
+        sorting={[]}
+        onSortingChange={vi.fn()}
+        onOpenPhotos={vi.fn()}
+        onOpenItem={vi.fn()}
+        columnsConfig={[characteristicsColumn]}
+        mediaCovers={new Map()}
+      />
+    )
+
+    const plasticWindow = screen.getByText("Пластиковое окно")
+    const characteristics = plasticWindow.parentElement
+
+    expect(plasticWindow.className).toContain("rounded-full")
+    expect(plasticWindow.className).toContain("bg-secondary")
+    expect(characteristics?.className).toContain("flex-wrap")
+    expect(characteristics?.parentElement?.className).toContain("items-center")
+    expect(characteristics?.parentElement?.className).toContain("min-h-[33px]")
+    expect(plasticWindow.closest("td")?.className).toContain("align-middle")
+    expect(screen.getByText("Электрика КК + УЗО")).toBeTruthy()
+    expect(screen.getByText("Электрика КК + счетчик")).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: /Показать полностью/ })
+    ).toBeNull()
+  })
+
   it("distinguishes an unavailable photo service from an empty archive", () => {
     const commonProps = {
       schema: photosTableSchema,

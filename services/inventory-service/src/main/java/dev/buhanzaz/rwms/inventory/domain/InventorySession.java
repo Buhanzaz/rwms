@@ -207,6 +207,16 @@ public class InventorySession {
     updatedAt = now();
   }
 
+  public void changeExpectedPopulation(int delta) {
+    requireActive();
+    int next = Math.addExact(expectedPopulationCount, delta);
+    if (next < 0) {
+      throw new IllegalStateException("Expected inventory population cannot be negative");
+    }
+    expectedPopulationCount = next;
+    updatedAt = now();
+  }
+
   private void requireActive() {
     if (lifecycle != SessionLifecycle.ACTIVE) {
       throw new IllegalStateException("Only an active inventory session may transition");

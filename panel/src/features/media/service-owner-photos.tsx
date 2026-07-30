@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { ImageUploadIcon } from "@hugeicons/core-free-icons"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -19,6 +19,10 @@ import {
 import { useServiceOwnerMedia } from "@/features/media/use-service-owner-media"
 import { serviceOwnerMediaQueryKey } from "@/features/media/use-service-owner-media"
 import { ApiError } from "@/lib/api-client"
+import {
+  isRetryableOwnerProofError,
+  retryOwnerProofOperation,
+} from "@/features/media/owner-proof-retry"
 
 const statusLabel = {
   UPLOADING: "Загрузка",
@@ -28,13 +32,14 @@ const statusLabel = {
   DELETED: "Удалено",
 } as const
 
-function isRetryableOwnerMediaError(error: unknown) {
-  return (
+function unavailableMessage(error: unknown) {
+  if (
     error instanceof ApiError &&
-    (error.status === 409 ||
-      error.status === 503 ||
-      (error.status === 403 && error.code === "MEDIA_OWNER_PROOF_REQUIRED"))
-  )
+    (error.status === 401 || error.status === 403)
+  ) {
+    return error.message
+  }
+  return "Сервис фото недоступен"
 }
 
 export function ServiceOwnerPhotos({
@@ -44,8 +49,13 @@ export function ServiceOwnerPhotos({
   readOnly,
   maxItems = 20,
   title = "Фотографии",
+  toolbarAction,
+  visibleMediaIds,
+  coverMediaId = null,
+  requireCover = false,
   onReadyReferencesChange,
   onReadyStateChange,
+  onCoverMediaIdChange,
 }: {
   accessToken: string | null
   owner: ServiceMediaOwner | null
@@ -53,8 +63,13 @@ export function ServiceOwnerPhotos({
   readOnly: boolean
   maxItems?: number
   title?: string
+  toolbarAction?: ReactNode
+  visibleMediaIds?: readonly string[]
+  coverMediaId?: string | null
+  requireCover?: boolean
   onReadyReferencesChange?: (references: ReadyMediaReference[]) => void
   onReadyStateChange?: (ready: boolean) => void
+  onCoverMediaIdChange?: (mediaId: string | null) => void
 }) {
   if (owner === null) {
     return (
@@ -64,6 +79,10 @@ export function ServiceOwnerPhotos({
         maxItems={maxItems}
         title={title}
         ensureOwner={ensureOwner}
+        toolbarAction={toolbarAction}
+        coverMediaId={coverMediaId}
+        requireCover={requireCover}
+        onCoverMediaIdChange={onCoverMediaIdChange}
       />
     )
   }
@@ -75,8 +94,13 @@ export function ServiceOwnerPhotos({
       readOnly={readOnly}
       maxItems={maxItems}
       title={title}
+      toolbarAction={toolbarAction}
+      visibleMediaIds={visibleMediaIds}
+      coverMediaId={coverMediaId}
+      requireCover={requireCover}
       onReadyReferencesChange={onReadyReferencesChange}
       onReadyStateChange={onReadyStateChange}
+      onCoverMediaIdChange={onCoverMediaIdChange}
     />
   )
 }
@@ -87,22 +111,56 @@ function OwnedServiceOwnerPhotos({
   readOnly,
   maxItems,
   title,
+  toolbarAction,
+  visibleMediaIds,
+  coverMediaId,
+  requireCover,
   onReadyReferencesChange,
   onReadyStateChange,
+  onCoverMediaIdChange,
 }: {
   accessToken: string | null
   owner: ServiceMediaOwner
   readOnly: boolean
   maxItems: number
   title: string
+  toolbarAction?: ReactNode
+  visibleMediaIds?: readonly string[]
+  coverMediaId: string | null
+  requireCover: boolean
   onReadyReferencesChange?: (references: ReadyMediaReference[]) => void
   onReadyStateChange?: (ready: boolean) => void
+  onCoverMediaIdChange?: (mediaId: string | null) => void
 }) {
   const [managerOpen, setManagerOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const media = useServiceOwnerMedia({ accessToken, owner })
+  const visibleMediaIdSet = useMemo(
+    () => (visibleMediaIds ? new Set(visibleMediaIds) : null),
+    [visibleMediaIds]
+  )
+  const visiblePhotos = useMemo(() => {
+    const photos = visibleMediaIdSet
+      ? media.photos.filter((photo) => visibleMediaIdSet.has(photo.id))
+      : [...media.photos]
+    if (!coverMediaId) return photos
+    return photos.slice().sort((left, right) => {
+      if (left.id === coverMediaId) return -1
+      if (right.id === coverMediaId) return 1
+      return 0
+    })
+  }, [coverMediaId, media.photos, visibleMediaIdSet])
+  const visibleLogicalPhotoCount = visibleMediaIdSet
+    ? media.assets.filter(
+        (asset) =>
+          visibleMediaIdSet.has(asset.id) &&
+          asset.kind === "IMAGE" &&
+          asset.status !== "DELETED"
+      ).length
+    : media.logicalPhotoCount
   const readyReferencesCallback = useRef(onReadyReferencesChange)
   const readyStateCallback = useRef(onReadyStateChange)
+  const coverCallback = useRef(onCoverMediaIdChange)
   const photoById = useMemo(
     () => new Map(media.photos.map((photo) => [photo.id, photo])),
     [media.photos]
@@ -131,6 +189,10 @@ function OwnedServiceOwnerPhotos({
     readyStateCallback.current = onReadyStateChange
   }, [onReadyStateChange])
 
+  useEffect(() => {
+    coverCallback.current = onCoverMediaIdChange
+  }, [onCoverMediaIdChange])
+
   const readyReferencesKey = media.readyReferences
     .map((reference) => `${reference.mediaId}:${reference.generation}`)
     .join("|")
@@ -139,6 +201,18 @@ function OwnedServiceOwnerPhotos({
       readyReferencesCallback.current?.([...media.readyReferences])
     }
   }, [media.query.isSuccess, media.readyReferences, readyReferencesKey])
+
+  useEffect(() => {
+    if (
+      media.query.isSuccess &&
+      coverMediaId &&
+      !media.readyReferences.some(
+        (reference) => reference.mediaId === coverMediaId
+      )
+    ) {
+      coverCallback.current?.(null)
+    }
+  }, [coverMediaId, media.query.isSuccess, media.readyReferences])
 
   const ready =
     media.query.isSuccess &&
@@ -190,7 +264,7 @@ function OwnedServiceOwnerPhotos({
         className="flex min-h-56 items-center justify-center rounded-lg border bg-muted px-4 text-center text-sm text-muted-foreground"
         aria-label={title}
       >
-        Сервис фото недоступен
+        {unavailableMessage(media.query.error)}
       </section>
     )
   }
@@ -199,19 +273,22 @@ function OwnedServiceOwnerPhotos({
     <section className="flex h-full min-h-0 flex-col gap-3" aria-label={title}>
       <div className="flex items-center justify-between gap-2">
         <Badge variant="secondary">
-          {media.logicalPhotoCount} из {maxItems}
+          {visibleLogicalPhotoCount} из {maxItems}
         </Badge>
-        {!readOnly ? (
-          <Button
-            type="button"
-            variant="outline"
-            disabled={media.pending || media.logicalPhotoCount >= maxItems}
-            onClick={() => setManagerOpen(true)}
-          >
-            <HugeiconsIcon icon={ImageUploadIcon} data-icon="inline-start" />
-            Добавить
-          </Button>
-        ) : null}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {toolbarAction}
+          {!readOnly ? (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={media.pending || media.logicalPhotoCount >= maxItems}
+              onClick={() => setManagerOpen(true)}
+            >
+              <HugeiconsIcon icon={ImageUploadIcon} data-icon="inline-start" />
+              Добавить
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       {media.error && !media.query.isError ? (
@@ -220,16 +297,40 @@ function OwnedServiceOwnerPhotos({
         </p>
       ) : null}
 
+      {requireCover && media.readyReferences.length > 0 ? (
+        <p
+          role={coverMediaId ? "status" : "alert"}
+          className={
+            coverMediaId
+              ? "text-sm text-muted-foreground"
+              : "text-sm text-destructive"
+          }
+        >
+          {coverMediaId
+            ? "Титульная фотография выбрана."
+            : "Выберите титульную фотографию в окне добавления."}
+        </p>
+      ) : null}
+
       {media.previewUnavailable ? (
-        <div className="flex min-h-56 flex-1 items-center justify-center rounded-lg border bg-muted px-4 text-center text-sm text-muted-foreground">
-          Сервис фото недоступен
+        <div className="flex min-h-56 flex-1 flex-col items-center justify-center gap-3 rounded-lg border bg-muted px-4 text-center text-sm text-muted-foreground">
+          <span>{unavailableMessage(media.previewError)}</span>
+          {isRetryableOwnerProofError(media.previewError) ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => media.retryPreviews()}
+            >
+              Повторить
+            </Button>
+          ) : null}
         </div>
       ) : (
         <PhotoCarousel
-          photos={media.photos}
+          photos={visiblePhotos}
           title={title}
           loading={media.query.isLoading}
-          photoCount={media.logicalPhotoCount}
+          photoCount={visibleLogicalPhotoCount}
           showPhotoCount
           activeIndex={activeIndex}
           onActiveIndexChange={setActiveIndex}
@@ -249,6 +350,8 @@ function OwnedServiceOwnerPhotos({
           items={managerItems}
           maxItems={maxItems}
           pending={media.pending}
+          coverMediaId={coverMediaId}
+          requireCover={requireCover}
           onOpenChange={setManagerOpen}
           onAddFiles={(files) => void addFiles(files)}
           onRemove={(item) => {
@@ -277,6 +380,7 @@ function OwnedServiceOwnerPhotos({
                 )
               )
           }}
+          onSelectCover={(item) => onCoverMediaIdChange?.(item.id)}
         />
       ) : null}
     </section>
@@ -304,37 +408,28 @@ async function uploadNewOwnerFile(
     uploadAndFinalize: crypto.randomUUID(),
   }
   const rotateKey = crypto.randomUUID()
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      const result = await unownedMediaClient.uploadFile(
-        accessToken,
-        owner,
-        item.file,
-        sortOrder,
-        folderId,
-        commandKeys
-      )
-      if (item.rotationDegrees === 0) {
-        return result
-      }
-      await unownedMediaClient.rotate(
-        accessToken,
-        owner,
-        result.asset.id,
-        item.rotationDegrees,
-        result.asset.version,
-        rotateKey
-      )
+  return retryOwnerProofOperation(async () => {
+    const result = await unownedMediaClient.uploadFile(
+      accessToken,
+      owner,
+      item.file,
+      sortOrder,
+      folderId,
+      commandKeys
+    )
+    if (item.rotationDegrees === 0) {
       return result
-    } catch (cause) {
-      if (attempt >= 4 || !isRetryableOwnerMediaError(cause)) {
-        throw cause
-      }
-      await new Promise((resolve) =>
-        setTimeout(resolve, Math.min(250 * 2 ** attempt, 2_000))
-      )
     }
-  }
+    await unownedMediaClient.rotate(
+      accessToken,
+      owner,
+      result.asset.id,
+      item.rotationDegrees,
+      result.asset.version,
+      rotateKey
+    )
+    return result
+  })
 }
 
 function UnownedServiceOwnerPhotos({
@@ -343,18 +438,27 @@ function UnownedServiceOwnerPhotos({
   maxItems,
   title,
   ensureOwner,
+  toolbarAction,
+  coverMediaId,
+  requireCover,
+  onCoverMediaIdChange,
 }: {
   accessToken: string | null
   readOnly: boolean
   maxItems: number
   title: string
   ensureOwner?: () => Promise<ServiceMediaOwner>
+  toolbarAction?: ReactNode
+  coverMediaId: string | null
+  requireCover: boolean
+  onCoverMediaIdChange?: (mediaId: string | null) => void
 }) {
   const queryClient = useQueryClient()
   const [managerOpen, setManagerOpen] = useState(false)
   const [pendingItems, setPendingItems] = useState<PendingOwnerPhoto[]>([])
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [pendingCoverId, setPendingCoverId] = useState<string | null>(null)
   const pendingItemsRef = useRef(pendingItems)
 
   useEffect(() => {
@@ -370,7 +474,7 @@ function UnownedServiceOwnerPhotos({
     []
   )
 
-  async function addFiles(files: File[]) {
+  function addFiles(files: File[]) {
     if (!accessToken || !ensureOwner || uploading) return
     const selected = files.slice(0, maxItems).map((file) => ({
       id: crypto.randomUUID(),
@@ -379,30 +483,47 @@ function UnownedServiceOwnerPhotos({
       rotationDegrees: 0 as const,
     }))
     if (selected.length === 0) return
-    pendingItemsRef.current.forEach((item) =>
-      URL.revokeObjectURL(item.previewUrl)
-    )
-    setPendingItems(selected)
+    setPendingItems((current) => [...current, ...selected].slice(0, maxItems))
+  }
+
+  async function uploadPendingItems() {
+    if (
+      !accessToken ||
+      !ensureOwner ||
+      uploading ||
+      pendingItems.length === 0 ||
+      (requireCover && !pendingCoverId)
+    ) {
+      return
+    }
+    const selected = [...pendingItems]
+    const selectedCoverId = pendingCoverId
     setUploading(true)
     setError(null)
     try {
       const resolvedOwner = await ensureOwner()
       const folderId = crypto.randomUUID()
+      let resolvedCoverMediaId: string | null = null
       for (const [index, item] of selected.entries()) {
-        await uploadNewOwnerFile(
+        const uploaded = await uploadNewOwnerFile(
           accessToken,
           resolvedOwner,
           item,
           index,
           folderId
         )
+        if (item.id === selectedCoverId) {
+          resolvedCoverMediaId = uploaded.asset.id
+        }
       }
       await queryClient.invalidateQueries({
         queryKey: serviceOwnerMediaQueryKey(resolvedOwner),
       })
       selected.forEach((item) => URL.revokeObjectURL(item.previewUrl))
       setPendingItems([])
+      setPendingCoverId(null)
       setManagerOpen(false)
+      onCoverMediaIdChange?.(resolvedCoverMediaId)
       toast.success(
         selected.length === 1
           ? "Фотография загружена"
@@ -441,17 +562,20 @@ function UnownedServiceOwnerPhotos({
     <section className="flex h-full min-h-0 flex-col gap-3" aria-label={title}>
       <div className="flex items-center justify-between gap-2">
         <Badge variant="secondary">0 из {maxItems}</Badge>
-        {!readOnly && ensureOwner ? (
-          <Button
-            type="button"
-            variant="outline"
-            disabled={uploading}
-            onClick={() => setManagerOpen(true)}
-          >
-            <HugeiconsIcon icon={ImageUploadIcon} data-icon="inline-start" />
-            Добавить
-          </Button>
-        ) : null}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {toolbarAction}
+          {!readOnly && ensureOwner ? (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={uploading}
+              onClick={() => setManagerOpen(true)}
+            >
+              <HugeiconsIcon icon={ImageUploadIcon} data-icon="inline-start" />
+              Добавить
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       {error ? (
@@ -470,8 +594,10 @@ function UnownedServiceOwnerPhotos({
           items={managerItems}
           maxItems={maxItems}
           pending={uploading}
+          coverMediaId={pendingCoverId ?? coverMediaId}
+          requireCover={requireCover}
           onOpenChange={setManagerOpen}
-          onAddFiles={(files) => void addFiles(files)}
+          onAddFiles={addFiles}
           onRemove={(item) => {
             const pendingItem = pendingItems.find(
               (candidate) => candidate.id === item.id
@@ -481,6 +607,7 @@ function UnownedServiceOwnerPhotos({
             setPendingItems((current) =>
               current.filter((candidate) => candidate.id !== item.id)
             )
+            if (pendingCoverId === item.id) setPendingCoverId(null)
           }}
           onRotate={(item, direction) => {
             const delta = direction === "RIGHT" ? 90 : 270
@@ -496,6 +623,8 @@ function UnownedServiceOwnerPhotos({
               )
             )
           }}
+          onSelectCover={(item) => setPendingCoverId(item.id)}
+          onConfirm={() => void uploadPendingItems()}
         />
       ) : null}
     </section>

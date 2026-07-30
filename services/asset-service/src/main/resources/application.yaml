@@ -30,6 +30,10 @@ logging:
 spring:
   application:
     name: asset-service
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 11MB
   datasource:
     url: ${ASSET_DB_URL}
     username: ${ASSET_DB_USERNAME}
@@ -117,6 +121,17 @@ rwms:
       client-secret: ${ASSET_WAREHOUSE_CLIENT_SECRET:}
       connect-timeout: ${ASSET_WAREHOUSE_CONNECT_TIMEOUT:2s}
       read-timeout: ${ASSET_WAREHOUSE_READ_TIMEOUT:3s}
+    media-import:
+      enabled: ${ASSET_MEDIA_IMPORT_ENABLED:false}
+      base-url: ${MEDIA_SERVICE_INTERNAL_BASE_URL:}
+      token-uri: ${ASSET_MEDIA_TOKEN_URI:${ASSET_WAREHOUSE_TOKEN_URI:}}
+      client-id: asset-service
+      client-secret: ${ASSET_MEDIA_CLIENT_SECRET:${ASSET_WAREHOUSE_CLIENT_SECRET:}}
+      connect-timeout: ${ASSET_MEDIA_CONNECT_TIMEOUT:2s}
+      read-timeout: ${ASSET_MEDIA_READ_TIMEOUT:5s}
+    html-import:
+      media-poll-delay: ${ASSET_HTML_IMPORT_MEDIA_POLL_DELAY:2s}
+      media-poll-initial-delay: ${ASSET_HTML_IMPORT_MEDIA_POLL_INITIAL_DELAY:2s}
   cors:
     allowed-origins: ${PANEL_ORIGIN}
   security:

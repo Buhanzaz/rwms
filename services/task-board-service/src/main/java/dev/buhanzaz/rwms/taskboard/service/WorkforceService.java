@@ -12,8 +12,10 @@ import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardProjectionWriter;
 import dev.buhanzaz.rwms.taskboard.repository.*;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,6 +23,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.client.HttpClientErrorException;
 
 @Service
 public class WorkforceService {
@@ -40,6 +43,7 @@ public class WorkforceService {
   private final WorkerCredentialOperationCoordinator credentialCoordinator;
   private final TaskBoardEventSourcing eventSourcing;
   private final TaskBoardProjectionWriter projectionWriter;
+  private final GroupKpiEvidenceService kpiEvidence;
 
   public WorkforceService(
       WorkerRepository workers,
@@ -56,7 +60,8 @@ public class WorkforceService {
       JdbcTemplate jdbc,
       WorkerCredentialOperationCoordinator credentialCoordinator,
       TaskBoardEventSourcing eventSourcing,
-      TaskBoardProjectionWriter projectionWriter) {
+      TaskBoardProjectionWriter projectionWriter,
+      GroupKpiEvidenceService kpiEvidence) {
     this.workers = workers;
     this.qualifications = qualifications;
     this.groups = groups;
@@ -72,6 +77,7 @@ public class WorkforceService {
     this.credentialCoordinator = credentialCoordinator;
     this.eventSourcing = eventSourcing;
     this.projectionWriter = projectionWriter;
+    this.kpiEvidence = kpiEvidence;
   }
 
   public List<WorkerDto> listWorkers(UUID warehouseId) {
@@ -150,9 +156,150 @@ public class WorkforceService {
     }
   }
 
+  public WorkerDto setCurrentGroup(
+      UUID warehouseId, UUID workerId, SetCurrentGroupRequest request) {
+    return tx.execute(
+        transaction -> {
+          Worker worker = requireWorker(warehouseId, workerId);
+          checkVersion(worker.getVersion(), request.expectedVersion(), "Рабочий");
+          if (!taskAssignments
+              .findAllByWorkerIdAndStatusIn(
+                  workerId, java.util.Set.of(AssignmentStatus.ACTIVE, AssignmentStatus.PAUSED))
+              .isEmpty()) {
+            throw new ConflictException(
+                "Нельзя менять текущую группу во время активного задания");
+          }
+          WorkerGroup selected =
+              request.workerGroupId() == null
+                  ? null
+                  : requireGroup(warehouseId, request.workerGroupId());
+          if (selected != null) {
+            if (!selected.isActive()
+                || selected.getOperationalStatus() != GroupOperationalStatus.AVAILABLE) {
+              throw new ConflictException("Выбранная группа недоступна");
+            }
+            boolean member =
+                members.findAllByWorkerGroupIdAndActiveTrue(selected.getId()).stream()
+                    .anyMatch(value -> value.getWorker().getId().equals(workerId));
+            if (!member) {
+              throw new ConflictException(
+                  "Рабочий не состоит в выбранной группе");
+            }
+          }
+          UUID previousId =
+              worker.getCurrentGroup() == null ? null : worker.getCurrentGroup().getId();
+          UUID selectedId = selected == null ? null : selected.getId();
+          if (java.util.Objects.equals(previousId, selectedId)) {
+            return dto(worker);
+          }
+          long streamVersion =
+              eventSourcing.lock(TaskBoardAggregateType.WORKER, workerId);
+          OffsetDateTime changedAt =
+              jdbc.queryForObject("select clock_timestamp()", OffsetDateTime.class);
+          jdbc.update(
+              """
+              update worker_current_group_interval
+                 set ended_at=?
+               where worker_id=? and ended_at is null
+              """,
+              changedAt,
+              workerId);
+          if (selected != null) {
+            jdbc.update(
+                """
+                insert into worker_current_group_interval(
+                  id,worker_id,worker_group_id,started_at,ended_at)
+                values (?,?,?, ?,null)
+                """,
+                UUID.randomUUID(),
+                workerId,
+                selected.getId(),
+                changedAt);
+          }
+          worker.setCurrentGroup(selected);
+          worker.touch();
+          worker = projectionWriter.saveAndFlush(workers, worker);
+          projectionWriter.refresh(worker);
+          eventSourcing.workerChanged(
+              worker, streamVersion, TaskBoardEventTypes.WORKER_CHANGED);
+          if (previousId != null) {
+            kpiEvidence.refreshGroup(warehouseId, previousId, changedAt);
+          }
+          if (selectedId != null) {
+            kpiEvidence.refreshGroup(warehouseId, selectedId, changedAt);
+          }
+          return dto(worker);
+        });
+  }
+
+  WorkerGroupDto disableGroupState(
+      UUID warehouseId, UUID groupId, GroupAvailabilityRequest request) {
+    return tx.execute(
+        transaction -> {
+          WorkerGroup group = requireGroup(warehouseId, groupId);
+          checkVersion(group.getVersion(), request.expectedVersion(), "Группа");
+          if (group.getOperationalStatus() == GroupOperationalStatus.DISABLED) {
+            throw new ConflictException("Группа уже отключена");
+          }
+          long streamVersion =
+              eventSourcing.lock(TaskBoardAggregateType.WORKER_GROUP, groupId);
+          OffsetDateTime changedAt =
+              jdbc.queryForObject("select clock_timestamp()", OffsetDateTime.class);
+          closeAvailabilityInterval(groupId, changedAt);
+          jdbc.update(
+              """
+              insert into worker_group_availability_interval(
+                id,worker_group_id,status,reason,started_at,ended_at)
+              values (?,?,'DISABLED',?,?,null)
+              """,
+              UUID.randomUUID(),
+              groupId,
+              normalize(request.reason()),
+              changedAt);
+          group.disable(changedAt, request.reason());
+          group = projectionWriter.saveAndFlush(groups, group);
+          projectionWriter.refresh(group);
+          eventSourcing.groupChanged(
+              group, streamVersion, TaskBoardEventTypes.WORKER_GROUP_CHANGED);
+          return dto(group);
+        });
+  }
+
+  WorkerGroupDto enableGroupState(
+      UUID warehouseId, UUID groupId, GroupAvailabilityRequest request) {
+    return tx.execute(
+        transaction -> {
+          WorkerGroup group = requireGroup(warehouseId, groupId);
+          checkVersion(group.getVersion(), request.expectedVersion(), "Группа");
+          if (group.getOperationalStatus() == GroupOperationalStatus.AVAILABLE) {
+            throw new ConflictException("Группа уже доступна");
+          }
+          long streamVersion =
+              eventSourcing.lock(TaskBoardAggregateType.WORKER_GROUP, groupId);
+          OffsetDateTime changedAt =
+              jdbc.queryForObject("select clock_timestamp()", OffsetDateTime.class);
+          closeAvailabilityInterval(groupId, changedAt);
+          jdbc.update(
+              """
+              insert into worker_group_availability_interval(
+                id,worker_group_id,status,reason,started_at,ended_at)
+              values (?,?,'AVAILABLE',null,?,null)
+              """,
+              UUID.randomUUID(),
+              groupId,
+              changedAt);
+          group.enable();
+          group = projectionWriter.saveAndFlush(groups, group);
+          projectionWriter.refresh(group);
+          eventSourcing.groupChanged(
+              group, streamVersion, TaskBoardEventTypes.WORKER_GROUP_CHANGED);
+          return dto(group);
+        });
+  }
+
   public WorkerDto resetPassword(UUID warehouseId, UUID id, long expectedVersion, String password) {
     try (var ignored = credentialCoordinator.tryAcquire(id)) {
-      Worker worker =
+      CredentialReset prepared =
           tx.execute(
               s -> {
                 var w = requireWorker(warehouseId, id);
@@ -161,27 +308,31 @@ public class WorkforceService {
                 long streamVersion = eventSourcing.lock(TaskBoardAggregateType.WORKER, id);
                 if (w.getAppLogin() == null)
                   throw new ConflictException("У рабочего не настроен логин");
+                CredentialStatus completedStatus =
+                    w.getCredentialStatus() == CredentialStatus.DISABLED
+                        ? CredentialStatus.DISABLED
+                        : CredentialStatus.ACTIVE;
                 startCredentialOperation(w, CredentialOperationType.RESET);
                 w = projectionWriter.save(workers, w);
                 projectionWriter.flush();
                 projectionWriter.refresh(w);
                 eventSourcing.workerChanged(w, streamVersion, TaskBoardEventTypes.WORKER_CREDENTIAL_AUDIT);
-                return w;
+                return new CredentialReset(w, completedStatus);
               });
       try {
-        credentials.reset(worker.getId(), password);
+        credentials.reset(prepared.worker().getId(), password);
         markCredential(
             id,
-            worker.getCredentialOperationId(),
-            CredentialStatus.ACTIVE,
+            prepared.worker().getCredentialOperationId(),
+            prepared.completedStatus(),
             null,
-            worker.getAppLogin());
+            prepared.worker().getAppLogin());
       } catch (RuntimeException ex) {
         markCredentialFailure(
             id,
-            worker.getCredentialOperationId(),
+            prepared.worker().getCredentialOperationId(),
             safeMessage(ex),
-            worker.getAppLogin());
+            prepared.worker().getAppLogin());
         throw new ExternalServiceException("Не удалось сбросить учетные данные рабочего", ex);
       }
       return tx.execute(s -> dto(requireWorker(warehouseId, id)));
@@ -197,6 +348,8 @@ public class WorkforceService {
                 ensureCredentialOperationSettled(w);
                 checkVersion(w.getVersion(), expectedVersion, "Рабочий");
                 long streamVersion = eventSourcing.lock(TaskBoardAggregateType.WORKER, id);
+                if (w.getAppLogin() == null)
+                  throw new ConflictException("У рабочего не настроен логин");
                 startCredentialOperation(w, CredentialOperationType.DISABLE);
                 w = projectionWriter.save(workers, w);
                 projectionWriter.flush();
@@ -205,6 +358,47 @@ public class WorkforceService {
                 return w;
               });
       disableCredentials(worker);
+      return tx.execute(s -> dto(requireWorker(warehouseId, id)));
+    }
+  }
+
+  public WorkerDto enableCredentials(UUID warehouseId, UUID id, long expectedVersion) {
+    try (var ignored = credentialCoordinator.tryAcquire(id)) {
+      Worker worker =
+          tx.execute(
+              s -> {
+                var w = requireWorker(warehouseId, id);
+                ensureCredentialOperationSettled(w);
+                checkVersion(w.getVersion(), expectedVersion, "Рабочий");
+                if (w.getAppLogin() == null)
+                  throw new ConflictException("У рабочего не настроен логин");
+                if (w.getCredentialStatus() != CredentialStatus.DISABLED)
+                  throw new ConflictException("Вход рабочего уже включен или требует сверки");
+                long streamVersion = eventSourcing.lock(TaskBoardAggregateType.WORKER, id);
+                startCredentialOperation(w, CredentialOperationType.CONFIGURE);
+                w = projectionWriter.save(workers, w);
+                projectionWriter.flush();
+                projectionWriter.refresh(w);
+                eventSourcing.workerChanged(
+                    w, streamVersion, TaskBoardEventTypes.WORKER_CREDENTIAL_AUDIT);
+                return w;
+              });
+      try {
+        credentials.enable(worker.getId());
+        markCredential(
+            worker.getId(),
+            worker.getCredentialOperationId(),
+            CredentialStatus.ACTIVE,
+            null,
+            worker.getAppLogin());
+      } catch (RuntimeException ex) {
+        markCredentialFailure(
+            worker.getId(),
+            worker.getCredentialOperationId(),
+            safeMessage(ex),
+            worker.getAppLogin());
+        throw new ExternalServiceException("Не удалось включить учетные данные рабочего", ex);
+      }
       return tx.execute(s -> dto(requireWorker(warehouseId, id)));
     }
   }
@@ -220,6 +414,12 @@ public class WorkforceService {
                 checkVersion(w.getVersion(), expectedVersion, "Рабочий");
                 long streamVersion = eventSourcing.lock(TaskBoardAggregateType.WORKER, id);
                 CredentialOperationType interruptedType = w.getCredentialOperationType();
+                boolean legacyProjection =
+                    w.getCredentialStatus() == CredentialStatus.NOT_CONFIGURED
+                        && w.getAppLogin() == null
+                        && w.getCredentialOperationId() == null
+                        && w.getCredentialOperationType() == null
+                        && w.getCredentialOperationStartedAt() == null;
                 if (w.getCredentialStatus() == CredentialStatus.PENDING
                     || w.getCredentialStatus() == CredentialStatus.ERROR) {
                   boolean legacyOperation =
@@ -236,7 +436,7 @@ public class WorkforceService {
                     throw new ConflictException(
                         "Незавершенная операция учетных данных еще не истекла");
                   }
-                } else {
+                } else if (!legacyProjection) {
                   throw new ConflictException(
                       "Сверка учетных данных доступна только после ошибки или истечения операции");
                 }
@@ -292,7 +492,35 @@ public class WorkforceService {
                   deletionIntents
                       .findByWorkerId(id)
                       .orElseThrow(() -> new ConflictException("Намерение удаления потеряно"));
+              List<WorkerGroupMember> ownedMembers = members.findAllByWorkerId(id);
+              List<WorkerGroup> affectedGroups =
+                  ownedMembers.stream()
+                      .map(WorkerGroupMember::getWorkerGroup)
+                      .distinct()
+                      .sorted(Comparator.comparing(group -> group.getId().toString()))
+                      .toList();
+              Map<UUID, Long> groupStreamVersions = new LinkedHashMap<>();
+              affectedGroups.forEach(
+                  group -> {
+                    groupStreamVersions.put(
+                        group.getId(),
+                        eventSourcing.lock(TaskBoardAggregateType.WORKER_GROUP, group.getId()));
+                    group.touch();
+                    projectionWriter.save(groups, group);
+                  });
               deletionIntents.delete(intent);
+              projectionWriter.deleteAll(members, ownedMembers);
+              projectionWriter.deleteAll(
+                  qualifications, qualifications.findAllByWorkerId(id));
+              projectionWriter.flush();
+              affectedGroups.forEach(
+                  group -> {
+                    projectionWriter.refresh(group);
+                    eventSourcing.groupChanged(
+                        group,
+                        groupStreamVersions.get(group.getId()),
+                        TaskBoardEventTypes.WORKER_GROUP_MEMBERS_CHANGED);
+                  });
               eventSourcing.deleted(worker, streamVersion);
               projectionWriter.delete(workers, worker);
               projectionWriter.flush();
@@ -337,6 +565,14 @@ public class WorkforceService {
           replaceMembers(g, request.members());
           projectionWriter.flush();
           projectionWriter.refresh(g);
+          jdbc.update(
+              """
+              insert into worker_group_availability_interval(
+                id,worker_group_id,status,reason,started_at,ended_at)
+              values (?,?,'AVAILABLE',null,clock_timestamp(),null)
+              """,
+              UUID.randomUUID(),
+              g.getId());
           eventSourcing.created(g);
           return dto(g);
         });
@@ -365,7 +601,8 @@ public class WorkforceService {
           var g = requireGroup(warehouseId, id);
           checkVersion(g.getVersion(), expectedVersion, "Группа");
           long streamVersion = eventSourcing.lock(TaskBoardAggregateType.WORKER_GROUP, id);
-          if (members.existsByWorkerGroupId(id) || taskAssignments.existsByWorkerGroupId(id))
+          if (members.existsByWorkerGroupId(id)
+              || taskAssignments.existsByWorkerGroupId(id))
             throw new ConflictException("Используемую группу можно только деактивировать");
           eventSourcing.deleted(g, streamVersion);
           projectionWriter.delete(groups, g);
@@ -377,11 +614,13 @@ public class WorkforceService {
       WorkQueue queue, List<WorkQueueClassBinding> queueBindings) {
     var active = groups.findAllByWarehouseIdAndActiveTrueOrderByNameAsc(queue.getWarehouseId());
     if (queueBindings.isEmpty()) return active;
-    var ids =
+    var classIds =
         queueBindings.stream()
             .map(b -> b.getWorkerClass().getId())
             .collect(java.util.stream.Collectors.toSet());
-    return active.stream().filter(g -> ids.contains(g.getWorkerClass().getId())).toList();
+    return active.stream()
+        .filter(group -> classIds.contains(group.getWorkerClass().getId()))
+        .toList();
   }
 
   public Worker requireWorker(UUID warehouseId, UUID id) {
@@ -493,9 +732,9 @@ public class WorkforceService {
       markCredential(
           worker.getId(),
           worker.getCredentialOperationId(),
-          CredentialStatus.NOT_CONFIGURED,
+          CredentialStatus.DISABLED,
           null,
-          null);
+          worker.getAppLogin());
     } catch (RuntimeException ex) {
       markCredentialFailure(
           worker.getId(),
@@ -509,10 +748,10 @@ public class WorkforceService {
   private void reconcileCredentials(CredentialReconciliation prepared) {
     Worker worker = prepared.worker();
     try {
+      WorkerCredentialGateway.WorkerCredentialSnapshot status =
+          credentials.status(worker.getId(), worker.getWarehouseId());
       if (prepared.interruptedType() == CredentialOperationType.CONFIGURE
           || prepared.interruptedType() == CredentialOperationType.RESET) {
-        WorkerCredentialGateway.WorkerCredentialSnapshot status =
-            credentials.status(worker.getId(), worker.getWarehouseId());
         if (status.status() == WorkerCredentialGateway.WorkerCredentialStatus.ACTIVE) {
           markCredential(
               worker.getId(),
@@ -522,14 +761,35 @@ public class WorkforceService {
               normalizeLogin(status.appLogin()));
           return;
         }
+        if (status.status() == WorkerCredentialGateway.WorkerCredentialStatus.DISABLED) {
+          markCredential(
+              worker.getId(),
+              worker.getCredentialOperationId(),
+              CredentialStatus.DISABLED,
+              null,
+              normalizeLogin(status.appLogin()));
+          return;
+        }
+        markCredential(
+            worker.getId(),
+            worker.getCredentialOperationId(),
+            CredentialStatus.NOT_CONFIGURED,
+            null,
+            null);
+        return;
       }
-      credentials.disable(worker.getId());
+      if (status.status() == WorkerCredentialGateway.WorkerCredentialStatus.ACTIVE) {
+        credentials.disable(worker.getId());
+      }
+      boolean preservesLogin =
+          prepared.interruptedType() == CredentialOperationType.DISABLE
+              || (prepared.interruptedType() == null && status.appLogin() != null);
       markCredential(
           worker.getId(),
           worker.getCredentialOperationId(),
-          CredentialStatus.NOT_CONFIGURED,
+          preservesLogin ? CredentialStatus.DISABLED : CredentialStatus.NOT_CONFIGURED,
           null,
-          null);
+          preservesLogin ? normalizeLogin(status.appLogin()) : null);
     } catch (RuntimeException ex) {
       markCredentialFailure(
           worker.getId(),
@@ -598,17 +858,12 @@ public class WorkforceService {
   }
 
   private void ensureWorkerEmpty(UUID id) {
-    if (members.existsByWorkerId(id)
-        || qualifications.existsByWorkerId(id)
-        || taskAssignments.existsByWorkerId(id)
-        || events.existsByWorkerId(id))
+    if (taskAssignments.existsByWorkerId(id) || events.existsByWorkerId(id))
       throw new ConflictException("Используемого рабочего можно только деактивировать");
   }
 
   private void ensureCredentialOperationSettled(Worker worker) {
-    if (worker.getCredentialStatus() == CredentialStatus.PENDING
-        || (worker.getCredentialStatus() == CredentialStatus.ERROR
-            && worker.getCredentialOperationId() != null)) {
+    if (worker.getCredentialStatus() == CredentialStatus.PENDING) {
       throw new ConflictException(
           "Операция с учетными данными еще выполняется; дождитесь завершения или выполните сверку");
     }
@@ -630,7 +885,13 @@ public class WorkforceService {
   }
 
   private void replaceQualifications(Worker worker, List<QualificationRequest> requested) {
-    projectionWriter.deleteAll(qualifications, qualifications.findAllByWorkerId(worker.getId()));
+    var existing = qualifications.findAllByWorkerId(worker.getId());
+    projectionWriter.deleteAll(qualifications, existing);
+    // Hibernate inserts replacement rows before deferred deletes. Flush the
+    // removals so retaining a qualification cannot violate the natural key.
+    if (!existing.isEmpty()) {
+      projectionWriter.flush();
+    }
     if (requested == null) return;
     var unique = new LinkedHashMap<UUID, QualificationRequest>();
     requested.forEach(r -> unique.put(r.workerClassId(), r));
@@ -645,16 +906,46 @@ public class WorkforceService {
   }
 
   private void replaceMembers(WorkerGroup group, List<GroupMemberRequest> requested) {
-    projectionWriter.deleteAll(members, members.findAllByWorkerGroupId(group.getId()));
+    Map<UUID, GroupMemberRequest> requestedByWorker = new LinkedHashMap<>();
+    if (requested != null) {
+      requested.forEach(value -> requestedByWorker.put(value.workerId(), value));
+    }
+    for (Worker currentWorker : workers.findAllByCurrentGroupId(group.getId())) {
+      GroupMemberRequest retained = requestedByWorker.get(currentWorker.getId());
+      if (retained == null || !retained.active()) {
+        throw new ConflictException(
+            "Нельзя исключить рабочего, пока эта группа назначена ему текущей");
+      }
+    }
+    var existing = members.findAllByWorkerGroupId(group.getId());
+    projectionWriter.deleteAll(members, existing);
+    // Hibernate orders entity inserts before deletes during the final flush.
+    // Flush removals first so an unchanged member can be recreated without
+    // violating the natural (worker_group_id, worker_id) identity.
+    if (!existing.isEmpty()) {
+      projectionWriter.flush();
+    }
     if (requested == null) return;
     var unique = new LinkedHashMap<UUID, GroupMemberRequest>();
     requested.forEach(r -> unique.put(r.workerId(), r));
     for (var r : unique.values()) {
       var worker = requireWorker(group.getWarehouseId(), r.workerId());
+      boolean qualified =
+          qualifications.findAllByWorkerId(worker.getId()).stream()
+              .anyMatch(
+                  qualification ->
+                      qualification.isActive()
+                          && qualification.getWorkerClass().equals(group.getWorkerClass()));
+      if (!qualified) {
+        throw new ConflictException(
+            "Рабочий "
+                + worker.getDisplayName()
+                + " не имеет квалификации "
+                + group.getWorkerClass().getName());
+      }
       var m = new WorkerGroupMember();
       m.setWorkerGroup(group);
       m.setWorker(worker);
-      m.setRoleInGroup(r.roleInGroup());
       m.setActive(r.active());
       projectionWriter.save(members, m);
     }
@@ -688,6 +979,22 @@ public class WorkforceService {
     return value == null || value.isBlank() ? null : value.trim();
   }
 
+  private void closeAvailabilityInterval(UUID groupId, OffsetDateTime endedAt) {
+    int updated =
+        jdbc.update(
+            """
+            update worker_group_availability_interval
+               set ended_at=?
+             where worker_group_id=? and ended_at is null
+            """,
+            endedAt,
+            groupId);
+    if (updated != 1) {
+      throw new IllegalStateException(
+          "Открытый интервал доступности группы отсутствует или неоднозначен");
+    }
+  }
+
   private String normalizeLogin(String value) {
     String normalized = normalize(value);
     return normalized == null ? null : normalized.toLowerCase(java.util.Locale.ROOT);
@@ -695,6 +1002,9 @@ public class WorkforceService {
 
   private String safeMessage(RuntimeException ex) {
     LOGGER.warn("Worker credential operation failed: {}", ex.getClass().getName());
+    if (ex instanceof HttpClientErrorException.Conflict) {
+      return "Логин приложения уже используется";
+    }
     return "AUTH_SERVICE_UNAVAILABLE";
   }
 
@@ -712,6 +1022,11 @@ public class WorkforceService {
         w.getAppLogin(),
         w.getCredentialStatus(),
         w.getCredentialError(),
+        w.getCurrentGroup() == null ? null : w.getCurrentGroup().getId(),
+        w.getCurrentGroup() == null ? null : w.getCurrentGroup().getName(),
+        w.getCurrentGroup() == null
+            ? GroupOperationalStatus.DISABLED
+            : w.getCurrentGroup().getOperationalStatus(),
         qualifications.findAllByWorkerId(w.getId()).stream()
             .map(
                 q ->
@@ -733,6 +1048,9 @@ public class WorkforceService {
         g.getName(),
         g.getDescription(),
         g.isActive(),
+        g.getOperationalStatus(),
+        g.getUnavailableSince(),
+        g.getUnavailabilityReason(),
         members.findAllByWorkerGroupId(g.getId()).stream()
             .map(
                 m ->
@@ -741,7 +1059,6 @@ public class WorkforceService {
                         m.getVersion(),
                         m.getWorker().getId(),
                         m.getWorker().getDisplayName(),
-                        m.getRoleInGroup(),
                         m.isActive()))
             .toList());
   }
@@ -767,4 +1084,6 @@ public class WorkforceService {
 
   private record CredentialReconciliation(
       Worker worker, CredentialOperationType interruptedType) {}
+
+  private record CredentialReset(Worker worker, CredentialStatus completedStatus) {}
 }

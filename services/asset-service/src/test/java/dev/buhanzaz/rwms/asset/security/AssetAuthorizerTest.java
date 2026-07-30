@@ -49,6 +49,28 @@ class AssetAuthorizerTest {
   }
 
   @Test
+  void htmlImportCommitRequiresWriteScopeAndAnAdministratorRole() {
+    AssetAuthorizer authorizer = new AssetAuthorizer(new MockEnvironment(), false);
+
+    authorizer.requireHtmlImportCommit(
+        user("rwms.read rwms.write", "WMS_ADMIN", "EDIT"), warehouseId);
+    authorizer.requireHtmlImportCommit(
+        user("rwms.read rwms.write", "SYSTEM_ADMIN", "MANAGE"), warehouseId);
+
+    assertThatThrownBy(
+            () ->
+                authorizer.requireHtmlImportCommit(
+                    user("rwms.read rwms.write", "WAREHOUSE_MANAGER", "MANAGE"),
+                    warehouseId))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(
+            () ->
+                authorizer.requireHtmlImportCommit(
+                    user("rwms.read", "WMS_ADMIN", "EDIT"), warehouseId))
+        .isInstanceOf(AccessDeniedException.class);
+  }
+
+  @Test
   void requiresAServiceCredentialWithExactlyAssetInternal() {
     AssetAuthorizer authorizer = new AssetAuthorizer(new MockEnvironment(), false);
 

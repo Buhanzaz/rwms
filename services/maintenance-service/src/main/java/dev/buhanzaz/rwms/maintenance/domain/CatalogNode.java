@@ -7,8 +7,6 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.util.UUID;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(name = "catalog_node")
@@ -23,9 +21,6 @@ public class CatalogNode {
 
   @Column(name = "catalog_version_id", nullable = false)
   private UUID catalogVersionId;
-
-  @Column(name = "code", nullable = false, length = 64)
-  private String code;
 
   @Column(name = "node_type", nullable = false, length = 32)
   private String nodeType;
@@ -44,9 +39,6 @@ public class CatalogNode {
 
   @Column(name = "furniture_equipment_id")
   private UUID furnitureEquipmentId;
-
-  @Column(name = "furniture_equipment_code", length = 64)
-  private String furnitureEquipmentCode;
 
   @Column(name = "furniture_equipment_name", length = 255)
   private String furnitureEquipmentName;
@@ -78,32 +70,38 @@ public class CatalogNode {
   @Column(name = "routing_queue_id")
   private UUID routingQueueId;
 
-  @Column(name = "routing_queue_code", length = 64)
-  private String routingQueueCode;
+  @Column(name = "routing_queue_name", length = 255)
+  private String routingQueueName;
 
-  @Column(name = "routing_queue_kind", length = 64)
-  private String routingQueueKind;
-
-  @Column(name = "opaque_references", nullable = false, columnDefinition = "jsonb")
-  @JdbcTypeCode(SqlTypes.JSON)
-  private String opaqueReferences;
+  @Column(name = "routing_queue_type", length = 64)
+  private String routingQueueType;
 
   @Column(name = "comment", length = 2000)
   private String comment;
+
+  @Column(name = "display_color", length = 7)
+  private String displayColor;
+
+  @Column(name = "forces_capital_repair", nullable = false)
+  private boolean forcesCapitalRepair;
+
+  @Column(name = "characteristic_id")
+  private UUID characteristicId;
+
+  @Column(name = "characteristic_name", length = 255)
+  private String characteristicName;
 
   protected CatalogNode() {}
 
   public CatalogNode(
       UUID id,
       UUID catalogVersionId,
-      String code,
       String nodeType,
       String name,
       boolean active,
       UUID parentNodeId,
       boolean furnitureCategory,
       UUID furnitureEquipmentId,
-      String furnitureEquipmentCode,
       String furnitureEquipmentName,
       String unit,
       Long priceMinor,
@@ -114,13 +112,66 @@ public class CatalogNode {
       Integer canvasX,
       Integer canvasY,
       UUID routingQueueId,
-      String routingQueueCode,
-      String routingQueueKind,
-      String opaqueReferences,
-      String comment) {
+      String routingQueueName,
+      String routingQueueType,
+      String comment,
+      String displayColor) {
+    this(
+        id,
+        catalogVersionId,
+        nodeType,
+        name,
+        active,
+        parentNodeId,
+        furnitureCategory,
+        furnitureEquipmentId,
+        furnitureEquipmentName,
+        unit,
+        priceMinor,
+        durationMinutes,
+        includeInEstimate,
+        commonItem,
+        showInMainMenu,
+        canvasX,
+        canvasY,
+        routingQueueId,
+        routingQueueName,
+        routingQueueType,
+        comment,
+        displayColor,
+        false,
+        null,
+        null);
+  }
+
+  public CatalogNode(
+      UUID id,
+      UUID catalogVersionId,
+      String nodeType,
+      String name,
+      boolean active,
+      UUID parentNodeId,
+      boolean furnitureCategory,
+      UUID furnitureEquipmentId,
+      String furnitureEquipmentName,
+      String unit,
+      Long priceMinor,
+      Integer durationMinutes,
+      boolean includeInEstimate,
+      boolean commonItem,
+      boolean showInMainMenu,
+      Integer canvasX,
+      Integer canvasY,
+      UUID routingQueueId,
+      String routingQueueName,
+      String routingQueueType,
+      String comment,
+      String displayColor,
+      boolean forcesCapitalRepair,
+      UUID characteristicId,
+      String characteristicName) {
     this.id = require(id, "id");
     this.catalogVersionId = require(catalogVersionId, "catalogVersionId");
-    this.code = text(code, "code", 64);
     this.nodeType = text(nodeType, "nodeType", 32);
     this.name = text(name, "name", 255);
     this.active = active;
@@ -129,10 +180,8 @@ public class CatalogNode {
       throw new IllegalArgumentException("Only a category can mark a furniture tree");
     }
     boolean completeFurnitureEquipment = furnitureEquipmentId != null
-        && furnitureEquipmentCode != null && !furnitureEquipmentCode.isBlank()
         && furnitureEquipmentName != null && !furnitureEquipmentName.isBlank();
     boolean emptyFurnitureEquipment = furnitureEquipmentId == null
-        && (furnitureEquipmentCode == null || furnitureEquipmentCode.isBlank())
         && (furnitureEquipmentName == null || furnitureEquipmentName.isBlank());
     if ((!completeFurnitureEquipment && !emptyFurnitureEquipment)
         || (completeFurnitureEquipment && !"MATERIAL".equals(nodeType))) {
@@ -141,11 +190,15 @@ public class CatalogNode {
     }
     this.furnitureCategory = furnitureCategory;
     this.furnitureEquipmentId = furnitureEquipmentId;
-    this.furnitureEquipmentCode = optional(furnitureEquipmentCode, 64);
     this.furnitureEquipmentName = optional(furnitureEquipmentName, 255);
     this.unit = optional(unit, 32);
     if (priceMinor != null && priceMinor < 0) throw new IllegalArgumentException("priceMinor is invalid");
-    if (durationMinutes != null && durationMinutes < 0) throw new IllegalArgumentException("durationMinutes is invalid");
+    if (durationMinutes != null && durationMinutes < 0) {
+      throw new IllegalArgumentException("durationMinutes is invalid");
+    }
+    if ("WORK".equals(nodeType) && (durationMinutes == null || durationMinutes < 1)) {
+      throw new IllegalArgumentException("durationMinutes must be positive for WORK");
+    }
     this.priceMinor = priceMinor;
     this.durationMinutes = durationMinutes;
     this.includeInEstimate = includeInEstimate;
@@ -154,19 +207,84 @@ public class CatalogNode {
     this.canvasX = canvasX;
     this.canvasY = canvasY;
     boolean completeRouting = routingQueueId != null
-        && routingQueueCode != null && !routingQueueCode.isBlank()
-        && routingQueueKind != null && !routingQueueKind.isBlank();
+        && routingQueueName != null && !routingQueueName.isBlank()
+        && routingQueueType != null && !routingQueueType.isBlank();
     boolean emptyRouting = routingQueueId == null
-        && (routingQueueCode == null || routingQueueCode.isBlank())
-        && (routingQueueKind == null || routingQueueKind.isBlank());
+        && (routingQueueName == null || routingQueueName.isBlank())
+        && (routingQueueType == null || routingQueueType.isBlank());
     if (!completeRouting && !emptyRouting) {
       throw new IllegalArgumentException("Routing snapshot must be complete or absent");
     }
     this.routingQueueId = routingQueueId;
-    this.routingQueueCode = optional(routingQueueCode, 64);
-    this.routingQueueKind = optional(routingQueueKind, 64);
-    this.opaqueReferences = opaqueReferences == null ? "[]" : opaqueReferences;
+    this.routingQueueName = optional(routingQueueName, 255);
+    this.routingQueueType = optional(routingQueueType, 64);
     this.comment = optional(comment, 2000);
+    this.displayColor = color(displayColor);
+    if (forcesCapitalRepair && !"WORK".equals(nodeType)) {
+      throw new IllegalArgumentException("Only a WORK can force capital repair");
+    }
+    boolean completeCharacteristic =
+        characteristicId != null
+            && characteristicName != null
+            && !characteristicName.isBlank();
+    boolean emptyCharacteristic =
+        characteristicId == null
+            && (characteristicName == null || characteristicName.isBlank());
+    if ((!completeCharacteristic && !emptyCharacteristic)
+        || (completeCharacteristic && !"MATERIAL".equals(nodeType))) {
+      throw new IllegalArgumentException(
+          "Cabin characteristic snapshot must be complete, absent and material-only");
+    }
+    this.forcesCapitalRepair = forcesCapitalRepair;
+    this.characteristicId = characteristicId;
+    this.characteristicName = optional(characteristicName, 255);
+  }
+
+  public CatalogNode(
+      UUID id,
+      UUID catalogVersionId,
+      String nodeType,
+      String name,
+      boolean active,
+      UUID parentNodeId,
+      boolean furnitureCategory,
+      UUID furnitureEquipmentId,
+      String furnitureEquipmentName,
+      String unit,
+      Long priceMinor,
+      Integer durationMinutes,
+      boolean includeInEstimate,
+      boolean commonItem,
+      boolean showInMainMenu,
+      Integer canvasX,
+      Integer canvasY,
+      UUID routingQueueId,
+      String routingQueueName,
+      String routingQueueType,
+      String comment) {
+    this(
+        id,
+        catalogVersionId,
+        nodeType,
+        name,
+        active,
+        parentNodeId,
+        furnitureCategory,
+        furnitureEquipmentId,
+        furnitureEquipmentName,
+        unit,
+        priceMinor,
+        durationMinutes,
+        includeInEstimate,
+        commonItem,
+        showInMainMenu,
+        canvasX,
+        canvasY,
+        routingQueueId,
+        routingQueueName,
+        routingQueueType,
+        comment,
+        null);
   }
 
   private static <T> T require(T value, String field) {
@@ -187,17 +305,24 @@ public class CatalogNode {
     return normalized;
   }
 
+  private static String color(String value) {
+    String normalized = optional(value, 7);
+    if (normalized == null) return null;
+    if (!normalized.matches("^#[0-9A-Fa-f]{6}$")) {
+      throw new IllegalArgumentException("displayColor is invalid");
+    }
+    return normalized.toUpperCase(java.util.Locale.ROOT);
+  }
+
   public UUID getId() { return id; }
   public UUID getRowId() { return rowId; }
   public UUID getCatalogVersionId() { return catalogVersionId; }
-  public String getCode() { return code; }
   public String getNodeType() { return nodeType; }
   public String getName() { return name; }
   public boolean isActive() { return active; }
   public UUID getParentNodeId() { return parentNodeId; }
   public boolean isFurnitureCategory() { return furnitureCategory; }
   public UUID getFurnitureEquipmentId() { return furnitureEquipmentId; }
-  public String getFurnitureEquipmentCode() { return furnitureEquipmentCode; }
   public String getFurnitureEquipmentName() { return furnitureEquipmentName; }
   public String getUnit() { return unit; }
   public Long getPriceMinor() { return priceMinor; }
@@ -208,8 +333,11 @@ public class CatalogNode {
   public Integer getCanvasX() { return canvasX; }
   public Integer getCanvasY() { return canvasY; }
   public UUID getRoutingQueueId() { return routingQueueId; }
-  public String getRoutingQueueCode() { return routingQueueCode; }
-  public String getRoutingQueueKind() { return routingQueueKind; }
-  public String getOpaqueReferences() { return opaqueReferences; }
+  public String getRoutingQueueName() { return routingQueueName; }
+  public String getRoutingQueueType() { return routingQueueType; }
   public String getComment() { return comment; }
+  public String getDisplayColor() { return displayColor; }
+  public boolean isForcesCapitalRepair() { return forcesCapitalRepair; }
+  public UUID getCharacteristicId() { return characteristicId; }
+  public String getCharacteristicName() { return characteristicName; }
 }

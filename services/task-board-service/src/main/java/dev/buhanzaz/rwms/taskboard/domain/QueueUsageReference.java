@@ -10,6 +10,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import jakarta.validation.constraints.NotNull;
 import java.util.UUID;
 
 @Entity
@@ -23,12 +24,13 @@ public class QueueUsageReference extends AbstractVersionedEntity {
   @Column(name = "revision_marker", nullable = false)
   private UUID revisionMarker = UUID.randomUUID();
 
+  @NotNull
   @ManyToOne(fetch = FetchType.LAZY, optional = false)
   @JoinColumn(
-      name = "queue_id",
+      name = "queue_definition_id",
       nullable = false,
-      foreignKey = @ForeignKey(name = "fk_queue_usage_queue"))
-  private WorkQueue queue;
+      foreignKey = @ForeignKey(name = "fk_queue_usage_definition"))
+  private QueueDefinition definition;
 
   @Enumerated(EnumType.STRING)
   @Column(name = "reference_type", nullable = false, length = 32)
@@ -37,12 +39,12 @@ public class QueueUsageReference extends AbstractVersionedEntity {
   @Column(name = "external_reference_id", nullable = false, length = 128)
   private String externalReferenceId;
 
-  public WorkQueue getQueue() {
-    return queue;
+  public QueueDefinition getDefinition() {
+    return definition;
   }
 
-  public void setQueue(WorkQueue v) {
-    queue = v;
+  public void setDefinition(QueueDefinition value) {
+    definition = value;
   }
 
   public QueueReferenceType getReferenceType() {

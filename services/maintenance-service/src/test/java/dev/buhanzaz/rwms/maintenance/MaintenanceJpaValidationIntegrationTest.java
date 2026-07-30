@@ -32,16 +32,42 @@ class MaintenanceJpaValidationIntegrationTest {
   @Autowired JdbcTemplate jdbc;
 
   @Test
-  void flywayV9PassesHibernateValidationForEveryBusinessProjection() {
+  void flywayV22PassesHibernateValidationForEveryBusinessProjection() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(jdbc.queryForObject(
-        "select count(*) from flyway_schema_history where success", Integer.class)).isEqualTo(9);
+        "select count(*) from flyway_schema_history where success", Integer.class)).isEqualTo(22);
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from information_schema.columns
+        where table_schema='public' and table_name='estimate_line' and column_name='unit'
+        """,
+        Integer.class)).isOne();
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from information_schema.tables
+        where table_schema='public' and table_name='repair_capacity_settings'
+        """,
+        Integer.class)).isOne();
     assertThat(jdbc.queryForObject(
         """
         select count(*) from information_schema.columns
         where table_schema='public' and table_name='catalog_node' and column_name='photo_required'
         """,
         Integer.class)).isZero();
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from information_schema.columns
+        where table_schema='public' and table_name='catalog_node' and column_name='display_color'
+        """,
+        Integer.class)).isOne();
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*) from information_schema.columns
+        where table_schema='public'
+          and table_name in ('maintenance_estimate','maintenance_repair')
+          and column_name='cover_media_id'
+        """,
+        Integer.class)).isEqualTo(2);
     assertThat(entityManagerFactory.getMetamodel().getEntities())
         .extracting(value -> value.getJavaType().getSimpleName())
         .contains(
@@ -51,6 +77,8 @@ class MaintenanceJpaValidationIntegrationTest {
             "RentalItemFactProjection", "OperationLeaseFactProjection");
     assertThat(entityManagerFactory.getMetamodel().getEntities())
         .extracting(value -> value.getJavaType().getSimpleName())
-        .contains("InventoryRepairSource", "LogisticsReturnShortage");
+        .contains(
+            "InventoryRepairSource", "LogisticsReturnShortage", "RepairCapacitySettings",
+            "RepairTaskEvidence");
   }
 }

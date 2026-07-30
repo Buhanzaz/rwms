@@ -1,0 +1,87 @@
+server:
+  port: ${ASSISTANT_SERVICE_PORT:8092}
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+  metrics:
+    tags:
+      application: assistant-service
+  tracing:
+    sampling:
+      probability: ${ASSISTANT_TRACING_SAMPLING_PROBABILITY:0.1}
+
+logging:
+  structured:
+    format:
+      console: ecs
+
+spring:
+  config:
+    # The first location covers standalone service launches; the second covers
+    # root Gradle launches. Both are optional and environment variables retain
+    # higher precedence in production.
+    import: "optional:file:./.env.local[.properties],optional:file:./services/assistant-service/.env.local[.properties]"
+  application:
+    name: assistant-service
+  datasource:
+    url: ${ASSISTANT_DB_URL}
+    username: ${ASSISTANT_DB_USERNAME}
+    password: ${ASSISTANT_DB_PASSWORD}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true
+    clean-disabled: true
+    out-of-order: false
+    validate-migration-naming: true
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  kafka:
+    bootstrap-servers: ${ASSISTANT_KAFKA_BROKERS:}
+    consumer:
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      properties:
+        isolation.level: read_committed
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${AUTH_ISSUER}
+          audiences: ${AUTH_AUDIENCE:rwms-services}
+
+rwms:
+  assistant:
+    llm:
+      base-url: ${LLM_BASE_URL:https://api.mistral.ai/v1}
+      api-key: ${LLM_API_KEY:}
+      model: ${LLM_MODEL:mistral-large-latest}
+      connect-timeout: ${LLM_CONNECT_TIMEOUT:5s}
+      request-timeout: ${LLM_REQUEST_TIMEOUT:60s}
+      require-api-key-on-startup: ${LLM_REQUIRE_API_KEY_ON_STARTUP:true}
+    logistics:
+      base-url: ${LOGISTICS_BASE_URL:http://logistics-service:8080}
+      connect-timeout: ${LOGISTICS_CONNECT_TIMEOUT:3s}
+      request-timeout: ${LOGISTICS_REQUEST_TIMEOUT:15s}
+    sse:
+      timeout: ${ASSISTANT_SSE_TIMEOUT:120s}
+    kafka:
+      enabled: ${ASSISTANT_KAFKA_ENABLED:true}
+      rental-inquiry-topic: rwms.logistics.rental-inquiry.events.v1
+  cors:
+    allowed-origins: ${PANEL_ORIGIN}

@@ -10,8 +10,9 @@ export type RepairEstimateTaskPlanId = string
 export type RepairEstimateMediaId = string
 
 export type RepairEstimateStatus = "DRAFT" | "COMPLETED"
-export type RepairEstimateLineType = "WORK" | "MATERIAL" | "UNSPECIFIED"
+export type RepairEstimateLineType = "WORK" | "MATERIAL"
 export type RepairEstimateCompletionMode = "AUTO" | "MANUAL"
+export type RepairPriority = 1 | 2 | 3 | 4 | 5
 export type RepairEstimateTaskPlanGenerationStatus =
   "PENDING_GENERATION" | "GENERATED" | "FAILED" | "UNKNOWN"
 export type RepairEstimateTaskPlanKind =
@@ -28,10 +29,20 @@ export type MoneyDecimal = string
 
 export type RepairEstimateCatalogLineSnapshotDto = {
   nodeId: string
-  code: string
   name: string
   nodeType: "WORK" | "MATERIAL" | "OPTION"
   furnitureEquipment: RepairEstimateFurnitureEquipmentReferenceDto | null
+}
+
+/**
+ * Panel-only stage selection for a custom line. The maintenance contract
+ * persists this through the containing repair-work stage rather than the line
+ * itself.
+ */
+export type RepairEstimateCustomQueueBindingDto = {
+  queueId: string
+  queueName: string
+  queueKind: "REPAIR" | "HOLDING"
 }
 
 export type RepairEstimateLineDto = {
@@ -40,12 +51,29 @@ export type RepairEstimateLineDto = {
   lineType: RepairEstimateLineType
   description: string
   lineComment: string
+  /** An absent catalog unit is normalized for the panel; custom lines always have one. */
   unit: string
   quantity: number
+  /**
+   * Planned execution time in whole minutes. New custom WORK lines must set a
+   * positive value; catalog lines retain the duration returned by maintenance.
+   */
+  normativeMinutes?: number
   unitPrice: MoneyDecimal
   lineTotal: MoneyDecimal
   catalogSnapshot: RepairEstimateCatalogLineSnapshotDto | null
+  /**
+   * Never serialized as a line field. Kept nullable for older panel callers
+   * that do not own custom repair work; adapters reconstruct it from stages.
+   */
+  customQueueBinding?: RepairEstimateCustomQueueBindingDto | null
   maintenanceMediaReferences?: MaintenanceMediaReferenceDto[]
+  rework?: {
+    disposition: "ADDED" | "REPEAT"
+    sourceRepairId: string | null
+    sourceLineId: string | null
+    lineageRootLineId: string
+  } | null
 }
 
 export type RepairEstimateMediaVariantDto = {
@@ -84,7 +112,7 @@ export type RepairEstimateTaskPlanDto = {
   groupComment: string
   /** Canonical task-board queue id carried by the maintenance routing snapshot. */
   queueId?: string | null
-  queueCode: string | null
+  queueName: string | null
   routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
   sortOrder: number
   generationStatus: RepairEstimateTaskPlanGenerationStatus
@@ -106,9 +134,6 @@ export type RepairEstimateDto = {
   cabinNumber: string
   authorName: string
   sourceParty: string
-  destinationText?: string | null
-  /** @deprecated Read compatibility for estimates stored before destinationText. */
-  destinationParty?: string | null
   dispatchDate: string | null
   comment: string
   totalAmount: MoneyDecimal
@@ -116,6 +141,7 @@ export type RepairEstimateDto = {
   media: RepairEstimateMediaRefDto[]
   /** Opaque server-owned references; preview URLs are resolved only by media-service. */
   maintenanceMediaReferences?: MaintenanceMediaReferenceDto[]
+  coverMediaId?: string | null
   repairId?: string | null
   deliveryState?: "PENDING" | "RETRY_PENDING" | "DELIVERED" | "QUARANTINED"
   completionMode: RepairEstimateCompletionMode | null
@@ -135,8 +161,6 @@ export type RepairEstimateSummaryDto = Pick<
   | "cabinNumber"
   | "authorName"
   | "sourceParty"
-  | "destinationText"
-  | "destinationParty"
   | "dispatchDate"
   | "totalAmount"
   | "createdAt"
@@ -149,25 +173,26 @@ export type RepairEstimateDraftCommand = {
   warehouseId: string
   rentalItemId: string
   sourceParty: string
-  destinationText?: string | null
-  /** @deprecated Transitional command compatibility; new clients omit this field. */
-  destinationParty?: string | null
   dispatchDate: string | null
   comment: string
   lines: RepairEstimateLineDto[]
+  /** Explicit routing stages used to persist custom work-line queue bindings. */
+  taskPlans?: RepairEstimateTaskPlanCommandDto[]
   media: RepairEstimateMediaRefDto[]
   maintenanceMediaReferences?: MaintenanceMediaReferenceDto[]
+  coverMediaId?: string | null
 }
 
 export type CompleteRepairEstimateCommand = RepairEstimateDraftCommand & {
   completionMode: RepairEstimateCompletionMode
   movementRequired: boolean
   taskPlans: RepairEstimateTaskPlanCommandDto[]
+  priority: RepairPriority
 }
 
 export type AmendCompletedRepairEstimateCommand = Omit<
   CompleteRepairEstimateCommand,
-  "estimateId" | "expectedVersion"
+  "estimateId" | "expectedVersion" | "priority"
 > & {
   estimateId: RepairEstimateId
   expectedVersion: number
@@ -177,7 +202,7 @@ export type AmendCompletedRepairEstimateCommand = Omit<
 
 export type RepairEstimateListQuery = {
   warehouseId: string
-  status: RepairEstimateStatus
+  status?: RepairEstimateStatus
 }
 
 export type EstimateRentalItemOptionDto = {
@@ -217,12 +242,12 @@ export type RepairEstimateEditorDraft = {
   expectedVersion: number | null
   rentalItemId: string
   sourceParty: string
-  destinationParty: string
   dispatchDate: string | null
   comment: string
   lines: RepairEstimateLineDto[]
   media: RepairEstimateMediaRefDto[]
   maintenanceMediaReferences?: MaintenanceMediaReferenceDto[]
+  coverMediaId?: string | null
   pendingUploads: PendingEstimateMediaUpload[]
 }
 
@@ -232,9 +257,13 @@ export type CompleteRepairEstimateInput = {
   completionMode: RepairEstimateCompletionMode
   movementRequired: boolean
   taskPlans: RepairEstimateTaskPlanDto[]
+  priority: RepairPriority
 }
 
-export type AmendCompletedRepairEstimateInput = CompleteRepairEstimateInput & {
+export type AmendCompletedRepairEstimateInput = Omit<
+  CompleteRepairEstimateInput,
+  "priority"
+> & {
   expectedTaskVersion: number | null
   reason: string
 }

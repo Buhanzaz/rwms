@@ -121,6 +121,40 @@ class MaintenanceEventSchemaContractTest {
   }
 
   @Test
+  void repairPriorityIsRequiredAndRestrictedToOneThroughFive()
+      throws Exception {
+    FactCase repair = MaintenanceEventContractFixtures.fact(MaintenanceEventType.REPAIR_QUEUED);
+    var envelope = new DomainEventEnvelopeV2<>(
+        2,
+        UUID.randomUUID(),
+        MaintenanceEventType.REPAIR_QUEUED.value(),
+        1,
+        RECORDED_AT,
+        RECORDED_AT,
+        "maintenance-service",
+        repair.aggregateType().name(),
+        repair.aggregateId().toString(),
+        1,
+        new CorrelationContext(UUID.randomUUID(), null),
+        null,
+        repair.payload());
+    var valid = SCHEMA_MAPPER.readTree(WIRE_MAPPER.writeValueAsString(envelope));
+
+    assertThat(valid.required("payload").required("priority").intValue()).isEqualTo(3);
+    assertThat(schema().validate(valid)).isEmpty();
+
+    var invalid = valid.deepCopy();
+    ((com.fasterxml.jackson.databind.node.ObjectNode) invalid.required("payload"))
+        .put("priority", 6);
+    assertThat(schema().validate(invalid)).isNotEmpty();
+
+    var missing = valid.deepCopy();
+    ((com.fasterxml.jackson.databind.node.ObjectNode) missing.required("payload"))
+        .remove("priority");
+    assertThat(schema().validate(missing)).isNotEmpty();
+  }
+
+  @Test
   void asyncApiBindsEachAggregateFamilyChannelToItsExactEventTypes() throws Exception {
     String asyncApi = Files.readString(
         Path.of(System.getProperty("rwms.contracts.dir"), "events/maintenance-events.yaml"));

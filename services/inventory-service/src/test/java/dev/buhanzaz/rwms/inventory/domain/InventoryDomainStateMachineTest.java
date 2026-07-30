@@ -107,6 +107,72 @@ class InventoryDomainStateMachineTest {
     assertThat(finding.getOwnerProofRevision()).isEqualTo(2);
   }
 
+  @Test
+  void conflictResolutionKeepsOrRebasesTheInspectionRegistrySnapshotExplicitly() {
+    UUID warehouseId = UUID.randomUUID();
+    InventoryFinding finding =
+        InventoryFinding.unexpected(
+            UUID.randomUUID(),
+            FindingOrigin.UNEXPECTED_EXISTING,
+            UUID.randomUUID(),
+            6L,
+            warehouseId,
+            "FREE",
+            null,
+            "БЫТ-001",
+            "БЫТ001",
+            ReconciliationState.MATCHED,
+            ACTOR);
+    finding.saveInspection(
+        InspectionState.READY,
+        ReconciliationState.MATCHED,
+        ObservationPresence.EXPLICIT_EMPTY,
+        "{}",
+        ObservationPresence.EXPLICIT_EMPTY,
+        "[]",
+        null,
+        "Исходный осмотр",
+        ACTOR);
+    finding.refreshCurrentAsset(
+        8L,
+        warehouseId,
+        "REPAIR",
+        null,
+        "БЫТ-001",
+        "{\"finish\":\"OSB\"}",
+        "[]",
+        "[]",
+        ReconciliationState.CONFLICT);
+
+    assertThatThrownBy(
+            () ->
+                finding.resolveConflict(
+                    ConflictResolutionStrategy.KEEP_INSPECTION,
+                    "1".repeat(64),
+                    " ",
+                    ACTOR))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    finding.resolveConflict(
+        ConflictResolutionStrategy.KEEP_INSPECTION,
+        "1".repeat(64),
+        "Осмотр точнее реестра",
+        ACTOR);
+    assertThat(finding.getInspectionStatus()).isEqualTo("FREE");
+    assertThat(finding.getCurrentStatus()).isEqualTo("REPAIR");
+    assertThat(finding.getConflictResolutionStrategy())
+        .isEqualTo(ConflictResolutionStrategy.KEEP_INSPECTION);
+    assertThat(finding.getConflictResolutionReason()).isEqualTo("Осмотр точнее реестра");
+
+    finding.resolveConflict(
+        ConflictResolutionStrategy.ACCEPT_REGISTRY, "2".repeat(64), null, ACTOR);
+    assertThat(finding.getInspectionAssetVersion()).isEqualTo(8L);
+    assertThat(finding.getInspectionStatus()).isEqualTo("REPAIR");
+    assertThat(finding.getInspectionPassportSnapshot()).isEqualTo("{\"finish\":\"OSB\"}");
+    assertThat(finding.getConflictResolutionStrategy())
+        .isEqualTo(ConflictResolutionStrategy.ACCEPT_REGISTRY);
+  }
+
   private InventorySession session() {
     InventorySession session =
         InventorySession.start(

@@ -166,6 +166,8 @@ public class EquipmentMovementTaskService {
 
   private static void validateRequest(CreateEquipmentMovementTaskRequest request) {
     if (request.warehouseId() == null
+        || request.plannedDurationMinutes() == null
+        || request.plannedDurationMinutes() < 1
         || request.deadlineAt() == null
         || !request.deadlineAt().isAfter(OffsetDateTime.now(ZoneOffset.UTC))
         || request.lines() == null

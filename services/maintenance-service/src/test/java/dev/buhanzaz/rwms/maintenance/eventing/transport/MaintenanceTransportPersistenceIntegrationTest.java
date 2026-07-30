@@ -142,13 +142,43 @@ class MaintenanceTransportPersistenceIntegrationTest {
                 Integer.class,
                 MaintenanceTransportTopics.CONSUMER_GROUP))
         .isEqualTo(4);
-    assertThat(EFFECTS).isEmpty();
+    assertThat(EFFECTS).containsExactly(changed.effectEvent());
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from maintenance_inbound_correlation where board_task_id=?",
                 Integer.class,
                 boardTaskId))
         .isEqualTo(4);
+  }
+
+  @Test
+  void mediaFactsRemainMonotonicWithoutRequiringContiguousDomainVersions() {
+    UUID mediaId = UUID.randomUUID();
+    var uploaded = mediaFact(mediaId, 2, "media.media.uploaded.v1", "PROCESSING");
+    var ready = mediaFact(mediaId, 4, "media.media.ready.v1", "READY");
+    var stale = mediaFact(mediaId, 3, "media.media.uploaded.v1", "PROCESSING");
+
+    stageAndProcess(uploaded);
+    stageAndProcess(ready);
+    staging.stage(stale);
+    assertThat(inbox.process(stale)).isEqualTo(MaintenanceInboxProcessor.Outcome.DUPLICATE);
+
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select last_aggregate_version from consumer_aggregate_checkpoint
+                 where consumer_group=? and aggregate_type='MEDIA' and aggregate_id=?
+                """,
+                Long.class,
+                MaintenanceTransportTopics.CONSUMER_GROUP,
+                mediaId.toString()))
+        .isEqualTo(4L);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from version_gap_quarantine where aggregate_id=?",
+                Integer.class,
+                mediaId.toString()))
+        .isZero();
   }
 
   @Test
@@ -326,7 +356,8 @@ class MaintenanceTransportPersistenceIntegrationTest {
               "producer":"task-board-service","aggregateType":"BOARD_TASK","aggregateId":"%s",
               "aggregateVersion":%d,"correlation":{"correlationId":"%s","causationId":null},
               "actorRef":null,"payload":{"boardTaskId":"%s","warehouseId":"%s",
-              "externalTaskId":"%s","status":"DONE","plannedDurationMinutes":10,
+              "externalTaskId":"%s","status":"DONE","scheduledDate":"2026-07-17",
+              "priority":3,"pinned":false,"plannedDurationMinutes":10,
               "deadlineAt":null,"doneAt":"2026-07-17T00:00:00Z","deleted":false}
             }
             """
@@ -341,6 +372,38 @@ class MaintenanceTransportPersistenceIntegrationTest {
                     externalTaskId));
     return validator.validate(
         MaintenanceTransportTopics.BOARD_TASK,
+        aggregateId.toString().getBytes(StandardCharsets.UTF_8),
+        raw);
+  }
+
+  private MaintenanceInboundEnvelopeValidator.ValidatedInboundEvent mediaFact(
+      UUID aggregateId, long version, String eventType, String status) {
+    byte[] raw =
+        json(
+            """
+            {
+              "envelopeVersion":2,"eventId":"%s","eventType":"%s","eventVersion":1,
+              "occurredAt":null,"recordedAt":"2026-07-17T00:00:00Z",
+              "producer":"media-service","aggregateType":"MEDIA","aggregateId":"%s",
+              "aggregateVersion":%d,"correlation":{"correlationId":"%s","causationId":null},
+              "actorRef":null,"payload":{"mediaId":"%s","ownerType":"MAINTENANCE_REPAIR",
+              "ownerId":"%s","warehouseId":"%s","folderId":"%s","kind":"IMAGE",
+              "status":"%s","generation":1,"rotationDegrees":0}
+            }
+            """
+                .formatted(
+                    UUID.randomUUID(),
+                    eventType,
+                    aggregateId,
+                    version,
+                    UUID.randomUUID(),
+                    aggregateId,
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    UUID.randomUUID(),
+                    status));
+    return validator.validate(
+        MaintenanceTransportTopics.MEDIA,
         aggregateId.toString().getBytes(StandardCharsets.UTF_8),
         raw);
   }

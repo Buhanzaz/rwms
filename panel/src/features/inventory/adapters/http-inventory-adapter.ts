@@ -182,6 +182,7 @@ export function saveInventoryInspection(input: {
   inspection: "READY" | "WORK_STAGED"
   comment: string
   media: InventoryMediaReference[]
+  coverMediaId: string | null
   planSelection: InventoryPlanSelection
 }) {
   return bearerRequest<InventoryFinding>(
@@ -199,8 +200,35 @@ export function saveInventoryInspection(input: {
         passportObservation: { presence: "ABSENT", value: null },
         equipmentObservation: { presence: "ABSENT", value: null },
         media: input.media,
+        coverMediaId: input.coverMediaId,
         planSelection:
           input.inspection === "READY" ? null : input.planSelection,
+      }),
+    }
+  )
+}
+
+export function resolveInventoryFindingConflict(input: {
+  accessToken: string | null
+  inventoryId: string
+  findingId: string
+  expectedSessionRevision: number
+  expectedFindingRevision: number
+  strategy: "ACCEPT_REGISTRY" | "KEEP_INSPECTION"
+  reason: string | null
+}) {
+  return bearerRequest<InventoryFinding>(
+    requireInventoryAccessToken(input.accessToken),
+    endpoint(
+      `/sessions/${encodeURIComponent(input.inventoryId)}/findings/${encodeURIComponent(input.findingId)}/conflict-resolution`
+    ),
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedSessionRevision: input.expectedSessionRevision,
+        expectedFindingRevision: input.expectedFindingRevision,
+        strategy: input.strategy,
+        reason: input.reason,
       }),
     }
   )

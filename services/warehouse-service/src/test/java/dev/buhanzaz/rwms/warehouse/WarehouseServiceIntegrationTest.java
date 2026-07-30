@@ -70,22 +70,22 @@ class WarehouseServiceIntegrationTest {
   void createsReplaysExpiresAndProtectsTheIdempotencyBoundary() {
     UUID subject = UUID.randomUUID();
     UUID key = UUID.randomUUID();
-    CreateWarehouseRequest first = request(" test-west ", " Test west ", 4);
+    CreateWarehouseRequest first = request(" Test west ", 4);
 
     WarehouseService.CreateResult created = service.create(subject, key, first);
     WarehouseService.CreateResult replayed =
-        service.create(subject, key, request("TEST-WEST", "Test west", 4));
+        service.create(subject, key, request("Test west", 4));
 
     assertThat(created.replayed()).isFalse();
     assertThat(replayed.replayed()).isTrue();
     assertThat(replayed.response()).isEqualTo(created.response());
-    assertThat(count("select count(*) from warehouse where code='TEST-WEST'")).isOne();
+    assertThat(count("select count(*) from warehouse where name='Test west'")).isOne();
     assertThat(
             count(
                 "select count(*) from outbox_event where aggregate_id=?",
                 created.response().id().toString()))
         .isOne();
-    assertThatThrownBy(() -> service.create(subject, key, request("TEST-EAST", "Test east", 4)))
+    assertThatThrownBy(() -> service.create(subject, key, request("Test east", 4)))
         .isInstanceOf(WarehouseConflictException.class)
         .hasMessageContaining("Idempotency-Key");
 
@@ -99,19 +99,19 @@ class WarehouseServiceIntegrationTest {
         subject,
         key);
     assertThat(idempotency.cleanupExpired()).isOne();
-    assertThat(service.create(subject, key, request("TEST-EAST", "Test east", 4)).replayed())
+    assertThat(service.create(subject, key, request("Test east", 4)).replayed())
         .isFalse();
   }
 
   @Test
-  void enforcesUniquenessOptimisticVersionNoOpAndDeactivationTransitions() {
+  void enforcesOptimisticVersionNoOpAndDeactivationTransitions() {
     WarehouseResponse created =
         service
-            .create(UUID.randomUUID(), UUID.randomUUID(), request("OPS-1", "Operations", null))
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Operations", null))
             .response();
     WarehouseResponse noOp =
         service.replace(
-            created.id(), replace(created, created.version(), "OPS-1", "Operations", true, null));
+            created.id(), replace(created, created.version(), "Operations", true, null));
     assertThat(noOp.version()).isEqualTo(created.version());
     assertThat(
             count(
@@ -121,14 +121,14 @@ class WarehouseServiceIntegrationTest {
     WarehouseResponse changed =
         service.replace(
             created.id(),
-            replace(created, created.version(), "OPS-2", "Operations updated", true, 5));
+            replace(created, created.version(), "Operations updated", true, 5));
     assertThat(changed.version()).isEqualTo(created.version() + 1);
     assertThat(eventTypes(created.id()))
         .containsExactly("warehouse.warehouse.created.v1", "warehouse.warehouse.changed.v1");
     assertThatThrownBy(
             () ->
                 service.replace(
-                    created.id(), replace(changed, created.version(), "OPS-3", "Stale", true, 5)))
+                    created.id(), replace(changed, created.version(), "Stale", true, 5)))
         .isInstanceOf(WarehouseConflictException.class);
 
     service.deactivate(created.id(), changed.version());
@@ -144,29 +144,17 @@ class WarehouseServiceIntegrationTest {
             replace(
                 inactive,
                 inactive.version(),
-                inactive.code(),
                 inactive.name(),
                 true,
                 inactive.sortOrder()));
     assertThat(reactivated.active()).isTrue();
     assertThat(eventTypes(created.id()).getLast()).isEqualTo("warehouse.warehouse.changed.v1");
 
-    WarehouseResponse other =
+    WarehouseResponse duplicateName =
         service
-            .create(UUID.randomUUID(), UUID.randomUUID(), request("OPS-UNIQUE", "Other", null))
+            .create(UUID.randomUUID(), UUID.randomUUID(), request("Operations updated", null))
             .response();
-    assertThatThrownBy(
-            () ->
-                service.replace(
-                    other.id(),
-                    replace(
-                        other,
-                        other.version(),
-                        reactivated.code(),
-                        other.name(),
-                        true,
-                        other.sortOrder())))
-        .isInstanceOf(WarehouseConflictException.class);
+    assertThat(duplicateName.id()).isNotEqualTo(reactivated.id());
   }
 
   @Test
@@ -250,7 +238,7 @@ class WarehouseServiceIntegrationTest {
             .create(
                 UUID.randomUUID(),
                 UUID.randomUUID(),
-                request("INVENTORY-HIDDEN", "Inventory hidden", null))
+                request("Inventory hidden", null))
             .response();
     service.deactivate(inactive.id(), inactive.version());
 
@@ -312,10 +300,13 @@ class WarehouseServiceIntegrationTest {
 
     JsonNode response = objectMapper.readTree(body);
     assertThat(Set.copyOf(response.propertyNames()))
-        .containsExactlyInAnyOrder("id", "version", "active", "timeZone");
+        .containsExactlyInAnyOrder(
+            "id", "version", "active", "name", "city", "timeZone");
     assertThat(response.get("id").stringValue()).isEqualTo(SPB.toString());
     assertThat(response.get("version").longValue()).isZero();
     assertThat(response.get("active").booleanValue()).isTrue();
+    assertThat(response.get("name").stringValue()).isEqualTo("СПБ");
+    assertThat(response.get("city").stringValue()).isEqualTo("Санкт-Петербург");
     assertThat(response.get("timeZone").stringValue()).isEqualTo("Europe/Moscow");
 
     WarehouseResponse inactive =
@@ -323,7 +314,7 @@ class WarehouseServiceIntegrationTest {
             .create(
                 UUID.randomUUID(),
                 UUID.randomUUID(),
-                request("LOGISTICS-INACTIVE", "Logistics inactive", null))
+                request("Logistics inactive", null))
             .response();
     service.deactivate(inactive.id(), inactive.version());
 
@@ -345,6 +336,29 @@ class WarehouseServiceIntegrationTest {
                             .get("active")
                             .booleanValue())
                     .isFalse());
+
+    JsonNode active =
+        objectMapper.readTree(
+            mockMvc
+                .perform(
+                    get("/api/internal/warehouse/v1/warehouses/logistics")
+                        .with(
+                            logisticsServiceJwt(
+                                "logistics-service",
+                                "logistics-service",
+                                "SERVICE",
+                                "warehouse.logistics")))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString());
+    assertThat(active.isArray()).isTrue();
+    assertThat(
+            java.util.stream.StreamSupport.stream(active.spliterator(), false)
+                .map(value -> value.get("id").stringValue())
+                .toList())
+        .containsExactlyInAnyOrder(SPB.toString(), MSK.toString())
+        .doesNotContain(inactive.id().toString());
 
     mockMvc
         .perform(
@@ -382,6 +396,11 @@ class WarehouseServiceIntegrationTest {
               get("/api/internal/warehouse/v1/warehouses/logistics/{id}/identity", SPB)
                   .with(invalid))
           .andExpect(status().isForbidden());
+      mockMvc
+          .perform(
+              get("/api/internal/warehouse/v1/warehouses/logistics")
+                  .with(invalid))
+          .andExpect(status().isForbidden());
     }
   }
 
@@ -413,26 +432,24 @@ class WarehouseServiceIntegrationTest {
                     .claim("scope", scope));
   }
 
-  private CreateWarehouseRequest request(String code, String name, Integer sortOrder) {
-    return new CreateWarehouseRequest(code, name, "Москва", "", "Europe/Moscow", sortOrder);
+  private CreateWarehouseRequest request(String name, Integer sortOrder) {
+    return new CreateWarehouseRequest(name, "Москва", "", "Europe/Moscow", sortOrder);
   }
 
   private ReplaceWarehouseRequest replace(
       WarehouseResponse warehouse,
       long expectedVersion,
-      String code,
       String name,
       boolean active,
       Integer sortOrder) {
     return new ReplaceWarehouseRequest(
-        code,
+        expectedVersion,
         name,
         warehouse.city(),
         warehouse.address(),
         warehouse.timeZone(),
         active,
-        sortOrder,
-        expectedVersion);
+        sortOrder);
   }
 
   private long count(String query, Object... arguments) {

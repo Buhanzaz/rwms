@@ -3,8 +3,10 @@ package dev.buhanzaz.rwms.taskboard;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CancelTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.PreStartUpdateTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueBindingRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueDefinitionRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RegisterExternalTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RouteStepRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.TaskSourceReferenceDto;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.WorkQueueRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -16,6 +18,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
+import dev.buhanzaz.rwms.taskboard.domain.TaskSourceType;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.service.NotFoundException;
 import dev.buhanzaz.rwms.taskboard.service.RegistryService;
@@ -48,54 +51,60 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
   @Autowired MockMvc mvc;
   @Autowired ObjectMapper objectMapper;
 
-  private UUID queueId;
-  private UUID verificationQueueId;
+  private UUID queueDefinitionId;
+  private UUID verificationQueueDefinitionId;
+  private UUID workQueueId;
+  private UUID verificationWorkQueueId;
 
   @BeforeEach
   void setUp() {
     cleanTaskBoardFixtures(jdbc);
-    queueId =
-        registry
-            .createQueue(
-                WAREHOUSE,
-                new WorkQueueRequest(
-                    0L,
-                    "MAINTENANCE",
-                    "Maintenance",
-                    null,
-                    QueueType.REPAIR,
-                    true,
-                    false,
-                    false,
-                    null,
-                    null,
-                    false,
-                    List.<QueueBindingRequest>of()))
-            .id();
-    verificationQueueId =
-        registry
-            .createQueue(
-                WAREHOUSE,
-                new WorkQueueRequest(
-                    0L,
-                    "MAINTENANCE_CHECK",
-                    "Maintenance check",
-                    null,
-                    QueueType.REPAIR,
-                    true,
-                    false,
-                    false,
-                    null,
-                    null,
-                    false,
-                    List.<QueueBindingRequest>of()))
-            .id();
+    var definition =
+        registry.createQueueDefinition(
+            new QueueDefinitionRequest(0L, "Maintenance", null, QueueType.REPAIR));
+    var queue =
+        registry.createQueue(
+            WAREHOUSE,
+            new WorkQueueRequest(
+                0L,
+                definition.id(),
+                true,
+                false,
+                false,
+                null,
+                null,
+                false,
+                null,
+                List.<QueueBindingRequest>of()));
+    queueDefinitionId = definition.id();
+    workQueueId = queue.id();
+    var verificationDefinition =
+        registry.createQueueDefinition(
+            new QueueDefinitionRequest(
+                0L, "Maintenance check", null, QueueType.REPAIR));
+    var verificationQueue =
+        registry.createQueue(
+            WAREHOUSE,
+            new WorkQueueRequest(
+                0L,
+                verificationDefinition.id(),
+                true,
+                false,
+                false,
+                null,
+                null,
+                false,
+                null,
+                List.<QueueBindingRequest>of()));
+    verificationQueueDefinitionId = verificationDefinition.id();
+    verificationWorkQueueId = verificationQueue.id();
   }
 
   @Test
   void sourceOwnedRegistrationReplayUpdateReconciliationAndCancelStayFenced() throws Exception {
     UUID externalTaskId = UUID.randomUUID();
-    RegisterExternalTaskRequest registration = registration(externalTaskId);
+    UUID repairId = UUID.randomUUID();
+    RegisterExternalTaskRequest registration = registration(externalTaskId, repairId);
 
     String first =
         mvc.perform(
@@ -120,6 +129,20 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
             .getContentAsString();
     assertThat(objectMapper.readTree(replay).required("taskId").textValue())
         .isEqualTo(objectMapper.readTree(first).required("taskId").textValue());
+    mvc.perform(
+            post("/api/internal/task-board/v1/tasks")
+                .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    objectMapper.writeValueAsString(
+                        registration(externalTaskId, UUID.randomUUID()))))
+        .andExpect(status().isConflict());
+    mvc.perform(
+            post("/api/internal/task-board/v1/tasks")
+                .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(registration(externalTaskId))))
+        .andExpect(status().isConflict());
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from outbox_event where event_type=?",
@@ -128,6 +151,14 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
         .isOne();
     assertThat(jdbc.queryForObject("select count(*) from task_sync_source", Integer.class))
         .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select source_type from task_sync_source", String.class))
+        .isEqualTo("MAINTENANCE_REPAIR");
+    assertThat(
+            jdbc.queryForObject(
+                "select source_id from task_sync_source", UUID.class))
+        .isEqualTo(repairId);
 
     UUID oldEntryId =
         jdbc.queryForObject(
@@ -142,8 +173,8 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
             25,
             null,
             List.of(
-                new RouteStepRequest(queueId, null, "Repair", 15),
-                new RouteStepRequest(verificationQueueId, null, "Check", 10)));
+                new RouteStepRequest(queueDefinitionId, "Repair", 15),
+                new RouteStepRequest(verificationQueueDefinitionId, "Check", 10)));
     mvc.perform(
             put("/api/internal/task-board/v1/tasks/{externalTaskId}", externalTaskId)
                 .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
@@ -238,10 +269,29 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
   }
 
   @Test
+  void registrationCannotBackfillAPreviouslyMissingSourceReference() {
+    UUID externalTaskId = UUID.randomUUID();
+    board.registerExternalTask("maintenance-service", registration(externalTaskId));
+
+    assertThatThrownBy(
+            () ->
+                board.registerExternalTask(
+                    "maintenance-service",
+                    registration(externalTaskId, UUID.randomUUID())))
+        .isInstanceOf(dev.buhanzaz.rwms.taskboard.service.ConflictException.class);
+    assertThat(
+            jdbc.queryForMap(
+                "select source_type,source_id from task_sync_source where external_task_id=?",
+                externalTaskId))
+        .containsEntry("source_type", null)
+        .containsEntry("source_id", null);
+  }
+
+  @Test
   void internalRegistrationPreservesRepeatedQueueStagesAndFencesReplay() throws Exception {
     UUID externalTaskId = UUID.randomUUID();
     RegisterExternalTaskRequest registration =
-        repeatedQueueRegistration(externalTaskId, "MOVEMENT");
+        repeatedQueueRegistration(externalTaskId, "Перемещение");
 
     String first =
         mvc.perform(
@@ -251,15 +301,26 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
                     .content(objectMapper.writeValueAsString(registration)))
             .andExpect(status().isCreated())
             .andExpect(jsonPath("$.route.length()").value(3))
-            .andExpect(jsonPath("$.route[0].queueId").value(queueId.toString()))
+            .andExpect(
+                jsonPath("$.route[0].queueDefinitionId")
+                    .value(queueDefinitionId.toString()))
+            .andExpect(jsonPath("$.route[0].workQueueId").value(workQueueId.toString()))
             .andExpect(jsonPath("$.route[0].routeIndex").value(0))
-            .andExpect(jsonPath("$.route[0].taskText").value("MOVEMENT"))
-            .andExpect(jsonPath("$.route[1].queueId").value(verificationQueueId.toString()))
+            .andExpect(jsonPath("$.route[0].taskText").value("Перемещение"))
+            .andExpect(
+                jsonPath("$.route[1].queueDefinitionId")
+                    .value(verificationQueueDefinitionId.toString()))
+            .andExpect(
+                jsonPath("$.route[1].workQueueId")
+                    .value(verificationWorkQueueId.toString()))
             .andExpect(jsonPath("$.route[1].routeIndex").value(1))
-            .andExpect(jsonPath("$.route[1].taskText").value("INTERNAL_WORKS"))
-            .andExpect(jsonPath("$.route[2].queueId").value(queueId.toString()))
+            .andExpect(jsonPath("$.route[1].taskText").value("Внутренние работы"))
+            .andExpect(
+                jsonPath("$.route[2].queueDefinitionId")
+                    .value(queueDefinitionId.toString()))
+            .andExpect(jsonPath("$.route[2].workQueueId").value(workQueueId.toString()))
             .andExpect(jsonPath("$.route[2].routeIndex").value(2))
-            .andExpect(jsonPath("$.route[2].taskText").value("MOVEMENT"))
+            .andExpect(jsonPath("$.route[2].taskText").value("Перемещение"))
             .andReturn()
             .getResponse()
             .getContentAsString();
@@ -281,9 +342,10 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
             row -> row.get("route_index"),
             row -> row.get("task_text"))
         .containsExactly(
-            org.assertj.core.groups.Tuple.tuple(queueId, 0, "MOVEMENT"),
-            org.assertj.core.groups.Tuple.tuple(verificationQueueId, 1, "INTERNAL_WORKS"),
-            org.assertj.core.groups.Tuple.tuple(queueId, 2, "MOVEMENT"));
+            org.assertj.core.groups.Tuple.tuple(workQueueId, 0, "Перемещение"),
+            org.assertj.core.groups.Tuple.tuple(
+                verificationWorkQueueId, 1, "Внутренние работы"),
+            org.assertj.core.groups.Tuple.tuple(workQueueId, 2, "Перемещение"));
 
     String replay =
         mvc.perform(
@@ -326,7 +388,7 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(
                     objectMapper.writeValueAsString(
-                        repeatedQueueRegistration(externalTaskId, "MOVEMENT_CHANGED"))))
+                        repeatedQueueRegistration(externalTaskId, "Изменённое перемещение"))))
         .andExpect(status().isConflict())
         .andExpect(jsonPath("$.code").value("TASK_BOARD_CONFLICT"));
     assertThat(
@@ -365,7 +427,7 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
             null,
             null,
             null,
-            List.of(new RouteStepRequest(queueId, null, null, null)));
+            List.of(new RouteStepRequest(queueDefinitionId, null, null)));
     mvc.perform(
             put("/api/internal/task-board/v1/tasks/{externalTaskId}", externalTaskId)
                 .with(taskSyncJwt("maintenance-service", List.of("task-board.task-sync")))
@@ -411,7 +473,23 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
         null,
         15,
         null,
-        List.of(new RouteStepRequest(queueId, null, "Repair", 15)));
+        List.of(new RouteStepRequest(queueDefinitionId, "Repair", 15)));
+  }
+
+  private RegisterExternalTaskRequest registration(UUID externalTaskId, UUID repairId) {
+    return new RegisterExternalTaskRequest(
+        WAREHOUSE,
+        externalTaskId,
+        "Maintenance task",
+        "CABIN-1",
+        null,
+        15,
+        null,
+        List.of(new RouteStepRequest(queueDefinitionId, "Repair", 15)),
+        null,
+        null,
+        null,
+        new TaskSourceReferenceDto(TaskSourceType.MAINTENANCE_REPAIR, repairId));
   }
 
   private RegisterExternalTaskRequest repeatedQueueRegistration(
@@ -425,9 +503,10 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
         30,
         null,
         List.of(
-            new RouteStepRequest(queueId, null, "MOVEMENT", 5),
-            new RouteStepRequest(verificationQueueId, null, "INTERNAL_WORKS", 20),
-            new RouteStepRequest(queueId, null, returnStepText, 5)));
+            new RouteStepRequest(queueDefinitionId, "Перемещение", 5),
+            new RouteStepRequest(
+                verificationQueueDefinitionId, "Внутренние работы", 20),
+            new RouteStepRequest(queueDefinitionId, returnStepText, 5)));
   }
 
   private JwtRequestPostProcessor taskSyncJwt(String clientId, List<String> scopes) {

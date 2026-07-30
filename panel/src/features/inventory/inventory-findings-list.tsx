@@ -3,7 +3,10 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { OperationsListGrid } from "@/components/operations-list-grid"
 import type { InventoryFindingDto } from "@/features/inventory/model/inventory"
-import { InventoryReconciliationBadges } from "@/features/inventory/inventory-presentation"
+import {
+  InventoryFindingStatusBadge,
+  type InventoryFindingStatusMode,
+} from "@/features/inventory/inventory-presentation"
 import { inventoryFindingPublicationLabel } from "@/features/inventory/inventory-publication-presentation"
 import { RentalItemStatusBadge } from "@/features/rental-items/rental-item-status-badge"
 
@@ -12,6 +15,13 @@ const originLabel: Record<InventoryFindingDto["origin"], string> = {
   ADDED_NEW: "Добавлена новая",
   ADDED_USED: "Добавлена б/у",
   UNEXPECTED_EXISTING: "Неожиданная",
+}
+
+function findingSourceLabel(finding: InventoryFindingDto) {
+  return finding.inspectionSource === "INVENTORY" ||
+    finding.inspectionStatus !== "NOT_INSPECTED"
+    ? "Инвентаризация"
+    : originLabel[finding.origin]
 }
 
 function FindingPublication({ finding }: { finding: InventoryFindingDto }) {
@@ -25,8 +35,8 @@ function FindingPublication({ finding }: { finding: InventoryFindingDto }) {
         {inventoryFindingPublicationLabel[finding.publicationStatus]}
       </Badge>
       {finding.publishedRepairTaskId ? (
-        <span className="text-xs break-all text-muted-foreground">
-          Задача: {finding.publishedRepairTaskId}
+        <span className="text-xs text-muted-foreground">
+          Задача на ремонт создана
         </span>
       ) : null}
       {finding.publicationError ? (
@@ -38,16 +48,14 @@ function FindingPublication({ finding }: { finding: InventoryFindingDto }) {
   )
 }
 
-function FindingState({ finding }: { finding: InventoryFindingDto }) {
-  return (
-    <InventoryReconciliationBadges
-      inspected={finding.inspectionStatus !== "NOT_INSPECTED"}
-      hasWork={finding.lines.length > 0}
-      added={finding.origin === "ADDED_NEW" || finding.origin === "ADDED_USED"}
-      missing={finding.reconciliationStatus === "MISSING"}
-      conflicts={finding.conflicts.length}
-    />
-  )
+function FindingState({
+  finding,
+  statusMode,
+}: {
+  finding: InventoryFindingDto
+  statusMode: InventoryFindingStatusMode
+}) {
+  return <InventoryFindingStatusBadge finding={finding} mode={statusMode} />
 }
 
 function FindingAction({
@@ -89,11 +97,13 @@ export function InventoryFindingsList({
   canInspect,
   onOpen,
   showPublication = false,
+  statusMode = "ACTIVE",
 }: {
   findings: InventoryFindingDto[]
   canInspect: boolean
   onOpen: (finding: InventoryFindingDto) => void
   showPublication?: boolean
+  statusMode?: InventoryFindingStatusMode
 }) {
   return (
     <>
@@ -115,12 +125,12 @@ export function InventoryFindingsList({
               id: "origin",
               label: "Источник",
               className: "w-44",
-              getSortValue: (finding) => originLabel[finding.origin],
-              render: (finding) => originLabel[finding.origin],
+              getSortValue: findingSourceLabel,
+              render: findingSourceLabel,
             },
             {
               id: "status",
-              label: "Статус бытовки",
+              label: "Текущий статус",
               className: "w-44",
               getSortValue: (finding) =>
                 finding.currentSnapshot?.status ??
@@ -135,10 +145,12 @@ export function InventoryFindingsList({
             },
             {
               id: "state",
-              label: "Сверка",
+              label: "Статус инвентаризации",
               getSortValue: (finding) =>
                 `${finding.inspectionStatus}:${finding.reconciliationStatus}:${finding.conflicts.length}`,
-              render: (finding) => <FindingState finding={finding} />,
+              render: (finding) => (
+                <FindingState finding={finding} statusMode={statusMode} />
+              ),
             },
             ...(showPublication
               ? [
@@ -180,8 +192,8 @@ export function InventoryFindingsList({
             <CardContent className="flex flex-col gap-3">
               <dl className="grid grid-cols-2 gap-2 text-sm">
                 <dt className="text-muted-foreground">Источник</dt>
-                <dd>{originLabel[finding.origin]}</dd>
-                <dt className="text-muted-foreground">Статус</dt>
+                <dd>{findingSourceLabel(finding)}</dd>
+                <dt className="text-muted-foreground">Текущий статус</dt>
                 <dd>
                   {(finding.currentSnapshot?.status ??
                   finding.expectedSnapshot?.status) ? (
@@ -196,7 +208,7 @@ export function InventoryFindingsList({
                   )}
                 </dd>
               </dl>
-              <FindingState finding={finding} />
+              <FindingState finding={finding} statusMode={statusMode} />
               {showPublication ? (
                 <FindingPublication finding={finding} />
               ) : null}

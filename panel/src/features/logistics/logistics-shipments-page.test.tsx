@@ -30,6 +30,9 @@ const rentalItemsApi = vi.hoisted(() => ({
 const ordersApi = vi.hoisted(() => ({
   getOrder: vi.fn(),
 }))
+const equipmentMovementTasksApi = vi.hoisted(() => ({
+  getEquipmentMovementTask: vi.fn(),
+}))
 const authState = vi.hoisted(() => ({
   level: "EDIT" as "VIEW" | "EDIT" | "MANAGE",
 }))
@@ -58,6 +61,10 @@ vi.mock("@/features/rental-items/api/asset-rental-items-api", () => ({
 vi.mock("@/features/orders/api/orders-api", () => ({
   ORDERS_QUERY_KEY: ["orders"],
   getOrder: ordersApi.getOrder,
+}))
+
+vi.mock("@/features/logistics/api/equipment-movement-tasks-api", () => ({
+  getEquipmentMovementTask: equipmentMovementTasksApi.getEquipmentMovementTask,
 }))
 
 vi.mock("@/features/logistics/logistics-driver-picker", () => ({
@@ -139,6 +146,9 @@ const CANCEL_KEY = "99999999-9999-4999-8999-999999999999"
 const FURNITURE_KEY = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab"
 const FURNITURE_TASK_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc"
 const EXTERNAL_FURNITURE_TASK_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+const EQUIPMENT_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+const EQUIPMENT_TASK_LINE_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+const RETURN_TASK_LINE_ID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
 const ASSET_NUMBER = "БЫТ-041"
 const ORDER_NUMBER = "ORD-000007"
 
@@ -209,7 +219,7 @@ beforeEach(() => {
       warehouseId: WAREHOUSE_ID,
       name: "Водители",
       active: true,
-      queueCodes: [],
+      queueIds: [],
       routeQueueKinds: ["MOVEMENT"],
       members: [
         {
@@ -235,11 +245,35 @@ beforeEach(() => {
   rentalItemsApi.getAssetRentalItem.mockResolvedValue({
     id: ASSET_ID,
     number: ASSET_NUMBER,
+    contentsItems: [
+      {
+        equipmentId: EQUIPMENT_ID,
+        equipmentName: "Стол",
+        name: "Стол",
+        quantity: 1,
+      },
+    ],
   })
   ordersApi.getOrder.mockResolvedValue({
     id: ORDER_ID,
     number: ORDER_NUMBER,
-    units: [{ unit: { id: ASSET_ID, number: ASSET_NUMBER } }],
+    units: [
+      {
+        unit: { id: ASSET_ID, number: ASSET_NUMBER },
+        desiredContents: [
+          {
+            equipmentId: EQUIPMENT_ID,
+            equipmentName: "Конвектор",
+            quantity: 2,
+          },
+        ],
+      },
+    ],
+  })
+  equipmentMovementTasksApi.getEquipmentMovementTask.mockResolvedValue({
+    id: FURNITURE_TASK_ID,
+    externalTaskId: EXTERNAL_FURNITURE_TASK_ID,
+    lines: [],
   })
 })
 
@@ -251,7 +285,12 @@ afterEach(() => {
 
 describe("LogisticsShipmentsPage", () => {
   it("shows cabin and order numbers in the shipment composition", async () => {
+    const user = userEvent.setup()
     renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Показать состав" }))[0]!
+    )
 
     expect(
       (await screen.findAllByText(`Бытовка ${ASSET_NUMBER}`)).length
@@ -268,6 +307,91 @@ describe("LogisticsShipmentsPage", () => {
     expect(screen.queryByText(new RegExp(ORDER_ID))).toBeNull()
   })
 
+  it("shows empty current contents, saved desired contents, and linked task lines for the cabin", async () => {
+    shipmentApi.getShipmentFurnitureReadiness.mockImplementation(
+      (_accessToken: string, documentId: string) =>
+        Promise.resolve({
+          shipmentId: documentId,
+          shipmentVersion: documentId === DRAFT_ID ? 2 : 5,
+          state: documentId === DRAFT_ID ? "AWAITING_TASK_COMPLETION" : "READY",
+          tasks:
+            documentId === DRAFT_ID
+              ? [
+                  {
+                    rentalItemId: ASSET_ID,
+                    unitNumber: ASSET_NUMBER,
+                    taskId: FURNITURE_TASK_ID,
+                    externalTaskId: EXTERNAL_FURNITURE_TASK_ID,
+                    taskBoardTaskId: null,
+                    taskState: "AWAITING_WORKER",
+                    lineCount: 2,
+                  },
+                ]
+              : [],
+        })
+    )
+    rentalItemsApi.getAssetRentalItem.mockResolvedValue({
+      id: ASSET_ID,
+      number: ASSET_NUMBER,
+      contentsItems: [],
+    })
+    equipmentMovementTasksApi.getEquipmentMovementTask.mockResolvedValue({
+      id: FURNITURE_TASK_ID,
+      externalTaskId: EXTERNAL_FURNITURE_TASK_ID,
+      lines: [
+        {
+          id: EQUIPMENT_TASK_LINE_ID,
+          equipmentId: EQUIPMENT_ID,
+          equipmentName: "Конвектор",
+          sourceRentalItemId: null,
+          sourceLocationKind: "STOCK",
+          targetRentalItemId: ASSET_ID,
+          targetLocationKind: "CABIN_NON_RENTED",
+          quantity: 2,
+        },
+        {
+          id: RETURN_TASK_LINE_ID,
+          equipmentId: EQUIPMENT_ID,
+          equipmentName: "Стол",
+          sourceRentalItemId: ASSET_ID,
+          sourceLocationKind: "CABIN_NON_RENTED",
+          targetRentalItemId: null,
+          targetLocationKind: "STOCK",
+          quantity: 1,
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(
+      (await screen.findAllByRole("button", { name: "Показать состав" }))[0]!
+    )
+
+    expect(
+      (await screen.findAllByText("Бытовка сейчас пуста.")).length
+    ).toBeGreaterThan(0)
+    expect(
+      screen.getAllByRole("heading", {
+        name: "Сохранённый состав по заказу",
+      }).length
+    ).toBeGreaterThan(0)
+    expect(screen.getAllByText("Конвектор").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("× 2").length).toBeGreaterThan(0)
+
+    await waitFor(() =>
+      expect(
+        equipmentMovementTasksApi.getEquipmentMovementTask
+      ).toHaveBeenCalledWith("shipment-token", FURNITURE_TASK_ID)
+    )
+    expect(
+      (await screen.findAllByText(/Склад → Бытовка БЫТ-041/)).length
+    ).toBeGreaterThan(0)
+    expect(
+      screen.getAllByText(/Бытовка БЫТ-041 → Склад/).length
+    ).toBeGreaterThan(0)
+  })
+
   it("keeps VIEW access read-only while preserving service reads", async () => {
     authState.level = "VIEW"
     renderPage()
@@ -279,6 +403,81 @@ describe("LogisticsShipmentsPage", () => {
     )
     expect(screen.queryByRole("button", { name: "Отгрузить" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Отгружена" })).toBeNull()
+  })
+
+  it("shows inline shipment filters and filters locally by counterparty", async () => {
+    shipmentApi.listShipments.mockResolvedValue([
+      {
+        ...shipmentDocument(DRAFT_ID, "DRAFT", 2),
+        partySnapshot: "ООО Альфа",
+        driverSnapshot: "Иванов Иван",
+      },
+      {
+        ...shipmentDocument(AWAITING_ID, "AWAITING_CONFIRMATION", 5),
+        partySnapshot: "ООО Бета",
+        driverSnapshot: "Петров Пётр",
+      },
+    ])
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findAllByText("ООО Альфа")
+    expect(screen.getAllByRole("button", { name: "Статус" })).not.toHaveLength(
+      0
+    )
+    expect(
+      screen.getAllByRole("button", { name: "Контрагент" })
+    ).not.toHaveLength(0)
+    expect(
+      screen.getAllByRole("button", { name: "Водитель" })
+    ).not.toHaveLength(0)
+    expect(screen.getByLabelText("Отгрузка с")).toBeTruthy()
+    expect(screen.getByLabelText("Отгрузка по")).toBeTruthy()
+    expect(screen.queryByText("Дата", { exact: true })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Обновить" })).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Показать все документы" })
+    ).toBeNull()
+
+    await user.click(screen.getAllByRole("button", { name: "Контрагент" })[0]!)
+    await user.click(screen.getByRole("checkbox", { name: "ООО Альфа" }))
+    await user.click(screen.getByRole("button", { name: "Применить" }))
+
+    await waitFor(() => expect(screen.queryByText("ООО Бета")).toBeNull())
+    expect(screen.getAllByText("ООО Альфа")).not.toHaveLength(0)
+  })
+
+  it("keeps the shipment search compact and lets the user hide filters", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findAllByText("Ждёт подтверждения")
+    const search = screen.getByRole("textbox", { name: "Поиск отгрузок" })
+    expect(search.parentElement?.classList.contains("max-w-xl")).toBe(true)
+
+    const hideFilters = screen.getByRole("button", {
+      name: "Скрыть фильтры",
+    })
+    expect(hideFilters.getAttribute("aria-controls")).toBe(
+      "logistics-shipment-filters"
+    )
+    expect(hideFilters.getAttribute("aria-expanded")).toBe("true")
+
+    await user.click(hideFilters)
+
+    expect(
+      document.getElementById("logistics-shipment-filters")?.hidden
+    ).toBe(true)
+    const showFilters = screen.getByRole("button", {
+      name: "Показать фильтры",
+    })
+    expect(showFilters.getAttribute("aria-expanded")).toBe("false")
+
+    await user.click(showFilters)
+
+    expect(
+      document.getElementById("logistics-shipment-filters")?.hidden
+    ).toBe(false)
   })
 
   it("assigns a driver and date to the shipment created from a saved order", async () => {

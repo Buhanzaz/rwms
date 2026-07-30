@@ -1,7 +1,7 @@
 package dev.buhanzaz.rwms.maintenance.api;
 
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceConflictException;
-import dev.buhanzaz.rwms.maintenance.service.MaintenanceCatalogImportValidationException;
+import dev.buhanzaz.rwms.maintenance.service.MaintenanceCatalogValidationException;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceDependencyException;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceNotFoundException;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceValidationException;
@@ -72,9 +72,9 @@ public class MaintenanceApiExceptionHandler {
     return problem(HttpStatus.UNPROCESSABLE_CONTENT, exception.code(), exception.getMessage(), request);
   }
 
-  @ExceptionHandler(MaintenanceCatalogImportValidationException.class)
-  ResponseEntity<ApiProblem> catalogImportValidation(
-      MaintenanceCatalogImportValidationException exception, HttpServletRequest request) {
+  @ExceptionHandler(MaintenanceCatalogValidationException.class)
+  ResponseEntity<ApiProblem> catalogValidation(
+      MaintenanceCatalogValidationException exception, HttpServletRequest request) {
     return problem(
         HttpStatus.UNPROCESSABLE_CONTENT,
         "MAINTENANCE_VALIDATION_FAILED",

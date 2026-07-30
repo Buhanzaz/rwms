@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.web.servlet.function.RequestPredicate;
@@ -41,6 +42,26 @@ public class GatewayRouteConfiguration {
   }
 
   @Bean
+  @Order(-100)
+  RouterFunction<ServerResponse> taskBoardWorkerEventsRoute(
+      GatewayProperties properties,
+      GatewayUpstreamProblemHandler upstreamProblems,
+      WorkerEventsProxyHandler workerEventsProxyHandler) {
+    RequestPredicate workerEventsPath =
+        path("/api/task-board/worker/v1/events")
+            .and(method(HttpMethod.GET))
+            .and(request -> safePath(request.path()));
+    return route("task-board-worker-events")
+        .route(workerEventsPath, workerEventsProxyHandler)
+        .before(uri(properties.getRoutes().getTaskBoardUri()))
+        .before(stripPrefix(2))
+        .before(prefixPath("/api"))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
+  @Bean
   RouterFunction<ServerResponse> taskBoardRoutes(
       GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
     RequestPredicate publicTaskBoardPath =
@@ -48,7 +69,12 @@ public class GatewayRouteConfiguration {
             .and(request -> safePath(request.path()))
             .and(
                 request ->
-                    !decodedPath(request.path()).startsWith("/api/task-board/internal"));
+                    !decodedPath(request.path()).startsWith("/api/task-board/internal"))
+            .and(
+                request ->
+                    request.method() != HttpMethod.GET
+                        || !decodedPath(request.path())
+                            .equals("/api/task-board/worker/v1/events"));
     return route("task-board-service")
         .route(publicTaskBoardPath, http())
         .before(uri(properties.getRoutes().getTaskBoardUri()))
@@ -71,6 +97,24 @@ public class GatewayRouteConfiguration {
     return route("warehouse-service-reserved")
         .route(publicWarehousePath, http())
         .before(uri(properties.getRoutes().getWarehouseUri()))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
+  @Bean
+  @Order(-80)
+  RouterFunction<ServerResponse> htmlImportCommitRoute(
+      GatewayProperties properties,
+      GatewayUpstreamProblemHandler upstreamProblems,
+      HtmlImportCommitProxyHandler htmlImportCommitProxyHandler) {
+    RequestPredicate htmlImportCommitPath =
+        path("/api/asset/v1/html-imports/*/commit")
+            .and(method(HttpMethod.POST))
+            .and(request -> safePath(request.path()));
+    return route("asset-html-import-commit")
+        .route(htmlImportCommitPath, htmlImportCommitProxyHandler)
+        .before(uri(properties.getRoutes().getAssetUri()))
         .before(removeRequestHeader(HttpHeaders.COOKIE))
         .onError(upstreamProblems::supports, upstreamProblems::handle)
         .build();
@@ -169,6 +213,47 @@ public class GatewayRouteConfiguration {
   }
 
   @Bean
+  @Order(-90)
+  RouterFunction<ServerResponse> assistantTurnsRoute(
+      GatewayProperties properties,
+      GatewayUpstreamProblemHandler upstreamProblems,
+      AssistantTurnsProxyHandler assistantTurnsProxyHandler) {
+    RequestPredicate turnsPath =
+        path("/api/assistant/v1/conversations/*/turns")
+            .and(method(HttpMethod.POST))
+            .and(request -> safePath(request.path()));
+    return route("assistant-turns")
+        .route(turnsPath, assistantTurnsProxyHandler)
+        .before(uri(properties.getRoutes().getAssistantUri()))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
+  @Bean
+  RouterFunction<ServerResponse> assistantRoutes(
+      GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
+    RequestPredicate publicAssistantPath =
+        path("/api/assistant/**")
+            .and(request -> safePath(request.path()))
+            .and(
+                request -> {
+                  String decoded = decodedPath(request.path());
+                  return !decoded.startsWith("/api/assistant/internal")
+                      && !decoded.startsWith("/api/assistant/private")
+                      && (request.method() != HttpMethod.POST
+                          || !decoded.matches(
+                              "^/api/assistant/v1/conversations/[^/]+/turns$"));
+                });
+    return route("assistant-service")
+        .route(publicAssistantPath, http())
+        .before(uri(properties.getRoutes().getAssistantUri()))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
+  @Bean
   RouterFunction<ServerResponse> dossierRoutes(
       GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
     RequestPredicate publicDossierPath =
@@ -184,6 +269,23 @@ public class GatewayRouteConfiguration {
     return route("dossier-service")
         .route(publicDossierPath, http())
         .before(uri(properties.getRoutes().getDossierUri()))
+        .before(removeRequestHeader(HttpHeaders.COOKIE))
+        .onError(upstreamProblems::supports, upstreamProblems::handle)
+        .build();
+  }
+
+  @Bean
+  RouterFunction<ServerResponse> analyticsRoutes(
+      GatewayProperties properties, GatewayUpstreamProblemHandler upstreamProblems) {
+    RequestPredicate publicAnalyticsPath =
+        path("/api/analytics/v1/**")
+            .and(method(HttpMethod.GET))
+            .and(request -> safePath(request.path()));
+    return route("analytics-service")
+        .route(publicAnalyticsPath, http())
+        .before(uri(properties.getRoutes().getAnalyticsUri()))
+        .before(stripPrefix(2))
+        .before(prefixPath("/api"))
         .before(removeRequestHeader(HttpHeaders.COOKIE))
         .onError(upstreamProblems::supports, upstreamProblems::handle)
         .build();

@@ -13,17 +13,13 @@ export function inventoryCompletionRiskSignature(
   const risks = findings
     .filter(
       (finding) =>
-        finding.reconciliationStatus === "MISSING" ||
-        finding.conflicts.length > 0
+        finding.inspectionStatus === "NOT_INSPECTED" ||
+        finding.reconciliationStatus === "MISSING"
     )
     .map((finding) => ({
       findingId: finding.id,
+      inspectionStatus: finding.inspectionStatus,
       reconciliationStatus: finding.reconciliationStatus,
-      conflicts: finding.conflicts.map((conflict) => ({
-        code: conflict.code,
-        expected: conflict.expected,
-        actual: conflict.actual,
-      })),
     }))
   return risks.length > 0 ? JSON.stringify(risks) : ""
 }
@@ -37,7 +33,8 @@ export function toInventoryRepairPlanSnapshot(
     includedLineIds: [...plan.includedLineIds],
     primaryLineId: plan.primaryLineId,
     groupComment: plan.groupComment,
-    queueCode: plan.queueCode,
+    queueId: plan.queueId ?? null,
+    queueName: plan.queueName,
     routeQueueKind: plan.routeQueueKind,
     sortOrder: plan.sortOrder,
     plannedDurationMinutes: null,
@@ -68,7 +65,8 @@ export function reconcileInventoryRepairTaskPlans(input: {
       includedLineIds,
       primaryLineId,
       groupComment: plan.groupComment,
-      queueCode: plan.queueCode,
+      queueId: plan.queueId,
+      queueName: plan.queueName,
       routeQueueKind: plan.routeQueueKind,
       sortOrder: plan.sortOrder,
       generationStatus: "PENDING_GENERATION" as const,

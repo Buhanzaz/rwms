@@ -1,13 +1,22 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { ApiError } from "@/lib/api-client"
 import type {
   CabinCoverProjection,
   MediaVariant,
 } from "@/features/media/media-service"
 
 const media = vi.hoisted(() => ({
+  createOriginalObjectUrl: vi.fn(),
   createVariantObjectUrl: vi.fn(),
+  listCabinCovers: vi.fn(),
   listOwnerMedia: vi.fn(),
 }))
 
@@ -21,7 +30,10 @@ vi.mock("@/features/media/media-service", () => ({
   createHttpMediaClient: () => media,
 }))
 
-import { useRentalItemCardPhotos } from "@/features/rental-items/use-rental-item-covers"
+import {
+  loadRentalItemCoverPage,
+  useRentalItemCardPhotos,
+} from "@/features/rental-items/use-rental-item-covers"
 
 const WAREHOUSE_ID = "11111111-1111-4111-8111-111111111111"
 const CABIN_ID = "22222222-2222-4222-8222-222222222222"
@@ -74,13 +86,28 @@ function Harness() {
       <span data-testid="photo-ids">
         {result.photos.map((photo) => photo.id).join(",")}
       </span>
+      <span data-testid="original-url">
+        {result.photos[0]?.variants?.original?.url ?? ""}
+      </span>
+      <button
+        type="button"
+        onClick={() => {
+          const photo = result.photos[0]
+          if (photo) void result.requestFullscreen(photo)
+        }}
+      >
+        Открыть оригинал
+      </button>
     </div>
   )
 }
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
+  media.createOriginalObjectUrl.mockReset()
   media.createVariantObjectUrl.mockReset()
+  media.listCabinCovers.mockReset()
   media.listOwnerMedia.mockReset()
 })
 
@@ -113,5 +140,121 @@ describe("useRentalItemCardPhotos", () => {
       )
     ).toEqual(["/cover-small", "/second-small"])
     expect(media.listOwnerMedia).not.toHaveBeenCalled()
+    expect(media.createOriginalObjectUrl).not.toHaveBeenCalled()
+  })
+
+  it("loads the original only when the card photo is opened fullscreen", async () => {
+    media.createVariantObjectUrl.mockImplementation(
+      async (_token: string, _owner: unknown, requested: MediaVariant) => ({
+        url: `blob:${requested.contentPath}`,
+        dispose: vi.fn(),
+      })
+    )
+    media.createOriginalObjectUrl.mockResolvedValue({
+      url: "blob:cover-original",
+      dispose: vi.fn(),
+    })
+
+    render(<Harness />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("photo-ids").textContent).toBe(
+        `${COVER_ID},${SECOND_ID}`
+      )
+    )
+    expect(media.createOriginalObjectUrl).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole("button", { name: "Открыть оригинал" }))
+
+    await waitFor(() =>
+      expect(media.createOriginalObjectUrl).toHaveBeenCalledWith(
+        "read-token",
+        {
+          ownerType: "CABIN",
+          ownerId: CABIN_ID,
+          warehouseId: WAREHOUSE_ID,
+          context: "WAREHOUSE",
+        },
+        COVER_ID
+      )
+    )
+    expect(screen.getByTestId("original-url").textContent).toBe(
+      "blob:cover-original"
+    )
+  })
+
+  it("retries a transient owner-proof failure while loading cabin covers", async () => {
+    vi.useFakeTimers()
+    media.listCabinCovers
+      .mockRejectedValueOnce(
+        new ApiError(
+          "Owner proof is catching up",
+          403,
+          "MEDIA_OWNER_PROOF_REQUIRED"
+        )
+      )
+      .mockResolvedValueOnce({ items: [] })
+
+    const result = loadRentalItemCoverPage("read-token", WAREHOUSE_ID, [
+      CABIN_ID,
+    ])
+
+    await vi.advanceTimersByTimeAsync(250)
+
+    await expect(result).resolves.toEqual({ items: [] })
+    expect(media.listCabinCovers).toHaveBeenCalledTimes(2)
+  })
+
+  it("surfaces a nonretryable cabin-cover error without retrying", async () => {
+    const error = new ApiError("Media access denied", 403, "MEDIA_FORBIDDEN")
+    media.listCabinCovers.mockRejectedValue(error)
+
+    await expect(
+      loadRentalItemCoverPage("read-token", WAREHOUSE_ID, [CABIN_ID])
+    ).rejects.toBe(error)
+
+    expect(media.listCabinCovers).toHaveBeenCalledOnce()
+  })
+
+  it("retries a transient owner-proof failure while loading card previews", async () => {
+    media.createVariantObjectUrl
+      .mockRejectedValueOnce(
+        new ApiError(
+          "Owner proof is catching up",
+          403,
+          "MEDIA_OWNER_PROOF_REQUIRED"
+        )
+      )
+      .mockImplementation(
+        async (_token: string, _owner: unknown, requested: MediaVariant) => ({
+          url: `blob:${requested.contentPath}`,
+          dispose: vi.fn(),
+        })
+      )
+
+    render(<Harness />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("photo-ids").textContent).toBe(
+        `${COVER_ID},${SECOND_ID}`
+      )
+    )
+
+    expect(media.createVariantObjectUrl).toHaveBeenCalledTimes(3)
+  })
+
+  it("does not retry a nonretryable card-preview failure", async () => {
+    media.createVariantObjectUrl.mockRejectedValue(
+      new ApiError("Media access denied", 403, "MEDIA_FORBIDDEN")
+    )
+
+    render(<Harness />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("availability").textContent).toBe("unavailable")
+    )
+    await new Promise((resolve) => setTimeout(resolve, 300))
+
+    expect(media.createVariantObjectUrl).toHaveBeenCalledTimes(2)
   })
 })

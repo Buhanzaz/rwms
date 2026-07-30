@@ -238,6 +238,15 @@ was not executed.
 - Go media change: affected package tests/build.
 - Auth, authorization, concurrency and integration changes: add the smallest
   targeted success and failure checks.
+- Android app change or a service-contract change consumed by `app/`: run the
+  affected unit/contract tests and build the exact APK to be distributed. Before
+  calling it tested or publishing it, install that APK on an emulator or
+  physical device, authenticate against the intended public RWMS gateway (not
+  MockWebServer), and verify the first authenticated workspace request plus the
+  changed flow. Capture a UI tree or screenshot and filtered logcat; a JSON
+  parsing, HTTP-contract, crash, or connection error fails the gate. If real
+  gateway credentials or runtime are unavailable, report that blocker and do
+  not claim end-to-end APK validation.
 
 Use full Testcontainers, Playwright, Kafka outage/retry or cross-service suites
 only when the change requires them, focused checks reveal a wider issue or the

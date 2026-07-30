@@ -17,6 +17,8 @@ public enum LogisticsEventType {
   RETURN_RECONCILIATION_REQUIRED(
       LogisticsAggregateType.RETURN, "logistics.return.reconciliation-required.v1", "RECONCILIATION_REQUIRED"),
   SHIPMENT_CREATED(LogisticsAggregateType.SHIPMENT, "logistics.shipment.created.v1", "DRAFT"),
+  SHIPMENT_DRAFT_UPDATED(
+      LogisticsAggregateType.SHIPMENT, "logistics.shipment.draft-updated.v1", "DRAFT"),
   SHIPMENT_PREPARATION_STARTED(
       LogisticsAggregateType.SHIPMENT, "logistics.shipment.preparation-started.v1", "PREPARING"),
   SHIPMENT_PLANNED(

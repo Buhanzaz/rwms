@@ -2,6 +2,8 @@ package dev.buhanzaz.rwms.taskboard.api;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.MaintenanceRoutingPreflightRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.MaintenanceRoutingPreflightResponse;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CatalogRoutingPreflightRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CatalogRoutingPreflightResponse;
 
 import dev.buhanzaz.rwms.taskboard.security.TaskSyncAuthorizer;
 import dev.buhanzaz.rwms.taskboard.service.MaintenanceRoutingPreflightService;
@@ -15,17 +17,25 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/internal/task-board/v1/maintenance/routing-preflight")
+@RequestMapping("/api/internal/task-board/v1/maintenance")
 @RequiredArgsConstructor
 public class MaintenanceRoutingPreflightController {
   private final MaintenanceRoutingPreflightService service;
   private final TaskSyncAuthorizer access;
 
-  @PostMapping
+  @PostMapping("/routing-preflight")
   public MaintenanceRoutingPreflightResponse preflight(
       @AuthenticationPrincipal Jwt jwt,
       @Valid @RequestBody MaintenanceRoutingPreflightRequest request) {
     access.requireTaskSync(jwt);
     return service.preflight(request);
+  }
+
+  @PostMapping("/catalog-routing-preflight")
+  public CatalogRoutingPreflightResponse catalogPreflight(
+      @AuthenticationPrincipal Jwt jwt,
+      @Valid @RequestBody CatalogRoutingPreflightRequest request) {
+    access.requireTaskSync(jwt);
+    return service.catalogPreflight(request);
   }
 }

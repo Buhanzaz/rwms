@@ -25,6 +25,8 @@ public interface AuthResponseMapper {
     @Mapping(target = "timeZoneId", source = "profile.timeZoneId")
     @Mapping(target = "active", source = "subject.active")
     @Mapping(target = "globalRole", source = "subject.globalRole")
+    @Mapping(target = "mobileAppAccess", source = "subject.mobileAppAccess")
+    @Mapping(target = "rentalAccess", source = "subject.rentalAccess")
     @Mapping(target = "warehouseAccesses", source = "warehouseAccesses")
     AdminUserResponse toAdmin(
             AuthSubject subject, Profile profile, List<WarehouseAccessDto> warehouseAccesses);
@@ -37,6 +39,7 @@ public interface AuthResponseMapper {
     @Mapping(target = "email", source = "profile.email")
     @Mapping(target = "principalType", source = "subject.principalType")
     @Mapping(target = "globalRole", source = "subject.globalRole")
+    @Mapping(target = "rentalAccess", source = "subject.rentalAccess")
     @Mapping(target = "warehouseAccessAll", source = "warehouseAccessAll")
     @Mapping(target = "warehouseAccesses", source = "warehouseAccesses")
     CurrentUserResponse toCurrent(

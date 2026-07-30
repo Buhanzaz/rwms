@@ -3,6 +3,8 @@ import type {
   InventoryFinding,
   InventoryFrozenPlanLine,
   InventoryFrozenStatistics,
+  InventoryMembershipMovement,
+  InventorySessionDetail,
   InventorySessionSummary,
 } from "@/features/inventory/model/inventory-service"
 import type {
@@ -10,6 +12,7 @@ import type {
   InventoryConflictDto,
   InventoryFindingDto,
   InventoryFindingPublicationStatus,
+  InventoryMembershipMovementDto,
   InventoryPublicationStatus,
   InventoryRepairPlanSnapshotDto,
   InventorySessionDto,
@@ -20,7 +23,6 @@ import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/re
 import type { RentalItemStatus } from "@/features/rental-items/model/rental-item"
 
 const rentalItemStatuses = new Set<RentalItemStatus>([
-  "NEW",
   "RENTED",
   "BOOKED",
   "REPAIR",
@@ -42,6 +44,7 @@ const riskMessage: Record<
   InventoryCompletionPreview["risks"][number]["code"],
   string
 > = {
+  NOT_INSPECTED: "Бытовка ещё не проверена",
   MISSING: "Бытовка не найдена при сверке",
   CONFLICT: "Сервис обнаружил конфликт актуального реестра",
   ASSET_CHANGED: "Бытовка изменилась после начала инвентаризации",
@@ -87,10 +90,7 @@ function aggregatePublicationStatus(
   return value
 }
 
-function viewLine(
-  line: InventoryFrozenPlanLine,
-  stageCodeByCatalogNode: Map<string, string>
-): RepairEstimateLineDto {
+function viewLine(line: InventoryFrozenPlanLine): RepairEstimateLineDto {
   const itemQuantity = quantity(line.quantity)
   const unitPrice = moneyFromMinor(line.unitPriceMinor)
   return {
@@ -106,9 +106,6 @@ function viewLine(
     catalogSnapshot: line.catalogNodeId
       ? {
           nodeId: line.catalogNodeId,
-          code:
-            stageCodeByCatalogNode.get(line.catalogNodeId) ??
-            line.catalogNodeId,
           name: line.description,
           nodeType: line.lineType,
           furnitureEquipment: null,
@@ -148,12 +145,13 @@ function viewPlans(
           includedLines.map((line) => line.lineComment.trim()).filter(Boolean)
         )
       ).join("; "),
-      queueCode: stage.routingQueueCode,
+      queueId: stage.routingQueueId,
+      queueName: stage.routingQueueName,
       routeQueueKind:
-        stage.routingQueueKind === "REPAIR" ||
-        stage.routingQueueKind === "MOVEMENT" ||
-        stage.routingQueueKind === "HOLDING"
-          ? stage.routingQueueKind
+        stage.routingQueueType === "REPAIR" ||
+        stage.routingQueueType === "MOVEMENT" ||
+        stage.routingQueueType === "HOLDING"
+          ? stage.routingQueueType
           : null,
       sortOrder: (stage.order + 1) * 10 || (index + 1) * 10,
       plannedDurationMinutes: stage.normativeDurationMinutes,
@@ -176,6 +174,14 @@ function viewSnapshot(
     warehouseId: snapshot.warehouseId,
     status,
     tenant: snapshot.tenantSnapshot,
+    passportSnapshot: { ...snapshot.passportSnapshot },
+    contentsSnapshot: Array.isArray(snapshot.contentsSnapshot)
+      ? [...snapshot.contentsSnapshot]
+      : { ...snapshot.contentsSnapshot },
+    repairsSnapshot:
+      "repairsSnapshot" in snapshot
+        ? snapshot.repairsSnapshot.map((repair) => ({ ...repair }))
+        : [],
   }
 }
 
@@ -184,16 +190,7 @@ export function toInventoryFindingView(
 ): InventoryFindingDto {
   const expectedSnapshot = viewSnapshot(finding.expectedSnapshot)
   const currentSnapshot = viewSnapshot(finding.currentSnapshot)
-  const stageCodeByCatalogNode = new Map(
-    (finding.frozenPlan?.stages ?? []).map((stage) => [
-      stage.catalogNodeId,
-      stage.catalogNodeCode,
-    ])
-  )
-  const lines =
-    finding.frozenPlan?.lines.map((line) =>
-      viewLine(line, stageCodeByCatalogNode)
-    ) ?? []
+  const lines = finding.frozenPlan?.lines.map(viewLine) ?? []
   return {
     id: finding.id,
     version: finding.findingRevision,
@@ -205,11 +202,24 @@ export function toInventoryFindingView(
     reconciliationStatus: finding.reconciliation,
     expectedSnapshot,
     currentSnapshot,
-    conflicts: finding.conflicts.map((conflict) => ({ ...conflict })),
+    inspectionBaseline: viewSnapshot(finding.inspectionBaseline),
+    conflictResolution: finding.conflictResolution
+      ? { ...finding.conflictResolution }
+      : null,
+    conflicts:
+      finding.inspection === "NOT_INSPECTED"
+        ? []
+        : finding.conflicts.map((conflict) => ({ ...conflict })),
     comment: finding.comment,
     media: finding.media.map((reference) => ({ ...reference })),
+    coverMediaId:
+      finding.coverMediaId ?? finding.frozenPlan?.coverMediaId ?? null,
+    inspectionSource:
+      finding.inspectionSource ??
+      (finding.inspection === "NOT_INSPECTED" ? null : "INVENTORY"),
     lines,
     repairCompletionMode: finding.frozenPlan?.mode ?? null,
+    repairPriority: finding.frozenPlan?.priority ?? 3,
     movementRequired:
       finding.frozenPlan?.stages.some((stage) => stage.movementRequired) ??
       false,
@@ -218,6 +228,15 @@ export function toInventoryFindingView(
     publicationOperationKey: finding.publication?.id ?? null,
     publishedRepairTaskId: finding.publication?.maintenanceRepairId ?? null,
     publicationError: finding.publication?.failureCode ?? null,
+  }
+}
+
+function viewMembershipMovement(
+  movement: InventoryMembershipMovement
+): InventoryMembershipMovementDto {
+  return {
+    ...movement,
+    status: movement.status ? rentalItemStatus(movement.status) : null,
   }
 }
 
@@ -253,7 +272,7 @@ export function toInventoryStatisticsView(
 }
 
 export function toInventorySessionView(input: {
-  session: InventorySessionSummary
+  session: InventorySessionDetail
   warehouse?: InventoryWarehouseSnapshot | null
   findings?: InventoryFinding[]
   statistics?: InventoryFrozenStatistics | null
@@ -266,7 +285,6 @@ export function toInventorySessionView(input: {
       ? input.warehouse
       : {
           id: input.session.warehouseId,
-          code: "—",
           name: "Склад",
           timeZone: input.session.warehouseTimeZone,
         }
@@ -288,6 +306,9 @@ export function toInventorySessionView(input: {
     findingCount: input.session.findingCount,
     inspectedCount: input.session.inspectedCount,
     findings,
+    membershipMovements: input.session.membershipMovements.map(
+      viewMembershipMovement
+    ),
     statistics: input.statistics
       ? toInventoryStatisticsView(input.statistics)
       : null,
@@ -300,7 +321,7 @@ export function toInventorySessionView(input: {
 function riskConflict(
   risk: InventoryCompletionPreview["risks"][number]
 ): InventoryConflictDto | null {
-  if (risk.code === "MISSING") return null
+  if (risk.code === "NOT_INSPECTED" || risk.code === "MISSING") return null
   const code: InventoryConflictCode =
     risk.code === "CONFLICT" ? "SERVER_CONFLICT" : risk.code
   return {
@@ -334,7 +355,10 @@ export function applyInventoryCompletionPreview(
       const currentSnapshot = validated
         ? viewSnapshot(validated.currentSnapshot)
         : finding.currentSnapshot
-      const registryConflicts = validated?.conflicts ?? finding.conflicts
+      const registryConflicts =
+        finding.inspectionStatus === "NOT_INSPECTED"
+          ? []
+          : (validated?.conflicts ?? finding.conflicts)
       const conflicts = [
         ...registryConflicts,
         ...(risks.get(finding.id) ?? []).filter(
@@ -352,12 +376,16 @@ export function applyInventoryCompletionPreview(
       return {
         ...finding,
         currentSnapshot,
-        reconciliationStatus: missing
-          ? ("MISSING" as const)
-          : conflicts.length > 0
-            ? ("CONFLICT" as const)
-            : finding.reconciliationStatus,
-        conflicts,
+        reconciliationStatus:
+          finding.inspectionStatus === "NOT_INSPECTED"
+            ? finding.reconciliationStatus
+            : missing
+              ? ("MISSING" as const)
+              : conflicts.length > 0
+                ? ("CONFLICT" as const)
+                : finding.reconciliationStatus,
+        conflicts:
+          finding.inspectionStatus === "NOT_INSPECTED" ? [] : conflicts,
       }
     }),
     statistics: toInventoryStatisticsView(preview.statistics),

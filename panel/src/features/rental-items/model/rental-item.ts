@@ -1,5 +1,4 @@
 export type RentalItemStatus =
-  | "NEW"
   | "RENTED"
   | "BOOKED"
   | "REPAIR"
@@ -22,7 +21,6 @@ export type MoveRentalItemContentToStockPayload = {
 }
 
 export const RENTAL_ITEM_STATUS_LABEL: Record<RentalItemStatus, string> = {
-  NEW: "Новая",
   RENTED: "Аренда",
   BOOKED: "Бронь",
   REPAIR: "В ремонте",
@@ -45,23 +43,10 @@ export type RentalItemContentsItemDto = {
   quantity: number
   /** Canonical asset-service identity when the public cabin response provides it. */
   equipmentId?: string
-  /** The public cabin response exposes a code, not an equipment display name. */
-  equipmentCode?: string
   /** Human-readable equipment name from the asset catalog. */
   equipmentName?: string
   /** Asset-service ledger location kind for this cabin content row. */
   locationKind?: string
-}
-
-export type RentalItemPhotoDto = {
-  id: string
-  url: string
-  variants?: {
-    small?: { url: string }
-    largeWebp?: { url: string }
-  }
-  capturedAt?: string | null
-  capturedAtKnown?: boolean
 }
 
 export type RentalItemActiveOrderReservationDto = {
@@ -72,6 +57,12 @@ export type RentalItemActiveOrderReservationDto = {
   reservedAt: string
 }
 
+/** A public cabin-composition value. The UUID remains an internal command key. */
+export type RentalItemCharacteristicDto = {
+  id: string
+  name: string
+}
+
 type RentalItemCoreDto = {
   id: string
   /** Optimistic concurrency token for cabin-level commands. */
@@ -79,24 +70,25 @@ type RentalItemCoreDto = {
   warehouseId: string
 
   number: string
+  /**
+   * UUIDs are retained only for strict passport edits and never rendered as
+   * labels. An incomplete HTML import is represented by an empty value, which
+   * keeps the required composition form invalid until the user selects one.
+   */
+  rentalTypeId: string
+  dimensionId: string
+  finishingId: string
   type: string
   dimensions: string | null
   finishing: string | null
   category: string | null
-  characteristics: string | null
+  characteristics: RentalItemCharacteristicDto[]
   linoleum: boolean | null
 
   status: RentalItemStatus
   comment: string | null
 
-  hasPhotos: boolean
-  photoCount: number
-  mainPhotoUrl: string | null
-  previewPhotoUrls?: string[]
-  /** Legacy photo references imported into the asset passport from old-panel. */
-  legacyPhotos?: RentalItemPhotoDto[]
   mediaAvailability?: "AVAILABLE"
-  locationNodeId: string | null
   contents: string | null
   contentsItems: RentalItemContentsItemDto[]
 
@@ -104,6 +96,9 @@ type RentalItemCoreDto = {
   tenant: string | null
   price: number | null
   activeOrderReservation?: RentalItemActiveOrderReservationDto | null
+  /** Preserved only so a composition-only passport edit does not erase it. */
+  passport: Record<string, unknown>
+  tags: string[]
 }
 
 export type RentalItemDto = RentalItemCoreDto & Record<string, unknown>
@@ -208,14 +203,14 @@ const INTERNAL_RENTAL_ITEM_FIELD_IDS = new Set([
   "categoryId",
   "subcategoryId",
   "typeId",
+  "rentalTypeId",
+  "dimensionId",
+  "finishingId",
   "subcategory",
-  "locationNodeId",
-  "mainPhotoUrl",
-  "previewPhotoUrls",
-  "legacyPhotos",
   "mediaAvailability",
-  "photoCount",
   "contentsItems",
+  "passport",
+  "tags",
   "lastModifiedDate",
   "lastModifiedBy",
   "createdDate",
@@ -276,6 +271,10 @@ const RENTAL_ITEM_FIELD_DEFINITIONS: RentalItemFieldDefinition[] = [
     id: "characteristics",
     label: "Характеристики",
     dataType: "text",
+    // Characteristics are represented by an array of UUID/name values. They
+    // cannot be discovered by the scalar-field inference below, so the
+    // warehouse must always keep this default-visible column in its schema.
+    alwaysShow: true,
     searchable: true,
     size: 260,
     minSize: 160,
@@ -310,6 +309,8 @@ const RENTAL_ITEM_FIELD_DEFINITIONS: RentalItemFieldDefinition[] = [
     id: "hasPhotos",
     label: "Фото",
     dataType: "photos",
+    filterable: false,
+    alwaysShow: true,
     size: 110,
     minSize: 90,
     maxSize: 300,
@@ -347,32 +348,6 @@ const RENTAL_ITEM_FIELD_DEFINITIONS: RentalItemFieldDefinition[] = [
     size: 140,
     minSize: 100,
     maxSize: 400,
-  },
-  { id: "id", label: "ID", dataType: "text", column: false },
-  { id: "warehouseId", label: "Склад ID", dataType: "text", column: false },
-  {
-    id: "locationNodeId",
-    label: "Место хранения ID",
-    dataType: "text",
-    column: false,
-  },
-  {
-    id: "mainPhotoUrl",
-    label: "Главное фото",
-    dataType: "text",
-    column: false,
-  },
-  {
-    id: "previewPhotoUrls",
-    label: "Превью фото",
-    dataType: "text",
-    column: false,
-  },
-  {
-    id: "photoCount",
-    label: "Количество фото",
-    dataType: "number",
-    column: false,
   },
   {
     id: "contentsItems",
@@ -462,7 +437,9 @@ function createInferredDefinition(
 }
 
 function canInferRentalItemColumn(fieldId: string) {
-  return !INTERNAL_RENTAL_ITEM_FIELD_IDS.has(fieldId)
+  return (
+    !INTERNAL_RENTAL_ITEM_FIELD_IDS.has(fieldId) && !/^legacy/i.test(fieldId)
+  )
 }
 
 function getObservedFieldValues(items: RentalItemDto[]) {
@@ -650,16 +627,16 @@ export function formatRentalItemFieldValue(
     return value ? "Да" : "Нет"
   }
 
-  if (dataType === "photos") {
-    return item.hasPhotos ? "Да" : "Нет"
-  }
-
   if (dataType === "contents") {
     return formatRentalItemContents(item.contentsItems, item.contents)
   }
 
   if (dataType === "currency" && typeof value === "number") {
     return new Intl.NumberFormat("ru-RU").format(value)
+  }
+
+  if (key === "characteristics" && Array.isArray(value)) {
+    return value[0]?.name ?? EMPTY_VALUE
   }
 
   if (Array.isArray(value) || isRecord(value)) {
@@ -674,6 +651,17 @@ export function getRentalItemFieldLabel(
   key: RentalItemsFilterKey
 ): string {
   return formatRentalItemFieldValue(item, key)
+}
+
+export function getRentalItemFieldLabels(
+  item: RentalItemDto,
+  key: RentalItemsFilterKey
+): string[] {
+  if (key === "characteristics") {
+    return item.characteristics.map((characteristic) => characteristic.name)
+  }
+
+  return [getRentalItemFieldLabel(item, key)]
 }
 
 export function getRentalItemSortValue(
@@ -694,7 +682,13 @@ export function getRentalItemSearchText(
   searchableFieldIds: RentalItemsColumnKey[]
 ) {
   return searchableFieldIds
-    .map((fieldId) => formatRentalItemFieldValue(item, fieldId))
+    .flatMap((fieldId) => {
+      if (fieldId === "characteristics") {
+        return item.characteristics.map((characteristic) => characteristic.name)
+      }
+
+      return [formatRentalItemFieldValue(item, fieldId)]
+    })
     .join(" ")
     .toLowerCase()
 }

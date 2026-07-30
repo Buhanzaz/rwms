@@ -21,8 +21,11 @@ import type { InventorySessionView } from "@/features/inventory/model/inventory-
 import type {
   RepairEstimateCompletionMode,
   RepairEstimateLineDto,
+  RepairPriority,
   RepairEstimateTaskPlanDto,
 } from "@/features/repair-estimates/model/repair-estimate"
+import { getOperationalRepairEstimateCatalog } from "@/features/repair-estimate-catalog/api/repair-estimate-catalog-api"
+import { getWarehouseQueueCapabilities } from "@/features/repair-estimates/api/warehouse-queue-capabilities"
 
 export const INVENTORY_QUERY_KEY = ["inventory-service"] as const
 
@@ -65,7 +68,6 @@ function commandKey() {
 function fallbackWarehouse(session: InventorySessionView) {
   return {
     id: session.warehouseId,
-    code: "—",
     name: "Склад",
     timeZone: session.warehouseTimeZone,
   } satisfies InventoryWarehouseSnapshot
@@ -167,6 +169,7 @@ export type InventoryNumberResolution =
       kind: "NOT_FOUND"
       canonicalNumber: string
       lookup: { kind: "NOT_FOUND" }
+      session: InventorySessionDto
     }
   | {
       kind: "CONFLICT"
@@ -195,10 +198,14 @@ export async function resolveInventoryNumber(input: {
     idempotencyKey: commandKey(),
   })
   if (resolution.outcome === "NOT_FOUND") {
+    const session = sessionView(
+      await inventoryHttp.getInventorySession(token, input.inventoryId)
+    )
     return {
       kind: "NOT_FOUND" as const,
       canonicalNumber: resolution.displayCanonicalNumber,
       lookup: { kind: "NOT_FOUND" as const },
+      session,
     }
   }
   if (!resolution.finding) {
@@ -260,11 +267,11 @@ export async function addInventoryRentalItem(input: {
     origin: input.condition === "NEW" ? "ADDED_NEW" : "ADDED_USED",
     displayCanonicalNumber: input.rentalItem.number,
     safePassport: {
-      rentalType: input.rentalItem.type,
-      dimensions: input.rentalItem.dimensions,
-      finishing: input.rentalItem.finishing,
+      rentalTypeId: input.rentalItem.rentalTypeId,
+      dimensionId: input.rentalItem.dimensionId,
+      finishingId: input.rentalItem.finishingId,
       category: input.rentalItem.category,
-      characteristics: input.rentalItem.characteristics.join(", "),
+      characteristicIds: input.rentalItem.characteristicIds,
       linoleum: input.rentalItem.linoleum,
       passport: {},
       tags: [],
@@ -289,10 +296,12 @@ export async function saveInventoryFinding(input: {
   findingId: string
   comment: string
   media: Array<{ mediaId: string; generation: number }>
+  coverMediaId: string | null
   lines: RepairEstimateLineDto[]
   repairPlans: ReturnType<typeof toInventoryRepairPlanSnapshot>[]
   repairCompletionMode?: RepairEstimateCompletionMode | null
   movementRequired?: boolean
+  priority?: RepairPriority
 }) {
   const token = await accessToken()
   const rawSession = await inventoryHttp.getInventorySession(
@@ -306,6 +315,41 @@ export async function saveInventoryFinding(input: {
   const inspection = input.lines.length > 0 ? "WORK_STAGED" : "READY"
   let planSelection = null
   if (inspection === "WORK_STAGED") {
+    const movementRequired = input.movementRequired === true
+    let movementCatalogNodeId: string | null = null
+    if (movementRequired) {
+      const capabilities = await getWarehouseQueueCapabilities(
+        token,
+        rawSession.warehouseId
+      )
+      if (!capabilities.movementToShipmentAvailable) {
+        throw new Error(
+          "На складе не подключена очередь для перемещения на отгрузку."
+        )
+      }
+      const connectedMovementDefinitions = new Set(
+        capabilities.movementQueueDefinitions.map(
+          (binding) => binding.queueDefinitionId
+        )
+      )
+      const catalog = await getOperationalRepairEstimateCatalog()
+      const movementNodes = catalog.nodes.filter(
+        (node) =>
+          node.active &&
+          node.nodeType === "LOCATION" &&
+          node.routeQueueKind === "MOVEMENT" &&
+          node.queueDefinitionId !== null &&
+          connectedMovementDefinitions.has(node.queueDefinitionId)
+      )
+      if (movementNodes.length !== 1) {
+        throw new Error(
+          movementNodes.length === 0
+            ? "В каталоге нет расположения для подключённой очереди перемещения этого склада."
+            : "Для подключённой очереди перемещения должно быть настроено одно активное расположение."
+        )
+      }
+      movementCatalogNodeId = movementNodes[0].id
+    }
     const taskPlans: RepairEstimateTaskPlanDto[] = input.repairPlans.map(
       (plan) => ({
         ...plan,
@@ -315,7 +359,10 @@ export async function saveInventoryFinding(input: {
     )
     planSelection = buildInventoryPlanSelection({
       completionMode: input.repairCompletionMode ?? "MANUAL",
-      movementRequired: input.movementRequired === true,
+      movementRequired,
+      movementCatalogNodeId,
+      priority: input.priority ?? 3,
+      coverMediaId: input.coverMediaId,
       taskPlans,
       lines: input.lines,
       media: input.media,
@@ -330,9 +377,34 @@ export async function saveInventoryFinding(input: {
     inspection,
     comment: input.comment,
     media: input.media,
+    coverMediaId: input.coverMediaId,
     planSelection,
   })
   return toInventoryFindingView(saved)
+}
+
+export async function resolveInventoryFindingConflict(input: {
+  inventoryId: string
+  expectedVersion: number
+  expectedFindingVersion: number
+  actor: InventoryActorSnapshot
+  findingId: string
+  strategy: "ACCEPT_REGISTRY" | "KEEP_INSPECTION"
+  reason: string | null
+}) {
+  const token = await accessToken()
+  await inventoryHttp.resolveInventoryFindingConflict({
+    accessToken: token,
+    inventoryId: input.inventoryId,
+    findingId: input.findingId,
+    expectedSessionRevision: input.expectedVersion,
+    expectedFindingRevision: input.expectedFindingVersion,
+    strategy: input.strategy,
+    reason: input.reason,
+  })
+  return sessionView(
+    await inventoryHttp.getInventorySession(token, input.inventoryId)
+  )
 }
 
 async function previewWithSession(inventoryId: string) {
@@ -373,6 +445,13 @@ export async function completeInventory(input: {
   if (result.rawSession.sessionRevision !== input.expectedVersion) {
     throw new Error("Инвентаризация была изменена. Обновите данные")
   }
+  if (
+    result.reviewed.findings.some((finding) => finding.conflicts.length > 0)
+  ) {
+    throw new Error(
+      "Урегулируйте все конфликты реестра перед завершением инвентаризации"
+    )
+  }
   const currentRiskSignature = inventoryCompletionRiskSignature(
     result.reviewed.findings
   )
@@ -381,7 +460,7 @@ export async function completeInventory(input: {
     currentRiskSignature !== input.acknowledgedRiskSignature
   ) {
     throw new Error(
-      "Сверка изменилась. Проверьте ненайденные бытовки и конфликты повторно"
+      "Сверка изменилась. Проверьте непроверенные и ненайденные бытовки повторно"
     )
   }
   await inventoryHttp.completeInventorySession({

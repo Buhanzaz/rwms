@@ -50,16 +50,6 @@ public class TransferProcessor {
                     work.expectedAssetVersion(),
                     work.documentId(),
                     work.lineId()));
-        case TASK_REGISTER ->
-            store.confirmTaskRegistration(
-                work.operationId(),
-                dependencies.registerPreparationTask(
-                    work.warehouseId(), work.externalTaskId(), 0, work.deadlineAt()));
-        case TASK_CANCEL ->
-            store.confirmTaskCancellation(
-                work.operationId(),
-                dependencies.cancelPreparationTask(
-                    work.externalTaskId(), work.expectedLeaseVersion()));
         case MEDIA ->
             store.confirmMedia(
                 work.operationId(),
@@ -82,7 +72,8 @@ public class TransferProcessor {
                     LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_TRANSFER,
                     work.documentId(),
                     work.lineId(),
-                    work.warehouseId()));
+                    work.warehouseId(),
+                    work.transferAssetStatus()));
         case LEASE_RELEASE ->
             store.confirmLeaseRelease(
                 work.operationId(),
@@ -94,6 +85,28 @@ public class TransferProcessor {
                     LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_TRANSFER,
                     work.documentId(),
                     work.lineId()));
+        case MAINTENANCE_PREPARE ->
+            store.confirmMaintenanceDeparture(
+                work.operationId(),
+                dependencies.prepareTransferDeparture(
+                    work.operationId(),
+                    work.documentId(),
+                    work.lineId(),
+                    work.assetId(),
+                    work.sourceWarehouseId(),
+                    work.warehouseId()));
+        case MAINTENANCE_COMPLETE ->
+            store.confirmMaintenanceArrival(
+                work.operationId(),
+                dependencies.completeTransferArrival(
+                    work.operationId(),
+                    work.documentId(),
+                    work.lineId(),
+                    work.assetId(),
+                    work.sourceWarehouseId(),
+                    work.warehouseId(),
+                    work.priority(),
+                    work.movementToShipment()));
       }
     } catch (LogisticsDependencyException exception) {
       store.recordFailure(work.operationId(), exception);

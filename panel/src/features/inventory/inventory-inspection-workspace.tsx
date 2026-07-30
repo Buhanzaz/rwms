@@ -1,16 +1,23 @@
-import { useState } from "react"
+import { useCallback, useState } from "react"
+import { ArrowLeft01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons"
+import { HugeiconsIcon } from "@hugeicons/react"
 
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import {
   inventoryFindingMediaOwner,
   type ReadyMediaReference,
 } from "@/features/media/media-service"
 import { ServiceOwnerPhotos } from "@/features/media/service-owner-photos"
-import { RepairEstimateCatalogPicker } from "@/features/repair-estimates/repair-estimate-catalog-picker"
+import {
+  RepairEstimateCatalogPicker,
+  type RepairEstimateCatalogPager,
+} from "@/features/repair-estimates/repair-estimate-catalog-picker"
 import { RepairEstimateLinesEditor } from "@/features/repair-estimates/repair-estimate-lines-editor"
 import { RepairEstimateLinesSnapshot } from "@/features/repair-estimates/repair-estimate-lines-snapshot"
 import { RepairEstimateWorkspaceLayout } from "@/features/repair-estimates/repair-estimate-workspace-layout"
@@ -27,7 +34,7 @@ function repairPlanKindLabel(plan: InventoryRepairPlanSnapshotDto) {
 }
 
 function repairPlanRouteLabel(plan: InventoryRepairPlanSnapshotDto) {
-  if (plan.queueCode) return `Очередь ${plan.queueCode}`
+  if (plan.queueName) return plan.queueName
   if (plan.routeQueueKind === "REPAIR") return "Ремонт"
   if (plan.routeQueueKind === "MOVEMENT") return "Перемещение"
   if (plan.routeQueueKind === "HOLDING") return "Удержание"
@@ -116,11 +123,13 @@ type InventoryInspectionWorkspaceProps = {
   movementRequired: boolean
   repairPlans: InventoryRepairPlanSnapshotDto[]
   readOnly: boolean
+  coverMediaId: string | null
   message?: string | null
   onCommentChange: (value: string) => void
   onLinesChange: (lines: RepairEstimateLineDto[]) => void
   onMediaChange: (media: ReadyMediaReference[]) => void
   onMediaReadyChange: (ready: boolean) => void
+  onCoverMediaIdChange: (mediaId: string | null) => void
 }
 
 export function InventoryInspectionWorkspace({
@@ -137,13 +146,23 @@ export function InventoryInspectionWorkspace({
   movementRequired,
   repairPlans,
   readOnly,
+  coverMediaId,
   message,
   onCommentChange,
   onLinesChange,
   onMediaChange,
   onMediaReadyChange,
+  onCoverMediaIdChange,
 }: InventoryInspectionWorkspaceProps) {
   const [catalogMessage, setCatalogMessage] = useState<string | null>(null)
+  const [catalogPager, setCatalogPager] =
+    useState<RepairEstimateCatalogPager | null>(null)
+  const handleCatalogPagerChange = useCallback(
+    (nextPager: RepairEstimateCatalogPager | null) => {
+      setCatalogPager(nextPager)
+    },
+    []
+  )
 
   return (
     <RepairEstimateWorkspaceLayout
@@ -163,8 +182,11 @@ export function InventoryInspectionWorkspace({
           owner={inventoryFindingMediaOwner(findingId, warehouseId)}
           readOnly={readOnly}
           maxItems={20}
+          coverMediaId={coverMediaId}
+          requireCover
           onReadyReferencesChange={onMediaChange}
           onReadyStateChange={onMediaReadyChange}
+          onCoverMediaIdChange={onCoverMediaIdChange}
         />
       }
       information={
@@ -254,14 +276,53 @@ export function InventoryInspectionWorkspace({
         )
       }
       controls={
-        <RepairEstimateCatalogPicker
-          lines={lines}
-          readOnly={readOnly}
-          onChange={(nextLines) => {
-            onLinesChange(nextLines)
-            setCatalogMessage("Позиция добавлена в результат осмотра.")
-          }}
-        />
+        <div className="flex h-full min-h-0 flex-col gap-3">
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            <RepairEstimateCatalogPicker
+              lines={lines}
+              readOnly={readOnly}
+              onPagerChange={handleCatalogPagerChange}
+              onChange={(nextLines) => {
+                onLinesChange(nextLines)
+                setCatalogMessage("Позиция добавлена в результат осмотра.")
+              }}
+            />
+          </div>
+
+          {!readOnly ? (
+            <>
+              <Separator />
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant={catalogPager?.canGoBack ? "default" : "outline"}
+                  size="icon-sm"
+                  aria-label="Предыдущая страница каталога"
+                  disabled={!catalogPager?.canGoBack}
+                  onClick={() => catalogPager?.goBack()}
+                >
+                  <HugeiconsIcon
+                    icon={ArrowLeft01Icon}
+                    data-icon="inline-start"
+                  />
+                </Button>
+                <Button
+                  type="button"
+                  variant={catalogPager?.canGoForward ? "default" : "outline"}
+                  size="icon-sm"
+                  aria-label="Следующая страница каталога"
+                  disabled={!catalogPager?.canGoForward}
+                  onClick={() => catalogPager?.goForward()}
+                >
+                  <HugeiconsIcon
+                    icon={ArrowRight01Icon}
+                    data-icon="inline-start"
+                  />
+                </Button>
+              </div>
+            </>
+          ) : null}
+        </div>
       }
     />
   )

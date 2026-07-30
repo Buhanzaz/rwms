@@ -10,7 +10,6 @@ type RentalItemStatusBadgeProps = {
 }
 
 const statusClassName: Record<RentalItemStatus, string> = {
-  NEW: "bg-[var(--status-new-bg)] text-[var(--status-new-fg)]",
   RENTED: "bg-[var(--status-rented-bg)] text-[var(--status-rented-fg)]",
   AFTER_RENT:
     "bg-[var(--status-after-rent-bg)] text-[var(--status-after-rent-fg)]",

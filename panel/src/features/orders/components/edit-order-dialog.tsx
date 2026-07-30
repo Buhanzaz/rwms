@@ -81,7 +81,7 @@ export function EditOrderDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent ref={contentRef} className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Редактировать заказ</DialogTitle>
+          <DialogTitle>Редактировать бронирование</DialogTitle>
           <DialogDescription>
             Для черновика можно изменить клиента, выбрав уже существующую
             карточку.
@@ -182,20 +182,22 @@ function EditOrderDialogContent({
     onSuccess: (projection, { fingerprint }) => {
       commandIdentity.current.confirm(fingerprint)
       onUpdated(projection)
-      toast.success("Клиент заказа изменён.")
+      toast.success("Клиент бронирования изменён.")
       onClose()
     },
     onError: (error) => {
       if (error instanceof ApiError && error.status === 409) {
         onConflict()
         setErrorText(
-          "Данные заказа изменились. Актуальные значения загружены с сервера."
+          "Данные бронирования изменились. Актуальные значения загружены с сервера."
         )
         return
       }
 
       setErrorText(
-        error instanceof Error ? error.message : "Не удалось изменить заказ."
+        error instanceof Error
+          ? error.message
+          : "Не удалось изменить бронирование."
       )
     },
   })
@@ -326,9 +328,9 @@ function EditOrderDialogContent({
           ) : null}
           <FieldDescription>
             {selectedClientUnchanged
-              ? "Выберите другого существующего клиента для изменения заказа."
+              ? "Выберите другого существующего клиента для изменения бронирования."
               : selection
-                ? `В заказе будет указан клиент «${selection.client.displayName}».`
+                ? `В бронировании будет указан клиент «${selection.client.displayName}».`
                 : "Введите минимум два символа и выберите клиента из выдачи."}
           </FieldDescription>
         </Field>

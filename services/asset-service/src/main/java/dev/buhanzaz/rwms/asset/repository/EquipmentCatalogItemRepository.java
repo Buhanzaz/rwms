@@ -6,7 +6,5 @@ import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface EquipmentCatalogItemRepository extends JpaRepository<EquipmentCatalogItem, UUID> {
-  boolean existsByCode(String code);
-  boolean existsByCodeAndIdNot(String code, UUID id);
-  List<EquipmentCatalogItem> findAllByOrderByCode();
+  List<EquipmentCatalogItem> findAllByOrderByNameAscIdAsc();
 }

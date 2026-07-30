@@ -2,16 +2,11 @@ package dev.buhanzaz.rwms.asset;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import dev.buhanzaz.rwms.asset.api.AssetApiModels.CreateEquipmentRequest;
-import dev.buhanzaz.rwms.asset.api.AssetApiModels.EquipmentResponse;
-import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateEquipmentRequest;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
-import dev.buhanzaz.rwms.asset.domain.EquipmentCategory;
-import dev.buhanzaz.rwms.asset.service.AssetService;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -50,7 +45,6 @@ class MaintenanceFurnitureCatalogIntegrationTest {
     POSTGRES.start();
   }
 
-  @Autowired AssetService service;
   @Autowired JdbcTemplate jdbc;
   @Autowired MockMvc mvc;
   @Autowired ObjectMapper objectMapper;
@@ -73,95 +67,71 @@ class MaintenanceFurnitureCatalogIntegrationTest {
   }
 
   @Test
-  void createsFurnitureOnceAndReturnsTheSameSanitizedIdentityOnRepeat() throws Exception {
-    String code = code("ESTIMATE-TABLE");
-
-    JsonNode created = ensure(code.toLowerCase(), "  Стол  ", status().isOk());
+  void createsFurnitureOnceAndReplaysTheSameUuidIdentity() throws Exception {
+    UUID idempotencyKey = UUID.randomUUID();
+    JsonNode created = create(idempotencyKey, "Стол", status().isCreated());
     UUID equipmentId = UUID.fromString(created.get("equipmentId").asText());
-    JsonNode repeated = ensure(code, "Стол", status().isOk());
+    JsonNode repeated = create(idempotencyKey, "Стол", status().isCreated());
 
     assertThat(Set.copyOf(created.propertyNames()))
-        .containsExactlyInAnyOrder("equipmentId", "equipmentCode", "equipmentName");
-    assertThat(created.get("equipmentCode").asText()).isEqualTo(code);
+        .containsExactlyInAnyOrder("equipmentId", "equipmentName");
     assertThat(created.get("equipmentName").asText()).isEqualTo("Стол");
     assertThat(repeated).isEqualTo(created);
-    assertThat(catalogCount(code)).isOne();
+    assertThat(catalogCount(equipmentId)).isOne();
     assertThat(eventCount(equipmentId)).isOne();
     assertThat(eventCount(equipmentId, AssetEventType.EQUIPMENT_CATALOG_CREATED)).isOne();
     assertThat(outboxCount(equipmentId)).isOne();
   }
 
   @Test
-  void rejectsNameOrCategoryReuseWithoutMutation() throws Exception {
-    EquipmentResponse furniture = createEquipment(code("ESTIMATE-CHAIR"), "Стул", EquipmentCategory.FURNITURE);
-    EquipmentResponse electrical =
-        createEquipment(code("ESTIMATE-LAMP"), "Лампа", EquipmentCategory.ELECTRICAL);
-    int furnitureEvents = eventCount(furniture.id());
-    int furnitureOutbox = outboxCount(furniture.id());
-    int electricalEvents = eventCount(electrical.id());
-    int electricalOutbox = outboxCount(electrical.id());
+  void rejectsADifferentNameForTheSameIdempotencyKeyWithoutMutation() throws Exception {
+    UUID idempotencyKey = UUID.randomUUID();
+    JsonNode created = create(idempotencyKey, "Стул", status().isCreated());
+    UUID equipmentId = UUID.fromString(created.get("equipmentId").asText());
 
-    ensure(furniture.code(), "Другой стул", status().isConflict());
-    ensure(electrical.code(), electrical.name(), status().isConflict());
+    create(idempotencyKey, "Другой стул", status().isConflict());
 
-    assertEquipmentUnchanged(furniture);
-    assertEquipmentUnchanged(electrical);
-    assertThat(eventCount(furniture.id())).isEqualTo(furnitureEvents);
-    assertThat(outboxCount(furniture.id())).isEqualTo(furnitureOutbox);
-    assertThat(eventCount(electrical.id())).isEqualTo(electricalEvents);
-    assertThat(outboxCount(electrical.id())).isEqualTo(electricalOutbox);
+    assertThat(catalogCount(equipmentId)).isOne();
+    assertThat(eventCount(equipmentId)).isOne();
+    assertThat(outboxCount(equipmentId)).isOne();
   }
 
   @Test
-  void reactivatesExactInactiveFurnitureOnceAndWritesChangedEventAndOutbox() throws Exception {
-    EquipmentResponse created =
-        createEquipment(code("ESTIMATE-DESK"), "Письменный стол", EquipmentCategory.FURNITURE);
-    EquipmentResponse inactive = service.updateEquipment(
-        created.id(),
-        new UpdateEquipmentRequest(
-            created.version(),
-            created.code(),
-            created.name(),
-            created.category(),
-            false,
-            created.comment()));
-    int eventsBeforeEnsure = eventCount(created.id());
-    int outboxBeforeEnsure = outboxCount(created.id());
+  void replayKeepsCreatedStatusAndMarksTheResponseHeader() throws Exception {
+    UUID idempotencyKey = UUID.randomUUID();
+    create(idempotencyKey, "Стол с заголовком", status().isCreated());
 
-    JsonNode reactivated = ensure(inactive.code(), inactive.name(), status().isOk());
-    EquipmentResponse active = service.equipment(created.id());
+    MvcResult replay =
+        mvc.perform(
+                post("/api/internal/asset/v1/maintenance/equipment-catalog")
+                    .header("Idempotency-Key", idempotencyKey)
+                    .with(serviceJwt(
+                        "maintenance-service", "maintenance-service", "asset.maintenance"))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(requestBody("Стол с заголовком")))
+            .andExpect(status().isCreated())
+            .andReturn();
 
-    assertThat(reactivated.get("equipmentId").asText()).isEqualTo(created.id().toString());
-    assertThat(active.active()).isTrue();
-    assertThat(active.version()).isEqualTo(inactive.version() + 1);
-    assertThat(eventCount(created.id())).isEqualTo(eventsBeforeEnsure + 1);
-    assertThat(eventCount(created.id(), AssetEventType.EQUIPMENT_CATALOG_CHANGED)).isEqualTo(2);
-    assertThat(outboxCount(created.id())).isEqualTo(outboxBeforeEnsure + 1);
-
-    ensure(inactive.code(), inactive.name(), status().isOk());
-
-    assertThat(service.equipment(created.id()).version()).isEqualTo(active.version());
-    assertThat(eventCount(created.id())).isEqualTo(eventsBeforeEnsure + 1);
-    assertThat(outboxCount(created.id())).isEqualTo(outboxBeforeEnsure + 1);
+    assertThat(replay.getResponse().getHeader("Idempotency-Replayed")).isEqualTo("true");
   }
 
   @Test
   void requiresExactlyTheMaintenanceServiceCredentialAndScope() throws Exception {
-    String path = "/api/internal/asset/v1/maintenance/equipment-catalog/{equipmentCode}";
+    String path = "/api/internal/asset/v1/maintenance/equipment-catalog";
     String request = requestBody("Автосвязь");
 
-    mvc.perform(put(path, code("USER")).with(userJwt("asset.maintenance"))
+    mvc.perform(post(path).header("Idempotency-Key", UUID.randomUUID()).with(userJwt("asset.maintenance"))
             .contentType(MediaType.APPLICATION_JSON).content(request))
         .andExpect(status().isForbidden());
-    mvc.perform(put(path, code("WRONG-CLIENT"))
+    mvc.perform(post(path).header("Idempotency-Key", UUID.randomUUID())
             .with(serviceJwt("inventory-service", "inventory-service", "asset.maintenance"))
             .contentType(MediaType.APPLICATION_JSON).content(request))
         .andExpect(status().isForbidden());
-    mvc.perform(put(path, code("WRONG-SUBJECT"))
+    mvc.perform(post(path).header("Idempotency-Key", UUID.randomUUID())
             .with(serviceJwt("inventory-service", "maintenance-service", "asset.maintenance"))
             .contentType(MediaType.APPLICATION_JSON).content(request))
         .andExpect(status().isForbidden());
-    mvc.perform(put(path, code("EXTRA-SCOPE"))
+    mvc.perform(post(path).header("Idempotency-Key", UUID.randomUUID())
             .with(serviceJwt(
                 "maintenance-service",
                 "maintenance-service",
@@ -169,25 +139,24 @@ class MaintenanceFurnitureCatalogIntegrationTest {
             .contentType(MediaType.APPLICATION_JSON).content(request))
         .andExpect(status().isForbidden());
 
-    String acceptedCode = code("EXACT-SCOPE");
-    mvc.perform(put(path, acceptedCode)
+    mvc.perform(post(path).header("Idempotency-Key", UUID.randomUUID())
             .with(serviceJwt("maintenance-service", "maintenance-service", "asset.maintenance"))
             .contentType(MediaType.APPLICATION_JSON).content(request))
-        .andExpect(status().isOk())
-        .andExpect(jsonPath("$.equipmentCode").value(acceptedCode));
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.equipmentName").value("Автосвязь"));
 
-    assertThat(catalogCount(acceptedCode)).isOne();
+    assertThat(jdbc.queryForObject(
+        "select count(*) from equipment_catalog_item where name='Автосвязь'", Integer.class)).isOne();
   }
 
-  private JsonNode ensure(
-      String equipmentCode,
+  private JsonNode create(
+      UUID idempotencyKey,
       String equipmentName,
       org.springframework.test.web.servlet.ResultMatcher expectedStatus)
       throws Exception {
     MvcResult result = mvc.perform(
-            put(
-                    "/api/internal/asset/v1/maintenance/equipment-catalog/{equipmentCode}",
-                    equipmentCode)
+            post("/api/internal/asset/v1/maintenance/equipment-catalog")
+                .header("Idempotency-Key", idempotencyKey)
                 .with(serviceJwt(
                     "maintenance-service", "maintenance-service", "asset.maintenance"))
                 .contentType(MediaType.APPLICATION_JSON)
@@ -201,30 +170,9 @@ class MaintenanceFurnitureCatalogIntegrationTest {
     return objectMapper.writeValueAsString(Map.of("equipmentName", equipmentName));
   }
 
-  private EquipmentResponse createEquipment(
-      String code, String name, EquipmentCategory category) {
-    return service.createEquipment(
-        UUID.randomUUID(),
-        UUID.randomUUID(),
-        new CreateEquipmentRequest(code, name, category, null))
-        .response();
-  }
-
-  private void assertEquipmentUnchanged(EquipmentResponse before) {
-    EquipmentResponse after = service.equipment(before.id());
-    assertThat(after.id()).isEqualTo(before.id());
-    assertThat(after.version()).isEqualTo(before.version());
-    assertThat(after.code()).isEqualTo(before.code());
-    assertThat(after.name()).isEqualTo(before.name());
-    assertThat(after.category()).isEqualTo(before.category());
-    assertThat(after.active()).isEqualTo(before.active());
-    assertThat(after.comment()).isEqualTo(before.comment());
-    assertThat(catalogCount(before.code())).isOne();
-  }
-
-  private int catalogCount(String code) {
+  private int catalogCount(UUID equipmentId) {
     return jdbc.queryForObject(
-        "select count(*) from equipment_catalog_item where code=?", Integer.class, code);
+        "select count(*) from equipment_catalog_item where id=?", Integer.class, equipmentId);
   }
 
   private int eventCount(UUID equipmentId) {
@@ -250,10 +198,6 @@ class MaintenanceFurnitureCatalogIntegrationTest {
         "select count(*) from outbox_event where aggregate_type='EQUIPMENT_CATALOG' and aggregate_id=?",
         Integer.class,
         equipmentId.toString());
-  }
-
-  private static String code(String prefix) {
-    return prefix + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
   }
 
   private static JwtRequestPostProcessor serviceJwt(

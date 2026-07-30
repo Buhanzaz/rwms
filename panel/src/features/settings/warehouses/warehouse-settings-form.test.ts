@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest"
 import { parseWarehouseForm } from "@/features/settings/warehouses/warehouse-settings-form"
 
 const validValues = {
-  code: " wh_north ",
   name: "Северный склад",
   city: "Санкт-Петербург",
   address: "",
@@ -16,7 +15,6 @@ describe("warehouse settings form", () => {
   it("normalizes a valid create/edit payload to the OpenAPI shape", () => {
     expect(parseWarehouseForm(validValues)).toEqual({
       input: {
-        code: "WH_NORTH",
         name: "Северный склад",
         city: "Санкт-Петербург",
         address: null,
@@ -29,7 +27,6 @@ describe("warehouse settings form", () => {
   })
 
   it.each([
-    [{ ...validValues, code: "склад" }],
     [{ ...validValues, timeZone: "Mars/Olympus" }],
     [{ ...validValues, sortOrder: "1.5" }],
   ])("rejects an invalid warehouse form", (values) => {

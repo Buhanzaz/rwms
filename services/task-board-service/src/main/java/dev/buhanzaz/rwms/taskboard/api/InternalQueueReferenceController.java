@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.validation.annotation.Validated;
 
 @RestController
-@RequestMapping("/api/internal/work-queues")
+@RequestMapping("/api/internal/queue-definitions")
 @Validated
 public class InternalQueueReferenceController {
   private final RegistryService registry;
@@ -35,13 +35,13 @@ public class InternalQueueReferenceController {
     this.access = access;
   }
 
-  @PostMapping("/{queueId}/references")
+  @PostMapping("/{queueDefinitionId}/references")
   public QueueReferenceDto register(
       @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID queueId,
+      @PathVariable UUID queueDefinitionId,
       @Valid @RequestBody QueueReferenceRequest request) {
     access.requireAccess(jwt);
-    return registry.registerReference(queueId, request);
+    return registry.registerReference(queueDefinitionId, request);
   }
 
   @DeleteMapping("/references/{type}/{externalReferenceId}")

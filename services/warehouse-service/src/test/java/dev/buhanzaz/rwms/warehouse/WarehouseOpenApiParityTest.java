@@ -55,7 +55,7 @@ class WarehouseOpenApiParityTest {
     Map<String, Object> schemas = child(child(document, "components"), "schemas");
     assertThat(list(child(schemas, "Warehouse").get("required")))
         .containsExactlyInAnyOrder(
-            "id", "version", "code", "name", "city", "address", "timeZone", "active", "sortOrder");
+            "id", "version", "name", "city", "address", "timeZone", "active", "sortOrder");
     assertThat(list(child(schemas, "InternalWarehouseExistence").get("required")))
         .containsExactlyInAnyOrder("id", "version", "active");
     assertThat(child(schemas, "InternalWarehouseExistence").get("additionalProperties"))
@@ -69,11 +69,12 @@ class WarehouseOpenApiParityTest {
                 .get("const"))
         .isEqualTo(true);
     assertThat(list(child(schemas, "LogisticsWarehouseIdentity").get("required")))
-        .containsExactlyInAnyOrder("id", "version", "active", "timeZone");
+        .containsExactlyInAnyOrder(
+            "id", "version", "active", "name", "city", "timeZone");
     assertThat(child(schemas, "LogisticsWarehouseIdentity").get("additionalProperties"))
         .isEqualTo(false);
     assertThat(child(child(schemas, "LogisticsWarehouseIdentity"), "properties"))
-        .containsKeys("id", "version", "active", "timeZone");
+        .containsKeys("id", "version", "active", "name", "city", "timeZone");
     assertAllLocalReferencesResolve(document, document);
   }
 

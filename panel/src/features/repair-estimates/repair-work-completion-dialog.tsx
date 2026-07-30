@@ -1,14 +1,6 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { HugeiconsIcon } from "@hugeicons/react"
-import {
-  ArrowDown01Icon,
-  ArrowUp01Icon,
-  Copy01Icon,
-  Delete02Icon,
-} from "@hugeicons/core-free-icons"
 
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -21,15 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { Textarea } from "@/components/ui/textarea"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   createRepairEstimateCatalogIndex,
   getOperationalRepairEstimateCatalog,
@@ -44,16 +28,24 @@ import type {
   RepairEstimateCompletionMode,
   RepairEstimateLineDto,
   RepairEstimateTaskPlanDto,
+  RepairPriority,
 } from "@/features/repair-estimates/model/repair-estimate"
+import {
+  getWarehouseQueueCapabilities,
+  warehouseQueueCapabilitiesQueryKey,
+} from "@/features/repair-estimates/api/warehouse-queue-capabilities"
 
 export type RepairWorkCompletionResult = {
   completionMode: RepairEstimateCompletionMode
   movementRequired: boolean
   taskPlans: RepairEstimateTaskPlanDto[]
+  priority: RepairPriority
 }
 
 type RepairWorkCompletionDialogProps = {
   open: boolean
+  accessToken: string | null
+  warehouseId: string
   lines: RepairEstimateLineDto[]
   pending: boolean
   error: string | null
@@ -68,9 +60,11 @@ type RepairWorkCompletionDialogProps = {
   emptyCompleteLabel?: string
   initialCompletionMode?: RepairEstimateCompletionMode
   initialMovementRequired?: boolean
-  movementAvailable?: boolean
+  initialPriority?: RepairPriority
+  movementRouteAvailable?: boolean
   routingSelectionAvailable?: boolean
   planStructureEditingAvailable?: boolean
+  selectPriority?: boolean
   reconcileInitialPlans?: (
     preparedPlans: RepairEstimateTaskPlanDto[]
   ) => RepairEstimateTaskPlanDto[]
@@ -78,32 +72,10 @@ type RepairWorkCompletionDialogProps = {
   onComplete: (result: RepairWorkCompletionResult) => void
 }
 
-function createPlanId() {
-  if (typeof crypto === "undefined" || !("randomUUID" in crypto)) {
-    throw new Error("Браузер не поддерживает безопасные UUID.")
-  }
-  return crypto.randomUUID()
-}
-
-function routeQueueKindLabel(
-  value: NonNullable<RepairEstimateTaskPlanDto["routeQueueKind"]>
-) {
-  if (value === "REPAIR") return "Ремонт"
-  if (value === "MOVEMENT") return "Перемещение"
-  return "Удержание"
-}
-
-function taskPlanTitle(
-  plan: RepairEstimateTaskPlanDto,
-  workTitle: string | undefined
-) {
-  if (plan.kind === "MOVE_TO_REPAIR") return "Перемещение на ремонт"
-  if (plan.kind === "MOVE_FROM_REPAIR") return "Перемещение с ремонта"
-  return workTitle || "Работы"
-}
-
 export function RepairWorkCompletionDialog({
   open,
+  accessToken,
+  warehouseId,
   lines,
   pending,
   error,
@@ -116,15 +88,21 @@ export function RepairWorkCompletionDialog({
   emptyTitle = "Бытовка готова",
   emptyDescription = "Пустая смета завершит осмотр, переведёт бытовку в статус «Свободная» и не создаст задание или перемещение.",
   emptyCompleteLabel = "Завершить и освободить",
-  initialCompletionMode,
   initialMovementRequired,
-  movementAvailable = true,
-  routingSelectionAvailable = true,
-  planStructureEditingAvailable = true,
-  reconcileInitialPlans,
+  initialPriority = 3,
+  movementRouteAvailable = true,
+  selectPriority = true,
   onOpenChange,
   onComplete,
 }: RepairWorkCompletionDialogProps) {
+  const queueCapabilitiesQuery = useQuery({
+    queryKey: warehouseQueueCapabilitiesQueryKey(warehouseId),
+    queryFn: () => getWarehouseQueueCapabilities(accessToken!, warehouseId),
+    enabled: open && Boolean(accessToken && warehouseId),
+  })
+  const movementAvailable =
+    movementRouteAvailable &&
+    queueCapabilitiesQuery.data?.movementToShipmentAvailable === true
   const previewQuery = useQuery({
     queryKey: [
       "repair-work",
@@ -136,6 +114,9 @@ export function RepairWorkCompletionDialog({
         line.description,
         line.quantity,
         line.catalogSnapshot?.nodeId,
+        line.customQueueBinding?.queueId,
+        line.customQueueBinding?.queueName,
+        line.customQueueBinding?.queueKind,
         line.lineComment,
       ]),
     ],
@@ -144,9 +125,7 @@ export function RepairWorkCompletionDialog({
       const catalog = createRepairEstimateCatalogIndex(snapshot)
       const taskPlans = buildRepairEstimateTaskPlans(lines, catalog)
       return {
-        taskPlans: reconcileInitialPlans
-          ? reconcileInitialPlans(taskPlans)
-          : taskPlans,
+        taskPlans,
         issues: validateAutoCompletion(lines, catalog),
       }
     },
@@ -180,7 +159,7 @@ export function RepairWorkCompletionDialog({
           </p>
         ) : (
           <RepairWorkCompletionForm
-            key={`${initialCompletionMode ?? "MANUAL"}:${movementAvailable && initialMovementRequired ? "movement" : "no-movement"}:${previewQuery.data.taskPlans.map((plan) => `${plan.id}:${plan.sortOrder}`).join(":")}`}
+            key={`${movementAvailable && initialMovementRequired ? "movement" : "no-movement"}:${previewQuery.data.taskPlans.map((plan) => `${plan.id}:${plan.sortOrder}`).join(":")}`}
             lines={lines}
             initialPlans={previewQuery.data.taskPlans}
             autoIssues={previewQuery.data.issues}
@@ -191,11 +170,10 @@ export function RepairWorkCompletionDialog({
             completeLabel={completeLabel}
             pendingLabel={pendingLabel}
             emptyCompleteLabel={emptyCompleteLabel}
-            initialCompletionMode={initialCompletionMode}
             initialMovementRequired={initialMovementRequired}
+            initialPriority={initialPriority}
             movementAvailable={movementAvailable}
-            routingSelectionAvailable={routingSelectionAvailable}
-            planStructureEditingAvailable={planStructureEditingAvailable}
+            selectPriority={selectPriority}
             onCancel={() => onOpenChange(false)}
             onComplete={onComplete}
           />
@@ -216,11 +194,10 @@ function RepairWorkCompletionForm({
   completeLabel,
   pendingLabel,
   emptyCompleteLabel,
-  initialCompletionMode,
   initialMovementRequired,
+  initialPriority,
   movementAvailable,
-  routingSelectionAvailable,
-  planStructureEditingAvailable,
+  selectPriority,
   onCancel,
   onComplete,
 }: {
@@ -234,16 +211,13 @@ function RepairWorkCompletionForm({
   completeLabel: string
   pendingLabel: string
   emptyCompleteLabel: string
-  initialCompletionMode?: RepairEstimateCompletionMode
   initialMovementRequired?: boolean
+  initialPriority: RepairPriority
   movementAvailable: boolean
-  routingSelectionAvailable: boolean
-  planStructureEditingAvailable: boolean
+  selectPriority: boolean
   onCancel: () => void
   onComplete: (result: RepairWorkCompletionResult) => void
 }) {
-  const [completionMode, setCompletionMode] =
-    useState<RepairEstimateCompletionMode>(initialCompletionMode ?? "MANUAL")
   const empty = allowEmpty && lines.length === 0
   const initialMovement =
     empty || !movementAvailable ? false : (initialMovementRequired ?? true)
@@ -266,41 +240,87 @@ function RepairWorkCompletionForm({
       movementPlans,
     })
   })
-  const lineById = new Map(lines.map((line) => [line.id, line]))
+  const [preparedResult, setPreparedResult] =
+    useState<RepairWorkCompletionResult | null>(null)
+  const [selectedPriority, setSelectedPriority] = useState(
+    String(initialPriority)
+  )
 
-  function updatePlan(
-    planId: string,
-    update: (plan: RepairEstimateTaskPlanDto) => RepairEstimateTaskPlanDto
-  ) {
-    setPlans((current) =>
-      current.map((plan) => (plan.id === planId ? update(plan) : plan))
+  if (preparedResult) {
+    const priorities: Array<{
+      value: RepairPriority
+      label: string
+      description: string
+    }> = [
+      { value: 1, label: "Самый срочный", description: "Первым в очереди" },
+      { value: 2, label: "Высокий", description: "Выше обычных заданий" },
+      { value: 3, label: "Средний", description: "Обычный порядок" },
+      { value: 4, label: "Низкий", description: "После обычных заданий" },
+      {
+        value: 5,
+        label: "Самый неприоритетный",
+        description: "В конце очереди",
+      },
+    ]
+    return (
+      <div className="flex flex-col gap-4">
+        <div>
+          <h3 className="font-heading text-base font-medium">
+            Выберите приоритет задания
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            Приоритет определяет автоматическую позицию нового задания в
+            очереди. Закреплённые задания сохранят своё положение.
+          </p>
+        </div>
+        <ToggleGroup
+          type="single"
+          value={selectedPriority}
+          variant="outline"
+          spacing={2}
+          className="grid w-full grid-cols-1 sm:grid-cols-5"
+          aria-label="Приоритет задания"
+          onValueChange={setSelectedPriority}
+        >
+          {priorities.map((item) => (
+            <ToggleGroupItem
+              key={item.value}
+              value={String(item.value)}
+              className="h-auto min-h-16 flex-col px-3 py-2"
+              aria-label={`Приоритет ${item.value}: ${item.label}`}
+            >
+              <span className="text-base font-semibold">{item.value}</span>
+              <span>{item.label}</span>
+              <span className="text-[0.625rem] font-normal text-muted-foreground">
+                {item.description}
+              </span>
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={() => setPreparedResult(null)}
+          >
+            Назад
+          </Button>
+          <Button
+            type="button"
+            disabled={!selectedPriority || pending}
+            onClick={() =>
+              onComplete({
+                ...preparedResult,
+                priority: Number(selectedPriority) as RepairPriority,
+              })
+            }
+          >
+            {pending ? pendingLabel : completeLabel}
+          </Button>
+        </DialogFooter>
+      </div>
     )
-  }
-
-  function movePlan(index: number, delta: number) {
-    setPlans((current) => {
-      const target = index + delta
-      if (target < 0 || target >= current.length) return current
-      const next = [...current]
-      const [plan] = next.splice(index, 1)
-      next.splice(target, 0, plan)
-      return next
-    })
-  }
-
-  function duplicatePlan(plan: RepairEstimateTaskPlanDto, index: number) {
-    const duplicate: RepairEstimateTaskPlanDto = {
-      ...plan,
-      id: createPlanId(),
-      includedLineIds: [...plan.includedLineIds],
-      generationStatus: "PENDING_GENERATION",
-      workflowRequestRef: null,
-    }
-    setPlans((current) => [
-      ...current.slice(0, index + 1),
-      duplicate,
-      ...current.slice(index + 1),
-    ])
   }
 
   return (
@@ -315,281 +335,57 @@ function RepairWorkCompletionForm({
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field data-disabled={pending}>
-            <FieldLabel htmlFor="repair-work-completion-mode">Режим</FieldLabel>
-            <Select
-              disabled={pending}
-              value={completionMode}
-              onValueChange={(value) =>
-                setCompletionMode(value as RepairEstimateCompletionMode)
-              }
-            >
-              <SelectTrigger
-                id="repair-work-completion-mode"
-                aria-label="Режим завершения"
-                className="w-full"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="MANUAL">Выбрать вручную</SelectItem>
-                  <SelectItem value="AUTO">
-                    Автоматически распределить по очередям
-                  </SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-
-          <Field
-            orientation="horizontal"
-            data-disabled={pending || !movementAvailable}
-          >
-            <Checkbox
-              id="repair-work-movement-required"
-              aria-label="Создать перемещение на ремонт и возврат"
-              checked={movementRequired}
-              disabled={pending || !movementAvailable}
-              onCheckedChange={(checked) => {
-                const required = checked === true
-                setMovementRequired(required)
-                setPlans((current) =>
-                  applyRepairEstimateMovementPlans({
-                    plans: current,
-                    movementRequired: required,
-                    movementPlans,
-                  })
-                )
-              }}
-            />
-            <div className="flex flex-col gap-1">
-              <FieldLabel htmlFor="repair-work-movement-required">
-                Создать перемещение на ремонт и возврат
-              </FieldLabel>
-              <FieldDescription>
-                {movementAvailable
-                  ? "Отметьте, если бытовку нужно отправить на ремонт и вернуть после завершения."
-                  : "Недоступно: маршрут локаций для инвентаризации не задан."}
-              </FieldDescription>
-            </div>
-          </Field>
+        <div className="flex flex-col gap-4">
+          {movementAvailable ? (
+            <Field orientation="horizontal" data-disabled={pending}>
+              <Checkbox
+                id="repair-work-movement-required"
+                aria-label="Перемещение на отгрузку"
+                checked={movementRequired}
+                disabled={pending}
+                onCheckedChange={(checked) => {
+                  const required = checked === true
+                  setMovementRequired(required)
+                  setPlans((current) =>
+                    applyRepairEstimateMovementPlans({
+                      plans: current,
+                      movementRequired: required,
+                      movementPlans,
+                    })
+                  )
+                }}
+              />
+              <div className="flex flex-col gap-1">
+                <FieldLabel htmlFor="repair-work-movement-required">
+                  Перемещение на отгрузку
+                </FieldLabel>
+                <FieldDescription>
+                  После завершения будет создано предусмотренное процессом
+                  задание на перемещение.
+                </FieldDescription>
+              </div>
+            </Field>
+          ) : null}
         </div>
       )}
 
-      {completionMode === "AUTO" && autoIssues.length > 0 ? (
+      {!empty && autoIssues.length > 0 ? (
         <div
           role="alert"
           className="flex flex-col gap-1 text-xs text-destructive"
         >
-          <span>Автоматическое распределение недоступно:</span>
+          <span>Нельзя создать задание:</span>
           <ul className="ml-4 list-disc">
             {autoIssues.slice(0, 3).map((issue) => (
-              <li key={issue}>{issue}</li>
+              <li key={issue}>
+                {issue.replace(
+                  "не задан маршрут очереди",
+                  "в каталоге не назначена очередь"
+                )}
+              </li>
             ))}
           </ul>
         </div>
-      ) : null}
-
-      {!empty && completionMode === "MANUAL" ? (
-        <section className="flex flex-col gap-3">
-          <div>
-            <h3 className="font-heading text-sm font-medium">Планы задач</h3>
-            <p className="text-xs text-muted-foreground">
-              Порядок и маршрут сохраняются вместе с заданием. Планы без
-              маршрута останутся в ожидании генерации.
-            </p>
-          </div>
-
-          {plans.length === 0 ? (
-            <Card size="sm">
-              <CardHeader>
-                <CardTitle>Планов задач нет</CardTitle>
-              </CardHeader>
-              <CardContent className="text-muted-foreground">
-                Строки без рабочего плана попадут в отдельное подзадание без
-                маршрута.
-              </CardContent>
-            </Card>
-          ) : (
-            plans.map((plan, index) => {
-              const includedLines = plan.includedLineIds
-                .map((lineId) => lineById.get(lineId))
-                .filter(Boolean)
-              const explicitQueueValue = plan.queueCode
-                ? `QUEUE_CODE:${plan.queueCode}`
-                : null
-              const routeSelection =
-                explicitQueueValue ?? plan.routeQueueKind ?? "NONE"
-              return (
-                <Card key={plan.id} size="sm">
-                  <CardHeader>
-                    <CardTitle className="flex flex-wrap items-center justify-between gap-2">
-                      <span>
-                        {index + 1}.{" "}
-                        {taskPlanTitle(
-                          plan,
-                          plan.primaryLineId
-                            ? lineById.get(plan.primaryLineId)?.description
-                            : undefined
-                        )}
-                      </span>
-                      <Badge variant="secondary">
-                        {plan.queueCode
-                          ? plan.queueCode
-                          : plan.routeQueueKind
-                            ? routeQueueKindLabel(plan.routeQueueKind)
-                            : "Маршрут не задан"}
-                      </Badge>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="flex flex-col gap-3">
-                    <p className="text-xs text-muted-foreground">
-                      {includedLines
-                        .map((line) => line?.description)
-                        .filter(Boolean)
-                        .join("; ")}
-                    </p>
-
-                    <div className="grid gap-3 md:grid-cols-[14rem_minmax(0,1fr)_auto] md:items-end">
-                      <Field
-                        className="md:self-start"
-                        data-disabled={pending || !routingSelectionAvailable}
-                      >
-                        <FieldLabel htmlFor={`plan-route-${plan.id}`}>
-                          Маршрут очереди
-                        </FieldLabel>
-                        <Select
-                          disabled={pending || !routingSelectionAvailable}
-                          value={routeSelection}
-                          onValueChange={(value) =>
-                            updatePlan(plan.id, (current) => {
-                              if (value.startsWith("QUEUE_CODE:")) {
-                                return current
-                              }
-                              return {
-                                ...current,
-                                queueCode: null,
-                                routeQueueKind:
-                                  value === "NONE"
-                                    ? null
-                                    : (value as NonNullable<
-                                        RepairEstimateTaskPlanDto["routeQueueKind"]
-                                      >),
-                              }
-                            })
-                          }
-                        >
-                          <SelectTrigger
-                            id={`plan-route-${plan.id}`}
-                            aria-label={`Маршрут очереди плана ${index + 1}`}
-                            className="w-full"
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectGroup>
-                              {explicitQueueValue ? (
-                                <SelectItem value={explicitQueueValue}>
-                                  Очередь {plan.queueCode} (из каталога)
-                                </SelectItem>
-                              ) : null}
-                              <SelectItem value="NONE">Не задан</SelectItem>
-                              <SelectItem value="REPAIR">Ремонт</SelectItem>
-                              <SelectItem value="MOVEMENT">
-                                Перемещение
-                              </SelectItem>
-                              <SelectItem value="HOLDING">Удержание</SelectItem>
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
-                        {!routingSelectionAvailable ? (
-                          <FieldDescription>
-                            Маршрут зафиксирован выбранным узлом каталога.
-                          </FieldDescription>
-                        ) : null}
-                      </Field>
-
-                      <Field data-disabled={pending}>
-                        <FieldLabel htmlFor={`plan-comment-${plan.id}`}>
-                          Комментарий группы
-                        </FieldLabel>
-                        <Textarea
-                          id={`plan-comment-${plan.id}`}
-                          aria-label={`Комментарий группы плана ${index + 1}`}
-                          disabled={pending}
-                          value={plan.groupComment}
-                          onChange={(event) =>
-                            updatePlan(plan.id, (current) => ({
-                              ...current,
-                              groupComment: event.target.value,
-                            }))
-                          }
-                        />
-                      </Field>
-
-                      <div className="flex flex-wrap gap-1">
-                        <Button
-                          type="button"
-                          size="icon-sm"
-                          variant="outline"
-                          aria-label="Переместить план выше"
-                          disabled={pending || index === 0}
-                          onClick={() => movePlan(index, -1)}
-                        >
-                          <HugeiconsIcon icon={ArrowUp01Icon} />
-                        </Button>
-                        <Button
-                          type="button"
-                          size="icon-sm"
-                          variant="outline"
-                          aria-label="Переместить план ниже"
-                          disabled={pending || index === plans.length - 1}
-                          onClick={() => movePlan(index, 1)}
-                        >
-                          <HugeiconsIcon icon={ArrowDown01Icon} />
-                        </Button>
-                        <Button
-                          type="button"
-                          size="icon-sm"
-                          variant="outline"
-                          aria-label="Дублировать план"
-                          disabled={
-                            pending ||
-                            !planStructureEditingAvailable ||
-                            plan.kind !== "REPAIR_WORK"
-                          }
-                          onClick={() => duplicatePlan(plan, index)}
-                        >
-                          <HugeiconsIcon icon={Copy01Icon} />
-                        </Button>
-                        <Button
-                          type="button"
-                          size="icon-sm"
-                          variant="ghost"
-                          aria-label="Удалить план"
-                          disabled={
-                            pending ||
-                            !planStructureEditingAvailable ||
-                            plan.kind !== "REPAIR_WORK"
-                          }
-                          onClick={() =>
-                            setPlans((current) =>
-                              current.filter((item) => item.id !== plan.id)
-                            )
-                          }
-                        >
-                          <HugeiconsIcon icon={Delete02Icon} />
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              )
-            })
-          )}
-        </section>
       ) : null}
 
       <DialogFooter>
@@ -603,18 +399,25 @@ function RepairWorkCompletionForm({
         </Button>
         <Button
           type="button"
-          disabled={
-            pending || (completionMode === "AUTO" && autoIssues.length > 0)
-          }
-          onClick={() =>
-            onComplete({
-              completionMode: empty ? "MANUAL" : completionMode,
+          disabled={pending || (!empty && autoIssues.length > 0)}
+          onClick={() => {
+            const result: RepairWorkCompletionResult = {
+              completionMode: empty ? "MANUAL" : "AUTO",
               movementRequired: empty ? false : movementRequired,
               taskPlans: empty ? [] : plans,
-            })
-          }
+              priority: 3,
+            }
+            if (empty || !selectPriority) onComplete(result)
+            else setPreparedResult(result)
+          }}
         >
-          {pending ? pendingLabel : empty ? emptyCompleteLabel : completeLabel}
+          {pending
+            ? pendingLabel
+            : empty
+              ? emptyCompleteLabel
+              : selectPriority
+                ? "Далее"
+                : completeLabel}
         </Button>
       </DialogFooter>
     </div>

@@ -22,11 +22,12 @@ const inventoryRecordLimit = 1 << 20
 
 type InventoryOwnerConsumer struct {
 	repository  inventoryOwnerPersistence
-	client      *kgo.Client
+	client      kafkaConsumerClient
 	logger      *slog.Logger
 	sourceTopic string
 	delays      []time.Duration
 	sleep       func(context.Context, time.Duration) error
+	pollTimeout time.Duration
 }
 
 type inventoryOwnerPersistence interface {
@@ -121,16 +122,23 @@ func NewInventoryOwnerConsumerWithOptions(
 		sourceTopic: sourceTopic,
 		delays:      delays,
 		sleep:       sleeper,
+		pollTimeout: kafkaConsumerPollTimeout,
 	}
 }
 
 func (consumer *InventoryOwnerConsumer) Run(ctx context.Context) error {
 	for {
-		fetches := consumer.client.PollFetches(ctx)
+		fetches, pollTimedOut := pollKafkaFetches(ctx, consumer.client, consumer.pollTimeout)
 		if ctx.Err() != nil {
+			consumer.client.AllowRebalance()
 			return nil
 		}
+		if pollTimedOut {
+			consumer.client.AllowRebalance()
+			continue
+		}
 		if errs := fetches.Errors(); len(errs) > 0 {
+			consumer.client.AllowRebalance()
 			consumer.logger.Error("poll inventory owner topic", "errorType", "BROKER_UNAVAILABLE")
 			continue
 		}

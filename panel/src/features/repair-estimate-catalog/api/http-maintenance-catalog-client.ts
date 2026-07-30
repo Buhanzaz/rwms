@@ -8,26 +8,31 @@ export type MaintenanceCatalogLinkType = "DEPENDENCY" | "FOLLOW_UP"
 
 export type MaintenanceCatalogRouting = {
   queueId: string
-  queueCode: string
-  queueKind: string
+  queueName: string
+  queueType: string
 }
 
-export type MaintenanceCatalogReference = {
-  referenceId: string
-  code: string
+export type MaintenanceCatalogRoutingInput = {
+  queueId: string
+  queueType: string
 }
 
 export type MaintenanceFurnitureEquipmentReference = {
   equipmentId: string
-  equipmentCode: string
   equipmentName: string
+}
+
+export type MaintenanceCabinCharacteristicReference = {
+  characteristicId: string
+  characteristicName: string
 }
 
 export type MaintenanceCatalogNodeInput = {
   id: string
-  code: string
   nodeType: MaintenanceCatalogNodeType
   name: string
+  /** Optional semantic button colour configured in the catalog settings. */
+  displayColor?: string | null
   active: boolean
   parentNodeId: string | null
   unit: string | null
@@ -38,15 +43,21 @@ export type MaintenanceCatalogNodeInput = {
   showInMainMenu: boolean
   furnitureCategory: boolean
   furnitureEquipment: MaintenanceFurnitureEquipmentReference | null
-  routing: MaintenanceCatalogRouting | null
-  references: MaintenanceCatalogReference[]
+  forcesCapitalRepair: boolean
+  characteristicId: string | null
+  routing: MaintenanceCatalogRoutingInput | null
   canvasX: number | null
   canvasY: number | null
   comment: string | null
 }
 
-export type MaintenanceCatalogNode = MaintenanceCatalogNodeInput & {
+export type MaintenanceCatalogNode = Omit<
+  MaintenanceCatalogNodeInput,
+  "routing" | "characteristicId"
+> & {
   catalogVersionId: string
+  routing: MaintenanceCatalogRouting | null
+  characteristic: MaintenanceCabinCharacteristicReference | null
 }
 
 export type MaintenanceCatalogLinkInput = {
@@ -87,7 +98,7 @@ export type MaintenanceCatalogVersionPage = {
   totalElements: number
 }
 
-export type MaintenanceCatalogBootstrapRequest = {
+export type MaintenanceCreateCatalogRequest = {
   warehouseId: string
 }
 
@@ -191,14 +202,14 @@ export function replaceMaintenanceCatalogLinks(
   )
 }
 
-export function bootstrapMaintenanceCatalog(
+export function createMaintenanceCatalog(
   accessToken: string,
   idempotencyKey: string,
-  request: MaintenanceCatalogBootstrapRequest
+  request: MaintenanceCreateCatalogRequest
 ) {
   return bearerRequest<MaintenanceCatalogVersion>(
     accessToken,
-    `${CATALOG_API}/imports`,
+    `${CATALOG_API}/versions`,
     json("POST", request, { "Idempotency-Key": idempotencyKey })
   )
 }

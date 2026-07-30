@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.asset.repository;
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservation;
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservationState;
 import jakarta.persistence.LockModeType;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -24,6 +25,23 @@ public interface OrderUnitReservationRepository
 
   List<OrderUnitReservation> findAllByOrderIdAndStateOrderByCreatedAtAscIdAsc(
       UUID orderId, OrderUnitReservationState state);
+
+  @Query(
+      """
+      select reservation.id
+      from OrderUnitReservation reservation
+      where reservation.state = :state
+        and reservation.draftReservationExpiresAt is not null
+        and reservation.draftReservationExpiresAt <= :timestamp
+      order by reservation.draftReservationExpiresAt, reservation.id
+      """)
+  List<UUID> findExpiredDraftReservationIds(
+      @Param("state") OrderUnitReservationState state,
+      @Param("timestamp") OffsetDateTime timestamp);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("select reservation from OrderUnitReservation reservation where reservation.id = :id")
+  Optional<OrderUnitReservation> findByIdForUpdate(@Param("id") UUID id);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query(

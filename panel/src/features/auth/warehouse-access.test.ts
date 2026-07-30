@@ -16,6 +16,7 @@ function currentUser(overrides: Partial<CurrentUser> = {}): CurrentUser {
     email: null,
     principalType: "USER",
     globalRole: "WAREHOUSE_MANAGER",
+    rentalAccess: false,
     warehouseAccessAll: false,
     warehouseAccesses: [{ warehouseId: "warehouse-1", level: "EDIT" }],
     ...overrides,

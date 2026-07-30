@@ -75,6 +75,16 @@ public class MaintenanceRepairController {
     return requireWarehouse(id, warehouseId);
   }
 
+  @GetMapping("/repairs/{id}/worker-evidence")
+  public List<RepairWorkerEvidenceResponse> workerEvidence(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID id,
+      @RequestParam UUID warehouseId) {
+    access.requireRead(jwt, warehouseId);
+    requireWarehouse(id, warehouseId);
+    return service.repairWorkerEvidence(id);
+  }
+
   @GetMapping("/repairs/{id}/plan")
   public RepairPlanResponse plan(
       @AuthenticationPrincipal Jwt jwt,
@@ -83,6 +93,15 @@ public class MaintenanceRepairController {
     access.requireRead(jwt, warehouseId);
     requireWarehouse(id, warehouseId);
     return service.repairPlan(id);
+  }
+
+  @GetMapping("/repairs/{id}/rework-candidates")
+  public ReworkCandidatesResponse reworkCandidates(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID id,
+      @RequestParam UUID warehouseId) {
+    access.requireRead(jwt, warehouseId);
+    return service.reworkCandidates(id, warehouseId);
   }
 
   @PutMapping("/repairs/{id}/plan")
@@ -102,7 +121,7 @@ public class MaintenanceRepairController {
       @PathVariable UUID id,
       @RequestParam UUID warehouseId,
       @RequestHeader("Idempotency-Key") UUID idempotencyKey,
-      @Valid @RequestBody VersionCommand request) {
+      @Valid @RequestBody QueueRepairRequest request) {
     access.requireEdit(jwt, warehouseId);
     requireWarehouse(id, warehouseId);
     return idempotentOk(service.queueRepair(access.subjectId(jwt), idempotencyKey, id, request));

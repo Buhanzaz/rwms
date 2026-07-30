@@ -326,6 +326,7 @@ function DateFilterChip({
           type="button"
           size="sm"
           variant={activeCount ? "secondary" : "outline"}
+          className="w-full justify-between lg:w-auto"
           aria-label={`Фильтр по дате: ${activeCount ? "выбран" : "не выбран"}`}
           aria-pressed={activeCount > 0}
         >
@@ -412,6 +413,7 @@ function MultiValueFilterChip({
           type="button"
           size="sm"
           variant={selected.length ? "secondary" : "outline"}
+          className="w-full justify-between lg:w-auto"
           aria-pressed={selected.length > 0}
         >
           {label}
@@ -558,7 +560,7 @@ function RegisterControls({
       <div
         data-testid="photo-filter-bar"
         className={cn(
-          "flex flex-wrap gap-2 rounded-lg border bg-card p-2",
+          "flex flex-col gap-2 rounded-lg border bg-card p-2 lg:flex-row",
           !mobileControlsOpen && "hidden lg:flex"
         )}
       >

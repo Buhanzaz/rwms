@@ -70,6 +70,8 @@ class ConfiguredRegisteredClientRepositoryTest {
                 Set.of("rwms-services"),
                 Set.of(),
                 Duration.ofMinutes(5),
+                Duration.ofHours(1),
+                true,
                 "DISABLED_SECRET",
                 null,
                 false)));
@@ -107,6 +109,8 @@ class ConfiguredRegisteredClientRepositoryTest {
                 Set.of("rwms-services"),
                 Set.of(),
                 Duration.ofMinutes(5),
+                Duration.ofHours(1),
+                true,
                 clientId.toUpperCase(java.util.Locale.ROOT).replace('-', '_') + "_SECRET",
                 null,
                 false);

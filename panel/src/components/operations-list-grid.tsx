@@ -59,12 +59,14 @@ export function OperationsListGrid<T extends { id: string }>({
   className,
   columns,
   items,
+  getRowClassName,
   expandedItemId,
   renderExpandedRow,
 }: {
   className?: string
   columns: OperationsListGridColumn<T>[]
   items: T[]
+  getRowClassName?: (item: T) => string | undefined
   expandedItemId?: string | null
   renderExpandedRow?: (item: T) => ReactNode
 }) {
@@ -165,7 +167,11 @@ export function OperationsListGrid<T extends { id: string }>({
             return (
               <Fragment key={item.id}>
                 <TableRow
-                  className={cn(GRID_TABLE_ROW_CLASS, "hover:bg-muted/40")}
+                  className={cn(
+                    GRID_TABLE_ROW_CLASS,
+                    "hover:bg-muted/40",
+                    getRowClassName?.(item)
+                  )}
                 >
                   {columns.map((column) => (
                     <TableCell

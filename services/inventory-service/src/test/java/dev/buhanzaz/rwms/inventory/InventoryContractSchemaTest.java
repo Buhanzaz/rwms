@@ -25,7 +25,7 @@ class InventoryContractSchemaTest {
   private static final Set<String> METHODS = Set.of("get", "post", "put", "delete");
 
   @Test
-  void openApiContainsOnlyTheApprovedSixteenOperationsAndExactErrors() throws Exception {
+  void openApiContainsOnlyTheApprovedOperationsAndExactErrors() throws Exception {
     Map<String, Object> document = yaml("openapi/inventory-service.yaml");
     Map<String, Object> paths = child(document, "paths");
 
@@ -39,6 +39,7 @@ class InventoryContractSchemaTest {
             "POST /api/inventory/v1/sessions/{inventoryId}/number-resolutions",
             "POST /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/assets",
             "PUT /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/inspection",
+            "PUT /api/inventory/v1/sessions/{inventoryId}/findings/{findingId}/conflict-resolution",
             "POST /api/inventory/v1/sessions/{inventoryId}/completion-preview",
             "POST /api/inventory/v1/sessions/{inventoryId}/complete",
             "POST /api/inventory/v1/sessions/{inventoryId}/cancel",
@@ -68,6 +69,12 @@ class InventoryContractSchemaTest {
             "normativeMinutes",
             "durationSeconds",
             "unexpectedExistingCount");
+    assertThat(enumValues(child(schemas, "ExpectedItemSnapshot"), "status"))
+        .doesNotContain("NEW")
+        .contains("FREE", "BOOKED", "WAREHOUSE");
+    assertThat(stringList(child(schemas, "RentalItemStatus").get("enum")))
+        .doesNotContain("NEW")
+        .contains("FREE", "RENTED", "IN_TRANSFER");
     assertThat(child(schemas, "FrozenStatistics").get("additionalProperties")).isEqualTo(false);
     assertThat(
             stringList(
@@ -98,6 +105,7 @@ class InventoryContractSchemaTest {
               "passportObservation":{"presence":"EXPLICIT_EMPTY","value":{}},
               "equipmentObservation":{"presence":"ABSENT","value":null},
               "media":[],
+              "coverMediaId":null,
               "planSelection":null
             }
             """);
@@ -170,9 +178,26 @@ class InventoryContractSchemaTest {
              "author":{"id":"00000000-0000-0000-0000-000000000723","displayName":"Inventory operator"},
              "lifecycle":"ACTIVE","expectedCount":0,"findingCount":0,"inspectedCount":0,
              "startedAt":"2026-07-17T12:00:00Z","terminalAt":null,
-             "publicationState":"NOT_REQUESTED","statistics":null,"cancellation":null}
+             "publicationState":"NOT_REQUESTED",
+             "membershipMovements":[{
+               "id":"00000000-0000-0000-0000-000000000724","type":"ARRIVED",
+               "assetId":"00000000-0000-0000-0000-000000000725",
+               "displayCanonicalNumber":"БЫТ-101","origin":"EXPECTED",
+               "fromWarehouseId":null,
+               "toWarehouseId":"00000000-0000-0000-0000-000000000722",
+               "status":"WAREHOUSE","tenantSnapshot":null,
+               "occurredAt":"2026-07-17T12:30:00Z"
+             }],
+             "statistics":null,"cancellation":null}
             """);
     assertThat(detail.validate(validDetail)).isEmpty();
+    ObjectNode missingMovements = validDetail.deepCopy();
+    missingMovements.remove("membershipMovements");
+    assertThat(detail.validate(missingMovements)).isNotEmpty();
+    ObjectNode invalidMovement = validDetail.deepCopy();
+    ((ObjectNode) invalidMovement.required("membershipMovements").get(0))
+        .put("type", "UNCHANGED");
+    assertThat(detail.validate(invalidMovement)).isNotEmpty();
   }
 
   @Test
@@ -186,6 +211,7 @@ class InventoryContractSchemaTest {
               "id":"00000000-0000-0000-0000-000000000731",
               "inventoryId":"00000000-0000-0000-0000-000000000732",
               "findingRevision":3,"origin":"EXPECTED","inspection":"WORK_STAGED",
+              "inspectionSource":"INVENTORY",
               "reconciliation":"MATCHED",
               "assetId":"00000000-0000-0000-0000-000000000733","assetVersion":7,
               "displayCanonicalNumber":"AA-01","identityMatchKey":"AA01",
@@ -200,15 +226,26 @@ class InventoryContractSchemaTest {
                 "status":"WAREHOUSE","displayCanonicalNumber":"AA-01","tenantSnapshot":null,
                 "passportSnapshot":{"serial":"SAFE"},"contentsSnapshot":[{"name":"safe"}]
               },
+              "inspectionBaseline":{
+                "assetId":"00000000-0000-0000-0000-000000000733","assetVersion":7,
+                "warehouseId":"00000000-0000-0000-0000-000000000732",
+                "status":"WAREHOUSE","displayCanonicalNumber":"AA-01","tenantSnapshot":null,
+                "passportSnapshot":{"serial":"SAFE"},"contentsSnapshot":[{"name":"safe"}],
+                "repairsSnapshot":[]
+              },
               "currentSnapshot":{
                 "assetId":"00000000-0000-0000-0000-000000000733","assetVersion":7,
                 "warehouseId":"00000000-0000-0000-0000-000000000732",
-                "status":"WAREHOUSE","displayCanonicalNumber":"AA-01","tenantSnapshot":null
+                "status":"WAREHOUSE","displayCanonicalNumber":"AA-01","tenantSnapshot":null,
+                "passportSnapshot":{"serial":"SAFE"},"contentsSnapshot":[{"name":"safe"}],
+                "repairsSnapshot":[]
               },
               "conflicts":[],
+              "conflictResolution":null,
               "frozenPlan":{
                 "mode":"MANUAL","catalogVersionId":"00000000-0000-0000-0000-000000000734",
                 "fingerprintSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "priority":3,"coverMediaId":null,
                 "lines":[{
                   "id":"00000000-0000-0000-0000-000000000736",
                   "sourceKind":"MANUAL","lineType":"WORK","catalogVersionId":null,
@@ -220,21 +257,25 @@ class InventoryContractSchemaTest {
                   "id":"00000000-0000-0000-0000-000000000737",
                   "order":0,"kind":"REPAIR_WORK",
                   "catalogNodeId":"00000000-0000-0000-0000-000000000738",
-                  "catalogNodeCode":"REPAIR_WORK",
+                  "catalogNodeName":"Repair work",
                   "routingQueueId":"00000000-0000-0000-0000-000000000735",
-                  "routingQueueCode":"REPAIR","routingQueueKind":"MAINTENANCE",
+                  "routingQueueName":"Repair","routingQueueType":"MAINTENANCE",
                   "movementRequired":false,"photoRequired":true,
                   "normativeDurationMinutes":150
                 }]
               },
-              "media":[],"publication":null
+              "coverMediaId":null,"media":[],"publication":null
             }
             """);
     assertThat(finding.validate(staged)).isEmpty();
+    ObjectNode legacyMembershipChange = staged.deepCopy();
+    legacyMembershipChange.put("membershipChange", "UNCHANGED");
+    assertThat(finding.validate(legacyMembershipChange)).isNotEmpty();
 
     ObjectNode ready = staged.deepCopy();
     ready.put("origin", "UNEXPECTED_EXISTING");
     ready.put("inspection", "READY");
+    ready.put("inspectionSource", "INVENTORY");
     ready.putNull("planFingerprintSha256");
     ready.putNull("expectedSnapshot");
     ready.putNull("frozenPlan");
@@ -262,20 +303,41 @@ class InventoryContractSchemaTest {
     ((ObjectNode) negativeMinor.required("frozenPlan").required("lines").get(0))
         .put("unitPriceMinor", -1);
     assertThat(finding.validate(negativeMinor)).isNotEmpty();
+
+    JsonSchema validatedFinding = openApiSchema("ValidatedFinding");
+    JsonNode validated =
+        JSON.readTree(
+            """
+            {
+              "findingId":"00000000-0000-0000-0000-000000000731",
+              "currentSnapshot":null,
+              "conflicts":[]
+            }
+            """);
+    assertThat(validatedFinding.validate(validated)).isEmpty();
+    ObjectNode legacyValidated = validated.deepCopy();
+    legacyValidated.put("membershipChange", "DEPARTED_OR_MOVED");
+    assertThat(validatedFinding.validate(legacyValidated)).isNotEmpty();
   }
 
   @Test
-  void asyncApiBindsTheTwoApprovedAggregateTopicsAndOwnerProof() throws Exception {
+  void asyncApiBindsApprovedAggregateAndDependencyTopicsAndOwnerProof() throws Exception {
     Map<String, Object> document = yaml("events/inventory-events.yaml");
     Map<String, Object> channels = child(document, "channels");
 
     assertThat(channels.keySet())
         .containsExactlyInAnyOrder(
-            "sessionFacts", "publicationFacts", "mediaFacts", "sanitizedDlt");
+            "sessionFacts",
+            "publicationFacts",
+            "mediaFacts",
+            "rentalItemFacts",
+            "sanitizedDlt");
     assertThat(child(channels, "sessionFacts").get("address"))
         .isEqualTo("rwms.inventory.session.v1");
     assertThat(child(channels, "publicationFacts").get("address"))
         .isEqualTo("rwms.inventory.publication.v1");
+    assertThat(child(channels, "rentalItemFacts").get("address"))
+        .isEqualTo("rwms.asset.rental-item.v1");
     String text = Files.readString(contract("events/inventory-events.yaml"));
     assertThat(text)
         .contains(
@@ -367,7 +429,7 @@ class InventoryContractSchemaTest {
     return (ObjectNode)
         JSON.readTree(
             """
-            {"mode":"AUTO","lines":[{
+            {"mode":"AUTO","priority":3,"coverMediaId":null,"lines":[{
               "aggregationKind":"CATALOG",
               "catalogNodeId":"00000000-0000-0000-0000-000000000731",
               "description":null,"type":null,"unit":null,"quantity":"1",

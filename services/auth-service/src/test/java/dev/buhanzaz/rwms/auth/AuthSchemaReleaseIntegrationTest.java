@@ -220,7 +220,7 @@ class AuthSchemaReleaseIntegrationTest {
     private List<RegisteredClient> seedClients(JdbcRegisteredClientRepository repository) {
         List<RegisteredClient> clients = List.of(
                 publicClient("rwms-panel", "rwms.read"),
-                publicClient("rwms-worker", "worker.tasks"),
+                publicClient("rwms-worker-android", "worker.tasks"),
                 serviceClient("task-board-service", "worker-credentials.manage"),
                 serviceClient("auth-service", "warehouse.read"));
         clients.forEach(repository::save);

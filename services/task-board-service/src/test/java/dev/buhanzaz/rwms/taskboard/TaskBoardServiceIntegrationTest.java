@@ -26,11 +26,12 @@ import dev.buhanzaz.rwms.taskboard.security.AccessLevel;
 import dev.buhanzaz.rwms.taskboard.security.WarehouseAccessAuthorizer;
 import dev.buhanzaz.rwms.taskboard.service.*;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -63,6 +64,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   @org.springframework.beans.factory.annotation.Autowired RegistryService registry;
   @org.springframework.beans.factory.annotation.Autowired WorkforceService workforce;
   @org.springframework.beans.factory.annotation.Autowired TaskBoardService board;
+  @org.springframework.beans.factory.annotation.Autowired WorkerTaskBoardService workerBoard;
   @org.springframework.beans.factory.annotation.Autowired FakeCredentials credentials;
   @org.springframework.beans.factory.annotation.Autowired JdbcTemplate jdbc;
 
@@ -103,18 +105,168 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                     repair.id(),
                     new WorkQueueRequest(
                         99L,
-                        "REPAIR",
-                        "Repair",
-                        null,
-                        QueueType.REPAIR,
+                        repair.definitionId(),
                         true,
                         false,
                         false,
                         null,
                         null,
                         false,
+                        null,
                         List.of())))
         .isInstanceOf(StaleVersionException.class);
+  }
+
+  @Test
+  void globalQueueDefinitionsAreSharedWhileWarehouseBindingsAndOrderRemainLocal() {
+    var firstW1 =
+        registry.createQueue(W1, queue("GLOBAL_EXTERNAL", QueueType.REPAIR, List.of()));
+    var secondW1 =
+        registry.createQueue(W1, queue("GLOBAL_INTERNAL", QueueType.REPAIR, List.of()));
+    var firstW2 =
+        registry.createQueue(W2, queue("GLOBAL_EXTERNAL", QueueType.REPAIR, List.of()));
+    var secondW2 =
+        registry.createQueue(W2, queue("GLOBAL_INTERNAL", QueueType.REPAIR, List.of()));
+
+    assertThat(firstW1.definitionId()).isEqualTo(firstW2.definitionId());
+    assertThat(secondW1.definitionId()).isEqualTo(secondW2.definitionId());
+    assertThat(firstW1.id()).isNotEqualTo(firstW2.id());
+    assertThatThrownBy(
+            () ->
+                registry.createQueue(
+                    W1,
+                    new WorkQueueRequest(
+                        0L,
+                        firstW1.definitionId(),
+                        true,
+                        false,
+                        false,
+                        null,
+                        null,
+                        false,
+                        null,
+                        List.of())))
+        .isInstanceOf(ConflictException.class);
+    assertThat(registry.listQueues(UUID.randomUUID())).isEmpty();
+    assertThat(registry.listQueueDefinitions())
+        .extracting(QueueDefinitionDto::id)
+        .containsExactlyInAnyOrder(firstW1.definitionId(), secondW1.definitionId());
+    assertThatThrownBy(
+            () ->
+                registry.createQueueDefinition(
+                    new QueueDefinitionRequest(
+                        0L, "  global_external  ", null, QueueType.REPAIR)))
+        .isInstanceOf(ConflictException.class);
+
+    var w1Before = registry.listQueues(W1);
+    registry.reorder(
+        W1,
+        new QueueOrderRequest(
+            List.of(
+                new QueueOrderItem(secondW1.id(), versionOf(w1Before, secondW1.id())),
+                new QueueOrderItem(firstW1.id(), versionOf(w1Before, firstW1.id())))));
+
+    assertThat(registry.listQueues(W1))
+        .extracting(WorkQueueDto::definitionId)
+        .containsExactly(secondW1.definitionId(), firstW1.definitionId());
+    assertThat(registry.listQueues(W2))
+        .extracting(WorkQueueDto::definitionId)
+        .containsExactly(firstW2.definitionId(), secondW2.definitionId());
+
+    QueueDefinitionDto definition =
+        registry.listQueueDefinitions().stream()
+            .filter(candidate -> candidate.id().equals(firstW1.definitionId()))
+            .findFirst()
+            .orElseThrow();
+    registry.updateQueueDefinition(
+        definition.id(),
+        new QueueDefinitionRequest(
+            definition.version(),
+            "Общие внешние работы",
+            "Изменение общего каталога",
+            definition.type()));
+
+    assertThat(registry.listQueues(W1))
+        .filteredOn(queue -> queue.definitionId().equals(definition.id()))
+        .extracting(WorkQueueDto::name)
+        .containsExactly("Общие внешние работы");
+    assertThat(registry.listQueues(W2))
+        .filteredOn(queue -> queue.definitionId().equals(definition.id()))
+        .extracting(WorkQueueDto::name)
+        .containsExactly("Общие внешние работы");
+  }
+
+  @Test
+  void movementCapabilityUsesActiveVisibleWarehouseBindingOfStableDefinition() {
+    var movementW1 =
+        registry.createQueue(W1, queue("GLOBAL_DRIVERS", QueueType.MOVEMENT, List.of()));
+
+    assertThat(registry.queueCapabilities(W1).movementToShipmentAvailable()).isTrue();
+    assertThat(registry.queueCapabilities(W1).movementQueueDefinitions())
+        .containsExactly(
+            new MovementQueueCapability(movementW1.definitionId(), movementW1.id()));
+    assertThat(registry.queueCapabilities(W2).movementToShipmentAvailable()).isFalse();
+
+    var movementW2 =
+        registry.createQueue(W2, queue("GLOBAL_DRIVERS", QueueType.MOVEMENT, List.of()));
+    assertThat(movementW2.definitionId()).isEqualTo(movementW1.definitionId());
+    assertThat(registry.queueCapabilities(W2).movementToShipmentAvailable()).isTrue();
+
+    registry.updateQueue(
+        W2,
+        movementW2.id(),
+        new WorkQueueRequest(
+            movementW2.version(),
+            movementW2.definitionId(),
+            false,
+            false,
+            movementW2.collapsed(),
+            movementW2.holdingPeriodMinutes(),
+            movementW2.notificationThreshold(),
+            movementW2.notifyWhenThresholdReached(),
+            movementW2.resultPhotoMinCount(),
+            List.of()));
+
+    assertThat(registry.queueCapabilities(W2).movementToShipmentAvailable()).isFalse();
+    assertThat(registry.queueCapabilities(W1).movementToShipmentAvailable()).isTrue();
+  }
+
+  @Test
+  void queueUpdateCanReplaceOrderedBindingsWithoutNaturalKeyConflict() {
+    var driverClass = registry.createClass(workerClass("DRIVER_ORDERED"));
+    var slingerClass = registry.createClass(workerClass("SLINGER_ORDERED"));
+    List<QueueBindingRequest> bindings =
+        List.of(
+            new QueueBindingRequest(driverClass.id(), 0, false, false),
+            new QueueBindingRequest(slingerClass.id(), 1, true, true));
+    var created =
+        registry.createQueue(W1, queue("ORDERED_MOVEMENT", QueueType.MOVEMENT, bindings));
+
+    var updated =
+        registry.updateQueue(
+            W1,
+            created.id(),
+            new WorkQueueRequest(
+                created.version(),
+                created.definitionId(),
+                created.active(),
+                created.hidden(),
+                created.collapsed(),
+                created.holdingPeriodMinutes(),
+                created.notificationThreshold(),
+                created.notifyWhenThresholdReached(),
+                created.resultPhotoMinCount(),
+                bindings));
+
+    assertThat(updated.bindings())
+        .extracting(QueueBindingDto::workerClass)
+        .extracting(WorkerClassDto::id)
+        .containsExactly(driverClass.id(), slingerClass.id());
+    assertThat(updated.bindings()).extracting(QueueBindingDto::order).containsExactly(0, 1);
+    assertThat(updated.bindings()).extracting(QueueBindingDto::primary).containsExactly(true, false);
+    assertThat(updated.bindings())
+        .extracting(QueueBindingDto::notifyUrgent)
+        .containsExactly(false, true);
   }
 
   @Test
@@ -124,22 +276,24 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         registry.updateClass(
             created.id(),
             new WorkerClassRequest(
-                created.version(), "VERSIONED", "Versioned", null, null, 10, true));
+                created.version(), "Versioned", null, null, 10, true));
     assertThat(updated.version()).isGreaterThan(created.version());
     var updatedAgain =
         registry.updateClass(
             updated.id(),
             new WorkerClassRequest(
-                updated.version(), "VERSIONED", "Versioned", null, null, 10, true));
+                updated.version(), "Versioned", null, null, 10, true));
     assertThat(updatedAgain.version()).isGreaterThan(updated.version());
 
     var queue = registry.createQueue(W1, queue("REF", QueueType.REPAIR, List.of()));
     var first =
         registry.registerReference(
-            queue.id(), new QueueReferenceRequest(QueueReferenceType.REPAIR_PLAN, "plan-version"));
+            queue.definitionId(),
+            new QueueReferenceRequest(QueueReferenceType.REPAIR_PLAN, "plan-version"));
     var reused =
         registry.registerReference(
-            queue.id(), new QueueReferenceRequest(QueueReferenceType.REPAIR_PLAN, "plan-version"));
+            queue.definitionId(),
+            new QueueReferenceRequest(QueueReferenceType.REPAIR_PLAN, "plan-version"));
     assertThat(reused.id()).isEqualTo(first.id());
     assertThat(reused.version()).isEqualTo(first.version());
     registry.deleteReference(first.type(), first.externalReferenceId(), first.version());
@@ -154,8 +308,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
     List<Object> outcomes =
         race(
-            () -> registry.registerReference(firstQueue.id(), request),
-            () -> registry.registerReference(firstQueue.id(), request));
+            () -> registry.registerReference(firstQueue.definitionId(), request),
+            () -> registry.registerReference(firstQueue.definitionId(), request));
 
     assertThat(outcomes).allMatch(QueueReferenceDto.class::isInstance);
     var registered = outcomes.stream().map(QueueReferenceDto.class::cast).toList();
@@ -164,7 +318,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .extracting(QueueReferenceDto::version)
         .containsOnly(registered.getFirst().version());
     assertThat(queueReferences.count()).isEqualTo(1);
-    assertThatThrownBy(() -> registry.registerReference(secondQueue.id(), request))
+    assertThatThrownBy(
+            () -> registry.registerReference(secondQueue.definitionId(), request))
         .isInstanceOf(ConflictException.class);
     assertThat(queueReferences.count()).isEqualTo(1);
   }
@@ -184,8 +339,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 null,
                 null,
                 List.of(
-                    new RouteStepRequest(holding.id(), null, "hold", null),
-                    new RouteStepRequest(after.id(), null, "after", null))));
+                    new RouteStepRequest(holding.definitionId(), "hold", null),
+                    new RouteStepRequest(after.definitionId(), "after", null))));
     assertThat(snapshot.columns().stream().flatMap(column -> column.entries().stream()))
         .extracting(BoardEntryDto::taskText)
         .containsExactly("hold");
@@ -206,23 +361,22 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             null,
             null,
             List.of(
-                new RouteStepRequest(queue.id(), null, null, null),
-                new RouteStepRequest(queue.id(), null, null, null)));
+                new RouteStepRequest(queue.definitionId(), null, null),
+                new RouteStepRequest(queue.definitionId(), null, null)));
     assertThatThrownBy(() -> board.createTask(W1, duplicateRoute))
         .isInstanceOf(ConflictException.class);
-    var duplicateCodeRoute =
+    var missingQueueRoute =
         new CreateBoardTaskRequest(
             null,
-            "duplicate-code-route",
+            "missing-queue-route",
             null,
             null,
             null,
             null,
-            List.of(
-                new RouteStepRequest(null, "virtual", null, null),
-                new RouteStepRequest(null, "VIRTUAL", null, null)));
-    assertThatThrownBy(() -> board.createTask(W1, duplicateCodeRoute))
-        .isInstanceOf(ConflictException.class);
+            List.of(new RouteStepRequest(null, null, null)));
+    assertThatThrownBy(() -> board.createTask(W1, missingQueueRoute))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("общей очереди");
     assertThat(board.snapshot(W1, true).columns())
         .flatExtracting(BoardColumnDto::entries)
         .isEmpty();
@@ -237,7 +391,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             null,
             null,
             null,
-            List.of(new RouteStepRequest(queue.id(), null, null, null))));
+            List.of(new RouteStepRequest(queue.definitionId(), null, null))));
     assertThat(entry("external").externalTaskId()).isEqualTo(externalTaskId);
     assertThatThrownBy(
             () ->
@@ -250,7 +404,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                         null,
                         null,
                         null,
-                        List.of(new RouteStepRequest(queue.id(), null, null, null)))))
+                        List.of(new RouteStepRequest(queue.definitionId(), null, null)))))
         .isInstanceOf(ConflictException.class);
   }
 
@@ -267,7 +421,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             " описание ",
             30,
             deadline,
-            List.of(new RouteStepRequest(queue.id(), null, " работа ", 15)));
+            List.of(new RouteStepRequest(queue.definitionId(), " работа ", 15)));
     var equivalent =
         new CreateBoardTaskRequest(
             externalTaskId,
@@ -276,7 +430,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             "описание",
             30,
             deadline.withOffsetSameInstant(ZoneOffset.UTC),
-            List.of(new RouteStepRequest(queue.id(), "IGNORED", "работа", 15)));
+            List.of(new RouteStepRequest(queue.definitionId(), "работа", 15)));
 
     var created = board.createTask(W1, first);
     registry.updateQueue(
@@ -284,17 +438,22 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         queue.id(),
         new WorkQueueRequest(
             queue.version(),
-            queue.code(),
-            "Переименованная очередь",
-            queue.description(),
-            queue.type(),
+            queue.definitionId(),
             true,
             queue.hidden(),
             queue.collapsed(),
             queue.holdingPeriodMinutes(),
             queue.notificationThreshold(),
             queue.notifyWhenThresholdReached(),
+            queue.resultPhotoMinCount(),
             List.of()));
+    registry.updateQueueDefinition(
+        queue.definitionId(),
+        new QueueDefinitionRequest(
+            queue.definitionVersion(),
+            "Переименованная очередь",
+            queue.description(),
+            queue.type()));
     var replayed = board.createTask(W1, equivalent);
 
     assertThat(replayed.columns())
@@ -312,7 +471,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void externalTaskRetryRejectsChangedLegacyAndCrossWarehouseCommands() {
+  void externalTaskRetryRequiresCanonicalFingerprintAndWarehouse() {
     var queue = registry.createQueue(W1, queue("IDEMPOTENT_CONFLICT", QueueType.REPAIR, List.of()));
     UUID externalTaskId = UUID.randomUUID();
     var request = externalTask(externalTaskId, queue.id(), "original");
@@ -328,6 +487,131 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         externalTaskId);
     assertThatThrownBy(() -> board.createTask(W1, request)).isInstanceOf(ConflictException.class);
     assertThat(kafkaOutboxCount(TaskBoardEventTypes.BOARD_TASK_CREATED)).isEqualTo(1);
+  }
+
+  @Test
+  void externalTaskRetryUsesEffectiveSchedulingInOneCanonicalFingerprint() {
+    var queue = registry.createQueue(W1, queue("IDEMPOTENT_SCHEDULE", QueueType.REPAIR, List.of()));
+    UUID implicitExternalTaskId = UUID.randomUUID();
+    var implicitRequest = externalTask(implicitExternalTaskId, queue.id(), "implicit-schedule");
+    board.createTask(W1, implicitRequest);
+    BoardTask implicitTask = tasks.findByExternalTaskId(implicitExternalTaskId).orElseThrow();
+    var explicitEffectiveRequest =
+        new CreateBoardTaskRequest(
+            implicitRequest.externalTaskId(),
+            implicitRequest.title(),
+            implicitRequest.unitNumber(),
+            implicitRequest.description(),
+            implicitRequest.plannedDurationMinutes(),
+            implicitRequest.deadlineAt(),
+            implicitRequest.route(),
+            implicitTask.getScheduledDate(),
+            implicitTask.getPriority());
+
+    board.createTask(W1, explicitEffectiveRequest);
+    assertThatThrownBy(
+            () ->
+                board.createTask(
+                    W1,
+                    new CreateBoardTaskRequest(
+                        explicitEffectiveRequest.externalTaskId(),
+                        explicitEffectiveRequest.title(),
+                        explicitEffectiveRequest.unitNumber(),
+                        explicitEffectiveRequest.description(),
+                        explicitEffectiveRequest.plannedDurationMinutes(),
+                        explicitEffectiveRequest.deadlineAt(),
+                        explicitEffectiveRequest.route(),
+                        explicitEffectiveRequest.scheduledDate(),
+                        1)))
+        .isInstanceOf(ConflictException.class);
+
+    UUID scheduledExternalTaskId = UUID.randomUUID();
+    var scheduled =
+        new CreateBoardTaskRequest(
+            scheduledExternalTaskId,
+            "scheduled",
+            null,
+            null,
+            null,
+            null,
+            List.of(new RouteStepRequest(queue.definitionId(), "scheduled", null)),
+            LocalDate.of(2026, 7, 25),
+            2);
+    board.createTask(W1, scheduled);
+    board.createTask(W1, scheduled);
+    assertThatThrownBy(
+            () ->
+                board.createTask(
+                    W1,
+                    new CreateBoardTaskRequest(
+                        scheduled.externalTaskId(),
+                        scheduled.title(),
+                        scheduled.unitNumber(),
+                        scheduled.description(),
+                        scheduled.plannedDurationMinutes(),
+                        scheduled.deadlineAt(),
+                        scheduled.route(),
+                        scheduled.scheduledDate().plusDays(1),
+                        scheduled.priority())))
+        .isInstanceOf(ConflictException.class);
+    assertThat(tasks.count()).isEqualTo(2);
+  }
+
+  @Test
+  void externalTaskRetryFingerprintsCompleteWorkerContent() {
+    var queue = registry.createQueue(W1, queue("IDEMPOTENT_CONTENT", QueueType.REPAIR, List.of()));
+    UUID externalTaskId = UUID.randomUUID();
+    UUID workId = UUID.randomUUID();
+    UUID materialId = UUID.randomUUID();
+    var initial =
+        new CreateBoardTaskRequest(
+            externalTaskId,
+            "worker content",
+            null,
+            null,
+            30,
+            null,
+            List.of(
+                new RouteStepRequest(
+                    queue.definitionId(),
+                    "repair",
+                    30,
+                    List.of(
+                        new TaskWorkSnapshotRequest(
+                            workId, "Замена двери", 1, "шт.", 30, null)),
+                    List.of(
+                        new TaskMaterialSnapshotRequest(
+                            materialId, "Железная дверь", 1, "шт.")),
+                    List.of(),
+                    List.of())));
+
+    board.createTask(W1, initial);
+    board.createTask(W1, initial);
+    var changedMaterialQuantity =
+        new CreateBoardTaskRequest(
+            initial.externalTaskId(),
+            initial.title(),
+            initial.unitNumber(),
+            initial.description(),
+            initial.plannedDurationMinutes(),
+            initial.deadlineAt(),
+            List.of(
+                new RouteStepRequest(
+                    queue.definitionId(),
+                    "repair",
+                    30,
+                    initial.route().getFirst().works(),
+                    List.of(
+                        new TaskMaterialSnapshotRequest(
+                            materialId, "Железная дверь", 2, "шт.")),
+                    List.of(),
+                    List.of())),
+            null,
+            null);
+
+    assertThatThrownBy(() -> board.createTask(W1, changedMaterialQuantity))
+        .isInstanceOf(ConflictException.class);
+    assertThat(tasks.count()).isOne();
   }
 
   @Test
@@ -359,20 +643,28 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void concurrentMixedCaseIdentitiesCommitOnlyOneCanonicalValue() throws Exception {
+  void classesUseUuidIdentityWhileGlobalQueueDefinitionsRejectDuplicateNames() throws Exception {
     List<Object> classOutcomes =
         race(
             () -> registry.createClass(workerClass("MixedClass")),
             () -> registry.createClass(workerClass("mixedclass")));
-    assertSingleSuccess(classOutcomes);
-    assertThat(registry.listClasses()).extracting(WorkerClassDto::code).containsExactly("MIXEDCLASS");
+    assertThat(classOutcomes).allMatch(WorkerClassDto.class::isInstance);
+    assertThat(registry.listClasses()).extracting(WorkerClassDto::id).hasSize(2);
 
     List<Object> queueOutcomes =
         race(
             () -> registry.createQueue(W1, queue("MixedQueue", QueueType.REPAIR, List.of())),
             () -> registry.createQueue(W1, queue("mixedqueue", QueueType.REPAIR, List.of())));
     assertSingleSuccess(queueOutcomes);
-    assertThat(registry.listQueues(W1)).extracting(WorkQueueDto::code).containsExactly("MIXEDQUEUE");
+    assertThat(queueOutcomes)
+        .filteredOn(RuntimeException.class::isInstance)
+        .allMatch(ConflictException.class::isInstance);
+    assertThat(registry.listQueues(W1)).extracting(WorkQueueDto::id).hasSize(1);
+    assertThat(registry.listQueueDefinitions())
+        .extracting(QueueDefinitionDto::name)
+        .singleElement()
+        .asString()
+        .isEqualToIgnoringCase("MixedQueue");
 
     List<Object> workerOutcomes =
         race(
@@ -494,31 +786,15 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void unassignedOrderingIsIsolatedPerWarehouse() {
-    UUID w2FirstExternal = UUID.randomUUID();
-    UUID w2SecondExternal = UUID.randomUUID();
-    board.createTask(W2, externalTask(w2FirstExternal, null, "w2-first"));
-    board.createTask(W2, externalTask(w2SecondExternal, null, "w2-second"));
-    var w2Before =
-        entries.findAllByQueueIsNullAndTask_WarehouseIdOrderByQueuePositionAsc(W2).stream()
-            .map(entry -> List.of(entry.getId(), entry.getVersion(), entry.getQueuePosition()))
-            .toList();
-
-    UUID w1FirstExternal = UUID.randomUUID();
-    board.createTask(W1, externalTask(w1FirstExternal, null, "w1-first"));
-    board.createTask(W1, externalTask(UUID.randomUUID(), null, "w1-second"));
-    var firstRegistration = board.registration(W1, w1FirstExternal);
-    board.cancelTask(
-        W1,
-        w1FirstExternal,
-        new CancelTaskRequest(firstRegistration.taskVersion(), "warehouse isolation"));
-
-    var w2After =
-        entries.findAllByQueueIsNullAndTask_WarehouseIdOrderByQueuePositionAsc(W2).stream()
-            .map(entry -> List.of(entry.getId(), entry.getVersion(), entry.getQueuePosition()))
-            .toList();
-    assertThat(w2After).isEqualTo(w2Before);
-    assertThat(w2After).extracting(values -> values.get(2)).containsExactly(0, 1);
+  void routeWithoutARealQueueIsRejected() {
+    assertThatThrownBy(
+            () ->
+                board.createTask(
+                    W1, externalTask(UUID.randomUUID(), null, "missing-real-queue")))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("общей очереди");
+    assertThat(tasks.count()).isZero();
+    assertThat(entries.count()).isZero();
   }
 
   @Test
@@ -583,7 +859,12 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                   return board.move(
                       W1,
                       moveEntry.id(),
-                      new MoveEntryRequest(moveEntry.version(), target.id(), 0));
+                      new MoveEntryRequest(
+                          moveEntry.version(),
+                          moveEntry.taskVersion(),
+                          target.id(),
+                          0,
+                          moveEntry.scheduledDate()));
                 } catch (RuntimeException conflict) {
                   return conflict;
                 }
@@ -712,12 +993,19 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 TaskBoardEventTypes.BOARD_TASK_CANCELLED))
         .doesNotContain("Отмена логистической операции", "Повторная отмена");
     var cancelledEntry = entries.findById(entry.id()).orElseThrow();
+    LocalDate cancelledDate =
+        tasks.findById(cancelled.taskId()).orElseThrow().getScheduledDate();
     assertThatThrownBy(
             () ->
                 board.move(
                     W1,
                     cancelledEntry.getId(),
-                    new MoveEntryRequest(cancelledEntry.getVersion(), null, 0)))
+                    new MoveEntryRequest(
+                        cancelledEntry.getVersion(),
+                        cancelled.taskVersion(),
+                        null,
+                        0,
+                        cancelledDate)))
         .isInstanceOf(ConflictException.class)
         .hasMessageContaining("отмененный");
   }
@@ -777,51 +1065,54 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 board.move(
                     W1,
                     completedEntry.getId(),
-                    new MoveEntryRequest(completedEntry.getVersion(), null, 0)))
+                    new MoveEntryRequest(
+                        completedEntry.getVersion(),
+                        doneTask.getVersion(),
+                        null,
+                        0,
+                        doneTask.getScheduledDate())))
         .isInstanceOf(ConflictException.class)
         .hasMessageContaining("Завершенный");
   }
 
   @Test
-  void queueWithTaskCannotBeDeletedOrRenamed() {
+  void queueWithTaskCannotBeDeletedButItsPresentationNameCanChange() {
     var queue = registry.createQueue(W1, queue("REPAIR", QueueType.REPAIR, List.of()));
     board.createTask(W1, task(queue.id(), "task"));
     var current = registry.listQueues(W1).getFirst();
     assertThatThrownBy(() -> registry.deleteQueue(W1, current.id(), current.version()))
         .isInstanceOf(ConflictException.class);
     assertThat(kafkaOutboxCount(TaskBoardEventTypes.BOARD_TASK_CANCELLED)).isZero();
-    assertThatThrownBy(
-            () ->
-                registry.updateQueue(
-                    W1,
-                    current.id(),
-                    new WorkQueueRequest(
-                        current.version(),
-                        "NEW",
-                        "Repair",
-                        null,
-                        QueueType.REPAIR,
-                        true,
-                        false,
-                        false,
-                        null,
-                        null,
-                        false,
-                        List.of())))
-        .isInstanceOf(ConflictException.class);
+    registry.updateQueueDefinition(
+        current.definitionId(),
+        new QueueDefinitionRequest(
+            current.definitionVersion(),
+            "Renamed repair",
+            null,
+            QueueType.REPAIR));
+    var renamed = registry.listQueues(W1).getFirst();
+    assertThat(renamed.id()).isEqualTo(current.id());
+    assertThat(renamed.name()).isEqualTo("Renamed repair");
+    assertThat(board.snapshot(W1, true).columns())
+        .extracting(BoardColumnDto::queueName)
+        .containsExactly("Renamed repair");
   }
 
   @Test
-  void externalPlanReferenceBlocksQueueDeleteUntilReleased() {
+  void externalPlanReferenceBlocksDefinitionButNotWarehouseDetach() {
     var queue = registry.createQueue(W1, queue("PLAN", QueueType.REPAIR, List.of()));
     var reference =
         registry.registerReference(
-            queue.id(), new QueueReferenceRequest(QueueReferenceType.REPAIR_PLAN, "plan-1"));
-    assertThatThrownBy(() -> registry.deleteQueue(W1, queue.id(), queue.version()))
+            queue.definitionId(),
+            new QueueReferenceRequest(QueueReferenceType.REPAIR_PLAN, "plan-1"));
+    registry.deleteQueue(W1, queue.id(), queue.version());
+    assertThatThrownBy(
+            () ->
+                registry.deleteQueueDefinition(
+                    queue.definitionId(), queue.definitionVersion()))
         .isInstanceOf(ConflictException.class);
     registry.deleteReference(
         reference.type(), reference.externalReferenceId(), reference.version());
-    registry.deleteQueue(W1, queue.id(), queue.version());
     assertThat(registry.listQueues(W1)).isEmpty();
   }
 
@@ -846,9 +1137,155 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             List.of(new GroupMemberRequest(worker.id(), null, true)));
     assertThatThrownBy(() -> workforce.createGroup(W1, group))
         .isInstanceOf(NotFoundException.class);
+    var queue = registry.createQueue(W2, queue("WORKER_HISTORY", QueueType.REPAIR, List.of()));
+    var entry =
+        board.createTask(W2, task(queue.id(), "worker-history"))
+            .columns()
+            .stream()
+            .flatMap(column -> column.entries().stream())
+            .findFirst()
+            .orElseThrow();
+    board.take(
+        W2, entry.id(), new TakeEntryRequest(entry.version(), null, worker.id()), null);
     assertThatThrownBy(() -> workforce.deleteWorker(W2, worker.id(), worker.version()))
         .isInstanceOf(ConflictException.class);
     assertThat(credentials.deletes).hasValue(0);
+  }
+
+  @Test
+  void groupUpdateCanReplaceOneWorkerWhileKeepingAnotherMember() {
+    var workerClass = registry.createClass(workerClass("DRIVER"));
+    var driverQualification =
+        new QualificationRequest(workerClass.id(), true, "Водитель");
+    var retained =
+        workforce.createWorker(
+            W1, worker("Retained worker", null, null, List.of(driverQualification)));
+    var replaced =
+        workforce.createWorker(
+            W1, worker("Old driver", null, null, List.of(driverQualification)));
+    var replacement =
+        workforce.createWorker(
+            W1, worker("New driver", null, null, List.of(driverQualification)));
+    var created =
+        workforce.createGroup(
+            W1,
+            new WorkerGroupRequest(
+                0L,
+                workerClass.id(),
+                "Drivers",
+                null,
+                true,
+                List.of(
+                    new GroupMemberRequest(retained.id(), "Рабочий", true),
+                    new GroupMemberRequest(replaced.id(), "Водитель", true))));
+
+    var updated =
+        workforce.updateGroup(
+            W1,
+            created.id(),
+            new WorkerGroupRequest(
+                created.version(),
+                workerClass.id(),
+                created.name(),
+                created.description(),
+                created.active(),
+                List.of(
+                    new GroupMemberRequest(retained.id(), "Рабочий", true),
+                    new GroupMemberRequest(replacement.id(), "Водитель", true))));
+
+    assertThat(updated.members())
+        .extracting(GroupMemberDto::workerId)
+        .containsExactlyInAnyOrder(retained.id(), replacement.id());
+  }
+
+  @Test
+  void groupRejectsWorkerWithoutMatchingActiveQualification() {
+    var generalClass = registry.createClass(workerClass("GENERAL_GROUP"));
+    var driverClass = registry.createClass(workerClass("DRIVER_GROUP"));
+    var driver =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Driver",
+                null,
+                null,
+                List.of(new QualificationRequest(driverClass.id(), true, null))));
+
+    assertThatThrownBy(
+            () ->
+                workforce.createGroup(
+                    W1,
+                    new WorkerGroupRequest(
+                        0L,
+                        generalClass.id(),
+                        "General workers",
+                        null,
+                        true,
+                        List.of(new GroupMemberRequest(driver.id(), true)))))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("не имеет квалификации");
+  }
+
+  @Test
+  void workerUpdateCanRetainQualificationWithoutNaturalKeyConflict() {
+    var workerClass = registry.createClass(workerClass("MOVEMENT"));
+    var qualification = new QualificationRequest(workerClass.id(), true, "Основная");
+    var created =
+        workforce.createWorker(
+            W1, worker("Movement worker", null, null, List.of(qualification)));
+
+    var updated =
+        workforce.updateWorker(
+            W1,
+            created.id(),
+            new WorkerRequest(
+                created.version(),
+                "Movement worker updated",
+                null,
+                null,
+                null,
+                true,
+                "Смена профиля",
+                null,
+                null,
+                List.of(qualification)));
+
+    assertThat(updated.displayName()).isEqualTo("Movement worker updated");
+    assertThat(updated.qualifications())
+        .singleElement()
+        .satisfies(
+            retained -> {
+              assertThat(retained.workerClass().id()).isEqualTo(workerClass.id());
+              assertThat(retained.comment()).isEqualTo("Основная");
+            });
+  }
+
+  @Test
+  void disablingAndEnablingWorkerLoginPreservesLoginAndPasswordState() {
+    var created =
+        workforce.createWorker(
+            W1, worker("Worker", "worker.toggle", "password-123", List.of()));
+
+    var disabled = workforce.disableCredentials(W1, created.id(), created.version());
+
+    assertThat(disabled.credentialStatus()).isEqualTo(CredentialStatus.DISABLED);
+    assertThat(disabled.appLogin()).isEqualTo("worker.toggle");
+    assertThat(credentials.externalCredentialState).hasValue("DISABLED");
+
+    var passwordReset =
+        workforce.resetPassword(
+            W1, disabled.id(), disabled.version(), "password-rotated");
+
+    assertThat(passwordReset.credentialStatus()).isEqualTo(CredentialStatus.DISABLED);
+    assertThat(passwordReset.appLogin()).isEqualTo("worker.toggle");
+    assertThat(credentials.externalCredentialState).hasValue("DISABLED");
+
+    var enabled =
+        workforce.enableCredentials(W1, passwordReset.id(), passwordReset.version());
+
+    assertThat(enabled.credentialStatus()).isEqualTo(CredentialStatus.ACTIVE);
+    assertThat(enabled.appLogin()).isEqualTo("worker.toggle");
+    assertThat(credentials.externalCredentialState).hasValue("ACTIVE");
   }
 
   @Test
@@ -859,6 +1296,121 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(created.credentialStatus()).isEqualTo(CredentialStatus.ERROR);
     assertThat(workforce.listWorkers(W1)).hasSize(1);
     assertThat(created).extracting(WorkerDto::appLogin).isEqualTo("worker.login");
+  }
+
+  @Test
+  void failedCredentialConfigureWithOperationMetadataCanBeDeletedWhenAuthIsAbsent() {
+    var workerClass = registry.createClass(workerClass("REJECTED_DELETE"));
+    credentials.failConfigure.set(true);
+    var created =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Rejected worker",
+                "worker.rejected",
+                "password-123",
+                List.of(new QualificationRequest(workerClass.id(), true, null))));
+    var group =
+        workforce.createGroup(
+            W1,
+            new WorkerGroupRequest(
+                0L,
+                workerClass.id(),
+                "Rejected worker group",
+                null,
+                true,
+                List.of(new GroupMemberRequest(created.id(), null, true))));
+
+    assertThat(created.credentialStatus()).isEqualTo(CredentialStatus.ERROR);
+    assertThat(credentials.externalCredentialState).hasValue(null);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                  from worker
+                 where id = ?
+                   and credential_operation_id is not null
+                   and credential_operation_type = 'CONFIGURE'
+                   and credential_operation_started_at is not null
+                """,
+                Integer.class,
+                created.id()))
+        .isEqualTo(1);
+
+    workforce.deleteWorker(W1, created.id(), created.version());
+
+    assertThat(workforce.listWorkers(W1)).isEmpty();
+    assertThat(credentials.deletes).hasValue(1);
+    assertThat(deletionIntents.findByWorkerId(created.id())).isEmpty();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from worker_class_assignment where worker_id = ?",
+                Integer.class,
+                created.id()))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from worker_group_member where worker_id = ?",
+                Integer.class,
+                created.id()))
+        .isZero();
+    assertThat(workforce.listGroups(W1))
+        .singleElement()
+        .satisfies(
+            remainingGroup -> {
+              assertThat(remainingGroup.id()).isEqualTo(group.id());
+              assertThat(remainingGroup.version()).isGreaterThan(group.version());
+              assertThat(remainingGroup.members()).isEmpty();
+            });
+  }
+
+  @Test
+  void failedCredentialConfigureCanBeRetriedWithDifferentLogin() {
+    credentials.failConfigure.set(true);
+    var failed =
+        workforce.createWorker(
+            W1, worker("Retry worker", "occupied.login", "password-123", List.of()));
+    assertThat(failed.credentialStatus()).isEqualTo(CredentialStatus.ERROR);
+
+    credentials.failConfigure.set(false);
+    var recovered =
+        workforce.updateWorker(
+            W1,
+            failed.id(),
+            workerWithVersion(
+                failed.version(), "Retry worker updated", "available.login", "password-456"));
+
+    assertThat(recovered.credentialStatus()).isEqualTo(CredentialStatus.ACTIVE);
+    assertThat(recovered.appLogin()).isEqualTo("available.login");
+    assertThat(recovered.displayName()).isEqualTo("Retry worker updated");
+    assertThat(credentials.lastConfiguredLogin).hasValue("available.login");
+    assertThat(credentials.externalCredentialState).hasValue("ACTIVE");
+  }
+
+  @Test
+  void pendingCredentialOperationStillBlocksWorkerDeletion() {
+    var created =
+        workforce.createWorker(W1, worker("Pending worker", null, null, List.of()));
+    jdbc.update(
+        """
+        update worker
+           set credential_status = 'PENDING',
+               credential_operation_id = ?,
+               credential_operation_type = 'CONFIGURE',
+               credential_operation_started_at = clock_timestamp(),
+               version = version + 1
+         where id = ?
+        """,
+        UUID.randomUUID(),
+        created.id());
+    var pending = workforce.listWorkers(W1).getFirst();
+
+    assertThatThrownBy(
+            () -> workforce.deleteWorker(W1, pending.id(), pending.version()))
+        .isInstanceOf(ConflictException.class);
+    assertThat(workforce.listWorkers(W1)).hasSize(1);
+    assertThat(credentials.deletes).hasValue(0);
+    assertThat(deletionIntents.findByWorkerId(created.id())).isEmpty();
   }
 
   @Test
@@ -886,19 +1438,27 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(failed.appLogin()).isEqualTo("old.login");
     assertThat(credentials.lastConfiguredLogin).hasValue("new.login");
 
+    var profileUpdatedAfterFailure =
+        workforce.updateWorker(
+            W1,
+            failed.id(),
+            workerWithVersion(
+                failed.version(), "Worker profile updated", "old.login", null));
+    assertThat(profileUpdatedAfterFailure.credentialStatus()).isEqualTo(CredentialStatus.ERROR);
+    assertThat(profileUpdatedAfterFailure.appLogin()).isEqualTo("old.login");
     assertThatThrownBy(
             () ->
-                workforce.updateWorker(
+                workforce.reconcileDisableCredentials(
                     W1,
-                    failed.id(),
-                    workerWithVersion(failed.version(), "Worker updated", null, null)))
-        .isInstanceOf(ConflictException.class);
-    assertThatThrownBy(
-            () -> workforce.reconcileDisableCredentials(W1, failed.id(), failed.version()))
+                    profileUpdatedAfterFailure.id(),
+                    profileUpdatedAfterFailure.version()))
         .isInstanceOf(ConflictException.class);
     Thread.sleep(1_250);
     var converged =
-        workforce.reconcileDisableCredentials(W1, failed.id(), failed.version());
+        workforce.reconcileDisableCredentials(
+            W1,
+            profileUpdatedAfterFailure.id(),
+            profileUpdatedAfterFailure.version());
     assertThat(converged.credentialStatus()).isEqualTo(CredentialStatus.ACTIVE);
     assertThat(converged.appLogin()).isEqualTo("old.login");
 
@@ -916,18 +1476,11 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(clearFailed.appLogin()).isEqualTo("old.login");
 
     credentials.failDisable.set(false);
-    assertThatThrownBy(
-            () ->
-                workforce.updateWorker(
-                    W1,
-                    clearFailed.id(),
-                    workerWithVersion(
-                        clearFailed.version(), "Worker updated", null, null)))
-        .isInstanceOf(ConflictException.class);
-    Thread.sleep(1_250);
     var cleared =
-        workforce.reconcileDisableCredentials(
-            W1, clearFailed.id(), clearFailed.version());
+        workforce.updateWorker(
+            W1,
+            clearFailed.id(),
+            workerWithVersion(clearFailed.version(), "Worker updated", null, null));
     assertThat(cleared.credentialStatus()).isEqualTo(CredentialStatus.NOT_CONFIGURED);
     assertThat(cleared.appLogin()).isNull();
   }
@@ -989,8 +1542,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
       Thread.sleep(1_250);
       var reconciled =
           workforce.reconcileDisableCredentials(W1, created.id(), failed.version());
-      assertThat(reconciled.credentialStatus()).isEqualTo(CredentialStatus.NOT_CONFIGURED);
-      assertThat(reconciled.appLogin()).isNull();
+      assertThat(reconciled.credentialStatus()).isEqualTo(CredentialStatus.DISABLED);
+      assertThat(reconciled.appLogin()).isEqualTo("worker.fenced");
       assertThat(credentials.externalCredentialState).hasValue("DISABLED");
     }
   }
@@ -1059,9 +1612,9 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         workforce.reconcileDisableCredentials(
             W1, created.id(), externallyDisabled.version());
 
-    assertThat(disabledRecovery.credentialStatus()).isEqualTo(CredentialStatus.NOT_CONFIGURED);
-    assertThat(disabledRecovery.appLogin()).isNull();
-    assertThat(credentials.disables).hasValue(1);
+    assertThat(disabledRecovery.credentialStatus()).isEqualTo(CredentialStatus.DISABLED);
+    assertThat(disabledRecovery.appLogin()).isEqualTo("worker.orphan");
+    assertThat(credentials.disables).hasValue(0);
   }
 
   @Test
@@ -1084,10 +1637,38 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     var recovered =
         workforce.reconcileDisableCredentials(W1, created.id(), legacy.version());
 
-    assertThat(recovered.credentialStatus()).isEqualTo(CredentialStatus.NOT_CONFIGURED);
-    assertThat(recovered.appLogin()).isNull();
+    assertThat(recovered.credentialStatus()).isEqualTo(CredentialStatus.DISABLED);
+    assertThat(recovered.appLogin()).isEqualTo("worker.legacy");
     assertThat(credentials.externalCredentialState).hasValue("DISABLED");
     assertThat(credentials.disables).hasValue(1);
+  }
+
+  @Test
+  void legacyNotConfiguredProjectionRestoresDisabledLoginFromAuth() {
+    var created =
+        workforce.createWorker(
+            W1, worker("Legacy disabled", "worker.disabled", "password-123", List.of()));
+    credentials.disable(created.id());
+    jdbc.update(
+        """
+        update worker
+           set app_login = null,
+               credential_status = 'NOT_CONFIGURED',
+               credential_operation_id = null,
+               credential_operation_type = null,
+               credential_operation_started_at = null,
+               version = version + 1
+         where id = ?
+        """,
+        created.id());
+    var legacy = workforce.listWorkers(W1).getFirst();
+
+    var recovered =
+        workforce.reconcileDisableCredentials(W1, legacy.id(), legacy.version());
+
+    assertThat(recovered.credentialStatus()).isEqualTo(CredentialStatus.DISABLED);
+    assertThat(recovered.appLogin()).isEqualTo("worker.disabled");
+    assertThat(credentials.externalCredentialState).hasValue("DISABLED");
   }
 
   @Test
@@ -1212,6 +1793,222 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
+  void primaryTakeRequiresUrgentSecondaryAndSecondaryPausesAndResumesWholeBrigade() {
+    var driverClass = registry.createClass(workerClass("DRIVER_URGENT"));
+    var slingerClass = registry.createClass(workerClass("SLINGER_URGENT"));
+    var generalClass = registry.createClass(workerClass("GENERAL_URGENT"));
+    var repairQueue =
+        registry.createQueue(
+            W1,
+            queue(
+                "BRIGADE_REPAIR",
+                QueueType.REPAIR,
+                List.of(new QueueBindingRequest(generalClass.id(), 0, false, false))));
+    var movementQueue =
+        registry.createQueue(
+            W1,
+            queue(
+                "DRIVER_WITH_SLINGER",
+                QueueType.MOVEMENT,
+                List.of(
+                    new QueueBindingRequest(driverClass.id(), 0, false, false),
+                    new QueueBindingRequest(slingerClass.id(), 1, true, true))));
+    var driver =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Driver",
+                null,
+                null,
+                List.of(new QualificationRequest(driverClass.id(), true, null))));
+    var slinger =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Slinger",
+                null,
+                null,
+                List.of(
+                    new QualificationRequest(generalClass.id(), true, null),
+                    new QualificationRequest(slingerClass.id(), true, null))));
+    var brigadeMate =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Brigade mate",
+                null,
+                null,
+                List.of(new QualificationRequest(generalClass.id(), true, null))));
+    var repairBrigade =
+        workforce.createGroup(
+            W1,
+            new WorkerGroupRequest(
+                0L,
+                generalClass.id(),
+                "Repair brigade",
+                null,
+                true,
+                List.of(
+                    new GroupMemberRequest(slinger.id(), true),
+                    new GroupMemberRequest(brigadeMate.id(), true))));
+    var driverGroup =
+        workforce.createGroup(
+            W1,
+            new WorkerGroupRequest(
+                0L,
+                driverClass.id(),
+                "Driver group",
+                null,
+                true,
+                List.of(new GroupMemberRequest(driver.id(), true))));
+    workforce.setCurrentGroup(
+        W1,
+        driver.id(),
+        new SetCurrentGroupRequest(driver.version(), driverGroup.id()));
+    workforce.setCurrentGroup(
+        W1,
+        slinger.id(),
+        new SetCurrentGroupRequest(slinger.version(), repairBrigade.id()));
+
+    var repair =
+        board.createTask(W1, task(repairQueue.id(), "repair")).columns().stream()
+            .flatMap(column -> column.entries().stream())
+            .filter(entry -> entry.title().equals("repair"))
+            .findFirst()
+            .orElseThrow();
+    repair =
+        board.take(
+            W1,
+            repair.id(),
+            new TakeEntryRequest(repair.version(), repairBrigade.id(), null),
+            null);
+    var movement =
+        board.createTask(W1, task(movementQueue.id(), "movement")).columns().stream()
+            .flatMap(column -> column.entries().stream())
+            .filter(entry -> entry.title().equals("movement"))
+            .findFirst()
+            .orElseThrow();
+    movement =
+        board.take(
+            W1,
+            movement.id(),
+            new TakeEntryRequest(movement.version(), null, driver.id()),
+            driver.id());
+    BoardEntryDto awaitingSecondary = movement;
+
+    assertThatThrownBy(
+            () ->
+                board.complete(
+                    W1,
+                    awaitingSecondary.id(),
+                    new VersionCommand(awaitingSecondary.version()),
+                    driver.id()))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("вторичного исполнителя");
+    movement =
+        board.take(
+            W1,
+            movement.id(),
+            new TakeEntryRequest(
+                movement.version(), repairBrigade.id(), slinger.id()),
+            slinger.id());
+
+    BoardEntryDto pausedRepair = entry("repair");
+    assertThat(pausedRepair.status()).isEqualTo(EntryStatus.PAUSED);
+    assertThat(pausedRepair.assignments())
+        .extracting(AssignmentDto::status)
+        .containsOnly(AssignmentStatus.PAUSED);
+    assertThat(movement.assignments())
+        .extracting(AssignmentDto::workerId)
+        .containsExactlyInAnyOrder(driver.id(), slinger.id());
+
+    board.complete(
+        W1, movement.id(), new VersionCommand(movement.version()), slinger.id());
+
+    BoardEntryDto resumedRepair = entry("repair");
+    assertThat(resumedRepair.status()).isEqualTo(EntryStatus.IN_PROGRESS);
+    assertThat(resumedRepair.assignments())
+        .extracting(AssignmentDto::status)
+        .containsOnly(AssignmentStatus.ACTIVE);
+  }
+
+  @Test
+  void secondaryWorkerWaitsForPrimaryThenSeesMandatoryUrgentTask() {
+    var driverClass = registry.createClass(workerClass("DRIVER_VISIBILITY"));
+    var slingerClass = registry.createClass(workerClass("SLINGER_VISIBILITY"));
+    var queue =
+        registry.createQueue(
+            W1,
+            queue(
+                "MOVEMENT_VISIBILITY",
+                QueueType.MOVEMENT,
+                List.of(
+                    new QueueBindingRequest(driverClass.id(), 0, false, false),
+                    new QueueBindingRequest(slingerClass.id(), 1, true, true))));
+    var driver =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Driver visibility",
+                null,
+                null,
+                List.of(new QualificationRequest(driverClass.id(), true, null))));
+    var slinger =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Slinger visibility",
+                null,
+                null,
+                List.of(new QualificationRequest(slingerClass.id(), true, null))));
+    var driverGroup =
+        workforce.createGroup(
+            W1,
+            new WorkerGroupRequest(
+                0L,
+                driverClass.id(),
+                "Driver visibility group",
+                null,
+                true,
+                List.of(new GroupMemberRequest(driver.id(), true))));
+    var slingerGroup =
+        workforce.createGroup(
+            W1,
+            new WorkerGroupRequest(
+                0L,
+                slingerClass.id(),
+                "Slinger visibility group",
+                null,
+                true,
+                List.of(new GroupMemberRequest(slinger.id(), true))));
+    workforce.setCurrentGroup(
+        W1,
+        driver.id(),
+        new SetCurrentGroupRequest(driver.version(), driverGroup.id()));
+    workforce.setCurrentGroup(
+        W1,
+        slinger.id(),
+        new SetCurrentGroupRequest(slinger.version(), slingerGroup.id()));
+    var waiting =
+        board.createTask(W1, task(queue.id(), "visible movement")).columns().stream()
+            .flatMap(column -> column.entries().stream())
+            .findFirst()
+            .orElseThrow();
+
+    assertThat(workerBoard.detail(slinger.id(), W1, waiting.id()).availabilityMode())
+        .isEqualTo("SECONDARY_PENDING");
+    var started =
+        board.take(
+            W1,
+            waiting.id(),
+            new TakeEntryRequest(waiting.version(), null, driver.id()),
+            driver.id());
+
+    assertThat(workerBoard.detail(slinger.id(), W1, started.id()).availabilityMode())
+        .isEqualTo("MANDATORY");
+  }
+
+  @Test
   void directWorkerNeedsMatchingActiveQualification() {
     var required = registry.createClass(workerClass("REQUIRED"));
     var other = registry.createClass(workerClass("OTHER"));
@@ -1249,7 +2046,12 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             .orElseThrow();
     board.createTask(W1, task(q1.id(), "left"));
     board.createTask(W1, task(q2.id(), "target"));
-    var snapshot = board.move(W1, moving.id(), new MoveEntryRequest(moving.version(), q2.id(), 0));
+    var snapshot =
+        board.move(
+            W1,
+            moving.id(),
+            new MoveEntryRequest(
+                moving.version(), moving.taskVersion(), q2.id(), 0, moving.scheduledDate()));
     var source =
         snapshot.columns().stream()
             .filter(c -> q1.id().equals(c.queueId()))
@@ -1265,6 +2067,1064 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .extracting(BoardEntryDto::title)
         .containsExactly("moving", "target");
     assertThat(target.entries()).extracting(BoardEntryDto::queuePosition).containsExactly(0, 1);
+  }
+
+  @Test
+  void sameDayMovePropagatesToCompanionRouteQueuesBehindActiveAndPinnedBarriers() {
+    var workerClass = registry.createClass(workerClass("ROUTE_ORDER_WORKER"));
+    var firstQueue =
+        registry.createQueue(
+            W1,
+            queue(
+                "ROUTE_ORDER_FIRST",
+                QueueType.REPAIR,
+                List.of(new QueueBindingRequest(workerClass.id(), false))));
+    var secondQueue =
+        registry.createQueue(
+            W1, queue("ROUTE_ORDER_SECOND", QueueType.REPAIR, List.of()));
+    var worker =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Route order worker",
+                null,
+                null,
+                List.of(new QualificationRequest(workerClass.id(), true, null))));
+    LocalDate date = LocalDate.of(2026, 7, 24);
+    board.createTask(
+        W1,
+        scheduledRouteTask(
+            List.of(firstQueue.id(), secondQueue.id()), "active", date, 3));
+    board.createTask(W1, scheduledTask(firstQueue.id(), "pinned", date, 3));
+    board.createTask(
+        W1,
+        scheduledRouteTask(
+            List.of(firstQueue.id(), secondQueue.id()), "middle", date, 3));
+    board.createTask(
+        W1,
+        scheduledRouteTask(
+            List.of(firstQueue.id(), secondQueue.id()), "moving", date, 3));
+    BoardEntryDto pinned = entry(date, firstQueue.id(), "pinned");
+    board.pin(W1, pinned.taskId(), new PinTaskRequest(pinned.taskVersion(), true));
+    BoardEntryDto active = entry(date, firstQueue.id(), "active");
+    board.take(
+        W1,
+        active.id(),
+        new TakeEntryRequest(active.version(), null, worker.id()),
+        null);
+
+    BoardEntryDto moving = entry(date, firstQueue.id(), "moving");
+    TaskBoardSnapshot moved =
+        board.move(
+            W1,
+            moving.id(),
+            new MoveEntryRequest(
+                moving.version(),
+                moving.taskVersion(),
+                firstQueue.id(),
+                0,
+                date));
+
+    assertThat(queueEntries(moved, firstQueue.id()))
+        .extracting(BoardEntryDto::title)
+        .containsExactly("active", "pinned", "moving", "middle");
+    assertThat(queueEntries(moved, secondQueue.id()))
+        .extracting(BoardEntryDto::title)
+        .containsExactly("active", "moving", "middle");
+    assertThat(queueEntries(moved, firstQueue.id()))
+        .extracting(BoardEntryDto::queuePosition)
+        .containsExactly(0, 1, 2, 3);
+    assertThat(queueEntries(moved, secondQueue.id()))
+        .extracting(BoardEntryDto::queuePosition)
+        .containsExactly(0, 1, 2);
+  }
+
+  @Test
+  void dateMoveMovesEveryRouteEntryAndKeepsTheRequestedOrdinalInEachQueue() {
+    var sourceQueue =
+        registry.createQueue(W1, queue("ROUTE_DATE_SOURCE", QueueType.REPAIR, List.of()));
+    var companionQueue =
+        registry.createQueue(W1, queue("ROUTE_DATE_COMPANION", QueueType.REPAIR, List.of()));
+    var targetQueue =
+        registry.createQueue(W1, queue("ROUTE_DATE_TARGET", QueueType.REPAIR, List.of()));
+    LocalDate firstDate = LocalDate.of(2026, 7, 24);
+    LocalDate secondDate = firstDate.plusDays(1);
+    board.createTask(
+        W1,
+        scheduledRouteTask(
+            List.of(sourceQueue.id(), companionQueue.id()), "moving", firstDate, 3));
+    board.createTask(
+        W1,
+        scheduledRouteTask(
+            List.of(sourceQueue.id(), companionQueue.id()), "remaining", firstDate, 3));
+    board.createTask(
+        W1,
+        scheduledRouteTask(
+            List.of(companionQueue.id(), targetQueue.id()), "planned-first", secondDate, 3));
+    board.createTask(
+        W1,
+        scheduledRouteTask(
+            List.of(companionQueue.id(), targetQueue.id()), "planned-last", secondDate, 3));
+    BoardEntryDto moving = entry(firstDate, sourceQueue.id(), "moving");
+
+    TaskBoardSnapshot moved =
+        board.move(
+            W1,
+            moving.id(),
+            new MoveEntryRequest(
+                moving.version(),
+                moving.taskVersion(),
+                targetQueue.id(),
+                1,
+                secondDate));
+
+    assertThat(moved.selectedDate()).isEqualTo(secondDate);
+    assertThat(queueEntries(moved, targetQueue.id()))
+        .extracting(BoardEntryDto::title)
+        .containsExactly("planned-first", "moving", "planned-last");
+    assertThat(queueEntries(moved, companionQueue.id()))
+        .extracting(BoardEntryDto::title)
+        .containsExactly("planned-first", "moving", "planned-last");
+    assertThat(queueEntries(board.snapshot(W1, firstDate, true), sourceQueue.id()))
+        .extracting(BoardEntryDto::title)
+        .containsExactly("remaining");
+    assertThat(queueEntries(board.snapshot(W1, firstDate, true), companionQueue.id()))
+        .extracting(BoardEntryDto::title)
+        .containsExactly("remaining");
+  }
+
+  @Test
+  void swappingDateColumnsKeepsTaskMembershipAndPersistsTheCommonRouteDate() {
+    var repairQueue = registry.createQueue(W1, queue("DATE_SWAP_REPAIR", QueueType.REPAIR, List.of()));
+    var verificationQueue =
+        registry.createQueue(W1, queue("DATE_SWAP_VERIFY", QueueType.REPAIR, List.of()));
+    LocalDate firstDate = LocalDate.of(2026, 7, 24);
+    LocalDate secondDate = firstDate.plusDays(1);
+    board.createTask(
+        W1,
+        scheduledRouteTask(
+            List.of(repairQueue.id(), verificationQueue.id()), "first-route", firstDate, 3));
+    board.createTask(W1, scheduledTask(repairQueue.id(), "first-single", firstDate, 3));
+    board.createTask(
+        W1,
+        scheduledRouteTask(
+            List.of(repairQueue.id(), verificationQueue.id()), "second-route", secondDate, 3));
+    board.createTask(W1, scheduledTask(verificationQueue.id(), "second-single", secondDate, 3));
+
+    TaskBoardSnapshot firstBefore = board.snapshot(W1, firstDate, true);
+    TaskBoardSnapshot secondBefore = board.snapshot(W1, secondDate, true);
+    List<BoardEntryDto> firstBeforeEntries = boardEntries(firstBefore);
+    List<BoardEntryDto> secondBeforeEntries = boardEntries(secondBefore);
+    Map<UUID, String> physicalPlacementBefore = new java.util.LinkedHashMap<>();
+    for (BoardEntryDto entry : firstBeforeEntries) {
+      physicalPlacementBefore.put(
+          entry.id(), entry.queueId() + ":" + entry.queuePosition() + ":" + entry.version());
+    }
+    for (BoardEntryDto entry : secondBeforeEntries) {
+      physicalPlacementBefore.put(
+          entry.id(), entry.queueId() + ":" + entry.queuePosition() + ":" + entry.version());
+    }
+    UUID firstRouteTaskId =
+        firstBeforeEntries.stream()
+            .filter(entry -> entry.title().equals("first-route"))
+            .findFirst()
+            .orElseThrow()
+            .taskId();
+
+    TaskBoardSnapshot firstAfter =
+        board.swapDates(
+            W1, swapDateColumnsRequest(firstDate, firstBefore, secondDate, secondBefore));
+    TaskBoardSnapshot secondAfter = board.snapshot(W1, secondDate, true);
+
+    assertThat(firstAfter.selectedDate()).isEqualTo(firstDate);
+    assertThat(boardEntries(firstAfter))
+        .extracting(BoardEntryDto::id)
+        .containsExactlyInAnyOrderElementsOf(
+            secondBeforeEntries.stream().map(BoardEntryDto::id).toList());
+    assertThat(boardEntries(secondAfter))
+        .extracting(BoardEntryDto::id)
+        .containsExactlyInAnyOrderElementsOf(
+            firstBeforeEntries.stream().map(BoardEntryDto::id).toList());
+    assertThat(boardEntries(firstAfter))
+        .extracting(BoardEntryDto::scheduledDate)
+        .containsOnly(firstDate);
+    assertThat(boardEntries(secondAfter))
+        .extracting(BoardEntryDto::scheduledDate)
+        .containsOnly(secondDate);
+
+    Map<UUID, String> physicalPlacementAfter = new java.util.LinkedHashMap<>();
+    for (BoardEntryDto entry : boardEntries(firstAfter)) {
+      physicalPlacementAfter.put(
+          entry.id(), entry.queueId() + ":" + entry.queuePosition() + ":" + entry.version());
+    }
+    for (BoardEntryDto entry : boardEntries(secondAfter)) {
+      physicalPlacementAfter.put(
+          entry.id(), entry.queueId() + ":" + entry.queuePosition() + ":" + entry.version());
+    }
+    assertThat(physicalPlacementAfter).containsExactlyInAnyOrderEntriesOf(physicalPlacementBefore);
+
+    assertThat(entries.findAllByTaskIdOrderByRouteIndexAsc(firstRouteTaskId)).hasSize(2);
+    assertThat(
+            jdbc.queryForList(
+                """
+                select task.scheduled_date
+                  from queue_entry entry
+                  join board_task task on task.id = entry.task_id
+                 where entry.task_id = ?
+                 order by entry.route_index
+                """,
+                LocalDate.class,
+                firstRouteTaskId))
+        .containsExactly(secondDate, secondDate);
+    assertThat(
+            jdbc.queryForObject(
+                "select scheduled_date from board_task where id = ?",
+                LocalDate.class,
+                firstRouteTaskId))
+        .isEqualTo(secondDate);
+    assertThat(kafkaOutboxCount(TaskBoardEventTypes.BOARD_TASK_CHANGED)).isEqualTo(4);
+  }
+
+  @Test
+  void routePropagationPreservesRealShadowQueueSwap() {
+    var firstQueue =
+        registry.createQueue(W1, queue("ROUTE_SWAP_FIRST", QueueType.REPAIR, List.of()));
+    var secondQueue =
+        registry.createQueue(W1, queue("ROUTE_SWAP_SECOND", QueueType.REPAIR, List.of()));
+    LocalDate date = LocalDate.of(2026, 7, 24);
+    board.createTask(
+        W1,
+        scheduledRouteTask(
+            List.of(firstQueue.id(), secondQueue.id()), "moving", date, 3));
+    BoardEntryDto moving = entry(date, firstQueue.id(), "moving");
+
+    TaskBoardSnapshot moved =
+        board.move(
+            W1,
+            moving.id(),
+            new MoveEntryRequest(
+                moving.version(),
+                moving.taskVersion(),
+                secondQueue.id(),
+                0,
+                date));
+
+    List<QueueEntry> route =
+        entries.findAllByTaskIdOrderByRouteIndexAsc(moving.taskId());
+    assertThat(route)
+        .extracting(routeEntry -> routeEntry.getQueue().getId())
+        .containsExactly(secondQueue.id(), firstQueue.id());
+    assertThat(route)
+        .extracting(QueueEntry::getEntryType)
+        .containsExactly(EntryType.REAL, EntryType.SHADOW);
+    assertThat(queueEntries(moved, firstQueue.id()))
+        .extracting(BoardEntryDto::title)
+        .containsExactly("moving");
+    assertThat(queueEntries(moved, secondQueue.id()))
+        .extracting(BoardEntryDto::title)
+        .containsExactly("moving");
+  }
+
+  @Test
+  void repeatedWaitingStagesInOneQueueMoveTogetherWithoutAFalseConflict() {
+    var queue = registry.createQueue(W1, queue("REPEATED_ROUTE", QueueType.REPAIR, List.of()));
+    LocalDate date = LocalDate.of(2026, 7, 24);
+    board.createTask(W1, scheduledTask(queue.id(), "first", date, 3));
+    board.registerExternalTask(
+        "maintenance-service",
+        new RegisterExternalTaskRequest(
+            W1,
+            UUID.randomUUID(),
+            "moving",
+            "БТ-3",
+            null,
+            null,
+            null,
+            List.of(
+                new RouteStepRequest(queue.definitionId(), "first stage", null),
+                new RouteStepRequest(queue.definitionId(), "second stage", null)),
+            date,
+            3));
+    board.createTask(W1, scheduledTask(queue.id(), "last", date, 3));
+    BoardEntryDto realEntry =
+        queueEntries(board.snapshot(W1, date, true), queue.id()).stream()
+            .filter(
+                candidate ->
+                    candidate.title().equals("moving")
+                        && candidate.entryType() == EntryType.REAL)
+            .findFirst()
+            .orElseThrow();
+
+    TaskBoardSnapshot moved =
+        board.move(
+            W1,
+            realEntry.id(),
+            new MoveEntryRequest(
+                realEntry.version(),
+                realEntry.taskVersion(),
+                queue.id(),
+                0,
+                date));
+
+    assertThat(queueEntries(moved, queue.id()))
+        .extracting(BoardEntryDto::title)
+        .containsExactly("moving", "moving", "first", "last");
+    assertThat(queueEntries(moved, queue.id()).subList(0, 2))
+        .extracting(BoardEntryDto::routeIndex)
+        .containsExactly(0, 1);
+  }
+
+  @Test
+  void newTasksAreAppendedToTheirPriorityGroup() {
+    var queue = registry.createQueue(W1, queue("STABLE_PRIORITY", QueueType.REPAIR, List.of()));
+    LocalDate date = LocalDate.of(2026, 7, 24);
+    board.createTask(W1, scheduledTask(queue.id(), "priority 4 first", date, 4));
+    board.createTask(W1, scheduledTask(queue.id(), "priority 1 first", date, 1));
+    board.createTask(W1, scheduledTask(queue.id(), "priority 5", date, 5));
+    board.createTask(W1, scheduledTask(queue.id(), "priority 3", date, 3));
+    board.createTask(W1, scheduledTask(queue.id(), "priority 2", date, 2));
+    board.createTask(W1, scheduledTask(queue.id(), "priority 4 second", date, 4));
+    board.createTask(W1, scheduledTask(queue.id(), "priority 1 second", date, 1));
+
+    assertThat(queueEntries(board.snapshot(W1, date, true), queue.id()))
+        .extracting(BoardEntryDto::title)
+        .containsExactly(
+            "priority 1 first",
+            "priority 1 second",
+            "priority 2",
+            "priority 3",
+            "priority 4 first",
+            "priority 4 second",
+            "priority 5");
+  }
+
+  @Test
+  void maintenanceRegistrationUsesDailyCapacityButManualDateMovesRemainUnrestricted() {
+    var queue = registry.createQueue(W1, queue("DAILY_CAPACITY", QueueType.REPAIR, List.of()));
+    LocalDate requestedDate = LocalDate.of(2026, 7, 25);
+    List<BoardTaskRegistrationDto> registrations = new java.util.ArrayList<>();
+    for (int number = 1; number <= 7; number++) {
+      List<RouteStepRequest> route =
+          number == 1
+              ? List.of(
+                  new RouteStepRequest(queue.definitionId(), "repair", null),
+                  new RouteStepRequest(queue.definitionId(), "verification", null))
+              : List.of(new RouteStepRequest(queue.definitionId(), "repair", null));
+      registrations.add(
+          board.registerExternalTask(
+              "maintenance-service",
+              new RegisterExternalTaskRequest(
+                  W1,
+                  UUID.randomUUID(),
+                  "maintenance-" + number,
+                  "BT-" + number,
+                  null,
+                  null,
+                  null,
+                  route,
+                  requestedDate,
+                  3,
+                  6)));
+    }
+
+    assertThat(registrations.subList(0, 6))
+        .extracting(BoardTaskRegistrationDto::scheduledDate)
+        .containsOnly(requestedDate);
+    BoardTaskRegistrationDto seventhRegistration = registrations.get(6);
+    LocalDate overflowDate = requestedDate.plusDays(1);
+    assertThat(seventhRegistration.scheduledDate()).isEqualTo(overflowDate);
+    assertThat(tasks.findById(seventhRegistration.taskId()).orElseThrow().getScheduledDate())
+        .isEqualTo(overflowDate);
+    assertThat(
+            board.registerExternalTask(
+                "maintenance-service",
+                new RegisterExternalTaskRequest(
+                    W1,
+                    seventhRegistration.externalTaskId(),
+                    "maintenance-7",
+                    "BT-7",
+                    null,
+                    null,
+                    null,
+                    List.of(new RouteStepRequest(queue.definitionId(), "repair", null)),
+                    requestedDate,
+                    3,
+                    7)))
+        .isEqualTo(seventhRegistration);
+
+    BoardEntryDto seventhEntry = entry(overflowDate, "maintenance-7");
+    TaskBoardSnapshot moved =
+        board.move(
+            W1,
+            seventhEntry.id(),
+            new MoveEntryRequest(
+                seventhEntry.version(),
+                seventhEntry.taskVersion(),
+                queue.id(),
+                6,
+                requestedDate));
+
+    assertThat(moved.selectedDate()).isEqualTo(requestedDate);
+    assertThat(queueEntries(board.snapshot(W1, requestedDate, false), queue.id()))
+        .extracting(BoardEntryDto::taskId)
+        .containsExactlyInAnyOrderElementsOf(
+            registrations.stream().map(BoardTaskRegistrationDto::taskId).toList());
+  }
+
+  @Test
+  void dailyCapacityDoesNotChangeNonMaintenanceOrPublicRegistration() {
+    var queue = registry.createQueue(W1, queue("CAPACITY_SCOPE", QueueType.REPAIR, List.of()));
+    LocalDate requestedDate = LocalDate.of(2026, 7, 25);
+    board.registerExternalTask(
+        "maintenance-service",
+        new RegisterExternalTaskRequest(
+            W1,
+            UUID.randomUUID(),
+            "maintenance",
+            null,
+            null,
+            null,
+            null,
+            List.of(new RouteStepRequest(queue.definitionId(), "repair", null)),
+            requestedDate,
+            3,
+            1));
+
+    BoardTaskRegistrationDto otherSource =
+        board.registerExternalTask(
+            "other-service",
+            new RegisterExternalTaskRequest(
+                W1,
+                UUID.randomUUID(),
+                "other source",
+                null,
+                null,
+                null,
+                null,
+                List.of(new RouteStepRequest(queue.definitionId(), "repair", null)),
+                requestedDate,
+                3,
+                1));
+    TaskBoardSnapshot publicRegistration =
+        board.createTask(W1, scheduledTask(queue.id(), "public", requestedDate, 3));
+
+    assertThat(otherSource.scheduledDate()).isEqualTo(requestedDate);
+    assertThat(publicRegistration.selectedDate()).isEqualTo(requestedDate);
+  }
+
+  @Test
+  void maintenanceRouteUsesTargetWarehouseQueueUuid() {
+    var targetQueue =
+        registry.createQueue(W2, queue("Target repair route", QueueType.REPAIR, List.of()));
+    var replacementQueue =
+        registry.createQueue(W2, queue("Replacement repair route", QueueType.REPAIR, List.of()));
+    UUID externalTaskId = UUID.randomUUID();
+
+    BoardTaskRegistrationDto registered =
+        board.registerExternalTask(
+            "maintenance-service",
+            new RegisterExternalTaskRequest(
+                W2,
+                externalTaskId,
+                "global catalog task",
+                "BT-101",
+                null,
+                null,
+                null,
+                List.of(
+                    new RouteStepRequest(targetQueue.definitionId(), "repair", null))));
+
+    assertThat(registered.route())
+        .extracting(RegisteredRouteStepDto::workQueueId)
+        .containsExactly(targetQueue.id());
+    assertThat(registered.route())
+        .extracting(RegisteredRouteStepDto::queueName)
+        .containsExactly(targetQueue.name());
+
+    BoardTaskRegistrationDto updated =
+        board.updateExternalTaskBeforeStart(
+            "maintenance-service",
+            externalTaskId,
+            new PreStartUpdateTaskRequest(
+                registered.taskVersion(),
+                "updated global catalog task",
+                "BT-101",
+                null,
+                null,
+                null,
+                List.of(
+                    new RouteStepRequest(
+                        replacementQueue.definitionId(), "external repair", null))));
+
+    assertThat(updated.route())
+        .extracting(RegisteredRouteStepDto::workQueueId)
+        .containsExactly(replacementQueue.id());
+    assertThat(updated.route())
+        .extracting(RegisteredRouteStepDto::queueName)
+        .containsExactly(replacementQueue.name());
+  }
+
+  @Test
+  void relocationKeepsTaskRouteStatusAndHistoryAndRemapsBindingsIdempotently() {
+    var sourceRepair =
+        registry.createQueue(W1, queue("RELOCATE_REPAIR", QueueType.REPAIR, List.of()));
+    var sourceAcceptance =
+        registry.createQueue(W1, queue("RELOCATE_ACCEPTANCE", QueueType.REPAIR, List.of()));
+    var targetRepair =
+        registry.createQueue(W2, queue("RELOCATE_REPAIR", QueueType.REPAIR, List.of()));
+    var targetAcceptance =
+        registry.createQueue(W2, queue("RELOCATE_ACCEPTANCE", QueueType.REPAIR, List.of()));
+    UUID externalTaskId = UUID.randomUUID();
+
+    RegisterExternalTaskRequest registrationRequest =
+        new RegisterExternalTaskRequest(
+            W1,
+            externalTaskId,
+            "Активный ремонт при перемещении",
+            "BT-RELOCATE",
+            "Смета и маршрут остаются у той же задачи",
+            120,
+            null,
+            List.of(
+                new RouteStepRequest(
+                    sourceRepair.definitionId(), "Незавершённая работа", 90),
+                new RouteStepRequest(
+                    sourceAcceptance.definitionId(), "Приёмка результата", 30)));
+    BoardTaskRegistrationDto registered =
+        board.registerExternalTask(
+            "maintenance-service",
+            registrationRequest);
+    QueueEntry originalEntry =
+        entries.findById(registered.route().getFirst().entryId()).orElseThrow();
+    var history = new TaskTimeEvent();
+    history.setQueueEntry(originalEntry);
+    history.setEventType(TimeEventType.PAUSED);
+    history.setReason("Историческое событие до перемещения");
+    history.setCreatedAt(OffsetDateTime.now(ZoneOffset.UTC));
+    history = timeEvents.saveAndFlush(history);
+
+    BoardTaskRegistrationDto relocated =
+        board.relocateExternalTask(
+            "maintenance-service",
+            externalTaskId,
+            new RelocateExternalTaskRequest(registered.taskVersion(), W2));
+
+    assertThat(relocated.taskId()).isEqualTo(registered.taskId());
+    assertThat(relocated.warehouseId()).isEqualTo(W2);
+    assertThat(relocated.route())
+        .extracting(RegisteredRouteStepDto::entryId)
+        .containsExactlyElementsOf(
+            registered.route().stream().map(RegisteredRouteStepDto::entryId).toList());
+    assertThat(relocated.route())
+        .extracting(RegisteredRouteStepDto::queueDefinitionId)
+        .containsExactly(sourceRepair.definitionId(), sourceAcceptance.definitionId());
+    assertThat(relocated.route())
+        .extracting(RegisteredRouteStepDto::workQueueId)
+        .containsExactly(targetRepair.id(), targetAcceptance.id());
+    assertThat(relocated.route())
+        .extracting(RegisteredRouteStepDto::status)
+        .containsExactlyElementsOf(
+            registered.route().stream().map(RegisteredRouteStepDto::status).toList());
+    assertThat(timeEvents.findAllByQueueEntryIdOrderByCreatedAtAsc(originalEntry.getId()))
+        .extracting(TaskTimeEvent::getId)
+        .containsExactly(history.getId());
+    BoardTaskRegistrationDto targetRegistrationReplay =
+        board.registerExternalTask(
+            "maintenance-service",
+            new RegisterExternalTaskRequest(
+                W2,
+                registrationRequest.externalTaskId(),
+                registrationRequest.title(),
+                registrationRequest.unitNumber(),
+                registrationRequest.description(),
+                registrationRequest.plannedDurationMinutes(),
+                registrationRequest.deadlineAt(),
+                registrationRequest.route()));
+    assertThat(targetRegistrationReplay.taskId()).isEqualTo(relocated.taskId());
+    assertThat(targetRegistrationReplay.taskVersion()).isEqualTo(relocated.taskVersion());
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select payload->>'warehouseId'
+                  from domain_event
+                 where aggregate_type='TASK_BOARD_ENTRY_OWNER_PROOF'
+                   and aggregate_id=?
+                 order by aggregate_version desc
+                 limit 1
+                """,
+                String.class,
+                originalEntry.getId().toString()))
+        .isEqualTo(W2.toString());
+
+    BoardTaskRegistrationDto replay =
+        board.relocateExternalTask(
+            "maintenance-service",
+            externalTaskId,
+            new RelocateExternalTaskRequest(registered.taskVersion(), W2));
+    assertThat(replay.taskVersion()).isEqualTo(relocated.taskVersion());
+    assertThat(replay.route())
+        .extracting(RegisteredRouteStepDto::entryVersion)
+        .containsExactlyElementsOf(
+            relocated.route().stream().map(RegisteredRouteStepDto::entryVersion).toList());
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from task_relocation_receipt where external_task_id=?",
+                Integer.class,
+                externalTaskId))
+        .isOne();
+  }
+
+  @Test
+  void relocationKeepsCompletedStagesOnTheirSourceQueueAndRequiresOnlyUnfinishedBindings() {
+    var workerClass = registry.createClass(workerClass("RELOCATE_COMPLETED_WORKER"));
+    var sourceCompleted =
+        registry.createQueue(
+            W1,
+            queue(
+                "RELOCATE_COMPLETED_STAGE",
+                QueueType.REPAIR,
+                List.of(new QueueBindingRequest(workerClass.id(), false))));
+    var sourcePending =
+        registry.createQueue(
+            W1, queue("RELOCATE_PENDING_STAGE", QueueType.REPAIR, List.of()));
+    var targetPending =
+        registry.createQueue(
+            W2, queue("RELOCATE_PENDING_STAGE", QueueType.REPAIR, List.of()));
+    var worker =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Relocation worker",
+                null,
+                null,
+                List.of(new QualificationRequest(workerClass.id(), true, null))));
+    UUID externalTaskId = UUID.randomUUID();
+    BoardTaskRegistrationDto registered =
+        board.registerExternalTask(
+            "maintenance-service",
+            new RegisterExternalTaskRequest(
+                W1,
+                externalTaskId,
+                "Ремонт с завершённым этапом",
+                "BT-RELOCATE-DONE",
+                null,
+                60,
+                null,
+                List.of(
+                    new RouteStepRequest(
+                        sourceCompleted.definitionId(), "Завершённая работа", 30),
+                    new RouteStepRequest(
+                        sourcePending.definitionId(), "Оставшаяся работа", 30))));
+    RegisteredRouteStepDto completedStage = registered.route().getFirst();
+    BoardEntryDto taken =
+        board.take(
+            W1,
+            completedStage.entryId(),
+            new TakeEntryRequest(completedStage.entryVersion(), null, worker.id()),
+            null);
+    board.complete(W1, taken.id(), new VersionCommand(taken.version()), null);
+    QueueEntry completedBeforeRelocation =
+        entries.findById(completedStage.entryId()).orElseThrow();
+    long completedVersion = completedBeforeRelocation.getVersion();
+    List<UUID> historyIds =
+        timeEvents.findAllByQueueEntryIdOrderByCreatedAtAsc(completedStage.entryId()).stream()
+            .map(TaskTimeEvent::getId)
+            .toList();
+    BoardTask task = tasks.findByExternalTaskId(externalTaskId).orElseThrow();
+
+    BoardTaskRegistrationDto relocated =
+        board.relocateExternalTask(
+            "maintenance-service",
+            externalTaskId,
+            new RelocateExternalTaskRequest(task.getVersion(), W2));
+
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from work_queue where warehouse_id=? and definition_id=?",
+                Integer.class,
+                W2,
+                sourceCompleted.definitionId()))
+        .isZero();
+    assertThat(relocated.route())
+        .extracting(
+            RegisteredRouteStepDto::status,
+            RegisteredRouteStepDto::workQueueId)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(EntryStatus.DONE, sourceCompleted.id()),
+            org.assertj.core.groups.Tuple.tuple(EntryStatus.WAITING, targetPending.id()));
+    QueueEntry completedAfterRelocation =
+        entries.findById(completedStage.entryId()).orElseThrow();
+    assertThat(completedAfterRelocation.getVersion()).isEqualTo(completedVersion);
+    assertThat(timeEvents.findAllByQueueEntryIdOrderByCreatedAtAsc(completedStage.entryId()))
+        .extracting(TaskTimeEvent::getId)
+        .containsExactlyElementsOf(historyIds);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select payload->>'warehouseId'
+                  from domain_event
+                 where aggregate_type='TASK_BOARD_ENTRY_OWNER_PROOF'
+                   and aggregate_id=?
+                 order by aggregate_version desc
+                 limit 1
+                """,
+                String.class,
+                completedStage.entryId().toString()))
+        .isEqualTo(W1.toString());
+  }
+
+  @Test
+  void relocationWithoutRequiredTargetBindingFailsBeforeAnyMutation() {
+    var sourceQueue =
+        registry.createQueue(W1, queue("RELOCATE_MISSING_TARGET", QueueType.REPAIR, List.of()));
+    UUID externalTaskId = UUID.randomUUID();
+    BoardTaskRegistrationDto registered =
+        board.registerExternalTask(
+            "maintenance-service",
+            new RegisterExternalTaskRequest(
+                W1,
+                externalTaskId,
+                "Ремонт без очереди на целевом складе",
+                null,
+                null,
+                30,
+                null,
+                List.of(
+                    new RouteStepRequest(
+                        sourceQueue.definitionId(), "Работа без fallback", 30))));
+
+    assertThatThrownBy(
+            () ->
+                board.relocateExternalTask(
+                    "maintenance-service",
+                    externalTaskId,
+                    new RelocateExternalTaskRequest(registered.taskVersion(), W2)))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("не подключил общую очередь");
+
+    BoardTaskRegistrationDto unchanged =
+        board.externalTask("maintenance-service", externalTaskId);
+    assertThat(unchanged.warehouseId()).isEqualTo(W1);
+    assertThat(unchanged.taskVersion()).isEqualTo(registered.taskVersion());
+    assertThat(unchanged.route())
+        .extracting(
+            RegisteredRouteStepDto::entryId,
+            RegisteredRouteStepDto::entryVersion,
+            RegisteredRouteStepDto::workQueueId,
+            RegisteredRouteStepDto::status)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(
+                registered.route().getFirst().entryId(),
+                registered.route().getFirst().entryVersion(),
+                sourceQueue.id(),
+                registered.route().getFirst().status()));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from task_relocation_receipt where external_task_id=?",
+                Integer.class,
+                externalTaskId))
+        .isZero();
+  }
+
+  @Test
+  void nonMaintenanceRouteCannotUseAnotherWarehousesQueueUuid() {
+    var sourceQueue =
+        registry.createQueue(W1, queue("Source repair route", QueueType.REPAIR, List.of()));
+
+    assertThatThrownBy(
+            () ->
+                board.registerExternalTask(
+                    "other-service",
+                    new RegisterExternalTaskRequest(
+                        W2,
+                        UUID.randomUUID(),
+                        "strict task",
+                        null,
+                        null,
+                        null,
+                        null,
+                        List.of(
+                            new RouteStepRequest(
+                                sourceQueue.definitionId(), null, null)))))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("не подключена");
+  }
+
+  @Test
+  void maintenanceRouteRejectsMissingHiddenAndInactiveTargetQueues() {
+    var hiddenTarget =
+        registry.createQueue(W2, queue("Hidden target", QueueType.REPAIR, List.of()));
+    registry.updateQueue(
+        W2,
+        hiddenTarget.id(),
+        new WorkQueueRequest(
+            hiddenTarget.version(),
+            hiddenTarget.definitionId(),
+            true,
+            true,
+            hiddenTarget.collapsed(),
+            hiddenTarget.holdingPeriodMinutes(),
+            hiddenTarget.notificationThreshold(),
+            hiddenTarget.notifyWhenThresholdReached(),
+            hiddenTarget.resultPhotoMinCount(),
+            List.of()));
+    var inactiveTarget =
+        registry.createQueue(W2, queue("Inactive target", QueueType.REPAIR, List.of()));
+    registry.updateQueue(
+        W2,
+        inactiveTarget.id(),
+        new WorkQueueRequest(
+            inactiveTarget.version(),
+            inactiveTarget.definitionId(),
+            false,
+            false,
+            inactiveTarget.collapsed(),
+            inactiveTarget.holdingPeriodMinutes(),
+            inactiveTarget.notificationThreshold(),
+            inactiveTarget.notifyWhenThresholdReached(),
+            inactiveTarget.resultPhotoMinCount(),
+            List.of()));
+
+    assertThatThrownBy(
+            () ->
+                registerMaintenanceRoute(
+                    UUID.randomUUID(), "missing target"))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("не подключена");
+    assertThatThrownBy(
+            () ->
+                registerMaintenanceRoute(
+                    hiddenTarget.id(), "hidden target"))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("активна и видима");
+    assertThatThrownBy(
+            () ->
+                registerMaintenanceRoute(
+                    inactiveTarget.id(), "inactive target"))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("активна и видима");
+  }
+
+  @Test
+  void concurrentMaintenanceRegistrationsDoNotOverfillDailyCapacity() throws Exception {
+    var queue = registry.createQueue(W1, queue("CAPACITY_RACE", QueueType.REPAIR, List.of()));
+    LocalDate requestedDate = LocalDate.of(2026, 7, 25);
+
+    List<Object> outcomes =
+        race(
+            () ->
+                board.registerExternalTask(
+                    "maintenance-service",
+                    new RegisterExternalTaskRequest(
+                        W1,
+                        UUID.randomUUID(),
+                        "first",
+                        null,
+                        null,
+                        null,
+                        null,
+                        List.of(new RouteStepRequest(queue.definitionId(), "repair", null)),
+                        requestedDate,
+                        3,
+                        1)),
+            () ->
+                board.registerExternalTask(
+                    "maintenance-service",
+                    new RegisterExternalTaskRequest(
+                        W1,
+                        UUID.randomUUID(),
+                        "second",
+                        null,
+                        null,
+                        null,
+                        null,
+                        List.of(new RouteStepRequest(queue.definitionId(), "repair", null)),
+                        requestedDate,
+                        3,
+                        1)));
+
+    assertThat(outcomes).allMatch(BoardTaskRegistrationDto.class::isInstance);
+    assertThat(outcomes.stream().map(BoardTaskRegistrationDto.class::cast).toList())
+        .extracting(BoardTaskRegistrationDto::scheduledDate)
+        .containsExactlyInAnyOrder(requestedDate, requestedDate.plusDays(1));
+  }
+
+  @Test
+  void priorityInsertionRespectsPinnedBarrierAndDateMoveUpdatesBothViews() {
+    var queue = registry.createQueue(W1, queue("PLANNED", QueueType.REPAIR, List.of()));
+    LocalDate firstDate = LocalDate.of(2026, 7, 24);
+    LocalDate secondDate = firstDate.plusDays(1);
+    board.createTask(W1, scheduledTask(queue.id(), "first", firstDate, 3));
+    board.createTask(W1, scheduledTask(queue.id(), "pinned", firstDate, 3));
+    BoardEntryDto pinned = entry(firstDate, "pinned");
+    board.pin(
+        W1, pinned.taskId(), new PinTaskRequest(pinned.taskVersion(), true));
+
+    board.createTask(W1, scheduledTask(queue.id(), "urgent", firstDate, 1));
+
+    assertThat(board.snapshot(W1, firstDate, true).columns().getFirst().entries())
+        .extracting(BoardEntryDto::title)
+        .containsExactly("first", "pinned", "urgent");
+    BoardEntryDto urgent = entry(firstDate, "urgent");
+    TaskBoardSnapshot moved =
+        board.move(
+            W1,
+            urgent.id(),
+            new MoveEntryRequest(
+                urgent.version(),
+                urgent.taskVersion(),
+                queue.id(),
+                0,
+                secondDate));
+
+    assertThat(moved.selectedDate()).isEqualTo(secondDate);
+    assertThat(moved.availableDates()).containsExactly(firstDate, secondDate);
+    assertThat(moved.columns().getFirst().entries())
+        .extracting(BoardEntryDto::title)
+        .containsExactly("urgent");
+    assertThat(board.snapshot(W1, firstDate, true).columns().getFirst().entries())
+        .extracting(BoardEntryDto::title)
+        .containsExactly("first", "pinned");
+  }
+
+  @Test
+  void urgentTaskIsInsertedImmediatelyAfterTheCurrentInProgressTask() {
+    var workerClass = registry.createClass(workerClass("PRIORITY_WORKER"));
+    var queue =
+        registry.createQueue(
+            W1,
+            queue(
+                "PRIORITY",
+                QueueType.REPAIR,
+                List.of(new QueueBindingRequest(workerClass.id(), false))));
+    var worker =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Priority worker",
+                null,
+                null,
+                List.of(new QualificationRequest(workerClass.id(), true, null))));
+    LocalDate date = LocalDate.of(2026, 7, 24);
+    board.createTask(W1, scheduledTask(queue.id(), "current", date, 3));
+    board.createTask(W1, scheduledTask(queue.id(), "waiting", date, 3));
+    BoardEntryDto current = entry(date, "current");
+    board.take(
+        W1,
+        current.id(),
+        new TakeEntryRequest(current.version(), null, worker.id()),
+        null);
+
+    board.createTask(W1, scheduledTask(queue.id(), "urgent", date, 1));
+
+    assertThat(board.snapshot(W1, date, true).columns().getFirst().entries())
+        .extracting(BoardEntryDto::title)
+        .containsExactly("current", "urgent", "waiting");
+
+    BoardEntryDto paused =
+        board.pause(
+            W1,
+            current.id(),
+            new PauseEntryRequest(entry(date, "current").version(), "Перерыв"),
+            null);
+    board.createTask(W1, scheduledTask(queue.id(), "another urgent", date, 1));
+
+    assertThat(board.snapshot(W1, date, true).columns().getFirst().entries())
+        .extracting(BoardEntryDto::title)
+        .containsExactly("current", "urgent", "another urgent", "waiting");
+    assertThatThrownBy(
+            () ->
+                board.move(
+                    W1,
+                    paused.id(),
+                    new MoveEntryRequest(
+                        paused.version(),
+                        paused.taskVersion(),
+                        queue.id(),
+                        2,
+                        paused.scheduledDate())))
+        .isInstanceOf(ConflictException.class)
+        .hasMessageContaining("в работе");
+  }
+
+  @Test
+  void overdueMaintenanceTasksRollOverBeforeOriginallyPlannedTasks() {
+    var workerClass = registry.createClass(workerClass("ROLLOVER_WORKER"));
+    var queue =
+        registry.createQueue(
+            W1,
+            queue(
+                "ROLLOVER",
+                QueueType.REPAIR,
+                List.of(new QueueBindingRequest(workerClass.id(), false))));
+    var worker =
+        workforce.createWorker(
+            W1,
+            worker(
+                "Rollover worker",
+                null,
+                null,
+                List.of(new QualificationRequest(workerClass.id(), true, null))));
+    LocalDate today = LocalDate.of(2026, 7, 24);
+    board.createTask(W1, scheduledTask(queue.id(), "current", today, 3));
+    board.createTask(W1, scheduledTask(queue.id(), "planned", today, 3));
+    BoardEntryDto current = entry(today, "current");
+    board.take(
+        W1,
+        current.id(),
+        new TakeEntryRequest(current.version(), null, worker.id()),
+        null);
+    board.registerExternalTask(
+        "maintenance-service",
+        new RegisterExternalTaskRequest(
+            W1,
+            UUID.randomUUID(),
+            "overdue",
+            "БТ-1",
+            null,
+            null,
+            null,
+            List.of(new RouteStepRequest(queue.definitionId(), "repair", null)),
+            today.minusDays(1),
+            4));
+
+    assertThat(board.rolloverOverdueMaintenanceTasks(today)).isEqualTo(1);
+
+    TaskBoardSnapshot snapshot = board.snapshot(W1, today, true);
+    assertThat(snapshot.availableDates()).containsExactly(today);
+    assertThat(snapshot.columns().getFirst().entries())
+        .extracting(BoardEntryDto::title)
+        .containsExactly("current", "overdue", "planned");
+    assertThat(board.rolloverOverdueMaintenanceTasks(today)).isZero();
+  }
+
+  @Test
+  void concurrentMaintenanceRolloverMovesEachTaskExactlyOnce() throws Exception {
+    var queue = registry.createQueue(W1, queue("ROLLOVER-RACE", QueueType.REPAIR, List.of()));
+    LocalDate today = LocalDate.of(2026, 7, 24);
+    board.registerExternalTask(
+        "maintenance-service",
+        new RegisterExternalTaskRequest(
+            W1,
+            UUID.randomUUID(),
+            "overdue",
+            "БТ-2",
+            null,
+            null,
+            null,
+            List.of(new RouteStepRequest(queue.definitionId(), "repair", null)),
+            today.minusDays(1),
+            3));
+
+    List<Object> outcomes =
+        race(
+            () -> board.rolloverOverdueMaintenanceTasks(today),
+            () -> board.rolloverOverdueMaintenanceTasks(today));
+
+    assertThat(outcomes).containsExactlyInAnyOrder(0, 1);
+    assertThat(board.snapshot(W1, today, true).columns().getFirst().entries())
+        .extracting(BoardEntryDto::title)
+        .containsExactly("overdue");
   }
 
   @Test
@@ -1294,7 +3154,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                   .header("Access-Control-Request-Method", "GET")
                   .header(
                       "Access-Control-Request-Headers",
-                      "Authorization, Content-Type, X-Correlation-Id"))
+                      "Authorization, Content-Type, X-Correlation-Id, "
+                          + "Idempotency-Key, If-None-Match, Last-Event-ID"))
           .andExpect(status().isOk())
           .andExpect(header().string("Access-Control-Allow-Origin", origin))
           .andExpect(
@@ -1325,7 +3186,10 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .andExpect(
             header().string(
                 "Access-Control-Expose-Headers",
-                org.hamcrest.Matchers.containsString("X-Correlation-Id")))
+                org.hamcrest.Matchers.allOf(
+                    org.hamcrest.Matchers.containsString("X-Correlation-Id"),
+                    org.hamcrest.Matchers.containsString("ETag"),
+                    org.hamcrest.Matchers.containsString("Retry-After"))))
         .andExpect(header().exists("X-Correlation-Id"));
   }
 
@@ -1339,7 +3203,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     var workerClass = registry.createClass(workerClass("HTTP"));
     String body =
         """
-        {"version":99,"code":"HTTP","name":"HTTP","description":null,"comment":null,"sortOrder":10,"active":true}
+        {"version":99,"name":"HTTP","description":null,"comment":null,"sortOrder":10,"active":true}
         """;
     mockMvc
         .perform(
@@ -1375,16 +3239,75 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
+  void dateColumnSwapApiRejectsStaleTaskVersionWithoutMovingEitherColumn() throws Exception {
+    var queue = registry.createQueue(W1, queue("HTTP_DATE_SWAP", QueueType.REPAIR, List.of()));
+    LocalDate firstDate = LocalDate.of(2026, 7, 24);
+    LocalDate secondDate = firstDate.plusDays(1);
+    board.createTask(W1, scheduledTask(queue.id(), "first", firstDate, 3));
+    board.createTask(W1, scheduledTask(queue.id(), "second", secondDate, 3));
+    TaskBoardSnapshot firstBefore = board.snapshot(W1, firstDate, true);
+    TaskBoardSnapshot secondBefore = board.snapshot(W1, secondDate, true);
+    BoardEntryDto firstEntry = boardEntries(firstBefore).getFirst();
+    BoardEntryDto secondEntry = boardEntries(secondBefore).getFirst();
+    board.pin(W1, firstEntry.taskId(), new PinTaskRequest(firstEntry.taskVersion(), true));
+
+    String body =
+        """
+        {
+          "firstDate":"%s",
+          "secondDate":"%s",
+          "entries":[
+            {"entryId":"%s","expectedVersion":%d,"expectedTaskVersion":%d},
+            {"entryId":"%s","expectedVersion":%d,"expectedTaskVersion":%d}
+          ]
+        }
+        """
+            .formatted(
+                firstDate,
+                secondDate,
+                firstEntry.id(),
+                firstEntry.version(),
+                firstEntry.taskVersion(),
+                secondEntry.id(),
+                secondEntry.version(),
+                secondEntry.taskVersion());
+
+    mockMvc
+        .perform(
+            post("/api/warehouses/{warehouseId}/task-board/dates/swap", W1)
+                .with(
+                    jwt()
+                        .jwt(
+                            token ->
+                                token
+                                    .claim("principal_type", "USER")
+                                    .claim("global_role", "SYSTEM_ADMIN")
+                                    .claim("scope", "rwms.write")))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body))
+        .andExpect(status().isConflict())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(jsonPath("$.code").value("TASK_BOARD_CONFLICT"));
+
+    assertThat(boardEntries(board.snapshot(W1, firstDate, true)))
+        .extracting(BoardEntryDto::id)
+        .containsExactly(firstEntry.id());
+    assertThat(boardEntries(board.snapshot(W1, secondDate, true)))
+        .extracting(BoardEntryDto::id)
+        .containsExactly(secondEntry.id());
+  }
+
+  @Test
   void duplicateRouteControllerMutationReturns409() throws Exception {
     var queue = registry.createQueue(W1, queue("HTTP_ROUTE", QueueType.REPAIR, List.of()));
     String body =
         """
         {"externalTaskId":null,"title":"duplicate","route":[
-          {"queueId":"%s","queueCode":null,"taskText":null,"plannedDurationMinutes":null},
-          {"queueId":"%s","queueCode":null,"taskText":null,"plannedDurationMinutes":null}
+          {"queueDefinitionId":"%s","taskText":null,"plannedDurationMinutes":null},
+          {"queueDefinitionId":"%s","taskText":null,"plannedDurationMinutes":null}
         ]}
         """
-            .formatted(queue.id(), queue.id());
+            .formatted(queue.definitionId(), queue.definitionId());
     mockMvc
         .perform(
             post("/api/warehouses/{warehouseId}/task-board/tasks", W1)
@@ -1482,6 +3405,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .andExpect(status().isOk());
 
     var cancelledEntry = entries.findById(entry.id()).orElseThrow();
+    var cancelledTask = tasks.findByWarehouseIdAndExternalTaskId(W1, externalTaskId).orElseThrow();
     mockMvc
         .perform(
             post(
@@ -1500,9 +3424,12 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 .content(
                     "{\"expectedVersion\":"
                         + cancelledEntry.getVersion()
-                        + ",\"targetQueueId\":null,\"targetIndex\":0}"))
-        .andExpect(status().isConflict())
-        .andExpect(jsonPath("$.code").value("TASK_BOARD_CONFLICT"));
+                        + ",\"expectedTaskVersion\":"
+                        + cancelledTask.getVersion()
+                        + ",\"targetQueueId\":null,\"targetIndex\":0,\"targetDate\":\""
+                        + cancelledTask.getScheduledDate()
+                        + "\"}"))
+        .andExpect(status().isBadRequest());
   }
 
   @Test
@@ -1594,7 +3521,10 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .andExpect(jsonPath("$.externalTaskId").value(externalTaskId.toString()))
         .andExpect(jsonPath("$.status").value("ACTIVE"))
         .andExpect(jsonPath("$.route.length()").value(1))
-        .andExpect(jsonPath("$.route[0].queueId").value(queue.id().toString()));
+        .andExpect(
+            jsonPath("$.route[0].queueDefinitionId")
+                .value(queue.definitionId().toString()))
+        .andExpect(jsonPath("$.route[0].workQueueId").value(queue.id().toString()));
   }
 
   private long kafkaOutboxCount(String eventType) {
@@ -1614,23 +3544,32 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .orElseThrow();
   }
 
-  private WorkerClassRequest workerClass(String code) {
-    return new WorkerClassRequest(0L, code, code, null, null, 10, true);
+  private WorkerClassRequest workerClass(String name) {
+    return new WorkerClassRequest(0L, name, null, null, 10, true);
   }
 
-  private WorkQueueRequest queue(String code, QueueType type, List<QueueBindingRequest> bindings) {
+  private WorkQueueRequest queue(String name, QueueType type, List<QueueBindingRequest> bindings) {
+    QueueDefinitionDto definition =
+        registry.listQueueDefinitions().stream()
+            .filter(
+                candidate ->
+                    candidate.name().equalsIgnoreCase(name)
+                        && candidate.type() == type)
+            .findFirst()
+            .orElseGet(
+                () ->
+                    registry.createQueueDefinition(
+                        new QueueDefinitionRequest(0L, name, null, type)));
     return new WorkQueueRequest(
         0L,
-        code,
-        code,
-        null,
-        type,
+        definition.id(),
         true,
         false,
         false,
         type == QueueType.HOLDING ? 10 : null,
         type == QueueType.HOLDING ? 2 : null,
         false,
+        null,
         bindings);
   }
 
@@ -1653,7 +3592,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         null,
         null,
         null,
-        List.of(new RouteStepRequest(queue, null, null, null)));
+        List.of(new RouteStepRequest(routeDefinition(queue), null, null)));
   }
 
   private CreateBoardTaskRequest externalTask(UUID externalTaskId, UUID queue, String title) {
@@ -1664,7 +3603,117 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         null,
         null,
         null,
-        List.of(new RouteStepRequest(queue, null, title, null)));
+        List.of(new RouteStepRequest(routeDefinition(queue), title, null)));
+  }
+
+  private BoardTaskRegistrationDto registerMaintenanceRoute(
+      UUID queueId, String title) {
+    return board.registerExternalTask(
+        "maintenance-service",
+        new RegisterExternalTaskRequest(
+            W2,
+            UUID.randomUUID(),
+            title,
+            null,
+            null,
+            null,
+            null,
+            List.of(new RouteStepRequest(routeDefinition(queueId), null, null))));
+  }
+
+  private CreateBoardTaskRequest scheduledTask(
+      UUID queue, String title, LocalDate scheduledDate, int priority) {
+    return new CreateBoardTaskRequest(
+        null,
+        title,
+        null,
+        null,
+        null,
+        null,
+        List.of(new RouteStepRequest(routeDefinition(queue), title, null)),
+        scheduledDate,
+        priority);
+  }
+
+  private CreateBoardTaskRequest scheduledRouteTask(
+      List<UUID> route, String title, LocalDate scheduledDate, int priority) {
+    return new CreateBoardTaskRequest(
+        null,
+        title,
+        null,
+        null,
+        null,
+        null,
+        route.stream()
+            .map(queue -> new RouteStepRequest(routeDefinition(queue), title, null))
+            .toList(),
+        scheduledDate,
+        priority);
+  }
+
+  private UUID routeDefinition(UUID queueOrDefinitionId) {
+    if (queueOrDefinitionId == null) {
+      return null;
+    }
+    try {
+      return registry.requireQueue(queueOrDefinitionId).getDefinition().getId();
+    } catch (NotFoundException ignored) {
+      return queueOrDefinitionId;
+    }
+  }
+
+  private long versionOf(List<WorkQueueDto> queues, UUID queueId) {
+    return queues.stream()
+        .filter(queue -> queue.id().equals(queueId))
+        .mapToLong(WorkQueueDto::version)
+        .findFirst()
+        .orElseThrow();
+  }
+
+  private BoardEntryDto entry(LocalDate date, String title) {
+    return board.snapshot(W1, date, true).columns().stream()
+        .flatMap(column -> column.entries().stream())
+        .filter(entry -> entry.title().equals(title))
+        .findFirst()
+        .orElseThrow();
+  }
+
+  private BoardEntryDto entry(LocalDate date, UUID queueId, String title) {
+    return queueEntries(board.snapshot(W1, date, true), queueId).stream()
+        .filter(entry -> entry.title().equals(title))
+        .findFirst()
+        .orElseThrow();
+  }
+
+  private List<BoardEntryDto> queueEntries(TaskBoardSnapshot snapshot, UUID queueId) {
+    return snapshot.columns().stream()
+        .filter(column -> Objects.equals(column.queueId(), queueId))
+        .findFirst()
+        .orElseThrow()
+        .entries();
+  }
+
+  private List<BoardEntryDto> boardEntries(TaskBoardSnapshot snapshot) {
+    return snapshot.columns().stream().flatMap(column -> column.entries().stream()).toList();
+  }
+
+  private SwapTaskBoardDatesRequest swapDateColumnsRequest(
+      LocalDate firstDate,
+      TaskBoardSnapshot firstColumn,
+      LocalDate secondDate,
+      TaskBoardSnapshot secondColumn) {
+    List<TaskBoardDateEntryExpectation> expectations = new java.util.ArrayList<>();
+    for (BoardEntryDto entry : boardEntries(firstColumn)) {
+      expectations.add(
+          new TaskBoardDateEntryExpectation(
+              entry.id(), entry.version(), entry.taskVersion()));
+    }
+    for (BoardEntryDto entry : boardEntries(secondColumn)) {
+      expectations.add(
+          new TaskBoardDateEntryExpectation(
+              entry.id(), entry.version(), entry.taskVersion()));
+    }
+    return new SwapTaskBoardDatesRequest(firstDate, secondDate, expectations);
   }
 
   private List<Object> race(Supplier<Object> firstCommand, Supplier<Object> secondCommand)
@@ -1774,6 +3823,10 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
       if (failDisable.get()) throw new IllegalStateException("auth down");
       disables.incrementAndGet();
       externalCredentialState.set("DISABLED");
+    }
+
+    public void enable(UUID workerId) {
+      externalCredentialState.set("ACTIVE");
     }
 
     public void delete(UUID workerId) {

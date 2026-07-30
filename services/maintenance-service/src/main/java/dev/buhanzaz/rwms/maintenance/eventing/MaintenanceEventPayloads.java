@@ -145,6 +145,7 @@ public final class MaintenanceEventPayloads {
       RepairExecutionState executionState,
       RepairAcceptanceState acceptanceState,
       LocalDate dispatchDate,
+      int priority,
       List<RepairStageFact> stages)
       implements MaintenanceIntegrationFact {
     public RepairFact {
@@ -158,6 +159,9 @@ public final class MaintenanceEventPayloads {
       Objects.requireNonNull(acceptanceState, "acceptanceState is required");
       Objects.requireNonNull(dispatchDate, "dispatchDate is required");
       Objects.requireNonNull(stages, "stages are required");
+      if (priority < 1 || priority > 5) {
+        throw new IllegalArgumentException("Repair priority must be between 1 and 5");
+      }
       stages = stages.stream()
           .sorted(Comparator.comparingInt(RepairStageFact::order).thenComparing(RepairStageFact::stageId))
           .toList();

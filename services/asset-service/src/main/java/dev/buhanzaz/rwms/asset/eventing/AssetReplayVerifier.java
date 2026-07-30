@@ -131,16 +131,34 @@ public class AssetReplayVerifier {
 
   private Map<StreamKey, JsonNode> liveProjection() {
     Map<StreamKey, JsonNode> result = new LinkedHashMap<>();
-    jdbc.query("select id,warehouse_id,status,display_canonical_number as number from rental_item", rs -> {
+    jdbc.query(
+        """
+        select id,warehouse_id,status,transfer_origin_status,
+          display_canonical_number as number
+        from rental_item
+        """,
+        rs -> {
       UUID id = rs.getObject("id", UUID.class);
-      result.put(new StreamKey(AssetAggregateType.RENTAL_ITEM, id), node(Map.of(
-          "rentalItemId", id.toString(), "warehouseId", rs.getObject("warehouse_id", UUID.class).toString(),
-          "status", rs.getString("status"), "numberSha256", AssetChecksum.sha256(rs.getString("number").getBytes(StandardCharsets.UTF_8)))));
+      Map<String, Object> value = new LinkedHashMap<>();
+      value.put("rentalItemId", id.toString());
+      value.put(
+          "warehouseId",
+          rs.getObject("warehouse_id", UUID.class).toString());
+      value.put("status", rs.getString("status"));
+      value.put(
+          "numberSha256",
+          AssetChecksum.sha256(
+              rs.getString("number").getBytes(StandardCharsets.UTF_8)));
+      String transferOriginStatus = rs.getString("transfer_origin_status");
+      if (transferOriginStatus != null) {
+        value.put("transferAssetStatus", transferOriginStatus);
+      }
+      result.put(new StreamKey(AssetAggregateType.RENTAL_ITEM, id), node(value));
     });
-    jdbc.query("select id,code,category,active from equipment_catalog_item", rs -> {
+    jdbc.query("select id,category,active from equipment_catalog_item", rs -> {
       UUID id = rs.getObject("id", UUID.class);
       result.put(new StreamKey(AssetAggregateType.EQUIPMENT_CATALOG, id), node(Map.of(
-          "equipmentId", id.toString(), "code", rs.getString("code"), "category", rs.getString("category"), "active", rs.getBoolean("active"))));
+          "equipmentId", id.toString(), "category", rs.getString("category"), "active", rs.getBoolean("active"))));
     });
     jdbc.query("select id,equipment_id,warehouse_id,rental_item_id,location_kind,quantity from equipment_balance", rs -> {
       UUID id = rs.getObject("id", UUID.class);
@@ -178,14 +196,13 @@ public class AssetReplayVerifier {
           "leaseId", id.toString(), "rentalItemId", lease.getRentalItemId().toString(),
           "fencingToken", lease.getFencingToken(), "state", lease.getState().name())));
     });
-    jdbc.query("select id,classifier_type,parent_id,code,name,active,sort_order from asset_classifier", rs -> {
+    jdbc.query("select id,classifier_type,parent_id,name,active,sort_order from asset_classifier", rs -> {
       UUID id = rs.getObject("id", UUID.class);
       Map<String, Object> value = new LinkedHashMap<>();
       value.put("classifierId", id.toString());
       value.put("type", rs.getString("classifier_type"));
       UUID parentId = rs.getObject("parent_id", UUID.class);
       value.put("parentId", parentId == null ? null : parentId.toString());
-      value.put("code", rs.getString("code"));
       value.put("label", rs.getString("name"));
       value.put("active", rs.getBoolean("active"));
       value.put("sortOrder", rs.getObject("sort_order", Integer.class));

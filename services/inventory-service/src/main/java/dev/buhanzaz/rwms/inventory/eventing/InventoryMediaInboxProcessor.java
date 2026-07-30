@@ -32,12 +32,31 @@ public class InventoryMediaInboxProcessor {
           "correlation",
           "actorRef",
           "payload");
-  private static final Set<String> PAYLOAD_FIELDS =
+  /**
+   * The media facts contract deliberately keeps folderId and clientReferenceId optional so
+   * older owners can publish a fact without a folder and task-board evidence can carry its
+   * own reference. Do not use {@link #exactObject(JsonNode, Set, String)} for this payload:
+   * treating optional fields as required was what made real inventory image READY facts land
+   * in the DLT instead of the readiness projection.
+   */
+  private static final Set<String> REQUIRED_PAYLOAD_FIELDS =
       Set.of(
           "mediaId",
           "ownerType",
           "ownerId",
           "warehouseId",
+          "kind",
+          "status",
+          "generation",
+          "rotationDegrees");
+  private static final Set<String> PAYLOAD_FIELDS =
+      Set.of(
+          "mediaId",
+          "folderId",
+          "ownerType",
+          "ownerId",
+          "warehouseId",
+          "clientReferenceId",
           "kind",
           "status",
           "generation",
@@ -151,6 +170,13 @@ public class InventoryMediaInboxProcessor {
   }
 
   private void process(UUID eventId, JsonNode root, String hash, String recordKey) {
+    // The topic is shared by all bounded contexts. Route on the owner first so inventory never
+    // rejects a valid foreign-owner fact merely because that owner's identifiers or actor shape
+    // are intentionally different from an inventory finding.
+    if (!isInventoryFindingFact(root)) {
+      markFactProcessed(eventId);
+      return;
+    }
     try {
       MediaFact fact = validate(root, recordKey);
       ensureCheckpoint(fact.mediaId());
@@ -159,13 +185,10 @@ public class InventoryMediaInboxProcessor {
         quarantineInbox(eventId, "AGGREGATE_ALREADY_QUARANTINED");
         return;
       }
-      long expected = checkpoint.version() == -1 ? 1 : Math.addExact(checkpoint.version(), 1);
-      if (fact.aggregateVersion() > expected) {
-        quarantineGap(eventId, fact, expected, hash);
-        return;
-      }
-      if (fact.aggregateVersion() < expected) {
-        validationFailure(eventId, hash, "STALE_AGGREGATE_VERSION");
+      // MEDIA facts are public snapshots. Private upload/rotation work advances the source
+      // aggregate between facts, so public versions are monotonic but not necessarily contiguous.
+      if (fact.aggregateVersion() <= checkpoint.version()) {
+        markFactProcessed(eventId);
         return;
       }
       if (findings.findOwnedInventoryId(fact.ownerId(), fact.warehouseId()).isEmpty()) {
@@ -244,16 +267,25 @@ public class InventoryMediaInboxProcessor {
     long version = root.path("aggregateVersion").asLong(-1);
     if (version < 1) throw invalid("INVALID_AGGREGATE_VERSION");
     JsonNode payload = root.path("payload");
-    exactObject(payload, PAYLOAD_FIELDS, "INVALID_MEDIA_PAYLOAD_FIELDS");
+    validatePayloadFields(payload);
     UUID payloadMedia = uuid(payload.path("mediaId").asText(), "payload.mediaId");
+    if (payload.has("folderId")) {
+      uuid(payload.path("folderId").asText(), "payload.folderId");
+    }
+    // INVENTORY_FINDING is an ordinary owner, not task-board worker evidence. The canonical
+    // schema permits the optional field only as null in this branch.
+    if (payload.has("clientReferenceId") && !payload.path("clientReferenceId").isNull()) {
+      throw invalid("INVALID_MEDIA_PAYLOAD");
+    }
     UUID ownerId = uuid(payload.path("ownerId").asText(), "payload.ownerId");
     UUID warehouseId = uuid(payload.path("warehouseId").asText(), "payload.warehouseId");
     String kind = payload.path("kind").asText();
     String status = payload.path("status").asText();
     long generation = payload.path("generation").asLong(-1);
     int rotation = payload.path("rotationDegrees").asInt(-1);
+    String ownerType = payload.path("ownerType").asText();
     if (!mediaId.equals(payloadMedia)
-        || !"INVENTORY_FINDING".equals(payload.path("ownerType").asText())
+        || !"INVENTORY_FINDING".equals(ownerType)
         || !Set.of("IMAGE", "VIDEO").contains(kind)
         || !Set.of("PROCESSING", "READY", "FAILED", "DELETED").contains(status)
         || !eventMatchesStatus(root.path("eventType").asText(), status)
@@ -262,7 +294,31 @@ public class InventoryMediaInboxProcessor {
       throw invalid("INVALID_MEDIA_PAYLOAD");
     }
     return new MediaFact(
-        mediaId, version, ownerId, warehouseId, kind, status, generation, rotation);
+        mediaId,
+        version,
+        ownerId,
+        warehouseId,
+        kind,
+        status,
+        generation,
+        rotation);
+  }
+
+  /** The shared media topic contains facts for every owning service, not only inventory findings. */
+  private void markFactProcessed(UUID eventId) {
+    jdbc.update(
+        """
+        update inbox_message set status='PROCESSED',processed_at=clock_timestamp(),
+          next_attempt_at=null,dlt_at=null,quarantine_reason=null
+         where consumer_group=? and event_id=?
+        """,
+        CONSUMER,
+        eventId);
+  }
+
+  private static boolean isInventoryFindingFact(JsonNode root) {
+    JsonNode payload = root.path("payload");
+    return payload.isObject() && "INVENTORY_FINDING".equals(payload.path("ownerType").asText());
   }
 
   private void ensureCheckpoint(UUID mediaId) {
@@ -410,11 +466,20 @@ public class InventoryMediaInboxProcessor {
     if (!actual.equals(fields)) throw invalid(code);
   }
 
+  private void validatePayloadFields(JsonNode payload) {
+    if (!payload.isObject()) throw invalid("INVALID_MEDIA_PAYLOAD_FIELDS");
+    Set<String> actual = new java.util.HashSet<>();
+    actual.addAll(payload.propertyNames());
+    if (!actual.containsAll(REQUIRED_PAYLOAD_FIELDS) || !PAYLOAD_FIELDS.containsAll(actual)) {
+      throw invalid("INVALID_MEDIA_PAYLOAD_FIELDS");
+    }
+  }
+
   private void validateActor(JsonNode actor) {
     if (actor.isNull()) return;
     exactObject(actor, ACTOR_FIELDS, "INVALID_ACTOR_FIELDS");
     uuid(actor.path("subjectId").asText(), "actorRef.subjectId");
-    if (!"USER".equals(actor.path("principalType").asText())) {
+    if (!Set.of("USER", "WORKER").contains(actor.path("principalType").asText())) {
       throw invalid("INVALID_ACTOR_TYPE");
     }
     JsonNode revision = actor.path("profileRevision");

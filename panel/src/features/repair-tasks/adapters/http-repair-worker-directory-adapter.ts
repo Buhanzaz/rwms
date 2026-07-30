@@ -1,4 +1,5 @@
 import { taskBoardSettingsClient } from "@/features/settings/task-board/api/task-board-settings-api"
+import type { RepairEstimateCatalogRouteQueueKind } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 import type { QueueType } from "@/features/settings/task-board/model/task-board-settings"
 import type { RepairWorkerDirectoryGroupDto } from "@/features/repair-tasks/model/repair-worker-directory"
 import type { RepairWorkerDirectoryClient } from "@/features/repair-tasks/ports/repair-worker-directory-client"
@@ -14,26 +15,26 @@ const ROUTE_QUEUE_TYPE: Record<
   HOLDING: "HOLDING",
 }
 
-const DRIVER_WORKER_CLASS_CODES = new Set(["DRIVER", "DRIVER_WORKER"])
+function isRepairRouteQueueKind(
+  value: QueueType
+): value is RepairEstimateCatalogRouteQueueKind {
+  return value === "MOVEMENT" || value === "REPAIR" || value === "HOLDING"
+}
 
 export class HttpRepairWorkerDirectoryAdapter implements RepairWorkerDirectoryClient {
   async listGroups(
     query: Parameters<RepairWorkerDirectoryClient["listGroups"]>[0],
     accessToken: string
   ) {
-    const [groups, workers, queues, classes] = await Promise.all([
+    const [groups, workers, queues] = await Promise.all([
       taskBoardSettingsClient.listGroups(accessToken, query.warehouseId),
       taskBoardSettingsClient.listWorkers(accessToken, query.warehouseId),
       taskBoardSettingsClient.listQueues(accessToken, query.warehouseId),
-      taskBoardSettingsClient.listClasses(accessToken),
     ])
     const workersById = new Map(workers.map((worker) => [worker.id, worker]))
-    const classCodeById = new Map(
-      classes.map((workerClass) => [workerClass.id, workerClass.code])
-    )
     const matchingQueues = queues.filter((queue) => {
       if (!queue.active || queue.hidden) return false
-      if (query.queueCode) return queue.code === query.queueCode
+      if (query.queueId) return queue.id === query.queueId
       if (query.routeQueueKind) {
         return queue.type === ROUTE_QUEUE_TYPE[query.routeQueueKind]
       }
@@ -44,16 +45,10 @@ export class HttpRepairWorkerDirectoryAdapter implements RepairWorkerDirectoryCl
         queue.bindings.map((binding) => binding.workerClass.id)
       )
     )
-    const driverDirectory = query.purpose === "DRIVER_DIRECTORY"
 
     return groups
       .filter((group) => {
         if (!group.active) return false
-        if (driverDirectory) {
-          return DRIVER_WORKER_CLASS_CODES.has(
-            classCodeById.get(group.workerClass.id) ?? ""
-          )
-        }
         return eligibleClassIds.has(group.workerClass.id)
       })
       .map<RepairWorkerDirectoryGroupDto>((group) => ({
@@ -61,7 +56,7 @@ export class HttpRepairWorkerDirectoryAdapter implements RepairWorkerDirectoryCl
         warehouseId: query.warehouseId,
         name: group.name,
         active: group.active,
-        queueCodes: queues
+        queueIds: queues
           .filter(
             (queue) =>
               queue.active &&
@@ -70,7 +65,7 @@ export class HttpRepairWorkerDirectoryAdapter implements RepairWorkerDirectoryCl
                 (binding) => binding.workerClass.id === group.workerClass.id
               )
           )
-          .map((queue) => queue.code),
+          .map((queue) => queue.id),
         routeQueueKinds: Array.from(
           new Set(
             queues
@@ -83,6 +78,7 @@ export class HttpRepairWorkerDirectoryAdapter implements RepairWorkerDirectoryCl
                   )
               )
               .map((queue) => queue.type)
+              .filter(isRepairRouteQueueKind)
           )
         ),
         members: group.members

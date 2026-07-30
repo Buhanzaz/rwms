@@ -2,6 +2,9 @@ package dev.buhanzaz.rwms.asset;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.DIMENSION_24_X_6;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.FINISHING_DVP;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.TYPE_BK_1;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireLogisticsOperationLeaseRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireMaintenanceOperationLeaseRequest;
@@ -233,6 +236,41 @@ class OrderAssetServiceIntegrationTest {
   }
 
   @Test
+  void releasesAnExpiredDraftReservationAndRestoresTheCabinToFree() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = freeRental(UUID.randomUUID(), warehouseId).id();
+    UUID orderId = UUID.randomUUID();
+    UUID actorId = UUID.randomUUID();
+    ReserveOrderUnitRequest request =
+        new ReserveOrderUnitRequest(
+            warehouseId,
+            rentalItemId,
+            UUID.randomUUID(),
+            "ООО Черновой резерв",
+            OffsetDateTime.now(ZoneOffset.UTC).plusDays(1),
+            actorId,
+            "RENTAL_MANAGER");
+
+    OrderUnitReservationView reserved =
+        orders.reserve(UUID.randomUUID(), orderId, request).response();
+    jdbc.update(
+        "update order_unit_reservation set draft_reservation_expires_at=? where id=?",
+        OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(1),
+        reserved.reservationId());
+
+    orders.releaseExpiredDraftReservations();
+
+    assertThat(orders.units(orderId)).isEmpty();
+    assertThat(assets.rentalItem(rentalItemId).status()).isEqualTo(RentalItemStatus.FREE);
+    assertThat(
+            jdbc.queryForObject(
+                "select state from order_unit_reservation where id=?",
+                String.class,
+                reserved.reservationId()))
+        .isEqualTo("RELEASED");
+  }
+
+  @Test
   @Transactional
   void desiredEquipmentReservesTheCatalogueWithoutMovingItAndPlansOnlyTheDifference() {
     UUID actorSubjectId = UUID.randomUUID();
@@ -249,7 +287,6 @@ class OrderAssetServiceIntegrationTest {
                 actorSubjectId,
                 UUID.randomUUID(),
                 new CreateEquipmentRequest(
-                    "ORDER-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
                     "Order equipment",
                     EquipmentCategory.FURNITURE,
                     null))
@@ -376,10 +413,19 @@ class OrderAssetServiceIntegrationTest {
   }
 
   @Test
-  void reserveReturnsExactAvailabilityAndWarehouseConflicts() {
+  void warehouseCreatedCabinIsFreeWithNewCategoryAndReleaseRestoresFree() {
     UUID actorSubjectId = UUID.randomUUID();
     UUID warehouseId = UUID.randomUUID();
     RentalItemResponse free = freeRental(actorSubjectId, warehouseId);
+    assertThat(
+            orders
+                .candidates(UUID.randomUUID(), warehouseId, 0, 20, free.number())
+                .content())
+        .singleElement()
+        .satisfies(candidate -> {
+          assertThat(candidate.unit().id()).isEqualTo(free.id());
+          assertThat(candidate.unit().status()).isEqualTo(RentalItemStatus.FREE);
+        });
     assertConflict(
         "UNIT_WAREHOUSE_MISMATCH",
         () ->
@@ -388,21 +434,40 @@ class OrderAssetServiceIntegrationTest {
                 UUID.randomUUID(),
                 reserveRequest(UUID.randomUUID(), free.id(), actorSubjectId)));
 
-    RentalItemResponse unavailable =
+    RentalItemResponse newCategoryRental =
         assets
             .createRentalItem(
                 actorSubjectId,
                 UUID.randomUUID(),
                 rentalRequest(warehouseId))
             .response();
-    assertThat(unavailable.status()).isEqualTo(RentalItemStatus.NEW);
-    assertConflict(
-        "UNIT_NOT_AVAILABLE",
-        () ->
-            orders.reserve(
-                UUID.randomUUID(),
-                UUID.randomUUID(),
-                reserveRequest(warehouseId, unavailable.id(), actorSubjectId)));
+    assertThat(newCategoryRental.status()).isEqualTo(RentalItemStatus.FREE);
+    assertThat(newCategoryRental.category()).isEqualTo("Новая");
+    assertThat(
+            orders
+                .candidates(
+                    UUID.randomUUID(), warehouseId, 0, 20, newCategoryRental.number())
+                .content())
+        .singleElement()
+        .satisfies(candidate -> {
+          assertThat(candidate.unit().id()).isEqualTo(newCategoryRental.id());
+          assertThat(candidate.unit().status()).isEqualTo(RentalItemStatus.FREE);
+          assertThat(candidate.unit().category()).isEqualTo("Новая");
+        });
+    UUID orderId = UUID.randomUUID();
+    orders.reserve(
+        UUID.randomUUID(),
+        orderId,
+        reserveRequest(warehouseId, newCategoryRental.id(), actorSubjectId));
+    assertThat(assets.rentalItem(newCategoryRental.id()).status())
+        .isEqualTo(RentalItemStatus.BOOKED);
+    orders.release(
+        UUID.randomUUID(),
+        orderId,
+        newCategoryRental.id(),
+        new OrderActorRequest(actorSubjectId, "RENTAL_MANAGER"));
+    assertThat(assets.rentalItem(newCategoryRental.id()).status())
+        .isEqualTo(RentalItemStatus.FREE);
 
     RentalItemResponse warehouseCandidate = freeRental(actorSubjectId, warehouseId);
     RentalItemResponse warehouseOnly =
@@ -618,27 +683,24 @@ class OrderAssetServiceIntegrationTest {
   }
 
   private RentalItemResponse freeRental(UUID actorSubjectId, UUID warehouseId) {
-    RentalItemResponse created =
-        assets
-            .createRentalItem(
-                actorSubjectId,
-                UUID.randomUUID(),
-                rentalRequest(warehouseId))
-            .response();
-    return assets.updateStatus(
-        created.id(), new UpdateStatusRequest(created.version(), RentalItemStatus.FREE));
+    return assets
+        .createRentalItem(
+            actorSubjectId,
+            UUID.randomUUID(),
+            rentalRequest(warehouseId))
+        .response();
   }
 
   private CreateRentalItemRequest rentalRequest(UUID warehouseId) {
     return new CreateRentalItemRequest(
         warehouseId,
         "ORDER-CABIN-" + UUID.randomUUID(),
+        TYPE_BK_1,
+        DIMENSION_24_X_6,
+        FINISHING_DVP,
         null,
-        null,
-        null,
-        null,
-        null,
-        null,
+        List.of(),
+        false,
         Map.of(),
         List.of());
   }
@@ -650,6 +712,7 @@ class OrderAssetServiceIntegrationTest {
         rentalItemId,
         UUID.randomUUID(),
         "ООО Тестовый арендатор",
+        null,
         actorSubjectId,
         "RENTAL_MANAGER");
   }

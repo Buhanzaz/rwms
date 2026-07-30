@@ -14,6 +14,7 @@ export function taskBoardTargetIndexAt(
 export function canMoveEntryToQueue(entry: TaskBoardEntryDto) {
   return (
     entry.status !== "IN_PROGRESS" &&
+    entry.status !== "PAUSED" &&
     entry.status !== "DONE" &&
     entry.status !== "CANCELLED"
   )

@@ -12,11 +12,10 @@ class EquipmentCatalogItemMapperTest {
   @Test
   void mapsEntityReadToApiResponse() {
     EquipmentCatalogItem item =
-        EquipmentCatalogItem.create("heater", "Heater", EquipmentCategory.ELECTRICAL, "220 V");
+        EquipmentCatalogItem.create("Heater", EquipmentCategory.ELECTRICAL, "220 V");
 
     var response = mapper.toResponse(item);
 
-    assertThat(response.code()).isEqualTo("HEATER");
     assertThat(response.name()).isEqualTo("Heater");
     assertThat(response.category()).isEqualTo(EquipmentCategory.ELECTRICAL);
     assertThat(response.active()).isTrue();

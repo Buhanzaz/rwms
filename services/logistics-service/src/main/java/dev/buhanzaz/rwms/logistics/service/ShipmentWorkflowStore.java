@@ -12,8 +12,6 @@ import dev.buhanzaz.rwms.logistics.domain.LogisticsGuardState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsReconciliation;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsReconciliationState;
 import dev.buhanzaz.rwms.logistics.domain.LogisticsTargetService;
-import dev.buhanzaz.rwms.logistics.domain.LogisticsTaskReference;
-import dev.buhanzaz.rwms.logistics.domain.LogisticsTaskReferenceState;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventStore;
 import dev.buhanzaz.rwms.logistics.eventing.LogisticsEventType;
 import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyException;
@@ -24,8 +22,6 @@ import dev.buhanzaz.rwms.logistics.repository.LogisticsEquipmentHoldReferenceRep
 import dev.buhanzaz.rwms.logistics.repository.LogisticsExternalAttemptRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsGuardRepository;
 import dev.buhanzaz.rwms.logistics.repository.LogisticsReconciliationRepository;
-import dev.buhanzaz.rwms.logistics.repository.LogisticsTaskReferenceRepository;
-import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -53,7 +49,6 @@ class ShipmentWorkflowStore {
   private final LogisticsExternalAttemptRepository attemptRepository;
   private final LogisticsGuardRepository guardRepository;
   private final LogisticsEquipmentHoldReferenceRepository holdRepository;
-  private final LogisticsTaskReferenceRepository taskRepository;
   private final LogisticsReconciliationRepository reconciliationRepository;
   private final LogisticsEventStore eventStore;
   private final LogisticsDocumentService documents;
@@ -137,7 +132,7 @@ class ShipmentWorkflowStore {
     }
     List<Allocation> allocations = allocations(line);
     if (allocations.isEmpty()) {
-      createTaskRegistrationAttempt(document, line, completedAt);
+      finishPreparationIfReady(document);
       return;
     }
     for (Allocation allocation : allocations) {
@@ -192,74 +187,8 @@ class ShipmentWorkflowStore {
               hold.version(),
               completedAt));
     }
-    if (allHoldsAcquired(document, line)) createTaskRegistrationAttempt(document, line, completedAt);
-  }
-
-  @Transactional
-  public void confirmTaskRegistration(UUID operationId, LogisticsDependencyGateway.PreparationTask task) {
-    LogisticsExternalAttempt attempt = attempt(operationId, LogisticsDocumentService.SHIPMENT_TASK_REGISTER);
-    if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
-    LogisticsDocument document = attempt.getDocument();
-    LogisticsDocumentLine line = requiredLine(attempt);
-    if (document.getState() != LogisticsDocumentState.PREPARING) return;
-    LogisticsTaskReference reference =
-        taskRepository
-            .findByLine_Id(line.getId())
-            .orElseThrow(() -> malformed("Shipment task registration has no local reference"));
-    requireRegisteredTask(document, reference, task);
-
-    OffsetDateTime completedAt = now();
-    attempt.confirm(taskDigest("SHIPMENT_TASK_REGISTER_RESPONSE", task), completedAt);
-    reference.register(task.taskId(), task.taskVersion(), task.status(), task.doneAt());
-    if (allTasksRegistered(document)) {
-      document.awaitShipmentConfirmation();
-      documentRepository.saveAndFlush(document);
-      eventStore.append(
-          document,
-          lineCount(document),
-          document.getCorrelationId(),
-          document.getRequestedBySubjectId(),
-          LogisticsEventType.SHIPMENT_PLANNED,
-          null);
-    }
-  }
-
-  @Transactional
-  public void confirmTaskCompletion(
-      UUID operationId, LogisticsDependencyGateway.PreparationTask task) {
-    LogisticsExternalAttempt attempt =
-        attempt(operationId, LogisticsDocumentService.SHIPMENT_TASK_COMPLETE);
-    if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
-    LogisticsDocument document = attempt.getDocument();
-    LogisticsDocumentLine line = requiredLine(attempt);
-    if (document.getState() != LogisticsDocumentState.CONFIRMING_PREPARATION) return;
-    LogisticsTaskReference reference =
-        taskRepository.findByLine_Id(line.getId()).orElseThrow(() -> malformed("Shipment line has no task reference"));
-    requireDoneTask(document, reference, task);
-
-    OffsetDateTime completedAt = now();
-    attempt.confirm(taskDigest("SHIPMENT_TASK_COMPLETE_RESPONSE", task), completedAt);
-    reference.markDone(task.taskVersion(), task.doneAt());
-    List<LogisticsEquipmentHoldReference> holds = holds(line);
-    if (holds.isEmpty()) {
-      createShipmentConfirmAttempt(document, line, completedAt);
-      return;
-    }
-    for (LogisticsEquipmentHoldReference hold : holds) {
-      String operation = LogisticsDocumentService.holdCommitOperation(hold.getHoldId());
-      createAttemptIfMissing(
-          document,
-          line,
-          LogisticsTargetService.ASSET,
-          operation,
-          LogisticsCommandChecksum.sha256(
-              operation,
-              List.of(
-                  hold.getHoldId().toString(),
-                  Long.toString(hold.getHoldVersion()),
-                  document.getId().toString(),
-                  line.getId().toString())),
-          completedAt);
+    if (allHoldsAcquired(document, line)) {
+      finishPreparationIfReady(document);
     }
   }
 
@@ -293,22 +222,6 @@ class ShipmentWorkflowStore {
     attempt.confirm(snapshotDigest("SHIPMENT_ASSET_CONFIRM_RESPONSE", snapshot), completedAt);
     guard.recordObservedAssetVersion(snapshot.version());
     createLeaseReleaseAttempt(document, line, guard, completedAt);
-  }
-
-  @Transactional
-  public void confirmTaskCancellation(UUID operationId, LogisticsDependencyGateway.PreparationTask task) {
-    LogisticsExternalAttempt attempt = attempt(operationId, LogisticsDocumentService.SHIPMENT_TASK_CANCEL);
-    if (attempt.getResult() == LogisticsExternalAttemptResult.CONFIRMED) return;
-    LogisticsDocument document = attempt.getDocument();
-    LogisticsDocumentLine line = requiredLine(attempt);
-    if (document.getState() != LogisticsDocumentState.CANCELLING) return;
-    LogisticsTaskReference reference =
-        taskRepository.findByLine_Id(line.getId()).orElseThrow(() -> malformed("Shipment cancellation has no task"));
-    requireCancelledTask(document, reference, task);
-    OffsetDateTime completedAt = now();
-    attempt.confirm(taskDigest("SHIPMENT_TASK_CANCEL_RESPONSE", task), completedAt);
-    reference.cancel(task.taskVersion());
-    finishCancellationIfComplete(document);
   }
 
   @Transactional
@@ -424,27 +337,11 @@ class ShipmentWorkflowStore {
               document.getWarehouseId(),
               allocation));
     }
-    if (LogisticsDocumentService.SHIPMENT_TASK_REGISTER.equals(attempt.getOperationType())) {
-      LogisticsTaskReference task =
-          taskRepository.findByLine_Id(line.getId()).orElseThrow(() -> malformed("Shipment registration has no task"));
-      return Optional.of(
-          Work.taskRegister(
-              attempt.getOperationId(), document.getWarehouseId(), task.getExternalTaskId()));
-    }
     return Optional.empty();
   }
 
   private Optional<Work> confirmationWork(
       LogisticsExternalAttempt attempt, LogisticsDocument document, LogisticsDocumentLine line) {
-    if (LogisticsDocumentService.SHIPMENT_TASK_COMPLETE.equals(attempt.getOperationType())) {
-      LogisticsTaskReference task =
-          taskRepository.findByLine_Id(line.getId()).orElseThrow(() -> malformed("Shipment confirmation has no task"));
-      return Optional.of(
-          Work.taskComplete(
-              attempt.getOperationId(),
-              task.getExternalTaskId(),
-              task.getTaskVersion()));
-    }
     if (attempt.getOperationType().startsWith(LogisticsDocumentService.SHIPMENT_HOLD_COMMIT_PREFIX)) {
       LogisticsEquipmentHoldReference hold =
           holdForOperation(attempt, LogisticsDocumentService.SHIPMENT_HOLD_COMMIT_PREFIX);
@@ -479,12 +376,6 @@ class ShipmentWorkflowStore {
 
   private Optional<Work> cancellationWork(
       LogisticsExternalAttempt attempt, LogisticsDocument document, LogisticsDocumentLine line) {
-    if (LogisticsDocumentService.SHIPMENT_TASK_CANCEL.equals(attempt.getOperationType())) {
-      LogisticsTaskReference task =
-          taskRepository.findByLine_Id(line.getId()).orElseThrow(() -> malformed("Shipment cancellation has no task"));
-      return Optional.of(
-          Work.taskCancel(attempt.getOperationId(), task.getExternalTaskId(), task.getTaskVersion()));
-    }
     if (attempt.getOperationType().startsWith(LogisticsDocumentService.SHIPMENT_HOLD_RELEASE_PREFIX)) {
       LogisticsEquipmentHoldReference hold =
           holdForOperation(attempt, LogisticsDocumentService.SHIPMENT_HOLD_RELEASE_PREFIX);
@@ -513,35 +404,6 @@ class ShipmentWorkflowStore {
         guard.getLeaseId(),
         guard.getLeaseVersion(),
         guard.getFenceToken());
-  }
-
-  private void createTaskRegistrationAttempt(
-      LogisticsDocument document, LogisticsDocumentLine line, OffsetDateTime createdAt) {
-    LogisticsTaskReference reference =
-        taskRepository
-            .findByLine_Id(line.getId())
-            .orElseGet(
-                () ->
-                    taskRepository.save(
-                        LogisticsTaskReference.pending(
-                            document,
-                            line,
-                            externalTaskId(document, line),
-                            document.getWarehouseId(),
-                            createdAt)));
-    createAttemptIfMissing(
-        document,
-        line,
-        LogisticsTargetService.TASK_BOARD,
-        LogisticsDocumentService.SHIPMENT_TASK_REGISTER,
-        LogisticsCommandChecksum.sha256(
-            LogisticsDocumentService.SHIPMENT_TASK_REGISTER,
-            List.of(
-                document.getWarehouseId().toString(),
-                reference.getExternalTaskId().toString(),
-                "0",
-                "<null>")),
-        createdAt);
   }
 
   private void createShipmentConfirmAttempt(
@@ -610,16 +472,38 @@ class ShipmentWorkflowStore {
     return true;
   }
 
-  private boolean allTasksRegistered(LogisticsDocument document) {
+  private void finishPreparationIfReady(LogisticsDocument document) {
+    if (document.getState() != LogisticsDocumentState.PREPARING
+        || !allPreparationEffectsConfirmed(document)) return;
+    document.awaitShipmentConfirmation();
+    documentRepository.saveAndFlush(document);
+    eventStore.append(
+        document,
+        lineCount(document),
+        document.getCorrelationId(),
+        document.getRequestedBySubjectId(),
+        LogisticsEventType.SHIPMENT_PLANNED,
+        null);
+  }
+
+  private boolean allPreparationEffectsConfirmed(LogisticsDocument document) {
     List<LogisticsDocumentLine> lines = lines(document.getId());
     if (lines.isEmpty()) return false;
     for (LogisticsDocumentLine line : lines) {
-      Optional<LogisticsTaskReference> task = taskRepository.findByLine_Id(line.getId());
-      if (task.isEmpty() || task.get().getTaskState() != LogisticsTaskReferenceState.REGISTERED) return false;
-      Optional<LogisticsExternalAttempt> attempt =
+      Optional<LogisticsExternalAttempt> snapshot =
           attemptRepository.findByDocument_IdAndLine_IdAndOperationType(
-              document.getId(), line.getId(), LogisticsDocumentService.SHIPMENT_TASK_REGISTER);
-      if (attempt.isEmpty() || attempt.get().getResult() != LogisticsExternalAttemptResult.CONFIRMED) return false;
+              document.getId(), line.getId(), LogisticsDocumentService.SHIPMENT_ASSET_SNAPSHOT);
+      Optional<LogisticsExternalAttempt> lease =
+          attemptRepository.findByDocument_IdAndLine_IdAndOperationType(
+              document.getId(), line.getId(), LogisticsDocumentService.SHIPMENT_ASSET_LEASE_ACQUIRE);
+      Optional<LogisticsGuard> guard = guardRepository.findByLine_Id(line.getId());
+      if (snapshot.isEmpty()
+          || snapshot.get().getResult() != LogisticsExternalAttemptResult.CONFIRMED
+          || lease.isEmpty()
+          || lease.get().getResult() != LogisticsExternalAttemptResult.CONFIRMED
+          || guard.isEmpty()
+          || guard.get().getGuardState() != LogisticsGuardState.ACTIVE
+          || !allHoldsAcquired(document, line)) return false;
     }
     return true;
   }
@@ -660,9 +544,6 @@ class ShipmentWorkflowStore {
   }
 
   private void finishCancellationIfComplete(LogisticsDocument document) {
-    for (LogisticsTaskReference task : taskRepository.findAllByDocument_IdOrderByCreatedAtAsc(document.getId())) {
-      if (task.getTaskState() != LogisticsTaskReferenceState.CANCELLED) return;
-    }
     for (LogisticsEquipmentHoldReference hold : holdRepository.findAllByDocument_IdOrderByCreatedAtAsc(document.getId())) {
       if (hold.getHoldState() != LogisticsEquipmentHoldState.RELEASED) return;
     }
@@ -854,51 +735,6 @@ class ShipmentWorkflowStore {
     }
   }
 
-  private static void requireRegisteredTask(
-      LogisticsDocument document,
-      LogisticsTaskReference reference,
-      LogisticsDependencyGateway.PreparationTask task) {
-    if (task == null
-        || task.taskId() == null
-        || task.taskVersion() < 0
-        || !document.getWarehouseId().equals(task.warehouseId())
-        || !reference.getExternalTaskId().equals(task.externalTaskId())
-        || !"ACTIVE".equals(task.status())) {
-      throw malformed("Task-board returned malformed preparation registration");
-    }
-  }
-
-  private static void requireDoneTask(
-      LogisticsDocument document,
-      LogisticsTaskReference reference,
-      LogisticsDependencyGateway.PreparationTask task) {
-    if (task == null
-        || !reference.getTaskId().equals(task.taskId())
-        || task.taskVersion() < reference.getTaskVersion()
-        || !document.getWarehouseId().equals(task.warehouseId())
-        || !reference.getExternalTaskId().equals(task.externalTaskId())
-        || !"DONE".equals(task.status())
-        || task.doneAt() == null) {
-      throw new LogisticsDependencyException(
-          LogisticsDependencyException.FailureKind.PERMANENT_REJECTION,
-          "Task-board has not confirmed shipment preparation");
-    }
-  }
-
-  private static void requireCancelledTask(
-      LogisticsDocument document,
-      LogisticsTaskReference reference,
-      LogisticsDependencyGateway.PreparationTask task) {
-    if (task == null
-        || !reference.getTaskId().equals(task.taskId())
-        || task.taskVersion() < reference.getTaskVersion()
-        || !document.getWarehouseId().equals(task.warehouseId())
-        || !reference.getExternalTaskId().equals(task.externalTaskId())
-        || !"CANCELLED".equals(task.status())) {
-      throw malformed("Task-board returned malformed cancellation truth");
-    }
-  }
-
   private static List<Allocation> allocations(LogisticsDocumentLine line) {
     JsonNode snapshot = line.getSourceAllocationSnapshot();
     JsonNode values = snapshot == null ? null : snapshot.get("allocations");
@@ -968,11 +804,6 @@ class ShipmentWorkflowStore {
     return snapshot;
   }
 
-  private static UUID externalTaskId(LogisticsDocument document, LogisticsDocumentLine line) {
-    return UUID.nameUUIDFromBytes(
-        ("rwms:shipment:" + document.getId() + ":" + line.getId()).getBytes(StandardCharsets.UTF_8));
-  }
-
   private void markConflict(LogisticsDocumentLine line) {
     if (line.getState() != dev.buhanzaz.rwms.logistics.domain.LogisticsLineState.CONFLICT
         && line.getState() != dev.buhanzaz.rwms.logistics.domain.LogisticsLineState.CANCELLED) {
@@ -982,7 +813,6 @@ class ShipmentWorkflowStore {
     for (LogisticsEquipmentHoldReference hold : holds(line)) {
       if (hold.getHoldState() != LogisticsEquipmentHoldState.RELEASED) hold.conflict();
     }
-    taskRepository.findByLine_Id(line.getId()).ifPresent(ShipmentWorkflowStore::conflictTask);
   }
 
   private void markReconciliationRequired(LogisticsDocumentLine line) {
@@ -990,7 +820,6 @@ class ShipmentWorkflowStore {
     for (LogisticsEquipmentHoldReference hold : holds(line)) {
       if (hold.getHoldState() != LogisticsEquipmentHoldState.RELEASED) hold.requireReconciliation();
     }
-    taskRepository.findByLine_Id(line.getId()).ifPresent(ShipmentWorkflowStore::reconcileTask);
   }
 
   private static void conflictGuard(LogisticsGuard guard) {
@@ -999,14 +828,6 @@ class ShipmentWorkflowStore {
 
   private static void reconcileGuard(LogisticsGuard guard) {
     if (guard.getGuardState() == LogisticsGuardState.ACTIVE) guard.requireReconciliation();
-  }
-
-  private static void conflictTask(LogisticsTaskReference task) {
-    if (task.getTaskState() != LogisticsTaskReferenceState.CANCELLED) task.conflict();
-  }
-
-  private static void reconcileTask(LogisticsTaskReference task) {
-    if (task.getTaskState() != LogisticsTaskReferenceState.CANCELLED) task.requireReconciliation();
   }
 
   private static String snapshotDigest(
@@ -1043,18 +864,6 @@ class ShipmentWorkflowStore {
     values.add(hold.state());
     values.add(hold.expiresAt().toInstant().toString());
     values.add(hold.committedAt() == null ? null : hold.committedAt().toInstant().toString());
-    return LogisticsCommandChecksum.sha256(
-        operation, values);
-  }
-
-  private static String taskDigest(String operation, LogisticsDependencyGateway.PreparationTask task) {
-    List<String> values = new ArrayList<>();
-    values.add(task.taskId().toString());
-    values.add(Long.toString(task.taskVersion()));
-    values.add(task.warehouseId().toString());
-    values.add(task.externalTaskId().toString());
-    values.add(task.status());
-    values.add(task.doneAt() == null ? null : task.doneAt().toInstant().toString());
     return LogisticsCommandChecksum.sha256(
         operation, values);
   }
@@ -1224,73 +1033,6 @@ class ShipmentWorkflowStore {
           null);
     }
 
-    static Work taskRegister(UUID operationId, UUID warehouseId, UUID externalTaskId) {
-      return new Work(
-          WorkType.TASK_REGISTER,
-          operationId,
-          null,
-          null,
-          warehouseId,
-          null,
-          -1,
-          null,
-          -1,
-          -1,
-          null,
-          -1,
-          -1,
-          null,
-          null,
-          externalTaskId,
-          -1,
-          null);
-    }
-
-    static Work taskComplete(
-        UUID operationId, UUID externalTaskId, long expectedTaskVersion) {
-      return new Work(
-          WorkType.TASK_COMPLETE,
-          operationId,
-          null,
-          null,
-          null,
-          null,
-          -1,
-          null,
-          -1,
-          -1,
-          null,
-          -1,
-          -1,
-          null,
-          null,
-          externalTaskId,
-          expectedTaskVersion,
-          null);
-    }
-
-    static Work taskCancel(UUID operationId, UUID externalTaskId, long expectedTaskVersion) {
-      return new Work(
-          WorkType.TASK_CANCEL,
-          operationId,
-          null,
-          null,
-          null,
-          null,
-          -1,
-          null,
-          -1,
-          -1,
-          null,
-          -1,
-          -1,
-          null,
-          null,
-          externalTaskId,
-          expectedTaskVersion,
-          null);
-    }
-
     static Work holdCommand(
         UUID operationId,
         LogisticsDependencyGateway.EquipmentHoldAction action,
@@ -1383,11 +1125,8 @@ class ShipmentWorkflowStore {
     SNAPSHOT,
     LEASE,
     HOLD_ACQUIRE,
-    TASK_REGISTER,
-    TASK_COMPLETE,
     HOLD_COMMAND,
     EFFECT,
-    TASK_CANCEL,
     LEASE_RELEASE
   }
 }

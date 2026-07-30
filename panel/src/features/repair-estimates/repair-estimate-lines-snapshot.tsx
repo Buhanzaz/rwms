@@ -34,7 +34,12 @@ export function RepairEstimateLinesSnapshot({
           <Card key={line.id} size="sm">
             <CardHeader>
               <CardTitle className="flex flex-wrap items-center gap-2">
-                <span>{line.description.trim() || `Строка ${index + 1}`}</span>
+                <span>
+                  {line.rework
+                    ? `${line.lineType === "WORK" ? "РД" : "МД"} · `
+                    : ""}
+                  {line.description.trim() || `Строка ${index + 1}`}
+                </span>
                 <Badge variant="secondary">
                   {line.lineType === "WORK"
                     ? "Работа"
@@ -42,6 +47,13 @@ export function RepairEstimateLinesSnapshot({
                       ? "Материал"
                       : "Тип не задан сервисом"}
                 </Badge>
+                {line.rework ? (
+                  <Badge variant="outline">
+                    {line.rework.disposition === "REPEAT"
+                      ? "Переделать"
+                      : "Добавлено в доработке"}
+                  </Badge>
+                ) : null}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -50,6 +62,16 @@ export function RepairEstimateLinesSnapshot({
                 <dd className="min-w-0 break-words">
                   {line.lineComment.trim() || "—"}
                 </dd>
+                {line.catalogSnapshot === null && line.lineType === "WORK" ? (
+                  <>
+                    <dt className="text-muted-foreground">Очередь работы</dt>
+                    <dd>
+                      {line.customQueueBinding
+                        ? `${line.customQueueBinding.queueName} — ${line.customQueueBinding.queueKind === "HOLDING" ? "Ожидание" : "Ремонт"}`
+                        : "Не задана"}
+                    </dd>
+                  </>
+                ) : null}
                 <dt className="text-muted-foreground">Количество</dt>
                 <dd>
                   {line.quantity} {line.unit}

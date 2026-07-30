@@ -1,78 +1,134 @@
 package dev.buhanzaz.rwms.taskboard.service;
 
-import static dev.buhanzaz.rwms.taskboard.api.ApiModels.MaintenanceRoutingMismatch;
-import static dev.buhanzaz.rwms.taskboard.api.ApiModels.MaintenanceRoutingMismatchField;
-import static dev.buhanzaz.rwms.taskboard.api.ApiModels.MaintenanceRoutingPreflightRequest;
-import static dev.buhanzaz.rwms.taskboard.api.ApiModels.MaintenanceRoutingPreflightResponse;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 
+import dev.buhanzaz.rwms.taskboard.domain.QueueDefinition;
 import dev.buhanzaz.rwms.taskboard.domain.WorkQueue;
+import dev.buhanzaz.rwms.taskboard.repository.QueueDefinitionRepository;
 import dev.buhanzaz.rwms.taskboard.repository.WorkQueueRepository;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Read-only prerequisite boundary for maintenance catalog routing snapshots. */
+/** Read-only prerequisite boundaries for maintenance catalog and warehouse routing. */
 @Service
 @RequiredArgsConstructor
 public class MaintenanceRoutingPreflightService {
+  private final QueueDefinitionRepository definitions;
   private final WorkQueueRepository queues;
+
+  @Transactional(readOnly = true)
+  public CatalogRoutingPreflightResponse catalogPreflight(
+      CatalogRoutingPreflightRequest request) {
+    LinkedHashSet<UUID> definitionIds = uniqueDefinitionIds(request.queues());
+    Map<UUID, QueueDefinition> definitionsById = loadDefinitions(definitionIds);
+    List<UUID> missingDefinitionIds = new ArrayList<>();
+    List<CatalogRoutingMismatch> mismatches = new ArrayList<>();
+    List<CatalogRoutingResolvedDefinition> resolved = new ArrayList<>();
+
+    for (MaintenanceRoutingQueueRequirement requirement : request.queues()) {
+      QueueDefinition definition = definitionsById.get(requirement.queueDefinitionId());
+      if (definition == null) {
+        missingDefinitionIds.add(requirement.queueDefinitionId());
+        continue;
+      }
+      resolved.add(
+          new CatalogRoutingResolvedDefinition(
+              definition.getId(), definition.getName(), definition.getType()));
+      if (requirement.type() != definition.getType()) {
+        mismatches.add(
+            new CatalogRoutingMismatch(
+                definition.getId(), List.of(MaintenanceRoutingMismatchField.TYPE)));
+      }
+    }
+    return new CatalogRoutingPreflightResponse(
+        missingDefinitionIds.isEmpty() && mismatches.isEmpty(),
+        missingDefinitionIds,
+        mismatches,
+        resolved);
+  }
 
   @Transactional(readOnly = true)
   public MaintenanceRoutingPreflightResponse preflight(
       MaintenanceRoutingPreflightRequest request) {
-    var queueIds = new LinkedHashSet<UUID>();
-    request.queues().forEach(
-        requirement -> {
-          if (!queueIds.add(requirement.queueId())) {
-            throw new IllegalArgumentException(
-                "Routing preflight requires unique queue identifiers");
-          }
-        });
+    LinkedHashSet<UUID> definitionIds = uniqueDefinitionIds(request.queues());
+    Map<UUID, QueueDefinition> definitionsById = loadDefinitions(definitionIds);
+    Map<UUID, WorkQueue> bindingsByDefinitionId = new LinkedHashMap<>();
+    queues.findAllOrderedByWarehouseId(request.warehouseId()).stream()
+        .filter(queue -> definitionIds.contains(queue.getDefinition().getId()))
+        .forEach(queue -> bindingsByDefinitionId.put(queue.getDefinition().getId(), queue));
 
-    Map<UUID, WorkQueue> currentById = new LinkedHashMap<>();
-    queues.findAllById(queueIds).forEach(queue -> currentById.put(queue.getId(), queue));
-
-    List<UUID> missingQueueIds = new ArrayList<>();
+    List<UUID> missingDefinitionIds = new ArrayList<>();
+    List<UUID> missingBindingDefinitionIds = new ArrayList<>();
     List<MaintenanceRoutingMismatch> mismatches = new ArrayList<>();
-    for (var requirement : request.queues()) {
-      WorkQueue current = currentById.get(requirement.queueId());
-      if (current == null) {
-        missingQueueIds.add(requirement.queueId());
+    List<MaintenanceRoutingResolvedQueue> resolvedQueues = new ArrayList<>();
+    for (MaintenanceRoutingQueueRequirement requirement : request.queues()) {
+      QueueDefinition definition = definitionsById.get(requirement.queueDefinitionId());
+      if (definition == null) {
+        missingDefinitionIds.add(requirement.queueDefinitionId());
+        continue;
+      }
+      WorkQueue binding = bindingsByDefinitionId.get(requirement.queueDefinitionId());
+      if (binding == null) {
+        missingBindingDefinitionIds.add(requirement.queueDefinitionId());
         continue;
       }
 
+      resolvedQueues.add(
+          new MaintenanceRoutingResolvedQueue(
+              definition.getId(),
+              binding.getId(),
+              definition.getName(),
+              definition.getType()));
       List<MaintenanceRoutingMismatchField> fields = new ArrayList<>();
-      if (!request.warehouseId().equals(current.getWarehouseId())) {
-        fields.add(MaintenanceRoutingMismatchField.WAREHOUSE_ID);
-      }
-      if (!Objects.equals(requirement.code(), current.getCode())) {
-        fields.add(MaintenanceRoutingMismatchField.CODE);
-      }
-      if (requirement.type() != current.getType()) {
+      if (requirement.type() != definition.getType()) {
         fields.add(MaintenanceRoutingMismatchField.TYPE);
       }
-      if (!current.isActive()) {
+      if (!binding.isActive()) {
         fields.add(MaintenanceRoutingMismatchField.ACTIVE);
       }
-      if (current.isHidden()) {
+      if (binding.isHidden()) {
         fields.add(MaintenanceRoutingMismatchField.HIDDEN);
       }
       if (!fields.isEmpty()) {
-        mismatches.add(new MaintenanceRoutingMismatch(requirement.queueId(), fields));
+        mismatches.add(
+            new MaintenanceRoutingMismatch(requirement.queueDefinitionId(), fields));
       }
     }
 
     return new MaintenanceRoutingPreflightResponse(
         request.warehouseId(),
-        missingQueueIds.isEmpty() && mismatches.isEmpty(),
-        missingQueueIds,
-        mismatches);
+        missingDefinitionIds.isEmpty()
+            && missingBindingDefinitionIds.isEmpty()
+            && mismatches.isEmpty(),
+        missingDefinitionIds,
+        missingBindingDefinitionIds,
+        mismatches,
+        resolvedQueues);
+  }
+
+  private LinkedHashSet<UUID> uniqueDefinitionIds(
+      List<MaintenanceRoutingQueueRequirement> requirements) {
+    var definitionIds = new LinkedHashSet<UUID>();
+    requirements.forEach(
+        requirement -> {
+          if (!definitionIds.add(requirement.queueDefinitionId())) {
+            throw new IllegalArgumentException(
+                "Routing preflight requires unique queue definition identifiers");
+          }
+        });
+    return definitionIds;
+  }
+
+  private Map<UUID, QueueDefinition> loadDefinitions(LinkedHashSet<UUID> ids) {
+    Map<UUID, QueueDefinition> currentById = new LinkedHashMap<>();
+    definitions.findAllById(ids).forEach(value -> currentById.put(value.getId(), value));
+    return currentById;
   }
 }

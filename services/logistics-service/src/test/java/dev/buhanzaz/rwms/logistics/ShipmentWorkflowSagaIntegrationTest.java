@@ -101,7 +101,7 @@ class ShipmentWorkflowSagaIntegrationTest {
   }
 
   @Test
-  void preparesAndConfirmsShipmentOnlyAfterTaskHoldAndFencedAssetEffects() {
+  void preparesAndConfirmsShipmentAfterHoldsAndFencedAssetEffects() {
     ShipmentLineRequest line =
         new ShipmentLineRequest(
             ASSET, 7, List.of(new EquipmentAllocationRequest(EQUIPMENT, 2, 4)));
@@ -115,7 +115,6 @@ class ShipmentWorkflowSagaIntegrationTest {
     UUID lineId = created.response().lines().getFirst().id();
     UUID leaseId = UUID.randomUUID();
     UUID holdId = UUID.randomUUID();
-    UUID taskId = UUID.randomUUID();
 
     when(dependencies.readRentalItemSnapshot(ASSET)).thenReturn(snapshot(7, "FREE"));
     when(dependencies.acquireOperationLease(
@@ -129,16 +128,6 @@ class ShipmentWorkflowSagaIntegrationTest {
     when(dependencies.acquireEquipmentHold(
             any(), any(), any(), any(), any(), anyLong(), anyLong()))
         .thenReturn(activeHold(holdId));
-    when(dependencies.registerPreparationTask(eq(WAREHOUSE), any(), eq(0), eq(null)))
-        .thenAnswer(
-            invocation ->
-                new LogisticsDependencyGateway.PreparationTask(
-                    taskId,
-                    1,
-                    WAREHOUSE,
-                    invocation.getArgument(1),
-                    "ACTIVE",
-                    null));
 
     assertThat(created.response().state()).isEqualTo(LogisticsDocumentState.PREPARING);
 
@@ -150,21 +139,15 @@ class ShipmentWorkflowSagaIntegrationTest {
                 String.class))
         .contains(
             "SHIPMENT_ASSET_SNAPSHOT:CONFIRMED",
-            "SHIPMENT_ASSET_LEASE_ACQUIRE:CONFIRMED",
-            "SHIPMENT_TASK_REGISTER:CONFIRMED");
+            "SHIPMENT_ASSET_LEASE_ACQUIRE:CONFIRMED");
     assertThat(documents.get(documentId, LogisticsDocumentType.SHIPMENT).state())
         .isEqualTo(LogisticsDocumentState.AWAITING_CONFIRMATION);
-
-    when(dependencies.completePreparationTask(any(), eq(1L)))
-        .thenAnswer(
-            invocation ->
-                new LogisticsDependencyGateway.PreparationTask(
-                    taskId,
-                    2,
-                    WAREHOUSE,
-                    invocation.getArgument(0),
-                    "DONE",
-                    OffsetDateTime.now(ZoneOffset.UTC)));
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_task_reference where document_id=?",
+                Long.class,
+                documentId))
+        .isZero();
     when(dependencies.commandEquipmentHold(
             any(),
             eq(LogisticsDependencyGateway.EquipmentHoldAction.COMMIT),
@@ -241,6 +224,10 @@ class ShipmentWorkflowSagaIntegrationTest {
                 ClientType.LEGAL_ENTITY,
                 "Party linked",
                 "party linked",
+                "+79990000002",
+                "+79990000002",
+                null,
+                null,
                 SUBJECT,
                 UUID.randomUUID(),
                 "0".repeat(64)));
@@ -260,7 +247,7 @@ class ShipmentWorkflowSagaIntegrationTest {
     order = orders.saveAndFlush(order);
     equipmentRequirements.saveAndFlush(
         RentalOrderEquipmentRequirement.create(
-            order, ASSET, EQUIPMENT, "TABLE", "Стол", 2));
+            order, ASSET, EQUIPMENT, "Стол", 2));
     LogisticsDependencyGateway.OrderUnitReservation reservation = reservation(order.getId());
 
     var created =
@@ -269,7 +256,6 @@ class ShipmentWorkflowSagaIntegrationTest {
     UUID documentId = created.id();
     UUID lineId = created.lines().getFirst().id();
     UUID leaseId = UUID.randomUUID();
-    UUID taskId = UUID.randomUUID();
 
     when(dependencies.readRentalItemSnapshot(ASSET)).thenReturn(snapshot(7, "BOOKED"));
     when(dependencies.acquireOperationLease(
@@ -281,16 +267,7 @@ class ShipmentWorkflowSagaIntegrationTest {
             eq(lineId),
             eq(order.getId())))
         .thenReturn(activeLease(leaseId));
-    when(dependencies.registerPreparationTask(eq(WAREHOUSE), any(), eq(0), eq(null)))
-        .thenAnswer(
-            invocation ->
-                new LogisticsDependencyGateway.PreparationTask(
-                    taskId,
-                    1,
-                    WAREHOUSE,
-                    invocation.getArgument(1),
-                    "ACTIVE",
-                    null));
+    when(dependencies.readOrderUnits(order.getId())).thenReturn(List.of(reservation));
     when(dependencies.planOrderFurnitureMovements(
             eq(order.getId()),
             eq(WAREHOUSE),
@@ -312,16 +289,6 @@ class ShipmentWorkflowSagaIntegrationTest {
     processor.processUntilIdle(documentId);
     long awaitingVersion = documents.get(documentId, LogisticsDocumentType.SHIPMENT).version();
 
-    when(dependencies.completePreparationTask(any(), eq(1L)))
-        .thenAnswer(
-            invocation ->
-                new LogisticsDependencyGateway.PreparationTask(
-                    taskId,
-                    2,
-                    WAREHOUSE,
-                    invocation.getArgument(0),
-                    "DONE",
-                    OffsetDateTime.now(ZoneOffset.UTC)));
     when(dependencies.applyFencedEffect(
             any(),
             eq(LogisticsDependencyGateway.AssetEffect.SHIPMENT_CONFIRM),
@@ -399,6 +366,10 @@ class ShipmentWorkflowSagaIntegrationTest {
                 ClientType.LEGAL_ENTITY,
                 "Furniture party",
                 "furniture party",
+                "+79990000003",
+                "+79990000003",
+                null,
+                null,
                 SUBJECT,
                 UUID.randomUUID(),
                 "2".repeat(64)));
@@ -418,7 +389,7 @@ class ShipmentWorkflowSagaIntegrationTest {
     order = orders.saveAndFlush(order);
     equipmentRequirements.saveAndFlush(
         RentalOrderEquipmentRequirement.create(
-            order, ASSET, EQUIPMENT, "TABLE", "Стол", 2));
+            order, ASSET, EQUIPMENT, "Стол", 2));
 
     var shipment =
         documents.createRentalOrderShipmentDraft(
@@ -431,7 +402,6 @@ class ShipmentWorkflowSagaIntegrationTest {
             List.of(
                 new LogisticsDependencyGateway.OrderFurnitureMovementPlanLine(
                     EQUIPMENT,
-                    "TABLE",
                     "Стол",
                     UUID.randomUUID(),
                     WAREHOUSE,
@@ -473,6 +443,11 @@ class ShipmentWorkflowSagaIntegrationTest {
             jdbc.queryForObject(
                 "select count(*) from equipment_movement_task", Long.class))
         .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select planned_duration_minutes from equipment_movement_task",
+                Integer.class))
+        .isEqualTo(60);
 
     assertThat(shipmentFurnitureTasks.readiness(shipment.id()).state())
         .isEqualTo(ShipmentFurnitureReadinessState.AWAITING_TASK_COMPLETION);
@@ -522,6 +497,12 @@ class ShipmentWorkflowSagaIntegrationTest {
                 "select count(*) from logistics_external_attempt where result='PERMANENT_REJECTION'",
                 Long.class))
         .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_task_reference where document_id=?",
+                Long.class,
+                created.response().id()))
+        .isZero();
   }
 
   private static LogisticsDependencyGateway.OrderUnitReservation reservation(UUID orderId) {

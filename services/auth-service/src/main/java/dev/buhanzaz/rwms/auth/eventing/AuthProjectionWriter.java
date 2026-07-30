@@ -32,9 +32,67 @@ public class AuthProjectionWriter {
             String timeZoneId,
             UserGlobalRole globalRole,
             boolean active) {
+        return insertUser(
+                username,
+                passwordHash,
+                firstName,
+                lastName,
+                email,
+                timeZoneId,
+                globalRole,
+                active,
+                false,
+                globalRole.hasRentalAccessByDefault());
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public AuthSubject insertUser(
+            String username,
+            String passwordHash,
+            String firstName,
+            String lastName,
+            String email,
+            String timeZoneId,
+            UserGlobalRole globalRole,
+            boolean active,
+            boolean mobileAppAccess) {
+        return insertUser(
+                username,
+                passwordHash,
+                firstName,
+                lastName,
+                email,
+                timeZoneId,
+                globalRole,
+                active,
+                mobileAppAccess,
+                globalRole.hasRentalAccessByDefault());
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public AuthSubject insertUser(
+            String username,
+            String passwordHash,
+            String firstName,
+            String lastName,
+            String email,
+            String timeZoneId,
+            UserGlobalRole globalRole,
+            boolean active,
+            boolean mobileAppAccess,
+            boolean rentalAccess) {
         var subject = new AuthSubject();
         subject.registerUser(
-                username, passwordHash, firstName, lastName, email, timeZoneId, globalRole, active);
+                username,
+                passwordHash,
+                firstName,
+                lastName,
+                email,
+                timeZoneId,
+                globalRole,
+                active,
+                mobileAppAccess,
+                rentalAccess);
         return insert(subject);
     }
 
@@ -75,8 +133,67 @@ public class AuthProjectionWriter {
             boolean active,
             boolean profileChanged,
             boolean credentialStatusChanged) {
+        return updateUser(
+                subject,
+                username,
+                firstName,
+                lastName,
+                email,
+                timeZoneId,
+                globalRole,
+                active,
+                subject.isMobileAppAccess()
+                        && globalRole != null
+                        && globalRole.isManagerAppEligible(),
+                subject.isRentalAccess(),
+                profileChanged,
+                credentialStatusChanged);
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public AuthSubject updateUser(
+            AuthSubject subject,
+            String username,
+            String firstName,
+            String lastName,
+            String email,
+            String timeZoneId,
+            UserGlobalRole globalRole,
+            boolean active,
+            boolean mobileAppAccess,
+            boolean profileChanged,
+            boolean credentialStatusChanged) {
+        return updateUser(
+                subject,
+                username,
+                firstName,
+                lastName,
+                email,
+                timeZoneId,
+                globalRole,
+                active,
+                mobileAppAccess,
+                subject.isRentalAccess(),
+                profileChanged,
+                credentialStatusChanged);
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public AuthSubject updateUser(
+            AuthSubject subject,
+            String username,
+            String firstName,
+            String lastName,
+            String email,
+            String timeZoneId,
+            UserGlobalRole globalRole,
+            boolean active,
+            boolean mobileAppAccess,
+            boolean rentalAccess,
+            boolean profileChanged,
+            boolean credentialStatusChanged) {
         subject.changeUserProfile(username, firstName, lastName, email, timeZoneId);
-        subject.changeUserAuthorization(globalRole, active);
+        subject.changeUserAuthorization(globalRole, active, mobileAppAccess, rentalAccess);
         AuthSubject saved = subjects.saveAndFlush(subject);
         if (profileChanged) {
             profiles.replace(
@@ -134,6 +251,14 @@ public class AuthProjectionWriter {
         subject.disable();
         AuthSubject saved = subjects.saveAndFlush(subject);
         credentials.changeStatus(saved.getId(), false);
+        return saved;
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public AuthSubject enableWorker(AuthSubject subject) {
+        subject.enableWorkerAccess();
+        AuthSubject saved = subjects.saveAndFlush(subject);
+        credentials.changeStatus(saved.getId(), true);
         return saved;
     }
 

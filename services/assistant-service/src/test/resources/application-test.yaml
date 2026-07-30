@@ -1,0 +1,26 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://invalid/assistant
+    username: test
+    password: test
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  kafka:
+    listener:
+      auto-startup: false
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://issuer.invalid
+rwms:
+  assistant:
+    kafka:
+      enabled: false
+    llm:
+      api-key: test-key
+      require-api-key-on-startup: false
+  cors:
+    allowed-origins:
+      - http://localhost:5173

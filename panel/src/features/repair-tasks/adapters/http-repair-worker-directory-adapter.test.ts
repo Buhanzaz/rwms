@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const settings = vi.hoisted(() => ({
-  listClasses: vi.fn(),
   listGroups: vi.fn(),
   listQueues: vi.fn(),
   listWorkers: vi.fn(),
@@ -17,11 +16,11 @@ const WAREHOUSE_ID = "11111111-1111-4111-8111-111111111111"
 const WORKER_CLASS_ID = "22222222-2222-4222-8222-222222222222"
 const GROUP_ID = "33333333-3333-4333-8333-333333333333"
 const WORKER_ID = "44444444-4444-4444-8444-444444444444"
+const QUEUE_ID = "66666666-6666-4666-8666-666666666666"
 
 const driverClass = {
   id: WORKER_CLASS_ID,
   version: 1,
-  code: "DRIVER_WORKER",
   name: "Водитель",
   description: null,
   comment: null,
@@ -30,8 +29,35 @@ const driverClass = {
 }
 
 beforeEach(() => {
-  settings.listClasses.mockResolvedValue([driverClass])
-  settings.listQueues.mockResolvedValue([])
+  settings.listQueues.mockResolvedValue([
+    {
+      id: QUEUE_ID,
+      version: 1,
+      warehouseId: WAREHOUSE_ID,
+      name: "Перемещение",
+      description: null,
+      type: "MOVEMENT",
+      sortOrder: 0,
+      active: true,
+      hidden: false,
+      collapsed: false,
+      holdingPeriodMinutes: null,
+      notificationThreshold: null,
+      notifyWhenThresholdReached: false,
+      resultPhotoMinCount: 0,
+      bindings: [
+        {
+          id: "77777777-7777-4777-8777-777777777777",
+          version: 1,
+          workerClass: driverClass,
+          order: 0,
+          primary: true,
+          stopTaskOnTake: false,
+          notifyUrgent: false,
+        },
+      ],
+    },
+  ])
   settings.listWorkers.mockResolvedValue([
     {
       id: WORKER_ID,
@@ -64,7 +90,6 @@ beforeEach(() => {
           version: 1,
           workerId: WORKER_ID,
           workerName: "Алексей Водитель",
-          roleInGroup: null,
           active: true,
         },
       ],
@@ -73,14 +98,14 @@ beforeEach(() => {
 })
 
 describe("HttpRepairWorkerDirectoryAdapter", () => {
-  it("uses active members of the configured DRIVER_WORKER group as drivers", async () => {
+  it("uses active members qualified for the movement queue as drivers", async () => {
     const adapter = new HttpRepairWorkerDirectoryAdapter()
 
     await expect(
       adapter.listGroups(
         {
           warehouseId: WAREHOUSE_ID,
-          queueCode: null,
+          queueId: null,
           routeQueueKind: "MOVEMENT",
           purpose: "DRIVER_DIRECTORY",
         },
@@ -92,8 +117,8 @@ describe("HttpRepairWorkerDirectoryAdapter", () => {
         warehouseId: WAREHOUSE_ID,
         name: "Водители",
         active: true,
-        queueCodes: [],
-        routeQueueKinds: [],
+        queueIds: [QUEUE_ID],
+        routeQueueKinds: ["MOVEMENT"],
         members: [{ id: WORKER_ID, name: "Алексей Водитель" }],
       },
     ])

@@ -6,6 +6,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.AfterAll;
@@ -37,6 +38,23 @@ class GatewayFailureIntegrationTest {
         "/",
         exchange -> {
           try {
+            if ("/api/worker/v1/events".equals(exchange.getRequestURI().getPath())
+                || exchange
+                    .getRequestURI()
+                    .getPath()
+                    .matches("^/api/assistant/v1/conversations/[^/]+/turns$")) {
+              exchange.getResponseHeaders().set(HttpHeaders.CONTENT_TYPE, "text/event-stream");
+              exchange.sendResponseHeaders(200, 0);
+              exchange
+                  .getResponseBody()
+                  .write("id: first\ndata: {\"revision\":1}\n\n".getBytes(StandardCharsets.UTF_8));
+              exchange.getResponseBody().flush();
+              Thread.sleep(250);
+              exchange
+                  .getResponseBody()
+                  .write("id: second\ndata: {\"revision\":2}\n\n".getBytes(StandardCharsets.UTF_8));
+              return;
+            }
             Thread.sleep(1_000);
             exchange.sendResponseHeaders(204, -1);
           } catch (InterruptedException exception) {
@@ -65,6 +83,8 @@ class GatewayFailureIntegrationTest {
     registry.add("rwms.gateway.routes.inventory-uri", () -> "http://127.0.0.1:9");
     registry.add("rwms.gateway.routes.logistics-uri", () -> "http://127.0.0.1:9");
     registry.add("rwms.gateway.routes.dossier-uri", () -> "http://127.0.0.1:9");
+    registry.add("rwms.gateway.routes.analytics-uri", () -> "http://127.0.0.1:9");
+    registry.add("rwms.gateway.routes.assistant-uri", GatewayFailureIntegrationTest::slowOrigin);
     registry.add("rwms.gateway.security.issuer", () -> "http://gateway.test/auth");
     registry.add("rwms.gateway.security.audience", () -> "rwms-services");
     registry.add("rwms.gateway.security.jwk-set-uri", () -> slowOrigin() + "/oauth2/jwks");
@@ -97,12 +117,47 @@ class GatewayFailureIntegrationTest {
         .doesNotContain(slowOrigin());
   }
 
+  @Test
+  void workerEventStreamIsNotCutOffByOrdinaryReadDeadline() throws Exception {
+    HttpResponse<String> response = request("/api/task-board/worker/v1/events");
+
+    org.assertj.core.api.Assertions.assertThat(response.statusCode()).isEqualTo(200);
+    org.assertj.core.api.Assertions.assertThat(response.headers().firstValue(HttpHeaders.CONTENT_TYPE))
+        .contains("text/event-stream");
+    org.assertj.core.api.Assertions.assertThat(response.body())
+        .contains("id: first", "id: second");
+  }
+
+  @Test
+  void assistantTurnStreamIsNotCutOffByOrdinaryReadDeadline() throws Exception {
+    HttpResponse<String> response =
+        post("/api/assistant/v1/conversations/conversation-1/turns");
+
+    org.assertj.core.api.Assertions.assertThat(response.statusCode()).isEqualTo(200);
+    org.assertj.core.api.Assertions.assertThat(
+            response.headers().firstValue(HttpHeaders.CONTENT_TYPE))
+        .contains("text/event-stream");
+    org.assertj.core.api.Assertions.assertThat(response.body())
+        .contains("id: first", "id: second");
+  }
+
   private HttpResponse<String> request(String path) throws Exception {
     return HttpClient.newHttpClient().send(
         HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + gatewayPort + path))
             .header(HttpHeaders.HOST, "gateway.test")
             .header(HttpHeaders.AUTHORIZATION, "Bearer valid")
             .GET()
+            .build(),
+        HttpResponse.BodyHandlers.ofString());
+  }
+
+  private HttpResponse<String> post(String path) throws Exception {
+    return HttpClient.newHttpClient().send(
+        HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + gatewayPort + path))
+            .header(HttpHeaders.HOST, "gateway.test")
+            .header(HttpHeaders.AUTHORIZATION, "Bearer valid")
+            .header(HttpHeaders.CONTENT_TYPE, "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString("{\"message\":\"test\"}"))
             .build(),
         HttpResponse.BodyHandlers.ofString());
   }
@@ -121,6 +176,7 @@ class GatewayFailureIntegrationTest {
               .header("alg", "none")
               .subject("test-user")
               .audience(List.of("rwms-services"))
+              .claim("scope", "worker.tasks")
               .issuedAt(Instant.now())
               .expiresAt(Instant.now().plusSeconds(60))
               .build();

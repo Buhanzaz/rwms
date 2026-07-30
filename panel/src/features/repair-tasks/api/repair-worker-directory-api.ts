@@ -12,7 +12,7 @@ export function repairWorkerGroupsQueryKey(query: RepairWorkerGroupsQuery) {
   return [
     ...REPAIR_WORKER_GROUPS_QUERY_KEY,
     query.warehouseId,
-    query.queueCode,
+    query.queueId,
     query.routeQueueKind,
     query.purpose ?? "TASK_ASSIGNMENT",
   ] as const

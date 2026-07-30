@@ -54,6 +54,10 @@ public class FindingMediaReference {
     return generation;
   }
 
+  public String getMediaKind() {
+    return mediaKind;
+  }
+
   public static class Key implements Serializable {
     private UUID findingId;
     private long findingRevision;

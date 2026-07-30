@@ -82,6 +82,7 @@ class MaintenanceEventFactFactoryTest {
     when(repair.getExecutionState()).thenReturn(RepairExecutionState.QUEUED);
     when(repair.getAcceptanceState()).thenReturn(RepairAcceptanceState.NOT_READY);
     when(repair.getDispatchDate()).thenReturn(LocalDate.of(2026, 7, 17));
+    when(repair.getPriority()).thenReturn(1);
     when(repair.getExternalTaskId()).thenReturn(MaintenanceEventContractFixtures.EXTERNAL_TASK_ID);
     RepairStage later = stage(2, "00000000-0000-0000-0000-000000000612");
     RepairStage first = stage(0, "00000000-0000-0000-0000-000000000611");
@@ -102,7 +103,9 @@ class MaintenanceEventFactFactoryTest {
             "executionState",
             "acceptanceState",
             "dispatchDate",
+            "priority",
             "stages")
+        .containsEntry("priority", 1)
         .doesNotContainKeys(
             "sourceParty", "reworkReason", "decisionReason", "leaseId", "objectPath");
     @SuppressWarnings("unchecked")

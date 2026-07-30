@@ -17,5 +17,56 @@ public record CreateUserRequest(
         @Size(max = 64) String timeZoneId,
         @NotNull UserGlobalRole globalRole,
         Boolean active,
+        Boolean mobileAppAccess,
+        Boolean rentalAccess,
         List<@Valid WarehouseAccessRequest> warehouseAccesses) {
+
+    public CreateUserRequest(
+            String username,
+            String password,
+            String firstName,
+            String lastName,
+            String email,
+            String timeZoneId,
+            UserGlobalRole globalRole,
+            Boolean active,
+            List<WarehouseAccessRequest> warehouseAccesses) {
+        this(
+                username,
+                password,
+                firstName,
+                lastName,
+                email,
+                timeZoneId,
+                globalRole,
+                active,
+                null,
+                null,
+                warehouseAccesses);
+    }
+
+    public CreateUserRequest(
+            String username,
+            String password,
+            String firstName,
+            String lastName,
+            String email,
+            String timeZoneId,
+            UserGlobalRole globalRole,
+            Boolean active,
+            Boolean mobileAppAccess,
+            List<WarehouseAccessRequest> warehouseAccesses) {
+        this(
+                username,
+                password,
+                firstName,
+                lastName,
+                email,
+                timeZoneId,
+                globalRole,
+                active,
+                mobileAppAccess,
+                null,
+                warehouseAccesses);
+    }
 }

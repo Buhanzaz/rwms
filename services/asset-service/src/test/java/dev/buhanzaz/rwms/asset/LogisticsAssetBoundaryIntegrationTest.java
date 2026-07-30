@@ -10,6 +10,9 @@ import static dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsRentalItemActi
 import static dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsRentalItemAction.TRANSFER_DEPART;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.DIMENSION_24_X_6;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.FINISHING_DVP;
+import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.TYPE_BK_1;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireLogisticsEquipmentHoldRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.AcquireLogisticsEquipmentMovementReservationRequest;
@@ -25,6 +28,7 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsReturnEquipmentReceip
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsReturnEquipmentReceiptRequest;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.TransferEquipmentRequest;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.TransferAssetStatus;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest;
 import dev.buhanzaz.rwms.asset.api.LogisticsFurnitureMovementApiModels.CabinFurnitureMovementPlanRequest;
 import dev.buhanzaz.rwms.asset.api.LogisticsFurnitureMovementApiModels.CabinFurnitureRequirement;
@@ -279,7 +283,6 @@ class LogisticsAssetBoundaryIntegrationTest {
         subject,
         UUID.randomUUID(),
         new CreateEquipmentRequest(
-            "LOG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
             "Logistics test equipment",
             EquipmentCategory.FURNITURE,
             null))
@@ -371,6 +374,155 @@ class LogisticsAssetBoundaryIntegrationTest {
 
   @Test
   @Transactional
+  void transferRestoresThePersistedActiveRepairStatusAndRejectsAMismatchedArrival() {
+    UUID subject = UUID.randomUUID();
+    UUID origin = UUID.randomUUID();
+    UUID destination = UUID.randomUUID();
+    RentalItemResponse rental =
+        rental(subject, origin, RentalItemStatus.REPAIR);
+    UUID document = UUID.randomUUID();
+    UUID line = UUID.randomUUID();
+    var lease =
+        service
+            .acquireLogisticsLease(
+                subject,
+                UUID.randomUUID(),
+                new AcquireLogisticsOperationLeaseRequest(
+                    rental.id(),
+                    LOGISTICS_TRANSFER,
+                    document,
+                    line,
+                    rental.version()))
+            .response();
+
+    var departed =
+        service.applyLogisticsEffect(
+            subject,
+            UUID.randomUUID(),
+            rental.id(),
+            effect(
+                rental.version(),
+                TRANSFER_DEPART,
+                lease.leaseId(),
+                lease.fencingToken(),
+                LOGISTICS_TRANSFER,
+                document,
+                line,
+                null,
+                TransferAssetStatus.REPAIR));
+
+    assertThat(departed.response().status())
+        .isEqualTo(RentalItemStatus.IN_TRANSFER);
+    assertThat(
+            jdbc.queryForObject(
+                "select transfer_origin_status from rental_item where id=?",
+                String.class,
+                rental.id()))
+        .isEqualTo("REPAIR");
+    assertThat(replay.rebuildAndVerify().aggregateCount())
+        .isGreaterThanOrEqualTo(2);
+    assertThatThrownBy(
+            () ->
+                service.applyLogisticsEffect(
+                    subject,
+                    UUID.randomUUID(),
+                    rental.id(),
+                    effect(
+                        departed.response().version(),
+                        TRANSFER_ARRIVE,
+                        lease.leaseId(),
+                        lease.fencingToken(),
+                        LOGISTICS_TRANSFER,
+                        document,
+                        line,
+                        destination,
+                        TransferAssetStatus.FREE)))
+        .isInstanceOf(AssetConflictException.class)
+        .hasMessageContaining("persisted departure");
+
+    var arrived =
+        service.applyLogisticsEffect(
+            subject,
+            UUID.randomUUID(),
+            rental.id(),
+            effect(
+                departed.response().version(),
+                TRANSFER_ARRIVE,
+                lease.leaseId(),
+                lease.fencingToken(),
+                LOGISTICS_TRANSFER,
+                document,
+                line,
+                destination,
+                TransferAssetStatus.REPAIR));
+
+    assertThat(arrived.response().warehouseId()).isEqualTo(destination);
+    assertThat(arrived.response().status()).isEqualTo(RentalItemStatus.REPAIR);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*) from rental_item
+                where id=? and transfer_origin_status is null
+                """,
+                Integer.class,
+                rental.id()))
+        .isOne();
+
+    RentalItemResponse capital =
+        rental(subject, origin, RentalItemStatus.CAPITAL_REPAIR);
+    UUID capitalDocument = UUID.randomUUID();
+    UUID capitalLine = UUID.randomUUID();
+    var capitalLease =
+        service
+            .acquireLogisticsLease(
+                subject,
+                UUID.randomUUID(),
+                new AcquireLogisticsOperationLeaseRequest(
+                    capital.id(),
+                    LOGISTICS_TRANSFER,
+                    capitalDocument,
+                    capitalLine,
+                    capital.version()))
+            .response();
+    var capitalDeparted =
+        service.applyLogisticsEffect(
+            subject,
+            UUID.randomUUID(),
+            capital.id(),
+            effect(
+                capital.version(),
+                TRANSFER_DEPART,
+                capitalLease.leaseId(),
+                capitalLease.fencingToken(),
+                LOGISTICS_TRANSFER,
+                capitalDocument,
+                capitalLine,
+                null,
+                TransferAssetStatus.REPAIR));
+    var capitalArrived =
+        service.applyLogisticsEffect(
+            subject,
+            UUID.randomUUID(),
+            capital.id(),
+            effect(
+                capitalDeparted.response().version(),
+                TRANSFER_ARRIVE,
+                capitalLease.leaseId(),
+                capitalLease.fencingToken(),
+                LOGISTICS_TRANSFER,
+                capitalDocument,
+                capitalLine,
+                UUID.randomUUID(),
+                TransferAssetStatus.REPAIR));
+
+    assertThat(capitalArrived.response().status())
+        .isEqualTo(RentalItemStatus.REPAIR);
+    assertThat(replay.rebuildAndVerify().aggregateCount())
+        .isGreaterThanOrEqualTo(6);
+  }
+
+  @Test
+  @Transactional
   void cabinFurniturePlanReplacesTheCompleteFurnitureCompositionWithoutMovingBalances() {
     UUID subject = UUID.randomUUID();
     UUID warehouse = UUID.randomUUID();
@@ -379,7 +531,6 @@ class LogisticsAssetBoundaryIntegrationTest {
         subject,
         UUID.randomUUID(),
         new CreateEquipmentRequest(
-            "PLAN-TABLE-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
             "Current table",
             EquipmentCategory.FURNITURE,
             null))
@@ -389,7 +540,6 @@ class LogisticsAssetBoundaryIntegrationTest {
         subject,
         UUID.randomUUID(),
         new CreateEquipmentRequest(
-            "PLAN-BED-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
             "Requested bed",
             EquipmentCategory.FURNITURE,
             null))
@@ -452,7 +602,6 @@ class LogisticsAssetBoundaryIntegrationTest {
         subject,
         UUID.randomUUID(),
         new CreateEquipmentRequest(
-            "HOLD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
             "Hold test equipment",
             EquipmentCategory.FURNITURE,
             null))
@@ -536,7 +685,6 @@ class LogisticsAssetBoundaryIntegrationTest {
         subject,
         UUID.randomUUID(),
         new CreateEquipmentRequest(
-            "MOVE-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
             "Worker table",
             EquipmentCategory.FURNITURE,
             null))
@@ -584,7 +732,7 @@ class LogisticsAssetBoundaryIntegrationTest {
             OffsetDateTime.now(ZoneOffset.UTC).plusHours(1)))
         .response();
 
-    assertThat(reserved.equipmentCode()).startsWith("MOVE-");
+    assertThat(reserved.equipmentId()).isEqualTo(equipmentId);
     assertThat(reserved.equipmentName()).isEqualTo("Worker table");
     assertThat(reserved.sourceRentalItemId()).isEqualTo(cabin.id());
     assertThat(service.equipmentTotals(equipmentId, warehouse).balances())
@@ -665,7 +813,6 @@ class LogisticsAssetBoundaryIntegrationTest {
         subject,
         UUID.randomUUID(),
         new CreateEquipmentRequest(
-            "XFER-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
             "Transfer stock table",
             EquipmentCategory.FURNITURE,
             null))
@@ -723,7 +870,6 @@ class LogisticsAssetBoundaryIntegrationTest {
         subject,
         UUID.randomUUID(),
         new CreateEquipmentRequest(
-            "RETURN-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
             "Returned furniture chair",
             EquipmentCategory.FURNITURE,
             null))
@@ -765,7 +911,6 @@ class LogisticsAssetBoundaryIntegrationTest {
         subject,
         UUID.randomUUID(),
         new CreateEquipmentRequest(
-            "BATCH-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
             "Batch chair",
             EquipmentCategory.FURNITURE,
             null))
@@ -853,16 +998,16 @@ class LogisticsAssetBoundaryIntegrationTest {
         new CreateRentalItemRequest(
             warehouseId,
             "LOG-CABIN-" + UUID.randomUUID(),
+            TYPE_BK_1,
+            DIMENSION_24_X_6,
+            FINISHING_DVP,
             null,
-            null,
-            null,
-            null,
-            null,
-            null,
+            List.of(),
+            false,
             Map.of(),
             List.of()))
         .response();
-    if (status == RentalItemStatus.NEW) {
+    if (status == RentalItemStatus.FREE) {
       return created;
     }
     return service.updateStatus(
@@ -909,6 +1054,32 @@ class LogisticsAssetBoundaryIntegrationTest {
       UUID documentId,
       UUID lineId,
       UUID destinationWarehouseId) {
+    TransferAssetStatus transferAssetStatus =
+        action == TRANSFER_DEPART || action == TRANSFER_ARRIVE
+            ? TransferAssetStatus.FREE
+            : null;
+    return effect(
+        expectedVersion,
+        action,
+        leaseId,
+        fencingToken,
+        ownerType,
+        documentId,
+        lineId,
+        destinationWarehouseId,
+        transferAssetStatus);
+  }
+
+  private static LogisticsFencedEffectRequest effect(
+      long expectedVersion,
+      dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsRentalItemAction action,
+      UUID leaseId,
+      long fencingToken,
+      dev.buhanzaz.rwms.asset.api.AssetApiModels.LogisticsLeaseOwnerType ownerType,
+      UUID documentId,
+      UUID lineId,
+      UUID destinationWarehouseId,
+      TransferAssetStatus transferAssetStatus) {
     return new LogisticsFencedEffectRequest(
         expectedVersion,
         action,
@@ -917,6 +1088,7 @@ class LogisticsAssetBoundaryIntegrationTest {
         ownerType,
         documentId,
         lineId,
-        destinationWarehouseId);
+        destinationWarehouseId,
+        transferAssetStatus);
   }
 }

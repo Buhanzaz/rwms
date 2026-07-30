@@ -52,7 +52,7 @@ spring:
     stream:
       bindings:
         maintenanceInbound-in-0:
-          destination: rwms.task-board.board-task.v1,rwms.task-board.queue-entry.v1,rwms.media.media.v1,rwms.asset.rental-item.v1,rwms.asset.operation-lease.v1
+          destination: rwms.task-board.board-task.v1,rwms.task-board.queue-entry.v1,rwms.task-board.task-evidence.v1,rwms.media.media.v1,rwms.asset.rental-item.v1,rwms.asset.operation-lease.v1
           group: maintenance-service-inbox-v1
           consumer:
             max-attempts: 1

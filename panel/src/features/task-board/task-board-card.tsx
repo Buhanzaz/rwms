@@ -5,6 +5,9 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import {
   DragDropVerticalIcon,
   PauseIcon,
+  PencilEdit01Icon,
+  PinIcon,
+  PinOffIcon,
   PlayIcon,
   ViewIcon,
 } from "@hugeicons/core-free-icons"
@@ -13,13 +16,17 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
-  CardAction,
   CardContent,
   CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import type { KpiPalette } from "@/features/settings/kpi/api/kpi-settings-api"
+import {
+  paletteColorForRemainingPercent,
+  taskTimerAt,
+} from "@/features/task-board/domain/task-board-kpi-presentation"
 import type {
   TaskBoardEntryDto,
   TaskBoardEntryStatus,
@@ -45,17 +52,51 @@ function formatElapsed(seconds: number) {
         .padStart(2, "0")}`
 }
 
-function elapsedSeconds(entry: TaskBoardEntryDto, now: number) {
-  if (!entry.activeStartedAt || entry.status !== "IN_PROGRESS") {
-    return entry.activeWorkSeconds
-  }
-  const started = Date.parse(entry.activeStartedAt)
-  return (
-    entry.activeWorkSeconds +
-    (Number.isFinite(started)
-      ? Math.max(0, Math.floor((now - started) / 1_000))
-      : 0)
+function formatRemaining(seconds: number) {
+  return seconds < 0
+    ? `Просрочено на ${formatElapsed(Math.abs(seconds))}`
+    : formatElapsed(seconds)
+}
+
+function timerStateLabel(state: ReturnType<typeof taskTimerAt>["timerState"]) {
+  if (state === "BREAK") return "Перерыв"
+  if (state === "OFF_SHIFT") return "Вне смены"
+  if (state === "PAUSED") return "Пауза"
+  if (state === "DONE") return "Завершено"
+  return null
+}
+
+function remainingPercentLabel(value: number) {
+  const rounded = Math.round(value)
+  return rounded < 0
+    ? `Просрочка ${Math.abs(rounded)}%`
+    : `Осталось ${rounded}%`
+}
+
+function kpiCardAppearance(
+  entry: TaskBoardEntryDto,
+  now: number,
+  palette: KpiPalette | null
+) {
+  const color = paletteColorForRemainingPercent(
+    taskTimerAt(entry, now).remainingPercent,
+    palette
   )
+  if (!color || !/^#[0-9A-F]{6}$/i.test(color)) {
+    return { color: null, style: undefined }
+  }
+
+  const red = Number.parseInt(color.slice(1, 3), 16)
+  const green = Number.parseInt(color.slice(3, 5), 16)
+  const blue = Number.parseInt(color.slice(5, 7), 16)
+  return {
+    color,
+    style: {
+      backgroundColor: `rgba(${red}, ${green}, ${blue}, 0.12)`,
+      borderColor: color,
+      borderLeftWidth: "4px",
+    } satisfies CSSProperties,
+  }
 }
 
 function assignedWorkerNames(entry: TaskBoardEntryDto) {
@@ -78,37 +119,217 @@ function assignedGroupNames(entry: TaskBoardEntryDto) {
   )
 }
 
+function canEditMaintenanceRepair(entry: TaskBoardEntryDto) {
+  return (
+    entry.entryType === "REAL" &&
+    entry.status === "WAITING" &&
+    entry.activeStartedAt === null &&
+    entry.source?.type === "MAINTENANCE_REPAIR" &&
+    entry.assignments.every((assignment) => assignment.startedAt === null)
+  )
+}
+
+function taskDescription(entry: TaskBoardEntryDto) {
+  const text = entry.taskText?.trim()
+  if (text) {
+    const repairText = text.replace(/\s*Материалы\s*:\s*[\s\S]*$/iu, "").trim()
+    return repairText || null
+  }
+
+  return entry.title === "MAINTENANCE_REPAIR" ? null : entry.title
+}
+
 const shadowEntryCardClassName =
   "border-dashed bg-muted/70 opacity-65 shadow-lg transition-opacity"
-const mobileEntryCardHeightClassName = "min-h-80"
+
+function cardActionVisibility(
+  entry: TaskBoardEntryDto,
+  mobile: boolean,
+  canEdit: boolean
+) {
+  const showEdit = canEdit && canEditMaintenanceRepair(entry)
+  const showDetails = entry.source?.type === "MAINTENANCE_REPAIR"
+  const showPause = !mobile && entry.status === "IN_PROGRESS"
+  const showResume = !mobile && entry.status === "PAUSED"
+
+  return {
+    showEdit,
+    showDetails,
+    showPause,
+    showResume,
+    showActions: showEdit || showDetails || showPause || showResume,
+  }
+}
+
+function TaskBoardCardContent({
+  entry,
+  now,
+  collapsed,
+}: {
+  entry: TaskBoardEntryDto
+  now: number
+  collapsed: boolean
+}) {
+  const workers = assignedWorkerNames(entry)
+  const groups = assignedGroupNames(entry)
+  const timer = taskTimerAt(entry, now)
+  const stateLabel = timerStateLabel(timer.timerState)
+
+  return (
+    <CardContent className="flex flex-col gap-3">
+      <div className="flex flex-wrap gap-2">
+        <Badge variant={entry.status === "IN_PROGRESS" ? "default" : "outline"}>
+          {statusLabels[entry.status]}
+        </Badge>
+        <Badge variant="outline">
+          Этап {entry.routeIndex + 1} из {entry.routeLength}
+        </Badge>
+        <Badge variant={entry.priority <= 2 ? "default" : "secondary"}>
+          Приоритет {entry.priority}
+        </Badge>
+        {timer.remainingPercent !== null ? (
+          <Badge variant="outline">
+            {remainingPercentLabel(timer.remainingPercent)}
+          </Badge>
+        ) : null}
+      </div>
+      {!collapsed ? (
+        <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-muted-foreground">
+          <dt>Группа</dt>
+          <dd className="min-w-0 truncate text-foreground">
+            {groups.join(", ") || "Не назначена"}
+          </dd>
+          <dt>Работники</dt>
+          <dd className="min-w-0 truncate text-foreground">
+            {workers.join(", ") || "Не назначены"}
+          </dd>
+          <dt>Время</dt>
+          <dd className="text-foreground">
+            {formatElapsed(timer.countedActiveSeconds)}
+          </dd>
+          {timer.remainingSeconds !== null ? (
+            <>
+              <dt>Осталось</dt>
+              <dd className="text-foreground">
+                {stateLabel ? `${stateLabel} · ` : null}
+                {formatRemaining(timer.remainingSeconds)}
+              </dd>
+            </>
+          ) : null}
+        </dl>
+      ) : null}
+    </CardContent>
+  )
+}
 
 export const TaskBoardCardPreview = memo(function TaskBoardCardPreview({
   entry,
   now,
+  mobile,
+  canEdit,
+  collapsed,
+  palette = null,
 }: {
   entry: TaskBoardEntryDto
   now: number
+  mobile: boolean
+  canEdit: boolean
+  collapsed: boolean
+  palette?: KpiPalette | null
 }) {
+  const description = taskDescription(entry)
+  const unitLabel = entry.unitNumber ?? description ?? "Задание без номера"
+  const { showEdit, showDetails, showPause, showResume, showActions } =
+    cardActionVisibility(entry, mobile, canEdit)
+  const appearance = kpiCardAppearance(entry, now, palette)
+
   return (
     <Card
       size="sm"
+      style={appearance.style}
       className={cn(
-        "w-80",
+        "w-full",
         entry.entryType === "SHADOW" && shadowEntryCardClassName
       )}
+      data-kpi-color={appearance.color ?? undefined}
+      data-timer-state={entry.timerSnapshot?.timerState}
+      data-collapsed={collapsed || undefined}
     >
-      <CardHeader>
-        <CardTitle>{entry.unitNumber ?? entry.title}</CardTitle>
-        <CardDescription>{entry.title}</CardDescription>
+      <CardHeader className="flex flex-col gap-2">
+        <div className="flex w-full min-w-0 items-center justify-between gap-2">
+          <CardTitle className="min-w-0 flex-1 truncate">{unitLabel}</CardTitle>
+          <div
+            data-slot="task-board-card-actions"
+            className="ml-auto flex shrink-0 items-center justify-end gap-1"
+          >
+            <Button
+              type="button"
+              size="sm"
+              variant={entry.pinned ? "secondary" : "ghost"}
+              disabled
+            >
+              <HugeiconsIcon
+                icon={entry.pinned ? PinOffIcon : PinIcon}
+                data-icon="inline-start"
+              />
+              {entry.pinned ? "Открепить" : "Закрепить"}
+            </Button>
+            <Button type="button" size="icon-sm" variant="ghost" disabled>
+              <HugeiconsIcon icon={DragDropVerticalIcon} />
+            </Button>
+          </div>
+        </div>
+        {!collapsed && description ? (
+          <CardDescription>{description}</CardDescription>
+        ) : null}
       </CardHeader>
-      <CardContent className="flex flex-wrap gap-2">
-        <Badge variant={entry.entryType === "REAL" ? "secondary" : "outline"}>
-          {entry.entryType === "REAL" ? "Текущий этап" : "Будущий этап"}
-        </Badge>
-        <Badge variant="outline">
-          {formatElapsed(elapsedSeconds(entry, now))}
-        </Badge>
-      </CardContent>
+      <TaskBoardCardContent entry={entry} now={now} collapsed={collapsed} />
+      {showActions ? (
+        <CardFooter className="flex flex-col gap-2">
+          {showEdit ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="w-full"
+              disabled
+            >
+              <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
+              Редактировать
+            </Button>
+          ) : null}
+          {showDetails ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="w-full"
+              disabled
+            >
+              <HugeiconsIcon icon={ViewIcon} data-icon="inline-start" />
+              Детали
+            </Button>
+          ) : null}
+          {showPause ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="w-full"
+              disabled
+            >
+              <HugeiconsIcon icon={PauseIcon} data-icon="inline-start" />
+              Пауза
+            </Button>
+          ) : null}
+          {showResume ? (
+            <Button type="button" size="sm" className="w-full" disabled>
+              <HugeiconsIcon icon={PlayIcon} data-icon="inline-start" />
+              Продолжить
+            </Button>
+          ) : null}
+        </CardFooter>
+      ) : null}
     </Card>
   )
 })
@@ -117,23 +338,36 @@ export const TaskBoardCard = memo(function TaskBoardCard({
   entry,
   now,
   mobile,
+  canEdit,
+  collapsed,
   dragDisabled,
   actionPending,
   onDetails,
+  onEdit,
   onPause,
   onResume,
+  onPin,
+  onToggleCollapsed,
+  palette = null,
 }: {
   entry: TaskBoardEntryDto
   now: number
   mobile: boolean
+  canEdit: boolean
+  collapsed: boolean
   dragDisabled: boolean
   actionPending: boolean
   onDetails: (entry: TaskBoardEntryDto) => void
+  onEdit: (entry: TaskBoardEntryDto) => void
   onPause: (entry: TaskBoardEntryDto) => void
   onResume: (entry: TaskBoardEntryDto) => void
+  onPin: (entry: TaskBoardEntryDto, pinned: boolean) => void
+  onToggleCollapsed: (entryId: string) => void
+  palette?: KpiPalette | null
 }) {
-  const workers = assignedWorkerNames(entry)
-  const groups = assignedGroupNames(entry)
+  const description = taskDescription(entry)
+  const { showEdit, showDetails, showPause, showResume, showActions } =
+    cardActionVisibility(entry, mobile, canEdit)
   const {
     attributes,
     listeners,
@@ -146,12 +380,14 @@ export const TaskBoardCard = memo(function TaskBoardCard({
     disabled: dragDisabled,
     data: { type: "entry", queueKey: entry.queueKey, entryId: entry.id },
   })
+  const appearance = kpiCardAppearance(entry, now, palette)
   const style: CSSProperties = {
+    ...appearance.style,
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.35 : 1,
   }
-  const unitLabel = entry.unitNumber ?? `Задание ${entry.taskId}`
+  const unitLabel = entry.unitNumber ?? "Задание без номера"
 
   return (
     <Card
@@ -159,107 +395,119 @@ export const TaskBoardCard = memo(function TaskBoardCard({
       style={style}
       size="sm"
       className={cn(
-        mobile && mobileEntryCardHeightClassName,
-        entry.entryType === "SHADOW" && shadowEntryCardClassName
+        entry.entryType === "SHADOW" && shadowEntryCardClassName,
+        !appearance.color &&
+          entry.status === "IN_PROGRESS" &&
+          "border-primary bg-primary/5",
+        !appearance.color && entry.status === "PAUSED" && "bg-muted/60",
+        (entry.status === "DONE" || entry.status === "CANCELLED") &&
+          "opacity-65"
       )}
-      aria-label={`${unitLabel}: ${entry.title}`}
+      data-collapsed={collapsed || undefined}
+      data-kpi-color={appearance.color ?? undefined}
+      data-timer-state={entry.timerSnapshot?.timerState}
+      aria-label={description ? `${unitLabel}: ${description}` : unitLabel}
     >
-      <CardHeader>
-        <CardTitle className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="truncate">{unitLabel}</span>
-          <Badge variant={entry.entryType === "REAL" ? "secondary" : "outline"}>
-            {entry.entryType === "REAL" ? "Текущий этап" : "Будущий этап"}
-          </Badge>
-        </CardTitle>
-        <CardDescription className="line-clamp-2">
-          {entry.taskText || entry.title}
-        </CardDescription>
-        <CardAction>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            className="touch-none"
-            disabled={dragDisabled}
-            aria-label={
-              dragDisabled
-                ? "Перемещение карточки сейчас недоступно"
-                : `Переместить этап ${unitLabel}`
-            }
-            {...attributes}
-            {...listeners}
+      <CardHeader className="flex flex-col gap-2">
+        <div className="flex w-full min-w-0 items-center justify-between gap-2">
+          <CardTitle className="min-w-0 flex-1 truncate">{unitLabel}</CardTitle>
+          <div
+            data-slot="task-board-card-actions"
+            className="ml-auto flex shrink-0 items-center justify-end gap-1"
           >
-            <HugeiconsIcon icon={DragDropVerticalIcon} />
-          </Button>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <p className="font-medium">{entry.title}</p>
-        <div className="flex flex-wrap gap-2">
-          <Badge variant="outline">{statusLabels[entry.status]}</Badge>
-          <Badge variant="outline">
-            Этап {entry.routeIndex + 1} из {entry.routeLength}
-          </Badge>
+            <Button
+              type="button"
+              size="sm"
+              variant={entry.pinned ? "secondary" : "ghost"}
+              disabled={actionPending}
+              aria-pressed={entry.pinned}
+              aria-label={
+                entry.pinned
+                  ? `Открепить этап ${unitLabel}`
+                  : `Закрепить этап ${unitLabel}`
+              }
+              onClick={() => onPin(entry, !entry.pinned)}
+            >
+              <HugeiconsIcon
+                icon={entry.pinned ? PinOffIcon : PinIcon}
+                data-icon="inline-start"
+              />
+              {entry.pinned ? "Открепить" : "Закрепить"}
+            </Button>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              className="touch-none"
+              aria-label={`${collapsed ? "Развернуть" : "Свернуть"} этап ${unitLabel}`}
+              aria-expanded={!collapsed}
+              onClick={() => onToggleCollapsed(entry.id)}
+              {...(!dragDisabled ? attributes : {})}
+              {...(!dragDisabled ? listeners : {})}
+            >
+              <HugeiconsIcon icon={DragDropVerticalIcon} />
+            </Button>
+          </div>
         </div>
-        <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-muted-foreground">
-          <dt>Группа</dt>
-          <dd className="min-w-0 truncate text-foreground">
-            {groups.join(", ") || "Не назначена"}
-          </dd>
-          <dt>Работники</dt>
-          <dd className="min-w-0 truncate text-foreground">
-            {workers.join(", ") || "Не назначены"}
-          </dd>
-          <dt>Время</dt>
-          <dd className="text-foreground">
-            {formatElapsed(elapsedSeconds(entry, now))}
-          </dd>
-          {entry.externalTaskId ? (
-            <>
-              <dt>Источник</dt>
-              <dd className="min-w-0 truncate font-mono text-xs text-foreground">
-                {entry.externalTaskId}
-              </dd>
-            </>
+        {!collapsed && description ? (
+          <CardDescription>{description}</CardDescription>
+        ) : null}
+      </CardHeader>
+      <TaskBoardCardContent entry={entry} now={now} collapsed={collapsed} />
+      {showActions ? (
+        <CardFooter className="flex flex-col gap-2">
+          {showEdit ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="w-full"
+              disabled={actionPending}
+              onClick={() => onEdit(entry)}
+            >
+              <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
+              Редактировать
+            </Button>
           ) : null}
-        </dl>
-      </CardContent>
-      <CardFooter className="flex flex-wrap justify-end gap-1">
-        {entry.detailsHref ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() => onDetails(entry)}
-          >
-            <HugeiconsIcon icon={ViewIcon} data-icon="inline-start" />
-            Источник
-          </Button>
-        ) : null}
-        {entry.status === "IN_PROGRESS" ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={actionPending}
-            onClick={() => onPause(entry)}
-          >
-            <HugeiconsIcon icon={PauseIcon} data-icon="inline-start" />
-            Пауза
-          </Button>
-        ) : null}
-        {entry.status === "PAUSED" ? (
-          <Button
-            type="button"
-            size="sm"
-            disabled={actionPending}
-            onClick={() => onResume(entry)}
-          >
-            <HugeiconsIcon icon={PlayIcon} data-icon="inline-start" />
-            Продолжить
-          </Button>
-        ) : null}
-      </CardFooter>
+          {showDetails ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="w-full"
+              onClick={() => onDetails(entry)}
+            >
+              <HugeiconsIcon icon={ViewIcon} data-icon="inline-start" />
+              Детали
+            </Button>
+          ) : null}
+          {showPause ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="w-full"
+              disabled={actionPending}
+              onClick={() => onPause(entry)}
+            >
+              <HugeiconsIcon icon={PauseIcon} data-icon="inline-start" />
+              Пауза
+            </Button>
+          ) : null}
+          {showResume ? (
+            <Button
+              type="button"
+              size="sm"
+              className="w-full"
+              disabled={actionPending}
+              onClick={() => onResume(entry)}
+            >
+              <HugeiconsIcon icon={PlayIcon} data-icon="inline-start" />
+              Продолжить
+            </Button>
+          ) : null}
+        </CardFooter>
+      ) : null}
     </Card>
   )
 })

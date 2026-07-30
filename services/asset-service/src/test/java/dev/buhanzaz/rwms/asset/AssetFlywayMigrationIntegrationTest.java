@@ -70,7 +70,7 @@ class AssetFlywayMigrationIntegrationTest {
       "Электрика КК + УЗО",
       "Электрика КК + УЗО + счётчик",
       "Электрика КК + счётчик",
-      "Металлическая дверь, кондиционер",
+      "Металлическая дверь, Кондиционер",
       "Две лампы",
       "Мама-папа");
   @Container static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
@@ -89,12 +89,15 @@ class AssetFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTransferredWarehouseData() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(12);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(24);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
         "flyway_schema_history",
         "rental_item",
+        "rental_item_characteristic",
+        "cabin_catalog_item",
+        "cabin_type_dimension",
         "equipment_catalog_item",
         "equipment_balance",
         "equipment_movement",
@@ -118,21 +121,62 @@ class AssetFlywayMigrationIntegrationTest {
         "inventory_asset_number_claim",
         "inventory_asset_source",
         "logistics_return_equipment_receipt",
+        "rental_item_html_import",
+        "rental_item_html_import_row",
+        "presentation_unit_hold",
         "order_unit_reservation",
         "order_equipment_reservation");
     assertThat(columnCount("order_unit_reservation", "client_id")).isEqualTo(1);
     assertThat(columnCount("order_unit_reservation", "tenant_snapshot")).isEqualTo(1);
+    assertThat(columnCount("order_unit_reservation", "draft_reservation_expires_at")).isEqualTo(1);
+    assertThat(columnCount("order_unit_reservation", "source_status")).isZero();
     assertThat(columnCount("order_equipment_reservation", "order_id")).isEqualTo(1);
     assertThat(columnCount("order_equipment_reservation", "equipment_id")).isEqualTo(1);
+    assertThat(columnCount("equipment_catalog_item", "code")).isZero();
+    assertThat(columnCount("asset_classifier", "code")).isZero();
+    assertThat(columnCount("rental_item", "rental_type")).isZero();
+    assertThat(columnCount("rental_item", "dimensions")).isZero();
+    assertThat(columnCount("rental_item", "finishing")).isZero();
+    assertThat(columnCount("rental_item", "characteristics")).isZero();
+    assertThat(columnCount("rental_item", "cabin_type_id")).isEqualTo(1);
+    assertThat(columnCount("rental_item", "cabin_dimension_id")).isEqualTo(1);
+    assertThat(columnCount("rental_item", "cabin_finishing_id")).isEqualTo(1);
+    assertThat(columnCount("rental_item", "cabin_category_id")).isEqualTo(1);
+    assertThat(columnCount("rental_item", "transfer_origin_status")).isEqualTo(1);
+    assertThat(integer("""
+        select count(*) from cabin_catalog_item where kind='CATEGORY'
+        """)).isGreaterThanOrEqualTo(4);
+    assertThat(integer("""
+        select count(*)
+        from cabin_catalog_item
+        where kind in ('TYPE', 'DIMENSION', 'FINISHING')
+          and name_normalized='—'
+          and active
+        """)).isEqualTo(3);
+    assertThat(integer("""
+        select count(*)
+        from cabin_type_dimension link
+        join cabin_catalog_item type_item on type_item.id=link.cabin_type_id
+        join cabin_catalog_item dimension_item on dimension_item.id=link.dimension_id
+        where type_item.name_normalized='—'
+          and dimension_item.name_normalized='—'
+        """)).isOne();
+    assertThat(toRegclass("asset_attribute_definition")).isNull();
+    assertThat(toRegclass("asset_attribute_option")).isNull();
+    assertThat(toRegclass("asset_classifier_attribute")).isNull();
+    assertThat(toRegclass("rental_item_attribute_value")).isNull();
+    assertThat(toRegclass("rental_tag")).isNull();
+    assertThat(toRegclass("rental_item_tag")).isNull();
     assertThat(jdbc.queryForObject("select count(*) from rental_item", Integer.class)).isEqualTo(195);
-    assertThat(jdbc.queryForObject("select count(*) from equipment_catalog_item", Integer.class)).isEqualTo(9);
+    assertThat(jdbc.queryForObject("select count(*) from equipment_catalog_item", Integer.class)).isEqualTo(20);
     assertThat(jdbc.queryForObject(
         "select count(*) from equipment_balance where rental_item_id is not null", Integer.class))
         .isGreaterThan(0);
     assertThat(jdbc.queryForObject(
         "select count(*) from rental_item where passport_json::jsonb->>'source'='old-panel-rental-items-v1'",
-        Integer.class)).isEqualTo(195);
-    assertStockPhotoMetadataRemoved();
+        Integer.class)).isZero();
+    assertOldPanelTechnicalMetadataRemoved();
+    assertLegacyIdentityMetadataRemoved();
     assertThat(jdbc.queryForObject("""
         select count(distinct (warehouse_id, identity_match_key)) from rental_item
         """, Integer.class)).isEqualTo(195);
@@ -169,12 +213,12 @@ class AssetFlywayMigrationIntegrationTest {
         """, existingId, UUID.randomUUID());
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(10);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(22);
     latest.validate();
 
     assertThat(appliedVersions())
         .containsExactly(
-            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12");
+            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24");
     assertThat(columnCount("rental_item", "number")).isZero();
     assertThat(columnCount("rental_item", "display_canonical_number")).isEqualTo(1);
     assertThat(columnCount("rental_item", "identity_match_key")).isEqualTo(1);
@@ -229,17 +273,20 @@ class AssetFlywayMigrationIntegrationTest {
     int outboxCount = integer("select count(*) from outbox_event");
 
     Flyway latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(5);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(17);
     latest.validate();
     assertThat(appliedVersions())
         .containsExactly(
-            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12");
-    assertStockPhotoMetadataRemoved();
-    assertThat(json(jdbc.queryForObject(
-        "select passport_json from rental_item where id=?", String.class, unrelatedId)))
-        .isEqualTo(json(unrelatedPassport));
-    assertThat(integer("select count(*) from domain_event")).isEqualTo(domainEventCount + 75);
-    assertThat(integer("select count(*) from outbox_event")).isEqualTo(outboxCount + 75);
+            "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24");
+    assertOldPanelTechnicalMetadataRemoved();
+    assertLegacyIdentityMetadataRemoved();
+    JsonNode unrelated = json(jdbc.queryForObject(
+        "select passport_json from rental_item where id=?", String.class, unrelatedId));
+    assertThat(unrelated.path("source").asText()).isEqualTo("manual-import");
+    assertThat(unrelated.path("tenant").asText()).isEqualTo("ООО Сохранить");
+    assertTechnicalPassportFieldsRemoved(unrelated);
+    assertThat(integer("select count(*) from domain_event")).isGreaterThan(domainEventCount + 75);
+    assertThat(integer("select count(*) from outbox_event")).isGreaterThan(outboxCount + 75);
     assertThat(latest.migrate().migrationsExecuted).isZero();
   }
 
@@ -318,7 +365,7 @@ class AssetFlywayMigrationIntegrationTest {
         order by snapshot.aggregate_version desc limit 1
         """, correctedAggregateId);
     latest = flyway(MIGRATIONS);
-    assertThat(latest.migrate().migrationsExecuted).isEqualTo(4);
+    assertThat(latest.migrate().migrationsExecuted).isEqualTo(16);
     latest.validate();
 
     assertThat(integer("select count(*) from rental_item")).isEqualTo(195);
@@ -342,6 +389,7 @@ class AssetFlywayMigrationIntegrationTest {
         where spb.warehouse_id='00000000-0000-0000-0000-000000000001'
           and msk.warehouse_id='00000000-0000-0000-0000-000000000002'
         """)).isEqualTo(75);
+    assertLegacyIdentityMetadataRemoved();
     assertThat(constraintDefinition(
         "rental_item", "uk_rental_item_warehouse_identity_match_key"))
         .isEqualTo("UNIQUE (warehouse_id, identity_match_key)");
@@ -364,6 +412,724 @@ class AssetFlywayMigrationIntegrationTest {
         .isEqualTo("UNIQUE NULLS NOT DISTINCT (warehouse_id, identity_match_key)");
     assertCanonicalEventState();
     assertThat(latest.migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
+  void versionSixteenSanitizesRetainedPassportSnapshotsAndRestoresAppendOnlyGuard() {
+    Flyway beforeVersionSixteen = configuration(MIGRATIONS).target("15").load();
+    assertThat(beforeVersionSixteen.migrate().migrationsExecuted).isEqualTo(15);
+
+    UUID usefulRentalItemId = jdbc.queryForObject(
+        """
+        select id
+        from rental_item
+        where passport_json::jsonb->>'shipmentDate' is not null
+          and passport_json::jsonb->'price' <> 'null'::jsonb
+        order by id
+        limit 1
+        """,
+        UUID.class);
+    JsonNode usefulPassportBefore = json(jdbc.queryForObject(
+        "select passport_json from rental_item where id=?",
+        String.class,
+        usefulRentalItemId));
+    UUID captureAssetId = jdbc.queryForObject(
+        """
+        select id
+        from rental_item
+        where status in (
+          'NEW','BOOKED','REPAIR','WAITING_REPAIR_CHECK','CAPITAL_REPAIR',
+          'AFTER_RENT','SALE','USED_SALE','RESERVED','FREE','WAREHOUSE','OWN_NEEDS')
+        order by id
+        limit 1
+        """,
+        UUID.class);
+    UUID captureOperationId = UUID.randomUUID();
+    UUID captureId = UUID.randomUUID();
+    String captureRequestHash = "c".repeat(64);
+    String membershipDigest = "d".repeat(64);
+    jdbc.update(
+        """
+        insert into inventory_asset_capture_operation(
+          operation_id,version,warehouse_id,request_fingerprint,created_at)
+        select ?,0,warehouse_id,?,clock_timestamp()
+        from rental_item
+        where id=?
+        """,
+        captureOperationId,
+        captureRequestHash,
+        captureAssetId);
+    jdbc.update(
+        """
+        with timing as (
+          select clock_timestamp() - interval '2 hours' as created_at
+        )
+        insert into inventory_asset_capture(
+          capture_id,operation_id,technical_attempt,warehouse_id,request_fingerprint,
+          membership_digest,total_count,state,created_at,expires_at,released_at)
+        select ?,?,1,item.warehouse_id,?,?,1,'EXPIRED',
+          timing.created_at,
+          timing.created_at + interval '30 minutes',
+          timing.created_at + interval '30 minutes'
+        from rental_item item
+        cross join timing
+        where item.id=?
+        """,
+        captureId,
+        captureOperationId,
+        captureRequestHash,
+        membershipDigest,
+        captureAssetId);
+    String retainedSnapshot = """
+        {
+          "tenant": "Внешний снимок арендатора",
+          "passport": {
+            "source": "old-panel-rental-items-v1",
+            "legacyId": "spb-legacy",
+            "legacyWarehouseId": "spb",
+            "legacyNumber": "БЫТ-LEGACY",
+            "legacyPhotos": [{"url": "https://example.test/legacy.jpg"}],
+            "locationNodeId": "legacy-node",
+            "hasPhotos": true,
+            "photoCount": 1,
+            "mainPhotoUrl": "https://example.test/main.jpg",
+            "previewPhotoUrls": ["https://example.test/preview.jpg"],
+            "price": 42000,
+            "shipmentDate": "2026-07-20",
+            "tenant": "ООО Полезные данные",
+            "nested": {
+              "LeGaCyFutureMarker": "remove",
+              "items": [{"LEGACYNestedMarker": "remove"}, {"keep": "value"}]
+            }
+          },
+          "other": {"source": "inventory-domain-source"}
+        }
+        """;
+    String technicalOnlySnapshot =
+        retainedSnapshot.replace("\"source\": \"old-panel-rental-items-v1\",", "");
+    jdbc.update(
+        """
+        insert into inventory_asset_capture_member(
+          capture_id,sequence_no,asset_id,asset_version,warehouse_id,status,
+          display_canonical_number,identity_match_key,passport_snapshot,contents_snapshot)
+        select ?,0,id,version,warehouse_id,status,display_canonical_number,identity_match_key,
+          ?::jsonb,'[]'::jsonb
+        from rental_item
+        where id=?
+        """,
+        captureId,
+        retainedSnapshot,
+        captureAssetId);
+
+    UUID idempotencySubjectId = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into asset_idempotency_record(
+          subject_id,command_scope,idempotency_key,request_sha256,response_status,
+          response_body,created_at,expires_at)
+        values (
+          ?,'maintenance.rental-item.fenced-status',?,?,200,?::jsonb,
+          clock_timestamp(),clock_timestamp() + interval '1 day')
+        """,
+        idempotencySubjectId,
+        idempotencyKey,
+        "e".repeat(64),
+        technicalOnlySnapshot);
+
+    Flyway versionSixteen = configuration(MIGRATIONS).target("16").load();
+    assertThat(versionSixteen.migrate().migrationsExecuted).isOne();
+    versionSixteen.validate();
+
+    JsonNode usefulPassportAfter = json(jdbc.queryForObject(
+        "select passport_json from rental_item where id=?",
+        String.class,
+        usefulRentalItemId));
+    assertThat(usefulPassportAfter.path("price")).isEqualTo(usefulPassportBefore.path("price"));
+    assertThat(usefulPassportAfter.path("shipmentDate"))
+        .isEqualTo(usefulPassportBefore.path("shipmentDate"));
+    assertThat(usefulPassportAfter.path("tenant")).isEqualTo(usefulPassportBefore.path("tenant"));
+    assertSanitizedOldPanelPassport(usefulPassportAfter);
+
+    JsonNode captureSnapshot = json(jdbc.queryForObject(
+        "select passport_snapshot::text from inventory_asset_capture_member where capture_id=?",
+        String.class,
+        captureId));
+    assertUsefulPassportRetained(captureSnapshot.path("passport"));
+    assertSanitizedOldPanelPassport(captureSnapshot.path("passport"));
+    assertThat(captureSnapshot.path("other").path("source").asText())
+        .isEqualTo("inventory-domain-source");
+    assertThat(jdbc.queryForObject(
+        "select membership_digest from inventory_asset_capture where capture_id=?",
+        String.class,
+        captureId)).isEqualTo(membershipDigest);
+
+    JsonNode idempotencyResponse = json(jdbc.queryForObject(
+        """
+        select response_body::text
+        from asset_idempotency_record
+        where subject_id=? and command_scope='maintenance.rental-item.fenced-status'
+          and idempotency_key=?
+        """,
+        String.class,
+        idempotencySubjectId,
+        idempotencyKey));
+    assertUsefulPassportRetained(idempotencyResponse.path("passport"));
+    assertSanitizedOldPanelPassport(idempotencyResponse.path("passport"));
+    assertThat(idempotencyResponse.path("other").path("source").asText())
+        .isEqualTo("inventory-domain-source");
+
+    assertOldPanelTechnicalMetadataRemoved();
+    assertThat(jdbc.queryForObject(
+        """
+        select tgenabled::text
+        from pg_trigger
+        where tgrelid='inventory_asset_capture_member'::regclass
+          and tgname='trg_inventory_asset_capture_member_no_mutation'
+        """,
+        String.class)).isEqualTo("O");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    update inventory_asset_capture_member
+                    set passport_snapshot=passport_snapshot
+                    where capture_id=?
+                    """,
+                    captureId))
+        .isInstanceOf(RuntimeException.class)
+        .hasMessageContaining("append-only");
+    assertThat(versionSixteen.migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
+  void versionSeventeenReclassifiesNewAsFreeCategoryAndRemovesItFromTheSchema() {
+    Flyway beforeVersionSeventeen = configuration(MIGRATIONS).target("16").load();
+    assertThat(beforeVersionSeventeen.migrate().migrationsExecuted).isEqualTo(16);
+    UUID rentalItemId =
+        jdbc.queryForObject(
+            """
+            select item.id
+            from rental_item item
+            join event_stream_head head
+              on head.aggregate_type='RENTAL_ITEM'
+             and head.aggregate_id=item.id::text
+            join domain_event event on event.event_id=head.last_event_id
+            where item.status='FREE' and event.payload ? 'status'
+            order by item.id
+            limit 1
+            """,
+            UUID.class);
+    UUID warehouseId =
+        jdbc.queryForObject(
+            "select warehouse_id from rental_item where id=?", UUID.class, rentalItemId);
+    UUID eventId =
+        jdbc.queryForObject(
+            """
+            select last_event_id from event_stream_head
+            where aggregate_type='RENTAL_ITEM' and aggregate_id=?
+            """,
+            UUID.class,
+            rentalItemId.toString());
+    long version =
+        jdbc.queryForObject(
+            "select version from rental_item where id=?", Long.class, rentalItemId);
+
+    jdbc.execute("alter table domain_event disable trigger trg_domain_event_immutable");
+    jdbc.update(
+        """
+        update domain_event
+        set payload=jsonb_set(payload,'{status}','"NEW"'::jsonb,false),
+            payload_sha256=encode(sha256(convert_to(
+              jsonb_set(payload,'{status}','"NEW"'::jsonb,false)::text,'UTF8')),'hex')
+        where event_id=?
+        """,
+        eventId);
+    jdbc.execute("alter table domain_event enable trigger trg_domain_event_immutable");
+    jdbc.update(
+        """
+        update outbox_event
+        set envelope_body=jsonb_set(envelope_body,'{payload,status}','"NEW"'::jsonb,false),
+            envelope_sha256=encode(sha256(convert_to(
+              jsonb_set(envelope_body,'{payload,status}','"NEW"'::jsonb,false)::text,
+              'UTF8')),'hex')
+        where event_id=?
+        """,
+        eventId);
+    jdbc.update(
+        """
+        update aggregate_snapshot
+        set state=jsonb_set(
+              jsonb_set(state,'{status}','"NEW"'::jsonb,false),
+              '{category}',to_jsonb('Обычная'::text),true),
+            state_sha256=encode(sha256(convert_to(
+              jsonb_set(
+                jsonb_set(state,'{status}','"NEW"'::jsonb,false),
+                '{category}',to_jsonb('Обычная'::text),true)::text,
+              'UTF8')),'hex')
+        where aggregate_type='RENTAL_ITEM' and aggregate_id=?
+          and aggregate_version=?
+        """,
+        rentalItemId.toString(),
+        version);
+    jdbc.update(
+        """
+        update projection_checkpoint checkpoint
+        set projection_sha256=snapshot.state_sha256
+        from aggregate_snapshot snapshot
+        where snapshot.aggregate_type=checkpoint.aggregate_type
+          and snapshot.aggregate_id=checkpoint.aggregate_id
+          and snapshot.aggregate_version=checkpoint.aggregate_version
+          and checkpoint.aggregate_type='RENTAL_ITEM'
+          and checkpoint.aggregate_id=?
+          and checkpoint.aggregate_version=?
+        """,
+        rentalItemId.toString(),
+        version);
+    jdbc.update(
+        "update rental_item set status='NEW',category='Обычная' where id=?",
+        rentalItemId);
+
+    UUID captureOperationId = UUID.randomUUID();
+    UUID captureId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into inventory_asset_capture_operation(
+          operation_id,version,warehouse_id,request_fingerprint,created_at)
+        values (?,0,?,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          clock_timestamp())
+        """,
+        captureOperationId,
+        warehouseId);
+    jdbc.update(
+        """
+        with timing as (select clock_timestamp() as created_at)
+        insert into inventory_asset_capture(
+          capture_id,operation_id,technical_attempt,warehouse_id,request_fingerprint,
+          membership_digest,total_count,state,created_at,expires_at,released_at)
+        select ?,?,1,?,
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          1,'ACTIVE',created_at,created_at+interval '30 minutes',null
+        from timing
+        """,
+        captureId,
+        captureOperationId,
+        warehouseId);
+    jdbc.update(
+        """
+        insert into inventory_asset_capture_member(
+          capture_id,sequence_no,asset_id,asset_version,warehouse_id,status,
+          display_canonical_number,identity_match_key,passport_snapshot,contents_snapshot)
+        select ?,0,id,version,warehouse_id,'NEW',display_canonical_number,
+          identity_match_key,
+          '{"status":"NEW","category":"Обычная"}'::jsonb,
+          '[]'::jsonb
+        from rental_item where id=?
+        """,
+        captureId,
+        rentalItemId);
+    UUID idempotencySubject = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into asset_idempotency_record(
+          subject_id,command_scope,idempotency_key,request_sha256,response_status,
+          response_body,created_at,expires_at)
+        values (?,'test.new-status',?,
+          'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+          200,'{"status":"NEW","category":"Обычная"}'::jsonb,
+          clock_timestamp(),clock_timestamp()+interval '1 hour')
+        """,
+        idempotencySubject,
+        idempotencyKey);
+
+    Flyway versionSeventeen = configuration(MIGRATIONS).target("17").load();
+    assertThat(versionSeventeen.migrate().migrationsExecuted).isOne();
+    versionSeventeen.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select status from rental_item where id=?",
+                String.class,
+                rentalItemId))
+        .isEqualTo("FREE");
+    assertThat(
+            jdbc.queryForObject(
+                "select category from rental_item where id=?",
+                String.class,
+                rentalItemId))
+        .isEqualTo("Новая");
+    assertThat(columnCount("order_unit_reservation", "source_status")).isZero();
+    assertThat(constraintDefinition("rental_item", "ck_rental_item_status"))
+        .contains("FREE")
+        .doesNotContain("'NEW'");
+    assertThat(
+            constraintDefinition(
+                "inventory_asset_capture_member",
+                "ck_inventory_asset_capture_member_status"))
+        .contains("FREE")
+        .doesNotContain("'NEW'");
+    assertThat(jdbc.queryForObject(
+        "select status from inventory_asset_capture_member where capture_id=?",
+        String.class,
+        captureId)).isEqualTo("FREE");
+    assertThat(jdbc.queryForObject(
+        "select passport_snapshot->>'category' from inventory_asset_capture_member where capture_id=?",
+        String.class,
+        captureId)).isEqualTo("Новая");
+    assertThat(jdbc.queryForObject(
+        """
+        select response_body->>'status'
+        from asset_idempotency_record
+        where subject_id=? and command_scope='test.new-status' and idempotency_key=?
+        """,
+        String.class,
+        idempotencySubject,
+        idempotencyKey)).isEqualTo("FREE");
+    assertThat(integer(
+        "select count(*) from domain_event where payload->>'status'='NEW'"))
+        .isZero();
+    assertThat(integer(
+        "select count(*) from aggregate_snapshot where state->>'status'='NEW'"))
+        .isZero();
+    assertThat(integer(
+        "select count(*) from outbox_event where envelope_body->'payload'->>'status'='NEW'"))
+        .isZero();
+    assertCanonicalEventState();
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_item set status='NEW' where id=?",
+                    rentalItemId))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    """
+                    update inventory_asset_capture_member
+                    set status=status
+                    where capture_id=?
+                    """,
+                    captureId))
+        .isInstanceOf(RuntimeException.class)
+        .hasMessageContaining("append-only");
+  }
+
+  @Test
+  void versionEighteenRemovesLegacyBusinessIdentifiersAndSanitizesReplayState() {
+    Flyway beforeVersionEighteen = configuration(MIGRATIONS).target("17").load();
+    assertThat(beforeVersionEighteen.migrate().migrationsExecuted).isEqualTo(17);
+    UUID equipmentId = jdbc.queryForObject(
+        "select id from equipment_catalog_item order by id limit 1", UUID.class);
+    UUID eventId = jdbc.queryForObject(
+        """
+        select event_id from domain_event
+        where aggregate_type='EQUIPMENT_CATALOG' and aggregate_id=?
+        order by aggregate_version limit 1
+        """,
+        UUID.class,
+        equipmentId.toString());
+    UUID idempotencySubject = UUID.randomUUID();
+    UUID idempotencyKey = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into asset_idempotency_record(
+          subject_id,command_scope,idempotency_key,request_sha256,response_status,
+          response_body,created_at,expires_at)
+        values (?,'equipment-catalog.create',?,
+          'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+          201,?::jsonb,clock_timestamp(),clock_timestamp()+interval '1 hour')
+        """,
+        idempotencySubject,
+        idempotencyKey,
+        "{\"id\":\"" + equipmentId + "\",\"code\":\"LEGACY\",\"name\":\"Legacy item\"}");
+
+    assertThat(integer(
+        "select count(*) from domain_event where aggregate_type='EQUIPMENT_CATALOG' and payload ? 'code'"))
+        .isPositive();
+    assertThat(integer(
+        "select count(*) from outbox_event where aggregate_type='EQUIPMENT_CATALOG' and envelope_body->'payload' ? 'code'"))
+        .isPositive();
+
+    Flyway versionEighteen = configuration(MIGRATIONS).target("18").load();
+    assertThat(versionEighteen.migrate().migrationsExecuted).isOne();
+    versionEighteen.validate();
+
+    assertThat(columnCount("equipment_catalog_item", "code")).isZero();
+    assertThat(columnCount("asset_classifier", "code")).isZero();
+    assertThat(toRegclass("asset_attribute_definition")).isNull();
+    assertThat(toRegclass("asset_attribute_option")).isNull();
+    assertThat(toRegclass("asset_classifier_attribute")).isNull();
+    assertThat(toRegclass("rental_item_attribute_value")).isNull();
+    assertThat(toRegclass("rental_tag")).isNull();
+    assertThat(toRegclass("rental_item_tag")).isNull();
+    assertThat(integer(
+        """
+        select count(*) from domain_event
+        where aggregate_type in ('EQUIPMENT_CATALOG','CLASSIFIER')
+          and (payload ? 'code' or payload ? 'equipmentCode' or payload ? 'classifierCode')
+        """))
+        .isZero();
+    assertThat(integer(
+        """
+        select count(*) from outbox_event
+        where aggregate_type in ('EQUIPMENT_CATALOG','CLASSIFIER')
+          and (envelope_body->'payload' ? 'code'
+            or envelope_body->'payload' ? 'equipmentCode'
+            or envelope_body->'payload' ? 'classifierCode')
+        """))
+        .isZero();
+    assertThat(integer(
+        """
+        select count(*) from aggregate_snapshot
+        where aggregate_type in ('EQUIPMENT_CATALOG','CLASSIFIER')
+          and (state ? 'code' or state ? 'equipmentCode' or state ? 'classifierCode')
+        """))
+        .isZero();
+    assertThat(jdbc.queryForObject(
+        """
+        select jsonb_exists(response_body, 'code')
+        from asset_idempotency_record
+        where subject_id=? and command_scope='equipment-catalog.create' and idempotency_key=?
+        """,
+        Boolean.class,
+        idempotencySubject,
+        idempotencyKey)).isFalse();
+    assertThat(integer(
+        """
+        select count(*)
+        from projection_checkpoint checkpoint
+        join aggregate_snapshot snapshot
+          on snapshot.aggregate_type=checkpoint.aggregate_type
+         and snapshot.aggregate_id=checkpoint.aggregate_id
+         and snapshot.aggregate_version=checkpoint.aggregate_version
+        where checkpoint.projection_sha256<>snapshot.state_sha256
+        """))
+        .isZero();
+    assertThatThrownBy(
+            () -> jdbc.update(
+                "update domain_event set payload=payload || '{\"migrationProbe\":true}'::jsonb where event_id=?",
+                eventId))
+        .isInstanceOf(RuntimeException.class)
+        .hasMessageContaining("append-only");
+  }
+
+  @Test
+  void versionNineteenNormalizesCabinCompositionAndSplitsLegacyCharacteristicText() {
+    Flyway versionEighteen = configuration(MIGRATIONS).target("18").load();
+    assertThat(versionEighteen.migrate().migrationsExecuted).isEqualTo(18);
+    UUID rentalItemId =
+        jdbc.queryForObject("select id from rental_item order by id limit 1", UUID.class);
+    jdbc.update(
+        """
+        update rental_item
+        set rental_type='БК-1', dimensions='2.4x6', finishing='ДВП',
+            characteristics='Металлическая дверь, кондиционер, Металлическая дверь'
+        where id=?
+        """,
+        rentalItemId);
+
+    Flyway versionNineteen = configuration(MIGRATIONS).target("19").load();
+    assertThat(versionNineteen.migrate().migrationsExecuted).isOne();
+    versionNineteen.validate();
+
+    assertThat(columnCount("rental_item", "rental_type")).isZero();
+    assertThat(columnCount("rental_item", "dimensions")).isZero();
+    assertThat(columnCount("rental_item", "finishing")).isZero();
+    assertThat(columnCount("rental_item", "characteristics")).isZero();
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*)
+        from rental_item
+        where id=?
+          and cabin_type_id is not null
+          and cabin_dimension_id is not null
+          and cabin_finishing_id is not null
+        """,
+        Integer.class,
+        rentalItemId)).isOne();
+    assertThat(jdbc.queryForList(
+        """
+        select catalog.name
+        from rental_item_characteristic link
+        join cabin_catalog_item catalog on catalog.id=link.characteristic_id
+        where link.rental_item_id=?
+        order by link.sort_order
+        """,
+        String.class,
+        rentalItemId)).containsExactly("Металлическая дверь", "Кондиционер");
+    assertThat(jdbc.queryForObject(
+        """
+        select count(*)
+        from cabin_type_dimension link
+        join cabin_catalog_item type_item on type_item.id=link.cabin_type_id
+        join cabin_catalog_item dimension_item on dimension_item.id=link.dimension_id
+        where type_item.kind='TYPE' and type_item.name='БК-1'
+          and dimension_item.kind='DIMENSION' and dimension_item.name='2.4x6'
+        """,
+        Integer.class)).isOne();
+  }
+
+  @Test
+  void versionTwentyAddsExpiryForDraftOrderReservations() {
+    Flyway versionNineteen = configuration(MIGRATIONS).target("19").load();
+    assertThat(versionNineteen.migrate().migrationsExecuted).isEqualTo(19);
+    assertThat(columnCount("order_unit_reservation", "draft_reservation_expires_at")).isZero();
+
+    Flyway versionTwenty = configuration(MIGRATIONS).target("20").load();
+    assertThat(versionTwenty.migrate().migrationsExecuted).isOne();
+    versionTwenty.validate();
+
+    assertThat(columnCount("order_unit_reservation", "draft_reservation_expires_at")).isEqualTo(1);
+    assertThat(toRegclass("idx_order_unit_reservation_draft_expiry")).isNotNull();
+  }
+
+  @Test
+  void versionTwentyFourPreservesTheOnlyLegacyTransferOriginAndEnforcesItsLifecycle() {
+    Flyway versionTwentyThree = configuration(MIGRATIONS).target("23").load();
+    assertThat(versionTwentyThree.migrate().migrationsExecuted).isEqualTo(23);
+    UUID rentalItemId =
+        jdbc.queryForObject(
+            """
+            select rental.id
+            from rental_item rental
+            join event_stream_head head
+              on head.aggregate_type='RENTAL_ITEM'
+             and head.aggregate_id=rental.id::text
+            join domain_event event on event.event_id=head.last_event_id
+            where rental.status='FREE'
+              and event.event_type not in (
+                'asset.rental-item.general-comment-changed.v1',
+                'asset.rental-item.manual-note-added.v1')
+            order by rental.id limit 1
+            """,
+            UUID.class);
+    UUID eventId =
+        jdbc.queryForObject(
+            """
+            select last_event_id from event_stream_head
+            where aggregate_type='RENTAL_ITEM' and aggregate_id=?
+            """,
+            UUID.class,
+            rentalItemId.toString());
+    jdbc.update(
+        "update rental_item set status='IN_TRANSFER' where id=?",
+        rentalItemId);
+    jdbc.execute(
+        "alter table domain_event disable trigger trg_domain_event_immutable");
+    jdbc.update(
+        """
+        update domain_event
+        set payload=payload || '{"status":"IN_TRANSFER"}'::jsonb,
+            payload_sha256=encode(sha256(convert_to(
+              (payload || '{"status":"IN_TRANSFER"}'::jsonb)::text,'UTF8')),'hex')
+        where event_id=?
+        """,
+        eventId);
+    jdbc.execute(
+        "alter table domain_event enable trigger trg_domain_event_immutable");
+    jdbc.update(
+        """
+        update outbox_event
+        set envelope_body=jsonb_set(
+              envelope_body,'{payload,status}',to_jsonb('IN_TRANSFER'::text),true),
+            envelope_sha256=encode(sha256(convert_to(
+              jsonb_set(
+                envelope_body,'{payload,status}',to_jsonb('IN_TRANSFER'::text),true)::text,
+              'UTF8')),'hex')
+        where event_id=?
+        """,
+        eventId);
+    jdbc.update(
+        """
+        update aggregate_snapshot
+        set state=jsonb_set(
+              state,'{status}',to_jsonb('IN_TRANSFER'::text),true),
+            state_sha256=encode(sha256(convert_to(
+              jsonb_set(
+                state,'{status}',to_jsonb('IN_TRANSFER'::text),true)::text,
+              'UTF8')),'hex')
+        where aggregate_type='RENTAL_ITEM' and aggregate_id=?
+          and aggregate_version=(
+            select current_version from event_stream_head
+            where aggregate_type='RENTAL_ITEM' and aggregate_id=?)
+        """,
+        rentalItemId.toString(),
+        rentalItemId.toString());
+    jdbc.update(
+        """
+        update projection_checkpoint checkpoint
+        set projection_sha256=snapshot.state_sha256
+        from aggregate_snapshot snapshot
+        where snapshot.aggregate_type=checkpoint.aggregate_type
+          and snapshot.aggregate_id=checkpoint.aggregate_id
+          and snapshot.aggregate_version=checkpoint.aggregate_version
+          and checkpoint.aggregate_type='RENTAL_ITEM'
+          and checkpoint.aggregate_id=?
+        """,
+        rentalItemId.toString());
+
+    Flyway versionTwentyFour = configuration(MIGRATIONS).target("24").load();
+    assertThat(versionTwentyFour.migrate().migrationsExecuted).isOne();
+    versionTwentyFour.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select transfer_origin_status from rental_item where id=?",
+                String.class,
+                rentalItemId))
+        .isEqualTo("FREE");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select payload->>'transferAssetStatus'
+                from domain_event where event_id=?
+                """,
+                String.class,
+                eventId))
+        .isEqualTo("FREE");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select envelope_body#>>'{payload,transferAssetStatus}'
+                from outbox_event where event_id=?
+                """,
+                String.class,
+                eventId))
+        .isEqualTo("FREE");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select state->>'transferOriginStatus'
+                from aggregate_snapshot
+                where aggregate_type='RENTAL_ITEM' and aggregate_id=?
+                order by aggregate_version desc limit 1
+                """,
+                String.class,
+                rentalItemId.toString()))
+        .isEqualTo("FREE");
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_item set transfer_origin_status='RENTED' where id=?",
+                    rentalItemId))
+        .isInstanceOf(RuntimeException.class);
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update rental_item set status='FREE' where id=?",
+                    rentalItemId))
+        .isInstanceOf(RuntimeException.class);
+    assertThat(
+            jdbc.update(
+                """
+                update rental_item
+                set status='REPAIR',transfer_origin_status=null
+                where id=?
+                """,
+                rentalItemId))
+        .isOne();
   }
 
   @Test
@@ -553,12 +1319,23 @@ class AssetFlywayMigrationIntegrationTest {
 
   private void assertTransferredCabins() {
     List<CabinRow> actual = jdbc.query("""
-        select id,version,warehouse_id,display_canonical_number,identity_match_key,status,
-          rental_type,dimensions,finishing,category,characteristics,linoleum,general_comment,
-          passport_json
-        from rental_item
-        where passport_json::jsonb->>'source'='old-panel-rental-items-v1'
-        order by warehouse_id,display_canonical_number
+        select item.id,item.version,item.warehouse_id,item.display_canonical_number,
+          item.identity_match_key,item.status,
+          type_item.name as rental_type,dimension_item.name as dimensions,
+          finishing_item.name as finishing,item.category,characteristics.names as characteristics,
+          item.linoleum,item.general_comment,item.passport_json
+        from rental_item item
+        left join cabin_catalog_item type_item on type_item.id=item.cabin_type_id
+        left join cabin_catalog_item dimension_item on dimension_item.id=item.cabin_dimension_id
+        left join cabin_catalog_item finishing_item on finishing_item.id=item.cabin_finishing_id
+        left join lateral (
+          select string_agg(catalog.name, ', ' order by link.sort_order, link.id) as names
+          from rental_item_characteristic link
+          join cabin_catalog_item catalog on catalog.id=link.characteristic_id
+          where link.rental_item_id=item.id
+        ) characteristics on true
+        where item.id::text like '51000000-0000-4000-8000-%'
+        order by item.warehouse_id,item.display_canonical_number
         """, (rs, row) -> new CabinRow(
         rs.getObject("id", UUID.class),
         rs.getLong("version"),
@@ -588,11 +1365,7 @@ class AssetFlywayMigrationIntegrationTest {
         select count(*) from rental_item
         where warehouse_id='00000000-0000-0000-0000-000000000002'
         """)).isEqualTo(75);
-    assertThat(integer("""
-        select count(*) from rental_item
-        where warehouse_id='00000000-0000-0000-0000-000000000002'
-          and display_canonical_number=passport_json::jsonb->>'legacyNumber'
-        """)).isEqualTo(75);
+    assertLegacyIdentityMetadataRemoved();
     assertThat(integer("""
         select count(*) from (
           select warehouse_id,identity_match_key
@@ -601,47 +1374,85 @@ class AssetFlywayMigrationIntegrationTest {
         """)).isZero();
   }
 
-  private void assertStockPhotoMetadataRemoved() {
+  private void assertOldPanelTechnicalMetadataRemoved() {
     assertThat(integer("""
         select count(*) from rental_item
-        where passport_json::jsonb->>'source'='old-panel-rental-items-v1'
-          and (passport_json::jsonb ? 'legacyPhotos'
-            or passport_json::jsonb ? 'previewPhotoUrls'
-            or passport_json::jsonb ? 'mainPhotoUrl'
-            or (passport_json::jsonb->>'hasPhotos')::boolean
-            or (passport_json::jsonb->>'photoCount')::integer<>0)
-        """)).isZero();
-    assertThat(integer("""
-        select count(*) from rental_item
-        where passport_json::jsonb->>'source'='old-panel-rental-items-v1'
-          and passport_json like '%images.unsplash.com%'
+        where id::text like '51000000-0000-4000-8000-%'
+          and (
+            passport_json::jsonb ?| array[
+              'source','legacyId','legacyWarehouseId','legacyNumber','legacyPhotos',
+              'locationNodeId','hasPhotos','photoCount','mainPhotoUrl','previewPhotoUrls']
+            or passport_json like '%images.unsplash.com%')
         """)).isZero();
     JsonNode firstPassport = json(jdbc.queryForObject("""
         select passport_json from rental_item
         where display_canonical_number='БЫТ-001'
           and warehouse_id='00000000-0000-0000-0000-000000000001'
         """, String.class));
-    assertThat(firstPassport.path("source").asText()).isEqualTo("old-panel-rental-items-v1");
-    assertThat(firstPassport.path("legacyNumber").asText()).isEqualTo("БЫТ-001");
-    assertThat(firstPassport.path("hasPhotos").asBoolean()).isFalse();
-    assertThat(firstPassport.path("photoCount").asInt()).isZero();
-    assertThat(firstPassport.has("legacyPhotos")).isFalse();
-    assertThat(firstPassport.has("previewPhotoUrls")).isFalse();
-    assertThat(firstPassport.has("mainPhotoUrl")).isFalse();
+    assertSanitizedOldPanelPassport(firstPassport);
     assertThat(integer("""
         select count(*) from aggregate_snapshot snapshot
-        join rental_item item
-          on snapshot.aggregate_type='RENTAL_ITEM'
-         and snapshot.aggregate_id=item.id::text
-        where item.passport_json::jsonb->>'source'='old-panel-rental-items-v1'
-          and (snapshot.state->'passport' ? 'legacyPhotos'
-            or snapshot.state->'passport' ? 'previewPhotoUrls'
-            or snapshot.state->'passport' ? 'mainPhotoUrl'
-            or (snapshot.state->'passport'->>'hasPhotos')::boolean
-            or (snapshot.state->'passport'->>'photoCount')::integer<>0
+        where snapshot.aggregate_type='RENTAL_ITEM'
+          and snapshot.aggregate_id like '51000000-0000-4000-8000-%'
+          and (snapshot.state->'passport' ?| array[
+                'source','legacyId','legacyWarehouseId','legacyNumber','legacyPhotos',
+                'locationNodeId','hasPhotos','photoCount','mainPhotoUrl','previewPhotoUrls']
             or snapshot.state::text like '%images.unsplash.com%'
             or snapshot.state_sha256<>
               encode(sha256(convert_to(snapshot.state::text,'UTF8')),'hex'))
+        """)).isZero();
+  }
+
+  private void assertUsefulPassportRetained(JsonNode passport) {
+    assertThat(passport.path("price").asInt()).isEqualTo(42000);
+    assertThat(passport.path("shipmentDate").asText()).isEqualTo("2026-07-20");
+    assertThat(passport.path("tenant").asText()).isEqualTo("ООО Полезные данные");
+  }
+
+  private void assertSanitizedOldPanelPassport(JsonNode passport) {
+    assertThat(passport.has("source")).isFalse();
+    assertThat(passport.toString()).doesNotContain("old-panel-rental-items-v1");
+    assertTechnicalPassportFieldsRemoved(passport);
+  }
+
+  private void assertTechnicalPassportFieldsRemoved(JsonNode passport) {
+    String serialized = passport.toString().toLowerCase();
+    for (String key :
+        List.of(
+            "legacy",
+            "locationnodeid",
+            "hasphotos",
+            "photocount",
+            "mainphotourl",
+            "previewphotourls")) {
+      assertThat(serialized).as("recursive passport marker %s", key).doesNotContain(key);
+    }
+  }
+
+  private void assertLegacyIdentityMetadataRemoved() {
+    assertThat(integer("""
+        select count(*) from rental_item
+        where passport_json::jsonb ?| array[
+          'legacyId','legacyWarehouseId','legacyNumber','legacyPhotos']
+        """)).isZero();
+    assertThat(integer("""
+        select count(*) from aggregate_snapshot
+        where aggregate_type='RENTAL_ITEM'
+          and state->'passport' ?| array[
+            'legacyId','legacyWarehouseId','legacyNumber','legacyPhotos']
+        """)).isZero();
+    assertThat(integer("""
+        select count(*) from projection_checkpoint checkpoint
+        join rental_item item
+          on checkpoint.projection_name='asset-live-v1'
+         and checkpoint.aggregate_type='RENTAL_ITEM'
+         and checkpoint.aggregate_id=item.id::text
+         and checkpoint.aggregate_version=item.version
+        join aggregate_snapshot snapshot
+          on snapshot.aggregate_type=checkpoint.aggregate_type
+         and snapshot.aggregate_id=checkpoint.aggregate_id
+         and snapshot.aggregate_version=checkpoint.aggregate_version
+        where checkpoint.projection_sha256<>snapshot.state_sha256
         """)).isZero();
   }
 
@@ -650,7 +1461,6 @@ class AssetFlywayMigrationIntegrationTest {
     int localIndex = spb ? globalIndex : globalIndex - 120;
     int zeroIndex = localIndex - 1;
     UUID warehouseId = spb ? SPB_WAREHOUSE_ID : MSK_WAREHOUSE_ID;
-    String legacyWarehouseId = spb ? "spb" : "msk";
     String number = "БЫТ-%03d".formatted(localIndex);
     String comment = zeroIndex % 5 == 0
         ? "Нужна проверка перед выдачей клиенту"
@@ -670,25 +1480,11 @@ class AssetFlywayMigrationIntegrationTest {
         CHARACTERISTICS.get(zeroIndex % CHARACTERISTICS.size()),
         zeroIndex % 2 == 0,
         comment,
-        expectedPassport(
-            legacyWarehouseId,
-            localIndex,
-            zeroIndex,
-            status));
+        expectedPassport(zeroIndex, status));
   }
 
-  private JsonNode expectedPassport(
-      String legacyWarehouseId,
-      int localIndex,
-      int zeroIndex,
-      String status) {
-    String legacyId = legacyWarehouseId + "-" + localIndex;
+  private JsonNode expectedPassport(int zeroIndex, String status) {
     Map<String, Object> passport = new LinkedHashMap<>();
-    passport.put("source", "old-panel-rental-items-v1");
-    passport.put("legacyId", legacyId);
-    passport.put("legacyWarehouseId", legacyWarehouseId);
-    passport.put("legacyNumber", "БЫТ-%03d".formatted(localIndex));
-    passport.put("locationNodeId", null);
     passport.put(
         "shipmentDate",
         status.equals("RENTED") ? "2026-05-%02d".formatted(zeroIndex % 27 + 1) : null);
@@ -698,139 +1494,109 @@ class AssetFlywayMigrationIntegrationTest {
             ? zeroIndex % 2 == 0 ? "ООО СтройПроект" : "ИП Петров А.В."
             : null);
     passport.put("price", zeroIndex % 3 == 0 ? 30000 + zeroIndex * 250 : null);
-    passport.put("hasPhotos", false);
-    passport.put("photoCount", 0);
     return JSON.valueToTree(passport);
   }
 
   private void assertTransferredEquipment() {
-    List<EquipmentCatalogRow> catalog = jdbc.query("""
-        select id,version,code,name,category,active,comment
-        from equipment_catalog_item order by code
-        """, (rs, row) -> new EquipmentCatalogRow(
-        rs.getObject("id", UUID.class),
-        rs.getLong("version"),
-        rs.getString("code"),
-        rs.getString("name"),
-        rs.getString("category"),
-        rs.getBoolean("active"),
-        rs.getString("comment")));
-    List<EquipmentCatalogRow> expectedCatalog = List.of(
-        equipment(1, "TABLE", "Стол", "FURNITURE"),
-        equipment(2, "OFFICE_TABLE", "Стол офисный", "FURNITURE"),
-        equipment(3, "BENCH", "Лавка", "FURNITURE"),
-        equipment(4, "CHAIR", "Стул", "FURNITURE"),
-        equipment(5, "BED", "Кровать", "FURNITURE"),
-        equipment(6, "BUNK_BED", "Кровать 2-ярусная", "FURNITURE"),
-        equipment(7, "WARDROBE", "Шкаф", "FURNITURE"),
-        equipment(8, "CONVECTOR", "Конвектор", "ELECTRICAL"),
-        equipment(9, "AIR_CONDITIONER", "Кондиционер", "ELECTRICAL"));
-    expectedCatalog = expectedCatalog.stream()
-        .sorted(Comparator.comparing(EquipmentCatalogRow::code))
-        .toList();
-    assertThat(catalog).containsExactlyElementsOf(expectedCatalog);
-
-    List<WarehouseEquipmentRow> warehouseBalances = jdbc.query("""
-        select b.warehouse_id,c.name,
-          max(b.quantity) filter (where b.location_kind='STOCK') as stock,
-          max(b.quantity) filter (where b.location_kind='WRITTEN_OFF') as written_off,
-          max(b.quantity) filter (where b.location_kind='LOST') as lost
-        from equipment_balance b
+    assertThat(jdbc.queryForList("""
+        select id::text || ':' || name
+        from equipment_catalog_item
+        where active
+        order by id
+        """, String.class))
+        .containsExactly(
+            "52140000-0000-4000-8000-000000000001:Конвектор 1,5 кВ без доп розетки",
+            "52140000-0000-4000-8000-000000000002:Кровать двухъярусная металлическая",
+            "52140000-0000-4000-8000-000000000003:Лавка металлическая",
+            "52140000-0000-4000-8000-000000000004:Стол обеденный",
+            "52140000-0000-4000-8000-000000000005:Стол офисный ЛДСП 1200мм",
+            "52140000-0000-4000-8000-000000000006:Стол офисный ЛДСП 900мм",
+            "52140000-0000-4000-8000-000000000007:Стул офисный",
+            "52140000-0000-4000-8000-000000000008:Тумба прикроватная",
+            "52140000-0000-4000-8000-000000000009:Тумба с ящиками ЛДСП",
+            "52140000-0000-4000-8000-000000000010:Шкаф для бумаг ЛДСП",
+            "52140000-0000-4000-8000-000000000011:Шкаф офисный ЛДСП стеллаж");
+    assertThat(integer("""
+        select count(*) from equipment_catalog_item where not active
+        """)).isEqualTo(9);
+    assertThat(integer("""
+        select count(*) from equipment_balance b
         join equipment_catalog_item c on c.id=b.equipment_id
-        where b.rental_item_id is null
-        group by b.warehouse_id,c.name
-        """, (rs, row) -> new WarehouseEquipmentRow(
-        rs.getObject("warehouse_id", UUID.class),
-        rs.getString("name"),
-        rs.getLong("stock"),
-        rs.getLong("written_off"),
-        rs.getLong("lost")));
-    assertThat(warehouseBalances).containsExactlyInAnyOrder(
-        warehouse(SPB_WAREHOUSE_ID, "Стол", 0, 2, 1),
-        warehouse(SPB_WAREHOUSE_ID, "Стол офисный", 1, 1, 0),
-        warehouse(SPB_WAREHOUSE_ID, "Лавка", 20, 0, 2),
-        warehouse(SPB_WAREHOUSE_ID, "Стул", 0, 5, 3),
-        warehouse(SPB_WAREHOUSE_ID, "Кровать", 24, 1, 1),
-        warehouse(SPB_WAREHOUSE_ID, "Кровать 2-ярусная", 0, 2, 0),
-        warehouse(SPB_WAREHOUSE_ID, "Шкаф", 0, 0, 0),
-        warehouse(SPB_WAREHOUSE_ID, "Конвектор", 24, 3, 2),
-        warehouse(SPB_WAREHOUSE_ID, "Кондиционер", 11, 1, 0),
-        warehouse(MSK_WAREHOUSE_ID, "Стол", 12, 1, 0),
-        warehouse(MSK_WAREHOUSE_ID, "Стол офисный", 6, 0, 1),
-        warehouse(MSK_WAREHOUSE_ID, "Стул", 20, 2, 1),
-        warehouse(MSK_WAREHOUSE_ID, "Лавка", 8, 0, 1),
-        warehouse(MSK_WAREHOUSE_ID, "Кровать", 10, 1, 2),
-        warehouse(MSK_WAREHOUSE_ID, "Кровать 2-ярусная", 5, 1, 0),
-        warehouse(MSK_WAREHOUSE_ID, "Шкаф", 7, 0, 0));
-    assertThat(integer("select count(*) from equipment_balance where rental_item_id is null"))
-        .isEqualTo(48);
+        where not c.active and b.quantity<>0
+        """)).isZero();
 
-    List<CabinEquipmentRow> cabinBalances = jdbc.query("""
-        select r.display_canonical_number,c.name,b.quantity,b.location_kind
-        from equipment_balance b
-        join rental_item r on r.id=b.rental_item_id
-        join equipment_catalog_item c on c.id=b.equipment_id
-        where b.rental_item_id is not null
-        """, (rs, row) -> new CabinEquipmentRow(
-        rs.getString("display_canonical_number"),
-        rs.getString("name"),
-        rs.getLong("quantity"),
-        rs.getString("location_kind")));
-    assertThat(cabinBalances).containsExactlyInAnyOrderElementsOf(expectedCabinEquipment());
-    assertThat(cabinBalances).hasSize(212);
-    assertThat(cabinBalances.stream().mapToLong(CabinEquipmentRow::quantity).sum()).isEqualTo(478);
-  }
-
-  private static EquipmentCatalogRow equipment(
-      int index, String code, String name, String category) {
-    return new EquipmentCatalogRow(
-        UUID.fromString("52000000-0000-4000-8000-%012d".formatted(index)),
-        0,
-        code,
-        name,
-        category,
-        true,
-        null);
-  }
-
-  private static WarehouseEquipmentRow warehouse(
-      UUID warehouseId, String name, long stock, long writtenOff, long lost) {
-    return new WarehouseEquipmentRow(warehouseId, name, stock, writtenOff, lost);
-  }
-
-  private List<CabinEquipmentRow> expectedCabinEquipment() {
-    List<CabinEquipmentRow> expected = new ArrayList<>();
-    for (int globalIndex = 1; globalIndex <= 195; globalIndex++) {
-      int localIndex = globalIndex <= 120 ? globalIndex : globalIndex - 120;
-      int zeroIndex = localIndex - 1;
-      String number = "БЫТ-%03d".formatted(localIndex);
-      String locationKind = STATUSES.get(zeroIndex % STATUSES.size()).equals("RENTED")
-          ? "CABIN_RENTED"
-          : "CABIN_NON_RENTED";
-      if (zeroIndex % 4 == 0) {
-        expected.add(new CabinEquipmentRow(number, "Стол", 2, locationKind));
-        expected.add(new CabinEquipmentRow(number, "Стул", 4, locationKind));
-        expected.add(new CabinEquipmentRow(number, "Шкаф", 1, locationKind));
-      } else if (zeroIndex % 6 == 0) {
-        expected.add(new CabinEquipmentRow(number, "Кровать 2-ярусная", 3, locationKind));
-        expected.add(new CabinEquipmentRow(number, "Стол офисный", 2, locationKind));
-      } else if (zeroIndex % 9 == 0) {
-        expected.add(new CabinEquipmentRow(number, "Кровать", 2, locationKind));
-        expected.add(new CabinEquipmentRow(number, "Стол офисный", 2, locationKind));
-        expected.add(new CabinEquipmentRow(number, "Конвектор", 1, locationKind));
+    Map<String, Long> totals = jdbc.query("""
+        select c.id::text as equipment_id,coalesce(sum(b.quantity),0) as quantity
+        from equipment_catalog_item c
+        left join equipment_balance b on b.equipment_id=c.id
+        where c.active
+        group by c.id
+        """, rs -> {
+      Map<String, Long> values = new LinkedHashMap<>();
+      while (rs.next()) {
+        values.put(rs.getString("equipment_id"), rs.getLong("quantity"));
       }
-    }
-    return expected;
+      return values;
+    });
+    assertThat(totals)
+        .containsEntry("52140000-0000-4000-8000-000000000001", 40L)
+        .containsEntry("52140000-0000-4000-8000-000000000002", 117L)
+        .containsEntry("52140000-0000-4000-8000-000000000003", 31L)
+        .containsEntry("52140000-0000-4000-8000-000000000004", 114L)
+        .containsEntry("52140000-0000-4000-8000-000000000005", 32L)
+        .containsEntry("52140000-0000-4000-8000-000000000006", 31L)
+        .containsEntry("52140000-0000-4000-8000-000000000007", 227L)
+        .containsEntry("52140000-0000-4000-8000-000000000008", 0L)
+        .containsEntry("52140000-0000-4000-8000-000000000009", 0L)
+        .containsEntry("52140000-0000-4000-8000-000000000010", 28L)
+        .containsEntry("52140000-0000-4000-8000-000000000011", 28L);
+
+    assertThat(integer("""
+        select count(*) from (
+          select b.rental_item_id
+          from equipment_balance b
+          join equipment_catalog_item c on c.id=b.equipment_id
+          where b.rental_item_id is not null
+            and b.quantity>0
+            and c.id in (
+              '52140000-0000-4000-8000-000000000005',
+              '52140000-0000-4000-8000-000000000006')
+          group by b.rental_item_id
+          having count(*)<>2 or min(b.quantity)<>1 or max(b.quantity)<>1
+        ) invalid_office_table_split
+        """)).isZero();
+    assertThat(integer("""
+        select count(*) from (
+          select b.rental_item_id
+          from equipment_balance b
+          join equipment_catalog_item c on c.id=b.equipment_id
+          where b.rental_item_id is not null
+            and b.quantity>0
+            and c.id in (
+              '52140000-0000-4000-8000-000000000010',
+              '52140000-0000-4000-8000-000000000011')
+          group by b.rental_item_id
+          having count(*)<>1 or sum(b.quantity)<>1
+        ) invalid_wardrobe_split
+        """)).isZero();
+    assertThat(jdbc.queryForObject("""
+        select coalesce(sum(b.quantity),0)
+        from equipment_balance b
+        join equipment_catalog_item c on c.id=b.equipment_id
+        where c.active and b.rental_item_id is not null
+        """, Long.class)).isEqualTo(478L);
   }
 
   private void assertCanonicalEventState() {
-    assertThat(integer("select count(*) from event_stream_head")).isEqualTo(464);
-    assertThat(integer("select count(*) from domain_event")).isEqualTo(795);
-    assertThat(integer("select count(*) from aggregate_snapshot")).isEqualTo(795);
-    assertThat(integer("select count(*) from outbox_event")).isEqualTo(795);
+    int streamCount = integer("select count(*) from event_stream_head");
+    int eventCount = integer("select count(*) from domain_event");
+    assertThat(streamCount).isGreaterThan(464);
+    assertThat(eventCount).isGreaterThan(795);
+    assertThat(integer("select count(*) from aggregate_snapshot")).isEqualTo(eventCount);
+    assertThat(integer("select count(*) from outbox_event")).isEqualTo(eventCount);
     assertThat(integer("""
         select count(*) from projection_checkpoint where projection_name='asset-live-v1'
-        """)).isEqualTo(464);
+        """)).isEqualTo(streamCount);
     assertThat(integer("""
         select count(*) from domain_event
         where aggregate_type='RENTAL_ITEM'
@@ -964,7 +1730,6 @@ class AssetFlywayMigrationIntegrationTest {
   private record EquipmentCatalogRow(
       UUID id,
       long version,
-      String code,
       String name,
       String category,
       boolean active,

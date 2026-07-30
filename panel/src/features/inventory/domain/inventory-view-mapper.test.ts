@@ -9,7 +9,7 @@ import type {
   InventoryCompletionPreview,
   InventoryFinding,
   InventoryFrozenStatistics,
-  InventorySessionSummary,
+  InventorySessionDetail,
 } from "@/features/inventory/model/inventory-service"
 
 const finding: InventoryFinding = {
@@ -45,7 +45,32 @@ const finding: InventoryFinding = {
     status: "WAREHOUSE",
     displayCanonicalNumber: "СПБ-01",
     tenantSnapshot: "Арендатор 1",
+    passportSnapshot: { type: "БК-3" },
+    contentsSnapshot: [{ name: "Стол" }],
+    repairsSnapshot: [
+      {
+        repairId: "00000000-0000-4000-8000-000000000220",
+        rootRepairId: "00000000-0000-4000-8000-000000000220",
+        origin: "ESTIMATE",
+        kind: "PRIMARY",
+        executionState: "READY",
+        acceptanceState: "NOT_READY",
+        planFingerprintSha256: "d".repeat(64),
+      },
+    ],
   },
+  inspectionBaseline: {
+    assetId: "00000000-0000-4000-8000-000000000203",
+    assetVersion: 7,
+    warehouseId: "00000000-0000-4000-8000-000000000204",
+    status: "WAREHOUSE",
+    displayCanonicalNumber: "СПБ-01",
+    tenantSnapshot: "Арендатор 1",
+    passportSnapshot: { type: "БК-2" },
+    contentsSnapshot: [],
+    repairsSnapshot: [],
+  },
+  conflictResolution: null,
   conflicts: [
     {
       code: "ASSET_CHANGED",
@@ -79,11 +104,11 @@ const finding: InventoryFinding = {
         id: "00000000-0000-4000-8000-000000000208",
         order: 0,
         catalogNodeId: "00000000-0000-4000-8000-000000000207",
-        catalogNodeCode: "DOOR_REPLACE",
+        catalogNodeName: "Замена двери",
         kind: "REPAIR_WORK",
         routingQueueId: "00000000-0000-4000-8000-000000000209",
-        routingQueueCode: "REPAIR",
-        routingQueueKind: "REPAIR",
+        routingQueueName: "Ремонт",
+        routingQueueType: "REPAIR",
         movementRequired: false,
         photoRequired: true,
         normativeDurationMinutes: 45,
@@ -129,7 +154,7 @@ const statistics: InventoryFrozenStatistics = {
   aggregateLines: [],
 }
 
-const session: InventorySessionSummary = {
+const session: InventorySessionDetail = {
   id: finding.inventoryId,
   sessionRevision: 5,
   warehouseId: "00000000-0000-4000-8000-000000000204",
@@ -147,6 +172,22 @@ const session: InventorySessionSummary = {
   startedAt: "2026-07-22T08:00:00Z",
   terminalAt: "2026-07-22T09:00:00Z",
   publicationState: "SUCCEEDED",
+  statistics,
+  cancellation: null,
+  membershipMovements: [
+    {
+      id: "00000000-0000-4000-8000-000000000214",
+      type: "ARRIVED",
+      assetId: finding.assetId!,
+      displayCanonicalNumber: "СПБ-01",
+      origin: "ADDED_USED",
+      fromWarehouseId: null,
+      toWarehouseId: "00000000-0000-4000-8000-000000000204",
+      status: "WAREHOUSE",
+      tenantSnapshot: null,
+      occurredAt: "2026-07-22T08:30:00Z",
+    },
+  ],
 }
 
 describe("inventory service view mapper", () => {
@@ -160,6 +201,11 @@ describe("inventory service view mapper", () => {
       currentSnapshot: {
         status: "WAREHOUSE",
         tenant: "Арендатор 1",
+        passportSnapshot: { type: "БК-3" },
+        repairsSnapshot: [{ executionState: "READY" }],
+      },
+      inspectionBaseline: {
+        passportSnapshot: { type: "БК-2" },
       },
       repairCompletionMode: "MANUAL",
       publicationStatus: "PUBLISHED",
@@ -168,7 +214,10 @@ describe("inventory service view mapper", () => {
         {
           id: "00000000-0000-4000-8000-000000000206",
           lineTotal: "300.00",
-          catalogSnapshot: { code: "DOOR_REPLACE" },
+          catalogSnapshot: {
+            nodeId: "00000000-0000-4000-8000-000000000207",
+            name: "Замена двери",
+          },
         },
       ],
       repairPlans: [
@@ -180,6 +229,17 @@ describe("inventory service view mapper", () => {
         },
       ],
     })
+  })
+
+  it("never exposes conflicts for a finding that has not been inspected", () => {
+    const result = toInventoryFindingView({
+      ...finding,
+      inspection: "NOT_INSPECTED",
+      reconciliation: "CONFLICT",
+    })
+
+    expect(result.inspectionStatus).toBe("NOT_INSPECTED")
+    expect(result.conflicts).toEqual([])
   })
 
   it("uses the service-issued author and applies fresh completion conflicts", () => {
@@ -223,5 +283,11 @@ describe("inventory service view mapper", () => {
       conflicts: [{ code: "RENTED" }, { code: "ASSET_CHANGED" }],
     })
     expect(result.statistics?.grandTotal).toBe("300.00")
+    expect(result.membershipMovements).toEqual([
+      expect.objectContaining({
+        type: "ARRIVED",
+        status: "WAREHOUSE",
+      }),
+    ])
   })
 })

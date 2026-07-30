@@ -34,6 +34,12 @@ public class WorkQueueClassBinding extends AbstractVersionedEntity {
   @Column(name = "stop_task_on_take", nullable = false)
   private boolean stopTaskOnTake;
 
+  @Column(name = "binding_order", nullable = false)
+  private int bindingOrder;
+
+  @Column(name = "notify_urgent", nullable = false)
+  private boolean notifyUrgent;
+
   public WorkQueue getQueue() {
     return queue;
   }
@@ -56,5 +62,21 @@ public class WorkQueueClassBinding extends AbstractVersionedEntity {
 
   public void setStopTaskOnTake(boolean v) {
     stopTaskOnTake = v;
+  }
+
+  public int getBindingOrder() {
+    return bindingOrder;
+  }
+
+  public void setBindingOrder(int v) {
+    bindingOrder = v;
+  }
+
+  public boolean isNotifyUrgent() {
+    return notifyUrgent;
+  }
+
+  public void setNotifyUrgent(boolean v) {
+    notifyUrgent = v;
   }
 }

@@ -497,6 +497,10 @@ public class MaintenanceReconciliation {
     return reviewedAt;
   }
 
+  public OffsetDateTime getCreatedAt() {
+    return createdAt;
+  }
+
   public OffsetDateTime getUpdatedAt() {
     return updatedAt;
   }

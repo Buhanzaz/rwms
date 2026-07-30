@@ -100,15 +100,11 @@ export const panelEstimateRentalItemsClient: EstimateRentalItemsClient = {
     const item = await getAssetRentalItem(accessToken, rentalItemId)
     if (
       item.warehouseId !== warehouseId ||
-      item.status === "WRITTEN_OFF" ||
-      item.status === "WAITING_ESTIMATE_CONFIRMATION"
+      item.status !== ESTIMATE_ELIGIBLE_STATUS
     ) {
       return null
     }
-    const returnDocuments =
-      item.status === ESTIMATE_ELIGIBLE_STATUS
-        ? await listReturns(accessToken, warehouseId)
-        : []
+    const returnDocuments = await listReturns(accessToken, warehouseId)
     return toOption(item, returnDocuments)
   },
 }

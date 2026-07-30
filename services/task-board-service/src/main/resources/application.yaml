@@ -48,7 +48,7 @@ spring:
     open-in-view: false
   cloud:
     function:
-      definition: taskBoardWorkerClassEvents;taskBoardWorkerEvents;taskBoardWorkerGroupEvents;taskBoardWorkQueueEvents;taskBoardQueueUsageReferenceEvents;taskBoardBoardTaskEvents;taskBoardQueueEntryEvents
+      definition: taskBoardWorkerClassEvents;taskBoardWorkerEvents;taskBoardWorkerGroupEvents;taskBoardWorkQueueEvents;taskBoardQueueUsageReferenceEvents;taskBoardBoardTaskEvents;taskBoardQueueEntryEvents;taskBoardMediaEvents;taskBoardWarehouseEvents
     stream:
       bindings:
         taskBoardWorkerClassEvents-in-0:
@@ -84,6 +84,16 @@ spring:
         taskBoardQueueEntryEvents-in-0:
           destination: rwms.task-board.queue-entry.v1
           group: task-board-shadow-v1
+          consumer:
+            max-attempts: 1
+        taskBoardMediaEvents-in-0:
+          destination: rwms.media.media.v1
+          group: task-board-worker-evidence-v1
+          consumer:
+            max-attempts: 1
+        taskBoardWarehouseEvents-in-0:
+          destination: rwms.warehouse.warehouse.v1
+          group: task-board-warehouse-metadata-v1
           consumer:
             max-attempts: 1
       kafka:
@@ -127,6 +137,14 @@ spring:
             consumer:
               enable-dlq: false
               common-error-handler-bean-name: taskBoardFailClosedConsumerErrorHandler
+          taskBoardMediaEvents-in-0:
+            consumer:
+              enable-dlq: false
+              common-error-handler-bean-name: taskBoardFailClosedConsumerErrorHandler
+          taskBoardWarehouseEvents-in-0:
+            consumer:
+              enable-dlq: false
+              common-error-handler-bean-name: taskBoardFailClosedConsumerErrorHandler
         default:
           producer:
             sync: true
@@ -160,6 +178,9 @@ rwms:
         - rwms.task-board.queue-usage-reference.v1
         - rwms.task-board.board-task.v1
         - rwms.task-board.queue-entry.v1
+        - rwms.task-board.entry-owner-proof.v1
+        - rwms.task-board.task-evidence.v1
+        - rwms.task-board.group-kpi-day.v1
   task-board:
     eventing:
       outbox:
@@ -168,6 +189,8 @@ rwms:
         instance-id: ${TASK_BOARD_KAFKA_INSTANCE_ID:task-board-service}
   security:
     queue-registry-client-ids: ${TASK_BOARD_QUEUE_REGISTRY_CLIENT_IDS:maintenance-service}
+  worker:
+    offline-lease-secret: ${TASK_BOARD_WORKER_OFFLINE_LEASE_SECRET}
   auth:
     worker-credentials-url: ${AUTH_WORKER_CREDENTIALS_URL}
     connect-timeout: ${AUTH_CONNECT_TIMEOUT:2s}

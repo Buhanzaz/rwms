@@ -72,7 +72,7 @@ public class EquipmentMovementTask {
   @Column(name = "unit_number", length = 64)
   private String unitNumber;
 
-  @Column(name = "planned_duration_minutes")
+  @Column(name = "planned_duration_minutes", nullable = false)
   private Integer plannedDurationMinutes;
 
   @Column(name = "deadline_at", nullable = false)
@@ -135,7 +135,7 @@ public class EquipmentMovementTask {
         || idempotencyKey == null) {
       throw new IllegalArgumentException("Equipment movement task ownership and deadline are required");
     }
-    if (plannedDurationMinutes != null && plannedDurationMinutes < 1) {
+    if (plannedDurationMinutes == null || plannedDurationMinutes < 1) {
       throw new IllegalArgumentException("plannedDurationMinutes is invalid");
     }
     EquipmentMovementTask task = new EquipmentMovementTask();

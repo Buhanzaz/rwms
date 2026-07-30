@@ -27,7 +27,6 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -99,6 +98,28 @@ class MaintenanceInventoryBoundaryIntegrationTest {
     workNodeId = UUID.randomUUID();
     insertActiveCatalog(catalogId, workNodeId, "WORK_A");
     org.mockito.Mockito.reset(dependencies);
+    when(dependencies.repairComplexityThresholds(any(UUID.class)))
+        .thenAnswer(invocation -> new MaintenanceDependencyGateway.RepairComplexityThresholds(
+            invocation.getArgument(0), 0L, 60, 180, 360));
+    when(dependencies.preflightMaintenanceRouting(any(UUID.class), anyList()))
+        .thenAnswer(invocation -> {
+          UUID requestedWarehouseId = invocation.getArgument(0);
+          List<MaintenanceDependencyGateway.RoutingQueueRequirement> requirements =
+              invocation.getArgument(1);
+          return new MaintenanceDependencyGateway.RoutingPreflight(
+              requestedWarehouseId,
+              true,
+              List.of(),
+              List.of(),
+              List.of(),
+              requirements.stream()
+                  .map(requirement -> new MaintenanceDependencyGateway.RoutingQueueSnapshot(
+                      requirement.queueDefinitionId(),
+                      requirement.queueDefinitionId(),
+                      requirement.queueDefinitionId().toString(),
+                      requirement.type()))
+                  .toList());
+        });
   }
 
   @Test
@@ -114,8 +135,8 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         .singleElement()
         .satisfies(stage -> {
           assertThat(stage.catalogNodeId()).isEqualTo(workNodeId);
-          assertThat(stage.catalogNodeCode()).isEqualTo("WORK_A");
-          assertThat(stage.routing().queueCode()).isEqualTo("REPAIR");
+          assertThat(stage.catalogNodeName()).isEqualTo("Repair work");
+          assertThat(stage.routing().queueName()).isEqualTo("Repair");
           assertThat(stage.normativeDurationMinutes()).isEqualTo(45);
         });
     assertThat(first.response().snapshot().lines())
@@ -163,6 +184,10 @@ class MaintenanceInventoryBoundaryIntegrationTest {
     assertThat(jdbc.queryForObject(
         "select origin from maintenance_repair where id=?", String.class, created.repairId()))
         .isEqualTo(RepairOrigin.INVENTORY.name());
+    assertThat(jdbc.queryForMap(
+        "select priority,source_party from maintenance_repair where id=?", created.repairId()))
+        .containsEntry("priority", 3)
+        .containsEntry("source_party", "Инвентаризация");
     assertThat(jdbc.queryForObject("""
         select count(*) from integration_reconciliation
         where repair_id=? and dependency_type='ASSET' and operation_type='QUEUE_REPAIR'
@@ -209,6 +234,27 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         where repair_id=? and operation_type='QUEUE_REPAIR'
         """, created.repairId());
     org.mockito.Mockito.reset(dependencies);
+    when(dependencies.repairComplexityThresholds(warehouseId))
+        .thenReturn(new MaintenanceDependencyGateway.RepairComplexityThresholds(
+            warehouseId, 0L, 60, 180, 360));
+    when(dependencies.preflightMaintenanceRouting(eq(warehouseId), anyList()))
+        .thenAnswer(invocation -> {
+          List<MaintenanceDependencyGateway.RoutingQueueRequirement> requirements =
+              invocation.getArgument(1);
+          return new MaintenanceDependencyGateway.RoutingPreflight(
+              warehouseId,
+              true,
+              List.of(),
+              List.of(),
+              List.of(),
+              requirements.stream()
+                  .map(requirement -> new MaintenanceDependencyGateway.RoutingQueueSnapshot(
+                      requirement.queueDefinitionId(),
+                      requirement.queueDefinitionId(),
+                      requirement.queueDefinitionId().toString(),
+                      requirement.type()))
+                  .toList());
+        });
     UUID leaseId = UUID.randomUUID();
     when(dependencies.getRentalItemSnapshot(rentalItemId))
         .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
@@ -239,9 +285,14 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         eq(dependencyIdentity.getValue()), eq(rentalItemId), eq(7L),
         eq("MAINTENANCE_REPAIR"), eq(created.repairId().toString()));
 
+    when(dependencies.getRentalItemSnapshot(rentalItemId))
+        .thenReturn(new MaintenanceDependencyGateway.AssetSnapshot(
+            rentalItemId, 8, warehouseId, "DEMO-001", "REPAIR"));
     UUID queueEntryId = UUID.randomUUID();
     when(dependencies.registerTask(
-        any(), eq(queued.getExternalTaskId()), eq(warehouseId), eq(rentalItemId), anyList()))
+        any(), eq(queued.getExternalTaskId()), eq(created.repairId()), eq(warehouseId),
+        eq(rentalItemId), nullable(String.class),
+        any(LocalDate.class), anyInt(), eq(6), anyList()))
         .thenReturn(new MaintenanceDependencyGateway.TaskSnapshot(
             queued.getExternalTaskId(), 0, "ACTIVE",
             List.of(new MaintenanceDependencyGateway.TaskStageSnapshot(0, queueEntryId, 0))));
@@ -337,16 +388,20 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         List.of(catalogLine(
             workNodeId, "1", null, List.of(new MediaReferenceInput(mediaId, 2L)))),
         List.of(new InventoryPlanStageSelection(workNodeId, RepairStageKind.REPAIR_WORK, 0)),
-        List.of());
+        List.of(new MediaReferenceInput(mediaId, 2L)),
+        5,
+        mediaId);
 
     FrozenInventoryPlanResponse frozen = inventory.freeze(manual).response();
     assertThat(frozen.snapshot().mode()).isEqualTo(InventoryPlanMode.MANUAL);
+    assertThat(frozen.snapshot().priority()).isEqualTo(5);
+    assertThat(frozen.snapshot().coverMediaId()).isEqualTo(mediaId);
     assertThat(frozen.fingerprint()).matches("[0-9a-f]{64}");
 
     FreezeInventoryPlanRequest unknown = new FreezeInventoryPlanRequest(
         warehouseId, UUID.randomUUID(), UUID.randomUUID(), 1L, InventoryPlanMode.MANUAL,
         List.of(catalogLine(UUID.randomUUID(), "1", null, List.of())),
-        List.of(), List.of());
+        List.of(), List.of(), 3, null);
     assertThatThrownBy(() -> inventory.freeze(unknown))
         .isInstanceOf(MaintenanceValidationException.class);
 
@@ -366,7 +421,7 @@ class MaintenanceInventoryBoundaryIntegrationTest {
                 " Материал ", InventoryPlanLineType.MATERIAL,
                 " шт ", "2", 250L, "0")),
         List.of(new InventoryPlanStageSelection(workNodeId, RepairStageKind.REPAIR_WORK, 0)),
-        List.of());
+        List.of(), 3, null);
     InventoryPlanLineSnapshot manualWork = inventory.freeze(manualLines).response()
         .snapshot().lines().getFirst();
     assertThat(manualWork.aggregationKind()).isEqualTo(InventoryPlanLineKind.MANUAL);
@@ -383,7 +438,7 @@ class MaintenanceInventoryBoundaryIntegrationTest {
     FreezeInventoryPlanRequest zeroRevision = new FreezeInventoryPlanRequest(
         warehouseId, UUID.randomUUID(), UUID.randomUUID(), 0L, InventoryPlanMode.AUTO,
         List.of(catalogLine(workNodeId, "1", null, List.of())),
-        List.of(), List.of());
+        List.of(), List.of(), 3, null);
     assertThatThrownBy(() -> inventory.freeze(zeroRevision))
         .isInstanceOf(MaintenanceValidationException.class)
         .hasMessageContaining("revision");
@@ -393,7 +448,7 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         List.of(catalogLine(workNodeId, "1", null, List.of())),
         List.of(new InventoryPlanStageSelection(
             workNodeId, RepairStageKind.MOVE_TO_REPAIR, 0)),
-        List.of());
+        List.of(), 3, null);
     assertThatThrownBy(() -> inventory.freeze(workAsLocation))
         .isInstanceOf(MaintenanceValidationException.class)
         .hasMessageContaining("LOCATION");
@@ -404,10 +459,21 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         List.of(catalogLine(materialNode, "1", null, List.of())),
         List.of(new InventoryPlanStageSelection(
             materialNode, RepairStageKind.REPAIR_WORK, 0)),
-        List.of());
-    assertThatThrownBy(() -> inventory.freeze(materialAsWork))
-        .isInstanceOf(MaintenanceValidationException.class)
-        .hasMessageContaining("WORK");
+        List.of(), 3, null);
+    FrozenInventoryPlanSnapshot materialAsWorkSnapshot =
+        inventory.freeze(materialAsWork).response().snapshot();
+    assertThat(materialAsWorkSnapshot.lines())
+        .singleElement()
+        .satisfies(line -> {
+          assertThat(line.catalogNodeId()).isEqualTo(materialNode);
+          assertThat(line.type()).isEqualTo(InventoryPlanLineType.MATERIAL);
+        });
+    assertThat(materialAsWorkSnapshot.stages())
+        .singleElement()
+        .satisfies(stage -> {
+          assertThat(stage.catalogNodeId()).isEqualTo(materialNode);
+          assertThat(stage.kind()).isEqualTo(RepairStageKind.REPAIR_WORK);
+        });
 
     FreezeInventoryPlanRequest materialOnlyWithSeparateWorkRoute =
         new FreezeInventoryPlanRequest(
@@ -420,7 +486,7 @@ class MaintenanceInventoryBoundaryIntegrationTest {
                     "pcs", "1", 100L, "0")),
             List.of(new InventoryPlanStageSelection(
                 workNodeId, RepairStageKind.REPAIR_WORK, 0)),
-            List.of());
+            List.of(), 3, null);
     FrozenInventoryPlanSnapshot materialOnly = inventory.freeze(
         materialOnlyWithSeparateWorkRoute).response().snapshot();
     assertThat(materialOnly.lines())
@@ -436,7 +502,7 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         List.of(catalogLine(furnitureMaterial, "1", null, List.of())),
         List.of(new InventoryPlanStageSelection(
             workNodeId, RepairStageKind.REPAIR_WORK, 0)),
-        List.of());
+        List.of(), 3, null);
     assertThatThrownBy(() -> inventory.freeze(furnitureOutsideEstimate))
         .isInstanceOf(MaintenanceValidationException.class)
         .hasMessageContaining("Furniture materials can only be used through an estimate");
@@ -445,7 +511,7 @@ class MaintenanceInventoryBoundaryIntegrationTest {
     FreezeInventoryPlanRequest unrouted = new FreezeInventoryPlanRequest(
         warehouseId, UUID.randomUUID(), UUID.randomUUID(), 1L, InventoryPlanMode.AUTO,
         List.of(catalogLine(unroutedWork, "1", null, List.of())),
-        List.of(), List.of());
+        List.of(), List.of(), 3, null);
     assertThatThrownBy(() -> inventory.freeze(unrouted))
         .isInstanceOf(MaintenanceValidationException.class)
         .hasMessageContaining("routing");
@@ -461,7 +527,9 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         InventoryPlanMode.AUTO,
         List.of(catalogLine(unitlessWork, "1", null, List.of())),
         List.of(),
-        List.of());
+        List.of(),
+        3,
+        null);
     assertThatThrownBy(() -> inventory.freeze(unitless))
         .isInstanceOf(MaintenanceValidationException.class)
         .hasMessageContaining("unit");
@@ -477,10 +545,110 @@ class MaintenanceInventoryBoundaryIntegrationTest {
           List.of(invalid),
           List.of(new InventoryPlanStageSelection(
               workNodeId, RepairStageKind.REPAIR_WORK, 0)),
-          List.of());
+          List.of(), 3, null);
       assertThatThrownBy(() -> inventory.freeze(rejected))
           .isInstanceOf(MaintenanceValidationException.class);
     }
+  }
+
+  @Test
+  void freezeFailsClosedWhenGlobalQueueIsNotConnectedToWarehouse() {
+    when(
+            dependencies.preflightMaintenanceRouting(
+                eq(warehouseId), anyList()))
+        .thenAnswer(
+            invocation -> {
+              List<MaintenanceDependencyGateway.RoutingQueueRequirement>
+                  requirements = invocation.getArgument(1);
+              return new MaintenanceDependencyGateway.RoutingPreflight(
+                  warehouseId,
+                  false,
+                  List.of(),
+                  List.of(
+                      requirements.getFirst().queueDefinitionId()),
+                  List.of(),
+                  List.of());
+            });
+
+    assertThatThrownBy(
+            () ->
+                inventory.freeze(
+                    autoRequest(
+                        UUID.randomUUID(), UUID.randomUUID(), List.of())))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .extracting(
+            exception ->
+                ((MaintenanceValidationException) exception).code())
+        .isEqualTo("MAINTENANCE_ROUTING_INVALID");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from inventory_repair_source",
+                Integer.class))
+        .isZero();
+  }
+
+  @Test
+  void upsertFailsClosedWhenFrozenPlanQueueWasDisconnectedBeforeRepairCreation() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    FrozenInventoryPlanResponse frozen =
+        inventory
+            .freeze(autoRequest(inventoryId, findingId, List.of()))
+            .response();
+    UUID rentalItemId = UUID.randomUUID();
+    rentalItems.saveAndFlush(
+        RentalItemFactProjection.create(
+            rentalItemId, warehouseId, "FREE", 7));
+    when(
+            dependencies.preflightMaintenanceRouting(
+                eq(warehouseId), anyList()))
+        .thenAnswer(
+            invocation -> {
+              List<MaintenanceDependencyGateway.RoutingQueueRequirement>
+                  requirements = invocation.getArgument(1);
+              return new MaintenanceDependencyGateway.RoutingPreflight(
+                  warehouseId,
+                  false,
+                  List.of(
+                      requirements.getFirst().queueDefinitionId()),
+                  List.of(),
+                  List.of(),
+                  List.of());
+            });
+
+    assertThatThrownBy(
+            () ->
+                inventory.upsert(
+                    inventoryId,
+                    findingId,
+                    new UpsertInventoryRepairRequest(
+                        warehouseId,
+                        3L,
+                        rentalItemId,
+                        7L,
+                        LocalDate.of(2026, 7, 17),
+                        frozen.fingerprint(),
+                        frozen.snapshot())))
+        .isInstanceOf(MaintenanceValidationException.class)
+        .extracting(
+            exception ->
+                ((MaintenanceValidationException) exception).code())
+        .isEqualTo("MAINTENANCE_ROUTING_INVALID");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from maintenance_repair",
+                Integer.class))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select repair_id from inventory_repair_source
+                 where inventory_id=? and finding_id=?
+                """,
+                UUID.class,
+                inventoryId,
+                findingId))
+        .isNull();
   }
 
   @Test
@@ -517,7 +685,9 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         InventoryPlanMode.AUTO,
         List.of(catalogLine(UUID.randomUUID(), "1", null, List.of())),
         List.of(),
-        List.of());
+        List.of(),
+        3,
+        null);
     assertThatThrownBy(() -> inventory.freeze(invalid))
         .isInstanceOf(MaintenanceValidationException.class);
 
@@ -543,7 +713,7 @@ class MaintenanceInventoryBoundaryIntegrationTest {
     return new FreezeInventoryPlanRequest(
         warehouseId, inventoryId, findingId, 3L, InventoryPlanMode.AUTO,
         List.of(catalogLine(workNodeId, "2.500", "  group   comment ", List.of())),
-        List.of(), media);
+        List.of(), media, 3, null);
   }
 
   private static InventoryPlanLineInput catalogLine(
@@ -568,40 +738,37 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         unitPriceMinor, normativeMinutes, null, List.of());
   }
 
-  private void insertActiveCatalog(UUID versionId, UUID nodeId, String code) {
+  private void insertActiveCatalog(UUID versionId, UUID nodeId, String seed) {
     jdbc.update("""
         insert into catalog_version(
           id,version,warehouse_id,state,source_sha256,node_count,link_count,
           validation_report,activated_at,created_at,updated_at)
         values (?,0,?,'ACTIVE',?,1,0,'{}',clock_timestamp(),clock_timestamp(),clock_timestamp())
-        """, versionId, warehouseId, UUID.nameUUIDFromBytes(code.getBytes()).toString()
-            .replace("-", "") + UUID.nameUUIDFromBytes((code + "x").getBytes()).toString()
+        """, versionId, warehouseId, UUID.nameUUIDFromBytes(seed.getBytes()).toString()
+            .replace("-", "") + UUID.nameUUIDFromBytes((seed + "x").getBytes()).toString()
             .replace("-", "").substring(0, 32));
     jdbc.update("""
         insert into catalog_node(
-          row_id,node_id,catalog_version_id,code,node_type,name,active,unit,price_minor,
+          row_id,node_id,catalog_version_id,node_type,name,active,unit,price_minor,
           duration_minutes,include_in_estimate,common_item,show_in_main_menu,
-          routing_queue_id,routing_queue_code,routing_queue_kind,opaque_references)
-        values (?,?,?,?,'WORK','Repair work',true,'pcs',12500,45,true,false,false,
-          ?,'REPAIR','REPAIR','[]')
-        """, UUID.randomUUID(), nodeId, versionId, code, UUID.randomUUID());
+          routing_queue_id,routing_queue_name,routing_queue_type)
+        values (?,?,?,'WORK','Repair work',true,'pcs',12500,45,true,false,false,
+          ?,'Repair','REPAIR')
+        """, UUID.randomUUID(), nodeId, versionId, UUID.randomUUID());
   }
 
   private UUID insertCatalogNode(String nodeType, boolean routed) {
     UUID nodeId = UUID.randomUUID();
     UUID queueId = routed ? UUID.randomUUID() : null;
-    String queueCode = routed ? "REPAIR" : null;
-    String queueKind = routed ? "REPAIR" : null;
     jdbc.update("""
         insert into catalog_node(
-          row_id,node_id,catalog_version_id,code,node_type,name,active,unit,price_minor,
+          row_id,node_id,catalog_version_id,node_type,name,active,unit,price_minor,
           duration_minutes,include_in_estimate,common_item,show_in_main_menu,
-          routing_queue_id,routing_queue_code,routing_queue_kind,opaque_references)
-        values (?,?,?, ?,?,'Catalog node',true,'pcs',12500,45,true,false,false,
-          ?,?,?,'[]')
+          routing_queue_id,routing_queue_name,routing_queue_type)
+        values (?,?,?,?,'Catalog node',true,'pcs',12500,45,true,false,false,
+          ?,?,?)
         """, UUID.randomUUID(), nodeId, catalogId,
-        ("NODE_" + nodeId.toString().substring(0, 8)).toUpperCase(Locale.ROOT),
-        nodeType, queueId, queueCode, queueKind);
+        nodeType, queueId, routed ? "Repair" : null, routed ? "REPAIR" : null);
     return nodeId;
   }
 
@@ -610,19 +777,19 @@ class MaintenanceInventoryBoundaryIntegrationTest {
     UUID materialId = UUID.randomUUID();
     jdbc.update("""
         insert into catalog_node(
-          row_id,node_id,catalog_version_id,code,node_type,name,active,furniture_category,
-          duration_minutes,include_in_estimate,common_item,show_in_main_menu,opaque_references)
-        values (?,?,?,'FURNITURE','CATEGORY','Furniture',true,true,
-          0,false,false,true,'[]')
+          row_id,node_id,catalog_version_id,node_type,name,active,furniture_category,
+          duration_minutes,include_in_estimate,common_item,show_in_main_menu)
+        values (?,?,?,'CATEGORY','Furniture',true,true,
+          0,false,false,true)
         """, UUID.randomUUID(), categoryId, catalogId);
     jdbc.update("""
         insert into catalog_node(
-          row_id,node_id,catalog_version_id,code,node_type,name,active,parent_node_id,unit,
+          row_id,node_id,catalog_version_id,node_type,name,active,parent_node_id,unit,
           price_minor,duration_minutes,include_in_estimate,common_item,show_in_main_menu,
-          opaque_references)
-        values (?,?,?,'FURNITURE_CHAIR','MATERIAL','Furniture chair',true,?,'pcs',12500,
-          0,true,false,false,'[]')
-        """, UUID.randomUUID(), materialId, catalogId, categoryId);
+          furniture_equipment_id,furniture_equipment_name)
+        values (?,?,?,'MATERIAL','Furniture chair',true,?,'pcs',12500,
+          0,true,false,false,?,?)
+        """, UUID.randomUUID(), materialId, catalogId, categoryId, UUID.randomUUID(), "Chair");
     return materialId;
   }
 }

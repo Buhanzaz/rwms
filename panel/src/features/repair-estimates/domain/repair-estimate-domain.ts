@@ -18,7 +18,7 @@ function createOpaqueId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID()
   }
-  throw new Error("Браузер не поддерживает безопасные UUID.")
+  throw new Error("Браузер не поддерживает создание безопасного ключа команды.")
 }
 
 function decimalToMinor(value: MoneyDecimal) {
@@ -47,6 +47,11 @@ function normalizeQuantity(value: number) {
   return Math.round(value * 1000) / 1000
 }
 
+function normalizeNormativeMinutes(value: number) {
+  if (!Number.isFinite(value)) return 0
+  return Math.trunc(value)
+}
+
 function quantityToThousandths(value: number) {
   return BigInt(Math.round(normalizeQuantity(value) * 1000))
 }
@@ -69,17 +74,29 @@ export function normalizeEstimateLine(
 ): RepairEstimateLineDto {
   const quantity = normalizeQuantity(line.quantity)
   const unitPrice = normalizeMoney(line.unitPrice || "0")
+  const rawNormativeMinutes =
+    line.normativeMinutes === undefined
+      ? undefined
+      : normalizeNormativeMinutes(line.normativeMinutes)
+  const normativeMinutes =
+    line.catalogSnapshot === null && line.lineType === "MATERIAL"
+      ? 0
+      : rawNormativeMinutes
+  const unit = line.unit?.trim() ?? ""
 
   return {
     ...line,
     sourceLineKey: line.sourceLineKey.trim(),
-    lineType: line.lineType ?? "WORK",
     description: line.description ?? "",
     lineComment: line.lineComment ?? "",
-    unit: line.unit.trim() || "ед",
+    unit: line.catalogSnapshot === null ? unit || "ед" : unit,
     quantity,
+    normativeMinutes,
     unitPrice,
     lineTotal: calculateLineTotal(unitPrice, quantity),
+    customQueueBinding: line.catalogSnapshot
+      ? null
+      : (line.customQueueBinding ?? null),
   }
 }
 
@@ -110,6 +127,40 @@ export function assertEstimateLinesValid(lines: RepairEstimateLineDto[]) {
     ) {
       throw new Error(
         `${label}: количество должно быть неотрицательным числом с точностью до трёх знаков`
+      )
+    }
+    if (line.lineType !== "WORK" && line.lineType !== "MATERIAL") {
+      throw new Error(`${label}: выберите тип строки`)
+    }
+    if (line.catalogSnapshot === null && !line.unit?.trim()) {
+      throw new Error(`${label}: укажите единицу измерения`)
+    }
+    if (
+      line.normativeMinutes !== undefined &&
+      (!Number.isInteger(line.normativeMinutes) ||
+        line.normativeMinutes < 0 ||
+        line.normativeMinutes > 525600)
+    ) {
+      throw new Error(
+        `${label}: время выполнения должно быть целым числом от 0 до 525600 минут`
+      )
+    }
+    if (
+      line.catalogSnapshot === null &&
+      line.lineType === "WORK" &&
+      (!Number.isInteger(line.normativeMinutes) ||
+        line.normativeMinutes === undefined ||
+        line.normativeMinutes <= 0)
+    ) {
+      throw new Error(`${label}: укажите время выполнения больше 0 минут`)
+    }
+    if (
+      line.catalogSnapshot === null &&
+      line.lineType === "MATERIAL" &&
+      line.normativeMinutes !== 0
+    ) {
+      throw new Error(
+        `${label}: у материала время выполнения должно быть равно 0`
       )
     }
     decimalToMinor(line.unitPrice)
@@ -188,19 +239,23 @@ export function formatMoneyDecimal(value: MoneyDecimal) {
   }
 }
 
-export function createManualEstimateLine(): RepairEstimateLineDto {
+export function createManualEstimateLine(
+  lineType: RepairEstimateLineType = "WORK"
+): RepairEstimateLineDto {
   const id = createOpaqueId("estimate-line")
   return {
     id,
     sourceLineKey: id,
-    lineType: "WORK",
+    lineType,
     description: "",
     lineComment: "",
     unit: "ед",
     quantity: 1,
+    normativeMinutes: 0,
     unitPrice: "0.00",
     lineTotal: "0.00",
     catalogSnapshot: null,
+    customQueueBinding: null,
   }
 }
 
@@ -218,11 +273,12 @@ export function createNewEstimateDraft(): RepairEstimateEditorDraft {
     expectedVersion: null,
     rentalItemId: "",
     sourceParty: "",
-    destinationParty: "",
     dispatchDate: toLocalCalendarDateValue(new Date()),
     comment: "",
     lines: [],
     media: [],
+    maintenanceMediaReferences: [],
+    coverMediaId: null,
     pendingUploads: [],
   }
 }
@@ -250,11 +306,14 @@ export function toEstimateEditorDraft(
     expectedVersion: estimate.version,
     rentalItemId: estimate.rentalItemId,
     sourceParty: estimate.sourceParty,
-    destinationParty:
-      estimate.destinationText ?? estimate.destinationParty ?? "",
     dispatchDate: estimate.dispatchDate,
     comment: estimate.comment,
-    lines: estimate.lines.map((line) => ({ ...line })),
+    lines: estimate.lines.map((line) => ({
+      ...line,
+      customQueueBinding: line.catalogSnapshot
+        ? null
+        : (line.customQueueBinding ?? null),
+    })),
     media: estimate.media.map((media) => ({
       ...media,
       variants: {
@@ -262,6 +321,10 @@ export function toEstimateEditorDraft(
         largeWebp: { ...media.variants.largeWebp },
       },
     })),
+    maintenanceMediaReferences: [
+      ...(estimate.maintenanceMediaReferences ?? []),
+    ],
+    coverMediaId: estimate.coverMediaId ?? null,
     pendingUploads: [],
   }
 }
@@ -307,7 +370,7 @@ export function applyCatalogNodesToEstimateLines(params: {
         : node.name
     const existingIndex = nextLines.findIndex(
       (line) =>
-        line.catalogSnapshot?.code === node.code &&
+        line.catalogSnapshot?.nodeId === node.id &&
         line.description.trim() === description.trim()
     )
 
@@ -335,13 +398,13 @@ export function applyCatalogNodesToEstimateLines(params: {
         lineType: nodeLineType(node),
         description,
         lineComment: params.comment.trim(),
-        unit: node.unit?.trim() || "ед",
+        unit: node.unit?.trim() || "",
         quantity,
+        normativeMinutes: node.durationMinutes ?? 0,
         unitPrice: nodeMoney(node),
         lineTotal: "0.00",
         catalogSnapshot: {
           nodeId: node.id,
-          code: node.code,
           name: node.name,
           nodeType:
             node.nodeType === "WORK"
@@ -351,6 +414,7 @@ export function applyCatalogNodesToEstimateLines(params: {
                 : "MATERIAL",
           furnitureEquipment: node.furnitureEquipment ?? null,
         },
+        customQueueBinding: null,
       }),
     ]
   })
@@ -376,7 +440,23 @@ function lineQueueBinding(
   catalog: RepairEstimateCatalogIndex
 ) {
   const nodeId = line.catalogSnapshot?.nodeId
-  return nodeId ? catalog.getEffectiveQueueBinding(nodeId) : null
+  if (nodeId) return catalog.getEffectiveQueueBinding(nodeId)
+
+  const binding = line.customQueueBinding
+  if (
+    !binding ||
+    !binding.queueId.trim() ||
+    !binding.queueName.trim() ||
+    (binding.queueKind !== "REPAIR" && binding.queueKind !== "HOLDING")
+  ) {
+    return null
+  }
+  return binding
+}
+
+function bindingKey(binding: ReturnType<typeof lineQueueBinding>) {
+  if (binding?.queueId) return `QUEUE:${binding.queueId}`
+  return "UNBOUND"
 }
 
 function commentsForLines(lines: RepairEstimateLineDto[]) {
@@ -391,106 +471,105 @@ export function buildRepairEstimateTaskPlans(
 ): RepairEstimateTaskPlanDto[] {
   const groups: Array<{
     queueId: string | null
-    queueCode: string | null
+    queueName: string | null
     routeQueueKind: RepairEstimateTaskPlanDto["routeQueueKind"]
     bindingKey: string
     lines: RepairEstimateLineDto[]
   }> = []
-  let current: (typeof groups)[number] | null = null
+  let currentWorkGroup: (typeof groups)[number] | null = null
+  const groupByWorkLineId = new Map<string, (typeof groups)[number]>()
 
   lines.forEach((line) => {
-    if (line.lineType === "WORK") {
-      const binding = lineQueueBinding(line, catalog)
-      const queueId = binding?.queueId ?? null
-      const queueCode = binding?.queueCode ?? null
-      const routeQueueKind = binding?.queueKind ?? null
-      const bindingKey = queueCode
-        ? `QUEUE:${queueCode}`
-        : routeQueueKind
-          ? `KIND:${routeQueueKind}`
-          : "UNBOUND"
-      if (!current || current.bindingKey !== bindingKey) {
-        current = {
-          queueId,
-          queueCode,
-          routeQueueKind,
-          bindingKey,
-          lines: [line],
-        }
-        groups.push(current)
-      } else {
-        current.lines.push(line)
+    if (line.lineType !== "WORK") return
+
+    const binding = lineQueueBinding(line, catalog)
+    const queueId = binding?.queueId ?? null
+    const queueName = binding?.queueName ?? null
+    const routeQueueKind = binding?.queueKind ?? null
+    const currentBindingKey = bindingKey(binding)
+    if (
+      !currentWorkGroup ||
+      currentWorkGroup.bindingKey !== currentBindingKey
+    ) {
+      currentWorkGroup = {
+        queueId,
+        queueName,
+        routeQueueKind,
+        bindingKey: currentBindingKey,
+        lines: [],
       }
+      groups.push(currentWorkGroup)
+    }
+    currentWorkGroup.lines.push(line)
+    groupByWorkLineId.set(line.id, currentWorkGroup)
+  })
+
+  let precedingWorkGroup: (typeof groups)[number] | null = null
+  lines.forEach((line) => {
+    if (line.lineType === "WORK") {
+      precedingWorkGroup = groupByWorkLineId.get(line.id) ?? null
       return
     }
 
-    current?.lines.push(line)
+    const binding = lineQueueBinding(line, catalog)
+    const matchingWorkGroup = binding
+      ? (groups.find((group) => group.bindingKey === bindingKey(binding)) ??
+        null)
+      : null
+    const customMaterial = line.catalogSnapshot === null
+    const target = customMaterial
+      ? (matchingWorkGroup ?? (binding ? null : precedingWorkGroup))
+      : (precedingWorkGroup ??
+        matchingWorkGroup ??
+        (groups.length === 1 ? groups[0] : null))
+
+    if (!target) {
+      const queueId = binding?.queueId ?? null
+      const queueName = binding?.queueName ?? null
+      const routeQueueKind = binding?.queueKind ?? null
+      const standaloneKey = bindingKey(binding)
+      const previous = groups.at(-1)
+      let standalone: (typeof groups)[number]
+      if (
+        previous &&
+        previous.lines.every(
+          (candidate) => candidate.lineType === "MATERIAL"
+        ) &&
+        previous.bindingKey === standaloneKey
+      ) {
+        standalone = previous
+      } else {
+        standalone = {
+          queueId,
+          queueName,
+          routeQueueKind,
+          bindingKey: standaloneKey,
+          lines: [],
+        }
+        groups.push(standalone)
+      }
+      standalone.lines.push(line)
+      return
+    }
+    target.lines.push(line)
   })
 
-  const plans: RepairEstimateTaskPlanDto[] = groups.map((group, index) => {
-    const primaryLine = group.lines.find((line) => line.lineType === "WORK")!
+  return groups.map((group, index) => {
+    const primaryLine = group.lines.find((line) => line.lineType === "WORK")
     return {
       id: createOpaqueId("task-plan"),
       kind: "REPAIR_WORK",
       includedLineIds: group.lines.map((line) => line.id),
-      primaryLineId: primaryLine.id,
+      primaryLineId: primaryLine?.id ?? null,
       groupComment: commentsForLines(group.lines),
       queueId: group.queueId,
-      queueCode: group.queueCode,
+      queueName: group.queueName,
       routeQueueKind: group.routeQueueKind,
       sortOrder: (index + 1) * 10,
       generationStatus: "PENDING_GENERATION",
       workflowRequestRef: null,
     }
   })
-  const assignedLineIds = new Set(
-    groups.flatMap((group) => group.lines.map((line) => line.id))
-  )
-  const unassignedLines = lines.filter((line) => !assignedLineIds.has(line.id))
-  let currentStandalone: (typeof groups)[number] | null = null
-  unassignedLines.forEach((line) => {
-    const binding =
-      line.lineType === "MATERIAL" ? lineQueueBinding(line, catalog) : null
-    const queueId = binding?.queueId ?? null
-    const queueCode = binding?.queueCode ?? null
-    const routeQueueKind = binding?.queueKind ?? null
-    const bindingKey = queueCode
-      ? `QUEUE:${queueCode}`
-      : routeQueueKind
-        ? `KIND:${routeQueueKind}`
-        : "UNBOUND"
-
-    if (!currentStandalone || currentStandalone.bindingKey !== bindingKey) {
-      currentStandalone = {
-        queueId,
-        queueCode,
-        routeQueueKind,
-        bindingKey,
-        lines: [line],
-      }
-      groups.push(currentStandalone)
-      return
-    }
-
-    currentStandalone.lines.push(line)
-  })
-
-  groups.slice(plans.length).forEach((group) => {
-    plans.push({
-      id: createOpaqueId("task-plan-standalone"),
-      kind: "REPAIR_WORK",
-      includedLineIds: group.lines.map((line) => line.id),
-      primaryLineId: null,
-      groupComment: commentsForLines(group.lines),
-      queueId: group.queueId,
-      queueCode: group.queueCode,
-      routeQueueKind: group.routeQueueKind,
-      sortOrder: (plans.length + 1) * 10,
-      generationStatus: "PENDING_GENERATION",
-      workflowRequestRef: null,
-    })
-  })
-  return plans
 }
 
 export function createRepairEstimateMovementTaskPlan(
@@ -505,7 +584,7 @@ export function createRepairEstimateMovementTaskPlan(
     primaryLineId: null,
     groupComment: "",
     queueId: null,
-    queueCode: null,
+    queueName: null,
     routeQueueKind: "MOVEMENT",
     sortOrder: 0,
     generationStatus: "PENDING_GENERATION",
@@ -545,7 +624,16 @@ export function validateAutoCompletion(
 ) {
   return lines.flatMap((line, index) => {
     if (line.lineType !== "WORK") {
-      return []
+      return lineQueueBinding(line, catalog) ||
+        lines.slice(0, index).some((candidate) => candidate.lineType === "WORK")
+        ? []
+        : [`Строка ${index + 1}: не задан маршрут очереди`]
+    }
+
+    if (line.catalogSnapshot === null) {
+      return lineQueueBinding(line, catalog)
+        ? []
+        : [`Строка ${index + 1}: не задан маршрут очереди`]
     }
 
     if (!line.catalogSnapshot?.nodeId) {
@@ -579,11 +667,11 @@ export function finalizeTaskPlans(params: {
     : params.plans.filter((plan) => plan.kind === "REPAIR_WORK")
 
   return plans.map((plan, index) => {
-    const queueCode = plan.queueCode?.trim() || null
+    const queueName = plan.queueName?.trim() || null
 
     return {
       ...plan,
-      queueCode,
+      queueName,
       includedLineIds: [...plan.includedLineIds],
       sortOrder: (index + 1) * 10,
       generationStatus: "PENDING_GENERATION" as const,

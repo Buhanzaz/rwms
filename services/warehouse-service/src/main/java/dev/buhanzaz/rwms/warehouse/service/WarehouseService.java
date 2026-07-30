@@ -26,7 +26,8 @@ public class WarehouseService {
   private static final Comparator<Warehouse> ORDER =
       Comparator.<Warehouse, Integer>comparing(
               Warehouse::getSortOrder, Comparator.nullsLast(Comparator.naturalOrder()))
-          .thenComparing(Warehouse::getCode);
+          .thenComparing(Warehouse::getName)
+          .thenComparing(Warehouse::getId);
   private final WarehouseRepository warehouses;
   private final WarehouseResponseMapper responses;
   private final WarehouseOutboxWriter outbox;
@@ -67,9 +68,6 @@ public class WarehouseService {
     Optional<WarehouseResponse> replayed =
         idempotency.replay(subjectId, idempotencyKey, fingerprint);
     if (replayed.isPresent()) return new CreateResult(replayed.get(), true);
-    if (warehouses.existsByCode(candidate.getCode())) {
-      throw new WarehouseConflictException("Warehouse code is already used and cannot be reused");
-    }
     Warehouse persisted = warehouses.saveAndFlush(candidate);
     outbox.append(persisted, WarehouseEventType.CREATED);
     WarehouseResponse response = responses.toResponse(persisted);
@@ -81,13 +79,8 @@ public class WarehouseService {
   public WarehouseResponse replace(UUID id, ReplaceWarehouseRequest request) {
     Warehouse warehouse = require(id);
     assertExpectedVersion(warehouse, request.expectedVersion());
-    String requestedCode = Warehouse.canonicalCode(request.code());
-    if (warehouses.existsByCodeAndIdNot(requestedCode, warehouse.getId())) {
-      throw new WarehouseConflictException("Warehouse code is already used and cannot be reused");
-    }
     Warehouse.Mutation mutation =
         warehouse.replace(
-            request.code(),
             request.name(),
             request.city(),
             request.address(),
@@ -133,9 +126,16 @@ public class WarehouseService {
     return responses.toLogisticsIdentity(require(id));
   }
 
+  @Transactional(readOnly = true)
+  public List<LogisticsWarehouseIdentityResponse> logisticsIdentities() {
+    return warehouses.findAllByActiveTrue().stream()
+        .sorted(ORDER)
+        .map(responses::toLogisticsIdentity)
+        .toList();
+  }
+
   private Warehouse newWarehouse(CreateWarehouseRequest request) {
     return Warehouse.create(
-        request.code(),
         request.name(),
         request.city(),
         request.address(),
@@ -162,7 +162,6 @@ public class WarehouseService {
       return WarehouseChecksum.sha256(
           objectMapper.writeValueAsBytes(
               new CreateFingerprint(
-                  warehouse.getCode(),
                   warehouse.getName(),
                   warehouse.getCity(),
                   warehouse.getAddress(),
@@ -177,5 +176,5 @@ public class WarehouseService {
   public record CreateResult(WarehouseResponse response, boolean replayed) {}
 
   private record CreateFingerprint(
-      String code, String name, String city, String address, String timeZone, Integer sortOrder) {}
+      String name, String city, String address, String timeZone, Integer sortOrder) {}
 }

@@ -64,14 +64,17 @@ class InventoryJpaValidationIntegrationTest {
   void flywayMigrationsPassHibernateValidationForIndependentAggregateRevisions() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(dataSource).isNotNull();
-    assertThat(
+        assertThat(
             jdbc.queryForObject(
                 "select count(*) from flyway_schema_history where success", Integer.class))
-        .isEqualTo(2);
+        .isEqualTo(10);
     assertThat(entityManagerFactory.getMetamodel().getEntities())
         .extracting(value -> value.getJavaType().getSimpleName())
         .contains(
-            "InventorySession", "InventoryFinding", "InventoryPublicationIntent");
+            "InventorySession",
+            "InventoryFinding",
+            "InventoryMembershipMovement",
+            "InventoryPublicationIntent");
   }
 
   @Test

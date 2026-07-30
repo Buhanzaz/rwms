@@ -3,6 +3,7 @@ import type {
   RepairEstimateCompletionMode,
   RepairEstimateLineDto,
   RepairEstimateTaskPlanKind,
+  RepairPriority,
 } from "@/features/repair-estimates/model/repair-estimate"
 import type { RentalItemStatus } from "@/features/rental-items/model/rental-item"
 
@@ -25,6 +26,10 @@ export type InventoryConflictCode =
   | "CROSS_WAREHOUSE_CONFLICT"
   | "EXCLUDED_STATUS_CONFLICT"
   | "ASSET_CHANGED"
+  | "NUMBER_CHANGED"
+  | "PASSPORT_CHANGED"
+  | "CONTENTS_CHANGED"
+  | "REPAIRS_CHANGED"
   | "MEDIA_NOT_READY"
   | "PLAN_STALE"
   | "MUTATION_IN_FLIGHT"
@@ -43,7 +48,6 @@ export type InventoryActorSnapshot = {
 
 export type InventoryWarehouseSnapshot = {
   id: string
-  code: string
   name: string
   timeZone: string
 }
@@ -55,6 +59,25 @@ export type InventoryRentalItemSnapshot = {
   warehouseId: string
   status: RentalItemStatus
   tenant: string | null
+  passportSnapshot: Record<string, unknown>
+  contentsSnapshot: Record<string, unknown> | unknown[]
+  repairsSnapshot: InventoryRepairRegistryFact[]
+}
+
+export type InventoryRepairRegistryFact = {
+  repairId: string
+  rootRepairId: string
+  origin: string
+  kind: string
+  executionState: string
+  acceptanceState: string
+  planFingerprintSha256: string
+}
+
+export type InventoryConflictResolutionDto = {
+  strategy: "ACCEPT_REGISTRY" | "KEEP_INSPECTION"
+  reason: string | null
+  resolvedAt: string
 }
 
 export type InventoryConflictDto = {
@@ -70,7 +93,8 @@ export type InventoryRepairPlanSnapshotDto = {
   includedLineIds: string[]
   primaryLineId: string | null
   groupComment: string
-  queueCode: string | null
+  queueId: string | null
+  queueName: string | null
   routeQueueKind: "REPAIR" | "MOVEMENT" | "HOLDING" | null
   sortOrder: number
   plannedDurationMinutes: number | null
@@ -88,11 +112,16 @@ export type InventoryFindingDto = {
   reconciliationStatus: InventoryReconciliationStatus
   expectedSnapshot: InventoryRentalItemSnapshot | null
   currentSnapshot: InventoryRentalItemSnapshot | null
+  inspectionBaseline: InventoryRentalItemSnapshot | null
+  conflictResolution: InventoryConflictResolutionDto | null
   conflicts: InventoryConflictDto[]
   comment: string
   media: Array<{ mediaId: string; generation: number }>
+  coverMediaId: string | null
+  inspectionSource: "INVENTORY" | null
   lines: RepairEstimateLineDto[]
   repairCompletionMode: RepairEstimateCompletionMode | null
+  repairPriority: RepairPriority
   movementRequired: boolean
   repairPlans: InventoryRepairPlanSnapshotDto[]
   publicationStatus: InventoryFindingPublicationStatus
@@ -110,6 +139,19 @@ export type InventoryAggregateLineDto = {
   unitPrice: MoneyDecimal
   quantity: number
   total: MoneyDecimal
+}
+
+export type InventoryMembershipMovementDto = {
+  id: string
+  type: "DEPARTED" | "TRANSFERRED" | "ARRIVED"
+  assetId: string
+  displayCanonicalNumber: string
+  origin: InventoryFindingOrigin
+  fromWarehouseId: string | null
+  toWarehouseId: string | null
+  status: RentalItemStatus | null
+  tenantSnapshot: string | null
+  occurredAt: string
 }
 
 export type InventoryStatisticsDto = {
@@ -143,16 +185,17 @@ export type InventorySessionDto = {
   findingCount: number
   inspectedCount: number
   findings: InventoryFindingDto[]
+  membershipMovements: InventoryMembershipMovementDto[]
   statistics: InventoryStatisticsDto | null
   publicationStatus: InventoryPublicationStatus
 }
 
 export type InventoryCreateRentalItem = {
   number: string
-  type: string
-  dimensions: string
-  finishing: string
+  rentalTypeId: string
+  dimensionId: string
+  finishingId: string
   category: string
-  characteristics: string[]
+  characteristicIds: string[]
   linoleum: boolean
 }

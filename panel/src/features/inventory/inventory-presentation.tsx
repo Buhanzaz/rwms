@@ -6,6 +6,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import type { InventoryFindingDto } from "@/features/inventory/model/inventory"
 
 export function InventoryUnavailable({
   title,
@@ -24,33 +25,51 @@ export function InventoryUnavailable({
   )
 }
 
-export function InventoryReconciliationBadges({
-  inspected,
-  hasWork,
-  added,
-  missing,
-  conflicts,
+export type InventoryFindingStatusMode = "ACTIVE" | "COMPLETION"
+
+type InventoryFindingPrimaryStatus = {
+  label: string
+  variant: "default" | "secondary" | "outline" | "destructive"
+}
+
+function inventoryFindingPrimaryStatus(
+  finding: InventoryFindingDto,
+  mode: InventoryFindingStatusMode
+): InventoryFindingPrimaryStatus {
+  if (mode === "COMPLETION") {
+    if (
+      finding.inspectionStatus === "NOT_INSPECTED" ||
+      finding.reconciliationStatus === "MISSING"
+    ) {
+      return { label: "Не найдено", variant: "destructive" }
+    }
+    if (finding.lines.length > 0) {
+      return { label: "Направлено в ремонт", variant: "secondary" }
+    }
+    return { label: "Проверено", variant: "default" }
+  }
+
+  if (finding.inspectionStatus === "NOT_INSPECTED") {
+    return { label: "Не проверено", variant: "outline" }
+  }
+  if (finding.reconciliationStatus !== "MATCHED") {
+    return { label: "Ожидает сверки", variant: "secondary" }
+  }
+  return { label: "Проверено", variant: "default" }
+}
+
+export function InventoryFindingStatusBadge({
+  finding,
+  mode,
 }: {
-  inspected: boolean
-  hasWork: boolean
-  added: boolean
-  missing: boolean
-  conflicts: number
+  finding: InventoryFindingDto
+  mode: InventoryFindingStatusMode
 }) {
+  const status = inventoryFindingPrimaryStatus(finding, mode)
   return (
-    <div className="flex flex-wrap gap-1">
-      {inspected ? (
-        <Badge>Проверена</Badge>
-      ) : (
-        <Badge variant="outline">Не проверена</Badge>
-      )}
-      {hasWork ? <Badge variant="secondary">С работами</Badge> : null}
-      {added ? <Badge variant="secondary">Добавлена</Badge> : null}
-      {missing ? <Badge variant="destructive">Не найдена</Badge> : null}
-      {conflicts > 0 ? (
-        <Badge variant="destructive">Конфликты: {conflicts}</Badge>
-      ) : null}
-    </div>
+    <Badge className="w-fit shrink-0" variant={status.variant}>
+      {status.label}
+    </Badge>
   )
 }
 

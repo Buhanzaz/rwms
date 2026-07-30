@@ -31,3 +31,9 @@ var V6 []byte
 
 //go:embed V7__dynamic_cabin_owner_projection.sql
 var V7 []byte
+
+//go:embed V8__task_board_worker_media.sql
+var V8 []byte
+
+//go:embed V9__asset_import_worker.sql
+var V9 []byte

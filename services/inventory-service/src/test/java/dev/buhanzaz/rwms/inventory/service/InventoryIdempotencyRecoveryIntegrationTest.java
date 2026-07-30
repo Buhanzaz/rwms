@@ -183,7 +183,9 @@ class InventoryIdempotencyRecoveryIntegrationTest {
             "WAREHOUSE",
             "AA-01",
             "AA01",
-            null);
+            null,
+            mapper.createObjectNode(),
+            mapper.createArrayNode());
     List<InventoryDependencyGateway.ValidationItem> items = List.of(item);
     when(dependencies.validateAssets(List.of(assetId)))
         .thenReturn(
@@ -199,15 +201,16 @@ class InventoryIdempotencyRecoveryIntegrationTest {
                 0, List.of(new RevisionExpectation(findingId, 0))));
 
     assertThat(preview.statistics().missingCount()).isOne();
-    assertThat(preview.statistics().conflictCount()).isOne();
+    assertThat(preview.statistics().conflictCount()).isZero();
+    assertThat(preview.risks())
+        .extracting(dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CompletionRisk::code)
+        .containsExactly("NOT_INSPECTED");
     assertThat(preview.validatedFindings())
         .singleElement()
         .satisfies(
             finding -> {
               assertThat(finding.currentSnapshot().warehouseId()).isEqualTo(currentWarehouseId);
-              assertThat(finding.conflicts())
-                  .extracting(dev.buhanzaz.rwms.inventory.api.InventoryApiModels.ConflictView::code)
-                  .contains("ADDED_AFTER_START", "OTHER_WAREHOUSE");
+              assertThat(finding.conflicts()).isEmpty();
             });
   }
 

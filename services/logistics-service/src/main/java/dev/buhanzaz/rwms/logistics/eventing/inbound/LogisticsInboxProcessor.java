@@ -47,6 +47,14 @@ public class LogisticsInboxProcessor {
       }
     }
 
+    if (!event.appliesToLogistics()) {
+      // The shared media stream contains facts owned by other bounded contexts. Persist the
+      // acknowledgement, but do not create a logistics observation or aggregate checkpoint.
+      markProcessed(event.eventId());
+      staging.markApplied(event.eventId());
+      return Outcome.PROCESSED;
+    }
+
     jdbc.update(
         """
         insert into consumer_aggregate_checkpoint(
@@ -63,16 +71,27 @@ public class LogisticsInboxProcessor {
       return Outcome.BLOCKED;
     }
 
-    long expectedVersion = Math.addExact(checkpoint.version(), 1);
-    if (event.aggregateVersion() < expectedVersion) {
-      observations.apply(event);
-      markProcessed(event.eventId());
-      staging.markApplied(event.eventId());
-      return Outcome.DUPLICATE;
-    }
-    if (event.aggregateVersion() > expectedVersion) {
-      quarantineGap(event, expectedVersion);
-      return Outcome.VERSION_GAP;
+    if (event.isPublicMediaFact()) {
+      // Private upload and processing mutations advance MEDIA between public facts. Public
+      // snapshots therefore only promise a strictly increasing source version.
+      if (event.aggregateVersion() <= checkpoint.version()) {
+        observations.apply(event);
+        markProcessed(event.eventId());
+        staging.markApplied(event.eventId());
+        return Outcome.DUPLICATE;
+      }
+    } else {
+      long expectedVersion = Math.addExact(checkpoint.version(), 1);
+      if (event.aggregateVersion() < expectedVersion) {
+        observations.apply(event);
+        markProcessed(event.eventId());
+        staging.markApplied(event.eventId());
+        return Outcome.DUPLICATE;
+      }
+      if (event.aggregateVersion() > expectedVersion) {
+        quarantineGap(event, expectedVersion);
+        return Outcome.VERSION_GAP;
+      }
     }
 
     observations.apply(event);

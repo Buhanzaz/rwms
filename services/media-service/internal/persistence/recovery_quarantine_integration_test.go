@@ -113,6 +113,15 @@ func TestV1UpgradeQuarantinedAssetsAreRuntimeInvisibleAndDoNotConsumeQuota(t *te
 	if _, err := runtimePool.Exec(ctx, string(mediamigration.V5_1)); err != nil {
 		t.Fatalf("restore isolated V5 runtime source guard: %v", err)
 	}
+	if _, err := runtimePool.Exec(ctx, string(mediamigration.V6)); err != nil {
+		t.Fatalf("upgrade isolated schema from V5 to V6: %v", err)
+	}
+	if _, err := runtimePool.Exec(ctx, string(mediamigration.V7)); err != nil {
+		t.Fatalf("upgrade isolated schema from V6 to V7: %v", err)
+	}
+	if _, err := runtimePool.Exec(ctx, string(mediamigration.V8)); err != nil {
+		t.Fatalf("upgrade isolated schema from V7 to V8: %v", err)
+	}
 
 	var quarantinedCount int
 	if err := runtimePool.QueryRow(ctx, `select count(*) from media_recovery_quarantine

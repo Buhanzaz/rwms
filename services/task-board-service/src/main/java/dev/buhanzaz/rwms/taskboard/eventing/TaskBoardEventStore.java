@@ -1,6 +1,8 @@
 package dev.buhanzaz.rwms.taskboard.eventing;
 
 import dev.buhanzaz.rwms.platform.contracts.DomainEventEnvelopeV2;
+import dev.buhanzaz.rwms.platform.contracts.CorrelationContext;
+import dev.buhanzaz.rwms.platform.contracts.OpaqueActorReference;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -9,6 +11,7 @@ import java.time.ZoneOffset;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
@@ -42,6 +45,19 @@ public class TaskBoardEventStore {
       long projectionVersion,
       String eventType,
       Object payload) {
+    return initialize(
+        aggregateType, aggregateId, projectionVersion, eventType, payload, null, null);
+  }
+
+  @Transactional(propagation = Propagation.MANDATORY)
+  public long initialize(
+      TaskBoardAggregateType aggregateType,
+      UUID aggregateId,
+      long projectionVersion,
+      String eventType,
+      Object payload,
+      OpaqueActorReference actor,
+      CorrelationContext correlation) {
     if (projectionVersion < 0) throw new IllegalArgumentException("projectionVersion must not be negative");
     JsonNode safePayload = payloadPolicy.validateAndConvert(eventType, aggregateType, aggregateId, payload);
     UUID eventId = UUID.randomUUID();
@@ -57,7 +73,16 @@ public class TaskBoardEventStore {
     } catch (DuplicateKeyException exception) {
       throw new OptimisticLockingFailureException("Task-board aggregate stream already exists", exception);
     }
-    persistFact(eventId, aggregateType, aggregateId, projectionVersion, eventType, safePayload, recordedAt);
+    persistFact(
+        eventId,
+        aggregateType,
+        aggregateId,
+        projectionVersion,
+        eventType,
+        safePayload,
+        recordedAt,
+        actor,
+        correlation);
     return projectionVersion;
   }
 
@@ -85,7 +110,16 @@ public class TaskBoardEventStore {
         aggregateId.toString(),
         expectedVersion);
     if (changed != 1) throw new OptimisticLockingFailureException("Task-board aggregate version conflict");
-    persistFact(eventId, aggregateType, aggregateId, nextVersion, eventType, safePayload, recordedAt);
+    persistFact(
+        eventId,
+        aggregateType,
+        aggregateId,
+        nextVersion,
+        eventType,
+        safePayload,
+        recordedAt,
+        null,
+        null);
     return nextVersion;
   }
 
@@ -123,25 +157,24 @@ public class TaskBoardEventStore {
       long aggregateVersion,
       String eventType,
       JsonNode payload,
-      OffsetDateTime recordedAt) {
+      OffsetDateTime recordedAt,
+      OpaqueActorReference suppliedActor,
+      CorrelationContext suppliedCorrelation) {
     String payloadJson = canonicalJson(write(payload));
     String payloadHash = sha256(payloadJson.getBytes(StandardCharsets.UTF_8));
-    var correlation = correlations.current();
-    var actor = actors.current();
-    var envelope = new DomainEventEnvelopeV2<>(
-        2,
-        eventId,
-        eventType,
-        1,
-        recordedAt.toInstant(),
-        recordedAt.toInstant(),
-        PRODUCER,
-        aggregateType.name(),
-        aggregateId.toString(),
-        aggregateVersion,
-        correlation,
-        actor,
-        objectPayload(payload));
+    var correlation = suppliedCorrelation == null ? correlations.current() : suppliedCorrelation;
+    var actor = suppliedActor == null ? actors.current() : suppliedActor;
+    Object envelope =
+        envelope(
+            eventId,
+            eventType,
+            aggregateType,
+            aggregateId,
+            aggregateVersion,
+            recordedAt,
+            correlation,
+            actor,
+            objectPayload(payload));
     String envelopeJson = canonicalJson(write(envelope));
     String envelopeHash = sha256(envelopeJson.getBytes(StandardCharsets.UTF_8));
 
@@ -262,6 +295,52 @@ public class TaskBoardEventStore {
     } catch (JacksonException exception) {
       throw new IllegalArgumentException("Task-board event payload must be a serializable object", exception);
     }
+  }
+
+  private Object envelope(
+      UUID eventId,
+      String eventType,
+      TaskBoardAggregateType aggregateType,
+      UUID aggregateId,
+      long aggregateVersion,
+      OffsetDateTime recordedAt,
+      CorrelationContext correlation,
+      OpaqueActorReference actor,
+      Map<String, Object> payload) {
+    if (aggregateType != TaskBoardAggregateType.TASK_BOARD_ENTRY_OWNER_PROOF) {
+      return new DomainEventEnvelopeV2<>(
+          2,
+          eventId,
+          eventType,
+          1,
+          recordedAt.toInstant(),
+          recordedAt.toInstant(),
+          PRODUCER,
+          aggregateType.name(),
+          aggregateId.toString(),
+          aggregateVersion,
+          correlation,
+          actor,
+          payload);
+    }
+    // The frozen cross-service contract deliberately shortens only this event
+    // segment to "entry-owner-proof" while retaining the unambiguous aggregate
+    // type TASK_BOARD_ENTRY_OWNER_PROOF expected by media-service.
+    Map<String, Object> value = new LinkedHashMap<>();
+    value.put("envelopeVersion", 2);
+    value.put("eventId", eventId);
+    value.put("eventType", eventType);
+    value.put("eventVersion", 1);
+    value.put("occurredAt", recordedAt.toInstant());
+    value.put("recordedAt", recordedAt.toInstant());
+    value.put("producer", PRODUCER);
+    value.put("aggregateType", aggregateType.name());
+    value.put("aggregateId", aggregateId.toString());
+    value.put("aggregateVersion", aggregateVersion);
+    value.put("correlation", correlation);
+    value.put("actorRef", actor);
+    value.put("payload", payload);
+    return value;
   }
 
   private String canonicalJson(String value) {

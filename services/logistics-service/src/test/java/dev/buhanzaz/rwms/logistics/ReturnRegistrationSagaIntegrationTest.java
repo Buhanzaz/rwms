@@ -158,6 +158,12 @@ class ReturnRegistrationSagaIntegrationTest {
         .isOne();
     assertThat(
             jdbc.queryForObject(
+                "select count(*) from logistics_task_reference where line_id=?",
+                Long.class,
+                lineId))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
                 "select count(*) from domain_event where aggregate_id=?",
                 Long.class,
                 documentId.toString()))
@@ -211,6 +217,12 @@ class ReturnRegistrationSagaIntegrationTest {
                 "select count(*) from logistics_external_attempt where result='PERMANENT_REJECTION'",
                 Long.class))
         .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_task_reference where document_id=?",
+                Long.class,
+                documentId))
+        .isZero();
     verify(dependencies, never()).acquireReturnLease(any(), any(), anyLong(), any(), any());
     verify(dependencies, never())
         .applyReturnIntake(any(), any(), anyLong(), any(), anyLong(), any(), any());
@@ -280,4 +292,5 @@ class ReturnRegistrationSagaIntegrationTest {
     assertThat(documents.get(documentId, LogisticsDocumentType.RETURN).state())
         .isEqualTo(LogisticsDocumentState.INSPECTION_REQUIRED);
   }
+
 }

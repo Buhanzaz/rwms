@@ -41,6 +41,15 @@ public class AssetAuthorizer {
     requireWarehouse(jwt, warehouseId, AccessLevel.MANAGE);
   }
 
+  public void requireHtmlImportCommit(Jwt jwt, UUID warehouseId) {
+    requireEdit(jwt, warehouseId);
+    if (developmentPublicBypass) return;
+    String role = jwt == null ? null : jwt.getClaimAsString("global_role");
+    if (!"SYSTEM_ADMIN".equals(role) && !"WMS_ADMIN".equals(role)) {
+      throw new AccessDeniedException("HTML import commit requires an administrator role");
+    }
+  }
+
   /** Orders use the constrained internal API; only warehouse operators and admins may mutate arbitrary balances. */
   public void requireEquipmentMovement(Jwt jwt, UUID warehouseId) {
     requireManage(jwt, warehouseId);

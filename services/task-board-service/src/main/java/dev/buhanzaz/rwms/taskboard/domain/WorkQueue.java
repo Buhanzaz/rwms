@@ -2,32 +2,27 @@ package dev.buhanzaz.rwms.taskboard.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.ForeignKey;
 import jakarta.persistence.Index;
-import jakarta.persistence.PrePersist;
-import jakarta.persistence.PreUpdate;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import java.util.Locale;
 import java.util.UUID;
-import org.hibernate.annotations.Check;
 
 @Entity
 @Table(
     name = "work_queue",
     uniqueConstraints =
         @UniqueConstraint(
-            name = "uk_work_queue_code",
-            columnNames = {"warehouse_id", "code"}),
+            name = "uk_work_queue_warehouse_definition",
+            columnNames = {"warehouse_id", "definition_id"}),
     indexes =
-        @Index(name = "idx_work_queue_order", columnList = "warehouse_id,sort_order,name"))
-@Check(
-    name = "ck_work_queue_holding",
-    constraints =
-        "queue_type = 'HOLDING' or (holding_period_minutes is null and notification_threshold is null and notify_when_threshold_reached = false)")
+        @Index(
+            name = "idx_work_queue_order",
+            columnList = "warehouse_id,sort_order,definition_id,id"))
 public class WorkQueue extends AbstractVersionedEntity {
   @Column(name = "revision_marker", nullable = false)
   private UUID revisionMarker = UUID.randomUUID();
@@ -36,20 +31,13 @@ public class WorkQueue extends AbstractVersionedEntity {
   @Column(name = "warehouse_id", nullable = false)
   private UUID warehouseId;
 
-  @NotBlank
-  @Column(name = "code", nullable = false, length = 64)
-  private String code;
-
-  @NotBlank
-  @Column(name = "name", nullable = false, length = 128)
-  private String name;
-
-  @Column(name = "description", length = 1000)
-  private String description;
-
-  @Enumerated(EnumType.STRING)
-  @Column(name = "queue_type", nullable = false, length = 32)
-  private QueueType type = QueueType.REPAIR;
+  @NotNull
+  @ManyToOne(fetch = FetchType.LAZY, optional = false)
+  @JoinColumn(
+      name = "definition_id",
+      nullable = false,
+      foreignKey = @ForeignKey(name = "fk_work_queue_definition"))
+  private QueueDefinition definition;
 
   @Column(name = "sort_order", nullable = false)
   private int sortOrder;
@@ -72,11 +60,15 @@ public class WorkQueue extends AbstractVersionedEntity {
   @Column(name = "notify_when_threshold_reached", nullable = false)
   private boolean notifyWhenThresholdReached;
 
-  @PrePersist
-  @PreUpdate
-  void normalize() {
-    code = code == null ? null : code.trim().toUpperCase(Locale.ROOT);
-    name = name == null ? null : name.trim();
+  @Column(name = "result_photo_min_count", nullable = false)
+  private int resultPhotoMinCount = 1;
+
+  public QueueDefinition getDefinition() {
+    return definition;
+  }
+
+  public void setDefinition(QueueDefinition value) {
+    definition = value;
   }
 
   public UUID getWarehouseId() {
@@ -87,36 +79,16 @@ public class WorkQueue extends AbstractVersionedEntity {
     warehouseId = v;
   }
 
-  public String getCode() {
-    return code;
-  }
-
-  public void setCode(String v) {
-    code = v;
-  }
-
   public String getName() {
-    return name;
-  }
-
-  public void setName(String v) {
-    name = v;
+    return definition.getName();
   }
 
   public String getDescription() {
-    return description;
-  }
-
-  public void setDescription(String v) {
-    description = v;
+    return definition.getDescription();
   }
 
   public QueueType getType() {
-    return type;
-  }
-
-  public void setType(QueueType v) {
-    type = v;
+    return definition.getType();
   }
 
   public int getSortOrder() {
@@ -173,6 +145,14 @@ public class WorkQueue extends AbstractVersionedEntity {
 
   public void setNotifyWhenThresholdReached(boolean v) {
     notifyWhenThresholdReached = v;
+  }
+
+  public int getResultPhotoMinCount() {
+    return resultPhotoMinCount;
+  }
+
+  public void setResultPhotoMinCount(int resultPhotoMinCount) {
+    this.resultPhotoMinCount = resultPhotoMinCount;
   }
 
   public void touch() {

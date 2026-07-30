@@ -22,6 +22,11 @@ func TestMediaFactSchemaValidatesStrictFixtures(t *testing.T) {
 	maintenance := cloneFixture(t, valid)
 	maintenance["payload"].(map[string]any)["ownerType"] = "MAINTENANCE_REPAIR"
 	assertSchemaAccepts(t, schema, maintenance)
+	workerEvidence := cloneFixture(t, valid)
+	workerEvidence["payload"].(map[string]any)["ownerType"] = "TASK_BOARD_ENTRY"
+	workerEvidence["payload"].(map[string]any)["clientReferenceId"] = "33a0f9d1-0ad2-42d1-bb94-36284833f622"
+	workerEvidence["actorRef"].(map[string]any)["principalType"] = "WORKER"
+	assertSchemaAccepts(t, schema, workerEvidence)
 	logistics := cloneFixture(t, valid)
 	logistics["payload"].(map[string]any)["ownerType"] = "LOGISTICS_TRANSFER"
 	logistics["payload"].(map[string]any)["ownerId"] =
@@ -59,12 +64,29 @@ func TestMediaFactSchemaValidatesStrictFixtures(t *testing.T) {
 		"object provenance leakage": func(value map[string]any) {
 			value["payload"].(map[string]any)["sourceObjectKey"] = "media/private/source.jpg"
 		},
+		"task evidence missing stable reference": func(value map[string]any) {
+			value["payload"].(map[string]any)["ownerType"] = "TASK_BOARD_ENTRY"
+		},
+		"non task evidence has stable reference": func(value map[string]any) {
+			value["payload"].(map[string]any)["clientReferenceId"] = "33a0f9d1-0ad2-42d1-bb94-36284833f622"
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
 			fixture := cloneFixture(t, valid)
 			mutate(fixture)
 			assertSchemaRejects(t, schema, fixture)
+		})
+	}
+}
+
+func TestMediaSchemasAcceptPreV8NonTaskPayloadWithoutClientReferenceID(t *testing.T) {
+	for _, fileName := range []string{"media-events-v1.schema.json", "media-facts-v1.schema.json"} {
+		t.Run(fileName, func(t *testing.T) {
+			schema := compileActualSchema(t, fileName)
+			legacy := validFactFixture()
+			delete(legacy["payload"].(map[string]any), "clientReferenceId")
+			assertSchemaAccepts(t, schema, legacy)
 		})
 	}
 }
@@ -239,14 +261,15 @@ func validFactFixture() map[string]any {
 			"profileRevision": nil,
 		},
 		"payload": map[string]any{
-			"mediaId":         "11bbb7f0-cf00-47cf-822e-21b362a5b206",
-			"ownerType":       "INVENTORY_FINDING",
-			"ownerId":         "d96d49c9-9e30-4d7c-b298-1687acb06a08",
-			"warehouseId":     "7f414608-e94d-4f73-8f92-54fa675e8af0",
-			"kind":            "IMAGE",
-			"status":          "PROCESSING",
-			"generation":      1,
-			"rotationDegrees": 0,
+			"mediaId":           "11bbb7f0-cf00-47cf-822e-21b362a5b206",
+			"ownerType":         "INVENTORY_FINDING",
+			"ownerId":           "d96d49c9-9e30-4d7c-b298-1687acb06a08",
+			"warehouseId":       "7f414608-e94d-4f73-8f92-54fa675e8af0",
+			"clientReferenceId": nil,
+			"kind":              "IMAGE",
+			"status":            "PROCESSING",
+			"generation":        1,
+			"rotationDegrees":   0,
 		},
 	}
 }

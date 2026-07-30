@@ -646,14 +646,15 @@ func kafkaFactEnvelope(
 		},
 		"actorRef": nil,
 		"payload": map[string]any{
-			"mediaId":         aggregateID,
-			"ownerType":       persistence.OwnerTypeInventoryFinding,
-			"ownerId":         ownerID,
-			"warehouseId":     warehouseID,
-			"kind":            media.KindImage,
-			"status":          status,
-			"generation":      1,
-			"rotationDegrees": media.Rotation0,
+			"mediaId":           aggregateID,
+			"ownerType":         persistence.OwnerTypeInventoryFinding,
+			"ownerId":           ownerID,
+			"warehouseId":       warehouseID,
+			"clientReferenceId": nil,
+			"kind":              media.KindImage,
+			"status":            status,
+			"generation":        1,
+			"rotationDegrees":   media.Rotation0,
 		},
 	})
 }

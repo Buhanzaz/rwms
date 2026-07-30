@@ -202,6 +202,7 @@ function EquipmentDesktopGrid({
   items,
   expandedItemId,
   canMoveToStock,
+  showForEmptyState,
   onToggleExpanded,
   onOpenRentalItem,
   onMoveToStock,
@@ -209,6 +210,7 @@ function EquipmentDesktopGrid({
   items: EquipmentItemDto[]
   expandedItemId: string | null
   canMoveToStock: boolean
+  showForEmptyState: boolean
   onToggleExpanded: (item: EquipmentItemDto) => void
   onOpenRentalItem: (rentalItemId: string) => void
   onMoveToStock: (
@@ -305,8 +307,14 @@ function EquipmentDesktopGrid({
   )
 
   return (
-    <div className="hidden h-full min-h-0 overflow-auto md:block">
+    <div
+      className={cn(
+        "min-h-0 flex-1 overflow-auto",
+        showForEmptyState ? "block" : "hidden md:block"
+      )}
+    >
       <OperationsListGrid
+        className="min-h-full"
         columns={columns}
         items={items}
         expandedItemId={expandedItemId}
@@ -341,83 +349,78 @@ function EquipmentMobileList({
     usage: EquipmentRentalUsageDto
   ) => void
 }) {
+  if (items.length === 0) {
+    return null
+  }
+
   return (
     <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border bg-card md:hidden">
-      {items.length === 0 ? (
-        <div className="p-4 text-sm text-muted-foreground">
-          Доп. оборудование не найдено.
-        </div>
-      ) : (
-        items.map((item) => {
-          const expanded = expandedItemId === item.id
-          return (
-            <div key={item.id} className="border-b last:border-b-0">
-              <button
-                type="button"
-                className="flex w-full min-w-0 flex-col gap-3 p-3 text-left text-sm outline-none hover:bg-muted/40 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
-                aria-label={`${expanded ? "Свернуть" : "Развернуть"} оборудование ${item.name}`}
-                aria-expanded={expanded}
-                onClick={() => onToggleExpanded(item)}
-              >
-                <div className="flex min-w-0 items-center gap-2">
-                  <HugeiconsIcon
-                    icon={expanded ? ArrowDown01Icon : ArrowRight01Icon}
-                    className="size-4 shrink-0 text-muted-foreground"
-                  />
-                  <span className="truncate font-medium">{item.name}</span>
-                </div>
+      {items.map((item) => {
+        const expanded = expandedItemId === item.id
+        return (
+          <div key={item.id} className="border-b last:border-b-0">
+            <button
+              type="button"
+              className="flex w-full min-w-0 flex-col gap-3 p-3 text-left text-sm outline-none hover:bg-muted/40 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
+              aria-label={`${expanded ? "Свернуть" : "Развернуть"} оборудование ${item.name}`}
+              aria-expanded={expanded}
+              onClick={() => onToggleExpanded(item)}
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <HugeiconsIcon
+                  icon={expanded ? ArrowDown01Icon : ArrowRight01Icon}
+                  className="size-4 shrink-0 text-muted-foreground"
+                />
+                <span className="truncate font-medium">{item.name}</span>
+              </div>
 
-                <div className="grid min-w-0 grid-cols-2 gap-2">
-                  <MobileQuantityStat
-                    label="Всего"
-                    value={item.totalQuantity}
-                  />
-                  <MobileQuantityStat
-                    label="На складе"
-                    value={item.stockQuantity}
-                    tone="stock"
-                  />
-                  <MobileQuantityStat
-                    label="В бытовках"
-                    value={item.cabinStockQuantity}
-                    tone="stock"
-                  />
-                  <MobileQuantityStat
-                    label="Забронировано"
-                    value={item.reservedQuantity}
-                  />
-                  <MobileQuantityStat
-                    label="В аренде"
-                    value={item.rentedQuantity}
-                    tone="rent"
-                  />
-                  <MobileQuantityStat
-                    label="Списано"
-                    value={item.writtenOffQuantity}
-                    tone="written-off"
-                  />
-                  <MobileQuantityStat
-                    label="Утеряно"
-                    value={item.lostQuantity}
-                    tone="lost"
-                  />
-                </div>
-              </button>
+              <div className="grid min-w-0 grid-cols-2 gap-2">
+                <MobileQuantityStat label="Всего" value={item.totalQuantity} />
+                <MobileQuantityStat
+                  label="На складе"
+                  value={item.stockQuantity}
+                  tone="stock"
+                />
+                <MobileQuantityStat
+                  label="В бытовках"
+                  value={item.cabinStockQuantity}
+                  tone="stock"
+                />
+                <MobileQuantityStat
+                  label="Забронировано"
+                  value={item.reservedQuantity}
+                />
+                <MobileQuantityStat
+                  label="В аренде"
+                  value={item.rentedQuantity}
+                  tone="rent"
+                />
+                <MobileQuantityStat
+                  label="Списано"
+                  value={item.writtenOffQuantity}
+                  tone="written-off"
+                />
+                <MobileQuantityStat
+                  label="Утеряно"
+                  value={item.lostQuantity}
+                  tone="lost"
+                />
+              </div>
+            </button>
 
-              {expanded ? (
-                <div className="border-t bg-muted/20 p-3">
-                  <UsageRows
-                    item={item}
-                    canMoveToStock={canMoveToStock}
-                    onOpenRentalItem={onOpenRentalItem}
-                    onMoveToStock={(usage) => onMoveToStock(item, usage)}
-                  />
-                </div>
-              ) : null}
-            </div>
-          )
-        })
-      )}
+            {expanded ? (
+              <div className="border-t bg-muted/20 p-3">
+                <UsageRows
+                  item={item}
+                  canMoveToStock={canMoveToStock}
+                  onOpenRentalItem={onOpenRentalItem}
+                  onMoveToStock={(usage) => onMoveToStock(item, usage)}
+                />
+              </div>
+            ) : null}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -485,9 +488,12 @@ export function EquipmentPage() {
       <PageToolbar>
         <PageToolbarContent className="max-w-xl">
           <Input
+            type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
             placeholder="Поиск по оборудованию..."
+            aria-label="Поиск оборудования"
+            autoComplete="off"
           />
         </PageToolbarContent>
       </PageToolbar>
@@ -497,7 +503,7 @@ export function EquipmentPage() {
           Для загрузки оборудования требуется авторизация.
         </div>
       ) : equipmentQuery.isLoading ? (
-        <div className="flex min-h-0 flex-1 items-center rounded-lg border bg-card p-4 text-sm text-muted-foreground">
+        <div className="flex min-h-0 flex-1 items-start justify-start rounded-lg border bg-card p-4 text-sm text-muted-foreground">
           Загрузка оборудования...
         </div>
       ) : equipmentQuery.isError ? (
@@ -523,6 +529,7 @@ export function EquipmentPage() {
             items={items}
             expandedItemId={expandedItemId}
             canMoveToStock={canMoveToStock}
+            showForEmptyState={items.length === 0}
             onToggleExpanded={toggleExpanded}
             onOpenRentalItem={openRentalItem}
             onMoveToStock={openMoveToStock}

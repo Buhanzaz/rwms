@@ -13,4 +13,6 @@ public interface ShipmentFurnitureMovementTaskRepository
 
   Optional<ShipmentFurnitureMovementTask> findByDocument_IdAndRentalItemId(
       UUID documentId, UUID rentalItemId);
+
+  boolean existsByDocument_Id(UUID documentId);
 }

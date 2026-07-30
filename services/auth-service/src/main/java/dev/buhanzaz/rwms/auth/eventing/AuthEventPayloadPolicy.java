@@ -14,8 +14,15 @@ import tools.jackson.databind.ObjectMapper;
 @Component
 public class AuthEventPayloadPolicy {
 
-    private static final Set<String> USER_FIELDS = Set.of(
+    private static final Set<String> LEGACY_USER_FIELDS = Set.of(
             "subjectId", "active", "globalRole", "profileRevision", "warehouseAccess");
+    private static final Set<String> USER_FIELDS = Set.of(
+            "subjectId",
+            "active",
+            "mobileAppAccess",
+            "globalRole",
+            "profileRevision",
+            "warehouseAccess");
     private static final Set<String> WORKER_FIELDS =
             Set.of("subjectId", "workerLink", "warehouseId", "active", "credentialStatus");
     private static final Set<String> GRANT_FIELDS =
@@ -65,14 +72,15 @@ public class AuthEventPayloadPolicy {
         if (!AuthEventTypes.ALL.contains(eventType)) {
             throw new IllegalArgumentException("Unsupported auth event type");
         }
-        Set<String> expected = AuthEventTypes.USER_FACTS.contains(eventType) ? USER_FIELDS : WORKER_FIELDS;
-        requireExactFields(payload, expected);
         if (AuthEventTypes.USER_FACTS.contains(eventType)) {
+            requireExactUserFields(payload);
             JsonNode grants = payload.get("warehouseAccess");
             if (grants == null || !grants.isArray()) {
                 throw new IllegalArgumentException("warehouseAccess must be an array");
             }
             grants.forEach(grant -> requireExactFields(grant, GRANT_FIELDS));
+        } else {
+            requireExactFields(payload, WORKER_FIELDS);
         }
         validateSensitiveValues(payload);
         try {
@@ -113,6 +121,18 @@ public class AuthEventPayloadPolicy {
         node.properties().forEach(entry -> actual.add(entry.getKey()));
         if (!actual.equals(expected)) {
             throw new IllegalArgumentException("Auth event payload does not match its exact schema");
+        }
+    }
+
+    private static void requireExactUserFields(JsonNode node) {
+        if (node == null || !node.isObject()) {
+            throw new IllegalArgumentException("Auth event payload must be an object");
+        }
+        Set<String> actual = new HashSet<>();
+        node.properties().forEach(entry -> actual.add(entry.getKey()));
+        if (!actual.equals(USER_FIELDS) && !actual.equals(LEGACY_USER_FIELDS)) {
+            throw new IllegalArgumentException(
+                    "Auth event payload does not match its exact schema");
         }
     }
 

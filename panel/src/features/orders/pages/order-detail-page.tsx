@@ -85,7 +85,7 @@ const ORDER_CHANGE_LABELS: Record<string, string> = {
   units: "бытовки",
   desiredEquipment: "желаемое наполнение",
   unitsAndDesiredEquipment: "бытовки и желаемое наполнение",
-  status: "статус заказа",
+  status: "статус бронирования",
 }
 
 const RESERVATION_STATE_LABELS: Record<string, string> = {
@@ -102,7 +102,7 @@ function auditValue(key: string, value: unknown) {
 
   switch (key) {
     case "number":
-      return `Номер заказа: ${String(value)}`
+      return `Номер бронирования: ${String(value)}`
     case "status":
       return typeof value === "string" &&
         Object.hasOwn(ORDER_STATUS_LABELS, value)
@@ -128,7 +128,7 @@ function auditValue(key: string, value: unknown) {
         : null
     case "conflictCode":
       return value === "UNIT_ALREADY_RESERVED"
-        ? "Бытовка уже занята другим заказом"
+        ? "Бытовка уже занята другим бронированием"
         : null
     default:
       return null
@@ -202,8 +202,7 @@ export function OrderDetailPage() {
     enabled: Boolean(accessToken && orderId),
   })
   const order = detailQuery.data
-  const editableOrder =
-    order?.permissions.canEdit === true && order.status === "DRAFT"
+  const editableOrder = order?.permissions.canEdit === true
 
   const availableQueryKey = [
     ...ORDERS_QUERY_KEY,
@@ -279,7 +278,7 @@ export function OrderDetailPage() {
     onSuccess: (projection, { fingerprint }) => {
       commandIdentity.current.confirm(fingerprint)
       applyProjection(projection)
-      toast.success("Склад заказа выбран.")
+      toast.success("Склад бронирования выбран.")
     },
     onError: (error) => {
       toast.error(
@@ -325,7 +324,9 @@ export function OrderDetailPage() {
         next.delete(candidate.unit.id)
         return next
       })
-      toast.success(`Бытовка ${candidate.unit.number} добавлена в заказ.`)
+      toast.success(
+        `Бытовка ${candidate.unit.number} добавлена в бронирование.`
+      )
     },
     onError: (error, { candidate }) => {
       if (
@@ -339,7 +340,7 @@ export function OrderDetailPage() {
           return next
         })
         toast.error(
-          "Бытовка уже занята другим заказом. Список доступных бытовок обновлён."
+          "Бытовка уже занята другим бронированием. Список доступных бытовок обновлён."
         )
         refreshOrderBoundary()
         return
@@ -421,7 +422,7 @@ export function OrderDetailPage() {
       commandIdentity.current.confirm(fingerprint)
       void queryClient.invalidateQueries({ queryKey: ORDERS_QUERY_KEY })
       toast.success(
-        "Черновик удалён: заказ логически отменён, резервирования освобождены."
+        "Черновик удалён: бронирование логически отменено, резервирования освобождены."
       )
       navigate("/orders", { replace: true })
     },
@@ -455,11 +456,13 @@ export function OrderDetailPage() {
     onSuccess: (projection, { fingerprint }) => {
       commandIdentity.current.confirm(fingerprint)
       applyProjection(projection)
-      toast.success("Заказ сохранён и добавлен в ожидающие отгрузки.")
+      toast.success("Бронирование сохранено и добавлено в ожидающие отгрузки.")
     },
     onError: (error) => {
       toast.error(
-        error instanceof Error ? error.message : "Не удалось сохранить заказ."
+        error instanceof Error
+          ? error.message
+          : "Не удалось сохранить бронирование."
       )
       if (error instanceof ApiError && error.status === 409) {
         refreshOrderBoundary()
@@ -518,9 +521,9 @@ export function OrderDetailPage() {
     return (
       <Card size="sm">
         <CardHeader>
-          <CardTitle>Заказ не выбран</CardTitle>
+          <CardTitle>Бронирование не выбрано</CardTitle>
           <CardDescription>
-            В URL отсутствует идентификатор заказа.
+            В URL отсутствует идентификатор бронирования.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -541,11 +544,11 @@ export function OrderDetailPage() {
     return (
       <Card size="sm">
         <CardHeader>
-          <CardTitle>Заказ недоступен</CardTitle>
+          <CardTitle>Бронирование недоступно</CardTitle>
           <CardDescription role="alert">
             {detailQuery.error instanceof Error
               ? detailQuery.error.message
-              : "Заказ не найден или у вас нет доступа."}
+              : "Бронирование не найдено или у вас нет доступа."}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex gap-2">
@@ -567,65 +570,63 @@ export function OrderDetailPage() {
   const selectedWarehouse = warehouses.find(
     (warehouse) => warehouse.id === order.warehouseId
   )
-  const canEdit = order.permissions.canEdit && order.status === "DRAFT"
+  const canEdit = order.permissions.canEdit
+  const canCancel = canEdit && order.status === "DRAFT"
   const warehouseLocked = order.unitCount > 0
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto pr-1">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <Button asChild size="icon-sm" variant="outline">
-            <Link to="/orders" aria-label="Вернуться к списку заказов">
-              <HugeiconsIcon icon={ArrowLeft01Icon} />
-            </Link>
-          </Button>
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-xl font-semibold">Заказ {order.number}</h1>
-              <Badge
-                variant={order.status === "DRAFT" ? "secondary" : "outline"}
-              >
-                {ORDER_STATUS_LABELS[order.status]}
-              </Badge>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              Изменён {formatOrderDateTime(order.updatedAt)}
-            </p>
-          </div>
+        <Button asChild size="sm" variant="outline">
+          <Link to="/orders">
+            <HugeiconsIcon icon={ArrowLeft01Icon} data-icon="inline-start" />
+            Назад
+          </Link>
+        </Button>
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          <Badge variant={order.status === "DRAFT" ? "secondary" : "outline"}>
+            {ORDER_STATUS_LABELS[order.status]}
+          </Badge>
+          <span className="text-sm text-muted-foreground">
+            Изменён {formatOrderDateTime(order.updatedAt)}
+          </span>
         </div>
-        {canEdit ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              disabled={
-                saveMutation.isPending ||
-                order.unitCount === 0 ||
-                order.warehouseId === null
-              }
-              onClick={() =>
-                saveMutation.mutate({
-                  expectedVersion: order.version,
-                  fingerprint: `save:${order.id}:${order.version}`,
-                })
-              }
-            >
-              {saveMutation.isPending ? (
-                <HugeiconsIcon
-                  icon={Loading03Icon}
-                  data-icon="inline-start"
-                  className="animate-spin"
-                />
-              ) : null}
-              {saveMutation.isPending ? "Сохраняем…" : "Сохранить заказ"}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setEditDialogOpen(true)}
-            >
-              <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
-              Редактировать заказ
-            </Button>
+      </div>
+
+      {canEdit ? (
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button
+            type="button"
+            disabled={
+              saveMutation.isPending ||
+              order.unitCount === 0 ||
+              order.warehouseId === null
+            }
+            onClick={() =>
+              saveMutation.mutate({
+                expectedVersion: order.version,
+                fingerprint: `save:${order.id}:${order.version}`,
+              })
+            }
+          >
+            {saveMutation.isPending ? (
+              <HugeiconsIcon
+                icon={Loading03Icon}
+                data-icon="inline-start"
+                className="animate-spin"
+              />
+            ) : null}
+            {saveMutation.isPending ? "Сохраняем…" : "Сохранить бронирование"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setEditDialogOpen(true)}
+          >
+            <HugeiconsIcon icon={PencilEdit01Icon} data-icon="inline-start" />
+            Редактировать бронирование
+          </Button>
+          {canCancel ? (
             <Button
               type="button"
               variant="destructive"
@@ -634,14 +635,14 @@ export function OrderDetailPage() {
               <HugeiconsIcon icon={Delete02Icon} data-icon="inline-start" />
               Удалить черновик
             </Button>
-          </div>
-        ) : null}
-      </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <Card size="sm">
         <CardHeader>
           <CardTitle>Основные данные</CardTitle>
-          <CardDescription>Ответственные за заказ.</CardDescription>
+          <CardDescription>Ответственные за бронирование.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <div>
@@ -670,7 +671,7 @@ export function OrderDetailPage() {
 
       <Card size="sm">
         <CardHeader>
-          <CardTitle>Склад заказа</CardTitle>
+          <CardTitle>Склад бронирования</CardTitle>
           <CardDescription>
             {warehouseLocked
               ? "Склад заблокирован после добавления первой бытовки."
@@ -693,7 +694,7 @@ export function OrderDetailPage() {
             }}
           >
             <SelectTrigger
-              aria-label="Склад заказа"
+              aria-label="Склад бронирования"
               className="w-full max-w-xl"
             >
               <SelectValue placeholder="Выберите склад" />
@@ -702,7 +703,7 @@ export function OrderDetailPage() {
               <SelectGroup>
                 {warehouses.map((warehouse) => (
                   <SelectItem key={warehouse.id} value={warehouse.id}>
-                    {warehouse.code} · {warehouse.name} · {warehouse.city}
+                    {warehouse.name} · {warehouse.city}
                   </SelectItem>
                 ))}
               </SelectGroup>
@@ -725,7 +726,7 @@ export function OrderDetailPage() {
           <CardHeader>
             <CardTitle>Склад не выбран</CardTitle>
             <CardDescription>
-              Сначала выберите склад заказа, затем станет доступен поиск
+              Сначала выберите склад бронирования, затем станет доступен поиск
               бытовок.
             </CardDescription>
           </CardHeader>
@@ -735,15 +736,15 @@ export function OrderDetailPage() {
           <CardHeader>
             <CardTitle>Выбор бытовок</CardTitle>
             <CardDescription>
-              Показаны свободные бытовки выбранного склада и бытовки этого
-              заказа.
+              Показаны доступные для аренды свободные и новые бытовки выбранного
+              склада, а также бытовки этого бронирования.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 overflow-hidden">
             <Input
               type="search"
               value={unitSearch}
-              aria-label="Поиск бытовок для заказа"
+              aria-label="Поиск бытовок для бронирования"
               placeholder="Поиск по номеру и характеристикам"
               className="max-w-xl"
               onChange={(event) => {
@@ -775,7 +776,7 @@ export function OrderDetailPage() {
               </div>
             ) : displayedAvailableCandidates.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Свободные бытовки не найдены.
+                Доступные для аренды бытовки не найдены.
               </p>
             ) : (
               <OrderWarehouseUnitSelection
@@ -787,7 +788,7 @@ export function OrderDetailPage() {
                 conflictingUnitIds={activeConflictingUnitIds}
                 onAdd={(candidate) => {
                   if (!canEdit) {
-                    toast.error("Изменение этого заказа запрещено.")
+                    toast.error("Изменение этого бронирования запрещено.")
                     return
                   }
                   addUnitMutation.mutate({
@@ -844,11 +845,12 @@ export function OrderDetailPage() {
       >
         <div>
           <h2 id="order-units-title" className="text-lg font-semibold">
-            Бытовки в заказе
+            Бытовки в бронировании
           </h2>
           <p className="text-sm text-muted-foreground">
-            Наполнение показано для каждой бытовки. Пока заказ в черновике, его
-            можно добавить или изменить из свободного остатка склада.
+            Наполнение показано для каждой бытовки. Пока бронирование в
+            черновике, его можно добавить или изменить из свободного остатка
+            склада.
           </p>
         </div>
         {selectedUnits.length === 0 ? (
@@ -935,7 +937,7 @@ export function OrderDetailPage() {
                         data-icon="inline-start"
                       />
                     )}
-                    Удалить из заказа
+                    Удалить из бронирования
                   </Button>
                 </CardFooter>
               ) : null}
@@ -946,7 +948,7 @@ export function OrderDetailPage() {
 
       <Card size="sm">
         <CardHeader>
-          <CardTitle>История заказа</CardTitle>
+          <CardTitle>История бронирования</CardTitle>
           <CardDescription>
             Аудит действий, резервирований и складских операций.
           </CardDescription>
@@ -971,9 +973,7 @@ export function OrderDetailPage() {
               const context = auditContext(
                 event,
                 order,
-                selectedWarehouse
-                  ? `${selectedWarehouse.code} · ${selectedWarehouse.name}`
-                  : null
+                selectedWarehouse ? selectedWarehouse.name : null
               )
               return (
                 <div
@@ -1027,11 +1027,11 @@ export function OrderDetailPage() {
       <AlertDialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Удалить черновик заказа?</AlertDialogTitle>
+            <AlertDialogTitle>Удалить черновик бронирования?</AlertDialogTitle>
             <AlertDialogDescription>
-              Это логическое удаление: заказ будет отменён, а все активные
-              резервирования бытовок будут освобождены. Действие фиксируется в
-              истории.
+              Это логическое удаление: бронирование будет отменено, а все
+              активные резервирования бытовок будут освобождены. Действие
+              фиксируется в истории.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

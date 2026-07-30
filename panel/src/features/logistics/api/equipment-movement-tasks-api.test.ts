@@ -10,6 +10,7 @@ import {
   MAX_EQUIPMENT_MOVEMENT_WORKER_OPERATIONS,
   createEquipmentMovementTask,
   equipmentMovementWorkerOperationCount,
+  getEquipmentMovementTask,
   type CreateEquipmentMovementTaskInput,
 } from "@/features/logistics/api/equipment-movement-tasks-api"
 
@@ -69,7 +70,6 @@ function taskResponse() {
         version: 1,
         lineNumber: 1,
         equipmentId: EQUIPMENT_ID,
-        equipmentCode: "OFFICE_TABLE",
         equipmentName: "Стол офисный",
         sourceWarehouseId: WAREHOUSE_ID,
         sourceRentalItemId: null,
@@ -141,6 +141,29 @@ describe("equipment movement task HTTP adapter", () => {
         },
       ])
     ).toBe(3)
+  })
+
+  it("loads the authoritative movement task composition", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(taskResponse(), 200))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const task = await getEquipmentMovementTask("access-token", TASK_ID)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://gateway.example.test/api/logistics/v1/equipment-movement-tasks/${TASK_ID}`,
+      expect.objectContaining({
+        headers: expect.any(Headers),
+      })
+    )
+    expect(task.lines).toEqual([
+      expect.objectContaining({
+        equipmentName: "Стол офисный",
+        quantity: 2,
+        targetRentalItemId: TARGET_RENTAL_ITEM_ID,
+      }),
+    ])
   })
 
   it("rejects a task over the worker-operation limit before sending it", async () => {

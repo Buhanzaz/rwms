@@ -28,21 +28,22 @@ class PostgresTaskBoardIntegrationTest extends PostgresIntegrationTestSupport {
   @Test
   void jpaAndCoreBoardFlowWorkOnPostgres() {
     UUID warehouse = UUID.randomUUID();
+    var definition =
+        registry.createQueueDefinition(
+            new QueueDefinitionRequest(0L, "Repair", null, QueueType.REPAIR));
     var queue =
         registry.createQueue(
             warehouse,
             new WorkQueueRequest(
                 0L,
-                "REPAIR",
-                "Repair",
-                null,
-                QueueType.REPAIR,
+                definition.id(),
                 true,
                 false,
                 false,
                 null,
                 null,
                 false,
+                null,
                 List.of()));
     var snapshot =
         board.createTask(
@@ -54,7 +55,7 @@ class PostgresTaskBoardIntegrationTest extends PostgresIntegrationTestSupport {
                 null,
                 null,
                 null,
-                List.of(new RouteStepRequest(queue.id(), null, null, null))));
+                List.of(new RouteStepRequest(queue.definitionId(), null, null))));
     assertThat(snapshot.columns())
         .filteredOn(column -> queue.id().equals(column.queueId()))
         .flatExtracting(BoardColumnDto::entries)
@@ -73,7 +74,8 @@ class PostgresTaskBoardIntegrationTest extends PostgresIntegrationTestSupport {
             "ck_board_task_request_fingerprint",
             "uk_queue_entry_route",
             "fk_queue_entry_task",
-            "ck_work_queue_holding",
+            "fk_work_queue_definition",
+            "uk_work_queue_warehouse_definition",
             "uk_task_board_outbox_semantic",
             "ck_task_board_outbox_body",
             "ck_task_board_inbox_hash");
@@ -99,6 +101,8 @@ class PostgresTaskBoardIntegrationTest extends PostgresIntegrationTestSupport {
         public void reset(UUID workerId, String password) {}
 
         public void disable(UUID workerId) {}
+
+        public void enable(UUID workerId) {}
 
         public void delete(UUID workerId) {}
 

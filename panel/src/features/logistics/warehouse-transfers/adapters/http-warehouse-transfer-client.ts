@@ -1,8 +1,15 @@
 import {
   TRANSFER_DOCUMENT_STATES,
+  TRANSFER_FURNITURE_READINESS_STATES,
+  TRANSFER_FURNITURE_TASK_STATES,
   TRANSFER_LINE_STATES,
   type TransferDocument,
+  type TransferArrivalPreflight,
   type TransferDocumentState,
+  type TransferFurnitureReadiness,
+  type TransferFurnitureReadinessState,
+  type TransferFurnitureTaskState,
+  type TransferFurnitureTaskStatus,
   type TransferLine,
   type TransferLineState,
 } from "@/features/logistics/warehouse-transfers/model/warehouse-transfer"
@@ -34,6 +41,7 @@ const DOCUMENT_KEYS = [
   "equipmentMovementTaskId",
   "scheduledDate",
   "scheduledAt",
+  "rentalOrderId",
   "lines",
   "createdAt",
   "updatedAt",
@@ -47,6 +55,29 @@ const LINE_KEYS = [
   "state",
   "tenantSnapshot",
   "rentalOrderId",
+] as const
+const FURNITURE_READINESS_KEYS = [
+  "transferId",
+  "transferVersion",
+  "state",
+  "tasks",
+] as const
+const FURNITURE_TASK_KEYS = [
+  "rentalItemId",
+  "unitNumber",
+  "taskId",
+  "externalTaskId",
+  "taskBoardTaskId",
+  "taskState",
+  "lineCount",
+] as const
+const ARRIVAL_PREFLIGHT_KEYS = [
+  "transferId",
+  "lineId",
+  "activeRepairId",
+  "priorityRequired",
+  "movementToShipmentAvailable",
+  "missingQueueDefinitionIds",
 ] as const
 
 function invalidResponse(): never {
@@ -78,6 +109,12 @@ function text(value: unknown): string {
   return value
 }
 
+function nonBlankText(value: unknown): string {
+  const candidate = text(value)
+  if (!candidate.trim()) invalidResponse()
+  return candidate
+}
+
 function uuid(value: unknown): string {
   const candidate = text(value)
   if (!UUID_PATTERN.test(candidate)) invalidResponse()
@@ -95,6 +132,11 @@ function nullableUuid(value: unknown): string | null {
 function integer(value: unknown): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) invalidResponse()
   return value as number
+}
+
+function flag(value: unknown): boolean {
+  if (typeof value !== "boolean") invalidResponse()
+  return value
 }
 
 function timestamp(value: unknown): string {
@@ -141,6 +183,72 @@ function transferLine(value: unknown): TransferLine {
   }
 }
 
+function transferFurnitureTaskStatus(
+  value: unknown
+): TransferFurnitureTaskStatus {
+  const source = object(value, FURNITURE_TASK_KEYS)
+  const lineCount = integer(source.lineCount)
+  if (lineCount < 1) invalidResponse()
+  return {
+    rentalItemId: uuid(source.rentalItemId),
+    unitNumber: nonBlankText(source.unitNumber),
+    taskId: uuid(source.taskId),
+    externalTaskId: uuid(source.externalTaskId),
+    taskBoardTaskId: nullableUuid(source.taskBoardTaskId),
+    taskState: oneOf<TransferFurnitureTaskState>(
+      source.taskState,
+      TRANSFER_FURNITURE_TASK_STATES
+    ),
+    lineCount,
+  }
+}
+
+export function parseTransferFurnitureReadiness(
+  value: unknown
+): TransferFurnitureReadiness {
+  const source = object(value, FURNITURE_READINESS_KEYS)
+  return {
+    transferId: uuid(source.transferId),
+    transferVersion: integer(source.transferVersion),
+    state: oneOf<TransferFurnitureReadinessState>(
+      source.state,
+      TRANSFER_FURNITURE_READINESS_STATES
+    ),
+    tasks: list(source.tasks).map(transferFurnitureTaskStatus),
+  }
+}
+
+export function parseTransferArrivalPreflight(
+  value: unknown
+): TransferArrivalPreflight {
+  const source = object(value, ARRIVAL_PREFLIGHT_KEYS)
+  const activeRepairId = nullableUuid(source.activeRepairId)
+  const priorityRequired = flag(source.priorityRequired)
+  const movementToShipmentAvailable = flag(source.movementToShipmentAvailable)
+  const missingQueueDefinitionIds = list(source.missingQueueDefinitionIds).map(
+    uuid
+  )
+  if (
+    new Set(missingQueueDefinitionIds).size !==
+      missingQueueDefinitionIds.length ||
+    (activeRepairId === null &&
+      (priorityRequired ||
+        movementToShipmentAvailable ||
+        missingQueueDefinitionIds.length > 0)) ||
+    (activeRepairId !== null && !priorityRequired)
+  ) {
+    invalidResponse()
+  }
+  return {
+    transferId: uuid(source.transferId),
+    lineId: uuid(source.lineId),
+    activeRepairId,
+    priorityRequired,
+    movementToShipmentAvailable,
+    missingQueueDefinitionIds,
+  }
+}
+
 export function parseTransferDocument(value: unknown): TransferDocument {
   const source = object(value, DOCUMENT_KEYS)
   const warehouseId = uuid(source.warehouseId)
@@ -174,6 +282,10 @@ export function parseTransferDocument(value: unknown): TransferDocument {
       if (source.scheduledAt !== null) invalidResponse()
       return null
     })(),
+    rentalOrderId: (() => {
+      if (nullableUuid(source.rentalOrderId) !== null) invalidResponse()
+      return null
+    })(),
     lines,
     createdAt: timestamp(source.createdAt),
     updatedAt: timestamp(source.updatedAt),
@@ -198,7 +310,13 @@ async function parsedRequest(
   )
 }
 
-function lineCommandPath(input: TransferLineCommand, action: string) {
+function lineCommandPath(
+  input: Pick<
+    TransferLineCommand,
+    "documentId" | "lineId" | "expectedVersion" | "expectedLineVersion"
+  >,
+  action: string
+) {
   const documentId = encodeURIComponent(input.documentId)
   const lineId = encodeURIComponent(input.lineId)
   return `/${documentId}/lines/${lineId}/${action}?expectedVersion=${input.expectedVersion}&expectedLineVersion=${input.expectedLineVersion}`
@@ -218,6 +336,37 @@ export class HttpWarehouseTransferClient implements WarehouseTransferClient {
       accessToken,
       transfersEndpoint(`/${encodeURIComponent(documentId)}`)
     )
+  }
+
+  async getFurnitureReadiness(accessToken: string, documentId: string) {
+    const readiness = parseTransferFurnitureReadiness(
+      await bearerRequest<unknown>(
+        accessToken,
+        transfersEndpoint(
+          `/${encodeURIComponent(documentId)}/furniture-readiness`
+        )
+      )
+    )
+    if (readiness.transferId !== documentId) invalidResponse()
+    return readiness
+  }
+
+  async getArrivalPreflight(
+    input: Omit<TransferLineCommand, "idempotencyKey">
+  ) {
+    const preflight = parseTransferArrivalPreflight(
+      await bearerRequest<unknown>(
+        input.accessToken,
+        transfersEndpoint(lineCommandPath(input, "arrival-preflight"))
+      )
+    )
+    if (
+      preflight.transferId !== input.documentId ||
+      preflight.lineId !== input.lineId
+    ) {
+      invalidResponse()
+    }
+    return preflight
   }
 
   create(input: TransferCreateCommand) {
@@ -253,7 +402,11 @@ export class HttpWarehouseTransferClient implements WarehouseTransferClient {
       {
         method: "POST",
         headers: commandHeaders(input.idempotencyKey),
-        body: JSON.stringify({ references: input.references }),
+        body: JSON.stringify({
+          references: input.references,
+          priority: input.priority,
+          movementToShipment: input.movementToShipment,
+        }),
       }
     )
   }

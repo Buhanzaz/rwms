@@ -1,0 +1,51 @@
+asyncapi: 3.1.0
+info:
+  title: RWMS Analytics Projection Events
+  version: 1.0.0
+  description: >-
+    Strict DomainEventEnvelopeV2 KPI day projection. analytics-service consumes
+    task-board snapshots from earliest, deduplicates by eventId, enforces
+    contiguous aggregate versions, holds bounded gaps and publishes hash-only
+    failures. It never reads another service database or sends operational
+    commands.
+defaultContentType: application/json
+servers:
+  kafka:
+    host: configured-at-runtime
+    protocol: kafka
+channels:
+  groupKpiDayFacts:
+    address: rwms.task-board.group-kpi-day.v1
+    messages:
+      groupKpiDayChangedV1:
+        $ref: '#/components/messages/GroupKpiDayChangedV1'
+  groupKpiDayDlt:
+    address: rwms.task-board.group-kpi-day.v1.analytics-projection-v1.dlt
+    messages:
+      sanitizedDltV1:
+        $ref: '#/components/messages/SanitizedDltV1'
+operations:
+  consumeGroupKpiDayFacts:
+    action: receive
+    channel: {$ref: '#/channels/groupKpiDayFacts'}
+  publishGroupKpiDayDlt:
+    action: send
+    channel: {$ref: '#/channels/groupKpiDayDlt'}
+components:
+  messages:
+    GroupKpiDayChangedV1:
+      name: task-board.group-kpi-day.changed.v1
+      correlationId:
+        location: $message.payload#/correlation/correlationId
+      payload:
+        allOf:
+          - {$ref: './technical/domain-event-envelope-v2.schema.yaml'}
+          - {$ref: './analytics/group-kpi-day-v1.schema.json'}
+      x-rwms-record-key: aggregateId
+      x-rwms-consumer-group: analytics-projection-v1
+      x-rwms-start-offset: earliest
+    SanitizedDltV1:
+      name: analytics.source.sanitized-dlt.v1
+      payload:
+        $ref: './analytics/analytics-sanitized-dlt-v1.schema.json'
+      x-rwms-record-key: source aggregateId when valid; failureId otherwise

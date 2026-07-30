@@ -1,0 +1,795 @@
+openapi: 3.1.1
+info:
+  title: RWMS Assistant Service API
+  version: 1.0.0
+  description: |
+    Stateful, owner-scoped rental conversations. The service owns conversation
+    history and tool audit records only. Rental inquiries and cabin availability
+    remain delegated to logistics-service through private service calls.
+servers:
+  - url: /
+security:
+  - bearerAuth: []
+paths:
+  /api/assistant/v1/conversations:
+    get:
+      operationId: listAssistantConversations
+      summary: List active and archived conversations owned by the current rental user
+      responses:
+        "200":
+          description: Active conversations in most-recent activity order.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Conversation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: createAssistantConversation
+      summary: Create or replay a conversation and its delegated rental inquiry
+      description: |
+        Exactly one existing clientId or newClient is required. When
+        conversationId is supplied it is the stable idempotency key forwarded
+        to logistics-service as Idempotency-Key. The delegated inquiry is
+        created before the service persists the local conversation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateConversationRequest"
+      responses:
+        "201":
+          description: Conversation created or replayed for its owner.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateConversationResponse"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "502":
+          $ref: "#/components/responses/LogisticsUnavailable"
+  /api/assistant/v1/conversations/{conversationId}:
+    parameters:
+      - $ref: "#/components/parameters/ConversationId"
+    get:
+      operationId: getAssistantConversation
+      summary: Read one owner-scoped conversation and its persisted messages
+      responses:
+        "200":
+          description: Conversation detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ConversationNotFound"
+    delete:
+      operationId: archiveAssistantConversation
+      summary: Archive one owner-scoped conversation
+      description: Archiving is idempotent and does not delete audit history.
+      responses:
+        "204":
+          description: Conversation archived.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ConversationNotFound"
+  /api/assistant/v1/conversations/{conversationId}/turns:
+    parameters:
+      - $ref: "#/components/parameters/ConversationId"
+    post:
+      operationId: streamAssistantTurn
+      summary: Persist a user turn and stream the LLM-assisted reply
+      description: |
+        Clients must request Accept: text/event-stream. The assistant provider
+        can choose list_available_cabin_facets, search_available_cabins, and,
+        only for a live unpublished selection,
+        request_search_merge_confirmation. Each cabin-search result is a bounded delegation to
+        logistics-service. Every user turn makes a fresh cabin-search attempt
+        before assistant text is accepted, except a merge-or-replace clarification
+        for a current live selection; a tool failure is reported as a
+        technical failure, never as an empty availability result. Each
+        cabin-search group filters FREE cabins by exact base facets, including
+        the independent category facet. If logistics reports
+        INQUIRY_ARCHIVED, the assistant persists a terminal explanation and
+        archives the local conversation so it cannot remain selected. The final
+        assistant text and tool records are persisted before turn.completed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TurnRequest"
+      responses:
+        "200":
+          description: Server-sent events for a single turn.
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/TurnEvent"
+              examples:
+                started:
+                  summary: A persisted user message has started a turn.
+                  value:
+                    event: turn.started
+                    conversationId: 4cf7de27-6b47-4f85-8041-522e50a671e7
+                    messageId: 6f029694-0647-4b96-9a88-0a3cbf4c8154
+                delta:
+                  summary: An incremental assistant text fragment.
+                  value:
+                    event: assistant.delta
+                    conversationId: 4cf7de27-6b47-4f85-8041-522e50a671e7
+                    delta: "I can check availability."
+                toolStarted:
+                  summary: The provider selected a bounded tool.
+                  value:
+                    event: tool.started
+                    conversationId: 4cf7de27-6b47-4f85-8041-522e50a671e7
+                    toolCallId: 4b940865-437a-4a6e-8d4c-3158e1f1ce3d
+                searchResult:
+                  summary: Normalized cabin-search projection.
+                  value:
+                    event: search.result
+                    conversationId: 4cf7de27-6b47-4f85-8041-522e50a671e7
+                    toolCallId: 4b940865-437a-4a6e-8d4c-3158e1f1ce3d
+                    result:
+                      tool: search_available_cabins
+                      resultMode: REPLACE
+                      notices: []
+                      data:
+                        warehouseId: 14a4087c-c21b-43d9-ab70-8bfa7610a1db
+                        groups: []
+                completed:
+                  summary: Persisted final assistant message.
+                  value:
+                    event: turn.completed
+                    conversationId: 4cf7de27-6b47-4f85-8041-522e50a671e7
+                    messageId: cba9b3ce-a4aa-4c15-9365-401ee86e39b0
+                failed:
+                  summary: A provider or tool failure ended the turn.
+                  value:
+                    event: turn.failed
+                    conversationId: 4cf7de27-6b47-4f85-8041-522e50a671e7
+                    code: PROVIDER_FAILED
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/ConversationNotFound"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Authenticated JWT with rentalAccess true.
+  parameters:
+    ConversationId:
+      name: conversationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    InvalidRequest:
+      description: The input did not satisfy the bounded command schema.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unauthorized:
+      description: A bearer token is required.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: The token has no rental access.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ConversationNotFound:
+      description: The conversation is absent or is not owned by the caller.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Conflict:
+      description: A replay attempted to change a conversation's immutable client.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    LogisticsUnavailable:
+      description: logistics-service could not accept the private delegation.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+  schemas:
+    CreateConversationRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        conversationId:
+          type: string
+          format: uuid
+          description: Optional caller-generated stable idempotency key.
+        clientId:
+          type: string
+          format: uuid
+        newClient:
+          $ref: "#/components/schemas/NewClient"
+      oneOf:
+        - required: [clientId]
+          not:
+            required: [newClient]
+        - required: [newClient]
+          not:
+            required: [clientId]
+    NewClient:
+      type: object
+      additionalProperties: false
+      required: [clientType, displayName, phone]
+      properties:
+        clientType:
+          type: string
+          enum: [INDIVIDUAL, LEGAL_ENTITY]
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 512
+        phone:
+          type: string
+          minLength: 1
+          maxLength: 32
+        email:
+          type: [string, "null"]
+          format: email
+          maxLength: 320
+    CreateConversationResponse:
+      type: object
+      additionalProperties: false
+      required: [conversation, inquiry, client]
+      properties:
+        conversation:
+          $ref: "#/components/schemas/Conversation"
+        inquiry:
+          $ref: "#/components/schemas/RentalInquirySummary"
+        client:
+          $ref: "#/components/schemas/ClientSummary"
+    Conversation:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - version
+        - clientId
+        - rentalInquiryId
+        - archived
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+        clientId:
+          type: string
+          format: uuid
+        rentalInquiryId:
+          type: string
+          format: uuid
+        clientType:
+          type: [string, "null"]
+        clientDisplayName:
+          type: [string, "null"]
+        archived:
+          type: boolean
+        archivedAt:
+          type: [string, "null"]
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    RentalInquirySummary:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: [string, "null"]
+    ClientSummary:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id:
+          type: string
+          format: uuid
+        clientType:
+          type: [string, "null"]
+        displayName:
+          type: [string, "null"]
+    ConversationDetail:
+      type: object
+      additionalProperties: false
+      required: [conversation, messages, lastSearchResult]
+      properties:
+        conversation:
+          $ref: "#/components/schemas/Conversation"
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+        lastSearchResult:
+          anyOf:
+            - $ref: "#/components/schemas/CabinSearchToolResult"
+            - type: "null"
+    Message:
+      type: object
+      additionalProperties: false
+      required: [id, role, content, createdAt, searchNotices]
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [USER, ASSISTANT]
+        content:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        searchNotices:
+          type: array
+          description: Structured exact-search availability gaps attached to this user turn.
+          items:
+            $ref: "#/components/schemas/CabinSearchNotice"
+    TurnRequest:
+      type: object
+      additionalProperties: false
+      required: [message]
+      properties:
+        message:
+          type: string
+          minLength: 1
+          maxLength: 8000
+    TurnEvent:
+      oneOf:
+        - $ref: "#/components/schemas/TurnStartedEvent"
+        - $ref: "#/components/schemas/AssistantDeltaEvent"
+        - $ref: "#/components/schemas/ToolStartedEvent"
+        - $ref: "#/components/schemas/SearchResultEvent"
+        - $ref: "#/components/schemas/ToolCompletedEvent"
+        - $ref: "#/components/schemas/TurnCompletedEvent"
+        - $ref: "#/components/schemas/TurnFailedEvent"
+      discriminator:
+        propertyName: event
+    TurnStartedEvent:
+      type: object
+      additionalProperties: false
+      required: [event, conversationId, messageId]
+      properties:
+        event:
+          const: turn.started
+        conversationId:
+          type: string
+          format: uuid
+        messageId:
+          type: string
+          format: uuid
+    AssistantDeltaEvent:
+      type: object
+      additionalProperties: false
+      required: [event, conversationId, delta]
+      properties:
+        event:
+          const: assistant.delta
+        conversationId:
+          type: string
+          format: uuid
+        delta:
+          type: string
+    ToolStartedEvent:
+      type: object
+      additionalProperties: false
+      required: [event, conversationId, toolCallId]
+      properties:
+        event:
+          const: tool.started
+        conversationId:
+          type: string
+          format: uuid
+        toolCallId:
+          type: string
+          format: uuid
+    SearchResultEvent:
+      type: object
+      additionalProperties: false
+      required: [event, conversationId, toolCallId, result]
+      properties:
+        event:
+          const: search.result
+        conversationId:
+          type: string
+          format: uuid
+        toolCallId:
+          type: string
+          format: uuid
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/CabinSearchToolResult"
+            - $ref: "#/components/schemas/ToolFailureResult"
+    ToolCompletedEvent:
+      type: object
+      additionalProperties: false
+      required: [event, conversationId, toolCallId, result]
+      properties:
+        event:
+          const: tool.completed
+        conversationId:
+          type: string
+          format: uuid
+        toolCallId:
+          type: string
+          format: uuid
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/ToolResult"
+            - $ref: "#/components/schemas/ToolFailureResult"
+        code:
+          type: [string, "null"]
+    TurnCompletedEvent:
+      type: object
+      additionalProperties: false
+      required: [event, conversationId, messageId]
+      properties:
+        event:
+          const: turn.completed
+        conversationId:
+          type: string
+          format: uuid
+        messageId:
+          type: string
+          format: uuid
+    TurnFailedEvent:
+      type: object
+      additionalProperties: false
+      required: [event, conversationId, code]
+      properties:
+        event:
+          const: turn.failed
+        conversationId:
+          type: string
+          format: uuid
+        code:
+          type: string
+          enum:
+            - CONVERSATION_UNAVAILABLE
+            - PROVIDER_FAILED
+            - TURN_FAILED
+    ToolResult:
+      oneOf:
+        - $ref: "#/components/schemas/CabinFacetsToolResult"
+        - $ref: "#/components/schemas/CabinSearchToolResult"
+        - $ref: "#/components/schemas/SearchMergeConfirmationToolResult"
+      discriminator:
+        propertyName: tool
+    CabinFacetsToolResult:
+      type: object
+      additionalProperties: false
+      required: [tool, data]
+      properties:
+        tool:
+          type: string
+          const: list_available_cabin_facets
+        data:
+          $ref: "#/components/schemas/CabinFacetsProjection"
+    CabinSearchToolResult:
+      type: object
+      additionalProperties: false
+      required: [tool, resultMode, notices, data]
+      properties:
+        tool:
+          type: string
+          const: search_available_cabins
+        resultMode:
+          $ref: "#/components/schemas/SearchResultMode"
+        notices:
+          type: array
+          items:
+            $ref: "#/components/schemas/CabinSearchNotice"
+        data:
+          $ref: "#/components/schemas/CabinSearchProjection"
+    SearchMergeConfirmationToolResult:
+      type: object
+      additionalProperties: false
+      required: [tool, data]
+      properties:
+        tool:
+          type: string
+          const: request_search_merge_confirmation
+        data:
+          type: object
+          additionalProperties: false
+          required: [action]
+          properties:
+            action:
+              type: string
+              const: ASK_ADD_OR_REPLACE
+    SearchResultMode:
+      type: string
+      enum: [APPEND, REPLACE]
+    ToolFailureResult:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code:
+          type: string
+          enum:
+            - TOOL_ARGUMENTS_INVALID
+            - LOGISTICS_UNAVAILABLE
+            - INQUIRY_ARCHIVED
+            - TOOL_FAILED
+    CabinFacetsProjection:
+      type: object
+      additionalProperties: false
+      required: [warehouses]
+      properties:
+        warehouses:
+          type: array
+          items:
+            $ref: "#/components/schemas/CabinFacetWarehouse"
+    CabinFacetWarehouse:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, name, city, cabinTypes, finishes, dimensions, categories]
+      properties:
+        warehouseId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        city:
+          type: string
+        cabinTypes:
+          type: array
+          items:
+            type: string
+        finishes:
+          type: array
+          items:
+            type: string
+        dimensions:
+          type: array
+          items:
+            type: string
+        categories:
+          type: array
+          items:
+            type: string
+    CabinSearchProjection:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, expiresAt, groups]
+      properties:
+        warehouseId:
+          type: string
+          format: uuid
+        expiresAt:
+          type: string
+          format: date-time
+          description: Earliest expiry of the short reservations backing this carousel.
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/CabinSearchGroupResult"
+    CabinSearchGroupResult:
+      type: object
+      additionalProperties: false
+      required: [group, cabins]
+      properties:
+        group:
+          $ref: "#/components/schemas/CabinSearchGroup"
+        cabins:
+          type: array
+          items:
+            $ref: "#/components/schemas/AvailableCabin"
+    CabinSearchGroup:
+      type: object
+      additionalProperties: false
+      required: [quantity]
+      description: |
+        One distinct requested filter combination. cabinType, finish, dimensions,
+        and category are exact facets. categories is an exact OR list of category
+        facets and cannot be combined with category. characteristics is the user-requested
+        characteristic text forwarded without invention or normalization.
+        linoleum is true for a requested linoleum filter and false only for an
+        explicitly requested no-linoleum filter. Every group has its own
+        requested quantity.
+      properties:
+        cabinType:
+          type: [string, "null"]
+          maxLength: 255
+        finish:
+          type: [string, "null"]
+          maxLength: 255
+        dimensions:
+          type: [string, "null"]
+          maxLength: 255
+        category:
+          type: [string, "null"]
+          maxLength: 255
+        categories:
+          type: [array, "null"]
+          minItems: 1
+          maxItems: 3
+          uniqueItems: true
+          items:
+            type: string
+            maxLength: 255
+        characteristics:
+          type: [string, "null"]
+          maxLength: 2000
+        linoleum:
+          type: [boolean, "null"]
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 30
+    CabinSearchNotice:
+      type: object
+      additionalProperties: false
+      required: [code, groups, requestedQuantity, foundQuantity]
+      description: |
+        An exact requested logical group was not found in full. The criteria are
+        carried structurally so the client can render the warning without parsing
+        assistant prose. For a shared total, requestedQuantity is authoritative
+        and each group has a positive materialized display quantity.
+      properties:
+        code:
+          type: string
+          enum: [CABINS_NOT_FOUND, CABINS_PARTIALLY_FOUND]
+        groups:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/CabinSearchNoticeGroup"
+        requestedQuantity:
+          type: integer
+          minimum: 1
+          maximum: 30
+        foundQuantity:
+          type: integer
+          minimum: 0
+          maximum: 30
+    CabinSearchNoticeGroup:
+      type: object
+      additionalProperties: false
+      required: [quantity]
+      description: Exact logical search criteria. categories is exact OR filtering.
+      properties:
+        cabinType:
+          type: [string, "null"]
+          maxLength: 255
+        finish:
+          type: [string, "null"]
+          maxLength: 255
+        dimensions:
+          type: [string, "null"]
+          maxLength: 255
+        category:
+          type: [string, "null"]
+          maxLength: 255
+        categories:
+          type: [array, "null"]
+          minItems: 1
+          maxItems: 3
+          uniqueItems: true
+          items:
+            type: string
+            maxLength: 255
+        characteristics:
+          type: [string, "null"]
+          maxLength: 2000
+        linoleum:
+          type: [boolean, "null"]
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 30
+    AvailableCabin:
+      type: object
+      additionalProperties: false
+      required: [id, version, warehouseId, number, status, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: integer
+          format: int64
+          minimum: 0
+        warehouseId:
+          type: string
+          format: uuid
+        number:
+          type: [string, "null"]
+        status:
+          type: string
+          description: Every cabin returned by the search is currently free.
+          enum: [FREE]
+        rentalType:
+          type: [string, "null"]
+        dimensions:
+          type: [string, "null"]
+        finishing:
+          type: [string, "null"]
+        category:
+          type: [string, "null"]
+        characteristics:
+          type: [string, "null"]
+        linoleum:
+          type: [boolean, "null"]
+        passport:
+          type: [object, "null"]
+          additionalProperties: true
+        tags:
+          type: [array, "null"]
+          items:
+            type: string
+        updatedAt:
+          type: string
+          format: date-time
+    Problem:
+      type: object
+      required: [type, title, status, detail, code]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
+        code:
+          type: string

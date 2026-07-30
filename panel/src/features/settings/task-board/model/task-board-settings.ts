@@ -1,28 +1,11 @@
-export type QueueType = "MOVEMENT" | "REPAIR" | "HOLDING"
-export type CredentialStatus = "NOT_CONFIGURED" | "PENDING" | "ACTIVE" | "ERROR"
-export type RestPeriodType = "SMOKE_BREAK" | "LUNCH"
-
-export type ReviewedTaskBoardBootstrapResult = {
-  warehouseId: string
-  sourceSha256: string
-  created: number
-  reused: number
-  conflicts: number
-  counts: {
-    workerClasses: number
-    workQueues: number
-    queueBindings: number
-    workers: number
-    qualifications: number
-    workerGroups: number
-    memberships: number
-  }
-}
+export type QueueType = "MOVEMENT" | "REPAIR" | "HOLDING" | "FURNITURE_MOVEMENT"
+export type CredentialStatus =
+  "NOT_CONFIGURED" | "PENDING" | "ACTIVE" | "DISABLED" | "ERROR"
+export type OperationalAvailability = "AVAILABLE" | "DISABLED"
 
 export type WorkerClassDto = {
   id: string
   version: number
-  code: string
   name: string
   description: string | null
   comment: string | null
@@ -36,19 +19,35 @@ export type QueueBindingDto = {
   id: string
   version: number
   workerClass: WorkerClassDto
+  order: number
+  primary: boolean
   stopTaskOnTake: boolean
+  notifyUrgent: boolean
 }
 
 export type QueueBindingRequest = {
   workerClassId: string
+  order: number
   stopTaskOnTake: boolean
+  notifyUrgent: boolean
 }
+
+export type QueueDefinitionDto = {
+  id: string
+  version: number
+  name: string
+  description: string | null
+  type: QueueType
+}
+
+export type QueueDefinitionRequest = Omit<QueueDefinitionDto, "id">
 
 export type WorkQueueDto = {
   id: string
   version: number
   warehouseId: string
-  code: string
+  definitionId: string
+  definitionVersion: number
   name: string
   description: string | null
   type: QueueType
@@ -59,21 +58,20 @@ export type WorkQueueDto = {
   holdingPeriodMinutes: number | null
   notificationThreshold: number | null
   notifyWhenThresholdReached: boolean
+  resultPhotoMinCount: number
   bindings: QueueBindingDto[]
 }
 
 export type WorkQueueRequest = {
   version: number
-  code: string
-  name: string
-  description: string | null
-  type: QueueType
+  definitionId: string
   active: boolean
   hidden: boolean
   collapsed: boolean
   holdingPeriodMinutes: number | null
   notificationThreshold: number | null
   notifyWhenThresholdReached: boolean
+  resultPhotoMinCount: number | null
   bindings: QueueBindingRequest[]
 }
 
@@ -104,6 +102,9 @@ export type WorkerDto = {
   appLogin: string | null
   credentialStatus: CredentialStatus
   credentialError: string | null
+  currentGroupId: string | null
+  currentGroupName: string | null
+  operationalAvailability: OperationalAvailability
   qualifications: QualificationDto[]
 }
 
@@ -125,13 +126,11 @@ export type GroupMemberDto = {
   version: number
   workerId: string
   workerName: string
-  roleInGroup: string | null
   active: boolean
 }
 
 export type GroupMemberRequest = {
   workerId: string
-  roleInGroup: string | null
   active: boolean
 }
 
@@ -143,6 +142,9 @@ export type WorkerGroupDto = {
   name: string
   description: string | null
   active: boolean
+  operationalStatus: OperationalAvailability
+  unavailableSince: string | null
+  unavailabilityReason: string | null
   members: GroupMemberDto[]
 }
 
@@ -155,60 +157,25 @@ export type WorkerGroupRequest = {
   members: GroupMemberRequest[]
 }
 
-/** @deprecated Retained only for deferred browser logistics fixtures. */
-export type RestPeriodDto = {
-  id: string
-  version: number
-  type: RestPeriodType
-  startsAt: string
-  endsAt: string
-  warningMinutes: number
-  autoPause: boolean
-}
-
-/** @deprecated Retained only for deferred browser logistics fixtures. */
-export type ScheduleDayDto = {
-  dayOfWeek: 1 | 2 | 3 | 4 | 5 | 6 | 7
-  enabled: boolean
-  linkedToTemplate: boolean
-  shiftStartsAt: string
-  shiftEndsAt: string
-  restPeriods: RestPeriodDto[]
-}
-
-/** @deprecated Retained only for deferred browser logistics fixtures. */
-export type GroupScheduleDto = {
-  id: string
-  version: number
-  warehouseId: string
-  workerGroupId: string
-  timezone: string
-  returnGraceMinutes: number
-  days: ScheduleDayDto[]
-}
-
-/** @deprecated Retained only for deferred browser logistics fixtures. */
-export type GroupScheduleRequest = Omit<
-  GroupScheduleDto,
-  "id" | "warehouseId" | "workerGroupId"
->
-
-/** @deprecated Retained only for deferred browser logistics fixtures. */
-export type CopyGroupScheduleRequest = {
-  sourceGroupId: string
-  sourceExpectedVersion: number
-  targets: { groupId: string; expectedVersion: number }[]
-}
-
 export const queueTypeLabels: Record<QueueType, string> = {
   MOVEMENT: "Перемещение",
   REPAIR: "Ремонт",
   HOLDING: "Удержание",
+  FURNITURE_MOVEMENT: "Перемещение мебели",
 }
 
 export const credentialStatusLabels: Record<CredentialStatus, string> = {
   NOT_CONFIGURED: "Не настроены",
   PENDING: "Обновляются",
   ACTIVE: "Активны",
+  DISABLED: "Отключены",
   ERROR: "Ошибка",
+}
+
+export const operationalAvailabilityLabels: Record<
+  OperationalAvailability,
+  string
+> = {
+  AVAILABLE: "Доступна",
+  DISABLED: "Недоступна",
 }

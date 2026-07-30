@@ -62,6 +62,9 @@ public class MaintenanceEstimate {
   @Column(name = "repair_id")
   private UUID repairId;
 
+  @Column(name = "cover_media_id")
+  private UUID coverMediaId;
+
   @Column(name = "completed_at")
   private OffsetDateTime completedAt;
 
@@ -118,6 +121,11 @@ public class MaintenanceEstimate {
 
   public void touchDraft() {
     requireDraft();
+    updatedAt = MaintenanceTime.now();
+  }
+
+  public void replaceCoverMediaId(UUID coverMediaId) {
+    this.coverMediaId = coverMediaId;
     updatedAt = MaintenanceTime.now();
   }
 
@@ -189,6 +197,7 @@ public class MaintenanceEstimate {
   public String getSourceParty() { return sourceParty; }
   public String getComment() { return comment; }
   public UUID getRepairId() { return repairId; }
+  public UUID getCoverMediaId() { return coverMediaId; }
   public OffsetDateTime getCompletedAt() { return completedAt; }
   public String getActorRef() { return actorRef; }
   public OffsetDateTime getCreatedAt() { return createdAt; }

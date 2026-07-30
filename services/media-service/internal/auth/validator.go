@@ -43,6 +43,20 @@ type Principal struct {
 	Grants    []WarehouseGrant
 }
 
+// WorkerPrincipal is deliberately separate from Principal. A worker token is
+// not a reduced user token: it has no warehouse-grant list and it must never
+// inherit USER routes or permissions by accident. The media API only admits
+// this principal for the task-board work-result scope.
+type WorkerPrincipal struct {
+	// SubjectID is the auth-service subject that owns a refresh-token/session
+	// lineage. WorkerID is the task-board worker identity used for every owner
+	// proof and emitted media actor reference.
+	SubjectID   uuid.UUID
+	WorkerID    uuid.UUID
+	WarehouseID uuid.UUID
+	Scopes      map[string]struct{}
+}
+
 // ServicePrincipal is intentionally distinct from a user principal: a service
 // token has no user ID, warehouse grants, or global role.
 type ServicePrincipal struct {
@@ -103,6 +117,52 @@ func (validator *Validator) Validate(ctx context.Context, authorization string) 
 	}
 	role, _ := claims["global_role"].(string)
 	return Principal{SubjectID: subject, Scopes: scopes, Role: role, Grants: grants}, nil
+}
+
+func (validator *Validator) ValidateWorker(ctx context.Context, authorization string) (WorkerPrincipal, error) {
+	claims, err := validator.validateClaims(ctx, authorization)
+	if err != nil {
+		return WorkerPrincipal{}, err
+	}
+	if claims["principal_type"] != "WORKER" {
+		return WorkerPrincipal{}, ErrForbidden
+	}
+	subjectRaw, subjectOK := claims["sub"].(string)
+	workerRaw, workerOK := claims["worker_id"].(string)
+	warehouseRaw, warehouseOK := claims["warehouse_id"].(string)
+	if !subjectOK || !workerOK || !warehouseOK {
+		return WorkerPrincipal{}, ErrForbidden
+	}
+	subjectID, subjectErr := uuid.Parse(subjectRaw)
+	workerID, workerErr := uuid.Parse(workerRaw)
+	warehouseID, warehouseErr := uuid.Parse(warehouseRaw)
+	if subjectErr != nil || workerErr != nil || warehouseErr != nil ||
+		subjectID == uuid.Nil || workerID == uuid.Nil || warehouseID == uuid.Nil ||
+		subjectID.String() != subjectRaw || workerID.String() != workerRaw ||
+		warehouseID.String() != warehouseRaw {
+		return WorkerPrincipal{}, ErrForbidden
+	}
+	scopes, err := parseScopes(claims)
+	if err != nil {
+		return WorkerPrincipal{}, ErrForbidden
+	}
+	if _, allowed := scopes["worker.tasks"]; !allowed {
+		return WorkerPrincipal{}, ErrForbidden
+	}
+	return WorkerPrincipal{
+		SubjectID: subjectID, WorkerID: workerID, WarehouseID: warehouseID,
+		Scopes: scopes,
+	}, nil
+}
+
+func (principal WorkerPrincipal) RequireTaskAccess(warehouseID uuid.UUID) error {
+	if warehouseID == uuid.Nil || warehouseID != principal.WarehouseID {
+		return ErrForbidden
+	}
+	if _, allowed := principal.Scopes["worker.tasks"]; !allowed {
+		return ErrForbidden
+	}
+	return nil
 }
 
 func (validator *Validator) ValidateService(ctx context.Context, authorization string) (ServicePrincipal, error) {

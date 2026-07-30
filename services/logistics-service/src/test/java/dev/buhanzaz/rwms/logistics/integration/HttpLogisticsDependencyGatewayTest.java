@@ -16,8 +16,10 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -208,6 +210,8 @@ class HttpLogisticsDependencyGatewayTest {
                   "id":"%s",
                   "version":4,
                   "active":true,
+                  "name":"СПБ",
+                  "city":"Санкт-Петербург",
                   "timeZone":"Europe/Moscow"
                 }
                 """
@@ -218,46 +222,460 @@ class HttpLogisticsDependencyGatewayTest {
 
     assertThat(identity).isEqualTo(
         new LogisticsDependencyGateway.WarehouseIdentity(
-            warehouseId, 4, true, "Europe/Moscow"));
+            warehouseId,
+            4,
+            true,
+            "СПБ",
+            "Санкт-Петербург",
+            "Europe/Moscow"));
     server.verify();
   }
 
   @Test
-  void completesThePreparationTaskThroughTheNarrowTaskBoardRoute() {
-    UUID externalTaskId = UUID.randomUUID();
-    UUID taskId = UUID.randomUUID();
-    UUID warehouseId = UUID.randomUUID();
+  void usesTheFrozenMaintenanceTransferRoutesAndStableIdempotencyKeys() {
+    UUID key = UUID.randomUUID();
+    UUID transferId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    UUID sourceWarehouseId = UUID.randomUUID();
+    UUID targetWarehouseId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    String base =
+        "http://maintenance.test/api/internal/maintenance/v1/logistics/transfers/"
+            + transferId
+            + "/lines/"
+            + lineId;
+
     server
-        .expect(
-            requestTo(
-                "http://task-board.test/api/internal/task-board/v1/logistics/preparation-tasks/"
-                    + externalTaskId
-                    + "/complete"))
+        .expect(requestTo(base + "/prepare-departure"))
         .andExpect(method(HttpMethod.POST))
-        .andExpect(header("Authorization", "Bearer test-task-board.logistics"))
-        .andExpect(jsonPath("$.expectedTaskVersion").value(4))
+        .andExpect(header("Authorization", "Bearer test-maintenance.logistics"))
+        .andExpect(header("Idempotency-Key", key.toString()))
+        .andExpect(jsonPath("$.rentalItemId").value(rentalItemId.toString()))
+        .andExpect(jsonPath("$.sourceWarehouseId").value(sourceWarehouseId.toString()))
+        .andExpect(jsonPath("$.targetWarehouseId").value(targetWarehouseId.toString()))
         .andRespond(
             withSuccess(
                 """
                 {
-                  "taskId":"%s",
-                  "taskVersion":5,
-                  "warehouseId":"%s",
-                  "externalTaskId":"%s",
-                  "status":"DONE",
-                  "doneAt":"2026-07-22T12:30:00Z"
+                  "activeRepairId":"%s",
+                  "activeRepairVersion":8,
+                  "assetStatus":"REPAIR"
                 }
                 """
-                    .formatted(taskId, warehouseId, externalTaskId),
+                    .formatted(repairId),
+                MediaType.APPLICATION_JSON));
+    server
+        .expect(requestTo(base + "/arrival-preflight"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer test-maintenance.logistics"))
+        .andExpect(jsonPath("$.rentalItemId").value(rentalItemId.toString()))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "activeRepairId":"%s",
+                  "priorityRequired":true,
+                  "movementToShipmentAvailable":true,
+                  "missingQueueDefinitionIds":[]
+                }
+                """
+                    .formatted(repairId),
+                MediaType.APPLICATION_JSON));
+    server
+        .expect(requestTo(base + "/complete-arrival"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer test-maintenance.logistics"))
+        .andExpect(header("Idempotency-Key", key.toString()))
+        .andExpect(jsonPath("$.priority").value(2))
+        .andExpect(jsonPath("$.movementToShipment").value(true))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "activeRepairId":"%s",
+                  "repairVersion":9,
+                  "warehouseId":"%s"
+                }
+                """
+                    .formatted(repairId, targetWarehouseId),
                 MediaType.APPLICATION_JSON));
 
-    LogisticsDependencyGateway.PreparationTask completed =
-        gateway.completePreparationTask(externalTaskId, 4);
+    assertThat(
+            gateway.prepareTransferDeparture(
+                key,
+                transferId,
+                lineId,
+                rentalItemId,
+                sourceWarehouseId,
+                targetWarehouseId))
+        .isEqualTo(
+            new LogisticsDependencyGateway.TransferRepairDeparture(
+                repairId, 8L, "REPAIR"));
+    assertThat(
+            gateway.preflightTransferArrival(
+                transferId,
+                lineId,
+                rentalItemId,
+                sourceWarehouseId,
+                targetWarehouseId))
+        .isEqualTo(
+            new LogisticsDependencyGateway.TransferRepairArrivalPreflight(
+                repairId, true, true, List.of()));
+    assertThat(
+            gateway.completeTransferArrival(
+                key,
+                transferId,
+                lineId,
+                rentalItemId,
+                sourceWarehouseId,
+                targetWarehouseId,
+                2,
+                true))
+        .isEqualTo(
+            new LogisticsDependencyGateway.TransferRepairArrivalCompletion(
+                repairId, 9L, targetWarehouseId));
+    server.verify();
+  }
 
-    assertThat(completed.taskId()).isEqualTo(taskId);
-    assertThat(completed.taskVersion()).isEqualTo(5);
-    assertThat(completed.status()).isEqualTo("DONE");
-    assertThat(completed.doneAt()).isNotNull();
+  @Test
+  void forwardsThePreparedRepairStatusToTheAssetTransferEffect() {
+    UUID key = UUID.randomUUID();
+    UUID assetId = UUID.randomUUID();
+    UUID leaseId = UUID.randomUUID();
+    UUID transferId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    UUID destinationWarehouseId = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/logistics/rental-items/"
+                    + assetId
+                    + "/effects"))
+        .andExpect(method(HttpMethod.PUT))
+        .andExpect(header("Idempotency-Key", key.toString()))
+        .andExpect(jsonPath("$.action").value("TRANSFER_ARRIVE"))
+        .andExpect(jsonPath("$.destinationWarehouseId").value(destinationWarehouseId.toString()))
+        .andExpect(jsonPath("$.transferAssetStatus").value("REPAIR"))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "assetId":"%s",
+                  "version":12,
+                  "warehouseId":"%s",
+                  "status":"REPAIR",
+                  "contents":[]
+                }
+                """
+                    .formatted(assetId, destinationWarehouseId),
+                MediaType.APPLICATION_JSON));
+
+    assertThat(
+            gateway.applyFencedEffect(
+                key,
+                LogisticsDependencyGateway.AssetEffect.TRANSFER_ARRIVE,
+                assetId,
+                11,
+                leaseId,
+                7,
+                LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_TRANSFER,
+                transferId,
+                lineId,
+                destinationWarehouseId,
+                "REPAIR"))
+        .extracting(LogisticsDependencyGateway.RentalItemSnapshot::status)
+        .isEqualTo("REPAIR");
+    server.verify();
+  }
+
+  @Test
+  void readsCabinFacetsWithTheInquiryHoldScope() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID holdScopeId = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/logistics/cabin-facets?warehouseId="
+                    + warehouseId
+                    + "&holdScopeId="
+                    + holdScopeId))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "warehouseId":"%s",
+                  "cabinTypes":["БК-1"],
+                  "finishes":["ДВП"],
+                  "dimensions":["6x2.4"],
+                  "categories":["Новая"]
+                }
+                """
+                    .formatted(warehouseId),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.CabinFacets facets =
+        gateway.readAvailableCabinFacets(warehouseId, holdScopeId);
+
+    assertThat(facets.warehouseId()).isEqualTo(warehouseId);
+    assertThat(facets.cabinTypes()).containsExactly("БК-1");
+    server.verify();
+  }
+
+  @Test
+  void preservesNullablePassportValuesAndExactCategoryInCabinSearchResults() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    UUID holdScopeId = UUID.randomUUID();
+    UUID actorSubjectId = UUID.randomUUID();
+    OffsetDateTime expiresAt = OffsetDateTime.parse("2026-07-27T06:00:00Z");
+    server
+        .expect(
+            requestTo("http://asset.test/api/internal/asset/v1/logistics/cabin-searches"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andExpect(jsonPath("$.warehouseId").value(warehouseId.toString()))
+        .andExpect(jsonPath("$.holdScopeId").value(holdScopeId.toString()))
+        .andExpect(jsonPath("$.expiresAt").value("2026-07-27T06:00:00Z"))
+        .andExpect(jsonPath("$.actorSubjectId").value(actorSubjectId.toString()))
+        .andExpect(jsonPath("$.actorRole").value("RENTAL_MANAGER"))
+        .andExpect(jsonPath("$.groups[0].finish").value("ДВП"))
+        .andExpect(jsonPath("$.groups[0].cabinType").doesNotExist())
+        .andExpect(jsonPath("$.groups[0].dimensions").doesNotExist())
+        .andExpect(jsonPath("$.groups[0].category").value("Новая"))
+        .andExpect(jsonPath("$.groups[0].condition").doesNotExist())
+        .andExpect(jsonPath("$.groups[0].quantity").value(2))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "warehouseId":"%s",
+                  "expiresAt":"%s",
+                  "groups":[{
+                    "group":{"cabinType":null,"finish":"ДВП","dimensions":null,"category":"Новая","quantity":2},
+                    "cabins":[{
+                      "id":"%s",
+                      "version":3,
+                      "warehouseId":"%s",
+                      "status":"FREE",
+                      "number":"СПБ-001",
+                      "rentalType":"БК-5",
+                      "dimensions":"2x2",
+                      "finishing":"ДВП",
+                      "category":"Новая",
+                      "characteristics":"Электрика",
+                      "linoleum":true,
+                      "passport":{"wall":"ДВП","legacy":null},
+                      "tags":[],
+                      "updatedAt":"2026-07-27T05:41:54Z"
+                    }]
+                  }]
+                }
+                """
+                    .formatted(warehouseId, expiresAt, cabinId, warehouseId),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.CabinSearchResult result =
+        gateway.searchAvailableCabins(
+            warehouseId,
+            holdScopeId,
+            expiresAt,
+            actorSubjectId,
+            "RENTAL_MANAGER",
+            List.of(
+                new LogisticsDependencyGateway.CabinSearchGroup(
+                    null, "ДВП", null, "Новая", null, null, 2)));
+
+    assertThat(result.expiresAt()).isEqualTo(expiresAt);
+    assertThat(result.groups())
+        .singleElement()
+        .satisfies(
+            group -> {
+              assertThat(group.group().category()).isEqualTo("Новая");
+              assertThat(group.cabins()).singleElement();
+              assertThat(group.cabins().getFirst().status()).isEqualTo("FREE");
+              assertThat(group.cabins().getFirst().category()).isEqualTo("Новая");
+              assertThat(group.cabins().getFirst().passport())
+                  .containsEntry("wall", "ДВП")
+                  .containsKey("legacy");
+              assertThat(group.cabins().getFirst().passport().get("legacy")).isNull();
+            });
+    server.verify();
+  }
+
+  @Test
+  void forwardsRichCabinSearchGroupsAndReturnsEachGroupUnchanged() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID firstCabinId = UUID.randomUUID();
+    UUID secondCabinId = UUID.randomUUID();
+    UUID holdScopeId = UUID.randomUUID();
+    UUID actorSubjectId = UUID.randomUUID();
+    OffsetDateTime expiresAt = OffsetDateTime.parse("2026-07-27T06:00:00Z");
+    LogisticsDependencyGateway.CabinSearchGroup first =
+        new LogisticsDependencyGateway.CabinSearchGroup(
+            "БК-1", "ДВП", "6x2.4", "Новая", "Утеплённая с электрикой", true, 6);
+    LogisticsDependencyGateway.CabinSearchGroup second =
+        new LogisticsDependencyGateway.CabinSearchGroup(
+            "БК-2", "OSB", "6x2.4", "ИТР", "С дополнительной вентиляцией", false, 6);
+    server
+        .expect(
+            requestTo("http://asset.test/api/internal/asset/v1/logistics/cabin-searches"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andExpect(jsonPath("$.groups[0].cabinType").value("БК-1"))
+        .andExpect(jsonPath("$.groups[0].finish").value("ДВП"))
+        .andExpect(jsonPath("$.groups[0].dimensions").value("6x2.4"))
+        .andExpect(jsonPath("$.groups[0].category").value("Новая"))
+        .andExpect(jsonPath("$.groups[0].characteristics").value("Утеплённая с электрикой"))
+        .andExpect(jsonPath("$.groups[0].linoleum").value(true))
+        .andExpect(jsonPath("$.groups[0].quantity").value(6))
+        .andExpect(jsonPath("$.groups[1].cabinType").value("БК-2"))
+        .andExpect(jsonPath("$.groups[1].finish").value("OSB"))
+        .andExpect(jsonPath("$.groups[1].dimensions").value("6x2.4"))
+        .andExpect(jsonPath("$.groups[1].category").value("ИТР"))
+        .andExpect(
+            jsonPath("$.groups[1].characteristics").value("С дополнительной вентиляцией"))
+        .andExpect(jsonPath("$.groups[1].linoleum").value(false))
+        .andExpect(jsonPath("$.groups[1].quantity").value(6))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "warehouseId":"%s",
+                  "expiresAt":"%s",
+                  "groups":[
+                    {
+                      "group":{
+                        "cabinType":"БК-1",
+                        "finish":"ДВП",
+                        "dimensions":"6x2.4",
+                        "category":"Новая",
+                        "characteristics":"Утеплённая с электрикой",
+                        "linoleum":true,
+                        "quantity":6
+                      },
+                      "cabins":[{
+                        "id":"%s",
+                        "version":3,
+                        "warehouseId":"%s",
+                        "status":"FREE",
+                        "number":"СПБ-001",
+                        "rentalType":"БК-1",
+                        "dimensions":"6x2.4",
+                        "finishing":"ДВП",
+                        "category":"Новая",
+                        "characteristics":"Утеплённая с электрикой",
+                        "linoleum":true,
+                        "passport":{},
+                        "tags":[],
+                        "updatedAt":"2026-07-27T05:41:54Z"
+                      }]
+                    },
+                    {
+                      "group":{
+                        "cabinType":"БК-2",
+                        "finish":"OSB",
+                        "dimensions":"6x2.4",
+                        "category":"ИТР",
+                        "characteristics":"С дополнительной вентиляцией",
+                        "linoleum":false,
+                        "quantity":6
+                      },
+                      "cabins":[{
+                        "id":"%s",
+                        "version":3,
+                        "warehouseId":"%s",
+                        "status":"FREE",
+                        "number":"СПБ-002",
+                        "rentalType":"БК-2",
+                        "dimensions":"6x2.4",
+                        "finishing":"OSB",
+                        "category":"ИТР",
+                        "characteristics":"С дополнительной вентиляцией",
+                        "linoleum":false,
+                        "passport":{},
+                        "tags":[],
+                        "updatedAt":"2026-07-27T05:41:54Z"
+                      }]
+                    }
+                  ]
+                }
+                """
+                    .formatted(warehouseId, expiresAt, firstCabinId, warehouseId, secondCabinId, warehouseId),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.CabinSearchResult result =
+        gateway.searchAvailableCabins(
+            warehouseId,
+            holdScopeId,
+            expiresAt,
+            actorSubjectId,
+            "RENTAL_MANAGER",
+            List.of(first, second));
+
+    assertThat(result.groups())
+        .extracting(LogisticsDependencyGateway.CabinSearchGroupResult::group)
+        .containsExactly(first, second);
+    assertThat(result.groups().get(0).cabins())
+        .extracting(LogisticsDependencyGateway.AvailableCabin::status)
+        .containsExactly("FREE");
+    assertThat(result.groups().get(1).cabins())
+        .extracting(LogisticsDependencyGateway.AvailableCabin::status)
+        .containsExactly("FREE");
+    server.verify();
+  }
+
+  @Test
+  void readsPresentationHoldsWithTheExactAssetScope() {
+    UUID holdScopeId = UUID.randomUUID();
+    UUID holdId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://asset.test/api/internal/asset/v1/logistics/presentations/"
+                    + holdScopeId
+                    + "/holds"))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-asset.logistics"))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "presentationId":"%s",
+                  "expiresAt":"2026-07-27T06:10:00Z",
+                  "holds":[{
+                    "holdId":"%s",
+                    "version":1,
+                    "presentationId":"%s",
+                    "rentalItemId":"%s",
+                    "warehouseId":"%s",
+                    "state":"ACTIVE",
+                    "expiresAt":"2026-07-27T06:10:00Z",
+                    "orderId":null,
+                    "createdAt":"2026-07-27T06:00:00Z",
+                    "endedAt":null
+                  }]
+                }
+                """
+                    .formatted(holdScopeId, holdId, holdScopeId, cabinId, warehouseId),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.PresentationHolds result =
+        gateway.readPresentationHolds(holdScopeId);
+
+    assertThat(result.presentationId()).isEqualTo(holdScopeId);
+    assertThat(result.holds())
+        .singleElement()
+        .satisfies(
+            hold -> {
+              assertThat(hold.holdId()).isEqualTo(holdId);
+              assertThat(hold.rentalItemId()).isEqualTo(cabinId);
+              assertThat(hold.state()).isEqualTo("ACTIVE");
+            });
     server.verify();
   }
 
@@ -337,7 +755,6 @@ class HttpLogisticsDependencyGatewayTest {
                     "tags":[],
                     "contents":[{
                       "equipmentId":"%s",
-                      "equipmentCode":"CHAIR",
                       "equipmentName":"Стул",
                       "quantity":2,
                       "locationKind":"CABIN_NON_RENTED"
@@ -366,6 +783,7 @@ class HttpLogisticsDependencyGatewayTest {
             unitId,
             clientId,
             tenantSnapshot,
+            null,
             actorId,
             "RENTAL_MANAGER");
 
@@ -414,6 +832,7 @@ class HttpLogisticsDependencyGatewayTest {
                     unitId,
                     clientId,
                     "ООО Тестовый клиент",
+                    null,
                     actorId,
                     "RENTAL_MANAGER"))
         .isInstanceOf(LogisticsDependencyException.class)
@@ -543,7 +962,7 @@ class HttpLogisticsDependencyGatewayTest {
             withSuccess(
                 """
                 {"reservationId":"%s","version":0,"ownerType":"LOGISTICS_EQUIPMENT_MOVEMENT",
-                 "movementId":"%s","lineId":"%s","equipmentId":"%s","equipmentCode":"TABLE",
+                 "movementId":"%s","lineId":"%s","equipmentId":"%s",
                  "equipmentName":"Стол","sourceBalanceId":"%s","sourceWarehouseId":"%s",
                  "sourceRentalItemId":null,"sourceLocationKind":"STOCK","quantity":2,"state":"ACTIVE",
                  "reservedUntil":"%s","executedAt":null}
@@ -570,7 +989,7 @@ class HttpLogisticsDependencyGatewayTest {
             4,
             2,
             deadline);
-    assertThat(reservation.equipmentCode()).isEqualTo("TABLE");
+    assertThat(reservation.equipmentName()).isEqualTo("Стол");
     server.verify();
   }
 
@@ -589,9 +1008,10 @@ class HttpLogisticsDependencyGatewayTest {
         .andExpect(jsonPath("$.warehouseId").value(warehouseId.toString()))
         .andExpect(jsonPath("$.externalTaskId").value(movementId.toString()))
         .andExpect(jsonPath("$.unitNumber").value("CAB-17"))
+        .andExpect(jsonPath("$.plannedDurationMinutes").value(10))
         .andExpect(jsonPath("$.deadlineAt").value("2026-07-20T15:00:00Z"))
         .andExpect(jsonPath("$.operations[0].direction").value("BRING_TO_CABIN"))
-        .andExpect(jsonPath("$.operations[0].equipmentCode").value("TABLE"))
+        .andExpect(jsonPath("$.operations[0].equipmentId").value(movementId.toString()))
         .andRespond(
             withSuccess(
                 """
@@ -609,8 +1029,77 @@ class HttpLogisticsDependencyGatewayTest {
             deadline,
             java.util.List.of(
                 new LogisticsDependencyGateway.EquipmentMovementOperation(
-                    "BRING_TO_CABIN", "TABLE", "Стол", 2)));
+                    "BRING_TO_CABIN", movementId, "Стол", 2)));
     assertThat(boardTask.taskId()).isEqualTo(boardTaskId);
+    server.verify();
+  }
+
+  @Test
+  void createsTheReturnEstimateWithInspectionDateAndPhotos() {
+    UUID returnId = UUID.randomUUID();
+    UUID lineId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID rentalItemId = UUID.randomUUID();
+    UUID equipmentId = UUID.randomUUID();
+    UUID mediaId = UUID.randomUUID();
+    UUID estimateId = UUID.randomUUID();
+    LocalDate dispatchDate = LocalDate.parse("2026-07-27");
+    server
+        .expect(
+            requestTo(
+                "http://maintenance.test/api/internal/maintenance/v1/logistics/returns/"
+                    + returnId
+                    + "/lines/"
+                    + lineId
+                    + "/shortage"))
+        .andExpect(method(HttpMethod.PUT))
+        .andExpect(header("Authorization", "Bearer test-maintenance.logistics"))
+        .andExpect(jsonPath("$.warehouseId").value(warehouseId.toString()))
+        .andExpect(jsonPath("$.rentalItemId").value(rentalItemId.toString()))
+        .andExpect(jsonPath("$.rentalItemVersion").value(8))
+        .andExpect(jsonPath("$.dispatchDate").value("2026-07-27"))
+        .andExpect(jsonPath("$.mediaReferences[0].mediaId").value(mediaId.toString()))
+        .andExpect(jsonPath("$.mediaReferences[0].generation").value(4))
+        .andExpect(jsonPath("$.shortages[0].equipmentId").value(equipmentId.toString()))
+        .andExpect(jsonPath("$.shortages[0].missingQuantity").value(3))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "returnId":"%s",
+                  "lineId":"%s",
+                  "sourceVersion":0,
+                  "warehouseId":"%s",
+                  "rentalItemId":"%s",
+                  "rentalItemVersion":8,
+                  "estimateId":"%s",
+                  "shortages":[{"equipmentId":"%s","missingQuantity":3}],
+                  "snapshotSha256":"%s",
+                  "receivedAt":"2026-07-27T12:00:00Z"
+                }
+                """
+                    .formatted(
+                        returnId,
+                        lineId,
+                        warehouseId,
+                        rentalItemId,
+                        estimateId,
+                        equipmentId,
+                        "a".repeat(64)),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.ReturnShortageSource source =
+        gateway.upsertReturnShortage(
+            returnId,
+            lineId,
+            warehouseId,
+            rentalItemId,
+            8,
+            dispatchDate,
+            List.of(new LogisticsDependencyGateway.MediaReference(mediaId, 4)),
+            List.of(new LogisticsDependencyGateway.EquipmentShortage(equipmentId, 3)));
+
+    assertThat(source.estimateId()).isEqualTo(estimateId);
     server.verify();
   }
 

@@ -55,6 +55,8 @@ rwms:
       inventory-uri: ${INVENTORY_SERVICE_URL}
       logistics-uri: ${LOGISTICS_SERVICE_URL}
       dossier-uri: ${DOSSIER_SERVICE_URL}
+      analytics-uri: ${ANALYTICS_SERVICE_URL}
+      assistant-uri: ${ASSISTANT_SERVICE_URL}
     security:
       issuer: ${AUTH_ISSUER}
       audience: ${AUTH_AUDIENCE:rwms-services}

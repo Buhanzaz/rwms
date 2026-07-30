@@ -21,9 +21,10 @@ const cabinOwnerRecordLimit = 1 << 20
 
 type CabinOwnerConsumer struct {
 	repository  cabinOwnerPersistence
-	client      *kgo.Client
+	client      kafkaConsumerClient
 	logger      *slog.Logger
 	sourceTopic string
+	pollTimeout time.Duration
 }
 
 type cabinOwnerPersistence interface {
@@ -84,16 +85,23 @@ func newCabinOwnerConsumer(
 	}
 	return &CabinOwnerConsumer{
 		repository: repository, client: client, logger: logger, sourceTopic: sourceTopic,
+		pollTimeout: kafkaConsumerPollTimeout,
 	}
 }
 
 func (consumer *CabinOwnerConsumer) Run(ctx context.Context) error {
 	for {
-		fetches := consumer.client.PollFetches(ctx)
+		fetches, pollTimedOut := pollKafkaFetches(ctx, consumer.client, consumer.pollTimeout)
 		if ctx.Err() != nil {
+			consumer.client.AllowRebalance()
 			return nil
 		}
+		if pollTimedOut {
+			consumer.client.AllowRebalance()
+			continue
+		}
 		if errs := fetches.Errors(); len(errs) > 0 {
+			consumer.client.AllowRebalance()
 			consumer.logger.Error("poll cabin owner topic", "errorType", "BROKER_UNAVAILABLE")
 			continue
 		}

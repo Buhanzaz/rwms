@@ -6,7 +6,6 @@ package dev.buhanzaz.rwms.asset.domain;
  * semantic transitions by reusing a browser-only value.
  */
 public enum RentalItemStatus {
-  NEW,
   RENTED,
   BOOKED,
   REPAIR,
@@ -24,7 +23,7 @@ public enum RentalItemStatus {
   IN_TRANSFER;
 
   public boolean acceptsManualStatusChangeTo(RentalItemStatus next) {
-    if (next == null || this == WRITTEN_OFF) return false;
+    if (next == null || this == WRITTEN_OFF || this == IN_TRANSFER) return false;
     // IN_TRANSFER is owned by the future logistics workflow, not by this public
     // operator endpoint. Cabin write-off has its own fenced command.
     return next != IN_TRANSFER && next != WRITTEN_OFF;

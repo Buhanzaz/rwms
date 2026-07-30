@@ -184,10 +184,15 @@ public class OAuthClientProvisioner implements ApplicationRunner {
                 .redirectUris(uris -> replace(uris, configured.redirectUris()))
                 .postLogoutRedirectUris(uris -> replace(uris, configured.postLogoutRedirectUris()))
                 .scopes(scopes -> replace(scopes, configured.scopes()))
-                .clientSettings(clientSettings.build())
-                .tokenSettings(TokenSettings.builder()
-                        .accessTokenTimeToLive(configured.accessTokenTtl())
-                        .build());
+                .clientSettings(clientSettings.build());
+        TokenSettings.Builder tokenSettings =
+                TokenSettings.builder().accessTokenTimeToLive(configured.accessTokenTtl());
+        if (validated.grantTypes().contains(AuthorizationGrantType.REFRESH_TOKEN)) {
+            tokenSettings
+                    .refreshTokenTimeToLive(configured.refreshTokenTtl())
+                    .reuseRefreshTokens(configured.reuseRefreshTokens());
+        }
+        builder.tokenSettings(tokenSettings.build());
         return builder.build();
     }
 
@@ -251,11 +256,18 @@ public class OAuthClientProvisioner implements ApplicationRunner {
             OAuthClientProperties.Client client,
             Set<ClientAuthenticationMethod> authenticationMethods,
             Set<AuthorizationGrantType> grantTypes) {
+        if (client.assetServiceClient()) {
+            validateAssetClientContract(client, authenticationMethods, grantTypes);
+        }
         if (client.inventoryServiceClient()) {
             validateInventoryClientContract(client, authenticationMethods, grantTypes);
         }
         if (client.logisticsServiceClient()) {
             validateLogisticsClientContract(client, authenticationMethods, grantTypes);
+        }
+        if (client.managerAndroidClient()) {
+            validateManagerAndroidClientContract(
+                    client, authenticationMethods, grantTypes);
         }
         if (!client.enabled()) {
             return;
@@ -268,6 +280,7 @@ public class OAuthClientProvisioner implements ApplicationRunner {
         }
         boolean authorizationCode = grantTypes.contains(AuthorizationGrantType.AUTHORIZATION_CODE);
         boolean clientCredentials = grantTypes.contains(AuthorizationGrantType.CLIENT_CREDENTIALS);
+        boolean refreshToken = grantTypes.contains(AuthorizationGrantType.REFRESH_TOKEN);
         if (authorizationCode == clientCredentials) {
             throw new IllegalStateException("OAuth client must use exactly one supported grant: " + client.clientId());
         }
@@ -280,6 +293,19 @@ public class OAuthClientProvisioner implements ApplicationRunner {
                         "Authorization-code client must be public PKCE with one principal type: "
                                 + client.clientId());
             }
+            if (refreshToken
+                    && (!client.scopes().contains("offline_access")
+                            || client.refreshTokenTtl().isZero()
+                            || client.refreshTokenTtl().isNegative()
+                            || client.reuseRefreshTokens())) {
+                throw new IllegalStateException(
+                        "Refresh-token clients must request offline_access and use positive rotating tokens: "
+                                + client.clientId());
+            }
+            if (!refreshToken && client.scopes().contains("offline_access")) {
+                throw new IllegalStateException(
+                        "offline_access requires the refresh_token grant: " + client.clientId());
+            }
         } else if (!authenticationMethods.equals(Set.of(ClientAuthenticationMethod.CLIENT_SECRET_BASIC))
                 || !client.allowedPrincipalTypes().isEmpty()
                 || !client.redirectUris().isEmpty()
@@ -288,6 +314,19 @@ public class OAuthClientProvisioner implements ApplicationRunner {
                 || client.scopes().contains("profile")) {
             throw new IllegalStateException("Client-credentials contract is invalid: " + client.clientId());
         }
+    }
+
+    private void validateAssetClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes) {
+        validateExactServiceClientContract(
+                client,
+                authenticationMethods,
+                grantTypes,
+                OAuthClientProperties.ASSET_SCOPES,
+                OAuthClientProperties.ASSET_AUDIENCE,
+                OAuthClientProperties.ASSET_SECRET_ENVIRONMENT);
     }
 
     private void validateInventoryClientContract(
@@ -314,6 +353,40 @@ public class OAuthClientProvisioner implements ApplicationRunner {
                 OAuthClientProperties.LOGISTICS_SCOPES,
                 OAuthClientProperties.LOGISTICS_AUDIENCE,
                 OAuthClientProperties.LOGISTICS_SECRET_ENVIRONMENT);
+    }
+
+    private void validateManagerAndroidClientContract(
+            OAuthClientProperties.Client client,
+            Set<ClientAuthenticationMethod> authenticationMethods,
+            Set<AuthorizationGrantType> grantTypes) {
+        boolean exactPublicContract =
+                authenticationMethods.equals(Set.of(ClientAuthenticationMethod.NONE))
+                        && grantTypes.equals(Set.of(
+                                AuthorizationGrantType.AUTHORIZATION_CODE,
+                                AuthorizationGrantType.REFRESH_TOKEN))
+                        && client.scopes().equals(
+                                OAuthClientProperties.MANAGER_ANDROID_SCOPES)
+                        && client.allowedPrincipalTypes().equals(Set.of(
+                                dev.buhanzaz.rwms.auth.domain.PrincipalType.USER))
+                        && client.audiences().equals(Set.of("rwms-services"))
+                        && client.requireProofKey()
+                        && client.redirectUris().size() == 1
+                        && client.allowedOrigins().size() == 1
+                        && client.secretEnvironment() == null
+                        && client.developmentSecret() == null;
+        if (!exactPublicContract) {
+            throw new IllegalStateException(
+                    "rwms-manager-android must use its exact public USER PKCE contract");
+        }
+        URI redirect = URI.create(client.redirectUris().iterator().next());
+        URI origin = URI.create(client.allowedOrigins().iterator().next());
+        if (!"/auth/manager/callback".equals(redirect.getPath())
+                || redirect.getQuery() != null
+                || !sameOrigin(origin, redirect)) {
+            throw new IllegalStateException(
+                    "rwms-manager-android redirect must use the same-origin "
+                            + "/auth/manager/callback path");
+        }
     }
 
     private void validateExactServiceClientContract(
@@ -370,6 +443,22 @@ public class OAuthClientProvisioner implements ApplicationRunner {
         }
     }
 
+    private boolean sameOrigin(URI expected, URI actual) {
+        int expectedPort = expected.getPort() < 0
+                ? defaultPort(expected.getScheme())
+                : expected.getPort();
+        int actualPort = actual.getPort() < 0
+                ? defaultPort(actual.getScheme())
+                : actual.getPort();
+        return expected.getScheme().equalsIgnoreCase(actual.getScheme())
+                && expected.getHost().equalsIgnoreCase(actual.getHost())
+                && expectedPort == actualPort;
+    }
+
+    private int defaultPort(String scheme) {
+        return "https".equalsIgnoreCase(scheme) ? 443 : 80;
+    }
+
     private String resolveSecret(
             OAuthClientProperties.Client client,
             Set<ClientAuthenticationMethod> authenticationMethods) {
@@ -416,6 +505,13 @@ public class OAuthClientProvisioner implements ApplicationRunner {
                 Boolean.toString(client.requireProofKey()),
                 client.accessTokenTtl().toString(),
                 Objects.toString(client.secretEnvironment(), ""));
+        if (client.grantTypes().contains("refresh_token")) {
+            canonical = String.join(
+                    "|",
+                    canonical,
+                    client.refreshTokenTtl().toString(),
+                    client.reuseRefreshTokens().toString());
+        }
         try {
             return java.util.HexFormat.of()
                     .formatHex(MessageDigest.getInstance("SHA-256")
@@ -469,6 +565,7 @@ public class OAuthClientProvisioner implements ApplicationRunner {
     private AuthorizationGrantType grantType(String value) {
         return switch (value) {
             case "authorization_code" -> AuthorizationGrantType.AUTHORIZATION_CODE;
+            case "refresh_token" -> AuthorizationGrantType.REFRESH_TOKEN;
             case "client_credentials" -> AuthorizationGrantType.CLIENT_CREDENTIALS;
             default -> throw new IllegalStateException("Unsupported OAuth grant type: " + value);
         };

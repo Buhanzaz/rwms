@@ -4,9 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.buhanzaz.rwms.auth.domain.PrincipalType;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -107,6 +112,19 @@ class OAuthClientProvisionerIntegrationTest {
     }
 
     @Test
+    void nonRefreshClientKeepsThePreRefreshSupportFingerprint() throws Exception {
+        OAuthClientProperties.Client client = serviceClient(true, 1, "secret-one", false);
+
+        provisioner(client).run(null);
+
+        Object storedFingerprint = repository.findByClientId(client.clientId())
+                .getClientSettings()
+                .getSetting(OAuthClientProvisioner.FINGERPRINT_SETTING);
+        assertThat(storedFingerprint).isEqualTo(legacyFingerprint(client));
+        provisioner(client).run(null);
+    }
+
+    @Test
     void disabledClientKeepsIdentityAndAuditRowsButIsHiddenFailClosed() throws Exception {
         provisioner(serviceClient(true, 1, "secret-one", false)).run(null);
         var enabled = repository.findByClientId("fixture-service");
@@ -127,6 +145,7 @@ class OAuthClientProvisionerIntegrationTest {
                 "fixture-service", "Fixture", true, 1,
                 Set.of("client_secret_basic"), Set.of("client_credentials"), Set.of(), Set.of(),
                 Set.of("fixture.manage"), false, Set.of(), Set.of(), Set.of(), Duration.ofMinutes(5),
+                Duration.ofHours(1), true,
                 "FIXTURE_SECRET", null, false);
         assertThatThrownBy(() -> provisioner(missingAudience).run(null))
                 .isInstanceOf(IllegalStateException.class)
@@ -276,6 +295,47 @@ class OAuthClientProvisionerIntegrationTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("secret environment")
                 .hasMessageContaining("inventory-service");
+        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
+    }
+
+    @Test
+    void assetClientRejectsScopeAudienceAndSecretDriftBeforeMutation() {
+        List<OAuthClientProperties.Client> invalidConfigurations = List.of(
+                assetClient(
+                        Set.of("warehouse.read"),
+                        Set.of(OAuthClientProperties.ASSET_AUDIENCE),
+                        OAuthClientProperties.ASSET_SECRET_ENVIRONMENT,
+                        null),
+                assetClient(
+                        Set.of("warehouse.read", "media.asset-import", "asset.inventory"),
+                        Set.of(OAuthClientProperties.ASSET_AUDIENCE),
+                        OAuthClientProperties.ASSET_SECRET_ENVIRONMENT,
+                        null),
+                assetClient(
+                        OAuthClientProperties.ASSET_SCOPES,
+                        Set.of("other-audience"),
+                        OAuthClientProperties.ASSET_SECRET_ENVIRONMENT,
+                        null),
+                assetClient(
+                        OAuthClientProperties.ASSET_SCOPES,
+                        Set.of(OAuthClientProperties.ASSET_AUDIENCE),
+                        "OTHER_CLIENT_SECRET",
+                        null),
+                assetClient(
+                        OAuthClientProperties.ASSET_SCOPES,
+                        Set.of(OAuthClientProperties.ASSET_AUDIENCE),
+                        OAuthClientProperties.ASSET_SECRET_ENVIRONMENT,
+                        "repository-secret"));
+
+        invalidConfigurations.forEach(configuration -> assertThatThrownBy(() -> provisioner(configuration).run(null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("asset-service OAuth client"));
+        assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
+
+        assertThatThrownBy(() -> provisioner(assetClient(true)).run(null))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("secret environment")
+                .hasMessageContaining("asset-service");
         assertThat(jdbc.queryForObject("select count(*) from oauth2_registered_client", Integer.class)).isZero();
     }
 
@@ -477,6 +537,8 @@ class OAuthClientProvisionerIntegrationTest {
                 Set.of("rwms-services"),
                 Set.of(),
                 Duration.ofMinutes(5),
+                Duration.ofHours(1),
+                true,
                 "FIXTURE_SECRET",
                 developmentSecret,
                 revoke);
@@ -498,6 +560,8 @@ class OAuthClientProvisionerIntegrationTest {
                 Set.of(OAuthClientProperties.INVENTORY_AUDIENCE),
                 Set.of(),
                 Duration.ofMinutes(5),
+                Duration.ofHours(1),
+                true,
                 OAuthClientProperties.INVENTORY_SECRET_ENVIRONMENT,
                 null,
                 false);
@@ -530,6 +594,53 @@ class OAuthClientProvisionerIntegrationTest {
                 audiences,
                 allowedOrigins,
                 Duration.ofMinutes(5),
+                Duration.ofHours(1),
+                true,
+                secretEnvironment,
+                developmentSecret,
+                false);
+    }
+
+    private OAuthClientProperties.Client assetClient(boolean enabled) {
+        return assetClient(
+                enabled,
+                OAuthClientProperties.ASSET_SCOPES,
+                Set.of(OAuthClientProperties.ASSET_AUDIENCE),
+                OAuthClientProperties.ASSET_SECRET_ENVIRONMENT,
+                null);
+    }
+
+    private OAuthClientProperties.Client assetClient(
+            Set<String> scopes,
+            Set<String> audiences,
+            String secretEnvironment,
+            String developmentSecret) {
+        return assetClient(true, scopes, audiences, secretEnvironment, developmentSecret);
+    }
+
+    private OAuthClientProperties.Client assetClient(
+            boolean enabled,
+            Set<String> scopes,
+            Set<String> audiences,
+            String secretEnvironment,
+            String developmentSecret) {
+        return new OAuthClientProperties.Client(
+                OAuthClientProperties.ASSET_CLIENT_ID,
+                "Asset Service Warehouse Registry Client",
+                enabled,
+                2,
+                Set.of("client_secret_basic"),
+                Set.of("client_credentials"),
+                Set.of(),
+                Set.of(),
+                scopes,
+                false,
+                Set.of(),
+                audiences,
+                Set.of(),
+                Duration.ofMinutes(5),
+                Duration.ofHours(1),
+                true,
                 secretEnvironment,
                 developmentSecret,
                 false);
@@ -573,8 +684,38 @@ class OAuthClientProvisionerIntegrationTest {
                 audiences,
                 Set.of(),
                 Duration.ofMinutes(5),
+                Duration.ofHours(1),
+                true,
                 secretEnvironment,
                 developmentSecret,
                 false);
+    }
+
+    private String legacyFingerprint(OAuthClientProperties.Client client) throws Exception {
+        String canonical = String.join(
+                "|",
+                client.clientId(),
+                client.clientName(),
+                Boolean.toString(client.enabled()),
+                sorted(client.authenticationMethods()),
+                sorted(client.grantTypes()),
+                sorted(client.redirectUris()),
+                sorted(client.postLogoutRedirectUris()),
+                sorted(client.scopes()),
+                sorted(client.allowedPrincipalTypes().stream()
+                        .map(Enum::name)
+                        .collect(java.util.stream.Collectors.toSet())),
+                sorted(client.audiences()),
+                sorted(client.allowedOrigins()),
+                Boolean.toString(client.requireProofKey()),
+                client.accessTokenTtl().toString(),
+                Objects.toString(client.secretEnvironment(), ""));
+        return HexFormat.of()
+                .formatHex(MessageDigest.getInstance("SHA-256")
+                        .digest(canonical.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private String sorted(Set<String> values) {
+        return values.stream().sorted(Comparator.naturalOrder()).collect(java.util.stream.Collectors.joining(","));
     }
 }

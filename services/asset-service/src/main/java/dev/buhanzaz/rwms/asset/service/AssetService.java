@@ -64,6 +64,7 @@ public class AssetService {
   private final AssetLogisticsResponseMapper logisticsMapper;
   private final EquipmentCatalogItemMapper equipmentMapper;
   private final OrderAssetResponseMapper orderAssetMapper;
+  private final CabinCompositionService cabinComposition;
   private final ObjectMapper mapper;
   private final Duration holdTtl;
   private final Duration leaseTtl;
@@ -80,6 +81,7 @@ public class AssetService {
       AssetLogisticsResponseMapper logisticsMapper,
       EquipmentCatalogItemMapper equipmentMapper,
       OrderAssetResponseMapper orderAssetMapper,
+      CabinCompositionService cabinComposition,
       ObjectMapper mapper,
       @Value("${rwms.asset.equipment-hold.ttl:15m}") Duration holdTtl,
       @Value("${rwms.asset.operation-lease.ttl:15m}") Duration leaseTtl) {
@@ -94,6 +96,7 @@ public class AssetService {
     this.logisticsMapper = logisticsMapper;
     this.equipmentMapper = equipmentMapper;
     this.orderAssetMapper = orderAssetMapper;
+    this.cabinComposition = cabinComposition;
     this.mapper = mapper;
     this.holdTtl = requireTtl(holdTtl, "equipment hold");
     this.leaseTtl = requireTtl(leaseTtl, "operation lease");
@@ -111,10 +114,13 @@ public class AssetService {
     String needle = search == null ? "" : search.trim().toUpperCase(java.util.Locale.ROOT);
     java.util.Set<RentalItemStatus> exclusions =
         excludedStatuses == null ? java.util.Set.of() : java.util.Set.copyOf(excludedStatuses);
+    Map<UUID, CabinCompositionService.CabinComposition> compositions =
+        cabinComposition.compositionsFor(values);
     List<RentalItemResponse> all = values.stream()
         .filter(item -> !exclusions.contains(item.getStatus()))
-        .filter(item -> needle.isEmpty() || item.getNumber().contains(needle))
-        .map(this::rentalResponse).toList();
+        .map(item -> rentalResponse(item, compositions.get(item.getId())))
+        .filter(item -> matchesRentalSearch(item, needle))
+        .toList();
     int from = Math.min(Math.multiplyExact(page, size), all.size());
     int to = Math.min(from + size, all.size());
     long pages = all.isEmpty() ? 0 : (all.size() + (long) size - 1) / size;
@@ -123,6 +129,11 @@ public class AssetService {
 
   @Transactional(readOnly = true)
   public RentalItemResponse rentalItem(UUID id) { return rentalResponse(requireRentalItem(id)); }
+
+  @Transactional(readOnly = true)
+  public List<CabinCatalogValueResponse> maintenanceCabinCharacteristics() {
+    return cabinComposition.activeCharacteristics();
+  }
 
   /**
    * Deliberately narrow read boundary for logistics. The public rental response
@@ -244,7 +255,9 @@ public class AssetService {
         item.getStatus(),
         request.action(),
         request.ownerType(),
-        request.destinationWarehouseId());
+        request.destinationWarehouseId(),
+        request.transferAssetStatus(),
+        item.getTransferOriginStatus());
     RentalItemStatus previous = item.getStatus();
     UUID sourceWarehouseId = item.getWarehouseId();
     if (request.action() == LogisticsRentalItemAction.TRANSFER_ARRIVE) {
@@ -256,7 +269,14 @@ public class AssetService {
       assertRentalNumberAvailableInWarehouse(item, request.destinationWarehouseId());
     }
 
-    item.changeStatusUnderLease(target);
+    if (request.action() == LogisticsRentalItemAction.TRANSFER_DEPART) {
+      item.departTransferUnderLease(
+          RentalItemStatus.valueOf(request.transferAssetStatus().name()));
+    } else if (request.action() == LogisticsRentalItemAction.TRANSFER_ARRIVE) {
+      item.arriveTransferUnderLease(target);
+    } else {
+      item.changeStatusUnderLease(target);
+    }
     if (request.action() == LogisticsRentalItemAction.TRANSFER_ARRIVE) {
       item.changeWarehouse(request.destinationWarehouseId());
     }
@@ -969,14 +989,32 @@ public class AssetService {
     String hash = hash(request);
     Optional<JsonNode> replay = idempotency.replay(subjectId, "rental-item.create", key, hash);
     if (replay.isPresent()) return new CreateResult<>(read(replay.get(), RentalItemResponse.class), true);
-    RentalItem candidate = RentalItem.create(request.warehouseId(), request.number(), request.rentalType(), request.dimensions(),
-        request.finishing(), request.category(), request.characteristics(), request.linoleum(), jsonObject(request.passport()), jsonArray(request.tags()));
+    CabinCompositionService.CabinSelection selection = cabinComposition.requireSelection(
+        request.rentalTypeId(),
+        request.dimensionId(),
+        request.finishingId(),
+        request.characteristicIds());
+    CabinCompositionService.CategorySelection category =
+        cabinComposition.requireCategory(request.category());
+    RentalItem candidate = RentalItem.create(
+        request.warehouseId(),
+        request.number(),
+        selection.rentalTypeId(),
+        selection.dimensionId(),
+        selection.finishingId(),
+        category.id(),
+        category.name(),
+        request.linoleum(),
+        jsonObject(request.passport()),
+        jsonArray(request.tags()));
     if (rentalItems.existsByWarehouseIdAndIdentityMatchKey(
         candidate.getWarehouseId(), candidate.getIdentityMatchKey())) {
       throw new AssetConflictException(
           "Rental item number identity is already used in this warehouse");
     }
     RentalItem persisted = rentalItems.saveAndFlush(candidate);
+    cabinComposition.replaceRentalItemCharacteristics(
+        persisted.getId(), selection.characteristicIds());
     events.initialize(AssetAggregateType.RENTAL_ITEM, persisted.getId(), persisted.getVersion(), AssetEventType.RENTAL_ITEM_CREATED,
         rentalFact(persisted), rentalSnapshot(persisted));
     RentalItemResponse response = rentalResponse(persisted);
@@ -984,13 +1022,92 @@ public class AssetService {
     return new CreateResult<>(response, false);
   }
 
+  /**
+   * Creates one cabin from a reviewed HTML import. This is intentionally not
+   * the public cabin-create path: legacy rows may have no type, dimensions or
+   * category. The importer has already resolved every supplied catalog UUID;
+   * normal interactive creation remains strict through {@link
+   * #createRentalItem(UUID, UUID, CreateRentalItemRequest)}.
+   */
+  @Transactional
+  public RentalItemResponse createRentalItemFromHtmlImport(
+      UUID warehouseId,
+      String number,
+      RentalItemStatus status,
+      UUID rentalTypeId,
+      UUID dimensionId,
+      UUID finishingId,
+      UUID categoryId,
+      String category,
+      List<UUID> characteristicIds,
+      Boolean linoleum,
+      Map<String, Object> passport) {
+    if (warehouseId == null || status == null || characteristicIds == null) {
+      throw new IllegalArgumentException("HTML import cabin identity is incomplete");
+    }
+    if (status == RentalItemStatus.IN_TRANSFER || status == RentalItemStatus.WRITTEN_OFF) {
+      throw new IllegalArgumentException("HTML import cannot create a fenced or terminal status");
+    }
+    if (finishingId == null) {
+      throw new IllegalArgumentException("HTML import finishing is required");
+    }
+    warehouses.requireActive(warehouseId);
+    List<UUID> characteristics = List.copyOf(characteristicIds);
+    RentalItem candidate =
+        RentalItem.createFromHtmlImport(
+            warehouseId,
+            number,
+            status,
+            rentalTypeId,
+            dimensionId,
+            finishingId,
+            categoryId,
+            category,
+            linoleum,
+            jsonObject(passport),
+            jsonArray(List.of()));
+    if (rentalItems.existsByWarehouseIdAndIdentityMatchKey(
+        candidate.getWarehouseId(), candidate.getIdentityMatchKey())) {
+      throw new AssetConflictException(
+          "Rental item number identity is already used in this warehouse");
+    }
+    RentalItem persisted = rentalItems.saveAndFlush(candidate);
+    cabinComposition.replaceRentalItemCharacteristics(persisted.getId(), characteristics);
+    events.initialize(
+        AssetAggregateType.RENTAL_ITEM,
+        persisted.getId(),
+        persisted.getVersion(),
+        AssetEventType.RENTAL_ITEM_CREATED,
+        rentalFact(persisted),
+        rentalSnapshot(persisted));
+    return rentalResponse(persisted);
+  }
+
   @Transactional
   public RentalItemResponse updatePassport(UUID id, UpdatePassportRequest request) {
     assertNoActiveLease(id);
     RentalItem item = requireRentalItem(id);
     assertVersion(item.getVersion(), request.expectedVersion());
-    if (!item.changePassport(request.rentalType(), request.dimensions(), request.finishing(), request.category(), request.characteristics(),
-        request.linoleum(), jsonObject(request.passport()), jsonArray(request.tags()))) return rentalResponse(item);
+    CabinCompositionService.CabinSelection selection = cabinComposition.requireSelection(
+        request.rentalTypeId(),
+        request.dimensionId(),
+        request.finishingId(),
+        request.characteristicIds());
+    CabinCompositionService.CategorySelection category =
+        cabinComposition.requireCategory(request.category());
+    boolean passportChanged = item.changePassport(
+        selection.rentalTypeId(),
+        selection.dimensionId(),
+        selection.finishingId(),
+        category.id(),
+        category.name(),
+        request.linoleum(),
+        jsonObject(request.passport()),
+        jsonArray(request.tags()));
+    boolean characteristicsChanged = cabinComposition.replaceRentalItemCharacteristics(
+        item.getId(), selection.characteristicIds());
+    if (!passportChanged && !characteristicsChanged) return rentalResponse(item);
+    if (characteristicsChanged && !passportChanged) item.touchActivity();
     RentalItem saved = rentalItems.saveAndFlush(item);
     events.append(AssetAggregateType.RENTAL_ITEM, saved.getId(), request.expectedVersion(), AssetEventType.RENTAL_ITEM_PASSPORT_CHANGED,
         rentalFact(saved), rentalSnapshot(saved));
@@ -1070,12 +1187,16 @@ public class AssetService {
 
   @Transactional(readOnly = true)
   public List<EquipmentResponse> listEquipment() {
-    return equipment.findAllByOrderByCode().stream().map(this::equipmentResponse).toList();
+    return equipment.findAllByOrderByNameAscIdAsc().stream()
+        .filter(EquipmentCatalogItem::isActive)
+        .map(this::equipmentResponse)
+        .toList();
   }
 
   @Transactional(readOnly = true)
   public List<EquipmentWarehouseResponse> equipmentAtWarehouse(UUID warehouseId) {
-    return equipment.findAllByOrderByCode().stream()
+    return equipment.findAllByOrderByNameAscIdAsc().stream()
+        .filter(EquipmentCatalogItem::isActive)
         .map(item -> new EquipmentWarehouseResponse(equipmentResponse(item), equipmentTotals(item.getId(), warehouseId)))
         .toList();
   }
@@ -1083,46 +1204,91 @@ public class AssetService {
   @Transactional(readOnly = true)
   public EquipmentResponse equipment(UUID id) { return equipmentResponse(requireEquipment(id)); }
 
+  /**
+   * Establishes the externally inventoried cabin contents during an
+   * administrator HTML import. It is intentionally not a public generic
+   * balance mutation: normal operations continue to use transfers.
+   */
   @Transactional
-  public EquipmentResponse ensureMaintenanceFurnitureEquipment(
-      String rawCode, EnsureMaintenanceFurnitureEquipmentRequest request) {
-    String code = EquipmentCatalogItem.canonicalCode(rawCode);
-    String name = required(request == null ? null : request.equipmentName(), 255);
-    advisoryLock(equipmentCatalogLockKey(code));
-    EquipmentCatalogItem item = equipment.findAllByOrderByCode().stream()
-        .filter(candidate -> code.equals(candidate.getCode()))
-        .findFirst()
-        .orElse(null);
-    if (item == null) {
-      EquipmentCatalogItem created = EquipmentCatalogItem.create(
-          code, name, EquipmentCategory.FURNITURE, null);
-      EquipmentCatalogItem saved = equipment.saveAndFlush(created);
-      events.initialize(
-          AssetAggregateType.EQUIPMENT_CATALOG,
-          saved.getId(),
-          saved.getVersion(),
-          AssetEventType.EQUIPMENT_CATALOG_CREATED,
-          equipmentFact(saved),
-          equipmentSnapshot(saved));
-      return equipmentResponse(saved);
+  public void initializeImportedEquipmentContents(
+      UUID rentalItemId, Map<UUID, Long> desiredQuantities) {
+    if (rentalItemId == null
+        || desiredQuantities == null
+        || desiredQuantities.isEmpty()
+        || desiredQuantities.size() > 100) {
+      throw new IllegalArgumentException("Imported equipment contents are invalid");
     }
-    if (item.getCategory() != EquipmentCategory.FURNITURE
-        || !item.getName().equals(name)) {
+    RentalItem rentalItem = requireRentalItem(rentalItemId);
+    assertNoActiveLease(rentalItemId);
+    assertNoActiveOrderReservation(
+        rentalItemId, "Reserved order unit contents cannot be replaced by an HTML import");
+    Boolean livePresentationHold =
+        jdbc.queryForObject(
+            """
+            select exists(
+              select 1 from presentation_unit_hold
+              where rental_item_id=?
+                and state='ACTIVE'
+                and expires_at>clock_timestamp())
+            """,
+            Boolean.class,
+            rentalItemId);
+    if (Boolean.TRUE.equals(livePresentationHold)) {
       throw new AssetConflictException(
-          "Equipment catalog code already belongs to another category or name");
+          "Presented rental-item contents cannot be replaced by an HTML import");
     }
-    if (item.isActive()) return equipmentResponse(item);
-    long expectedVersion = item.getVersion();
-    item.change(code, name, EquipmentCategory.FURNITURE, true, item.getComment());
-    EquipmentCatalogItem saved = equipment.saveAndFlush(item);
-    events.append(
-        AssetAggregateType.EQUIPMENT_CATALOG,
-        saved.getId(),
-        expectedVersion,
-        AssetEventType.EQUIPMENT_CATALOG_CHANGED,
-        equipmentFact(saved),
-        equipmentSnapshot(saved));
-    return equipmentResponse(saved);
+
+    BalanceLocationKind desiredKind =
+        rentalItem.getStatus() == RentalItemStatus.RENTED
+            ? BalanceLocationKind.CABIN_RENTED
+            : BalanceLocationKind.CABIN_NON_RENTED;
+    List<Map.Entry<UUID, Long>> entries =
+        desiredQuantities.entrySet().stream()
+            .sorted(Map.Entry.comparingByKey())
+            .toList();
+    for (Map.Entry<UUID, Long> entry : entries) {
+      if (entry.getValue() == null || entry.getValue() < 1 || entry.getValue() > 1_000_000) {
+        throw new IllegalArgumentException("Imported equipment quantity is invalid");
+      }
+      EquipmentCatalogItem catalogItem = requireEquipment(entry.getKey());
+      if (!catalogItem.isActive() || catalogItem.getCategory() != EquipmentCategory.FURNITURE) {
+        throw new AssetConflictException("Imported equipment target must be active furniture");
+      }
+      List<BalanceRow> cabinBalances =
+          jdbc.query(
+              """
+              select id,version,equipment_id,warehouse_id,rental_item_id,location_kind,quantity
+              from equipment_balance
+              where equipment_id=? and warehouse_id=? and rental_item_id=?
+                and location_kind in ('CABIN_NON_RENTED','CABIN_RENTED')
+              order by id
+              for update
+              """,
+              (rs, row) -> balanceRow(rs),
+              entry.getKey(),
+              rentalItem.getWarehouseId(),
+              rentalItemId);
+      BalanceRow selected =
+          cabinBalances.stream()
+              .filter(balance -> balance.kind() == desiredKind)
+              .findFirst()
+              .orElseGet(
+                  () ->
+                      createEmptyBalance(
+                          entry.getKey(),
+                          rentalItem.getWarehouseId(),
+                          rentalItemId,
+                          desiredKind));
+      for (BalanceRow balance : cabinBalances) {
+        if (!balance.id().equals(selected.id()) && balance.quantity() != 0) {
+          replaceBalanceQuantity(balance, 0);
+        }
+      }
+      BalanceRow current = requireBalanceById(selected.id());
+      if (current.quantity() != entry.getValue()) {
+        replaceBalanceQuantity(current, entry.getValue());
+      }
+    }
   }
 
   @Transactional
@@ -1130,8 +1296,8 @@ public class AssetService {
     String hash = hash(request);
     Optional<JsonNode> replay = idempotency.replay(subjectId, "equipment-catalog.create", key, hash);
     if (replay.isPresent()) return new CreateResult<>(read(replay.get(), EquipmentResponse.class), true);
-    EquipmentCatalogItem candidate = EquipmentCatalogItem.create(request.code(), request.name(), request.category(), request.comment());
-    if (equipment.existsByCode(candidate.getCode())) throw new AssetConflictException("Equipment catalog code is globally unique and cannot be reused");
+    EquipmentCatalogItem candidate =
+        EquipmentCatalogItem.create(request.name(), request.category(), request.comment());
     EquipmentCatalogItem saved = equipment.saveAndFlush(candidate);
     events.initialize(AssetAggregateType.EQUIPMENT_CATALOG, saved.getId(), saved.getVersion(), AssetEventType.EQUIPMENT_CATALOG_CREATED,
         equipmentFact(saved), equipmentSnapshot(saved));
@@ -1144,9 +1310,9 @@ public class AssetService {
   public EquipmentResponse updateEquipment(UUID id, UpdateEquipmentRequest request) {
     EquipmentCatalogItem item = requireEquipment(id);
     assertVersion(item.getVersion(), request.expectedVersion());
-    String code = EquipmentCatalogItem.canonicalCode(request.code());
-    if (equipment.existsByCodeAndIdNot(code, id)) throw new AssetConflictException("Equipment catalog code is globally unique and cannot be reused");
-    if (!item.change(request.code(), request.name(), request.category(), request.active(), request.comment())) return equipmentResponse(item);
+    if (!item.change(request.name(), request.category(), request.active(), request.comment())) {
+      return equipmentResponse(item);
+    }
     EquipmentCatalogItem saved = equipment.saveAndFlush(item);
     events.append(AssetAggregateType.EQUIPMENT_CATALOG, id, request.expectedVersion(), AssetEventType.EQUIPMENT_CATALOG_CHANGED,
         equipmentFact(saved), equipmentSnapshot(saved));
@@ -1186,7 +1352,7 @@ public class AssetService {
   public List<EquipmentDispositionResponse> dispositions(UUID warehouseId) {
     return jdbc.query("""
         select m.id,m.version,m.equipment_id,m.source_balance_id,m.target_balance_id,m.quantity,m.movement_kind,m.occurred_at,
-          c.code,c.name
+          c.name
         from equipment_movement m
         join equipment_catalog_item c on c.id=m.equipment_id
         join equipment_balance target on target.id=m.target_balance_id
@@ -1196,7 +1362,7 @@ public class AssetService {
             new MovementResponse(rs.getObject("id", UUID.class), rs.getLong("version"), rs.getObject("equipment_id", UUID.class),
                 rs.getObject("source_balance_id", UUID.class), rs.getObject("target_balance_id", UUID.class), rs.getLong("quantity"),
                 rs.getString("movement_kind"), rs.getObject("occurred_at", OffsetDateTime.class)),
-            rs.getString("code"), rs.getString("name")), warehouseId);
+            rs.getString("name")), warehouseId);
   }
 
   @Transactional
@@ -1583,6 +1749,72 @@ public class AssetService {
     return new CreateResult<>(updated, false);
   }
 
+  /**
+   * Applies an accepted maintenance material characteristic without replacing
+   * any existing cabin characteristic. The rental-item aggregate lock,
+   * relation uniqueness and subject-bound idempotency make repeated acceptance
+   * safe.
+   */
+  @Transactional
+  public CreateResult<MaintenanceCharacteristicApplicationResponse>
+      applyMaintenanceCharacteristic(
+          UUID subjectId,
+          UUID key,
+          UUID rentalItemId,
+          UUID characteristicId) {
+    MaintenanceCharacteristicCommand command =
+        new MaintenanceCharacteristicCommand(rentalItemId, characteristicId);
+    String requestHash = hash(command);
+    Optional<JsonNode> replay =
+        idempotency.replay(
+            subjectId,
+            "maintenance.rental-item.characteristic.apply",
+            key,
+            requestHash);
+    if (replay.isPresent()) {
+      return new CreateResult<>(
+          read(replay.get(), MaintenanceCharacteristicApplicationResponse.class),
+          true);
+    }
+
+    advisoryLock(rentalItemLockKey(rentalItemId));
+    RentalItem item =
+        rentalItems
+            .findByIdForUpdate(rentalItemId)
+            .orElseThrow(() -> new AssetNotFoundException("Rental item was not found"));
+    long expectedVersion = item.getVersion();
+    boolean added =
+        cabinComposition.appendRentalItemCharacteristic(
+            rentalItemId, characteristicId);
+    RentalItem current = item;
+    if (added) {
+      item.touchActivity();
+      current = rentalItems.saveAndFlush(item);
+      events.append(
+          AssetAggregateType.RENTAL_ITEM,
+          current.getId(),
+          expectedVersion,
+          AssetEventType.RENTAL_ITEM_PASSPORT_CHANGED,
+          rentalFact(current),
+          rentalSnapshot(current));
+    }
+
+    MaintenanceCharacteristicApplicationResponse response =
+        new MaintenanceCharacteristicApplicationResponse(
+            rentalItemId,
+            characteristicId,
+            added,
+            current.getVersion());
+    idempotency.store(
+        subjectId,
+        "maintenance.rental-item.characteristic.apply",
+        key,
+        requestHash,
+        200,
+        response);
+    return new CreateResult<>(response, false);
+  }
+
   private List<MaintenanceFurnitureLoss> maintenanceFurnitureLosses(
       MaintenanceFencedStatusRequest request) {
     if (request.furnitureLosses() == null) {
@@ -1596,16 +1828,14 @@ public class AssetService {
       if (loss.quantity() < 1) {
         throw new IllegalArgumentException("Furniture loss quantity must be positive");
       }
-      String canonicalCode = EquipmentCatalogItem.canonicalCode(loss.equipmentCode());
-      if (!canonicalCode.equals(loss.equipmentCode())) {
-        throw new IllegalArgumentException("Furniture loss equipmentCode must be canonical");
-      }
       if (unique.putIfAbsent(loss.equipmentId(), loss) != null) {
         throw new IllegalArgumentException("Furniture losses must contain unique equipment items");
       }
     }
     if (!unique.isEmpty()
-        && (request.action() != MaintenanceStatusAction.QUEUE_FOR_REPAIR
+        && ((request.action() != MaintenanceStatusAction.QUEUE_FOR_REPAIR
+                && request.action()
+                    != MaintenanceStatusAction.QUEUE_FOR_CAPITAL_REPAIR)
             || request.ownerType() != MaintenanceLeaseOwnerType.MAINTENANCE_ESTIMATE
             || request.estimateId() == null
             || !request.estimateId().equals(request.ownerId()))) {
@@ -1643,9 +1873,6 @@ public class AssetService {
       if (!catalogItem.active() || catalogItem.category() != EquipmentCategory.FURNITURE) {
         throw new AssetConflictException(
             "Furniture loss must reference active FURNITURE equipment");
-      }
-      if (!catalogItem.code().equals(loss.equipmentCode())) {
-        throw new AssetConflictException("Furniture loss equipment code is stale");
       }
       BalanceRow source = findBalance(
           loss.equipmentId(),
@@ -1688,10 +1915,9 @@ public class AssetService {
 
   private EquipmentFurnitureRow requireFurnitureEquipmentForUpdate(UUID equipmentId) {
     return jdbc.query(
-        "select id,code,category,active from equipment_catalog_item where id=? for update",
+        "select id,category,active from equipment_catalog_item where id=? for update",
         (rs, row) -> new EquipmentFurnitureRow(
             rs.getObject("id", UUID.class),
-            rs.getString("code"),
             EquipmentCategory.valueOf(rs.getString("category")),
             rs.getBoolean("active")),
         equipmentId).stream().findFirst().orElseThrow(
@@ -1782,9 +2008,9 @@ public class AssetService {
 
   @Transactional(readOnly = true)
   public List<ClassifierResponse> classifiers(String type) {
-    return jdbc.query("select id,version,classifier_type,parent_id,code,name,active,sort_order from asset_classifier where (? is null or classifier_type=?) order by classifier_type,sort_order nulls last,code",
+    return jdbc.query("select id,version,classifier_type,parent_id,name,active,sort_order from asset_classifier where (? is null or classifier_type=?) order by classifier_type,sort_order nulls last,name,id",
         (rs, row) -> new ClassifierResponse(rs.getObject("id", UUID.class), rs.getLong("version"), rs.getString("classifier_type"),
-            rs.getObject("parent_id", UUID.class), rs.getString("code"), rs.getString("name"), rs.getBoolean("active"), rs.getObject("sort_order", Integer.class)), type, type);
+            rs.getObject("parent_id", UUID.class), rs.getString("name"), rs.getBoolean("active"), rs.getObject("sort_order", Integer.class)), type, type);
   }
 
   @Transactional
@@ -1793,8 +2019,8 @@ public class AssetService {
     Optional<JsonNode> replay = idempotency.replay(subjectId, "classifier.create", key, hash);
     if (replay.isPresent()) return new CreateResult<>(read(replay.get(), ClassifierResponse.class), true);
     UUID id = UUID.randomUUID();
-    jdbc.update("insert into asset_classifier(id,version,classifier_type,parent_id,code,name,active,sort_order,created_at,updated_at) values (?,0,?,?,?,?,?,?,clock_timestamp(),clock_timestamp())",
-        id, classifierType(request.type()), request.parentId(), canonicalCode(request.code()), required(request.name(), 255), request.active(), request.sortOrder());
+    jdbc.update("insert into asset_classifier(id,version,classifier_type,parent_id,name,active,sort_order,created_at,updated_at) values (?,0,?,?,?,?,?,clock_timestamp(),clock_timestamp())",
+        id, classifierType(request.type()), request.parentId(), required(request.name(), 255), request.active(), request.sortOrder());
     ClassifierResponse response = classifier(id);
     events.initialize(AssetAggregateType.CLASSIFIER, id, 0, AssetEventType.CLASSIFIER_CREATED,
         classifierFact(response), classifierSnapshot(response));
@@ -1807,9 +2033,9 @@ public class AssetService {
     ClassifierResponse current = classifier(id);
     assertVersion(current.version(), request.expectedVersion());
     int changed = jdbc.update("""
-        update asset_classifier set classifier_type=?,parent_id=?,code=?,name=?,active=?,sort_order=?,version=version+1,updated_at=clock_timestamp()
+        update asset_classifier set classifier_type=?,parent_id=?,name=?,active=?,sort_order=?,version=version+1,updated_at=clock_timestamp()
         where id=? and version=?
-        """, classifierType(request.type()), request.parentId(), canonicalCode(request.code()), required(request.name(), 255), request.active(), request.sortOrder(), id, request.expectedVersion());
+        """, classifierType(request.type()), request.parentId(), required(request.name(), 255), request.active(), request.sortOrder(), id, request.expectedVersion());
     if (changed != 1) throw new AssetConflictException("Classifier changed concurrently");
     ClassifierResponse updated = classifier(id);
     events.append(AssetAggregateType.CLASSIFIER, id, request.expectedVersion(), AssetEventType.CLASSIFIER_CHANGED,
@@ -1880,15 +2106,62 @@ public class AssetService {
   }
   private OffsetDateTime now() { return OffsetDateTime.now(ZoneOffset.UTC); }
 
+  private static boolean matchesRentalSearch(RentalItemResponse item, String needle) {
+    if (needle == null || needle.isEmpty()) return true;
+    return contains(item.number(), needle)
+        || contains(item.rentalType(), needle)
+        || contains(item.dimensions(), needle)
+        || contains(item.finishing(), needle)
+        || contains(item.category(), needle)
+        || item.characteristics().stream()
+            .map(CabinCatalogValueResponse::name)
+            .anyMatch(value -> contains(value, needle));
+  }
+
+  private static boolean contains(String value, String needle) {
+    return value != null && value.toUpperCase(java.util.Locale.ROOT).contains(needle);
+  }
+
   private RentalItemResponse rentalResponse(RentalItem item) {
+    return rentalResponse(
+        item,
+        cabinComposition.compositionsFor(List.of(item)).get(item.getId()));
+  }
+
+  private RentalItemResponse rentalResponse(
+      RentalItem item, CabinCompositionService.CabinComposition composition) {
     ActiveOrderReservationResponse activeOrderReservation = orderUnitReservations
         .findByRentalItemIdAndState(item.getId(), OrderUnitReservationState.ACTIVE)
         .map(orderAssetMapper::toActiveOrderReservation)
         .orElse(null);
-    return new RentalItemResponse(item.getId(), item.getVersion(), item.getWarehouseId(), item.getNumber(), item.getStatus(), item.getRentalType(),
-        item.getDimensions(), item.getFinishing(), item.getCategory(), item.getCharacteristics(), item.getLinoleum(), item.getGeneralComment(),
-        map(item.getPassportJson()), strings(item.getTagsJson()), contents(item.getId()), activeOrderReservation,
-        item.getCreatedAt(), item.getUpdatedAt());
+    return new RentalItemResponse(
+        item.getId(),
+        item.getVersion(),
+        item.getWarehouseId(),
+        item.getNumber(),
+        item.getStatus(),
+        item.getRentalTypeId(),
+        composition == null || composition.rentalType() == null
+            ? null
+            : composition.rentalType().name(),
+        item.getDimensionId(),
+        composition == null || composition.dimensions() == null
+            ? null
+            : composition.dimensions().name(),
+        item.getFinishingId(),
+        composition == null || composition.finishing() == null
+            ? null
+            : composition.finishing().name(),
+        item.getCategory(),
+        composition == null ? List.of() : composition.characteristics(),
+        item.getLinoleum(),
+        item.getGeneralComment(),
+        map(item.getPassportJson()),
+        strings(item.getTagsJson()),
+        contents(item.getId()),
+        activeOrderReservation,
+        item.getCreatedAt(),
+        item.getUpdatedAt());
   }
   private EquipmentResponse equipmentResponse(EquipmentCatalogItem item) {
     return equipmentMapper.toResponse(item);
@@ -1903,12 +2176,11 @@ public class AssetService {
   }
   private List<EquipmentContentResponse> contents(UUID rentalItemId) {
     return jdbc.query("""
-        select b.equipment_id,c.code,c.name,b.quantity,b.location_kind from equipment_balance b
+        select b.equipment_id,c.name,b.quantity,b.location_kind from equipment_balance b
         join equipment_catalog_item c on c.id=b.equipment_id
-        where b.rental_item_id=? and b.location_kind in ('CABIN_NON_RENTED','CABIN_RENTED') and b.quantity>0 order by c.code
+        where b.rental_item_id=? and b.location_kind in ('CABIN_NON_RENTED','CABIN_RENTED') and b.quantity>0 order by c.name,c.id
         """, (rs, row) -> new EquipmentContentResponse(
             rs.getObject("equipment_id", UUID.class),
-            rs.getString("code"),
             rs.getString("name"),
             rs.getLong("quantity"),
             BalanceLocationKind.valueOf(rs.getString("location_kind"))), rentalItemId);
@@ -2031,6 +2303,29 @@ public class AssetService {
   private void increment(BalanceRow row, long amount, long expectedVersion) {
     int changed = jdbc.update("update equipment_balance set quantity=quantity+?,version=version+1,updated_at=clock_timestamp() where id=? and version=?", amount, row.id(), expectedVersion);
     if (changed != 1) throw new AssetConflictException("Target equipment balance changed concurrently");
+  }
+  private void replaceBalanceQuantity(BalanceRow row, long quantity) {
+    int changed =
+        jdbc.update(
+            """
+            update equipment_balance
+            set quantity=?,version=version+1,updated_at=clock_timestamp()
+            where id=? and version=?
+            """,
+            quantity,
+            row.id(),
+            row.version());
+    if (changed != 1) {
+      throw new AssetConflictException("Equipment balance changed concurrently");
+    }
+    BalanceRow updated = requireBalanceById(row.id());
+    events.append(
+        AssetAggregateType.EQUIPMENT_BALANCE,
+        updated.id(),
+        row.version(),
+        AssetEventType.EQUIPMENT_BALANCE_CHANGED,
+        balanceFact(updated),
+        balanceSnapshot(updated));
   }
   private static long sum(List<BalanceRow> values, BalanceLocationKind kind) { return values.stream().filter(row -> row.kind() == kind).mapToLong(BalanceRow::quantity).sum(); }
   /**
@@ -2498,7 +2793,6 @@ public class AssetService {
         ownerDocumentId(reservation.ownerId()),
         ownerLineId(reservation.ownerId()),
         reservation.equipmentId(),
-        catalog.getCode(),
         catalog.getName(),
         source.id(),
         source.warehouseId(),
@@ -2685,9 +2979,6 @@ public class AssetService {
   }
   private static String rentalItemLockKey(UUID rentalItemId) { return "asset-rental-item:" + rentalItemId; }
   private static String leaseLockKey(UUID rentalItemId) { return "lease:" + rentalItemId; }
-  private static String equipmentCatalogLockKey(String equipmentCode) {
-    return "asset-equipment-catalog:" + equipmentCode;
-  }
   private static String balanceLockKey(UUID equipmentId, UUID warehouseId, UUID rentalItemId, BalanceLocationKind kind) {
     return "asset-balance:" + equipmentId + ':' + warehouseId + ':' + (rentalItemId == null ? "-" : rentalItemId) + ':' + kind.name();
   }
@@ -2697,16 +2988,15 @@ public class AssetService {
   private void advisoryLock(String value) { jdbc.query("select pg_advisory_xact_lock(hashtextextended(?, 0))", rs -> {}, value); }
 
   private ClassifierResponse classifier(UUID id) {
-    return jdbc.query("select id,version,classifier_type,parent_id,code,name,active,sort_order from asset_classifier where id=?",
+    return jdbc.query("select id,version,classifier_type,parent_id,name,active,sort_order from asset_classifier where id=?",
         (rs, row) -> new ClassifierResponse(rs.getObject("id", UUID.class), rs.getLong("version"), rs.getString("classifier_type"),
-            rs.getObject("parent_id", UUID.class), rs.getString("code"), rs.getString("name"), rs.getBoolean("active"), rs.getObject("sort_order", Integer.class)), id).stream().findFirst().orElseThrow(() -> new AssetNotFoundException("Classifier was not found"));
+            rs.getObject("parent_id", UUID.class), rs.getString("name"), rs.getBoolean("active"), rs.getObject("sort_order", Integer.class)), id).stream().findFirst().orElseThrow(() -> new AssetNotFoundException("Classifier was not found"));
   }
   private static String classifierType(String value) {
     String normalized = value == null ? "" : value.trim().toUpperCase(java.util.Locale.ROOT);
     if (!List.of("CATEGORY", "SUBCATEGORY", "TYPE", "CONDITION").contains(normalized)) throw new IllegalArgumentException("Unsupported classifier type");
     return normalized;
   }
-  private static String canonicalCode(String value) { return EquipmentCatalogItem.canonicalCode(value); }
   private static String required(String value, int max) {
     if (value == null || value.trim().isEmpty() || value.trim().length() > max) throw new IllegalArgumentException("Value is required and bounded");
     return value.trim();
@@ -2735,22 +3025,50 @@ public class AssetService {
   }
 
   private Map<String, ?> rentalFact(RentalItem item) {
-    return Map.of("rentalItemId", item.getId().toString(), "warehouseId", item.getWarehouseId().toString(), "status", item.getStatus().name(),
-        "numberSha256", AssetChecksum.sha256(item.getNumber().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    Map<String, Object> value = new LinkedHashMap<>();
+    value.put("rentalItemId", item.getId().toString());
+    value.put("warehouseId", item.getWarehouseId().toString());
+    value.put("status", item.getStatus().name());
+    value.put(
+        "numberSha256",
+        AssetChecksum.sha256(
+            item.getNumber().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    if (item.getTransferOriginStatus() != null) {
+      value.put("transferAssetStatus", item.getTransferOriginStatus().name());
+    }
+    return Map.copyOf(value);
   }
   /** Full service-local state for deterministic replay; never serialized into a Kafka envelope. */
   private Map<String, ?> rentalSnapshot(RentalItem item) {
     Map<String, Object> value = new LinkedHashMap<>();
+    CabinCompositionService.CabinComposition composition =
+        cabinComposition.compositionsFor(List.of(item)).get(item.getId());
     value.put("rentalItemId", item.getId().toString());
     value.put("version", item.getVersion());
     value.put("warehouseId", item.getWarehouseId().toString());
     value.put("number", item.getNumber());
     value.put("status", item.getStatus().name());
-    value.put("rentalType", item.getRentalType());
-    value.put("dimensions", item.getDimensions());
-    value.put("finishing", item.getFinishing());
+    value.put(
+        "transferOriginStatus",
+        item.getTransferOriginStatus() == null
+            ? null
+            : item.getTransferOriginStatus().name());
+    value.put(
+        "rentalTypeId",
+        item.getRentalTypeId() == null ? null : item.getRentalTypeId().toString());
+    value.put(
+        "dimensionId", item.getDimensionId() == null ? null : item.getDimensionId().toString());
+    value.put(
+        "finishingId", item.getFinishingId() == null ? null : item.getFinishingId().toString());
     value.put("category", item.getCategory());
-    value.put("characteristics", item.getCharacteristics());
+    value.put(
+        "characteristicIds",
+        composition == null
+            ? List.of()
+            : composition.characteristics().stream()
+                .map(CabinCatalogValueResponse::id)
+                .map(UUID::toString)
+                .toList());
     value.put("linoleum", item.getLinoleum());
     value.put("generalComment", item.getGeneralComment());
     value.put("passport", map(item.getPassportJson()));
@@ -2758,13 +3076,12 @@ public class AssetService {
     return value;
   }
   private Map<String, ?> equipmentFact(EquipmentCatalogItem item) {
-    return Map.of("equipmentId", item.getId().toString(), "code", item.getCode(), "category", item.getCategory().name(), "active", item.isActive());
+    return Map.of("equipmentId", item.getId().toString(), "category", item.getCategory().name(), "active", item.isActive());
   }
   private Map<String, ?> equipmentSnapshot(EquipmentCatalogItem item) {
     Map<String, Object> value = new LinkedHashMap<>();
     value.put("equipmentId", item.getId().toString());
     value.put("version", item.getVersion());
-    value.put("code", item.getCode());
     value.put("name", item.getName());
     value.put("category", item.getCategory().name());
     value.put("active", item.isActive());
@@ -2831,7 +3148,6 @@ public class AssetService {
     fact.put("classifierId", value.id().toString());
     fact.put("type", value.type());
     fact.put("parentId", value.parentId() == null ? null : value.parentId().toString());
-    fact.put("code", value.code());
     fact.put("label", value.name());
     fact.put("active", value.active());
     fact.put("sortOrder", value.sortOrder());
@@ -2844,7 +3160,12 @@ public class AssetService {
     catch (JacksonException exception) { throw new IllegalArgumentException("Asset command cannot be fingerprinted", exception); }
   }
   private String jsonObject(Object value) {
-    try { return mapper.writeValueAsString(value == null ? Map.of() : value); }
+    try {
+      String serialized = mapper.writeValueAsString(value == null ? Map.of() : value);
+      Map<String, Object> passport =
+          mapper.readValue(serialized, new TypeReference<Map<String, Object>>() {});
+      return mapper.writeValueAsString(RentalPassportSanitizer.sanitize(passport));
+    }
     catch (JacksonException exception) { throw new IllegalArgumentException("Asset JSON is invalid", exception); }
   }
   private String jsonArray(Object value) {
@@ -2852,7 +3173,11 @@ public class AssetService {
     catch (JacksonException exception) { throw new IllegalArgumentException("Asset JSON is invalid", exception); }
   }
   private Map<String, Object> map(String value) {
-    try { return mapper.readValue(value, new TypeReference<Map<String, Object>>() {}); }
+    try {
+      Map<String, Object> passport =
+          mapper.readValue(value, new TypeReference<Map<String, Object>>() {});
+      return RentalPassportSanitizer.sanitize(passport);
+    }
     catch (JacksonException exception) { throw new IllegalStateException("Stored rental passport is corrupt", exception); }
   }
   private List<String> strings(String value) {
@@ -2873,8 +3198,7 @@ public class AssetService {
       UUID warehouseId,
       UUID stockBalanceId,
       long quantity) {}
-  private record EquipmentFurnitureRow(
-      UUID id, String code, EquipmentCategory category, boolean active) {}
+  private record EquipmentFurnitureRow(UUID id, EquipmentCategory category, boolean active) {}
   private record FurnitureLossAllocation(
       MaintenanceFurnitureLoss loss, BalanceRow source, BalanceRow target) {}
   private record HoldQuantity(UUID id, long quantity) {}
@@ -2890,6 +3214,8 @@ public class AssetService {
   private record MaintenanceLeaseCommand<T>(UUID resourceId, T request) {}
   private record LogisticsLeaseCommand(UUID resourceId, LogisticsLeaseCommandRequest request) {}
   private record LogisticsEffectCommand(UUID resourceId, LogisticsFencedEffectRequest request) {}
+  private record MaintenanceCharacteristicCommand(
+      UUID rentalItemId, UUID characteristicId) {}
   private record LogisticsHoldCommand(UUID resourceId, LogisticsEquipmentHoldCommandRequest request) {}
   private record LogisticsEquipmentMovementReservationCommand(
       UUID resourceId,

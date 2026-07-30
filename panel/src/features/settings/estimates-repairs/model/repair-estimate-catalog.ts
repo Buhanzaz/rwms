@@ -30,19 +30,18 @@ export type RepairEstimateCatalogVersionDto = {
 
 export type RepairEstimateCatalogRoutingDto = {
   queueId: string
-  queueCode: string
-  queueKind: string
-}
-
-export type RepairEstimateCatalogReferenceDto = {
-  referenceId: string
-  code: string
+  queueName: string
+  queueType: RepairEstimateCatalogRouteQueueKind
 }
 
 export type RepairEstimateFurnitureEquipmentReferenceDto = {
   equipmentId: string
-  equipmentCode: string
   equipmentName: string
+}
+
+export type RepairEstimateCabinCharacteristicReferenceDto = {
+  characteristicId: string
+  characteristicName: string
 }
 
 export type RepairEstimateCatalogCanvasLinkAnchors = {
@@ -53,25 +52,25 @@ export type RepairEstimateCatalogCanvasLinkAnchors = {
 export type RepairEstimateCatalogNodeDto = {
   id: string
   catalogVersionId: string
-  code: string
   name: string
+  /** Optional semantic button colour configured in the catalog settings. */
+  displayColor?: string | null
   nodeType: RepairEstimateCatalogNodeType
   parentId: string | null
-  parentCode: string | null
   active: boolean
   unit: string | null
   unitPrice: RepairEstimateCatalogMoneyDecimal | null
   durationMinutes: number | null
   showInMainMenu: boolean
   routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
-  workQueueId: string | null
-  workQueueCode: string | null
+  queueDefinitionId: string | null
   routing: RepairEstimateCatalogRoutingDto | null
   includeInEstimate: boolean
   commonItem: boolean
   furnitureCategory: boolean
   furnitureEquipment: RepairEstimateFurnitureEquipmentReferenceDto | null
-  references: RepairEstimateCatalogReferenceDto[]
+  forcesCapitalRepair: boolean
+  characteristic: RepairEstimateCabinCharacteristicReferenceDto | null
   /** Persisted constructor coordinates owned by maintenance-service. */
   canvasX: number | null
   canvasY: number | null
@@ -114,8 +113,9 @@ export type RepairEstimateCatalogSectionDto = {
 
 export type RepairEstimateCatalogNodeMutation = {
   id?: string
-  code: string
   name: string
+  /** Undefined preserves the existing colour; null clears it. */
+  displayColor?: string | null
   nodeType: RepairEstimateCatalogNodeType
   parentId: string | null
   active: boolean
@@ -125,11 +125,12 @@ export type RepairEstimateCatalogNodeMutation = {
   showInMainMenu: boolean
   routeQueueKind: RepairEstimateCatalogRouteQueueKind | null
   routing?: RepairEstimateCatalogRoutingDto | null
-  references?: RepairEstimateCatalogReferenceDto[]
   includeInEstimate: boolean
   commonItem: boolean
   furnitureCategory: boolean
   furnitureEquipment: RepairEstimateFurnitureEquipmentReferenceDto | null
+  forcesCapitalRepair: boolean
+  characteristicId: string | null
   canvasX: number | null
   canvasY: number | null
   comment: string | null

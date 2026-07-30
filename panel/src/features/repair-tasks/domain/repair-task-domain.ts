@@ -16,13 +16,18 @@ function createOpaqueId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID()
   }
-  throw new Error("Браузер не поддерживает безопасные UUID.")
+  throw new Error("Браузер не поддерживает создание безопасного ключа команды.")
 }
 
 function cloneLine(line: RepairEstimateLineDto) {
   return {
     ...line,
     catalogSnapshot: line.catalogSnapshot ? { ...line.catalogSnapshot } : null,
+    customQueueBinding: line.catalogSnapshot
+      ? null
+      : line.customQueueBinding
+        ? { ...line.customQueueBinding }
+        : null,
   }
 }
 
@@ -73,7 +78,7 @@ function snapshotSubtask(
     | "includedLineIds"
     | "groupComment"
     | "queueId"
-    | "queueCode"
+    | "queueName"
     | "routeQueueKind"
     | "sortOrder"
   >,
@@ -91,7 +96,7 @@ function snapshotSubtask(
       .map(cloneLine),
     groupComment: plan.groupComment.trim() || commentsForLines(lines),
     queueId: plan.queueId ?? null,
-    queueCode: plan.queueCode?.trim() || null,
+    queueName: plan.queueName?.trim() || null,
     routeQueueKind: plan.routeQueueKind,
     sortOrder: plan.sortOrder,
     queuePosition: plan.sortOrder,
@@ -148,7 +153,7 @@ export function buildRepairTaskSubtasks(params: {
         includedLineIds: unassignedLines.map((line) => line.id),
         groupComment: commentsForLines(unassignedLines),
         queueId: null,
-        queueCode: null,
+        queueName: null,
         routeQueueKind: null,
         sortOrder: (subtasks.length + 1) * 10,
       },
@@ -189,6 +194,18 @@ export function assertRepairTaskCanBeQueued(lines: RepairEstimateLineDto[]) {
   }
 }
 
+export function canEditRepairTaskPlan(task: RepairTaskDto) {
+  if (task.status === "DRAFT") return true
+  if (task.status !== "QUEUED" || task.startedAt !== null) return false
+  return task.subtasks.every(
+    (subtask) =>
+      subtask.status === "WAITING" &&
+      subtask.startedAt === null &&
+      subtask.activeStartedAt === null &&
+      subtask.assignments.every((assignment) => assignment.startedAt === null)
+  )
+}
+
 export function assertRepairTaskSubtasksValid(
   subtasks: RepairTaskSubtaskDto[]
 ) {
@@ -200,12 +217,6 @@ export function assertRepairTaskSubtasksValid(
       )
     }
     ids.add(subtask.id)
-    if (
-      subtask.kind === "REPAIR_WORK" &&
-      subtask.workLines.length + subtask.materialLines.length === 0
-    ) {
-      throw new Error(`Подзадание ${index + 1}: состав не может быть пустым`)
-    }
     if (
       subtask.kind !== "REPAIR_WORK" &&
       subtask.workLines.length + subtask.materialLines.length > 0
@@ -244,6 +255,7 @@ export function createNewRepairTaskDraft(
     lines: seed?.lines.map(cloneLine) ?? [],
     media: [],
     maintenanceMediaReferences: [],
+    coverMediaId: null,
     pendingUploads: [],
   }
 }
@@ -270,6 +282,7 @@ export function toRepairTaskEditorDraft(
     ]),
     media: [],
     maintenanceMediaReferences: task.maintenanceMediaReferences ?? [],
+    coverMediaId: task.coverMediaId ?? null,
     pendingUploads: [],
   }
 }

@@ -39,6 +39,14 @@ public class MaintenanceInventoryController {
     return response.body(result.response());
   }
 
+  @PostMapping("/repair-snapshots")
+  public InventoryRepairSnapshotsResponse repairSnapshots(
+      @AuthenticationPrincipal Jwt jwt,
+      @Valid @RequestBody InventoryRepairSnapshotRequest request) {
+    access.requireInventoryService(jwt);
+    return inventory.repairSnapshots(request);
+  }
+
   @PutMapping("/sources/{inventoryId}/findings/{findingId}")
   public ResponseEntity<InventoryRepairUpsertResponse> upsertRepair(
       @AuthenticationPrincipal Jwt jwt,

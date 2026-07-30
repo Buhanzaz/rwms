@@ -95,7 +95,6 @@ class WarehouseKafkaBinderIntegrationTest {
   private static Map<String, Object> payload(UUID warehouseId) {
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("warehouseId", warehouseId);
-    payload.put("code", "WH_00000000000000000000000000000001");
     payload.put("timeZone", "Europe/Moscow");
     payload.put("active", true);
     payload.put("sortOrder", null);

@@ -1,6 +1,7 @@
 package dev.buhanzaz.rwms.logistics;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -28,6 +29,7 @@ import dev.buhanzaz.rwms.logistics.order.domain.RentalOrder;
 import dev.buhanzaz.rwms.logistics.order.repository.OrderClientRepository;
 import dev.buhanzaz.rwms.logistics.order.repository.RentalOrderRepository;
 import dev.buhanzaz.rwms.logistics.service.LogisticsDocumentService;
+import dev.buhanzaz.rwms.logistics.service.LogisticsConflictException;
 import dev.buhanzaz.rwms.logistics.service.ReturnCompletionProcessor;
 import dev.buhanzaz.rwms.logistics.service.ReturnRegistrationProcessor;
 import java.time.LocalDate;
@@ -111,6 +113,7 @@ class ReturnCompletionSagaIntegrationTest {
                 new ReturnMediaLineRequest(
                     registered.lineId(),
                     List.of(new MediaReferenceInput(mediaId, 2)),
+                    true,
                     List.of(new ReturnAdditionalEquipmentRequest(additionalEquipmentId, 3L)))));
     when(dependencies.validateMediaReferences(
             eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_RETURN),
@@ -198,8 +201,31 @@ class ReturnCompletionSagaIntegrationTest {
         .isOne();
     assertThat(
             jdbc.queryForObject(
+                """
+                select return_additional_contents_snapshot->>'equipmentConfirmed'
+                from logistics_document_line where id=?
+                """,
+                String.class,
+                registered.lineId()))
+        .isEqualTo("true");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select payload->>'resultCode' from domain_event
+                where event_type='logistics.return.acceptance-started.v1'
+                """,
+                String.class))
+        .isEqualTo("EQUIPMENT_COMPLETENESS_CONFIRMED");
+    assertThat(
+            jdbc.queryForObject(
                 "select count(*) from logistics_guard where guard_state='RELEASED'", Long.class))
         .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_task_reference where line_id=?",
+                Long.class,
+                registered.lineId()))
+        .isZero();
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from domain_event where event_type='logistics.return.accepted.v1'",
@@ -231,11 +257,28 @@ class ReturnCompletionSagaIntegrationTest {
   void persistsAnImmutableShortageSourceBeforeRequestingMaintenanceEstimate() {
     RegisteredReturn registered = registeredReturn();
     UUID equipmentId = UUID.randomUUID();
+    UUID mediaId = UUID.randomUUID();
+    UUID estimateId = UUID.randomUUID();
     RequestReturnEstimateRequest request =
         new RequestReturnEstimateRequest(
             List.of(
                 new ReturnShortageLineRequest(
-                    registered.lineId(), List.of(new EquipmentShortageRequest(equipmentId, 3)))));
+                    registered.lineId(),
+                    List.of(new MediaReferenceInput(mediaId, 4)),
+                    List.of(new EquipmentShortageRequest(equipmentId, 3)))));
+    when(dependencies.validateMediaReferences(
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_RETURN),
+            eq(registered.documentId()),
+            eq(registered.lineId()),
+            eq(WAREHOUSE),
+            any()))
+        .thenReturn(
+            new LogisticsDependencyGateway.MediaValidation(
+                LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_RETURN,
+                registered.documentId(),
+                registered.lineId(),
+                WAREHOUSE,
+                List.of(new LogisticsDependencyGateway.MediaReference(mediaId, 4))));
     when(dependencies.settleReturn(
             any(), any(), anyLong(), any(), anyLong(), any(), any(), anyBoolean()))
         .thenReturn(snapshot(9, "WAITING_ESTIMATE_CONFIRMATION"));
@@ -245,6 +288,8 @@ class ReturnCompletionSagaIntegrationTest {
             eq(WAREHOUSE),
             eq(ASSET),
             eq(8L),
+            eq(LocalDate.parse("2026-07-01")),
+            eq(List.of(new LogisticsDependencyGateway.MediaReference(mediaId, 4))),
             any()))
         .thenReturn(
             new LogisticsDependencyGateway.ReturnShortageSource(
@@ -254,6 +299,7 @@ class ReturnCompletionSagaIntegrationTest {
                 WAREHOUSE,
                 ASSET,
                 8,
+                estimateId,
                 List.of(new LogisticsDependencyGateway.EquipmentShortage(equipmentId, 3)),
                 "a".repeat(64),
                 OffsetDateTime.now(ZoneOffset.UTC)));
@@ -289,6 +335,7 @@ class ReturnCompletionSagaIntegrationTest {
                 "select operation_type || ':' || result from logistics_external_attempt order by operation_type",
                 String.class))
         .contains(
+            "RETURN_MEDIA_VALIDATE:CONFIRMED",
             "RETURN_ASSET_SETTLE_SHORTAGE:CONFIRMED",
             "RETURN_MAINTENANCE_SHORTAGE_UPSERT:CONFIRMED",
             "RETURN_ASSET_LEASE_RELEASE:CONFIRMED");
@@ -303,6 +350,25 @@ class ReturnCompletionSagaIntegrationTest {
             jdbc.queryForObject(
                 "select count(*) from logistics_guard where guard_state='RELEASED'", Long.class))
         .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_media_reference where readiness='READY'", Long.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select payload->>'resultCode' from domain_event
+                where event_type='logistics.return.estimate-started.v1'
+                """,
+                String.class))
+        .isEqualTo("INSPECTION_MEDIA_SUBMITTED");
+    verify(dependencies)
+        .validateMediaReferences(
+            eq(LogisticsDependencyGateway.LogisticsOwnerType.LOGISTICS_RETURN),
+            eq(registered.documentId()),
+            eq(registered.lineId()),
+            eq(WAREHOUSE),
+            eq(List.of(new LogisticsDependencyGateway.MediaReference(mediaId, 4))));
     verify(dependencies)
         .settleReturn(
             any(),
@@ -320,7 +386,55 @@ class ReturnCompletionSagaIntegrationTest {
             eq(WAREHOUSE),
             eq(ASSET),
             eq(8L),
+            eq(LocalDate.parse("2026-07-01")),
+            eq(List.of(new LogisticsDependencyGateway.MediaReference(mediaId, 4))),
             eq(List.of(new LogisticsDependencyGateway.EquipmentShortage(equipmentId, 3))));
+  }
+
+  @Test
+  void rejectsAcceptanceWithoutExplicitEquipmentCompletenessConfirmation() {
+    RegisteredReturn registered = registeredReturn();
+
+    assertThatThrownBy(
+            () ->
+                documents.acceptUndamagedReturn(
+                    SUBJECT,
+                    UUID.randomUUID(),
+                    CORRELATION,
+                    registered.documentId(),
+                    registered.version(),
+                    new AcceptReturnRequest(
+                        List.of(
+                            new ReturnMediaLineRequest(
+                                registered.lineId(),
+                                List.of(new MediaReferenceInput(UUID.randomUUID(), 1)),
+                                false,
+                                List.of())))))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessage("Return acceptance lines are invalid");
+  }
+
+  @Test
+  void rejectsEstimateWithoutInspectionPhotos() {
+    RegisteredReturn registered = registeredReturn();
+
+    assertThatThrownBy(
+            () ->
+                documents.requestReturnEstimate(
+                    SUBJECT,
+                    UUID.randomUUID(),
+                    CORRELATION,
+                    registered.documentId(),
+                    registered.version(),
+                    new RequestReturnEstimateRequest(
+                        List.of(
+                            new ReturnShortageLineRequest(
+                                registered.lineId(),
+                                List.of(),
+                                List.of(
+                                    new EquipmentShortageRequest(UUID.randomUUID(), 1)))))))
+        .isInstanceOf(LogisticsConflictException.class)
+        .hasMessage("Return estimate lines are invalid");
   }
 
   @Test
@@ -331,6 +445,10 @@ class ReturnCompletionSagaIntegrationTest {
                 ClientType.LEGAL_ENTITY,
                 "Tenant linked",
                 "tenant linked",
+                "+79990000001",
+                "+79990000001",
+                null,
+                null,
                 SUBJECT,
                 UUID.randomUUID(),
                 "0".repeat(64)));
@@ -411,6 +529,12 @@ class ReturnCompletionSagaIntegrationTest {
     long version = documents.get(documentId, LogisticsDocumentType.RETURN).version();
     assertThat(documents.get(documentId, LogisticsDocumentType.RETURN).state())
         .isEqualTo(LogisticsDocumentState.INSPECTION_REQUIRED);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from logistics_task_reference where document_id=?",
+                Long.class,
+                documentId))
+        .isZero();
     return new RegisteredReturn(documentId, lineId, leaseId, version);
   }
 

@@ -28,7 +28,7 @@ type JsonRecord = Record<string, unknown>
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const INVALID_RESPONSE_MESSAGE =
-  "Сервис логистики вернул некорректный ответ модуля заказов."
+  "Сервис логистики вернул некорректный ответ модуля бронирований."
 
 export const ORDERS_QUERY_KEY = ["orders"] as const
 
@@ -50,7 +50,12 @@ export type CreateOrderInput =
   | { clientId: string; newClient?: never }
   | {
       clientId?: never
-      newClient: { clientType: OrderClientType; displayName: string }
+      newClient: {
+        clientType: OrderClientType
+        displayName: string
+        phone: string
+        email?: string | null
+      }
     }
 
 function invalidResponse(): never {
@@ -135,6 +140,10 @@ function parseClient(value: unknown): OrderClient {
     id: uuid(source.id),
     type: enumValue(source.type, ORDER_CLIENT_TYPES),
     displayName: text(source.displayName),
+    phone:
+      source.phone === undefined ? null : nullableText(source.phone),
+    email:
+      source.email === undefined ? null : nullableText(source.email),
   }
 }
 
@@ -182,7 +191,6 @@ function parseEquipmentContent(value: unknown): OrderEquipmentContent {
   const source = record(value)
   return {
     equipmentId: uuid(source.equipmentId),
-    equipmentCode: text(source.equipmentCode),
     equipmentName: text(source.equipmentName),
     quantity: nonNegativeInteger(source.quantity),
     locationKind: text(source.locationKind),
@@ -196,7 +204,6 @@ function parseDesiredEquipment(value: unknown): OrderDesiredEquipment {
 
   return {
     equipmentId: uuid(source.equipmentId),
-    equipmentCode: text(source.equipmentCode),
     equipmentName: text(source.equipmentName),
     quantity,
   }
@@ -448,7 +455,12 @@ export async function listOrderClients(params: {
 export async function createOrderClient(params: {
   accessToken: string
   idempotencyKey: string
-  input: { clientType: OrderClientType; displayName: string }
+  input: {
+    clientType: OrderClientType
+    displayName: string
+    phone: string
+    email?: string | null
+  }
 }): Promise<OrderClientSearchItem> {
   return parseClientSearchItem(
     await bearerRequest<unknown>(params.accessToken, clientsEndpoint(), {

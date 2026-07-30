@@ -35,9 +35,14 @@ const INITIAL_RENTAL_ITEM_PAGE_SIZE = 100
 
 export function repairEstimateListQueryKey(
   warehouseId: string,
-  status: RepairEstimateStatus
+  status?: RepairEstimateStatus
 ) {
-  return [...REPAIR_ESTIMATES_QUERY_KEY, "list", warehouseId, status] as const
+  return [
+    ...REPAIR_ESTIMATES_QUERY_KEY,
+    "list",
+    warehouseId,
+    status ?? "all",
+  ] as const
 }
 
 export function repairEstimateDetailQueryKey(
@@ -58,7 +63,7 @@ export function estimateRentalItemsQueryKey(warehouseId: string) {
 
 export function listRepairEstimates(
   warehouseId: string,
-  status: RepairEstimateStatus
+  status?: RepairEstimateStatus
 ) {
   return repairEstimatesClient.list({ warehouseId, status })
 }
@@ -106,12 +111,12 @@ function buildDraftCommand(params: {
     warehouseId: params.warehouseId,
     rentalItemId: params.draft.rentalItemId,
     sourceParty: params.draft.sourceParty,
-    destinationText: null,
     dispatchDate: params.draft.dispatchDate,
     comment: "",
     lines: params.draft.lines.map((line) => ({ ...line })),
     media: [],
     maintenanceMediaReferences: params.draft.maintenanceMediaReferences ?? [],
+    coverMediaId: params.draft.coverMediaId ?? null,
   }
 }
 
@@ -125,18 +130,39 @@ function toTaskPlanCommand(
     primaryLineId: plan.primaryLineId,
     groupComment: plan.groupComment,
     queueId: plan.queueId ?? null,
-    queueCode: plan.queueCode,
+    queueName: plan.queueName,
     routeQueueKind: plan.routeQueueKind,
     sortOrder: plan.sortOrder,
     generationStatus: plan.generationStatus,
   }
 }
 
-export function saveRepairEstimateDraft(params: {
+export async function saveRepairEstimateDraft(params: {
   draft: RepairEstimateEditorDraft
   warehouseId: string
 }) {
-  return repairEstimatesClient.saveDraft(buildDraftCommand(params))
+  const command = buildDraftCommand(params)
+  const customLines = params.draft.lines.filter(
+    (line) => line.catalogSnapshot === null
+  )
+  if (customLines.length === 0) {
+    return repairEstimatesClient.saveDraft(command)
+  }
+
+  const snapshot = await getOperationalRepairEstimateCatalog()
+  const catalog = createRepairEstimateCatalogIndex(snapshot)
+  const customIssues = validateAutoCompletion(params.draft.lines, catalog)
+  if (customIssues.length > 0) {
+    throw new Error(customIssues.slice(0, 3).join("; "))
+  }
+  const taskPlans = buildRepairEstimateTaskPlans(params.draft.lines, catalog)
+    .filter((plan) =>
+      plan.includedLineIds.some((lineId) =>
+        customLines.some((line) => line.id === lineId)
+      )
+    )
+    .map(toTaskPlanCommand)
+  return repairEstimatesClient.saveDraft({ ...command, taskPlans })
 }
 
 export async function prepareRepairEstimateCompletion(
@@ -151,7 +177,12 @@ export async function prepareRepairEstimateCompletion(
   }
 }
 
-function completionPlans(input: CompleteRepairEstimateInput) {
+function completionPlans(
+  input: Pick<
+    CompleteRepairEstimateInput,
+    "draft" | "completionMode" | "movementRequired" | "taskPlans"
+  >
+) {
   const emptyEstimate = input.draft.lines.length === 0
   return getOperationalRepairEstimateCatalog().then((snapshot) => {
     const catalog = createRepairEstimateCatalogIndex(snapshot)
@@ -183,6 +214,7 @@ export async function completeRepairEstimate(
     movementRequired:
       input.draft.lines.length === 0 ? false : input.movementRequired,
     taskPlans: taskPlans.map(toTaskPlanCommand),
+    priority: input.priority,
   })
 }
 
