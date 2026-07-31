@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: RWMS Media Events
-  version: 1.4.0
+  version: 1.5.0
   description: >-
     PostgreSQL is the replay authority. Facts and processing requests use
     separate schemas and aggregate families. Delivery is at-least-once.
@@ -59,6 +59,13 @@ channels:
       an active current proof explicitly contains the authenticated worker ID.
     messages:
       taskBoardEntryOwnerProofV1: { $ref: '#/components/messages/TaskBoardEntryOwnerProofV1' }
+  cabinPhotoFacts:
+    address: rwms.media.cabin-photo.v1
+    description: >-
+      Canonical cabin cover changes keyed by cabin ID. The referenced media
+      remains one logical asset; consumers receive no object-store locator.
+    messages:
+      cabinCoverChangedV1: { $ref: '#/components/messages/CabinCoverChangedV1' }
 operations:
   publishMediaFact:
     action: send
@@ -81,6 +88,9 @@ operations:
   consumeTaskBoardOwnerProofFact:
     action: receive
     channel: { $ref: '#/channels/taskBoardOwnerProofFacts' }
+  publishCabinCoverChangedFact:
+    action: send
+    channel: { $ref: '#/channels/cabinPhotoFacts' }
 components:
   messages:
     MediaFactV1:
@@ -124,4 +134,8 @@ components:
             properties:
               aggregateType: { const: TASK_BOARD_ENTRY_OWNER_PROOF }
               eventType: { const: task-board.entry-owner-proof.changed.v1 }
+      x-rwms-record-key: aggregateId
+    CabinCoverChangedV1:
+      name: media.cabin.cover-changed.v1
+      payload: { $ref: './media/cabin-photo-facts-v1.schema.json' }
       x-rwms-record-key: aggregateId

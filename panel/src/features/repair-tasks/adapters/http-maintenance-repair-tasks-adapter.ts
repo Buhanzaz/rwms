@@ -305,6 +305,7 @@ async function toTask(
 ): Promise<RepairTaskDto> {
   const entries = entriesByExternalTaskId(board)
   const subtasks = repair.plan.stages
+    .filter((stage) => stage.kind === "REPAIR_WORK")
     .map((stage) =>
       toSubtask(
         stage,
@@ -350,6 +351,8 @@ async function toTask(
     writtenOffAt: projection?.writtenOffAt ?? null,
     decisionActorId: projection?.decisionActorId ?? null,
     taskBoardAvailable: board !== null,
+    logisticsPlanningMode: repair.logisticsPlanningMode,
+    logisticsScheduledDate: repair.logisticsScheduledDate,
     createdAt: repair.createdAt,
     updatedAt: repair.updatedAt,
   }
@@ -1002,7 +1005,9 @@ export class HttpMaintenanceRepairTasksAdapter implements RepairTasksClient {
         draft.id,
         draft.version,
         command.priority,
-        createMaintenanceIdempotencyKey()
+        createMaintenanceIdempotencyKey(),
+        command.logisticsPlanningMode,
+        command.logisticsScheduledDate
       )
     } catch (error) {
       const repair = await this.recoverPersistedDraftAfterQueueFailure(

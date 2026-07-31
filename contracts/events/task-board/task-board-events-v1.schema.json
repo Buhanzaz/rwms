@@ -308,7 +308,7 @@
       "type": "object", "additionalProperties": false,
       "required": [
         "bindingId", "version", "workerClassId", "bindingOrder",
-        "stopTaskOnTake", "notifyUrgent"
+        "stopTaskOnTake", "participationPolicy", "notifyOnPrimaryTake"
       ],
       "properties": {
         "bindingId": {"type": "string", "format": "uuid"},
@@ -316,7 +316,8 @@
         "workerClassId": {"type": "string", "format": "uuid"},
         "bindingOrder": {"type": "integer", "minimum": 0},
         "stopTaskOnTake": {"type": "boolean"},
-        "notifyUrgent": {"type": "boolean"}
+        "participationPolicy": {"enum": ["PRIMARY", "REQUIRED", "OPTIONAL"]},
+        "notifyOnPrimaryTake": {"type": "boolean"}
       }
     },
     "queueGroupBindingFact": {
@@ -333,7 +334,7 @@
     "workQueueFact": {
       "type": "object", "additionalProperties": false,
       "required": [
-        "workQueueId", "revisionMarker", "warehouseId", "queueType", "sortOrder",
+        "workQueueId", "revisionMarker", "warehouseId", "queueType", "queuePurpose", "sortOrder",
         "active", "hidden", "collapsed", "holdingPeriodMinutes", "notificationThreshold",
         "notifyWhenThresholdReached", "classBindings", "deleted"
       ],
@@ -342,6 +343,7 @@
         "revisionMarker": {"type": "string", "format": "uuid"},
         "warehouseId": {"type": "string", "format": "uuid"},
         "queueType": {"enum": ["MOVEMENT", "REPAIR", "HOLDING", "FURNITURE_MOVEMENT"]},
+        "queuePurpose": {"enum": ["GENERAL", "LOGISTICS_DRIVER"]},
         "sortOrder": {"type": "integer"},
         "active": {"type": "boolean"},
         "hidden": {"type": "boolean"},
@@ -374,7 +376,7 @@
     "boardTaskFact": {
       "type": "object", "additionalProperties": false,
       "required": [
-        "boardTaskId", "warehouseId", "externalTaskId", "status", "plannedDurationMinutes",
+        "boardTaskId", "warehouseId", "externalTaskId", "status", "lane", "plannedDurationMinutes",
         "deadlineAt", "doneAt", "deleted"
       ],
       "properties": {
@@ -383,6 +385,7 @@
         "externalTaskId": {"$ref": "#/$defs/nullableUuid"},
         "status": {"enum": ["ACTIVE", "DONE", "CANCELLED"]},
         "scheduledDate": {"type": "string", "format": "date"},
+        "lane": {"enum": ["SCHEDULED", "CURRENT"]},
         "priority": {"type": "integer", "minimum": 1, "maximum": 5},
         "pinned": {"type": "boolean"},
         "plannedDurationMinutes": {"$ref": "#/$defs/nullableInteger"},
@@ -530,6 +533,7 @@
         "sourceType": {
           "oneOf": [
             {"const": "MAINTENANCE_REPAIR"},
+            {"const": "LOGISTICS_DRIVER_TASK"},
             {"type": "null"}
           ]
         },

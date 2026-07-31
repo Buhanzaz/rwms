@@ -7,7 +7,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import dev.buhanzaz.rwms.taskboard.domain.EntryStatus;
 import dev.buhanzaz.rwms.taskboard.domain.EntryType;
 import dev.buhanzaz.rwms.taskboard.domain.GroupOperationalStatus;
+import dev.buhanzaz.rwms.taskboard.domain.ParticipationPolicy;
+import dev.buhanzaz.rwms.taskboard.domain.QueuePurpose;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
+import dev.buhanzaz.rwms.taskboard.domain.TaskLane;
 import dev.buhanzaz.rwms.taskboard.domain.TaskStatus;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.BoardTaskFact;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.QueueEntryFact;
@@ -36,6 +39,7 @@ class TaskBoardEventPayloadPolicyTest {
             UUID.randomUUID(),
             TaskStatus.ACTIVE,
             scheduledDate,
+            TaskLane.SCHEDULED,
             1,
             true,
             null,
@@ -68,6 +72,7 @@ class TaskBoardEventPayloadPolicyTest {
                     UUID.randomUUID(),
                     TaskStatus.ACTIVE,
                     LocalDate.of(2026, 7, 24),
+                    TaskLane.SCHEDULED,
                     0,
                     false,
                     null,
@@ -263,6 +268,7 @@ class TaskBoardEventPayloadPolicyTest {
             UUID.randomUUID(),
             UUID.randomUUID(),
             QueueType.MOVEMENT,
+            QueuePurpose.GENERAL,
             0,
             true,
             false,
@@ -273,7 +279,13 @@ class TaskBoardEventPayloadPolicyTest {
             1,
             List.of(
                 new QueueBindingFact(
-                    bindingId, 2, UUID.randomUUID(), 1, true, true)),
+                    bindingId,
+                    2,
+                    UUID.randomUUID(),
+                    1,
+                    true,
+                    ParticipationPolicy.REQUIRED,
+                    true)),
             false);
 
     var payload =
@@ -286,7 +298,12 @@ class TaskBoardEventPayloadPolicyTest {
     assertThat(payload.has("groupBindings")).isFalse();
     assertThat(payload.required("classBindings").get(0).required("bindingOrder").intValue())
         .isOne();
-    assertThat(payload.required("classBindings").get(0).required("notifyUrgent").booleanValue())
+    assertThat(
+            payload
+                .required("classBindings")
+                .get(0)
+                .required("notifyOnPrimaryTake")
+                .booleanValue())
         .isTrue();
 
     var missingQueueDefinition = payload.deepCopy();

@@ -32,6 +32,7 @@ class TaskQueueListComposeTest {
             TaskQueueSection(
                 queueId = "queue-$index",
                 name = "Очередь $index",
+                queuePurpose = "GENERAL",
                 sortOrder = index,
                 tasks = emptyList(),
             )

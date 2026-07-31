@@ -14,6 +14,7 @@ import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
 import com.networknt.schema.SpecVersion;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
+import dev.buhanzaz.rwms.taskboard.domain.TaskLane;
 import dev.buhanzaz.rwms.taskboard.domain.TaskSourceType;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardAggregateType;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
@@ -331,7 +332,8 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
             null,
             null,
             null,
-            source));
+            source,
+            TaskLane.SCHEDULED));
 
     assertThat(
             board.snapshot(WAREHOUSE, true).columns().stream()
@@ -441,11 +443,18 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
                 "expectedVersion",
                 "workerGroupId",
                 "occurredAt",
-                "offlineLeaseId"));
+                "offlineLeaseId",
+                "evidenceId"));
     assertThat(child(child(schemas, "WorkerActionRequest"), "properties"))
         .doesNotContainKeys("workerId", "warehouseId");
     assertThat(child(schemas, "AudienceSelector").get("required"))
-        .isEqualTo(List.of("kind", "id", "mode", "interruptOnTake"));
+        .isEqualTo(
+            List.of(
+                "kind",
+                "id",
+                "mode",
+                "interruptOnTake",
+                "notifyOnPrimaryTake"));
     assertAllLocalReferencesResolve(contract, contract);
   }
 

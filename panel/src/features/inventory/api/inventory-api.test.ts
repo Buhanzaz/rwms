@@ -282,6 +282,8 @@ describe("inventory API", () => {
       repairPlans: [],
       repairCompletionMode: "AUTO",
       movementRequired: true,
+      logisticsPlanningMode: "FIXED_DATE",
+      logisticsScheduledDate: "2026-08-12",
       priority: 3,
     })
 
@@ -291,6 +293,8 @@ describe("inventory API", () => {
         inventoryId: INVENTORY_ID,
         findingId: rawFinding.id,
         planSelection: expect.objectContaining({
+          logisticsPlanningMode: "FIXED_DATE",
+          logisticsScheduledDate: "2026-08-12",
           stages: [
             {
               catalogNodeId: "allowed-movement-location",

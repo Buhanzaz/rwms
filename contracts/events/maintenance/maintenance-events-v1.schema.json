@@ -262,7 +262,7 @@
         "externalTaskId": {"type": "string", "format": "uuid"},
         "taskBoardRegistrationVersion": {"$ref": "#/$defs/nullableInteger"},
         "generationState": {
-          "enum": ["PENDING_GENERATION", "GENERATED", "FAILED"]
+          "enum": ["PENDING_GENERATION", "GENERATED", "NOT_REQUIRED", "FAILED"]
         },
         "deliveryState": {
           "enum": ["PENDING", "RETRY_PENDING", "DELIVERED", "QUARANTINED"]

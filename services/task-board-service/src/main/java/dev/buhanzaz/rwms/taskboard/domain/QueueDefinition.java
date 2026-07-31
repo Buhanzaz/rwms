@@ -40,6 +40,11 @@ public class QueueDefinition extends AbstractVersionedEntity {
   @Column(name = "queue_type", nullable = false, length = 32)
   private QueueType type = QueueType.REPAIR;
 
+  @NotNull
+  @Enumerated(EnumType.STRING)
+  @Column(name = "queue_purpose", nullable = false, length = 32)
+  private QueuePurpose purpose = QueuePurpose.GENERAL;
+
   @PrePersist
   @PreUpdate
   void normalize() {
@@ -80,6 +85,14 @@ public class QueueDefinition extends AbstractVersionedEntity {
 
   public void setType(QueueType value) {
     type = value;
+  }
+
+  public QueuePurpose getPurpose() {
+    return purpose;
+  }
+
+  public void setPurpose(QueuePurpose value) {
+    purpose = value;
   }
 
   public UUID getRevisionMarker() {

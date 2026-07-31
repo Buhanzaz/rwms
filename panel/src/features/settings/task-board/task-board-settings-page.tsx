@@ -36,6 +36,7 @@ import type {
 import {
   credentialStatusLabels,
   operationalAvailabilityLabels,
+  participationPolicyLabels,
   queueTypeLabels,
 } from "@/features/settings/task-board/model/task-board-settings"
 import { QueueOrderSettings } from "@/features/settings/task-board/queue-order-settings"
@@ -91,7 +92,7 @@ function QueueBindings({ queue }: { queue: WorkQueueDto }) {
       {bindings.map((binding, index) => (
         <div key={binding.id} className="flex items-center gap-2">
           <Badge variant={index === 0 ? "default" : "secondary"}>
-            {index === 0 ? "Основной" : "Вторичный"}
+            {participationPolicyLabels[binding.participationPolicy]}
           </Badge>
           <span>{binding.workerClass.name}</span>
         </div>
@@ -304,11 +305,33 @@ export function TaskBoardSettingsPage() {
     )
   }
 
-  const queueDefinitions = queueDefinitionsQuery.data ?? []
-  const queues = queuesQuery.data ?? []
-  const classes = classesQuery.data ?? []
-  const workers = workersQuery.data ?? []
-  const groups = groupsQuery.data ?? []
+  const allQueueDefinitions = queueDefinitionsQuery.data ?? []
+  const allQueues = queuesQuery.data ?? []
+  const allClasses = classesQuery.data ?? []
+  const allWorkers = workersQuery.data ?? []
+  const allGroups = groupsQuery.data ?? []
+  const logisticsQueues = allQueues.filter(
+    (queue) => queue.purpose === "LOGISTICS_DRIVER"
+  )
+  const driverClassIds = new Set(
+    logisticsQueues.flatMap((queue) =>
+      queue.bindings
+        .filter(
+          (binding) =>
+            binding.primary || binding.participationPolicy === "PRIMARY"
+        )
+        .map((binding) => binding.workerClass.id)
+    )
+  )
+  const queueDefinitions = allQueueDefinitions.filter(
+    (definition) => definition.purpose === "GENERAL"
+  )
+  const queues = allQueues.filter((queue) => queue.purpose === "GENERAL")
+  const classes = allClasses.filter((item) => !driverClassIds.has(item.id))
+  const workers = allWorkers
+  const groups = allGroups.filter(
+    (group) => !driverClassIds.has(group.workerClass.id)
+  )
   const actions = (edit: () => void, remove: () => void) => (
     <div className="flex items-center gap-2">
       <Button type="button" size="sm" variant="outline" onClick={edit}>
@@ -573,12 +596,19 @@ export function TaskBoardSettingsPage() {
             pending={mutation.isPending}
             onSave={async (ordered) => {
               if (!accessToken) return
+              let generalQueueIndex = 0
+              const completeOrder = allQueues.map((queue) => {
+                if (queue.purpose === "LOGISTICS_DRIVER") return queue
+                const reorderedQueue = ordered[generalQueueIndex]
+                generalQueueIndex += 1
+                return reorderedQueue ?? queue
+              })
               await run(
                 () =>
                   taskBoardSettingsClient.reorderQueues(
                     accessToken,
                     warehouseId,
-                    ordered.map((queue) => ({
+                    completeOrder.map((queue) => ({
                       queueId: queue.id,
                       expectedVersion: queue.version,
                     }))
@@ -786,7 +816,9 @@ export function TaskBoardSettingsPage() {
                 getSortValue: (item) => item.qualifications.length,
                 render: (item) =>
                   item.qualifications
-                    .filter((q) => q.active)
+                    .filter(
+                      (q) => q.active && !driverClassIds.has(q.workerClass.id)
+                    )
                     .map((q) => q.workerClass.name)
                     .join(", ") || "—",
               },

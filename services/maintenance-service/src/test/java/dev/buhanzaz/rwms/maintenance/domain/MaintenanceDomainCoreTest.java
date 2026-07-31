@@ -109,4 +109,95 @@ class MaintenanceDomainCoreTest {
         .isInstanceOf(IllegalStateException.class)
         .hasMessageContaining("before queueing");
   }
+
+  @Test
+  void repairLogisticsPlanningIsCanonicalAndImmutableAfterQueueing() {
+    MaintenanceRepair repair =
+        MaintenanceRepair.primary(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            0,
+            null,
+            RepairOrigin.DIRECT_REPAIR,
+            LocalDate.of(2026, 8, 1),
+            null,
+            ACTOR);
+    LocalDate scheduledDate = LocalDate.of(2026, 8, 3);
+
+    repair.selectLogisticsPlanning(
+        RepairLogisticsPlanningMode.FIXED_DATE, scheduledDate);
+
+    assertThat(repair.getLogisticsPlanningMode())
+        .isEqualTo(RepairLogisticsPlanningMode.FIXED_DATE);
+    assertThat(repair.getLogisticsScheduledDate())
+        .isEqualTo(scheduledDate);
+    assertThatThrownBy(
+            () ->
+                repair.selectLogisticsPlanning(
+                    RepairLogisticsPlanningMode.AUTO,
+                    scheduledDate))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("inconsistent");
+    repair.queue(
+        UUID.randomUUID(),
+        0,
+        1,
+        OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15));
+    assertThatThrownBy(
+            () ->
+                repair.selectLogisticsPlanning(
+                    RepairLogisticsPlanningMode.AUTO,
+                    null))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessageContaining("before repair queueing");
+  }
+
+  @Test
+  void movementStageIsCompletedWithoutCreatingTaskBoardTruth() {
+    RepairStage stage =
+        new RepairStage(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            0,
+            RepairStageKind.MOVE_TO_REPAIR,
+            UUID.randomUUID(),
+            "Перемещения",
+            "MOVEMENT",
+            null);
+
+    stage.routedThroughLogistics();
+
+    assertThat(stage.getState()).isEqualTo(RepairStageState.DONE);
+    assertThat(stage.getTaskGenerationState())
+        .isEqualTo("NOT_REQUIRED");
+    assertThat(stage.getExternalQueueEntryId()).isNull();
+    assertThat(stage.getCompletedAt()).isNotNull();
+  }
+
+  @Test
+  void pendingCapitalReclassificationCanReturnToOrdinaryBeforeExternalExecution() {
+    MaintenanceRepair repair =
+        MaintenanceRepair.primary(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            0,
+            null,
+            RepairOrigin.DIRECT_REPAIR,
+            LocalDate.of(2026, 7, 31),
+            null,
+            ACTOR);
+    repair.queue(
+        UUID.randomUUID(),
+        0,
+        1,
+        OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(15));
+    repair.markReclassifyingCapital();
+
+    assertThat(repair.getReclassificationState())
+        .isEqualTo(RepairReclassificationState.RECLASSIFYING_CAPITAL);
+    assertThat(repair.stabilizeOrdinaryClassification()).isTrue();
+    assertThat(repair.getReclassificationState())
+        .isEqualTo(RepairReclassificationState.STABLE);
+    assertThat(repair.stabilizeOrdinaryClassification()).isFalse();
+  }
 }

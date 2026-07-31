@@ -395,6 +395,7 @@ func TestCabinCoverBatchIsBoundedWarehouseScopedAndCountsAssets(t *testing.T) {
 	repository := &repositoryStub{cabinCoverRecords: []persistence.CabinCoverRecord{
 		{
 			CabinID: firstCabinID, PhotoCount: 3,
+			MediaID: firstMediaID, Generation: 3, Variant: &firstVariant,
 			Previews: []persistence.CabinPreviewRecord{
 				{MediaID: firstMediaID, Generation: 3, Variant: firstVariant},
 				{MediaID: secondMediaID, Generation: 1, Variant: secondVariant},
@@ -1184,6 +1185,71 @@ func TestLogisticsReferenceValidationReturnsOnlyOpaqueReadyReferences(t *testing
 	}
 }
 
+func TestLogisticsCabinCoverCommandRequiresExactServiceAndIdempotencyKey(t *testing.T) {
+	cabinID, warehouseID, entryID, mediaID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	changedAt := time.Now().UTC().Truncate(time.Millisecond)
+	repository := &repositoryStub{cabinCoverChange: persistence.CabinCoverChangeRecord{
+		CabinID: cabinID, WarehouseID: warehouseID, MediaID: mediaID,
+		Generation: 2, TaskBoardEntryID: entryID, Version: 7, ChangedAt: changedAt,
+	}}
+	server := newTestServer(t, repository, logisticsValidatorStub(), &storeStub{})
+	body := fmt.Sprintf(`{"taskBoardEntryId":"%s","evidenceMediaId":"%s"}`, entryID, mediaID)
+	idempotencyKey := uuid.New()
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/internal/media/v1/logistics/cabins/"+cabinID.String()+"/cover-from-task-evidence",
+		strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer test")
+	request.Header.Set("Idempotency-Key", idempotencyKey.String())
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("cover command response = %d %s", response.Code, response.Body.String())
+	}
+	command := repository.cabinCoverChangeCommand
+	if command.CabinID != cabinID || command.TaskBoardEntryID != entryID ||
+		command.EvidenceMediaID != mediaID || command.IdempotencyKey != idempotencyKey ||
+		command.CorrelationID == uuid.Nil || !checksumPattern.MatchString(command.RequestSHA256) {
+		t.Fatalf("cover command = %#v", command)
+	}
+	var result struct {
+		CabinID      uuid.UUID `json:"cabinId"`
+		CoverMediaID uuid.UUID `json:"coverMediaId"`
+		Version      int64     `json:"version"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil ||
+		result.CabinID != cabinID || result.CoverMediaID != mediaID || result.Version != 7 {
+		t.Fatalf("cover result = %#v error=%v", result, err)
+	}
+
+	missingKey := httptest.NewRequest(http.MethodPost,
+		"/api/internal/media/v1/logistics/cabins/"+cabinID.String()+"/cover-from-task-evidence",
+		strings.NewReader(body))
+	missingKey.Header.Set("Authorization", "Bearer test")
+	missingResponse := httptest.NewRecorder()
+	server.Handler().ServeHTTP(missingResponse, missingKey)
+	if missingResponse.Code != http.StatusBadRequest {
+		t.Fatalf("missing idempotency response = %d %s", missingResponse.Code, missingResponse.Body.String())
+	}
+
+	wrongServer := newTestServer(t, &repositoryStub{}, validatorStub{
+		servicePrincipal: auth.ServicePrincipal{
+			Subject: "maintenance-service", ClientID: "maintenance-service",
+			Scopes: map[string]struct{}{"media.maintenance": {}},
+		},
+	}, &storeStub{})
+	wrongRequest := httptest.NewRequest(http.MethodPost,
+		"/api/internal/media/v1/logistics/cabins/"+cabinID.String()+"/cover-from-task-evidence",
+		strings.NewReader(body))
+	wrongRequest.Header.Set("Authorization", "Bearer test")
+	wrongRequest.Header.Set("Idempotency-Key", uuid.NewString())
+	wrongResponse := httptest.NewRecorder()
+	wrongServer.Handler().ServeHTTP(wrongResponse, wrongRequest)
+	if wrongResponse.Code != http.StatusForbidden {
+		t.Fatalf("wrong service response = %d %s", wrongResponse.Code, wrongResponse.Body.String())
+	}
+}
+
 func TestLogisticsReferenceValidationFailsClosed(t *testing.T) {
 	documentID, lineID, warehouseID, mediaID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	validBody := logisticsReferenceBody(t, persistence.OwnerTypeLogisticsTransfer, documentID, lineID, warehouseID,
@@ -1291,7 +1357,8 @@ func TestLogisticsCabinPresentationSnapshotReturnsOpaqueCurrentReferences(t *tes
 	firstMediaID, secondMediaID := uuid.New(), uuid.New()
 	repository := &repositoryStub{cabinPresentationRecords: []persistence.CabinPresentationSnapshotRecord{
 		{
-			CabinID: firstCabinID,
+			CabinID:      firstCabinID,
+			CoverMediaID: &firstMediaID,
 			Photos: []persistence.CabinPresentationPhotoRecord{
 				{MediaID: firstMediaID, Generation: 3, SortOrder: 0, HasSmall: true, HasLarge: true},
 				{MediaID: secondMediaID, Generation: 2, SortOrder: 4, HasSmall: true},
@@ -1314,8 +1381,9 @@ func TestLogisticsCabinPresentationSnapshotReturnsOpaqueCurrentReferences(t *tes
 	}
 	var payload struct {
 		Items []struct {
-			CabinID uuid.UUID `json:"cabinId"`
-			Photos  []struct {
+			CabinID      uuid.UUID  `json:"cabinId"`
+			CoverMediaID *uuid.UUID `json:"coverMediaId"`
+			Photos       []struct {
 				MediaID           uuid.UUID `json:"mediaId"`
 				Generation        int       `json:"generation"`
 				SortOrder         int64     `json:"sortOrder"`
@@ -1327,12 +1395,14 @@ func TestLogisticsCabinPresentationSnapshotReturnsOpaqueCurrentReferences(t *tes
 		t.Fatalf("decode snapshot response: %v", err)
 	}
 	if len(payload.Items) != 2 || payload.Items[0].CabinID != firstCabinID ||
+		payload.Items[0].CoverMediaID == nil || *payload.Items[0].CoverMediaID != firstMediaID ||
 		len(payload.Items[0].Photos) != 2 || payload.Items[0].Photos[0].MediaID != firstMediaID ||
 		payload.Items[0].Photos[0].Generation != 3 || payload.Items[0].Photos[0].SortOrder != 0 ||
 		!sameStrings(payload.Items[0].Photos[0].AvailableVariants, []string{"SMALL", "LARGE"}) ||
 		payload.Items[0].Photos[1].MediaID != secondMediaID ||
 		!sameStrings(payload.Items[0].Photos[1].AvailableVariants, []string{"SMALL"}) ||
-		payload.Items[1].CabinID != secondCabinID || len(payload.Items[1].Photos) != 0 {
+		payload.Items[1].CabinID != secondCabinID || payload.Items[1].CoverMediaID != nil ||
+		len(payload.Items[1].Photos) != 0 {
 		t.Fatalf("snapshot payload = %#v", payload.Items)
 	}
 	if repository.cabinPresentationCalls != 1 || repository.cabinPresentationWarehouseID != warehouseID ||
@@ -1595,6 +1665,10 @@ type repositoryStub struct {
 	cabinPresentationCalls       int
 	cabinPresentationWarehouseID uuid.UUID
 	cabinPresentationIDs         []uuid.UUID
+	cabinCoverChange             persistence.CabinCoverChangeRecord
+	cabinCoverChangeReplay       bool
+	cabinCoverChangeErr          error
+	cabinCoverChangeCommand      persistence.SetCabinCoverFromTaskEvidenceCommand
 	originalAsset                persistence.AssetRecord
 	originalVariant              *persistence.VariantRecord
 	originalReadErr              error
@@ -1745,6 +1819,14 @@ func (stub *repositoryStub) ReadCabinPresentationSnapshots(_ context.Context, wa
 		return errors.New("unexpected ReadCabinPresentationSnapshots")
 	}
 	return consume(stub.cabinPresentationRecords)
+}
+
+func (stub *repositoryStub) SetCabinCoverFromTaskEvidence(
+	_ context.Context,
+	command persistence.SetCabinCoverFromTaskEvidenceCommand,
+) (persistence.CabinCoverChangeRecord, bool, error) {
+	stub.cabinCoverChangeCommand = command
+	return stub.cabinCoverChange, stub.cabinCoverChangeReplay, stub.cabinCoverChangeErr
 }
 
 func (stub *repositoryStub) ReadOriginal(_ context.Context, _ uuid.UUID, _, _ string, _ uuid.UUID,

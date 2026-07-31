@@ -22,7 +22,9 @@ import dev.buhanzaz.rwms.maintenance.domain.RepairComplexity;
 import dev.buhanzaz.rwms.maintenance.domain.RepairComplexityColors;
 import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairKind;
+import dev.buhanzaz.rwms.maintenance.domain.RepairLogisticsPlanningMode;
 import dev.buhanzaz.rwms.maintenance.domain.RepairOrigin;
+import dev.buhanzaz.rwms.maintenance.domain.RepairReclassificationState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStage;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageState;
@@ -139,7 +141,9 @@ public class MaintenanceApplicationService {
   private final CatalogFurnitureReferenceMapper catalogFurnitureMapper;
   private final CatalogNodeResponseMapper catalogNodeResponseMapper;
   private final RepairCapacitySettingsService repairCapacitySettings;
+  private final RepairComplexitySettingsService repairComplexitySettings;
   private final RepairComplexityColorsService repairComplexityColors;
+  private final RepairPlaceService repairPlaces;
   private final MaintenanceDependencyGateway dependencies;
   private final JdbcTemplate jdbc;
   private final ObjectMapper mapper;
@@ -170,7 +174,9 @@ public class MaintenanceApplicationService {
       CatalogFurnitureReferenceMapper catalogFurnitureMapper,
       CatalogNodeResponseMapper catalogNodeResponseMapper,
       RepairCapacitySettingsService repairCapacitySettings,
+      RepairComplexitySettingsService repairComplexitySettings,
       RepairComplexityColorsService repairComplexityColors,
+      RepairPlaceService repairPlaces,
       MaintenanceDependencyGateway dependencies,
       JdbcTemplate jdbc,
       ObjectMapper mapper,
@@ -199,7 +205,9 @@ public class MaintenanceApplicationService {
     this.catalogFurnitureMapper = catalogFurnitureMapper;
     this.catalogNodeResponseMapper = catalogNodeResponseMapper;
     this.repairCapacitySettings = repairCapacitySettings;
+    this.repairComplexitySettings = repairComplexitySettings;
     this.repairComplexityColors = repairComplexityColors;
+    this.repairPlaces = repairPlaces;
     this.dependencies = dependencies;
     this.jdbc = jdbc;
     this.mapper = mapper;
@@ -299,7 +307,11 @@ public class MaintenanceApplicationService {
           "MAINTENANCE_STATE_CONFLICT",
           "Prepared transfer no longer has an active repair");
     }
-    return transferArrivalPreflight(active, chain, capabilities);
+    RepairComplexitySnapshot targetComplexity =
+        repairComplexityFromStoredStages(
+            request.targetWarehouseId(), active.getId());
+    return transferArrivalPreflight(
+        active, chain, capabilities, targetComplexity);
   }
 
   @Transactional
@@ -345,8 +357,12 @@ public class MaintenanceApplicationService {
     }
     MaintenanceDependencyGateway.QueueCapabilities capabilities =
         dependencies.queueCapabilities(request.targetWarehouseId());
+    RepairComplexitySnapshot targetComplexity =
+        repairComplexityFromStoredStages(
+            request.targetWarehouseId(), active.getId());
     TransferRepairArrivalPreflightResponse preflight =
-        transferArrivalPreflight(active, chain, capabilities);
+        transferArrivalPreflight(
+            active, chain, capabilities, targetComplexity);
     if (!preflight.missingQueueDefinitionIds().isEmpty()) {
       throw new MaintenanceConflictException(
           "MAINTENANCE_TARGET_QUEUE_MISSING",
@@ -373,13 +389,26 @@ public class MaintenanceApplicationService {
       }
       MaintenanceDependencyGateway.TaskSnapshot currentTask =
           dependencies.getTask(repair.getExternalTaskId());
-      MaintenanceDependencyGateway.TaskSnapshot relocated =
-          dependencies.relocateTask(
-              derived(key, "task-relocate:" + repair.getId()),
-              repair.getExternalTaskId(),
-              currentTask.version(),
-              request.targetWarehouseId());
-      relocatedTaskVersions.put(repair.getId(), relocated.version());
+      if (targetComplexity.type() == RepairComplexity.CAPITAL) {
+        MaintenanceDependencyGateway.TaskSnapshot cancelled =
+            dependencies.cancelTask(
+                derived(key, "task-withdraw-capital:" + repair.getId()),
+                repair.getExternalTaskId(),
+                currentTask.version());
+        if (!"CANCELLED".equals(cancelled.state())) {
+          throw new MaintenanceDependencyException(
+              org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+              "Task-board did not confirm ordinary repair route withdrawal");
+        }
+      } else {
+        MaintenanceDependencyGateway.TaskSnapshot relocated =
+            dependencies.relocateTask(
+                derived(key, "task-relocate:" + repair.getId()),
+                repair.getExternalTaskId(),
+                currentTask.version(),
+                request.targetWarehouseId());
+        relocatedTaskVersions.put(repair.getId(), relocated.version());
+      }
     }
 
     MaintenanceRepair leaseOwner = repairLifecycleOwner(chain, active);
@@ -403,11 +432,8 @@ public class MaintenanceApplicationService {
     validateLeaseTruth(
         request.rentalItemId(), lease, ownerType(leaseOwner), ownerId(leaseOwner));
 
-    RepairComplexitySnapshot complexity =
-        repairComplexityFromStoredStages(
-            request.targetWarehouseId(), active.getId());
     MaintenanceDependencyGateway.AssetSnapshot finalAsset = asset;
-    if (complexity.type() == RepairComplexity.CAPITAL) {
+    if (targetComplexity.type() == RepairComplexity.CAPITAL) {
       finalAsset =
           dependencies.fencedStatus(
               derived(key, "transfer-arrival-capital:" + active.getId()),
@@ -425,6 +451,27 @@ public class MaintenanceApplicationService {
             org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
             "Asset-service did not confirm capital repair status");
       }
+    }
+
+    if (targetComplexity.type() == RepairComplexity.CAPITAL) {
+      List<RepairStage> externalCapitalStages = new ArrayList<>();
+      List<MaintenanceRepair> externalCapitalRepairs = new ArrayList<>();
+      for (MaintenanceRepair repair : chain) {
+        if (repair.getExecutionState() != RepairExecutionState.QUEUED
+            && repair.getExecutionState() != RepairExecutionState.IN_PROGRESS) {
+          continue;
+        }
+        List<RepairStage> stages =
+            repairStages.findAllByRepairIdOrderByStageNo(repair.getId());
+        stages.forEach(RepairStage::completeAsExternalCapital);
+        externalCapitalStages.addAll(stages);
+        externalCapitalRepairs.add(repair);
+      }
+      if (!externalCapitalStages.isEmpty()) {
+        repairStages.saveAllAndFlush(externalCapitalStages);
+      }
+      externalCapitalRepairs.forEach(
+          MaintenanceRepair::completeAsExternalCapital);
     }
 
     for (MaintenanceRepair repair : chain) {
@@ -1018,7 +1065,13 @@ public class MaintenanceApplicationService {
           derived(key, "empty-asset"),
           Map.of("estimateId", estimate.getId().toString()));
     } else {
-      commandRepair = createEstimateRepair(estimate, currentPlan(estimate), request.priority());
+      commandRepair =
+          createEstimateRepair(
+              estimate,
+              currentPlan(estimate),
+              request.priority(),
+              request.logisticsPlanningMode(),
+              request.logisticsScheduledDate());
       estimate.complete(commandRepair.getId());
       enqueueRepairQueue(commandRepair, derived(key, "queue-repair"), false);
     }
@@ -1081,15 +1134,25 @@ public class MaintenanceApplicationService {
         throw new MaintenanceConflictException(
             "MAINTENANCE_STATE_CONFLICT", "An estimate linked to a repair cannot be amended to zero lines");
       }
+      List<EstimateLineResponse> canonicalLines =
+          canonicalEstimateLines(estimate, request.lines());
+      RepairComplexitySnapshot amendedComplexity =
+          repairComplexityForLines(repair.getWarehouseId(), canonicalLines);
+      boolean reclassifyingCapital =
+          repair.getExecutionState() == RepairExecutionState.QUEUED
+              && amendedComplexity.type() == RepairComplexity.CAPITAL;
       repair.amendPreStartPlan();
+      if (reclassifyingCapital) {
+        repair.markReclassifyingCapital();
+      }
       replaceRepairStages(
-          repair, request.plan(), canonicalEstimateLines(estimate, request.lines()));
+          repair, request.plan(), canonicalLines);
       MaintenanceRepair repairSaved = repairs.saveAndFlush(repair);
       linkedRepair = repairSaved;
       if (repairSaved.getExecutionState() == RepairExecutionState.QUEUED) {
         enqueueRepairComplexityStatusSync(
             repairSaved, derived(key, "repair-complexity-status"));
-        if (repairSaved.getTaskBoardVersion() != null) {
+        if (repairSaved.getTaskBoardVersion() != null && !reclassifyingCapital) {
           reconciliations.enqueue(
               repairSaved.getId(),
               "TASK_BOARD",
@@ -1156,6 +1219,38 @@ public class MaintenanceApplicationService {
   @Transactional(readOnly = true)
   public List<RepairResponse> repairs(UUID warehouseId) {
     return repairs.findAllByWarehouseIdOrderByCreatedAtDesc(warehouseId).stream().map(this::repairResponse).toList();
+  }
+
+  @Transactional(readOnly = true)
+  public List<RepairResponse> activeCapitalRepairs(UUID warehouseId) {
+    return repairs.findAllByWarehouseIdOrderByCreatedAtDesc(warehouseId).stream()
+        .filter(value -> value.getExecutionState() != RepairExecutionState.DRAFT)
+        .filter(value -> value.getExecutionState() != RepairExecutionState.CANCELLED)
+        .filter(value -> value.getAcceptanceState() != RepairAcceptanceState.ACCEPTED)
+        .filter(value -> value.getAcceptanceState() != RepairAcceptanceState.WRITTEN_OFF)
+        .map(this::repairResponse)
+        .filter(value -> value.complexity().type() == RepairComplexity.CAPITAL)
+        .toList();
+  }
+
+  @Transactional(readOnly = true)
+  public RepairResponse activeCapitalRepair(UUID repairId) {
+    MaintenanceRepair value =
+        repairs
+            .findById(repairId)
+            .orElseThrow(
+                () -> new MaintenanceNotFoundException("Active capital repair not found"));
+    if (value.getExecutionState() == RepairExecutionState.DRAFT
+        || value.getExecutionState() == RepairExecutionState.CANCELLED
+        || value.getAcceptanceState() == RepairAcceptanceState.ACCEPTED
+        || value.getAcceptanceState() == RepairAcceptanceState.WRITTEN_OFF) {
+      throw new MaintenanceNotFoundException("Active capital repair not found");
+    }
+    RepairResponse response = repairResponse(value);
+    if (response.complexity().type() != RepairComplexity.CAPITAL) {
+      throw new MaintenanceNotFoundException("Active capital repair not found");
+    }
+    return response;
   }
 
   @Transactional(readOnly = true)
@@ -1275,16 +1370,26 @@ public class MaintenanceApplicationService {
             && repair.getTaskBoardVersion() != null;
     boolean synchronizeQueuedRepairStatus =
         repair.getExecutionState() == RepairExecutionState.QUEUED;
+    List<EstimateLineResponse> canonicalLines =
+        canonicalRepairLines(repair.getWarehouseId(), request.lines());
+    RepairComplexitySnapshot updatedComplexity =
+        repairComplexityForLines(repair.getWarehouseId(), canonicalLines);
+    boolean reclassifyingCapital =
+        repair.getExecutionState() == RepairExecutionState.QUEUED
+            && updatedComplexity.type() == RepairComplexity.CAPITAL;
     if (repair.getExecutionState() == RepairExecutionState.QUEUED) {
       repair.amendPreStartPlan();
     } else {
       repair.touchPlan();
     }
+    if (reclassifyingCapital) {
+      repair.markReclassifyingCapital();
+    }
     repair.replaceCoverMediaId(request.coverMediaId());
     replaceRepairStages(
         repair,
         request.stages(),
-        canonicalRepairLines(repair.getWarehouseId(), request.lines()));
+        canonicalLines);
     replaceMedia(
         "REPAIR",
         "MAINTENANCE_REPAIR",
@@ -1298,7 +1403,7 @@ public class MaintenanceApplicationService {
           stableOperationKey(
               "repair-complexity-status", saved.getId(), saved.getVersion()));
     }
-    if (updateRegisteredTask) {
+    if (updateRegisteredTask && !reclassifyingCapital) {
       reconciliations.enqueue(
           saved.getId(),
           "TASK_BOARD",
@@ -1352,6 +1457,8 @@ public class MaintenanceApplicationService {
               .orElseThrow(() -> new MaintenanceNotFoundException("Repair not found"));
       assertStreamParity(repair, locked);
       repair.selectPriority(request.priority());
+      repair.selectLogisticsPlanning(
+          request.logisticsPlanningMode(), request.logisticsScheduledDate());
       repair.queueUnderExistingRepair();
       repair.applyExternalTaskCancellation();
       repair.markReconciliationRequired();
@@ -1408,12 +1515,25 @@ public class MaintenanceApplicationService {
           repairFact(MaintenanceEventType.REPAIR_REWORK_CREATED, sourceSaved),
           repairSnapshot(sourceSaved));
       stages = repairStages.findAllByRepairIdOrderByStageNo(id);
-      stages.forEach(RepairStage::queued);
+      RepairComplexitySnapshot complexity =
+          repairComplexityFromStoredStages(repair.getWarehouseId(), repair.getId());
+      prepareStagesForQueue(stages, complexity.type() == RepairComplexity.CAPITAL);
       repairStages.saveAllAndFlush(stages);
       repair.selectPriority(request.priority());
-      repair.queue(lease.leaseId(), lease.version(), lease.fencingToken(), lease.expiresAt());
+      repair.selectLogisticsPlanning(
+          request.logisticsPlanningMode(), request.logisticsScheduledDate());
+      if (complexity.type() == RepairComplexity.CAPITAL) {
+        repair.queueExternalCapital(
+            lease.leaseId(), lease.version(), lease.fencingToken(), lease.expiresAt());
+      } else {
+        repair.queue(lease.leaseId(), lease.version(), lease.fencingToken(), lease.expiresAt());
+      }
       saved = repairs.saveAndFlush(repair);
-      enqueueTaskRegistration(saved, derived(key, "task-register"));
+      if (complexity.type() != RepairComplexity.CAPITAL) {
+        enqueueTaskRegistration(saved, derived(key, "task-register"));
+        enqueueDriverLogisticsTaskIfRequired(
+            saved, derived(key, "driver-logistics-task"));
+      }
       enqueueRepairComplexityStatusSync(
           saved, derived(key, "repair-complexity-status"));
       events.append(
@@ -1429,8 +1549,15 @@ public class MaintenanceApplicationService {
       assertVersion(locked.get(stream(id)), request.expectedVersion());
       boolean priorityChanged = repair.getPriority() != request.priority();
       repair.selectPriority(request.priority());
-      saved = priorityChanged ? repairs.saveAndFlush(repair) : repair;
-      if (priorityChanged) {
+      boolean logisticsPlanningChanged =
+          repair.selectLogisticsPlanning(
+              request.logisticsPlanningMode(),
+              request.logisticsScheduledDate());
+      saved =
+          priorityChanged || logisticsPlanningChanged
+              ? repairs.saveAndFlush(repair)
+              : repair;
+      if (priorityChanged || logisticsPlanningChanged) {
         events.append(
             MaintenanceAggregateType.REPAIR,
             id,
@@ -1905,6 +2032,8 @@ public class MaintenanceApplicationService {
           case "COMPLETE_EMPTY_ESTIMATE" -> reconcileEmptyEstimate(work);
           case "REGISTER_TASK" -> reconcileTask(work, false);
           case "UPDATE_TASK" -> reconcileTask(work, true);
+          case "CREATE_DRIVER_TASK" ->
+              reconcileDriverLogisticsTask(work);
           case "SYNC_REPAIR_COMPLEXITY_STATUS" ->
               reconcileRepairComplexityStatus(work);
           case "APPLY_CHARACTERISTIC" -> reconcileAcceptedCharacteristic(work);
@@ -1988,11 +2117,30 @@ public class MaintenanceApplicationService {
 
   private MaintenanceRepair createEstimateRepair(
       MaintenanceEstimate estimate, List<EstimatePlanStage> estimatePlan) {
-    return createEstimateRepair(estimate, estimatePlan, 3);
+    return createEstimateRepair(
+        estimate,
+        estimatePlan,
+        3,
+        RepairLogisticsPlanningMode.AUTO,
+        null);
   }
 
   private MaintenanceRepair createEstimateRepair(
       MaintenanceEstimate estimate, List<EstimatePlanStage> estimatePlan, int priority) {
+    return createEstimateRepair(
+        estimate,
+        estimatePlan,
+        priority,
+        RepairLogisticsPlanningMode.AUTO,
+        null);
+  }
+
+  private MaintenanceRepair createEstimateRepair(
+      MaintenanceEstimate estimate,
+      List<EstimatePlanStage> estimatePlan,
+      int priority,
+      RepairLogisticsPlanningMode logisticsPlanningMode,
+      LocalDate logisticsScheduledDate) {
     List<PlanStageInput> plan = estimatePlan.stream()
         .map(value -> new PlanStageInput(
             value.getId(), value.getStageKind(), value.getStageNo(),
@@ -2003,20 +2151,46 @@ public class MaintenanceApplicationService {
             value.getGroupComment(),
             value.getTaskDeadline()))
         .toList();
-    return createEstimateRepairFromPlan(estimate, plan, priority);
+    return createEstimateRepairFromPlan(
+        estimate,
+        plan,
+        priority,
+        logisticsPlanningMode,
+        logisticsScheduledDate);
   }
 
   private MaintenanceRepair createEstimateRepairFromPlan(
       MaintenanceEstimate estimate, List<PlanStageInput> plan) {
-    return createEstimateRepairFromPlan(estimate, plan, 3);
+    return createEstimateRepairFromPlan(
+        estimate,
+        plan,
+        3,
+        RepairLogisticsPlanningMode.AUTO,
+        null);
   }
 
   private MaintenanceRepair createEstimateRepairFromPlan(
       MaintenanceEstimate estimate, List<PlanStageInput> plan, int priority) {
+    return createEstimateRepairFromPlan(
+        estimate,
+        plan,
+        priority,
+        RepairLogisticsPlanningMode.AUTO,
+        null);
+  }
+
+  private MaintenanceRepair createEstimateRepairFromPlan(
+      MaintenanceEstimate estimate,
+      List<PlanStageInput> plan,
+      int priority,
+      RepairLogisticsPlanningMode logisticsPlanningMode,
+      LocalDate logisticsScheduledDate) {
     MaintenanceRepair newRepair = MaintenanceRepair.primary(
         estimate.getWarehouseId(), estimate.getRentalItemId(), estimate.getRentalItemVersionSnapshot(),
         estimate.getId(), RepairOrigin.ESTIMATE, estimate.getDispatchDate(), estimate.getSourceParty(), actorJson());
     newRepair.selectPriority(priority);
+    newRepair.selectLogisticsPlanning(
+        logisticsPlanningMode, logisticsScheduledDate);
     newRepair.replaceCoverMediaId(estimate.getCoverMediaId());
     MaintenanceRepair repair = repairs.saveAndFlush(newRepair);
     replaceRepairStages(
@@ -3999,6 +4173,41 @@ public class MaintenanceApplicationService {
         Map.of("repairId", repair.getId().toString()));
   }
 
+  private void enqueueDriverLogisticsTaskIfRequired(
+      MaintenanceRepair repair, UUID key) {
+    boolean deliveryRequired =
+        repairStages.findAllByRepairIdOrderByStageNo(repair.getId()).stream()
+            .anyMatch(
+                stage ->
+                    stage.getStageKind()
+                        == RepairStageKind.MOVE_TO_REPAIR);
+    if (!deliveryRequired) {
+      return;
+    }
+    reconciliations.enqueue(
+        repair.getId(),
+        "LOGISTICS",
+        "CREATE_DRIVER_TASK",
+        key,
+        Map.of(
+            "repairId", repair.getId().toString(),
+            "kind", "DELIVER_TO_REPAIR"));
+  }
+
+  private static void prepareStagesForQueue(
+      List<RepairStage> stages, boolean externalCapital) {
+    for (RepairStage stage : stages) {
+      if (externalCapital) {
+        stage.completeAsExternalCapital();
+      } else if (stage.getStageKind()
+          == RepairStageKind.REPAIR_WORK) {
+        stage.queued();
+      } else {
+        stage.routedThroughLogistics();
+      }
+    }
+  }
+
   private void enqueueRepairComplexityStatusSync(
       MaintenanceRepair repair, UUID key) {
     reconciliations.enqueue(
@@ -4093,7 +4302,13 @@ public class MaintenanceApplicationService {
 
   private void confirmTaskRegistration(
       UUID repairId, MaintenanceDependencyGateway.TaskSnapshot task) {
-    List<RepairStage> stages = repairStages.findAllByRepairIdOrderByStageNo(repairId);
+    List<RepairStage> stages =
+        repairStages.findAllByRepairIdOrderByStageNo(repairId).stream()
+            .filter(
+                stage ->
+                    stage.getStageKind()
+                        == RepairStageKind.REPAIR_WORK)
+            .toList();
     if (task.stages().size() != stages.size()) {
       throw new MaintenanceDependencyException(
           org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
@@ -4127,6 +4342,8 @@ public class MaintenanceApplicationService {
     if (repair.getExecutionState() == RepairExecutionState.QUEUED) {
       enqueueTaskRegistration(
           repair, stableOperationKey("register-task", repair.getExternalTaskId(), 0));
+      enqueueDriverLogisticsTaskIfRequired(
+          repair, stableOperationKey("driver-logistics-task", repair.getId(), 0));
       return Map.of("repairId", repair.getId().toString(), "alreadyQueued", true);
     }
     if (repair.getExecutionState() != RepairExecutionState.DRAFT || repair.getKind() == RepairKind.REWORK) {
@@ -4154,15 +4371,28 @@ public class MaintenanceApplicationService {
       Optional<MaintenanceRepair> lifecycleOwner =
           primaryLifecycleOwnerWithLeaseIdentity(repair);
       if (lifecycleOwner.isPresent()) {
-        stages.forEach(RepairStage::queued);
+        prepareStagesForQueue(
+            stages, complexity.type() == RepairComplexity.CAPITAL);
         repairStages.saveAllAndFlush(stages);
         repair.confirmRentalItemVersion(liveAsset.version());
-        repair.queueUnderExistingRepair();
+        if (complexity.type() == RepairComplexity.CAPITAL) {
+          repair.queueExternalCapitalUnderExistingRepair();
+        } else {
+          repair.queueUnderExistingRepair();
+        }
         MaintenanceRepair saved = repairs.saveAndFlush(repair);
-        enqueueTaskRegistration(
-            saved, stableOperationKey("register-task", saved.getExternalTaskId(), 0));
-        enqueueRepairComplexityStatusSync(
-            saved, derived(work.idempotencyKey(), "repair-complexity-status"));
+        if (complexity.type() != RepairComplexity.CAPITAL) {
+          enqueueTaskRegistration(
+              saved, stableOperationKey("register-task", saved.getExternalTaskId(), 0));
+          enqueueDriverLogisticsTaskIfRequired(
+              saved,
+              stableOperationKey(
+                  "driver-logistics-task", saved.getId(), 0));
+        }
+        if (complexity.type() != RepairComplexity.CAPITAL) {
+          enqueueRepairComplexityStatusSync(
+              saved, derived(work.idempotencyKey(), "repair-complexity-status"));
+        }
         events.append(
             MaintenanceAggregateType.REPAIR,
             saved.getId(),
@@ -4219,12 +4449,25 @@ public class MaintenanceApplicationService {
           org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
           "Asset-service did not confirm the calculated repair status");
     }
-    stages.forEach(RepairStage::queued);
+    prepareStagesForQueue(
+        stages, complexity.type() == RepairComplexity.CAPITAL);
     repairStages.saveAllAndFlush(stages);
     repair.confirmRentalItemVersion(asset.version());
-    repair.queue(lease.leaseId(), lease.version(), lease.fencingToken(), lease.expiresAt());
+    if (complexity.type() == RepairComplexity.CAPITAL) {
+      repair.queueExternalCapital(
+          lease.leaseId(), lease.version(), lease.fencingToken(), lease.expiresAt());
+    } else {
+      repair.queue(lease.leaseId(), lease.version(), lease.fencingToken(), lease.expiresAt());
+    }
     MaintenanceRepair saved = repairs.saveAndFlush(repair);
-    enqueueTaskRegistration(saved, stableOperationKey("register-task", saved.getExternalTaskId(), 0));
+    if (complexity.type() != RepairComplexity.CAPITAL) {
+      enqueueTaskRegistration(
+          saved, stableOperationKey("register-task", saved.getExternalTaskId(), 0));
+      enqueueDriverLogisticsTaskIfRequired(
+          saved,
+          stableOperationKey(
+              "driver-logistics-task", saved.getId(), 0));
+    }
     events.append(
         MaintenanceAggregateType.REPAIR,
         saved.getId(),
@@ -4319,7 +4562,7 @@ public class MaintenanceApplicationService {
       task = dependencies.registerTask(
           work.idempotencyKey(), repair.getExternalTaskId(), repair.getId(), repair.getWarehouseId(),
           repair.getRentalItemId(), asset.number(), repair.getDispatchDate(), repair.getPriority(),
-          repairCapacitySettings.get(repair.getWarehouseId()).maxRepairsPerDay(), stages);
+          repairCapacitySettings.get(repair.getWarehouseId()).repairPlaceCount(), stages);
     }
     validateTaskTruth(repair, task, stages.size());
     confirmTaskRegistration(repair.getId(), task);
@@ -4343,6 +4586,70 @@ public class MaintenanceApplicationService {
         "taskBoardVersion", task.version());
   }
 
+  private Object reconcileDriverLogisticsTask(
+      MaintenanceReconciliationStore.WorkItem work) {
+    if (!"LOGISTICS".equals(work.dependency())
+        || !"DELIVER_TO_REPAIR"
+            .equals(work.payload().path("kind").asText())) {
+      throw new IllegalStateException(
+          "Stored maintenance driver-task intent is invalid");
+    }
+    MaintenanceRepair repair = requireWorkRepair(work);
+    if (repair.getExecutionState() != RepairExecutionState.QUEUED
+        || repair.getReclassificationState()
+            == RepairReclassificationState.EXTERNAL_CAPITAL) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Only queued ordinary repair work can create a delivery task");
+    }
+    boolean deliveryRequired =
+        repairStages.findAllByRepairIdOrderByStageNo(repair.getId()).stream()
+            .anyMatch(
+                stage ->
+                    stage.getStageKind()
+                        == RepairStageKind.MOVE_TO_REPAIR);
+    if (!deliveryRequired) {
+      throw new MaintenanceConflictException(
+          "MAINTENANCE_STATE_CONFLICT",
+          "Repair no longer requires delivery to a repair place");
+    }
+
+    String sourceType;
+    UUID sourceId;
+    var inventorySource =
+        inventorySources.findByRepairId(repair.getId()).orElse(null);
+    if (inventorySource != null) {
+      sourceType = "INVENTORY";
+      sourceId = inventorySource.getFindingId();
+    } else if (repair.getEstimateId() != null) {
+      sourceType = "ESTIMATE";
+      sourceId = repair.getEstimateId();
+    } else {
+      sourceType = "REPAIR";
+      sourceId = repair.getId();
+    }
+
+    MaintenanceDependencyGateway.DriverTaskSnapshot task =
+        dependencies.createDriverTask(
+            work.idempotencyKey(),
+            new MaintenanceDependencyGateway.DriverTaskCommand(
+                repair.getWarehouseId(),
+                repair.getRentalItemId(),
+                repair.getId(),
+                sourceType,
+                sourceId,
+                "DELIVER_TO_REPAIR",
+                repair.getLogisticsPlanningMode(),
+                repair.getLogisticsScheduledDate(),
+                repair.getPriority(),
+                false));
+    return Map.of(
+        "repairId", repair.getId().toString(),
+        "driverTaskId", task.id().toString(),
+        "driverTaskVersion", task.version(),
+        "state", task.state());
+  }
+
   private Object reconcileRepairComplexityStatus(
       MaintenanceReconciliationStore.WorkItem work) {
     MaintenanceRepair requested = requireWorkRepair(work);
@@ -4357,10 +4664,17 @@ public class MaintenanceApplicationService {
                     new MaintenanceConflictException(
                         "MAINTENANCE_STATE_CONFLICT",
                         "Queued repair disappeared during complexity synchronization"));
-    if (repair.getExecutionState() != RepairExecutionState.QUEUED) {
+    boolean externalCapitalPendingStatusSync =
+        repair.getExecutionState() == RepairExecutionState.COMPLETED
+            && repair.getAcceptanceState() == RepairAcceptanceState.PENDING
+            && repair.getReclassificationState()
+                == RepairReclassificationState.EXTERNAL_CAPITAL;
+    if (repair.getExecutionState() != RepairExecutionState.QUEUED
+        && repair.getExecutionState() != RepairExecutionState.IN_PROGRESS
+        && !externalCapitalPendingStatusSync) {
       throw new MaintenanceConflictException(
           "MAINTENANCE_STATE_CONFLICT",
-          "Only a queued pre-start repair can synchronize its calculated status");
+          "Only active ordinary work or pending external capital repair can synchronize its calculated status");
     }
 
     List<MaintenanceRepair> complexityRepairs =
@@ -4423,6 +4737,43 @@ public class MaintenanceApplicationService {
             .anyMatch(
                 complexity ->
                     complexity.type() == RepairComplexity.CAPITAL);
+    Map<UUID, MaintenanceRepair> changed = new LinkedHashMap<>();
+    if (capital) {
+      for (MaintenanceRepair value : complexityRepairs) {
+        if (value.getExecutionState() != RepairExecutionState.QUEUED
+            && value.getExecutionState() != RepairExecutionState.IN_PROGRESS) {
+          continue;
+        }
+        if (value.getTaskBoardVersion() != null) {
+          MaintenanceDependencyGateway.TaskSnapshot cancelled =
+              dependencies.cancelTask(
+                  derived(work.idempotencyKey(), "withdraw-task:" + value.getId()),
+                  value.getExternalTaskId(),
+                  value.getTaskBoardVersion());
+          if (!"CANCELLED".equals(cancelled.state())) {
+            throw new MaintenanceDependencyException(
+                org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                "Task-board did not confirm ordinary repair route withdrawal");
+          }
+        }
+        List<RepairStage> stages =
+            repairStages.findAllByRepairIdOrderByStageNo(value.getId());
+        stages.forEach(RepairStage::completeAsExternalCapital);
+        repairStages.saveAllAndFlush(stages);
+        value.completeAsExternalCapital();
+        repairPlaces.markReadyToReleaseIfOccupied(
+            value.getWarehouseId(), value.getId());
+        changed.put(value.getId(), value);
+      }
+    } else {
+      for (MaintenanceRepair value : complexityRepairs) {
+        if ((value.getExecutionState() == RepairExecutionState.QUEUED
+                || value.getExecutionState() == RepairExecutionState.IN_PROGRESS)
+            && value.stabilizeOrdinaryClassification()) {
+          changed.put(value.getId(), value);
+        }
+      }
+    }
     String desiredStatus = capital ? "CAPITAL_REPAIR" : "REPAIR";
     String transition =
         capital ? "QUEUE_TO_CAPITAL_REPAIR" : "QUEUE_TO_REPAIR";
@@ -4493,7 +4844,6 @@ public class MaintenanceApplicationService {
     }
 
     long synchronizedAssetVersion = synchronizedAsset.version();
-    Map<UUID, MaintenanceRepair> changed = new LinkedHashMap<>();
     for (MaintenanceRepair value : synchronizedRepairs) {
       if (value.getRentalItemVersionSnapshot() != synchronizedAssetVersion) {
         value.confirmRentalItemVersion(synchronizedAssetVersion);
@@ -4764,6 +5114,10 @@ public class MaintenanceApplicationService {
   private List<MaintenanceDependencyGateway.TaskStage> taskStages(MaintenanceRepair repair) {
     List<MediaReferenceInput> repairMedia = new ArrayList<>(repairMedia(repair));
     return repairStages.findAllByRepairIdOrderByStageNo(repair.getId()).stream()
+        .filter(
+            stage ->
+                stage.getStageKind()
+                    == RepairStageKind.REPAIR_WORK)
         .map(
             stage -> {
               List<EstimateLineResponse> work =
@@ -5505,7 +5859,8 @@ public class MaintenanceApplicationService {
     return new RepairResponse(
         value.getId(), rootId(value), value.getSourceRepairId(), value.getEstimateId(),
         value.getWarehouseId(), value.getRentalItemId(), value.getOrigin(), value.getKind(),
-        value.getExecutionState(), value.getAcceptanceState(), value.getVersion(), value.getDispatchDate(),
+        value.getExecutionState(), value.getAcceptanceState(), value.getReclassificationState(),
+        value.getVersion(), value.getDispatchDate(),
         value.getPriority(), value.getSourceParty(),
         new RepairPlanResponse(value.getId(), value.getVersion(), stages),
         inventorySource,
@@ -5515,6 +5870,8 @@ public class MaintenanceApplicationService {
         aggregateMedia, effectiveCoverMediaId(value.getCoverMediaId(), aggregateMedia),
         complexity,
         value.isMovementToShipment(),
+        value.getLogisticsPlanningMode(),
+        value.getLogisticsScheduledDate(),
         value.getCreatedAt(), value.getUpdatedAt(),
         actor(value.getActorRef()));
   }
@@ -5551,32 +5908,10 @@ public class MaintenanceApplicationService {
         forcedCapital = true;
       }
     }
-    MaintenanceDependencyGateway.RepairComplexityThresholds thresholds =
-        dependencies.repairComplexityThresholds(warehouseId);
-    if (thresholds == null
-        || !warehouseId.equals(thresholds.warehouseId())) {
-      throw new MaintenanceDependencyException(
-          org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
-          "Task-board omitted warehouse repair complexity thresholds");
-    }
-    RepairComplexity type;
-    if (forcedCapital) {
-      type = RepairComplexity.CAPITAL;
-    } else if (plannedMinutes.compareTo(
-            BigDecimal.valueOf(thresholds.lightBoundaryMinutes()))
-        <= 0) {
-      type = RepairComplexity.LIGHT;
-    } else if (plannedMinutes.compareTo(
-            BigDecimal.valueOf(thresholds.mediumBoundaryMinutes()))
-        <= 0) {
-      type = RepairComplexity.MEDIUM;
-    } else if (plannedMinutes.compareTo(
-            BigDecimal.valueOf(thresholds.complexBoundaryMinutes()))
-        <= 0) {
-      type = RepairComplexity.COMPLEX;
-    } else {
-      type = RepairComplexity.CAPITAL;
-    }
+    RepairComplexity type =
+        repairComplexitySettings
+            .requireSettings(warehouseId)
+            .classify(plannedMinutes, forcedCapital);
     RepairComplexityColors colors = repairComplexityColors.requireColors();
     String canonicalMinutes =
         plannedMinutes.signum() == 0
@@ -5731,27 +6066,30 @@ public class MaintenanceApplicationService {
   private TransferRepairArrivalPreflightResponse transferArrivalPreflight(
       MaintenanceRepair active,
       List<MaintenanceRepair> chain,
-      MaintenanceDependencyGateway.QueueCapabilities capabilities) {
+      MaintenanceDependencyGateway.QueueCapabilities capabilities,
+      RepairComplexitySnapshot targetComplexity) {
     Map<UUID, MaintenanceDependencyGateway.RoutingQueueRequirement> requirements =
         new LinkedHashMap<>();
-    for (MaintenanceRepair repair : chain) {
-      for (RepairStage stage :
-          repairStages.findAllByRepairIdOrderByStageNo(repair.getId())) {
-        if (stage.getState() == RepairStageState.DONE
-            || stage.getState() == RepairStageState.CANCELLED) {
-          continue;
-        }
-        MaintenanceDependencyGateway.RoutingQueueRequirement requirement =
-            new MaintenanceDependencyGateway.RoutingQueueRequirement(
-                stage.getRoutingQueueId(),
-                stage.getRoutingQueueType().trim().toUpperCase(Locale.ROOT));
-        MaintenanceDependencyGateway.RoutingQueueRequirement previous =
-            requirements.putIfAbsent(
-                requirement.queueDefinitionId(), requirement);
-        if (previous != null && !previous.equals(requirement)) {
-          throw new MaintenanceConflictException(
-              "MAINTENANCE_STATE_CONFLICT",
-              "One repair queue definition has conflicting route types");
+    if (targetComplexity.type() != RepairComplexity.CAPITAL) {
+      for (MaintenanceRepair repair : chain) {
+        for (RepairStage stage :
+            repairStages.findAllByRepairIdOrderByStageNo(repair.getId())) {
+          if (stage.getState() == RepairStageState.DONE
+              || stage.getState() == RepairStageState.CANCELLED) {
+            continue;
+          }
+          MaintenanceDependencyGateway.RoutingQueueRequirement requirement =
+              new MaintenanceDependencyGateway.RoutingQueueRequirement(
+                  stage.getRoutingQueueId(),
+                  stage.getRoutingQueueType().trim().toUpperCase(Locale.ROOT));
+          MaintenanceDependencyGateway.RoutingQueueRequirement previous =
+              requirements.putIfAbsent(
+                  requirement.queueDefinitionId(), requirement);
+          if (previous != null && !previous.equals(requirement)) {
+            throw new MaintenanceConflictException(
+                "MAINTENANCE_STATE_CONFLICT",
+                "One repair queue definition has conflicting route types");
+          }
         }
       }
     }

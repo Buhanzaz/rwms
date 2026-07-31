@@ -260,6 +260,7 @@ function queueFixture(
     name: "Электрики",
     description: null,
     type: "REPAIR",
+    purpose: "GENERAL",
     ...overrides,
   }
 }
@@ -416,7 +417,7 @@ describe("maintenance catalog settings", () => {
     ).toBeTruthy()
     expect(screen.getByLabelText("Лёгкий ремонт")).toBeTruthy()
     expect(screen.getByLabelText("Средний ремонт")).toBeTruthy()
-    expect(screen.getByLabelText("Сложный ремонт")).toBeTruthy()
+    expect(screen.getByLabelText("Тяжёлый ремонт")).toBeTruthy()
     expect(screen.getByLabelText("Капитальный ремонт")).toBeTruthy()
 
     fireEvent.change(screen.getByLabelText("Лёгкий ремонт"), {

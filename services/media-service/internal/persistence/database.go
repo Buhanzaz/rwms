@@ -106,9 +106,10 @@ func verifyMigrationHistory(history []migrationHistoryRow) error {
 		{"7", "dynamic cabin owner projection", "V7__dynamic_cabin_owner_projection.sql", mediamigration.V7},
 		{"8", "task board worker media", "V8__task_board_worker_media.sql", mediamigration.V8},
 		{"9", "asset import worker", "V9__asset_import_worker.sql", mediamigration.V9},
+		{"10", "canonical cabin photo library", "V10__canonical_cabin_photo_library.sql", mediamigration.V10},
 	}
 	if len(history) != len(expected) {
-		return fmt.Errorf("%w: expected the exact approved V1 through V9 history, found %d versioned rows", ErrSchemaNotReady, len(history))
+		return fmt.Errorf("%w: expected the exact approved V1 through V10 history, found %d versioned rows", ErrSchemaNotReady, len(history))
 	}
 	expectedByVersion := make(map[string]approvedMigration, len(expected))
 	for _, migration := range expected {

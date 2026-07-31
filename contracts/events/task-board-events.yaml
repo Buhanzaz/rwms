@@ -1,7 +1,7 @@
 asyncapi: 3.1.0
 info:
   title: RWMS Task Board Kafka Facts
-  version: 1.2.0
+  version: 1.3.0
   description: >-
     Canonical version-one facts published by task-board-service in
     DomainEventEnvelopeV2 through its PostgreSQL transactional outbox. The V2

@@ -93,9 +93,6 @@ class MaintenanceTaskCorrelationRecoveryIntegrationTest {
           catalog_version cascade
         """);
     reset(dependencies);
-    when(dependencies.repairComplexityThresholds(any(UUID.class)))
-        .thenAnswer(invocation -> new MaintenanceDependencyGateway.RepairComplexityThresholds(
-            invocation.getArgument(0), 0L, 60, 180, 360));
     when(dependencies.preflightMaintenanceRouting(any(UUID.class), anyList()))
         .thenAnswer(invocation -> {
           List<MaintenanceDependencyGateway.RoutingQueueRequirement> requirements =

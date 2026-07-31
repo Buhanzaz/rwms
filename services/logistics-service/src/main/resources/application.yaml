@@ -132,6 +132,10 @@ rwms:
       relay-enabled: ${LOGISTICS_EQUIPMENT_MOVEMENT_RELAY_ENABLED:true}
       relay-delay: ${LOGISTICS_EQUIPMENT_MOVEMENT_RELAY_DELAY:1s}
       relay-initial-delay: ${LOGISTICS_EQUIPMENT_MOVEMENT_RELAY_INITIAL_DELAY:1s}
+    driver-queue:
+      relay-enabled: ${LOGISTICS_DRIVER_QUEUE_RELAY_ENABLED:true}
+      relay-delay: ${LOGISTICS_DRIVER_QUEUE_RELAY_DELAY:1s}
+      relay-initial-delay: ${LOGISTICS_DRIVER_QUEUE_RELAY_INITIAL_DELAY:1s}
     eventing:
       outbox:
         relay-delay: ${LOGISTICS_KAFKA_OUTBOX_RELAY_DELAY:1s}

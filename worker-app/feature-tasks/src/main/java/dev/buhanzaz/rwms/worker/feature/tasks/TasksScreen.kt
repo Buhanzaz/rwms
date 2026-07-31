@@ -58,9 +58,16 @@ fun TasksScreen(
                 total = state.progress?.totalUnits ?: 0,
                 message = state.progress?.message,
             )
+            val hasIndividualLogistics = state.categories.any {
+                it.queuePurpose == "LOGISTICS_DRIVER"
+            }
             Text(
                 state.session?.currentGroupName?.let { "Текущая группа: $it" }
-                    ?: "Текущая группа не выбрана руководителем",
+                    ?: if (hasIndividualLogistics) {
+                        "Доступны индивидуальные логистические задания"
+                    } else {
+                        "Текущая группа не выбрана руководителем"
+                    },
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 style = MaterialTheme.typography.bodyMedium,
                 color = if (state.session?.operationalAvailability == "DISABLED") {
@@ -71,7 +78,11 @@ fun TasksScreen(
             )
             if (state.session?.operationalAvailability == "DISABLED") {
                 Text(
-                    "Группа временно недоступна — новые задания взять нельзя",
+                    if (hasIndividualLogistics && state.session?.currentGroupId == null) {
+                        "Рабочий временно недоступен — новые задания взять нельзя"
+                    } else {
+                        "Группа временно недоступна — новые задания взять нельзя"
+                    },
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -122,6 +133,13 @@ internal fun TaskQueueList(
                         modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.titleMedium,
                     )
+                    if (section.queuePurpose == "LOGISTICS_DRIVER") {
+                        Text(
+                            "Логистика",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                     Text(
                         section.tasks.size.toString(),
                         style = MaterialTheme.typography.labelLarge,

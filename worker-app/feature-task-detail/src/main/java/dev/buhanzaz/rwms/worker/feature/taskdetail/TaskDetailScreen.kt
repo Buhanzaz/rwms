@@ -63,9 +63,18 @@ fun TaskDetailScreen(
     val readyServerEvidence = detail?.evidence.orEmpty()
         .filter { evidence -> evidence.state == "READY" && !evidence.readPath.isNullOrBlank() }
     val readyEvidenceIds = readyServerEvidence.mapTo(mutableSetOf()) { it.evidenceId }.apply {
+        addAll(detail?.evidence.orEmpty().filter { it.state == "READY" }.map { it.evidenceId })
         addAll(state.evidence.filter { it.state == "READY" }.map { it.evidenceId })
     }
     val readyEvidenceCount = readyEvidenceIds.size
+    var explicitlySelectedEvidenceId by remember(entryId, readyEvidenceIds) {
+        mutableStateOf<String?>(null)
+    }
+    val selectedCompletionEvidenceId = completionEvidenceId(
+        queuePurpose = state.queuePurpose,
+        readyEvidenceIds = readyEvidenceIds,
+        selectedEvidenceId = explicitlySelectedEvidenceId,
+    )
     val localEvidenceWithoutServerPhoto = state.evidence.filterNot { local ->
         readyServerEvidence.any { remote -> remote.evidenceId == local.evidenceId }
     }
@@ -99,6 +108,7 @@ fun TaskDetailScreen(
         currentWorkerId = userId,
         taskStatus = displayedStatus,
         availabilityMode = detail?.availabilityMode,
+        queuePurpose = state.queuePurpose,
         assignments = state.assignments,
         locallyPending = task?.locallyPending == true,
         hasCurrentGroup = session?.currentGroupId != null,
@@ -118,7 +128,9 @@ fun TaskDetailScreen(
                             Text(
                                 when (it) {
                                     "MANDATORY" -> "Обязательное"
+                                    "REQUIRED_JOIN" -> "Требуется присоединение"
                                     "SECONDARY_PENDING" -> "Ожидает основного исполнителя"
+                                    "OPTIONAL_JOIN" -> "Можно присоединиться"
                                     else -> "Доступное"
                                 },
                             )
@@ -144,19 +156,30 @@ fun TaskDetailScreen(
                     state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
             }
-            item {
-                Column(
-                    Modifier.padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text("Текущая группа", style = MaterialTheme.typography.titleSmall)
-                    Text(session?.currentGroupName ?: "Не выбрана руководителем")
-                    if (session?.operationalAvailability == "DISABLED") {
-                        Text(
-                            "Группа временно недоступна",
-                            color = MaterialTheme.colorScheme.error,
-                        )
+            if (state.queuePurpose != LOGISTICS_DRIVER_QUEUE_PURPOSE) {
+                item {
+                    Column(
+                        Modifier.padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text("Текущая группа", style = MaterialTheme.typography.titleSmall)
+                        Text(session?.currentGroupName ?: "Не выбрана руководителем")
+                        if (session?.operationalAvailability == "DISABLED") {
+                            Text(
+                                "Группа временно недоступна",
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                     }
+                }
+            } else {
+                item {
+                    Text(
+                        "Логистическое задание · индивидуальное назначение",
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
             item {
@@ -166,10 +189,58 @@ fun TaskDetailScreen(
                 ) {
                     ActionButtons(
                         presentation = actionPresentation,
-                        completionAllowed = (detail?.completionAllowed == true) ||
-                            (task?.let { readyEvidenceCount >= it.resultPhotoMinCount } == true),
-                        onAction = { viewModel.perform(it.wireValue) },
+                        completionAllowed = (
+                            (detail?.completionAllowed == true) ||
+                                (task?.let { readyEvidenceCount >= it.resultPhotoMinCount } == true)
+                            ) &&
+                            (
+                                state.queuePurpose != LOGISTICS_DRIVER_QUEUE_PURPOSE ||
+                                    selectedCompletionEvidenceId != null
+                                ),
+                        onAction = {
+                            viewModel.perform(
+                                action = it.wireValue,
+                                evidenceId = selectedCompletionEvidenceId,
+                            )
+                        },
                     )
+                    if (
+                        state.queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE &&
+                        WorkerTaskAction.COMPLETE in actionPresentation.actions
+                    ) {
+                        when {
+                            readyEvidenceIds.isEmpty() ->
+                                Text(
+                                    "Для завершения добавьте фотографию бытовки",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            readyEvidenceIds.size == 1 ->
+                                Text(
+                                    "Единственная готовая фотография выбрана автоматически",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            else -> {
+                                Text(
+                                    "Выберите фотографию, которая станет титульной",
+                                    style = MaterialTheme.typography.titleSmall,
+                                )
+                                readyEvidenceIds.sorted().forEachIndexed { index, evidenceId ->
+                                    OutlinedButton(
+                                        onClick = { explicitlySelectedEvidenceId = evidenceId },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text(
+                                            if (explicitlySelectedEvidenceId == evidenceId) {
+                                                "Фото ${index + 1} · выбрано"
+                                            } else {
+                                                "Выбрать фото ${index + 1}"
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                     actionPresentation.message?.let {
                         Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -279,6 +350,12 @@ private fun ActionButtons(
                 onClick = { onAction(WorkerTaskAction.TAKE) },
                 enabled = presentation.actionsEnabled,
             ) { Text(presentation.takeLabel) }
+        }
+        if (WorkerTaskAction.JOIN in presentation.actions) {
+            Button(
+                onClick = { onAction(WorkerTaskAction.JOIN) },
+                enabled = presentation.actionsEnabled,
+            ) { Text("Присоединиться") }
         }
         if (WorkerTaskAction.PAUSE in presentation.actions) {
             OutlinedButton(

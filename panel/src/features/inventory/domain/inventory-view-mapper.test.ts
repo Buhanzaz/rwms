@@ -81,6 +81,8 @@ const finding: InventoryFinding = {
   ],
   frozenPlan: {
     mode: "MANUAL",
+    logisticsPlanningMode: "AUTO",
+    logisticsScheduledDate: null,
     catalogVersionId: "00000000-0000-4000-8000-000000000205",
     fingerprintSha256: "a".repeat(64),
     lines: [
@@ -208,6 +210,8 @@ describe("inventory service view mapper", () => {
         passportSnapshot: { type: "БК-2" },
       },
       repairCompletionMode: "MANUAL",
+      logisticsPlanningMode: "AUTO",
+      logisticsScheduledDate: null,
       publicationStatus: "PUBLISHED",
       publishedRepairTaskId: "00000000-0000-4000-8000-000000000212",
       lines: [

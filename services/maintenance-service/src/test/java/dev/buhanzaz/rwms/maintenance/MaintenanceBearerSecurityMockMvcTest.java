@@ -12,6 +12,7 @@ import dev.buhanzaz.rwms.maintenance.api.MaintenanceEstimateController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceInventoryController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceLogisticsController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceRepairController;
+import dev.buhanzaz.rwms.maintenance.api.MaintenanceRepairPlaceLogisticsController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceSettingsController;
 import dev.buhanzaz.rwms.maintenance.config.MaintenanceSecurityProblemWriter;
 import dev.buhanzaz.rwms.maintenance.config.SecurityConfiguration;
@@ -20,6 +21,7 @@ import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
 import dev.buhanzaz.rwms.maintenance.service.LogisticsReturnShortageService;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceApplicationService;
 import dev.buhanzaz.rwms.maintenance.service.RepairCapacitySettingsService;
+import dev.buhanzaz.rwms.maintenance.service.RepairPlaceService;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import dev.buhanzaz.rwms.platform.web.RwmsProblemDetailFactory;
 import java.util.UUID;
@@ -44,6 +46,7 @@ import org.springframework.test.web.servlet.MockMvc;
       MaintenanceInventoryController.class,
       MaintenanceLogisticsController.class,
       MaintenanceRepairController.class,
+      MaintenanceRepairPlaceLogisticsController.class,
       MaintenanceSettingsController.class
     },
     properties = {
@@ -66,6 +69,7 @@ class MaintenanceBearerSecurityMockMvcTest {
   @MockitoBean InventoryMaintenanceService inventoryService;
   @MockitoBean LogisticsReturnShortageService logisticsService;
   @MockitoBean RepairCapacitySettingsService repairCapacitySettingsService;
+  @MockitoBean RepairPlaceService repairPlaceService;
   @MockitoBean JwtDecoder jwtDecoder;
 
   @Test
@@ -80,6 +84,7 @@ class MaintenanceBearerSecurityMockMvcTest {
                   .replace("{findingId}", ID.toString())
                   .replace("{returnId}", ID.toString())
                   .replace("{transferId}", ID.toString())
+                  .replace("{repairId}", ID.toString())
                   .replace("{warehouseId}", ID.toString())
                   .replace("{lineId}", ID.toString()))
               .header(CorrelationIdFilter.HEADER_NAME, ID.toString()))
@@ -121,6 +126,8 @@ class MaintenanceBearerSecurityMockMvcTest {
           "plan":[],
           "mediaReferences":[],
           "priority":3,
+          "logisticsPlanningMode":"AUTO",
+          "logisticsScheduledDate":null,
           "coverMediaId":null
         }
         """;
@@ -143,6 +150,42 @@ class MaintenanceBearerSecurityMockMvcTest {
               .with(rejected)
               .contentType(MediaType.APPLICATION_JSON)
               .content(body))
+          .andExpect(status().isForbidden())
+          .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+          .andExpect(jsonPath("$.code").value("MAINTENANCE_FORBIDDEN"));
+    }
+  }
+
+  @Test
+  void privateLogisticsCapitalLookupRejectsWrongSubjectAndCombinedScopeAtHttpLevel()
+      throws Exception {
+    for (var rejected :
+        java.util.List.of(
+            jwt()
+                .jwt(
+                    token ->
+                        token
+                            .subject("other-service")
+                            .audience(java.util.List.of("rwms-services"))
+                            .claim("client_id", "logistics-service")
+                            .claim("principal_type", "SERVICE")
+                            .claim("scope", "maintenance.logistics")),
+            jwt()
+                .jwt(
+                    token ->
+                        token
+                            .subject("logistics-service")
+                            .audience(java.util.List.of("rwms-services"))
+                            .claim("client_id", "logistics-service")
+                            .claim("principal_type", "SERVICE")
+                            .claim(
+                                "scope",
+                                "maintenance.logistics maintenance.inventory")))) {
+      mvc.perform(
+              org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                      "/api/internal/maintenance/v1/logistics/repairs/capital/{repairId}",
+                      ID)
+                  .with(rejected))
           .andExpect(status().isForbidden())
           .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
           .andExpect(jsonPath("$.code").value("MAINTENANCE_FORBIDDEN"));

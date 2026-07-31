@@ -133,6 +133,7 @@ function queueFixture(): WorkQueueDto {
     name: "Ремонт",
     description: null,
     type: "REPAIR",
+    purpose: "GENERAL",
     sortOrder: 0,
     active: true,
     hidden: false,
@@ -152,6 +153,7 @@ function queueDefinitionFixture(): QueueDefinitionDto {
     name: "Ремонт",
     description: null,
     type: "REPAIR",
+    purpose: "GENERAL",
   }
 }
 
@@ -164,6 +166,39 @@ function classFixture(): WorkerClassDto {
     comment: null,
     sortOrder: 1,
     active: true,
+  }
+}
+
+function driverClassFixture(): WorkerClassDto {
+  return {
+    ...classFixture(),
+    id: "driver-class",
+    name: "Водители",
+  }
+}
+
+function driverQueueFixture(): WorkQueueDto {
+  const driverClass = driverClassFixture()
+  return {
+    ...queueFixture(),
+    id: "00000000-0000-4000-8000-000000000003",
+    definitionId: "00000000-0000-4000-8000-000000000011",
+    name: "Водители",
+    type: "MOVEMENT",
+    purpose: "LOGISTICS_DRIVER",
+    sortOrder: 10,
+    bindings: [
+      {
+        id: "driver-binding",
+        version: 1,
+        workerClass: driverClass,
+        order: 0,
+        primary: true,
+        stopTaskOnTake: false,
+        participationPolicy: "PRIMARY",
+        notifyOnPrimaryTake: false,
+      },
+    ],
   }
 }
 
@@ -280,11 +315,12 @@ beforeEach(() => {
       id: "00000000-0000-4000-8000-000000000011",
       name: "Водители",
       type: "MOVEMENT",
+      purpose: "LOGISTICS_DRIVER",
     },
   ])
-  mocks.listClasses.mockResolvedValue([])
+  mocks.listClasses.mockResolvedValue([driverClassFixture()])
   mocks.listGroups.mockResolvedValue([])
-  mocks.listQueues.mockResolvedValue([queueFixture()])
+  mocks.listQueues.mockResolvedValue([queueFixture(), driverQueueFixture()])
   mocks.listWorkers.mockResolvedValue([])
   mocks.disableGroup.mockResolvedValue({})
   mocks.enableGroup.mockResolvedValue({})
@@ -336,12 +372,16 @@ describe("TaskBoardSettingsPage navigation", () => {
     expect(
       createQueueButton.parentElement?.classList.contains("justify-end")
     ).toBe(true)
+    expect(screen.queryByText("Водители")).toBeNull()
 
     fireEvent.click(screen.getByRole("radio", { name: "Каталог очередей" }))
     expect(
       screen.getByRole("button", { name: "Создать общую очередь" })
     ).toBeTruthy()
-    expect(screen.getByText("Водители")).toBeTruthy()
+    expect(screen.queryByText("Водители")).toBeNull()
+
+    fireEvent.click(screen.getByRole("radio", { name: "Классы" }))
+    expect(screen.queryByText("Водители")).toBeNull()
 
     fireEvent.click(screen.getByRole("radio", { name: "Порядок" }))
 

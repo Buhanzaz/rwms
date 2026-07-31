@@ -23,6 +23,8 @@ import { CabinCompositionSettingsPage } from "@/features/settings/cabin-composit
 import { LogisticsReturnsPage } from "@/features/logistics/logistics-returns-page"
 import { LogisticsShipmentsPage } from "@/features/logistics/logistics-shipments-page"
 import { WarehouseTransfersPage } from "@/features/logistics/warehouse-transfers/warehouse-transfers-page"
+import { DriverBoardPage } from "@/features/logistics/driver-board"
+import { LogisticsSettingsPage } from "@/features/settings/logistics"
 import { OrdersRoutes } from "@/features/orders/orders-routes"
 import { AssistantPage } from "@/features/assistant/pages/assistant-page"
 import { RentalSettingsPage } from "@/features/assistant/pages/rental-settings-page"
@@ -43,6 +45,12 @@ type PageConfig = {
 }
 
 const pages: PageConfig[] = [
+  {
+    path: "/logistics/tasks",
+    title: "Задания водителей",
+    description:
+      "Текущая и плановая очередь перемещений, загрузка ремонтных мест и капитальные ремонты.",
+  },
   {
     path: "/logistics/returns",
     title: "Возврат из аренды",
@@ -102,7 +110,7 @@ const pages: PageConfig[] = [
     path: "/task-board",
     title: "Доска задач",
     description:
-      "Очереди задач для рабочих, электриков, СЭС, водителей и других исполнителей.",
+      "Очереди ремонтных задач для рабочих, электриков, СЭС и других исполнителей.",
   },
   {
     path: "/acceptance",
@@ -136,6 +144,12 @@ const pages: PageConfig[] = [
     title: "Настройка Доски задач",
     description:
       "Очереди, маршруты, исполнители и параметры отображения доски задач.",
+  },
+  {
+    path: "/settings/logistics",
+    title: "Настройки логистики",
+    description:
+      "Водители, прикреплённые классы и правила совместного выполнения логистических заданий.",
   },
   {
     path: "/settings/cabins",
@@ -224,6 +238,7 @@ function AppLayout() {
             <Route path="/repairs" element={<RepairsPage />} />
             <Route path="/task-board" element={<TaskBoardPage />} />
             <Route path="/acceptance" element={<AcceptancePage />} />
+            <Route path="/logistics/tasks" element={<DriverBoardPage />} />
             <Route
               path="/logistics/returns"
               element={<LogisticsReturnsPage />}
@@ -258,6 +273,10 @@ function AppLayout() {
               element={<TaskBoardSettingsPage />}
             />
             <Route
+              path="/settings/logistics"
+              element={<LogisticsSettingsPage />}
+            />
+            <Route
               path="/settings/cabins"
               element={<CabinCompositionSettingsPage />}
             />
@@ -275,6 +294,7 @@ function AppLayout() {
                     "/repairs",
                     "/task-board",
                     "/acceptance",
+                    "/logistics/tasks",
                     "/logistics/returns",
                     "/logistics/shipments",
                     "/logistics/transfers",
@@ -284,6 +304,7 @@ function AppLayout() {
                     "/settings/estimates-repairs",
                     "/settings/warehouses",
                     "/settings/task-board",
+                    "/settings/logistics",
                     "/settings/cabins",
                   ].includes(page.path)
               )

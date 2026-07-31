@@ -9,6 +9,7 @@ import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.EstimateLineRespon
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.EstimateLineType;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.FreezeInventoryPlanRequest;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceApiModels.FrozenInventoryPlanSnapshot;
+import dev.buhanzaz.rwms.maintenance.domain.RepairLogisticsPlanningMode;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import tools.jackson.core.JacksonException;
@@ -155,6 +156,8 @@ class MaintenanceApiModelDefaultsTest {
           "plan":[],
           "mediaReferences":[],
           "priority":3,
+          "logisticsPlanningMode":"AUTO",
+          "logisticsScheduledDate":null,
           "coverMediaId":null
         }
         """,
@@ -170,14 +173,20 @@ class MaintenanceApiModelDefaultsTest {
           "moveFromRepairRequired":false,
           "mediaReferences":[],
           "priority":3,
+          "logisticsPlanningMode":"AUTO",
+          "logisticsScheduledDate":null,
           "coverMediaId":null
         }
         """,
         FrozenInventoryPlanSnapshot.class);
 
     assertThat(request.priority()).isEqualTo(3);
+    assertThat(request.logisticsPlanningMode()).isEqualTo(RepairLogisticsPlanningMode.AUTO);
+    assertThat(request.logisticsScheduledDate()).isNull();
     assertThat(request.coverMediaId()).isNull();
     assertThat(snapshot.priority()).isEqualTo(3);
+    assertThat(snapshot.logisticsPlanningMode()).isEqualTo(RepairLogisticsPlanningMode.AUTO);
+    assertThat(snapshot.logisticsScheduledDate()).isNull();
     assertThat(snapshot.coverMediaId()).isNull();
   }
 

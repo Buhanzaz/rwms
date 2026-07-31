@@ -37,3 +37,6 @@ var V8 []byte
 
 //go:embed V9__asset_import_worker.sql
 var V9 []byte
+
+//go:embed V10__canonical_cabin_photo_library.sql
+var V10 []byte

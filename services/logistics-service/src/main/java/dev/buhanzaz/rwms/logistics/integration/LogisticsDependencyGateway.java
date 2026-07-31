@@ -248,6 +248,89 @@ public interface LogisticsDependencyGateway {
   EquipmentMovementBoardTask cancelEquipmentMovementTask(
       UUID externalTaskId, long expectedTaskVersion);
 
+  default WarehouseDriverQueue readWarehouseDriverQueue(UUID warehouseId) {
+    throw unavailable("Warehouse driver queue lookup is not configured");
+  }
+
+  /**
+   * Reports whether the warehouse has exactly one active, visible driver queue.
+   *
+   * <p>A warehouse is allowed to operate without an in-house driver queue. Callers that reconcile
+   * driver work must treat that configuration as an unavailable logistics lane rather than
+   * repeatedly trying to read or populate a board that cannot exist.
+   */
+  default boolean isWarehouseDriverQueueAvailable(UUID warehouseId) {
+    return true;
+  }
+
+  default DriverBoardTask registerDriverTask(
+      UUID warehouseId,
+      UUID externalTaskId,
+      UUID sourceId,
+      String title,
+      String unitNumber,
+      String description,
+      UUID queueDefinitionId,
+      LocalDate scheduledDate,
+      int priority) {
+    throw unavailable("Driver task registration is not configured");
+  }
+
+  default DriverBoardTask readDriverTask(UUID externalTaskId) {
+    throw unavailable("Driver task lookup is not configured");
+  }
+
+  default DriverBoardTask setDriverTaskLane(
+      UUID externalTaskId, long expectedTaskVersion, String lane) {
+    throw unavailable("Driver task lane transition is not configured");
+  }
+
+  default DriverBoardSnapshot readDriverBoard(UUID warehouseId) {
+    throw unavailable("Driver board lookup is not configured");
+  }
+
+  default DriverBoardTask moveDriverTask(
+      UUID externalTaskId,
+      long expectedTaskVersion,
+      long expectedEntryVersion,
+      LocalDate targetDate,
+      int targetIndex) {
+    throw unavailable("Driver task movement is not configured");
+  }
+
+  default DriverCompletionEvidence readDriverCompletionEvidence(UUID externalTaskId) {
+    throw unavailable("Driver completion evidence lookup is not configured");
+  }
+
+  default CapitalRepairPage readCapitalRepairs(UUID warehouseId, int page, int size) {
+    throw unavailable("Capital-repair projection is not configured");
+  }
+
+  default CapitalRepair readCapitalRepair(UUID repairId) {
+    throw unavailable("Capital-repair lookup is not configured");
+  }
+
+  default RepairPlaceProjection readRepairPlaces(UUID warehouseId) {
+    throw unavailable("Repair-place projection is not configured");
+  }
+
+  default RepairPlaceAllocation transitionRepairPlace(
+      UUID idempotencyKey,
+      UUID warehouseId,
+      UUID repairId,
+      long expectedVersion,
+      String transition) {
+    throw unavailable("Repair-place transition is not configured");
+  }
+
+  default CabinCoverChange setCabinCoverFromTaskEvidence(
+      UUID idempotencyKey,
+      UUID cabinId,
+      UUID taskBoardEntryId,
+      UUID evidenceMediaId) {
+    throw unavailable("Cabin cover transition is not configured");
+  }
+
   OrderUnitCandidatePage readOrderUnitCandidates(
       UUID orderId, UUID warehouseId, int page, int size, String search);
 
@@ -386,8 +469,18 @@ public interface LogisticsDependencyGateway {
       UUID assetId,
       long version,
       UUID warehouseId,
+      String number,
       String status,
-      List<EquipmentContent> contents) {}
+      List<EquipmentContent> contents) {
+    public RentalItemSnapshot(
+        UUID assetId,
+        long version,
+        UUID warehouseId,
+        String status,
+        List<EquipmentContent> contents) {
+      this(assetId, version, warehouseId, null, status, contents);
+    }
+  }
 
   record OperationLease(
       UUID leaseId,
@@ -529,6 +622,94 @@ public interface LogisticsDependencyGateway {
       UUID externalTaskId,
       String status,
       OffsetDateTime doneAt) {}
+
+  record WarehouseDriverQueue(
+      UUID warehouseId, UUID queueDefinitionId, UUID workQueueId) {}
+
+  record DriverBoardTask(
+      UUID taskId,
+      long taskVersion,
+      UUID warehouseId,
+      UUID externalTaskId,
+      String title,
+      String unitNumber,
+      String taskText,
+      String status,
+      LocalDate scheduledDate,
+      String lane,
+      int priority,
+      boolean pinned,
+      OffsetDateTime doneAt,
+      UUID entryId,
+      long entryVersion,
+      String entryStatus,
+      int queuePosition) {}
+
+  record DriverBoardDateColumn(LocalDate date, List<DriverBoardTask> tasks) {}
+
+  record DriverBoardSnapshot(
+      UUID warehouseId,
+      UUID queueId,
+      long queueVersion,
+      List<DriverBoardTask> current,
+      List<DriverBoardDateColumn> dates) {}
+
+  record RepairComplexitySnapshot(
+      String type,
+      String name,
+      String color,
+      String plannedMinutes,
+      boolean forcedCapital) {}
+
+  record CapitalRepair(
+      UUID repairId,
+      UUID rentalItemId,
+      UUID warehouseId,
+      int priority,
+      RepairComplexitySnapshot complexity,
+      long version) {}
+
+  record CapitalRepairPage(
+      List<CapitalRepair> items, int page, int size, long totalElements) {}
+
+  record DriverCompletionEvidence(
+      UUID externalTaskId,
+      UUID taskId,
+      UUID entryId,
+      UUID evidenceId,
+      UUID mediaId,
+      long mediaGeneration,
+      UUID warehouseId,
+      OffsetDateTime recordedAt) {}
+
+  record RepairPlaceAllocation(
+      UUID id,
+      long version,
+      UUID warehouseId,
+      UUID repairId,
+      UUID rentalItemId,
+      String state,
+      OffsetDateTime createdAt,
+      OffsetDateTime updatedAt) {}
+
+  record RepairPlaceProjection(
+      UUID warehouseId,
+      int repairPlaceCount,
+      long reservedCount,
+      long occupiedCount,
+      long readyToReleaseCount,
+      long availableCount,
+      boolean overCapacity,
+      List<RepairPlaceAllocation> allocations) {}
+
+  record CabinCoverChange(
+      UUID cabinId,
+      UUID warehouseId,
+      UUID coverMediaId,
+      long generation,
+      UUID taskBoardEntryId,
+      long version,
+      OffsetDateTime changedAt) {}
 
   record OrderEquipmentContent(
       UUID equipmentId,

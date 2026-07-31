@@ -68,6 +68,7 @@ type repository interface {
 	GetAssetScoped(context.Context, uuid.UUID, string, string, uuid.UUID) (persistence.AssetRecord, error)
 	UpsertServiceOwnerProof(context.Context, persistence.ServiceOwnerProofCommand) (persistence.ServiceOwnerProofRecord, bool, error)
 	ValidateLogisticsReferences(context.Context, persistence.ValidateLogisticsReferencesCommand) error
+	SetCabinCoverFromTaskEvidence(context.Context, persistence.SetCabinCoverFromTaskEvidenceCommand) (persistence.CabinCoverChangeRecord, bool, error)
 	Rotate(context.Context, persistence.RotateCommand) (persistence.AssetRecord, bool, error)
 	Delete(context.Context, persistence.DeleteCommand) (persistence.AssetRecord, bool, error)
 }
@@ -202,6 +203,7 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("POST /api/internal/media/v1/asset-imports/{jobId}/retry", server.retryAssetImport)
 	server.mux.HandleFunc("POST /api/internal/media/v1/logistics/references/validate", server.validateLogisticsReferences)
 	server.mux.HandleFunc("POST /api/internal/media/v1/logistics/cabin-presentations/snapshots", server.listLogisticsCabinPresentationSnapshots)
+	server.mux.HandleFunc("POST /api/internal/media/v1/logistics/cabins/{cabinId}/cover-from-task-evidence", server.setCabinCoverFromTaskEvidence)
 	server.mux.HandleFunc("GET /api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content", server.getLogisticsCabinPresentationVariantContent)
 	server.mux.HandleFunc("/health/live", server.methodNotAllowed)
 	server.mux.HandleFunc("/health/ready", server.methodNotAllowed)
@@ -221,6 +223,7 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("/api/internal/media/v1/asset-imports/", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/internal/media/v1/logistics/references/validate", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/internal/media/v1/logistics/cabin-presentations/snapshots", server.methodNotAllowed)
+	server.mux.HandleFunc("/api/internal/media/v1/logistics/cabins/{cabinId}/cover-from-task-evidence", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content", server.methodNotAllowed)
 	server.mux.HandleFunc("/", server.notFound)
 }
@@ -419,6 +422,59 @@ type cabinPresentationSnapshotsRequest struct {
 	CabinIDs    []string `json:"cabinIds"`
 }
 
+type setCabinCoverFromTaskEvidenceRequest struct {
+	TaskBoardEntryID string `json:"taskBoardEntryId"`
+	EvidenceMediaID  string `json:"evidenceMediaId"`
+}
+
+func (server *Server) setCabinCoverFromTaskEvidence(response http.ResponseWriter, request *http.Request) {
+	if !server.logisticsPrincipal(response, request) {
+		return
+	}
+	idempotencyKey, ok := requireUUIDHeader(response, request, "Idempotency-Key", server)
+	if !ok {
+		return
+	}
+	cabinID, cabinErr := uuid.Parse(request.PathValue("cabinId"))
+	var body setCabinCoverFromTaskEvidenceRequest
+	if !server.decode(response, request, &body) {
+		return
+	}
+	entryID, entryErr := uuid.Parse(body.TaskBoardEntryID)
+	evidenceID, evidenceErr := uuid.Parse(body.EvidenceMediaID)
+	if cabinErr != nil || entryErr != nil || evidenceErr != nil ||
+		cabinID == uuid.Nil || entryID == uuid.Nil || evidenceID == uuid.Nil {
+		server.problem(response, request, http.StatusBadRequest,
+			"MEDIA_INVALID_CABIN_COVER", "Invalid cabin cover request")
+		return
+	}
+	record, replayed, err := server.repository.SetCabinCoverFromTaskEvidence(
+		request.Context(), persistence.SetCabinCoverFromTaskEvidenceCommand{
+			CabinID: cabinID, TaskBoardEntryID: entryID, EvidenceMediaID: evidenceID,
+			IdempotencyKey: idempotencyKey,
+			RequestSHA256: requestFingerprint(map[string]any{
+				"cabinId": cabinID, "taskBoardEntryId": entryID,
+				"evidenceMediaId": evidenceID,
+			}),
+			CorrelationID: correlationID(request.Context()),
+		})
+	if err != nil {
+		server.repositoryProblem(response, request, err)
+		return
+	}
+	status := http.StatusCreated
+	if replayed {
+		status = http.StatusOK
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	writeJSON(response, status, map[string]any{
+		"cabinId": record.CabinID, "warehouseId": record.WarehouseID,
+		"coverMediaId": record.MediaID, "generation": record.Generation,
+		"taskBoardEntryId": record.TaskBoardEntryID, "version": record.Version,
+		"changedAt": record.ChangedAt,
+	})
+}
+
 // listLogisticsCabinPresentationSnapshots is intentionally a private
 // projection boundary: logistics receives only opaque current media references
 // and the variants it may subsequently stream. It never receives a public URL,
@@ -469,7 +525,10 @@ func (server *Server) listLogisticsCabinPresentationSnapshots(response http.Resp
 						"sortOrder": photo.SortOrder, "availableVariants": variants,
 					})
 				}
-				items = append(items, map[string]any{"cabinId": record.CabinID, "photos": photos})
+				items = append(items, map[string]any{
+					"cabinId": record.CabinID, "coverMediaId": record.CoverMediaID,
+					"photos": photos,
+				})
 			}
 			return nil
 		})
@@ -509,8 +568,8 @@ func (server *Server) getLogisticsCabinPresentationVariantContent(response http.
 	err := server.repository.ReadCurrentVariant(request.Context(), mediaID, persistence.OwnerTypeCabin,
 		cabinID.String(), warehouseID, int(generation), variant,
 		func(asset persistence.AssetRecord, record *persistence.VariantRecord) error {
-			if asset.ID != mediaID || asset.OwnerType != persistence.OwnerTypeCabin || asset.OwnerID != cabinID.String() ||
-				asset.WarehouseID != warehouseID || asset.Kind != media.KindImage || asset.Status != media.StatusReady ||
+			if asset.ID != mediaID || asset.WarehouseID != warehouseID ||
+				asset.Kind != media.KindImage || asset.Status != media.StatusReady ||
 				asset.Generation != int(generation) ||
 				record == nil || record.Variant != variant || record.ObjectKey == "" || record.ObjectVersionID == "" ||
 				record.SizeBytes <= 0 || normalizeContentType(record.ContentType) != "image/webp" {
@@ -1121,8 +1180,10 @@ func (server *Server) listCabinCovers(response http.ResponseWriter, request *htt
 						record.CabinID.String(), warehouseID))
 				}
 				var cover any
-				if len(previews) > 0 {
-					cover = previews[0]
+				if record.Variant != nil {
+					cover = publicVariantResponse(record.MediaID, record.Generation,
+						*record.Variant, persistence.OwnerTypeCabin,
+						record.CabinID.String(), warehouseID)
 				}
 				items = append(items, map[string]any{
 					"cabinId": record.CabinID, "photoCount": record.PhotoCount,

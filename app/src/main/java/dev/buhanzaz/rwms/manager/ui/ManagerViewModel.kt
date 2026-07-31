@@ -349,6 +349,7 @@ class ManagerViewModel(
 ) : AndroidViewModel(application) {
     private val preference = WarehousePreference(application)
     private val maintenanceCatalogCache = MaintenanceCatalogCache(application)
+    private val managerReadCache = ManagerReadCache(application)
     private val uploader = MediaUploader(
         backend.api,
         PhotoPayloadReader(application.contentResolver),
@@ -359,7 +360,11 @@ class ManagerViewModel(
     private var maintenanceCatalogWarehouseId: String? = null
     private var maintenanceCatalogNodesById: Map<String, CatalogNodeDto> = emptyMap()
     private var maintenanceCatalogRevision: ActiveMaintenanceCatalogRevision? = null
+    private var maintenanceCatalogActiveVersionEtag: String? = null
     private val maintenanceCatalogMutex = Mutex()
+    private val maintenanceReadMutex = Mutex()
+    private val repairQueueMutex = Mutex()
+    private val inventoryReadMutex = Mutex()
     private var maintenanceCatalogSyncJob: Job? = null
     private var maintenanceCatalogSchedulerJob: Job? = null
     private var connectivityMonitorJob: Job? = null
@@ -1971,8 +1976,10 @@ class ManagerViewModel(
     fun loadMaintenance() = command { refreshMaintenance() }
 
     fun loadRepairQueue() = command {
-        refreshMaintenance()
-        refreshRepairTaskBoards()
+        coroutineScope {
+            async { refreshMaintenance() }
+            async { refreshRepairTaskBoards() }
+        }
     }
 
     fun moveRepairQueueEntry(
@@ -3149,6 +3156,7 @@ class ManagerViewModel(
 
     private data class LoadedMaintenanceCatalog(
         val revision: ActiveMaintenanceCatalogRevision,
+        val activeVersionEtag: String?,
         val allNodes: List<CatalogNodeDto>,
         val operationalNodes: List<CatalogNodeDto>,
         val links: List<CatalogLinkDto>,
@@ -3261,53 +3269,176 @@ class ManagerViewModel(
             step = 1,
         )
 
-    private suspend fun refreshMaintenance() {
+    private suspend fun refreshMaintenance(force: Boolean = false) {
         val warehouseId = requireWarehouseId()
+        val scope = readCacheScope(warehouseId)
         ensureMaintenanceCatalog(warehouseId)
-        val estimates = backend.api.estimates(warehouseId = warehouseId, size = 200).items
-        val repairs = backend.api.repairs(warehouseId = warehouseId, size = 200).items
-        val labels = resolveMaintenanceAssetLabels(
-            (estimates.asSequence().map(EstimateDto::rentalItemId) +
-                repairs.asSequence().map(RepairDto::rentalItemId)).toList(),
-        )
-        if (mutableState.value.selectedWarehouseId != warehouseId) return
+        maintenanceReadMutex.withLock {
+            val cached = managerReadCache.readMaintenance(scope)
+            val refreshed = try {
+                coroutineScope {
+                    val estimatesRequest = async {
+                        backend.api.estimates(
+                            warehouseId = warehouseId,
+                            size = 200,
+                            ifNoneMatch = if (force) null else cached?.estimatesEtag,
+                        )
+                    }
+                    val repairsRequest = async {
+                        backend.api.repairs(
+                            warehouseId = warehouseId,
+                            size = 200,
+                            ifNoneMatch = if (force) null else cached?.repairsEtag,
+                        )
+                    }
+                    val estimates = conditionalRead(
+                        response = estimatesRequest.await(),
+                        cachedValue = cached?.estimates,
+                        cachedEtag = cached?.estimatesEtag,
+                        missingCacheMessage = "Сервер подтвердил старую смету, которой нет на телефоне",
+                    )
+                    val repairs = conditionalRead(
+                        response = repairsRequest.await(),
+                        cachedValue = cached?.repairs,
+                        cachedEtag = cached?.repairsEtag,
+                        missingCacheMessage = "Сервер подтвердил старый ремонт, которого нет на телефоне",
+                    )
+                    estimates to repairs
+                }
+            } catch (failure: Throwable) {
+                if (cached != null && canUseCachedReadAfter(failure)) {
+                    applyMaintenanceRead(warehouseId, cached)
+                    return@withLock
+                }
+                throw failure
+            }
+            if (mutableState.value.selectedWarehouseId != warehouseId) return@withLock
 
-        mutableState.update {
-            it.copy(
-                estimates = estimates,
-                repairs = repairs,
-                maintenanceAssetLabels = labels,
+            val estimates = refreshed.first.value.items
+            val repairs = refreshed.second.value.items
+            val retainedLabels = cached?.assetLabels.orEmpty()
+            val labels = retainedLabels + resolveMaintenanceAssetLabels(
+                (estimates.asSequence().map(EstimateDto::rentalItemId) +
+                    repairs.asSequence().map(RepairDto::rentalItemId))
+                    .distinct()
+                    .filterNot(retainedLabels::containsKey)
+                    .toList(),
             )
+            val snapshot = CachedMaintenanceRead(
+                estimates = refreshed.first.value,
+                estimatesEtag = refreshed.first.etag,
+                repairs = refreshed.second.value,
+                repairsEtag = refreshed.second.etag,
+                assetLabels = labels,
+            )
+            managerReadCache.writeMaintenance(scope, snapshot)
+            applyMaintenanceRead(warehouseId, snapshot)
         }
     }
 
-    private suspend fun refreshRepairTaskBoards() {
+    private fun applyMaintenanceRead(
+        warehouseId: String,
+        snapshot: CachedMaintenanceRead,
+    ) {
+        mutableState.update { current ->
+            if (current.selectedWarehouseId != warehouseId) {
+                current
+            } else {
+                current.copy(
+                    estimates = snapshot.estimates?.items.orEmpty(),
+                    repairs = snapshot.repairs?.items.orEmpty(),
+                    maintenanceAssetLabels = current.maintenanceAssetLabels + snapshot.assetLabels,
+                )
+            }
+        }
+    }
+
+    private suspend fun refreshRepairTaskBoards(force: Boolean = false) {
         val warehouseId = requireWarehouseId()
-        val initial = backend.api.taskBoard(
-            warehouseId = warehouseId,
-            includeShadow = true,
-        )
-        val boardsByDate = linkedMapOf<String, TaskBoardSnapshotDto>()
-        initial.selectedDate?.let { date -> boardsByDate[date] = initial }
-        val remainingDates = initial.availableDates.filterNot(boardsByDate::containsKey)
-        val remainingBoards = coroutineScope {
-            remainingDates.map { date ->
-                async {
-                    backend.api.taskBoard(
+        val scope = readCacheScope(warehouseId)
+        repairQueueMutex.withLock {
+            val cached = managerReadCache.readRepairQueue(scope)
+            val refreshed = try {
+                val root = conditionalRead(
+                    response = backend.api.taskBoard(
                         warehouseId = warehouseId,
                         includeShadow = true,
-                        date = date,
-                    )
+                        ifNoneMatch = if (force) null else cached?.rootEtag,
+                    ),
+                    cachedValue = cached?.rootSnapshot,
+                    cachedEtag = cached?.rootEtag,
+                    missingCacheMessage = "Сервер подтвердил старую очередь, которой нет на телефоне",
+                )
+                val cachedBoardsByDate = cached?.snapshots
+                    ?.mapNotNull { board -> board.selectedDate?.let { it to board } }
+                    ?.toMap()
+                    .orEmpty()
+                val rootDate = root.value.selectedDate
+                val remaining = root.value.availableDates.filterNot { date -> date == rootDate }
+                val boards = coroutineScope {
+                    remaining.map { date ->
+                        async {
+                            date to conditionalRead(
+                                response = backend.api.taskBoard(
+                                    warehouseId = warehouseId,
+                                    includeShadow = true,
+                                    date = date,
+                                    ifNoneMatch = if (force) null else cached?.etagsByDate?.get(date),
+                                ),
+                                cachedValue = cachedBoardsByDate[date],
+                                cachedEtag = cached?.etagsByDate?.get(date),
+                                missingCacheMessage =
+                                    "Сервер подтвердил старую колонку очереди, которой нет на телефоне",
+                            )
+                        }
+                    }.map { request -> request.await() }
                 }
-            }.map { request -> request.await() }
+                root to boards
+            } catch (failure: Throwable) {
+                if (cached != null && canUseCachedReadAfter(failure)) {
+                    applyRepairQueueRead(warehouseId, cached)
+                    return@withLock
+                }
+                throw failure
+            }
+            if (mutableState.value.selectedWarehouseId != warehouseId) return@withLock
+
+            val root = refreshed.first
+            val boardsByDate = linkedMapOf<String, TaskBoardSnapshotDto>()
+            root.value.selectedDate?.let { date -> boardsByDate[date] = root.value }
+            val etagsByDate = refreshed.second.mapNotNull { (date, board) ->
+                board.etag?.let { tag -> date to tag }
+            }.toMap()
+            refreshed.second.forEach { (_, board) ->
+                board.value.selectedDate?.let { date -> boardsByDate[date] = board.value }
+            }
+            val snapshots = root.value.availableDates.mapNotNull(boardsByDate::get)
+                .ifEmpty { listOf(root.value) }
+            val snapshot = CachedRepairQueueRead(
+                rootSnapshot = root.value,
+                rootEtag = root.etag,
+                snapshots = snapshots,
+                etagsByDate = etagsByDate,
+            )
+            managerReadCache.writeRepairQueue(scope, snapshot)
+            applyRepairQueueRead(warehouseId, snapshot)
         }
-        remainingBoards.forEach { board ->
-            board.selectedDate?.let { date -> boardsByDate[date] = board }
+    }
+
+    private fun applyRepairQueueRead(
+        warehouseId: String,
+        snapshot: CachedRepairQueueRead,
+    ) {
+        val ordered = snapshot.rootSnapshot.availableDates
+            .mapNotNull { date -> snapshot.snapshots.firstOrNull { it.selectedDate == date } }
+            .ifEmpty { snapshot.snapshots.ifEmpty { listOf(snapshot.rootSnapshot) } }
+        mutableState.update { current ->
+            if (current.selectedWarehouseId == warehouseId) {
+                current.copy(repairTaskBoards = ordered)
+            } else {
+                current
+            }
         }
-        val ordered = initial.availableDates.mapNotNull(boardsByDate::get)
-            .ifEmpty { listOf(initial) }
-        if (mutableState.value.selectedWarehouseId != warehouseId) return
-        mutableState.update { it.copy(repairTaskBoards = ordered) }
     }
 
     private suspend fun refreshAcceptance() {
@@ -3353,20 +3484,36 @@ class ManagerViewModel(
                 cachedNodeCount = maintenanceCatalogNodesById.size,
             )
             val activeRevision = if (needsInitialCatalog) {
-                fetchActiveMaintenanceCatalogRevision(warehouseId)
+                fetchActiveMaintenanceCatalogRevision(
+                    warehouseId = warehouseId,
+                    ifNoneMatch = null,
+                    cachedRevision = null,
+                )
             } else {
                 try {
-                    fetchActiveMaintenanceCatalogRevision(warehouseId)
-                } catch (_: Throwable) {
-                    // A valid local snapshot remains usable while the device is offline.
-                    return@withLock
+                    fetchActiveMaintenanceCatalogRevision(
+                        warehouseId = warehouseId,
+                        ifNoneMatch = maintenanceCatalogActiveVersionEtag,
+                        cachedRevision = maintenanceCatalogRevision,
+                    )
+                } catch (failure: Throwable) {
+                    if (canUseCachedReadAfter(failure)) {
+                        // A valid local snapshot remains usable while the device is offline.
+                        return@withLock
+                    }
+                    throw failure
                 }
             }
-            if (!needsInitialCatalog && maintenanceCatalogRevision == activeRevision) {
+            if (!needsInitialCatalog && maintenanceCatalogRevision == activeRevision.value) {
+                updateMaintenanceCatalogActiveVersionEtag(warehouseId, activeRevision.etag)
                 return@withLock
             }
 
-            val catalog = fetchMaintenanceCatalog(warehouseId, activeRevision)
+            val catalog = fetchMaintenanceCatalog(
+                warehouseId = warehouseId,
+                revision = activeRevision.value,
+                activeVersionEtag = activeRevision.etag,
+            )
             if (mutableState.value.selectedWarehouseId != warehouseId) return@withLock
             persistMaintenanceCatalog(warehouseId, catalog)
             maintenanceCatalogCache.markAttemptSlot(
@@ -3400,6 +3547,7 @@ class ManagerViewModel(
                 warehouseId = warehouseId,
                 catalog = LoadedMaintenanceCatalog(
                     revision = cached.revision,
+                    activeVersionEtag = cached.activeVersionEtag,
                     allNodes = cached.nodes,
                     operationalNodes = operationalNodes,
                     links = cached.links,
@@ -3417,6 +3565,7 @@ class ManagerViewModel(
             CachedMaintenanceCatalog(
                 warehouseId = warehouseId,
                 revision = catalog.revision,
+                activeVersionEtag = catalog.activeVersionEtag,
                 nodes = catalog.allNodes,
                 links = catalog.links,
             ),
@@ -3430,6 +3579,7 @@ class ManagerViewModel(
         maintenanceCatalogWarehouseId = warehouseId
         maintenanceCatalogNodesById = catalog.allNodes.associateBy(CatalogNodeDto::id)
         maintenanceCatalogRevision = catalog.revision
+        maintenanceCatalogActiveVersionEtag = catalog.activeVersionEtag
         mutableState.update {
             it.copy(
                 maintenanceCatalogNodes = catalog.allNodes.filter(CatalogNodeDto::active),
@@ -3503,15 +3653,26 @@ class ManagerViewModel(
                 maintenanceCatalogCache.markAttemptSlot(maintenanceCatalogSyncSlot(now))
             }
             val activeRevision = try {
-                fetchActiveMaintenanceCatalogRevision(warehouseId)
+                fetchActiveMaintenanceCatalogRevision(
+                    warehouseId = warehouseId,
+                    ifNoneMatch = maintenanceCatalogActiveVersionEtag,
+                    cachedRevision = maintenanceCatalogRevision,
+                )
             } catch (_: Throwable) {
                 return@withLock
             }
             if (mutableState.value.selectedWarehouseId != warehouseId) return@withLock
-            if (maintenanceCatalogRevision == activeRevision) return@withLock
+            if (maintenanceCatalogRevision == activeRevision.value) {
+                updateMaintenanceCatalogActiveVersionEtag(warehouseId, activeRevision.etag)
+                return@withLock
+            }
 
             val catalog = try {
-                fetchMaintenanceCatalog(warehouseId, activeRevision)
+                fetchMaintenanceCatalog(
+                    warehouseId = warehouseId,
+                    revision = activeRevision.value,
+                    activeVersionEtag = activeRevision.etag,
+                )
             } catch (_: Throwable) {
                 return@withLock
             }
@@ -3537,29 +3698,56 @@ class ManagerViewModel(
 
     private suspend fun fetchActiveMaintenanceCatalogRevision(
         warehouseId: String,
-    ): ActiveMaintenanceCatalogRevision {
-        val active = backend.api.catalogVersions(
+        ifNoneMatch: String?,
+        cachedRevision: ActiveMaintenanceCatalogRevision?,
+    ): ConditionalRead<ActiveMaintenanceCatalogRevision> {
+        val response = backend.api.catalogVersions(
             warehouseId = warehouseId,
             page = 0,
             size = 200,
             lifecycle = "ACTIVE",
-        ).items.firstOrNull { it.lifecycle == "ACTIVE" }
+            ifNoneMatch = ifNoneMatch,
+        )
+        if (response.code() == 304) {
+            return ConditionalRead(
+                value = requireNotNull(cachedRevision) {
+                    "Сервер подтвердил старый каталог, которого нет на телефоне"
+                },
+                etag = response.headers()["ETag"] ?: ifNoneMatch,
+            )
+        }
+        if (!response.isSuccessful) throw HttpException(response)
+        val active = requireNotNull(response.body())
+            .items
+            .firstOrNull { it.lifecycle == "ACTIVE" }
             ?: throw IllegalStateException(
                 "Активный каталог смет и ремонтов ещё не опубликован",
             )
-        return ActiveMaintenanceCatalogRevision(active.id, active.version)
+        return ConditionalRead(
+            value = ActiveMaintenanceCatalogRevision(active.id, active.version),
+            etag = response.headers()["ETag"],
+        )
     }
 
     private suspend fun fetchMaintenanceCatalog(
         warehouseId: String,
-    ): LoadedMaintenanceCatalog = fetchMaintenanceCatalog(
-        warehouseId = warehouseId,
-        revision = fetchActiveMaintenanceCatalogRevision(warehouseId),
-    )
+    ): LoadedMaintenanceCatalog {
+        val active = fetchActiveMaintenanceCatalogRevision(
+            warehouseId = warehouseId,
+            ifNoneMatch = null,
+            cachedRevision = null,
+        )
+        return fetchMaintenanceCatalog(
+            warehouseId = warehouseId,
+            revision = active.value,
+            activeVersionEtag = active.etag,
+        )
+    }
 
     private suspend fun fetchMaintenanceCatalog(
         warehouseId: String,
         revision: ActiveMaintenanceCatalogRevision,
+        activeVersionEtag: String?,
     ): LoadedMaintenanceCatalog {
         val nodes = backend.api.catalogNodes(revision.id, warehouseId)
         val links = backend.api.catalogLinks(revision.id, warehouseId)
@@ -3571,10 +3759,24 @@ class ManagerViewModel(
         }
         return LoadedMaintenanceCatalog(
             revision = revision,
+            activeVersionEtag = activeVersionEtag,
             allNodes = nodes,
             operationalNodes = operationalNodes,
             links = links,
         )
+    }
+
+    private fun updateMaintenanceCatalogActiveVersionEtag(
+        warehouseId: String,
+        etag: String?,
+    ) {
+        val retained = etag ?: maintenanceCatalogActiveVersionEtag
+        if (retained == maintenanceCatalogActiveVersionEtag) return
+        maintenanceCatalogActiveVersionEtag = retained
+        val cached = maintenanceCatalogCache.read()
+        if (cached?.warehouseId == warehouseId && cached.revision == maintenanceCatalogRevision) {
+            maintenanceCatalogCache.write(cached.copy(activeVersionEtag = retained))
+        }
     }
 
     private suspend fun resolveMaintenanceAssetLabels(ids: List<String>): Map<String, String> =
@@ -4430,8 +4632,53 @@ class ManagerViewModel(
     private fun logisticsCommandKey(signature: String): String =
         commandKeys.key(signature)
 
-    private suspend fun refreshInventory() {
+    private suspend fun refreshInventory(force: Boolean = false) {
         val warehouseId = requireWarehouseId()
+        val scope = readCacheScope(warehouseId)
+        inventoryReadMutex.withLock {
+            val cached = managerReadCache.readInventory(scope)
+            val snapshot = try {
+                val active = backend.api.activeInventory(
+                    warehouseId = warehouseId,
+                    ifNoneMatch = if (force) null else cached?.activeEtag,
+                )
+                when (active.code()) {
+                    304 -> requireNotNull(cached) {
+                        "Сервер подтвердил старую инвентаризацию, которой нет на телефоне"
+                    }.copy(activeEtag = active.headers()["ETag"] ?: cached.activeEtag)
+
+                    204 -> CachedInventoryRead(
+                        activeEtag = active.headers()["ETag"],
+                        rentalItems = cached?.rentalItems.orEmpty(),
+                    )
+
+                    else -> {
+                        if (!active.isSuccessful) throw HttpException(active)
+                        val session = requireNotNull(active.body()) {
+                            "RWMS не вернул активную инвентаризацию"
+                        }
+                        CachedInventoryRead(
+                            activeEtag = active.headers()["ETag"],
+                            rentalItems = loadInventoryRentalItems(warehouseId),
+                            session = session,
+                            findings = loadInventoryFindings(session.id),
+                        )
+                    }
+                }
+            } catch (failure: Throwable) {
+                if (cached != null && canUseCachedReadAfter(failure)) {
+                    applyInventoryRead(warehouseId, cached)
+                    return@withLock
+                }
+                throw failure
+            }
+            if (mutableState.value.selectedWarehouseId != warehouseId) return@withLock
+            managerReadCache.writeInventory(scope, snapshot)
+            applyInventoryRead(warehouseId, snapshot)
+        }
+    }
+
+    private suspend fun loadInventoryRentalItems(warehouseId: String): List<RentalItemDto> {
         val rentalItems = mutableListOf<RentalItemDto>()
         var rentalPage = 0
         var rentalTotalPages: Int
@@ -4445,45 +4692,39 @@ class ManagerViewModel(
             rentalTotalPages = result.totalPages
             rentalPage += 1
         } while (rentalPage < rentalTotalPages)
-        if (mutableState.value.selectedWarehouseId != warehouseId) return
-        mutableState.update {
-            it.copy(
-                inventoryRentalItems = rentalItems
-                    .distinctBy(RentalItemDto::id)
-                    .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { item -> item.number }),
-            )
-        }
+        return rentalItems
+            .distinctBy(RentalItemDto::id)
+            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { item -> item.number })
+    }
 
-        val response = backend.api.activeInventory(warehouseId)
-        if (mutableState.value.selectedWarehouseId != warehouseId) return
-        if (response.code() == 204) {
-            mutableState.update {
-                it.copy(
-                    inventorySession = null,
-                    inventoryFindings = emptyList(),
-                    inventoryCompletionPreview = null,
-                )
-            }
-            return
-        }
-        if (!response.isSuccessful) throw HttpException(response)
-        val session = requireNotNull(response.body())
+    private suspend fun loadInventoryFindings(inventoryId: String): List<InventoryFindingDto> {
         val findings = mutableListOf<InventoryFindingDto>()
         var page = 0
         var totalPages: Int
         do {
-            val result = backend.api.inventoryFindings(session.id, page)
+            val result = backend.api.inventoryFindings(inventoryId, page)
             findings += result.content
             totalPages = result.page.totalPages
             page += 1
         } while (page < totalPages)
-        if (mutableState.value.selectedWarehouseId != warehouseId) return
-        mutableState.update {
-            it.copy(
-                inventorySession = session,
-                inventoryFindings = findings,
-                inventoryCompletionPreview = null,
-            )
+        return findings
+    }
+
+    private fun applyInventoryRead(
+        warehouseId: String,
+        snapshot: CachedInventoryRead,
+    ) {
+        mutableState.update { current ->
+            if (current.selectedWarehouseId == warehouseId) {
+                current.copy(
+                    inventoryRentalItems = snapshot.rentalItems,
+                    inventorySession = snapshot.session,
+                    inventoryFindings = snapshot.findings,
+                    inventoryCompletionPreview = null,
+                )
+            } else {
+                current
+            }
         }
     }
 
@@ -4595,6 +4836,42 @@ class ManagerViewModel(
         mutableState.update { it.copy(message = value) }
     }
 
+    private data class ConditionalRead<T>(
+        val value: T,
+        val etag: String?,
+    )
+
+    private fun <T> conditionalRead(
+        response: retrofit2.Response<T>,
+        cachedValue: T?,
+        cachedEtag: String?,
+        missingCacheMessage: String,
+    ): ConditionalRead<T> = when (response.code()) {
+        304 -> ConditionalRead(
+            value = requireNotNull(cachedValue) { missingCacheMessage },
+            etag = response.headers()["ETag"] ?: cachedEtag,
+        )
+
+        else -> {
+            if (!response.isSuccessful) throw HttpException(response)
+            ConditionalRead(
+                value = requireNotNull(response.body()) { "RWMS вернул пустой ответ" },
+                etag = response.headers()["ETag"],
+            )
+        }
+    }
+
+    private fun canUseCachedReadAfter(failure: Throwable): Boolean =
+        failure is IOException || (failure is HttpException && failure.code() in 500..599)
+
+    private fun readCacheScope(warehouseId: String): ManagerReadCacheScope =
+        ManagerReadCacheScope(
+            accountId = requireNotNull(mutableState.value.currentUser?.id) {
+                "Не удалось определить пользователя для локального кэша"
+            },
+            warehouseId = warehouseId,
+        )
+
     private fun requireWarehouseId(): String =
         requireNotNull(mutableState.value.selectedWarehouseId) {
             "Склад не выбран"
@@ -4608,6 +4885,7 @@ class ManagerViewModel(
         maintenanceCatalogWarehouseId = null
         maintenanceCatalogNodesById = emptyMap()
         maintenanceCatalogRevision = null
+        maintenanceCatalogActiveVersionEtag = null
         assetSearchGeneration += 1
     }
 

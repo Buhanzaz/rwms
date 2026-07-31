@@ -246,7 +246,8 @@ was not executed.
   changed flow. Capture a UI tree or screenshot and filtered logcat; a JSON
   parsing, HTTP-contract, crash, or connection error fails the gate. If real
   gateway credentials or runtime are unavailable, report that blocker and do
-  not claim end-to-end APK validation.
+  not claim end-to-end APK validation. For every change in `app/`, update the
+  `/download` site with the newly built application version before handoff.
 
 Use full Testcontainers, Playwright, Kafka outage/retry or cross-service suites
 only when the change requires them, focused checks reveal a wider issue or the
@@ -272,6 +273,10 @@ Keep the related production controls unavailable until a direct command and
 domain decision define them.
 
 ## Local Runtime And VPS
+
+Work in this repository is performed on the VPS. At the end of each completed
+task, update the affected running test services on the VPS so they reflect the
+delivered changes; inspect their status and logs after the update.
 
 `compose.yaml` is for isolated local development/test dependencies only. Do
 not add Kubernetes, Helm, Terraform, Ansible, Swarm, production ingress/TLS or

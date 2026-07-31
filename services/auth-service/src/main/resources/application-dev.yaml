@@ -118,10 +118,10 @@ rwms:
         - client-id: maintenance-service
           client-name: Maintenance Service Downstream Client
           enabled: ${MAINTENANCE_CLIENT_ENABLED:false}
-          revision: ${MAINTENANCE_CLIENT_REVISION:1}
+          revision: ${MAINTENANCE_CLIENT_REVISION:2}
           authentication-methods: [client_secret_basic]
           grant-types: [client_credentials]
-          scopes: [asset.maintenance, task-board.task-sync, queue-registry.write, media.maintenance]
+          scopes: [asset.maintenance, task-board.task-sync, queue-registry.write, media.maintenance, logistics.maintenance]
           secret-environment: MAINTENANCE_CLIENT_SECRET
           development-secret: maintenance-dev-secret
           audiences: [rwms-services]

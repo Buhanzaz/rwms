@@ -457,6 +457,169 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/driver-tasks:
+    get:
+      operationId: listDriverTasks
+      description: Lists logistics-owned task intents for the selected warehouse.
+      parameters:
+        - $ref: "#/components/parameters/WarehouseIdQuery"
+      responses:
+        "200":
+          description: Driver task intents. Ordering and execution remain authoritative in task-board.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DriverTask" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createDriverTask
+      description: >-
+        Creates one cabin-movement intent and registers it in the warehouse's
+        single queue with purpose LOGISTICS_DRIVER. AUTO resolves the current
+        warehouse date; FIXED_DATE uses the supplied date. No queue-name lookup
+        or fallback is allowed.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateDriverTaskRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/DriverTask" }
+        "201": { $ref: "#/components/responses/DriverTask" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/internal/logistics/v1/maintenance/driver-tasks:
+    post:
+      operationId: createMaintenanceDriverTask
+      description: >-
+        Exact maintenance-service boundary used by estimate, repair, and
+        inventory-repair orchestration. Requires a SERVICE token with
+        sub=client_id=maintenance-service, audience rwms-services, and exactly
+        the logistics.maintenance scope. It creates the same logistics-owned
+        driver task as the public board and never bypasses repair-place
+        capacity or the singleton CURRENT scheduler.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateDriverTaskRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/DriverTask" }
+        "201": { $ref: "#/components/responses/DriverTask" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/driver-tasks/{taskId}:
+    parameters:
+      - $ref: "#/components/parameters/DriverTaskId"
+    get:
+      operationId: getDriverTask
+      responses:
+        "200": { $ref: "#/components/responses/DriverTask" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/logistics/v1/driver-tasks/{taskId}/promote:
+    parameters:
+      - $ref: "#/components/parameters/DriverTaskId"
+    post:
+      operationId: promoteDriverTask
+      description: >-
+        Moves this exact scheduled task into the singleton CURRENT lane. Repair
+        delivery first reserves a factual repair place; an occupied current lane
+        or missing capacity fails without a queue fallback.
+      responses:
+        "202": { $ref: "#/components/responses/DriverTask" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/driver-board:
+    get:
+      operationId: getDriverBoard
+      description: >-
+        Returns the warehouse's dedicated driver queue with one CURRENT lane,
+        its finite ordered non-empty date columns, factual repair-place capacity
+        and active capital repairs not yet moved to production.
+      parameters:
+        - $ref: "#/components/parameters/WarehouseIdQuery"
+      responses:
+        "200":
+          description: Authoritative logistics board projection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DriverBoard" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/driver-board/tasks/{externalTaskId}/move:
+    parameters:
+      - name: externalTaskId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      operationId: moveDriverBoardTask
+      description: >-
+        Reorders a SCHEDULED driver task inside a date or moves it to another
+        calendar date. The task-board versions are mandatory; CURRENT or
+        already-running tasks are rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MoveDriverBoardTaskRequest" }
+      responses:
+        "200":
+          description: Moved driver card.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DriverBoardCard" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/driver-board/capital-repairs/{repairId}/promote:
+    parameters:
+      - name: repairId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - $ref: "#/components/parameters/IdempotencyKey"
+    post:
+      operationId: promoteCapitalRepairToDriverCurrent
+      description: >-
+        Creates or replays the single capital-to-production movement and moves
+        it into CURRENT. It never creates an ordinary repair-board task.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PromoteCapitalRepairRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/DriverTask" }
+        "201": { $ref: "#/components/responses/DriverTask" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
   /api/logistics/v1/orders:
     get:
       operationId: listOrders
@@ -1210,6 +1373,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    DriverTaskId:
+      name: taskId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
     InquiryId:
       name: inquiryId
       in: path
@@ -1563,6 +1731,220 @@ components:
           items: { $ref: "#/components/schemas/EquipmentMovementTaskLine" }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    DriverTaskKind:
+      type: string
+      enum:
+        [DELIVER_TO_REPAIR, REMOVE_FROM_REPAIR, CAPITAL_TO_PRODUCTION, MOVE_TO_SHIPMENT]
+    DriverTaskSourceType:
+      type: string
+      enum: [REPAIR, ESTIMATE, INVENTORY, REPAIR_PLACE, CAPITAL_REPAIR]
+    DriverTaskPlanningMode:
+      type: string
+      enum: [AUTO, FIXED_DATE]
+    DriverTaskState:
+      type: string
+      enum:
+        [REGISTERING, SCHEDULED, CURRENT, FINALIZING, COMPLETED, CANCELLED, RECONCILIATION_REQUIRED]
+    CreateDriverTaskRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [warehouseId, cabinId, repairId, sourceType, sourceId, kind, planningMode, scheduledDate, priority, activateNow]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        cabinId: { type: string, format: uuid }
+        repairId: { type: [string, "null"], format: uuid }
+        sourceType: { $ref: "#/components/schemas/DriverTaskSourceType" }
+        sourceId: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/DriverTaskKind" }
+        planningMode: { $ref: "#/components/schemas/DriverTaskPlanningMode" }
+        scheduledDate:
+          description: Required only for FIXED_DATE and forbidden for AUTO.
+          type: [string, "null"]
+          format: date
+        priority: { type: integer, minimum: 1, maximum: 5 }
+        activateNow:
+          type: boolean
+          description: Used by an explicit drag into CURRENT; capacity and singleton-lane checks still apply.
+    DriverTask:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          version,
+          warehouseId,
+          cabinId,
+          repairId,
+          sourceType,
+          sourceId,
+          kind,
+          planningMode,
+          scheduledDate,
+          priority,
+          unitNumber,
+          driverQueueDefinitionId,
+          externalTaskId,
+          taskBoardTaskId,
+          taskBoardTaskVersion,
+          taskBoardEntryId,
+          taskBoardEntryStatus,
+          taskBoardDoneAt,
+          state,
+          repairPlaceAllocationId,
+          repairPlaceAllocationVersion,
+          completionMediaId,
+          completionMediaGeneration,
+          coverApplied,
+          repairPlaceEffectApplied,
+          failureCode,
+          createdAt,
+          updatedAt,
+          completedAt,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        warehouseId: { type: string, format: uuid }
+        cabinId: { type: string, format: uuid }
+        repairId: { type: [string, "null"], format: uuid }
+        sourceType: { $ref: "#/components/schemas/DriverTaskSourceType" }
+        sourceId: { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/DriverTaskKind" }
+        planningMode: { $ref: "#/components/schemas/DriverTaskPlanningMode" }
+        scheduledDate: { type: string, format: date }
+        priority: { type: integer, minimum: 1, maximum: 5 }
+        unitNumber: { type: string, minLength: 1, maxLength: 64 }
+        driverQueueDefinitionId: { type: string, format: uuid }
+        externalTaskId: { type: string, format: uuid }
+        taskBoardTaskId: { type: [string, "null"], format: uuid }
+        taskBoardTaskVersion: { type: [integer, "null"], format: int64, minimum: 0 }
+        taskBoardEntryId: { type: [string, "null"], format: uuid }
+        taskBoardEntryStatus: { type: [string, "null"], maxLength: 24 }
+        taskBoardDoneAt: { type: [string, "null"], format: date-time }
+        state: { $ref: "#/components/schemas/DriverTaskState" }
+        repairPlaceAllocationId: { type: [string, "null"], format: uuid }
+        repairPlaceAllocationVersion: { type: [integer, "null"], format: int64, minimum: 0 }
+        completionMediaId: { type: [string, "null"], format: uuid }
+        completionMediaGeneration: { type: [integer, "null"], format: int64, minimum: 1 }
+        coverApplied: { type: boolean }
+        repairPlaceEffectApplied: { type: boolean }
+        failureCode: { type: [string, "null"], maxLength: 96 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        completedAt: { type: [string, "null"], format: date-time }
+    DriverBoardCard:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          driverTaskId,
+          externalTaskId,
+          taskBoardTaskId,
+          taskBoardTaskVersion,
+          taskBoardEntryId,
+          taskBoardEntryVersion,
+          title,
+          taskText,
+          unitNumber,
+          kind,
+          workflowState,
+          taskStatus,
+          entryStatus,
+          scheduledDate,
+          lane,
+          priority,
+          pinned,
+          position,
+        ]
+      properties:
+        driverTaskId: { type: [string, "null"], format: uuid }
+        externalTaskId: { type: string, format: uuid }
+        taskBoardTaskId: { type: string, format: uuid }
+        taskBoardTaskVersion: { type: integer, format: int64, minimum: 0 }
+        taskBoardEntryId: { type: string, format: uuid }
+        taskBoardEntryVersion: { type: integer, format: int64, minimum: 0 }
+        title: { type: string }
+        taskText: { type: [string, "null"] }
+        unitNumber: { type: [string, "null"] }
+        kind:
+          oneOf:
+            - { $ref: "#/components/schemas/DriverTaskKind" }
+            - { type: "null" }
+        workflowState:
+          oneOf:
+            - { $ref: "#/components/schemas/DriverTaskState" }
+            - { type: "null" }
+        taskStatus: { type: string, enum: [ACTIVE, DONE, CANCELLED] }
+        entryStatus: { type: string, enum: [WAITING, IN_PROGRESS, PAUSED, DONE, CANCELLED] }
+        scheduledDate: { type: string, format: date }
+        lane: { type: string, enum: [SCHEDULED, CURRENT] }
+        priority: { type: integer, minimum: 1, maximum: 5 }
+        pinned: { type: boolean }
+        position: { type: integer, minimum: 0 }
+    DriverBoardDateColumn:
+      type: object
+      additionalProperties: false
+      required: [date, tasks]
+      properties:
+        date: { type: string, format: date }
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/DriverBoardCard" }
+    CapitalRepairCard:
+      type: object
+      additionalProperties: false
+      required:
+        [repairId, repairVersion, cabinId, unitNumber, priority, complexityName, complexityColor, plannedMinutes, forcedCapital]
+      properties:
+        repairId: { type: string, format: uuid }
+        repairVersion: { type: integer, format: int64, minimum: 0 }
+        cabinId: { type: string, format: uuid }
+        unitNumber: { type: string }
+        priority: { type: integer, minimum: 1, maximum: 5 }
+        complexityName: { type: string, const: "Капитальный ремонт" }
+        complexityColor: { type: string, pattern: "^#[0-9A-F]{6}$" }
+        plannedMinutes: { type: string, pattern: "^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,3})?$" }
+        forcedCapital: { type: boolean }
+    DriverBoard:
+      type: object
+      additionalProperties: false
+      required:
+        [warehouseId, queueId, queueVersion, repairPlaceCount, occupiedRepairPlaceCount, availableRepairPlaceCount, repairPlacesOverCapacity, current, dates, capitalRepairs]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        queueId: { type: string, format: uuid }
+        queueVersion: { type: integer, format: int64, minimum: 0 }
+        repairPlaceCount: { type: integer, minimum: 1 }
+        occupiedRepairPlaceCount: { type: integer, format: int64, minimum: 0 }
+        availableRepairPlaceCount: { type: integer, format: int64, minimum: 0 }
+        repairPlacesOverCapacity: { type: boolean }
+        current:
+          type: array
+          maxItems: 1
+          items: { $ref: "#/components/schemas/DriverBoardCard" }
+        dates:
+          type: array
+          items: { $ref: "#/components/schemas/DriverBoardDateColumn" }
+        capitalRepairs:
+          type: array
+          items: { $ref: "#/components/schemas/CapitalRepairCard" }
+    MoveDriverBoardTaskRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, expectedTaskVersion, expectedEntryVersion, targetDate, targetIndex]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
+        expectedEntryVersion: { type: integer, format: int64, minimum: 0 }
+        targetDate: { type: string, format: date }
+        targetIndex: { type: integer, minimum: 0 }
+    PromoteCapitalRepairRequest:
+      type: object
+      additionalProperties: false
+      required: [warehouseId]
+      properties:
+        warehouseId: { type: string, format: uuid }
     CreateReturnRequest:
       type: object
       additionalProperties: false
@@ -2637,6 +3019,18 @@ components:
         status: { type: integer }
         code: { type: string }
   responses:
+    DriverTask:
+      description: Current logistics-owned driver task intent and effect checkpoints.
+      headers:
+        ETag:
+          required: true
+          schema: { type: string }
+        Idempotency-Replayed:
+          required: false
+          schema: { type: string, const: "true" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/DriverTask" }
     EquipmentMovementTask:
       description: Current source-reservation and worker-task state for one physical equipment movement.
       headers:

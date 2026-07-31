@@ -62,6 +62,11 @@ public class BoardTask extends AbstractVersionedEntity {
   @Column(name = "scheduled_date", nullable = false)
   private LocalDate scheduledDate;
 
+  @NotNull
+  @Enumerated(EnumType.STRING)
+  @Column(name = "task_lane", nullable = false, length = 16)
+  private TaskLane lane = TaskLane.SCHEDULED;
+
   @Column(name = "priority", nullable = false)
   private int priority = 3;
 
@@ -153,6 +158,15 @@ public class BoardTask extends AbstractVersionedEntity {
   public void setScheduledDate(LocalDate v) {
     if (v == null) throw new IllegalArgumentException("Scheduled date is required");
     scheduledDate = v;
+  }
+
+  public TaskLane getLane() {
+    return lane;
+  }
+
+  public void setLane(TaskLane value) {
+    if (value == null) throw new IllegalArgumentException("Task lane is required");
+    lane = value;
   }
 
   public int getPriority() {

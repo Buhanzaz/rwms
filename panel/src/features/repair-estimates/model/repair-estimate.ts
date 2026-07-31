@@ -12,6 +12,7 @@ export type RepairEstimateMediaId = string
 export type RepairEstimateStatus = "DRAFT" | "COMPLETED"
 export type RepairEstimateLineType = "WORK" | "MATERIAL"
 export type RepairEstimateCompletionMode = "AUTO" | "MANUAL"
+export type LogisticsPlanningMode = "AUTO" | "FIXED_DATE"
 export type RepairPriority = 1 | 2 | 3 | 4 | 5
 export type RepairEstimateTaskPlanGenerationStatus =
   "PENDING_GENERATION" | "GENERATED" | "FAILED" | "UNKNOWN"
@@ -186,6 +187,8 @@ export type RepairEstimateDraftCommand = {
 export type CompleteRepairEstimateCommand = RepairEstimateDraftCommand & {
   completionMode: RepairEstimateCompletionMode
   movementRequired: boolean
+  logisticsPlanningMode: LogisticsPlanningMode
+  logisticsScheduledDate: string | null
   taskPlans: RepairEstimateTaskPlanCommandDto[]
   priority: RepairPriority
 }
@@ -256,6 +259,8 @@ export type CompleteRepairEstimateInput = {
   warehouseId: string
   completionMode: RepairEstimateCompletionMode
   movementRequired: boolean
+  logisticsPlanningMode: LogisticsPlanningMode
+  logisticsScheduledDate: string | null
   taskPlans: RepairEstimateTaskPlanDto[]
   priority: RepairPriority
 }

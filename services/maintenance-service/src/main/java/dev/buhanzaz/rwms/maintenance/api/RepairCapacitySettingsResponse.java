@@ -10,6 +10,6 @@ import java.util.UUID;
 public record RepairCapacitySettingsResponse(
     UUID warehouseId,
     long version,
-    int maxRepairsPerDay,
+    int repairPlaceCount,
     OffsetDateTime createdAt,
     OffsetDateTime updatedAt) {}

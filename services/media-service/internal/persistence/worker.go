@@ -488,6 +488,9 @@ func (repository *Repository) CompleteProcessingJob(ctx context.Context, job Wor
 	if err := repository.appendSystemFact(ctx, tx, job, asset, eventType); err != nil {
 		return err
 	}
+	if err := repository.associateProcessedCabinImage(ctx, tx, asset, job.CorrelationID); err != nil {
+		return err
+	}
 	if err := finishProcessingMessage(ctx, tx, job.ProcessingMessage, "APPLIED"); err != nil {
 		return err
 	}

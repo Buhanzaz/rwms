@@ -36,15 +36,35 @@ export function normalizeRgb(value: string | null) {
   return RGB_PATTERN.test(normalized) ? normalized : null
 }
 
-export function hoursToMinutes(value: string) {
-  const hours = Number(value)
-  if (!Number.isFinite(hours) || hours <= 0) return null
-  const minutes = hours * 60
-  return Number.isInteger(minutes) ? minutes : null
+export function hoursAndMinutesToMinutes(hours: string, minutes: string) {
+  const parsedHours = Number(hours)
+  const parsedMinutes = Number(minutes)
+  if (
+    !Number.isInteger(parsedHours) ||
+    parsedHours < 0 ||
+    !Number.isInteger(parsedMinutes) ||
+    parsedMinutes < 0 ||
+    parsedMinutes > 59
+  ) {
+    return null
+  }
+  const total = parsedHours * 60 + parsedMinutes
+  return total > 0 ? total : null
 }
 
-export function minutesToHours(value: number) {
-  return String(value / 60)
+export function splitMinutes(value: number) {
+  return {
+    hours: Math.floor(value / 60),
+    minutes: value % 60,
+  }
+}
+
+export function formatRepairDuration(value: number, format: "MINUTES" | "HOURS") {
+  if (format === "MINUTES") return `${value} мин`
+  const { hours, minutes } = splitMinutes(value)
+  if (hours === 0) return `${minutes} мин`
+  if (minutes === 0) return `${hours} ч`
+  return `${hours} ч ${minutes} мин`
 }
 
 export function validateRepairComplexityBoundaries(
@@ -67,7 +87,7 @@ export function validateRepairComplexityBoundaries(
   ) {
     return {
       valid: false,
-      error: "Границы должны строго возрастать: лёгкий < средний < сложный.",
+      error: "Границы должны строго возрастать: лёгкий < средний < тяжёлый.",
     }
   }
   return { valid: true, error: null }

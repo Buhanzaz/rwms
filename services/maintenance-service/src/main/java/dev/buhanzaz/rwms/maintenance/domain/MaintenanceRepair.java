@@ -79,6 +79,14 @@ public class MaintenanceRepair {
   @Column(name = "movement_to_shipment", nullable = false)
   private boolean movementToShipment;
 
+  @Enumerated(EnumType.STRING)
+  @Column(name = "logistics_planning_mode", nullable = false, length = 16)
+  private RepairLogisticsPlanningMode logisticsPlanningMode =
+      RepairLogisticsPlanningMode.AUTO;
+
+  @Column(name = "logistics_scheduled_date")
+  private LocalDate logisticsScheduledDate;
+
   @Column(name = "transfer_state", nullable = false, length = 24)
   private String transferState = "NONE";
 
@@ -143,6 +151,10 @@ public class MaintenanceRepair {
 
   @Column(name = "reconciliation_state", nullable = false, length = 32)
   private String reconciliationState;
+
+  @Enumerated(EnumType.STRING)
+  @Column(name = "reclassification_state", nullable = false, length = 24)
+  private RepairReclassificationState reclassificationState;
 
   @Column(name = "created_at", nullable = false)
   private OffsetDateTime createdAt;
@@ -236,6 +248,7 @@ public class MaintenanceRepair {
     value.deliveryUpdatedAt = MaintenanceTime.now();
     value.leaseReconciliationState = "NOT_REQUIRED";
     value.reconciliationState = "NOT_REQUIRED";
+    value.reclassificationState = RepairReclassificationState.STABLE;
     value.transferState = "NONE";
     return value;
   }
@@ -275,6 +288,58 @@ public class MaintenanceRepair {
     deliveryUpdatedAt = MaintenanceTime.now();
   }
 
+  public void queueExternalCapital(
+      UUID leaseId, long leaseVersion, long fencingToken, OffsetDateTime leaseExpiresAt) {
+    queue(leaseId, leaseVersion, fencingToken, leaseExpiresAt);
+    completeAsExternalCapital();
+  }
+
+  public void queueExternalCapitalUnderExistingRepair() {
+    queueUnderExistingRepair();
+    completeAsExternalCapital();
+  }
+
+  public void completeAsExternalCapital() {
+    if (executionState != RepairExecutionState.QUEUED
+        && executionState != RepairExecutionState.IN_PROGRESS) {
+      throw new IllegalStateException(
+          "Only an active repair can move to external capital execution");
+    }
+    executionState = RepairExecutionState.COMPLETED;
+    acceptanceState = RepairAcceptanceState.PENDING;
+    taskGenerationState = "NOT_REQUIRED";
+    deliveryState = "DELIVERED";
+    reconciliationState = "RECONCILED";
+    reclassificationState = RepairReclassificationState.EXTERNAL_CAPITAL;
+    deliveryUpdatedAt = MaintenanceTime.now();
+    taskBoardVersion = null;
+  }
+
+  public void markReclassifyingCapital() {
+    if (executionState != RepairExecutionState.QUEUED
+        && executionState != RepairExecutionState.IN_PROGRESS) {
+      throw new IllegalStateException(
+          "Only active ordinary repair work can be reclassified");
+    }
+    reclassificationState = RepairReclassificationState.RECLASSIFYING_CAPITAL;
+    reconciliationState = "RECONCILIATION_REQUIRED";
+    updatedAt = MaintenanceTime.now();
+  }
+
+  public boolean stabilizeOrdinaryClassification() {
+    if (executionState != RepairExecutionState.QUEUED
+        && executionState != RepairExecutionState.IN_PROGRESS) {
+      throw new IllegalStateException(
+          "Only active repair work can confirm an ordinary classification");
+    }
+    if (reclassificationState == RepairReclassificationState.STABLE) {
+      return false;
+    }
+    reclassificationState = RepairReclassificationState.STABLE;
+    updatedAt = MaintenanceTime.now();
+    return true;
+  }
+
   public boolean isQueuedWithoutOperationLease() {
     return kind == RepairKind.PRIMARY
         && executionState != RepairExecutionState.DRAFT
@@ -302,6 +367,32 @@ public class MaintenanceRepair {
           "Movement to shipment can only be selected before repair work starts");
     }
     this.movementToShipment = movementToShipment;
+  }
+
+  public boolean selectLogisticsPlanning(
+      RepairLogisticsPlanningMode mode, LocalDate scheduledDate) {
+    if (executionState != RepairExecutionState.DRAFT) {
+      throw new IllegalStateException(
+          "Logistics planning can only be selected before repair queueing");
+    }
+    if (mode == null
+        || (mode == RepairLogisticsPlanningMode.AUTO
+            && scheduledDate != null)
+        || (mode == RepairLogisticsPlanningMode.FIXED_DATE
+            && scheduledDate == null)) {
+      throw new IllegalArgumentException(
+          "Repair logistics planning mode and date are inconsistent");
+    }
+    boolean changed =
+        logisticsPlanningMode != mode
+            || !java.util.Objects.equals(
+                logisticsScheduledDate, scheduledDate);
+    logisticsPlanningMode = mode;
+    logisticsScheduledDate = scheduledDate;
+    if (changed) {
+      updatedAt = MaintenanceTime.now();
+    }
+    return changed;
   }
 
   public boolean prepareWarehouseTransfer(
@@ -646,6 +737,12 @@ public class MaintenanceRepair {
   public String getSourceParty() { return sourceParty; }
   public UUID getCoverMediaId() { return coverMediaId; }
   public boolean isMovementToShipment() { return movementToShipment; }
+  public RepairLogisticsPlanningMode getLogisticsPlanningMode() {
+    return logisticsPlanningMode;
+  }
+  public LocalDate getLogisticsScheduledDate() {
+    return logisticsScheduledDate;
+  }
   public String getTransferState() { return transferState; }
   public UUID getTransferDocumentId() { return transferDocumentId; }
   public UUID getTransferLineId() { return transferLineId; }
@@ -667,6 +764,7 @@ public class MaintenanceRepair {
   public OffsetDateTime getLeaseExpiresAt() { return leaseExpiresAt; }
   public String getLeaseReconciliationState() { return leaseReconciliationState; }
   public String getReconciliationState() { return reconciliationState; }
+  public RepairReclassificationState getReclassificationState() { return reclassificationState; }
   public OffsetDateTime getCreatedAt() { return createdAt; }
   public OffsetDateTime getUpdatedAt() { return updatedAt; }
 }

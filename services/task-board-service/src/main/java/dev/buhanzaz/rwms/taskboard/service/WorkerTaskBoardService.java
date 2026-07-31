@@ -5,6 +5,8 @@ import static dev.buhanzaz.rwms.taskboard.api.WorkerApiModels.*;
 
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import dev.buhanzaz.rwms.taskboard.domain.GroupOperationalStatus;
+import dev.buhanzaz.rwms.taskboard.domain.ParticipationPolicy;
+import dev.buhanzaz.rwms.taskboard.domain.QueuePurpose;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
@@ -32,7 +34,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class WorkerTaskBoardService {
   private static final String AVAILABLE = "AVAILABLE";
-  private static final String MANDATORY = "MANDATORY";
+  private static final String REQUIRED_JOIN = "REQUIRED_JOIN";
+  private static final String OPTIONAL_JOIN = "OPTIONAL_JOIN";
   private static final String SECONDARY_PENDING = "SECONDARY_PENDING";
   private static final int MAX_LIMIT = 50;
 
@@ -80,7 +83,7 @@ public class WorkerTaskBoardService {
                         group.workerClass().id(),
                         group.workerClass().name()))
             .orElse(null),
-        worker.operationalAvailability().name(),
+        operationalAvailability(access),
         access.groups().stream()
             .map(
                 group ->
@@ -120,7 +123,7 @@ public class WorkerTaskBoardService {
     access
         .categories()
         .forEach(queue -> categories.put(queue.id(), category(queue, access)));
-    TaskBoardSnapshot snapshot = taskBoard.snapshot(warehouseId, null, false);
+    TaskBoardSnapshot snapshot = taskBoard.workerSnapshot(warehouseId);
     List<CategoryEntry> visible = new ArrayList<>();
     for (BoardColumnDto column : snapshot.columns()) {
       WorkerCategory workerCategory = categories.get(column.queueId());
@@ -258,8 +261,11 @@ public class WorkerTaskBoardService {
                     binding.workerClass().id(),
                     binding.primary()
                         ? AVAILABLE
-                        : binding.notifyUrgent() ? MANDATORY : SECONDARY_PENDING,
-                    binding.stopTaskOnTake()))
+                        : binding.participationPolicy() == ParticipationPolicy.REQUIRED
+                            ? REQUIRED_JOIN
+                            : OPTIONAL_JOIN,
+                    binding.stopTaskOnTake(),
+                    binding.notifyOnPrimaryTake()))
         .forEach(audienceSelectors::add);
     return new WorkerTaskDetail(
         entry.id(),
@@ -493,6 +499,7 @@ public class WorkerTaskBoardService {
     }
   }
 
+  @Transactional
   public WorkerActionAppliedResult applyAction(
       UUID workerId,
       UUID warehouseId,
@@ -501,7 +508,7 @@ public class WorkerTaskBoardService {
       WorkerActionRequest request) {
     requireIdempotencyKey(idempotencyKey, request.operationId());
     WorkerTaskDetail current = detail(workerId, warehouseId, entryId);
-    boolean primaryTakeTriggersUrgency =
+    boolean primaryTakeTriggersNotification =
         request.action() == WorkerAction.TAKE && "WAITING".equals(current.status());
     ActionReplay replay = replay(request.operationId());
     if (replay != null) {
@@ -514,17 +521,28 @@ public class WorkerTaskBoardService {
 
     WorkerAccess access = access(workerId, warehouseId);
     UUID currentGroupId = access.worker().currentGroupId();
+    BoardEntryDto commandEntry = taskBoard.entry(warehouseId, entryId);
+    boolean individualLogistics =
+        commandEntry.queuePurpose() == QueuePurpose.LOGISTICS_DRIVER;
     if (request.action() == WorkerAction.TAKE) {
-      if (currentGroupId == null
-          || access.worker().operationalAvailability()
-              != GroupOperationalStatus.AVAILABLE) {
+      if (!individualLogistics
+          && (currentGroupId == null
+              || access.worker().operationalAvailability()
+                  != GroupOperationalStatus.AVAILABLE)) {
         throw new ConflictException("Рабочему не назначена доступная текущая группа");
       }
-      if (request.workerGroupId() != null
+      if (!individualLogistics
+          && request.workerGroupId() != null
           && !currentGroupId.equals(request.workerGroupId())) {
         throw new ConflictException(
             "Задачу можно взять только текущей группой рабочего");
       }
+      if (individualLogistics && request.workerGroupId() != null) {
+        throw new ConflictException("Водитель берёт логистическое задание без бригады");
+      }
+    }
+    if (request.action() == WorkerAction.JOIN && !"IN_PROGRESS".equals(current.status())) {
+      throw new ConflictException("Присоединиться можно только к заданию в работе");
     }
     leases.requireValid(
         request.offlineLeaseId(), workerId, warehouseId, request.occurredAt(), now());
@@ -532,12 +550,16 @@ public class WorkerTaskBoardService {
     MDC.put(CorrelationIdFilter.MDC_KEY, request.operationId().toString());
     try {
       switch (request.action()) {
-        case TAKE ->
+        case TAKE, JOIN ->
             taskBoard.take(
                 warehouseId,
                 entryId,
                 new TakeEntryRequest(
-                    request.expectedVersion(), currentGroupId, workerId),
+                    request.expectedVersion(),
+                    request.action() == WorkerAction.TAKE && !individualLogistics
+                        ? currentGroupId
+                        : null,
+                    workerId),
                 workerId);
         case PAUSE ->
             taskBoard.pause(
@@ -559,6 +581,9 @@ public class WorkerTaskBoardService {
           if (current.resultPhotoMinCount() > readyEvidence) {
             throw new ConflictException("Для завершения не хватает готовых фотографий");
           }
+          if (commandEntry.queuePurpose() == QueuePurpose.LOGISTICS_DRIVER) {
+            selectCompletionEvidence(entryId, request.evidenceId());
+          }
           taskBoard.complete(
               warehouseId,
               entryId,
@@ -575,12 +600,12 @@ public class WorkerTaskBoardService {
     }
     WorkerTaskDetail changed = detail(workerId, warehouseId, entryId);
     long changedRevision = revision();
-    Set<UUID> urgentWorkerIds =
-        primaryTakeTriggersUrgency
-            ? urgentWorkerIds(warehouseId, current.audienceSelectors())
+    Set<UUID> notifiedWorkerIds =
+        primaryTakeTriggersNotification
+            ? notifiedWorkerIds(warehouseId, current.audienceSelectors())
             : Set.of();
     invalidations.actionApplied(
-        workerId, entryId, changedRevision, urgentWorkerIds);
+        workerId, entryId, changedRevision, notifiedWorkerIds);
     return new WorkerActionAppliedResult("APPLIED", changed.version(), changed);
   }
 
@@ -623,6 +648,27 @@ public class WorkerTaskBoardService {
     return new WorkerAccess(worker, groups, qualifications, categories);
   }
 
+  private static String operationalAvailability(WorkerAccess access) {
+    if (access.worker().currentGroupId() == null
+        && access.categories().stream()
+            .anyMatch(
+                queue ->
+                    queue.purpose() == QueuePurpose.LOGISTICS_DRIVER
+                        && queue.bindings().stream()
+                            .anyMatch(
+                                binding ->
+                                    binding.primary()
+                                        && access.qualifications().stream()
+                                            .anyMatch(
+                                                qualification ->
+                                                    qualification.workerClass().id()
+                                                        .equals(
+                                                            binding.workerClass().id()))))) {
+      return GroupOperationalStatus.AVAILABLE.name();
+    }
+    return access.worker().operationalAvailability().name();
+  }
+
   private WorkerCategory category(WorkQueueDto queue, WorkerAccess access) {
     Set<UUID> workerClassIds = new LinkedHashSet<>();
     access
@@ -638,13 +684,17 @@ public class WorkerTaskBoardService {
                 modes.add(AVAILABLE);
               } else {
                 modes.add(SECONDARY_PENDING);
-                if (binding.notifyUrgent()) modes.add(MANDATORY);
+                modes.add(
+                    binding.participationPolicy() == ParticipationPolicy.REQUIRED
+                        ? REQUIRED_JOIN
+                        : OPTIONAL_JOIN);
               }
             });
     return new WorkerCategory(
         queue.id(),
         queue.name(),
         queue.type().name(),
+        queue.purpose().name(),
         queue.sortOrder(),
         List.copyOf(modes),
         resultPhotoMinimum(queue));
@@ -706,8 +756,13 @@ public class WorkerTaskBoardService {
   }
 
   private static String availabilityMode(WorkerCategory category, String entryStatus) {
-    if ("IN_PROGRESS".equals(entryStatus) && category.audienceModes().contains(MANDATORY)) {
-      return MANDATORY;
+    if ("IN_PROGRESS".equals(entryStatus)
+        && category.audienceModes().contains(REQUIRED_JOIN)) {
+      return REQUIRED_JOIN;
+    }
+    if ("IN_PROGRESS".equals(entryStatus)
+        && category.audienceModes().contains(OPTIONAL_JOIN)) {
+      return OPTIONAL_JOIN;
     }
     if ("WAITING".equals(entryStatus)
         && !category.audienceModes().contains(AVAILABLE)
@@ -717,15 +772,19 @@ public class WorkerTaskBoardService {
     return AVAILABLE;
   }
 
-  private Set<UUID> urgentWorkerIds(
+  private Set<UUID> notifiedWorkerIds(
       UUID warehouseId, List<AudienceSelector> audienceSelectors) {
-    Set<UUID> urgentClassIds =
+    Set<UUID> notifiedClassIds =
         audienceSelectors.stream()
             .filter(selector -> "WORKER_CLASS".equals(selector.kind()))
-            .filter(selector -> MANDATORY.equals(selector.mode()))
+            .filter(AudienceSelector::notifyOnPrimaryTake)
+            .filter(
+                selector ->
+                    REQUIRED_JOIN.equals(selector.mode())
+                        || OPTIONAL_JOIN.equals(selector.mode()))
             .map(AudienceSelector::id)
             .collect(java.util.stream.Collectors.toSet());
-    if (urgentClassIds.isEmpty()) return Set.of();
+    if (notifiedClassIds.isEmpty()) return Set.of();
     return workforce.listWorkers(warehouseId).stream()
         .filter(WorkerDto::active)
         .filter(
@@ -734,11 +793,42 @@ public class WorkerTaskBoardService {
                     .anyMatch(
                         qualification ->
                             qualification.active()
-                                && urgentClassIds.contains(
+                                && notifiedClassIds.contains(
                                     qualification.workerClass().id())))
         .map(WorkerDto::id)
         .collect(
             java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+  }
+
+  private void selectCompletionEvidence(UUID entryId, UUID evidenceId) {
+    if (evidenceId == null) {
+      throw new ConflictException(
+          "Для завершения логистического задания выберите фотографию результата");
+    }
+    Integer ready =
+        jdbc.queryForObject(
+            """
+            select count(*)::integer
+              from worker_task_evidence
+             where entry_id=? and evidence_id=? and state='READY' and media_id is not null
+            """,
+            Integer.class,
+            entryId,
+            evidenceId);
+    if (ready == null || ready != 1) {
+      throw new ConflictException("Выбранная фотография результата ещё не готова");
+    }
+    jdbc.update(
+        "update worker_task_evidence set selected_for_completion=false where entry_id=?",
+        entryId);
+    jdbc.update(
+        """
+        update worker_task_evidence
+           set selected_for_completion=true, updated_at=clock_timestamp()
+         where entry_id=? and evidence_id=?
+        """,
+        entryId,
+        evidenceId);
   }
 
   private List<TaskEvidence> evidence(UUID entryId) {
@@ -896,7 +986,7 @@ public class WorkerTaskBoardService {
 
   private String eventType(WorkerAction action) {
     return switch (action) {
-      case TAKE -> TaskBoardEventTypes.QUEUE_ENTRY_TAKEN;
+      case TAKE, JOIN -> TaskBoardEventTypes.QUEUE_ENTRY_TAKEN;
       case PAUSE -> TaskBoardEventTypes.QUEUE_ENTRY_PAUSED;
       case RESUME -> TaskBoardEventTypes.QUEUE_ENTRY_RESUMED;
       case COMPLETE -> TaskBoardEventTypes.QUEUE_ENTRY_COMPLETED;

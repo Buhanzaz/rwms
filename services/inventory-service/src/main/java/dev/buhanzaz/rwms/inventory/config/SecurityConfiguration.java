@@ -71,10 +71,11 @@ public class SecurityConfiguration {
         List.of(
             HttpHeaders.AUTHORIZATION,
             HttpHeaders.CONTENT_TYPE,
+            HttpHeaders.IF_NONE_MATCH,
             CorrelationIdFilter.HEADER_NAME,
             "Idempotency-Key"));
     configuration.setExposedHeaders(
-        List.of(CorrelationIdFilter.HEADER_NAME, "Idempotency-Replayed"));
+        List.of(CorrelationIdFilter.HEADER_NAME, HttpHeaders.ETAG, "Idempotency-Replayed"));
     UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
     source.registerCorsConfiguration("/**", configuration);
     return source;

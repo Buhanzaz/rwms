@@ -14,7 +14,7 @@ import java.util.UUID;
 @Entity
 @Table(name = "repair_capacity_settings")
 public class RepairCapacitySettings {
-  public static final int DEFAULT_MAX_REPAIRS_PER_DAY = 6;
+  public static final int DEFAULT_REPAIR_PLACE_COUNT = 6;
 
   @Id
   @Column(name = "warehouse_id", nullable = false)
@@ -25,8 +25,8 @@ public class RepairCapacitySettings {
   private long version;
 
   @Positive
-  @Column(name = "max_repairs_per_day", nullable = false)
-  private int maxRepairsPerDay;
+  @Column(name = "repair_place_count", nullable = false)
+  private int repairPlaceCount;
 
   @Column(name = "created_at", nullable = false)
   private OffsetDateTime createdAt;
@@ -36,18 +36,18 @@ public class RepairCapacitySettings {
 
   protected RepairCapacitySettings() {}
 
-  public static RepairCapacitySettings create(UUID warehouseId, int maxRepairsPerDay) {
+  public static RepairCapacitySettings create(UUID warehouseId, int repairPlaceCount) {
     if (warehouseId == null) {
       throw new IllegalArgumentException("warehouseId is required");
     }
     RepairCapacitySettings value = new RepairCapacitySettings();
     value.warehouseId = warehouseId;
-    value.maxRepairsPerDay = requirePositive(maxRepairsPerDay);
+    value.repairPlaceCount = requirePositive(repairPlaceCount);
     return value;
   }
 
-  public void replace(int maxRepairsPerDay) {
-    this.maxRepairsPerDay = requirePositive(maxRepairsPerDay);
+  public void replace(int repairPlaceCount) {
+    this.repairPlaceCount = requirePositive(repairPlaceCount);
   }
 
   @PrePersist
@@ -62,16 +62,16 @@ public class RepairCapacitySettings {
     updatedAt = MaintenanceTime.now();
   }
 
-  private static int requirePositive(int maxRepairsPerDay) {
-    if (maxRepairsPerDay < 1) {
-      throw new IllegalArgumentException("maxRepairsPerDay must be positive");
+  private static int requirePositive(int repairPlaceCount) {
+    if (repairPlaceCount < 1) {
+      throw new IllegalArgumentException("repairPlaceCount must be positive");
     }
-    return maxRepairsPerDay;
+    return repairPlaceCount;
   }
 
   public UUID getWarehouseId() { return warehouseId; }
   public long getVersion() { return version; }
-  public int getMaxRepairsPerDay() { return maxRepairsPerDay; }
+  public int getRepairPlaceCount() { return repairPlaceCount; }
   public OffsetDateTime getCreatedAt() { return createdAt; }
   public OffsetDateTime getUpdatedAt() { return updatedAt; }
 }

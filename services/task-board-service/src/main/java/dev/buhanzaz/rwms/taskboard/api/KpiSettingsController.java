@@ -58,15 +58,6 @@ public class KpiSettingsController {
     return service.saveWorkSchedule(warehouseId, request);
   }
 
-  @PutMapping("/repair-complexity")
-  public WarehouseKpiSettingsResponse saveRepairComplexity(
-      @AuthenticationPrincipal Jwt jwt,
-      @PathVariable UUID warehouseId,
-      @Valid @RequestBody SaveRepairComplexityThresholdsRequest request) {
-    write(jwt, warehouseId);
-    return service.saveRepairComplexity(warehouseId, request);
-  }
-
   @DeleteMapping("/work-schedule/pending")
   @ResponseStatus(HttpStatus.NO_CONTENT)
   public void deletePendingWorkSchedule(

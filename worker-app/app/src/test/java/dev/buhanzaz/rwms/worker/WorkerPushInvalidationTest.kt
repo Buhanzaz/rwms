@@ -11,11 +11,11 @@ class WorkerPushInvalidationTest {
                 mapOf(
                     "eventId" to "event-42",
                     "revision" to "42",
-                    "type" to "MANDATORY_TASK",
+                    "type" to "TASK_JOIN_AVAILABLE",
                     "entryId" to "entry-8",
                 ),
             ),
-        ).isEqualTo(WorkerPushInvalidation("event-42", 42, "MANDATORY_TASK", "entry-8"))
+        ).isEqualTo(WorkerPushInvalidation("event-42", 42, "TASK_JOIN_AVAILABLE", "entry-8"))
     }
 
     @Test

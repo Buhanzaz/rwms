@@ -75,45 +75,6 @@ class KpiSettingsServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void repairComplexityThresholdsHaveDefaultsAreWarehouseScopedAndStrictlyIncreasing() {
-    assertThat(service.get(W1).repairComplexity())
-        .isEqualTo(new RepairComplexityThresholdsDto(60, 180, 360));
-    assertThat(service.repairComplexity(W1))
-        .isEqualTo(new RepairComplexityThresholdsResponse(W1, 0, 60, 180, 360));
-
-    WarehouseKpiSettingsResponse saved =
-        service.saveRepairComplexity(
-            W1,
-            new SaveRepairComplexityThresholdsRequest(
-                0, 45, 120, 300));
-
-    assertThat(saved.repairComplexity())
-        .isEqualTo(new RepairComplexityThresholdsDto(45, 120, 300));
-    assertThat(service.repairComplexity(W1))
-        .isEqualTo(
-            new RepairComplexityThresholdsResponse(
-                W1, saved.version(), 45, 120, 300));
-    assertThat(service.repairComplexity(W2))
-        .isEqualTo(new RepairComplexityThresholdsResponse(W2, 0, 60, 180, 360));
-
-    assertThatThrownBy(
-            () ->
-                service.saveRepairComplexity(
-                    W2,
-                    new SaveRepairComplexityThresholdsRequest(
-                        0, 60, 60, 360)))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("строго возрастать");
-    assertThatThrownBy(
-            () ->
-                service.saveRepairComplexity(
-                    W1,
-                    new SaveRepairComplexityThresholdsRequest(
-                        saved.version() + 1, 50, 150, 400)))
-        .isInstanceOf(StaleVersionException.class);
-  }
-
-  @Test
   void paletteMustCoverWholeIntegerScaleWithoutGapsAndUsesSeparateOverdueColor() {
     assertThatThrownBy(
             () ->

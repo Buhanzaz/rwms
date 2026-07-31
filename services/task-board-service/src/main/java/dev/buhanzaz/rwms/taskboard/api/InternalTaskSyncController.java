@@ -6,6 +6,8 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CancelledTaskDto;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.PreStartUpdateTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RegisterExternalTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RelocateExternalTaskRequest;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.SelectedCompletionEvidenceDto;
+import static dev.buhanzaz.rwms.taskboard.api.ApiModels.SetTaskLaneRequest;
 
 import dev.buhanzaz.rwms.taskboard.security.TaskSyncAuthorizer;
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardService;
@@ -68,5 +70,21 @@ public class InternalTaskSyncController {
       @Valid @RequestBody RelocateExternalTaskRequest request) {
     return service.relocateExternalTask(
         access.requireTaskSync(jwt), externalTaskId, request);
+  }
+
+  @PostMapping("/{externalTaskId}/lane")
+  public BoardTaskRegistrationDto setLane(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID externalTaskId,
+      @Valid @RequestBody SetTaskLaneRequest request) {
+    return service.setExternalTaskLane(
+        access.requireTaskSync(jwt), externalTaskId, request);
+  }
+
+  @GetMapping("/{externalTaskId}/completion-evidence")
+  public SelectedCompletionEvidenceDto completionEvidence(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID externalTaskId) {
+    return service.selectedCompletionEvidence(
+        access.requireTaskSync(jwt), externalTaskId);
   }
 }

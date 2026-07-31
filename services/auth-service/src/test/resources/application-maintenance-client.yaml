@@ -5,10 +5,10 @@ rwms:
         - client-id: maintenance-service
           client-name: Maintenance Service Downstream Client
           enabled: true
-          revision: 1
+          revision: 2
           authentication-methods: [client_secret_basic]
           grant-types: [client_credentials]
-          scopes: [asset.maintenance, task-board.task-sync, queue-registry.write, media.maintenance]
+          scopes: [asset.maintenance, task-board.task-sync, queue-registry.write, media.maintenance, logistics.maintenance]
           development-secret: maintenance-test-secret
           audiences: [rwms-services]
           access-token-ttl: 5m

@@ -519,7 +519,9 @@ export class HttpMaintenanceRepairEstimatesAdapter implements RepairEstimatesCli
         draft.id,
         draft.version,
         command.priority,
-        createMaintenanceIdempotencyKey()
+        createMaintenanceIdempotencyKey(),
+        command.logisticsPlanningMode,
+        command.logisticsScheduledDate
       )
       return toEstimateDto(
         result.estimate,

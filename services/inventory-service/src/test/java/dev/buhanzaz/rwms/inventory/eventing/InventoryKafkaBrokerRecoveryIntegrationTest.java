@@ -168,7 +168,7 @@ class InventoryKafkaBrokerRecoveryIntegrationTest {
   }
 
   @Test
-  void mediaConsumerPreservesOrderDuplicateGapDltAndBrokerRecovery() throws Exception {
+  void mediaConsumerAcceptsMonotonicSnapshotSkipsAndRecoversBroker() throws Exception {
     UUID warehouseId = UUID.randomUUID();
     UUID findingId = seedFinding(warehouseId, UUID.randomUUID());
     UUID mediaId = UUID.randomUUID();
@@ -201,21 +201,37 @@ class InventoryKafkaBrokerRecoveryIntegrationTest {
                 mediaId))
         .isOne();
 
-    UUID gapEvent = UUID.randomUUID();
+    UUID skippedVersionEvent = UUID.randomUUID();
     publish(
         MEDIA_TOPIC,
         mediaId.toString().getBytes(StandardCharsets.UTF_8),
         mediaFact(
-            gapEvent, mediaId, 4, findingId, warehouseId, "media.media.rotated.v1"));
+            skippedVersionEvent,
+            mediaId,
+            4,
+            findingId,
+            warehouseId,
+            "media.media.rotated.v1"));
     await(
-        "media version gap quarantined",
-        () ->
+        "monotonic media version 4 applied after a public snapshot skip",
+        () -> checkpoint(mediaId) == 4);
+    assertThat(inboxStatus(skippedVersionEvent)).isEqualTo("PROCESSED");
+    assertThat(
             jdbc.queryForObject(
-                    "select count(*) from version_gap_quarantine where aggregate_id=? and expected_version=3 and received_version=4 and status='OPEN'",
-                    Integer.class,
-                    mediaId.toString())
-                == 1);
-    assertThat(checkpointBlocked(mediaId)).isTrue();
+                "select count(*) from version_gap_quarantine where aggregate_id=?",
+                Integer.class,
+                mediaId.toString()))
+        .isZero();
+    assertThat(checkpointBlocked(mediaId)).isFalse();
+
+    UUID staleEvent = UUID.randomUUID();
+    publish(
+        MEDIA_TOPIC,
+        mediaId.toString().getBytes(StandardCharsets.UTF_8),
+        mediaFact(
+            staleEvent, mediaId, 3, findingId, warehouseId, "media.media.rotated.v1"));
+    await("stale media fact marked processed", () -> "PROCESSED".equals(inboxStatus(staleEvent)));
+    assertThat(checkpoint(mediaId)).isEqualTo(4);
 
     UUID laterEvent = UUID.randomUUID();
     publish(
@@ -223,7 +239,8 @@ class InventoryKafkaBrokerRecoveryIntegrationTest {
         mediaId.toString().getBytes(StandardCharsets.UTF_8),
         mediaFact(
             laterEvent, mediaId, 5, findingId, warehouseId, "media.media.rotated.v1"));
-    await("later fact remains quarantined", () -> "QUARANTINED".equals(inboxStatus(laterEvent)));
+    await("later monotonic media fact applied", () -> checkpoint(mediaId) == 5);
+    assertThat(inboxStatus(laterEvent)).isEqualTo("PROCESSED");
 
     byte[] invalid =
         ("password=never-publish inventory-kafka-" + UUID.randomUUID() + "@example.test")

@@ -1,5 +1,6 @@
 import type {
   MoneyDecimal,
+  LogisticsPlanningMode,
   RepairEstimateCompletionMode,
   RepairEstimateLineDto,
   RepairEstimateTaskPlanKind,
@@ -123,6 +124,8 @@ export type InventoryFindingDto = {
   repairCompletionMode: RepairEstimateCompletionMode | null
   repairPriority: RepairPriority
   movementRequired: boolean
+  logisticsPlanningMode: LogisticsPlanningMode
+  logisticsScheduledDate: string | null
   repairPlans: InventoryRepairPlanSnapshotDto[]
   publicationStatus: InventoryFindingPublicationStatus
   publicationOperationKey: string | null

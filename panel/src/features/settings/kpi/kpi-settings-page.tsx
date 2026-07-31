@@ -44,20 +44,22 @@ import {
   getKpiSettings,
   kpiSettingsKeys,
   saveKpiPalette,
-  saveRepairComplexity,
   saveWorkSchedule,
   type SaveKpiPaletteInput,
-  type SaveRepairComplexityInput,
   type SaveWorkScheduleInput,
   type WarehouseKpiSettings,
 } from "@/features/settings/kpi/api/kpi-settings-api"
+import {
+  getRepairComplexity,
+  repairComplexityKeys,
+  updateRepairComplexity,
+  type RepairComplexityUpdate,
+} from "@/features/settings/kpi/api/repair-complexity-api"
 import { PaletteSettingsCard } from "@/features/settings/kpi/palette-settings-card"
 import { RepairComplexitySettingsCard } from "@/features/settings/kpi/repair-complexity-settings-card"
 import { WorkScheduleCard } from "@/features/settings/kpi/work-schedule-card"
 import { useWarehouse } from "@/hooks/use-warehouse"
 import { ApiError } from "@/lib/api-client"
-
-const PREVIEW_DAYS = ["Сегодня", "Завтра", "Послезавтра"] as const
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message.trim()
@@ -86,7 +88,7 @@ function LoadingCard() {
   return (
     <Card aria-label="Загрузка настройки KPI">
       <CardHeader>
-        <CardTitle>Лимит ремонтов</CardTitle>
+        <CardTitle>Количество ремонтных мест</CardTitle>
         <CardDescription>
           Загружаем настройку выбранного склада…
         </CardDescription>
@@ -117,7 +119,7 @@ function QueryErrorCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Не удалось загрузить лимит ремонтов</CardTitle>
+        <CardTitle>Не удалось загрузить ремонтные места</CardTitle>
         <CardDescription>
           Настройка не подменяется локальным значением.
         </CardDescription>
@@ -159,21 +161,21 @@ function CapacityForm({
   actionError: string | null
   onSave: (input: RepairCapacityUpdate) => void
 }) {
-  const [maxRepairsPerDay, setMaxRepairsPerDay] = useState(
-    String(setting.maxRepairsPerDay)
+  const [repairPlaceCount, setRepairPlaceCount] = useState(
+    String(setting.repairPlaceCount)
   )
   const [validationError, setValidationError] = useState<string | null>(null)
-  const previewValue = Number(maxRepairsPerDay)
-  const validPreview =
-    Number.isInteger(previewValue) && previewValue >= 1 ? previewValue : null
+  const parsedValue = Number(repairPlaceCount)
+  const validValue =
+    Number.isInteger(parsedValue) && parsedValue >= 1 ? parsedValue : null
   const visibleError = validationError ?? actionError
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
-    if (validPreview === null) {
+    if (validValue === null) {
       setValidationError(
-        "Укажите положительное целое количество ремонтов в день."
+        "Укажите положительное целое количество ремонтных мест."
       )
       return
     }
@@ -181,7 +183,7 @@ function CapacityForm({
     setValidationError(null)
     onSave({
       expectedVersion: setting.version,
-      maxRepairsPerDay: validPreview,
+      repairPlaceCount: validValue,
     })
   }
 
@@ -189,10 +191,10 @@ function CapacityForm({
     <form onSubmit={submit}>
       <Card>
         <CardHeader>
-          <CardTitle>Лимит ремонтов</CardTitle>
+          <CardTitle>Количество ремонтных мест</CardTitle>
           <CardDescription>
-            Максимальное количество бытовок в ремонте за день для склада «
-            {warehouseName}».
+            Фактическая вместимость обычного ремонта на складе «{warehouseName}
+            ».
           </CardDescription>
           <CardAction>
             <Badge variant="outline">Версия {setting.version}</Badge>
@@ -206,72 +208,36 @@ function CapacityForm({
                 validationError !== null || actionError !== null || undefined
               }
             >
-              <FieldLabel htmlFor="repair-capacity-max">
-                Максимум ремонтов в день
+              <FieldLabel htmlFor="repair-capacity-count">
+                Количество ремонтных мест
               </FieldLabel>
               <Input
-                id="repair-capacity-max"
+                id="repair-capacity-count"
                 type="number"
                 min={1}
                 step={1}
                 inputMode="numeric"
-                value={maxRepairsPerDay}
+                value={repairPlaceCount}
                 disabled={saving}
                 aria-invalid={visibleError !== null}
                 onChange={(event) => {
-                  setMaxRepairsPerDay(event.target.value)
+                  setRepairPlaceCount(event.target.value)
                   setValidationError(null)
                 }}
               />
               <FieldDescription>
-                Значение действует только для выбранного склада. Если настройка
-                ещё не сохранена, сервис возвращает значение по умолчанию — 6.
+                Одно место одновременно может быть занято одной бытовкой.
+                Значение действует только для выбранного склада.
               </FieldDescription>
               <FieldError>{visibleError}</FieldError>
             </Field>
           </FieldGroup>
-
-          <section
-            className="flex flex-col gap-3"
-            aria-labelledby="repair-capacity-preview-title"
-          >
-            <div className="flex flex-col gap-1">
-              <h2
-                id="repair-capacity-preview-title"
-                className="text-sm font-medium"
-              >
-                Предпросмотр на три дня
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                Это поясняющая проекция одного дневного лимита. Она не планирует
-                ремонты и не создаёт задачи.
-              </p>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-3">
-              {PREVIEW_DAYS.map((day) => (
-                <Card key={day} size="sm">
-                  <CardHeader>
-                    <CardDescription>{day}</CardDescription>
-                    <CardTitle>
-                      <output aria-label={`${day}: лимит ремонтов`}>
-                        {validPreview ?? "—"}
-                      </output>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="text-sm text-muted-foreground">
-                    бытовок
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </section>
         </CardContent>
 
         <CardFooter className="justify-between gap-4 border-t">
           <p className="text-sm text-muted-foreground">
             {setting.createdAt === null
-              ? "Сейчас используется значение по умолчанию."
+              ? "Настройка ещё не сохранялась для выбранного склада."
               : "Настройка сохранена в сервисе ремонтов."}
           </p>
           <Button type="submit" disabled={saving}>
@@ -311,7 +277,7 @@ function RepairCapacityContent({
     onSuccess: (saved) => {
       queryClient.setQueryData(queryKey, saved)
       setActionError(null)
-      toast.success("Лимит ремонтов сохранён.")
+      toast.success("Количество ремонтных мест сохранено.")
     },
     onError: async (error) => {
       if (error instanceof ApiError && error.status === 409) {
@@ -325,7 +291,7 @@ function RepairCapacityContent({
 
       const message = errorMessage(
         error,
-        "Не удалось сохранить лимит ремонтов."
+        "Не удалось сохранить количество ремонтных мест."
       )
       setActionError(message)
       toast.error(message)
@@ -349,7 +315,7 @@ function RepairCapacityContent({
   if (!capacityQuery.data) {
     return (
       <QueryErrorCard
-        error={new Error("Сервис ремонтов не вернул настройку KPI.")}
+        error={new Error("Сервис ремонтов не вернул настройку ремонтных мест.")}
         retrying={capacityQuery.isFetching}
         onRetry={() => void capacityQuery.refetch()}
       />
@@ -358,7 +324,7 @@ function RepairCapacityContent({
 
   return (
     <CapacityForm
-      key={`${warehouseId}:${capacityQuery.data.version}:${capacityQuery.data.maxRepairsPerDay}`}
+      key={`${warehouseId}:${capacityQuery.data.version}:${capacityQuery.data.repairPlaceCount}`}
       setting={capacityQuery.data}
       warehouseName={warehouseName}
       saving={saveMutation.isPending}
@@ -371,8 +337,118 @@ function RepairCapacityContent({
   )
 }
 
+function RepairComplexityContent({
+  accessToken,
+  warehouseId,
+}: {
+  accessToken: string
+  warehouseId: string
+}) {
+  const queryClient = useQueryClient()
+  const queryKey = repairComplexityKeys.warehouse(warehouseId)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const settingQuery = useQuery({
+    queryKey,
+    queryFn: () => getRepairComplexity(accessToken, warehouseId),
+  })
+  const saveMutation = useMutation({
+    mutationFn: (input: RepairComplexityUpdate) =>
+      updateRepairComplexity(accessToken, warehouseId, input),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(queryKey, saved)
+      setActionError(null)
+      toast.success("Границы сложности ремонта сохранены.")
+    },
+    onError: async (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        const message =
+          "Границы уже изменены другим пользователем. Данные обновлены — повторите сохранение."
+        setActionError(message)
+        toast.error(message)
+        await queryClient.invalidateQueries({ queryKey })
+        return
+      }
+      const message = errorMessage(
+        error,
+        "Не удалось сохранить границы сложности ремонта."
+      )
+      setActionError(message)
+      toast.error(message)
+    },
+  })
+
+  if (settingQuery.isLoading) {
+    return (
+      <Card aria-label="Загрузка границ сложности ремонта">
+        <CardHeader>
+          <Skeleton className="h-5 w-40" />
+          <Skeleton className="h-4 w-3/4" />
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <Skeleton className="h-9 w-64" />
+          <Skeleton className="h-28 w-full" />
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (settingQuery.isError || !settingQuery.data) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Не удалось загрузить сложность ремонта</CardTitle>
+          <CardDescription>
+            Границы не подменяются настройками доски задач.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p role="alert" className="text-sm text-destructive">
+            {errorMessage(
+              settingQuery.error,
+              "Сервис ремонтов временно недоступен."
+            )}
+          </p>
+        </CardContent>
+        <CardFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={settingQuery.isFetching}
+            onClick={() => void settingQuery.refetch()}
+          >
+            <HugeiconsIcon
+              icon={
+                settingQuery.isFetching ? Loading03Icon : Refresh01Icon
+              }
+              data-icon="inline-start"
+              className={
+                settingQuery.isFetching ? "animate-spin" : undefined
+              }
+            />
+            Повторить
+          </Button>
+        </CardFooter>
+      </Card>
+    )
+  }
+
+  return (
+    <RepairComplexitySettingsCard
+      key={`${warehouseId}:${settingQuery.data.version}:${settingQuery.data.updatedAt}`}
+      setting={settingQuery.data}
+      saving={saveMutation.isPending}
+      blocked={saveMutation.isPending}
+      actionError={actionError}
+      onSave={(input) => {
+        setActionError(null)
+        saveMutation.mutate(input)
+      }}
+    />
+  )
+}
+
 type KpiConfigurationCommand = {
-  kind: "complexity" | "palette" | "schedule" | "delete-schedule" | "activate"
+  kind: "palette" | "schedule" | "delete-schedule" | "activate"
   execute: () => Promise<WarehouseKpiSettings | void>
   success: string
   confirmed?: () => void
@@ -552,23 +628,6 @@ function KpiConfigurationContent({
         </Button>
       </div>
 
-      <RepairComplexitySettingsCard
-        key={`complexity:${settings.version}`}
-        settings={settings}
-        saving={activeKind === "complexity"}
-        blocked={mutation.isPending}
-        actionError={actionError}
-        onSave={(input: SaveRepairComplexityInput) => {
-          setActionError(null)
-          mutation.mutate({
-            kind: "complexity",
-            execute: () =>
-              saveRepairComplexity(accessToken, warehouseId, input),
-            success: "Границы сложности ремонта сохранены.",
-          })
-        }}
-      />
-
       <WorkScheduleCard
         key={`schedule:${settings.version}`}
         settings={settings}
@@ -655,6 +714,11 @@ export function KpiSettingsPage() {
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto pb-4">
       <KpiConfigurationContent
         key={`configuration:${warehouseId}`}
+        accessToken={accessToken}
+        warehouseId={warehouseId}
+      />
+      <RepairComplexityContent
+        key={`repair-complexity:${warehouseId}`}
         accessToken={accessToken}
         warehouseId={warehouseId}
       />

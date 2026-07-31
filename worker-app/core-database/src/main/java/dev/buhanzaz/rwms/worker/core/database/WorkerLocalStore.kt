@@ -17,6 +17,7 @@ data class PendingWorkerAction(
     val action: String,
     val expectedVersion: Long,
     val workerGroupId: String?,
+    val evidenceId: String? = null,
     val occurredAt: String,
     val offlineLeaseId: String,
 )

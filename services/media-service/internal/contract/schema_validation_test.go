@@ -180,6 +180,57 @@ func TestMediaInventoryOwnerDLTSchemaValidatesSanitizedFixtures(t *testing.T) {
 	}
 }
 
+func TestCabinCoverFactSchemaIsStrictAndCarriesNoObjectLocator(t *testing.T) {
+	schema := compileActualSchema(t, "cabin-photo-facts-v1.schema.json")
+	valid := map[string]any{
+		"envelopeVersion":  2,
+		"eventId":          "8df83c63-c41c-43bb-ae5e-17b75986efe1",
+		"eventType":        "media.cabin.cover-changed.v1",
+		"eventVersion":     1,
+		"occurredAt":       nil,
+		"recordedAt":       "2026-07-30T12:34:56Z",
+		"producer":         "media-service",
+		"aggregateType":    "CABIN_PHOTO_LIBRARY",
+		"aggregateId":      "11bbb7f0-cf00-47cf-822e-21b362a5b206",
+		"aggregateVersion": 2,
+		"correlation": map[string]any{
+			"correlationId": "a9b456b6-becf-40b6-9874-4293c041a630",
+			"causationId":   nil,
+		},
+		"actorRef": nil,
+		"payload": map[string]any{
+			"cabinId":              "11bbb7f0-cf00-47cf-822e-21b362a5b206",
+			"warehouseId":          "7f414608-e94d-4f73-8f92-54fa675e8af0",
+			"mediaId":              "33a0f9d1-0ad2-42d1-bb94-36284833f622",
+			"generation":           1,
+			"taskBoardEntryId":     "d96d49c9-9e30-4d7c-b298-1687acb06a08",
+			"previousCoverMediaId": nil,
+			"changedAt":            "2026-07-30T12:34:56Z",
+		},
+	}
+	assertSchemaAccepts(t, schema, valid)
+	direct := cloneFixture(t, valid)
+	direct["payload"].(map[string]any)["taskBoardEntryId"] = nil
+	assertSchemaAccepts(t, schema, direct)
+	for name, mutate := range map[string]func(map[string]any){
+		"object key leakage": func(value map[string]any) {
+			value["payload"].(map[string]any)["objectKey"] = "private/cabin.jpg"
+		},
+		"wrong aggregate": func(value map[string]any) {
+			value["aggregateType"] = "MEDIA"
+		},
+		"zero version": func(value map[string]any) {
+			value["aggregateVersion"] = 0
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := cloneFixture(t, valid)
+			mutate(fixture)
+			assertSchemaRejects(t, schema, fixture)
+		})
+	}
+}
+
 func compileActualSchema(t *testing.T, fileName string) *jsonschema.Schema {
 	t.Helper()
 	path := filepath.Join(eventsDirectory(t), "media", fileName)

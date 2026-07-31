@@ -5,14 +5,22 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 import dev.buhanzaz.rwms.taskboard.security.*;
 import dev.buhanzaz.rwms.taskboard.service.TaskBoardService;
 import jakarta.validation.Valid;
+import java.security.MessageDigest;
 import java.time.LocalDate;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.context.request.ServletWebRequest;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 @RestController
 @RequiredArgsConstructor
@@ -20,15 +28,29 @@ import org.springframework.web.bind.annotation.*;
 public class TaskBoardController {
   private final TaskBoardService service;
   private final WarehouseAccessAuthorizer access;
+  private final ObjectMapper objectMapper;
 
   @GetMapping
-  public TaskBoardSnapshot snapshot(
+  public ResponseEntity<TaskBoardSnapshot> snapshot(
       @AuthenticationPrincipal Jwt jwt,
       @PathVariable UUID warehouseId,
       @RequestParam(required = false) LocalDate date,
-      @RequestParam(defaultValue = "false") boolean includeShadow) {
+      @RequestParam(defaultValue = "false") boolean includeShadow,
+      ServletWebRequest request) {
     taskAccess(jwt, warehouseId, false);
-    return service.snapshot(warehouseId, date, includeShadow);
+    TaskBoardSnapshot snapshot = service.snapshot(warehouseId, date, includeShadow);
+    String etag = snapshotEtag(date, includeShadow, snapshot);
+    if (request.checkNotModified(etag)) {
+      return ResponseEntity.status(HttpStatus.NOT_MODIFIED).eTag(etag).build();
+    }
+    return ResponseEntity.ok().eTag(etag).body(snapshot);
+  }
+
+  @GetMapping("/logistics")
+  public LogisticsBoardSnapshot logisticsSnapshot(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID warehouseId) {
+    taskAccess(jwt, warehouseId, false);
+    return service.logisticsSnapshot(warehouseId);
   }
 
   @GetMapping("/queues/{queueId}/eligible-groups")
@@ -156,4 +178,50 @@ public class TaskBoardController {
     access.requireUserScope(jwt, "rwms.write");
     access.requireWarehouse(jwt, id, AccessLevel.EDIT, false);
   }
+
+  /**
+   * A weak validator reflects stable public state rather than a byte-for-byte response. Requested
+   * parameters are part of the value because unavailable dates may resolve to the same selected
+   * date and an empty shadow lane can otherwise have the same response body. Rolling timer values
+   * are intentionally excluded: clients derive them from the stable timer state and transition.
+   */
+  private String snapshotEtag(
+      LocalDate requestedDate, boolean includeShadow, TaskBoardSnapshot snapshot) {
+    try {
+      ObjectNode representation =
+          objectMapper.valueToTree(
+              new SnapshotRepresentation(requestedDate, includeShadow, snapshot));
+      removeVolatileTimerValues(representation);
+      String digest =
+          HexFormat.of()
+              .formatHex(
+                  MessageDigest.getInstance("SHA-256")
+                      .digest(objectMapper.writeValueAsBytes(representation)));
+      return "W/\"task-board-" + digest + "\"";
+    } catch (JacksonException | java.security.NoSuchAlgorithmException exception) {
+      throw new IllegalStateException("Не удалось вычислить ETag снимка очередей", exception);
+    }
+  }
+
+  private void removeVolatileTimerValues(ObjectNode representation) {
+    JsonNode snapshot = representation.get("snapshot");
+    if (!(snapshot instanceof ObjectNode board)) return;
+    JsonNode columns = board.get("columns");
+    if (columns == null) return;
+    for (JsonNode column : columns) {
+      JsonNode entries = column.get("entries");
+      if (entries == null) continue;
+      for (JsonNode entry : entries) {
+        JsonNode timer = entry.get("timerSnapshot");
+        if (timer instanceof ObjectNode timerSnapshot) {
+          timerSnapshot.remove(
+              List.of(
+                  "countedActiveSeconds", "remainingSeconds", "remainingPercent", "serverTime"));
+        }
+      }
+    }
+  }
+
+  private record SnapshotRepresentation(
+      LocalDate requestedDate, boolean includeShadow, TaskBoardSnapshot snapshot) {}
 }

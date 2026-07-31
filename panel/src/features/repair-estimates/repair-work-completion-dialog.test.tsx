@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -125,6 +125,8 @@ describe("repair completion priority step", () => {
         priority: 1,
         completionMode: "AUTO",
         movementRequired: false,
+        logisticsPlanningMode: "AUTO",
+        logisticsScheduledDate: null,
         taskPlans: [
           expect.objectContaining({
             queueId: "queue-internal-works",
@@ -191,6 +193,8 @@ describe("repair completion priority step", () => {
       expect.objectContaining({
         completionMode: "AUTO",
         movementRequired: true,
+        logisticsPlanningMode: "AUTO",
+        logisticsScheduledDate: null,
         taskPlans: expect.arrayContaining([
           expect.objectContaining({
             kind: "MOVE_TO_REPAIR",
@@ -201,6 +205,146 @@ describe("repair completion priority step", () => {
             routeQueueKind: "MOVEMENT",
           }),
         ]),
+      })
+    )
+  })
+
+  it("requires and submits a date for fixed-date logistics planning", async () => {
+    capabilities.get.mockResolvedValue({
+      warehouseId: "warehouse-1",
+      movementToShipmentAvailable: true,
+      movementQueueDefinitions: [
+        { queueDefinitionId: "movement", workQueueId: "warehouse-movement" },
+      ],
+    })
+    const user = userEvent.setup()
+    const onComplete = vi.fn()
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false } },
+          })
+        }
+      >
+        <RepairWorkCompletionDialog
+          open
+          accessToken="access-token"
+          warehouseId="warehouse-1"
+          lines={[line]}
+          pending={false}
+          error={null}
+          title="Завершение задания"
+          description="Проверьте план."
+          completeLabel="Создать задание"
+          pendingLabel="Создание..."
+          previewKey="fixed-date-movement-test"
+          initialMovementRequired={false}
+          onOpenChange={vi.fn()}
+          onComplete={onComplete}
+        />
+      </QueryClientProvider>
+    )
+
+    await user.click(
+      await screen.findByRole("checkbox", {
+        name: "Перемещение на отгрузку",
+      })
+    )
+    await user.click(
+      screen.getByRole("radio", { name: "Выбрать конкретную дату" })
+    )
+
+    const nextButton = screen.getByRole("button", {
+      name: "Далее",
+    }) as HTMLButtonElement
+    expect(nextButton.disabled).toBe(true)
+
+    fireEvent.change(
+      screen.getByLabelText("Дата логистического задания"),
+      { target: { value: "2026-08-12" } }
+    )
+    expect(nextButton.disabled).toBe(false)
+
+    await user.click(nextButton)
+    await user.click(
+      screen.getByRole("radio", {
+        name: "Приоритет 2: Высокий",
+      })
+    )
+    await user.click(screen.getByRole("button", { name: "Создать задание" }))
+
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        movementRequired: true,
+        logisticsPlanningMode: "FIXED_DATE",
+        logisticsScheduledDate: "2026-08-12",
+        priority: 2,
+      })
+    )
+  })
+
+  it("restores persisted fixed-date logistics planning when reopened", async () => {
+    capabilities.get.mockResolvedValue({
+      warehouseId: "warehouse-1",
+      movementToShipmentAvailable: true,
+      movementQueueDefinitions: [
+        { queueDefinitionId: "movement", workQueueId: "warehouse-movement" },
+      ],
+    })
+    const user = userEvent.setup()
+    const onComplete = vi.fn()
+    render(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false } },
+          })
+        }
+      >
+        <RepairWorkCompletionDialog
+          open
+          accessToken="access-token"
+          warehouseId="warehouse-1"
+          lines={[line]}
+          pending={false}
+          error={null}
+          title="Завершение задания"
+          description="Проверьте план."
+          completeLabel="Создать задание"
+          pendingLabel="Создание..."
+          previewKey="persisted-fixed-date-movement-test"
+          initialMovementRequired
+          initialLogisticsPlanningMode="FIXED_DATE"
+          initialLogisticsScheduledDate="2026-08-12"
+          onOpenChange={vi.fn()}
+          onComplete={onComplete}
+        />
+      </QueryClientProvider>
+    )
+
+    expect(
+      (
+        await screen.findByRole("radio", {
+          name: "Выбрать конкретную дату",
+        })
+      ).getAttribute("data-state")
+    ).toBe("on")
+    expect(
+      (screen.getByLabelText("Дата логистического задания") as HTMLInputElement)
+        .value
+    ).toBe("2026-08-12")
+
+    await user.click(screen.getByRole("button", { name: "Далее" }))
+    await user.click(
+      screen.getByRole("button", { name: "Создать задание" })
+    )
+
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        movementRequired: true,
+        logisticsPlanningMode: "FIXED_DATE",
+        logisticsScheduledDate: "2026-08-12",
       })
     )
   })
@@ -252,7 +396,11 @@ describe("repair completion priority step", () => {
     await user.click(screen.getByRole("button", { name: "Создать задание" }))
 
     expect(onComplete).toHaveBeenCalledWith(
-      expect.objectContaining({ movementRequired: false })
+      expect.objectContaining({
+        movementRequired: false,
+        logisticsPlanningMode: "AUTO",
+        logisticsScheduledDate: null,
+      })
     )
   })
 })

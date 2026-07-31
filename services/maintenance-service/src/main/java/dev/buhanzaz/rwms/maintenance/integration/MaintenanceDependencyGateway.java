@@ -1,10 +1,12 @@
 package dev.buhanzaz.rwms.maintenance.integration;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import dev.buhanzaz.rwms.maintenance.domain.RepairLogisticsPlanningMode;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 public interface MaintenanceDependencyGateway {
@@ -155,13 +157,14 @@ public interface MaintenanceDependencyGateway {
       long expectedVersion,
       UUID targetWarehouseId);
 
+  DriverTaskSnapshot createDriverTask(
+      UUID idempotencyKey, DriverTaskCommand command);
+
   CatalogRoutingPreflight preflightCatalogRouting(
       List<CatalogRoutingQueueRequirement> queues);
 
   RoutingPreflight preflightMaintenanceRouting(
       UUID warehouseId, List<RoutingQueueRequirement> queues);
-
-  RepairComplexityThresholds repairComplexityThresholds(UUID warehouseId);
 
   QueueCapabilities queueCapabilities(UUID warehouseId);
 
@@ -341,6 +344,72 @@ public interface MaintenanceDependencyGateway {
       String state,
       List<TaskStageSnapshot> stages) {}
 
+  record DriverTaskCommand(
+      UUID warehouseId,
+      UUID cabinId,
+      UUID repairId,
+      String sourceType,
+      UUID sourceId,
+      String kind,
+      RepairLogisticsPlanningMode planningMode,
+      LocalDate scheduledDate,
+      int priority,
+      boolean activateNow) {
+    public DriverTaskCommand {
+      if (warehouseId == null
+          || cabinId == null
+          || repairId == null
+          || !Set.of("REPAIR", "ESTIMATE", "INVENTORY")
+              .contains(sourceType)
+          || sourceId == null
+          || !"DELIVER_TO_REPAIR".equals(kind)
+          || planningMode == null
+          || (planningMode == RepairLogisticsPlanningMode.FIXED_DATE)
+              != (scheduledDate != null)
+          || priority < 1
+          || priority > 5
+          || activateNow) {
+        throw new IllegalArgumentException(
+            "Maintenance driver-task command is invalid");
+      }
+    }
+  }
+
+  record DriverTaskSnapshot(
+      UUID id,
+      long version,
+      UUID warehouseId,
+      UUID cabinId,
+      UUID repairId,
+      String sourceType,
+      UUID sourceId,
+      String kind,
+      RepairLogisticsPlanningMode planningMode,
+      LocalDate scheduledDate,
+      int priority,
+      String state) {
+    public DriverTaskSnapshot {
+      if (id == null
+          || version < 0
+          || warehouseId == null
+          || cabinId == null
+          || repairId == null
+          || !Set.of("REPAIR", "ESTIMATE", "INVENTORY")
+              .contains(sourceType)
+          || sourceId == null
+          || !"DELIVER_TO_REPAIR".equals(kind)
+          || planningMode == null
+          || scheduledDate == null
+          || priority < 1
+          || priority > 5
+          || state == null
+          || state.isBlank()) {
+        throw new IllegalArgumentException(
+            "Maintenance driver-task snapshot is invalid");
+      }
+    }
+  }
+
   record CatalogRoutingQueueRequirement(UUID queueDefinitionId, String type) {
     public CatalogRoutingQueueRequirement {
       if (queueDefinitionId == null
@@ -463,23 +532,6 @@ public interface MaintenanceDependencyGateway {
       queues = List.copyOf(queues);
     }
 
-  }
-
-  record RepairComplexityThresholds(
-      UUID warehouseId,
-      long settingsVersion,
-      int lightBoundaryMinutes,
-      int mediumBoundaryMinutes,
-      int complexBoundaryMinutes) {
-    public RepairComplexityThresholds {
-      if (warehouseId == null
-          || settingsVersion < 0
-          || lightBoundaryMinutes < 1
-          || lightBoundaryMinutes >= mediumBoundaryMinutes
-          || mediumBoundaryMinutes >= complexBoundaryMinutes) {
-        throw new IllegalArgumentException("Repair complexity thresholds are invalid");
-      }
-    }
   }
 
   record MovementQueueBinding(UUID queueDefinitionId, UUID workQueueId) {

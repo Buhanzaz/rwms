@@ -249,6 +249,9 @@ public class InventoryMaintenanceService {
     draft.selectPriority(request.snapshot().priority());
     draft.selectMovementToShipment(
         request.snapshot().moveFromRepairRequired());
+    draft.selectLogisticsPlanning(
+        request.snapshot().logisticsPlanningMode(),
+        request.snapshot().logisticsScheduledDate());
     draft.replaceCoverMediaId(request.snapshot().coverMediaId());
     MaintenanceRepair repair = repairs.saveAndFlush(draft);
     Map<UUID, List<EstimateLineResponse>> linesByQueue =
@@ -409,10 +412,15 @@ public class InventoryMaintenanceService {
     if (moveTo != moveFrom) {
       throw invalid("Movement plan requires both move-to and move-from stages");
     }
+    if (!request.isLogisticsPlanningValid()) {
+      throw invalid(
+          "Inventory logistics planning mode and date are inconsistent");
+    }
     requireWarehouseRoutingReady(request.warehouseId(), stages);
     FrozenInventoryPlanSnapshot snapshot = new FrozenInventoryPlanSnapshot(
         catalog.getId(), request.mode(), List.copyOf(lines), List.copyOf(stages), moveTo, moveFrom,
-        List.copyOf(request.mediaReferences()), request.priority(), request.coverMediaId());
+        List.copyOf(request.mediaReferences()), request.priority(), request.coverMediaId(),
+        request.logisticsPlanningMode(), request.logisticsScheduledDate());
     if (sourceMedia(snapshot).size() > 100) {
       throw invalid("Inventory plan cannot reference more than 100 media objects");
     }

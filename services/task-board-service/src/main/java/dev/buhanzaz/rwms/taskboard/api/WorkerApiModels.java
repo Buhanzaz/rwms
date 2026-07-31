@@ -27,9 +27,20 @@ public final class WorkerApiModels {
       UUID queueId,
       String name,
       String type,
+      String queuePurpose,
       int sortOrder,
       List<String> audienceModes,
-      int resultPhotoMinCount) {}
+      int resultPhotoMinCount) {
+    public WorkerCategory(
+        UUID queueId,
+        String name,
+        String type,
+        int sortOrder,
+        List<String> audienceModes,
+        int resultPhotoMinCount) {
+      this(queueId, name, type, "GENERAL", sortOrder, audienceModes, resultPhotoMinCount);
+    }
+  }
 
   public record WorkerOfflineLease(
       UUID id, OffsetDateTime issuedAt, OffsetDateTime expiresAt, long syncRevision) {}
@@ -133,7 +144,16 @@ public final class WorkerApiModels {
       String thumbnailPath) {}
 
   public record AudienceSelector(
-      String kind, UUID id, String mode, boolean interruptOnTake) {}
+      String kind,
+      UUID id,
+      String mode,
+      boolean interruptOnTake,
+      boolean notifyOnPrimaryTake) {
+    public AudienceSelector(
+        String kind, UUID id, String mode, boolean interruptOnTake) {
+      this(kind, id, mode, interruptOnTake, false);
+    }
+  }
 
   public record WorkerTaskDetail(
       UUID entryId,
@@ -171,10 +191,29 @@ public final class WorkerApiModels {
       @Min(0) long expectedVersion,
       UUID workerGroupId,
       @NotNull OffsetDateTime occurredAt,
-      @NotNull UUID offlineLeaseId) {}
+      @NotNull UUID offlineLeaseId,
+      UUID evidenceId) {
+    public WorkerActionRequest(
+        UUID operationId,
+        WorkerAction action,
+        long expectedVersion,
+        UUID workerGroupId,
+        OffsetDateTime occurredAt,
+        UUID offlineLeaseId) {
+      this(
+          operationId,
+          action,
+          expectedVersion,
+          workerGroupId,
+          occurredAt,
+          offlineLeaseId,
+          null);
+    }
+  }
 
   public enum WorkerAction {
     TAKE,
+    JOIN,
     PAUSE,
     RESUME,
     COMPLETE

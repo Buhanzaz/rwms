@@ -21,6 +21,7 @@ class TaskQueueSectionsTest {
             .containsExactly("repair", "furniture", "electric")
             .inOrder()
         assertThat(sections.first().tasks).isEmpty()
+        assertThat(sections.first().queuePurpose).isEqualTo("GENERAL")
         assertThat(sections[1].tasks.map { it.entryId }).containsExactly("furniture-task")
         assertThat(sections.last().tasks).isEmpty()
     }
@@ -91,6 +92,7 @@ class TaskQueueSectionsTest {
         queueId = queueId,
         name = name,
         type = "REPAIR",
+        queuePurpose = "GENERAL",
         sortOrder = sortOrder,
         audienceModesKey = "AVAILABLE",
         resultPhotoMinCount = 1,

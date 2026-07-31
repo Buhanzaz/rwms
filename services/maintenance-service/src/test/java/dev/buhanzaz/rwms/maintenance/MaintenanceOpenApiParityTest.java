@@ -14,20 +14,35 @@ import dev.buhanzaz.rwms.maintenance.api.MaintenanceEstimateController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceInventoryController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceLogisticsController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceRepairController;
+import dev.buhanzaz.rwms.maintenance.api.MaintenanceRepairPlaceLogisticsController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceSettingsController;
 import dev.buhanzaz.rwms.maintenance.api.MaintenanceTransferRepairController;
+import dev.buhanzaz.rwms.maintenance.api.LogisticsCapitalRepairResponse;
+import dev.buhanzaz.rwms.maintenance.api.LogisticsRepairPlaceAllocationResponse;
+import dev.buhanzaz.rwms.maintenance.api.LogisticsRepairPlaceProjectionResponse;
+import dev.buhanzaz.rwms.maintenance.api.RepairComplexitySettingsController;
+import dev.buhanzaz.rwms.maintenance.api.RepairComplexitySettingsResponse;
+import dev.buhanzaz.rwms.maintenance.api.ImportRepairComplexitySettingsRequest;
+import dev.buhanzaz.rwms.maintenance.api.ReplaceRepairComplexitySettingsRequest;
 import dev.buhanzaz.rwms.maintenance.api.RepairComplexityColorsController;
 import dev.buhanzaz.rwms.maintenance.api.RepairComplexityColorsResponse;
 import dev.buhanzaz.rwms.maintenance.api.RepairCapacitySettingsResponse;
 import dev.buhanzaz.rwms.maintenance.api.ReplaceRepairCapacitySettingsRequest;
 import dev.buhanzaz.rwms.maintenance.api.ReplaceRepairComplexityColorsRequest;
+import dev.buhanzaz.rwms.maintenance.api.RepairPlaceAllocationResponse;
+import dev.buhanzaz.rwms.maintenance.api.RepairPlaceController;
+import dev.buhanzaz.rwms.maintenance.api.RepairPlaceProjectionResponse;
+import dev.buhanzaz.rwms.maintenance.api.RepairPlaceTransitionRequest;
 import dev.buhanzaz.rwms.maintenance.domain.CatalogVersionState;
 import dev.buhanzaz.rwms.maintenance.domain.EstimateState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairComplexity;
 import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairKind;
+import dev.buhanzaz.rwms.maintenance.domain.RepairLogisticsPlanningMode;
 import dev.buhanzaz.rwms.maintenance.domain.RepairOrigin;
+import dev.buhanzaz.rwms.maintenance.domain.RepairPlaceAllocationState;
+import dev.buhanzaz.rwms.maintenance.domain.RepairReclassificationState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageState;
 import dev.buhanzaz.rwms.maintenance.security.MaintenanceAuthorizer;
@@ -36,6 +51,8 @@ import dev.buhanzaz.rwms.maintenance.service.InventoryMaintenanceService;
 import dev.buhanzaz.rwms.maintenance.service.LogisticsReturnShortageService;
 import dev.buhanzaz.rwms.maintenance.service.RepairCapacitySettingsService;
 import dev.buhanzaz.rwms.maintenance.service.RepairComplexityColorsService;
+import dev.buhanzaz.rwms.maintenance.service.RepairComplexitySettingsService;
+import dev.buhanzaz.rwms.maintenance.service.RepairPlaceService;
 import dev.buhanzaz.rwms.platform.contracts.ApiProblem;
 import dev.buhanzaz.rwms.platform.web.CorrelationIdFilter;
 import jakarta.validation.Valid;
@@ -96,12 +113,12 @@ class MaintenanceOpenApiParityTest {
   private static final List<OperationSpec> OPERATIONS = canonicalOperations();
 
   @Test
-  void allThirtyPathsAndFortyOperationsExactlyMatchTheApprovedAcceptanceMatrix()
+  void allFortyOnePathsAndFiftyTwoOperationsExactlyMatchTheApprovedAcceptanceMatrix()
       throws Exception {
     Map<String, Object> document = openApi();
-    assertThat(child(document, "paths")).hasSize(30);
-    assertThat(openApiOperationCount(document)).isEqualTo(40);
-    assertThat(controllerOperations()).hasSize(40);
+    assertThat(child(document, "paths")).hasSize(41);
+    assertThat(openApiOperationCount(document)).isEqualTo(52);
+    assertThat(controllerOperations()).hasSize(52);
 
     for (OperationSpec expected : OPERATIONS) {
       assertOpenApiOperation(document, expected);
@@ -141,11 +158,18 @@ class MaintenanceOpenApiParityTest {
         "/api/internal/maintenance/v1/logistics/returns/{returnId}/lines/{lineId}/shortage",
         "/api/internal/maintenance/v1/logistics/transfers/{transferId}/lines/{lineId}/prepare-departure",
         "/api/internal/maintenance/v1/logistics/transfers/{transferId}/lines/{lineId}/arrival-preflight",
-        "/api/internal/maintenance/v1/logistics/transfers/{transferId}/lines/{lineId}/complete-arrival");
+        "/api/internal/maintenance/v1/logistics/transfers/{transferId}/lines/{lineId}/complete-arrival",
+        "/api/internal/maintenance/v1/logistics/repair-places/{warehouseId}",
+        "/api/internal/maintenance/v1/logistics/repairs/capital",
+        "/api/internal/maintenance/v1/logistics/repairs/capital/{repairId}",
+        "/api/internal/maintenance/v1/logistics/repair-places/{warehouseId}/allocations/{repairId}/reserve",
+        "/api/internal/maintenance/v1/logistics/repair-places/{warehouseId}/allocations/{repairId}/occupy",
+        "/api/internal/maintenance/v1/logistics/repair-places/{warehouseId}/allocations/{repairId}/ready-to-release",
+        "/api/internal/maintenance/v1/logistics/repair-places/{warehouseId}/allocations/{repairId}/release");
     assertThat(logisticsPaths)
         .allMatch(path -> path.startsWith("/api/internal/maintenance/v1/logistics"))
         .noneMatch(path -> path.startsWith("/api/maintenance/"))
-        .noneMatch(path -> Set.of("repair", "estimate", "lease", "hold", "fence", "task")
+        .noneMatch(path -> Set.of("/estimates", "/leases", "/holds", "/fences", "/tasks")
             .stream()
             .anyMatch(path::contains));
   }
@@ -207,7 +231,11 @@ class MaintenanceOpenApiParityTest {
       assertProblemResponse(document, expected.id(), responses, "401", "Unauthorized");
       assertProblemResponse(document, expected.id(), responses, "403", "Forbidden");
       for (String statusCode : expected.errors()) {
-        assertProblemResponse(document, expected.id(), responses, statusCode, null);
+        if ("304".equals(statusCode)) {
+          assertNotModifiedResponse(document, expected.id(), responses);
+        } else {
+          assertProblemResponse(document, expected.id(), responses, statusCode, null);
+        }
       }
     }
   }
@@ -240,6 +268,8 @@ class MaintenanceOpenApiParityTest {
         .isEqualTo(Map.of("type", "string", "format", "uuid"));
     assertThat(child(headers, "Idempotency-Replayed").get("schema"))
         .isEqualTo(Map.of("type", "string", "const", "true"));
+    assertThat(child(headers, "ETag").get("schema"))
+        .isEqualTo(Map.of("type", "string", "minLength", 1, "maxLength", 512));
 
     for (OperationSpec expected : OPERATIONS) {
       Map<String, Object> response = child(
@@ -252,6 +282,9 @@ class MaintenanceOpenApiParityTest {
         assertThat(mapOrEmpty(response.get("headers")))
             .as(expected.id())
             .doesNotContainKey("Idempotency-Replayed");
+      }
+      if (expected.errors().contains("304")) {
+        assertResponseHeader(response, "ETag", "#/components/headers/ETag");
       }
     }
     for (Map.Entry<String, Object> entry : child(components, "responses").entrySet()) {
@@ -304,7 +337,13 @@ class MaintenanceOpenApiParityTest {
           explicitNull.putNull(property);
           boolean nullRejected = rejectedByJacksonOrValidation(
               MAPPER.writeValueAsBytes(explicitNull), recordType, validator);
-          if (allowsNull(document, child(properties, property))) {
+          if ("logisticsScheduledDate".equals(property)
+              && logisticsPlanningMode(fixture)
+                  == RepairLogisticsPlanningMode.FIXED_DATE) {
+            softly.assertThat(nullRejected)
+                .as(field + " conditionally required")
+                .isTrue();
+          } else if (allowsNull(document, child(properties, property))) {
             softly.assertThat(nullRejected).as(field + " explicit null").isFalse();
           } else {
             softly.assertThat(nullRejected).as(field + " explicit null").isTrue();
@@ -325,6 +364,29 @@ class MaintenanceOpenApiParityTest {
     }
   }
 
+  private static RepairLogisticsPlanningMode logisticsPlanningMode(
+      Object value) {
+    if (value == null || !value.getClass().isRecord()) {
+      return null;
+    }
+    return Arrays.stream(value.getClass().getRecordComponents())
+        .filter(
+            component ->
+                "logisticsPlanningMode"
+                    .equals(component.getName()))
+        .findFirst()
+        .map(
+            component -> {
+              try {
+                return (RepairLogisticsPlanningMode)
+                    component.getAccessor().invoke(value);
+              } catch (ReflectiveOperationException exception) {
+                throw new AssertionError(exception);
+              }
+            })
+        .orElse(null);
+  }
+
   @Test
   void everyPublishedEnumUsesItsExactJacksonWireValue() throws Exception {
     Map<String, Object> document = openApi();
@@ -334,6 +396,8 @@ class MaintenanceOpenApiParityTest {
     assertEnum(document, RepairKind.class, "RepairKind");
     assertEnum(document, RepairExecutionState.class, "RepairExecutionState");
     assertEnum(document, RepairAcceptanceState.class, "RepairAcceptanceState");
+    assertEnum(document, RepairReclassificationState.class, "RepairReclassificationState");
+    assertEnum(document, RepairPlaceAllocationState.class, "RepairPlaceAllocationState");
     assertEnum(document, RepairStageKind.class, "RepairStageKind");
     assertEnum(document, RepairStageState.class, "RepairStageState");
     assertEnum(document, CatalogNodeType.class, "CatalogNodeType");
@@ -342,6 +406,10 @@ class MaintenanceOpenApiParityTest {
     assertEnum(document, DeliveryState.class, "DeliveryState");
     assertEnum(document, LeaseReconciliationState.class, "LeaseReconciliationState");
     assertEnum(document, GenerationState.class, "GenerationState");
+    assertEnum(
+        document,
+        RepairLogisticsPlanningMode.class,
+        "RepairLogisticsPlanningMode");
     assertEnum(document, InventoryPlanMode.class, "InventoryPlanMode");
     assertEnum(document, InventoryPlanLineKind.class, "InventoryPlanLineKind");
     assertEnum(document, InventoryPlanLineType.class, "InventoryPlanLineType");
@@ -355,7 +423,9 @@ class MaintenanceOpenApiParityTest {
     InventoryMaintenanceService inventory = inventoryFixture();
     LogisticsReturnShortageService logistics = logisticsFixture();
     RepairCapacitySettingsService settings = settingsFixture();
+    RepairComplexitySettingsService complexitySettings = complexitySettingsFixture();
     RepairComplexityColorsService colors = colorsFixture();
+    RepairPlaceService repairPlaces = repairPlacesFixture();
     MaintenanceAuthorizer authorizer = mock(MaintenanceAuthorizer.class);
     when(authorizer.subjectId(null)).thenReturn(ID);
     MockMvc mvc = MockMvcBuilders.standaloneSetup(
@@ -365,7 +435,11 @@ class MaintenanceOpenApiParityTest {
             new MaintenanceInventoryController(inventory, service, authorizer),
             new MaintenanceLogisticsController(logistics, authorizer),
             new MaintenanceTransferRepairController(service, authorizer),
+            new MaintenanceRepairPlaceLogisticsController(
+                repairPlaces, service, authorizer),
             new MaintenanceSettingsController(settings, authorizer),
+            new RepairComplexitySettingsController(complexitySettings, authorizer),
+            new RepairPlaceController(repairPlaces, authorizer),
             new RepairComplexityColorsController(colors, authorizer))
         .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
         .addFilters(new CorrelationIdFilter())
@@ -380,6 +454,7 @@ class MaintenanceOpenApiParityTest {
               .replace("{findingId}", ID.toString())
               .replace("{returnId}", ID.toString())
               .replace("{transferId}", ID.toString())
+              .replace("{repairId}", ID.toString())
               .replace("{lineId}", ID.toString())
               .replace("{warehouseId}", ID.toString()));
       for (ParameterSpec parameter : operation.parameters()) {
@@ -433,8 +508,10 @@ class MaintenanceOpenApiParityTest {
     List<OperationSpec> result = new ArrayList<>();
     result.add(op("GET", "/api/maintenance/v1/catalog/versions", "listCatalogVersions",
         MaintenanceCatalogController.class, "versions",
-        append(warehousePage, query("lifecycle", false, "$CatalogLifecycle", null)),
-        null, null, "200", "CatalogVersionPage", false, "401", "403"));
+        append(warehousePage,
+            query("lifecycle", false, "$CatalogLifecycle", null),
+            optionalHeader("If-None-Match")),
+        null, null, "200", "CatalogVersionPage", false, "304", "401", "403"));
     result.add(op("PUT", "/api/maintenance/v1/catalog/versions/{id}", "replaceCatalog",
         MaintenanceCatalogController.class, "replaceCatalog", catalogId,
         ChangeCatalogRequest.class, "ReplaceCatalogRequest", "200", "CatalogVersion", false,
@@ -530,13 +607,100 @@ class MaintenanceOpenApiParityTest {
         "CompleteTransferRepairResult",
         true,
         "400", "401", "403", "404", "409", "422", "503"));
+    result.add(
+        op(
+            "GET",
+            "/api/internal/maintenance/v1/logistics/repair-places/{warehouseId}",
+            "getLogisticsRepairPlaceProjection",
+            MaintenanceRepairPlaceLogisticsController.class,
+            "projection",
+            repairCapacityWarehouse,
+            null,
+            null,
+            "200",
+            "LogisticsRepairPlaceProjection",
+            false,
+            "401",
+            "403"));
+    result.add(
+        op(
+            "GET",
+            "/api/internal/maintenance/v1/logistics/repairs/capital",
+            "listLogisticsCapitalRepairs",
+            MaintenanceRepairPlaceLogisticsController.class,
+            "capital",
+            warehousePage,
+            null,
+            null,
+            "200",
+            "LogisticsCapitalRepairPage",
+            false,
+            "401",
+            "403"));
+    result.add(
+        op(
+            "GET",
+            "/api/internal/maintenance/v1/logistics/repairs/capital/{repairId}",
+            "getLogisticsCapitalRepair",
+            MaintenanceRepairPlaceLogisticsController.class,
+            "capitalRepair",
+            List.of(path("repairId")),
+            null,
+            null,
+            "200",
+            "LogisticsCapitalRepair",
+            false,
+            "401",
+            "403",
+            "404"));
+    for (String transition : List.of("reserve", "occupy", "ready-to-release", "release")) {
+      String operationId =
+          switch (transition) {
+            case "reserve" -> "reserveRepairPlace";
+            case "occupy" -> "occupyRepairPlace";
+            case "ready-to-release" -> "markRepairPlaceReadyToRelease";
+            case "release" -> "releaseRepairPlace";
+            default -> throw new IllegalStateException();
+          };
+      String methodName =
+          switch (transition) {
+            case "reserve" -> "reserve";
+            case "occupy" -> "occupy";
+            case "ready-to-release" -> "readyToRelease";
+            case "release" -> "release";
+            default -> throw new IllegalStateException();
+          };
+      result.add(
+          op(
+              "POST",
+              "/api/internal/maintenance/v1/logistics/repair-places/{warehouseId}/allocations/{repairId}/"
+                  + transition,
+              operationId,
+              MaintenanceRepairPlaceLogisticsController.class,
+              methodName,
+              List.of(
+                  path("warehouseId"),
+                  path("repairId"),
+                  requiredHeader("Idempotency-Key")),
+              RepairPlaceTransitionRequest.class,
+              "RepairPlaceTransitionRequest",
+              "200",
+              "RepairPlaceAllocation",
+              true,
+              "400",
+              "401",
+              "403",
+              "404",
+              "409"));
+    }
 
     result.add(op("GET", "/api/maintenance/v1/estimates", "listEstimates",
         MaintenanceEstimateController.class, "list",
         append(warehousePage,
             query("lifecycle", false, "$EstimateLifecycle", null),
-            query("rentalItemId", false, "uuid", null)),
-        null, null, "200", "EstimatePage", false, "401", "403"));
+            query("rentalItemId", false, "uuid", null),
+            optionalHeader("If-None-Match")),
+        null, null, "200", "EstimatePage", false, "304", "401", "403"));
     result.add(op("POST", "/api/maintenance/v1/estimates", "createEstimate",
         MaintenanceEstimateController.class, "create", idempotency,
         CreateEstimateRequest.class, "CreateEstimateRequest", "201", "Estimate", true,
@@ -562,7 +726,11 @@ class MaintenanceOpenApiParityTest {
         append(warehousePage,
             query("executionState", false, "$RepairExecutionState", null),
             query("acceptanceState", false, "$RepairAcceptanceState", null),
-            query("rentalItemId", false, "uuid", null)),
+            query("rentalItemId", false, "uuid", null),
+            optionalHeader("If-None-Match")),
+        null, null, "200", "RepairPage", false, "304", "401", "403"));
+    result.add(op("GET", "/api/maintenance/v1/repairs/capital", "listActiveCapitalRepairs",
+        MaintenanceRepairController.class, "capital", warehousePage,
         null, null, "200", "RepairPage", false, "401", "403"));
     result.add(op("POST", "/api/maintenance/v1/repairs/direct", "createDirectRepair",
         MaintenanceRepairController.class, "direct", idempotency,
@@ -621,6 +789,32 @@ class MaintenanceOpenApiParityTest {
         ReplaceRepairCapacitySettingsRequest.class, "ReplaceRepairCapacitySettingsRequest",
         "200", "RepairCapacitySettings", false,
         "400", "401", "403", "409"));
+    result.add(op("GET",
+        "/api/maintenance/v1/settings/repair-complexity/{warehouseId}",
+        "getRepairComplexitySettings", RepairComplexitySettingsController.class, "get",
+        repairCapacityWarehouse, null, null, "200", "RepairComplexitySettings", false,
+        "401", "403"));
+    result.add(op("PUT",
+        "/api/maintenance/v1/settings/repair-complexity/{warehouseId}",
+        "replaceRepairComplexitySettings", RepairComplexitySettingsController.class, "replace",
+        repairCapacityWarehouse,
+        ReplaceRepairComplexitySettingsRequest.class,
+        "ReplaceRepairComplexitySettingsRequest",
+        "200", "RepairComplexitySettings", false,
+        "400", "401", "403", "409"));
+    result.add(op("POST",
+        "/api/maintenance/v1/settings/repair-complexity/{warehouseId}/task-board-import",
+        "importRepairComplexitySettings", RepairComplexitySettingsController.class, "importOnce",
+        repairCapacityWarehouse,
+        ImportRepairComplexitySettingsRequest.class,
+        "ImportRepairComplexitySettingsRequest",
+        "200", "RepairComplexitySettings", false,
+        "400", "401", "403", "409"));
+    result.add(op("GET",
+        "/api/maintenance/v1/repair-places/{warehouseId}",
+        "getRepairPlaceProjection", RepairPlaceController.class, "projection",
+        repairCapacityWarehouse, null, null, "200", "RepairPlaceProjection", false,
+        "401", "403"));
     result.add(op("GET",
         "/api/maintenance/v1/settings/repair-complexity-colors",
         "getRepairComplexityColors", RepairComplexityColorsController.class, "get",
@@ -739,6 +933,7 @@ class MaintenanceOpenApiParityTest {
 
   private static String javaWireType(Class<?> type) {
     if (type == UUID.class) return "uuid";
+    if (type == String.class) return "string";
     if (type == int.class || type == Integer.class || type == long.class || type == Long.class) {
       return "integer";
     }
@@ -793,6 +988,9 @@ class MaintenanceOpenApiParityTest {
     if (itemType == CatalogVersionResponse.class) return "CatalogVersionPage";
     if (itemType == EstimateResponse.class) return "EstimatePage";
     if (itemType == RepairResponse.class) return "RepairPage";
+    if (itemType == LogisticsCapitalRepairResponse.class) {
+      return "LogisticsCapitalRepairPage";
+    }
     if (itemType == AcceptanceProjection.class) return "AcceptanceProjectionPage";
     if (itemType == WriteOffProjection.class) return "WriteOffProjectionPage";
     throw new AssertionError("No page schema for " + itemType.getName());
@@ -814,6 +1012,16 @@ class MaintenanceOpenApiParityTest {
     assertThat(child(response, "content")).containsOnlyKeys(PROBLEM_JSON);
     assertThat(schemaDescriptor(child(child(response, "content"), PROBLEM_JSON).get("schema")))
         .isEqualTo("ProblemDetail");
+  }
+
+  private static void assertNotModifiedResponse(
+      Map<String, Object> document,
+      String operationId,
+      Map<String, Object> responses) {
+    Map<String, Object> response = child(responses, "304");
+    assertThat(response).as(operationId + " 304").doesNotContainKey("content");
+    assertResponseHeader(response, "X-Correlation-Id", "#/components/headers/X-Correlation-Id");
+    assertResponseHeader(response, "ETag", "#/components/headers/ETag");
   }
 
   private static void assertResponseHeader(
@@ -994,8 +1202,9 @@ class MaintenanceOpenApiParityTest {
       case "estimate", "updateEstimate" -> sample(EstimateResponse.class, "estimate");
       case "createEstimate" -> createResult(EstimateResponse.class);
       case "completeEstimate", "amendEstimate" -> createResult(EstimateCommandResult.class);
-      case "repairs" -> List.of(sample(RepairResponse.class, "repair"));
-      case "repair", "updateRepairPlan" -> sample(RepairResponse.class, "repair");
+      case "repairs", "activeCapitalRepairs" -> List.of(sample(RepairResponse.class, "repair"));
+      case "repair", "activeCapitalRepair", "updateRepairPlan" ->
+          sample(RepairResponse.class, "repair");
       case "repairWorkerEvidence" ->
           List.of(sample(RepairWorkerEvidenceResponse.class, "repairWorkerEvidence"));
       case "reworkCandidates" ->
@@ -1068,6 +1277,64 @@ class MaintenanceOpenApiParityTest {
     return colors;
   }
 
+  private static RepairComplexitySettingsService complexitySettingsFixture() throws Exception {
+    RepairComplexitySettingsService settings = mock(RepairComplexitySettingsService.class);
+    RepairComplexitySettingsResponse response =
+        (RepairComplexitySettingsResponse)
+            sample(RepairComplexitySettingsResponse.class, "repairComplexitySettings");
+    when(settings.get(org.mockito.ArgumentMatchers.any())).thenReturn(response);
+    when(settings.replace(
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+        .thenReturn(response);
+    when(settings.importOnce(
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+        .thenReturn(response);
+    return settings;
+  }
+
+  private static RepairPlaceService repairPlacesFixture() throws Exception {
+    RepairPlaceService service = mock(RepairPlaceService.class);
+    RepairPlaceProjectionResponse projection =
+        (RepairPlaceProjectionResponse)
+            sample(RepairPlaceProjectionResponse.class, "repairPlaceProjection");
+    LogisticsRepairPlaceProjectionResponse logisticsProjection =
+        (LogisticsRepairPlaceProjectionResponse)
+            sample(
+                LogisticsRepairPlaceProjectionResponse.class,
+                "logisticsRepairPlaceProjection");
+    RepairPlaceAllocationResponse allocation =
+        (RepairPlaceAllocationResponse)
+            sample(RepairPlaceAllocationResponse.class, "repairPlaceAllocation");
+    when(service.projection(org.mockito.ArgumentMatchers.any())).thenReturn(projection);
+    when(service.logisticsProjection(org.mockito.ArgumentMatchers.any()))
+        .thenReturn(logisticsProjection);
+    when(service.reserve(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.anyLong(),
+            org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new RepairPlaceService.TransitionResult(allocation, true));
+    when(service.occupy(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.anyLong(),
+            org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new RepairPlaceService.TransitionResult(allocation, true));
+    when(service.readyToRelease(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.anyLong(),
+            org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new RepairPlaceService.TransitionResult(allocation, true));
+    when(service.release(
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.anyLong(),
+            org.mockito.ArgumentMatchers.any()))
+        .thenReturn(new RepairPlaceService.TransitionResult(allocation, true));
+    return service;
+  }
+
   private static MaintenanceApplicationService.CreateResult<?> createResult(Class<?> type)
       throws Exception {
     return new MaintenanceApplicationService.CreateResult<>(sample(type, type.getSimpleName()), true);
@@ -1133,6 +1400,34 @@ class MaintenanceOpenApiParityTest {
           arguments[index] = "45.000";
         }
       }
+      if (recordType == ReplaceRepairComplexitySettingsRequest.class
+          || recordType == ImportRepairComplexitySettingsRequest.class) {
+        if ("lightBoundaryMinutes".equals(components[index].getName())) {
+          arguments[index] = 60;
+        }
+        if ("mediumBoundaryMinutes".equals(components[index].getName())) {
+          arguments[index] = 180;
+        }
+        if ("complexBoundaryMinutes".equals(components[index].getName())) {
+          arguments[index] = 360;
+        }
+      }
+      if ("logisticsPlanningMode"
+          .equals(components[index].getName())) {
+        arguments[index] =
+            recordType == FreezeInventoryPlanRequest.class
+                    || recordType
+                        == FrozenInventoryPlanSnapshot.class
+                ? RepairLogisticsPlanningMode.AUTO
+                : RepairLogisticsPlanningMode.FIXED_DATE;
+      }
+      if ("logisticsScheduledDate"
+              .equals(components[index].getName())
+          && (recordType == FreezeInventoryPlanRequest.class
+              || recordType
+                  == FrozenInventoryPlanSnapshot.class)) {
+        arguments[index] = null;
+      }
     }
     return arguments;
   }
@@ -1174,6 +1469,7 @@ class MaintenanceOpenApiParityTest {
     if ("uuid".equals(parameter.wireType())) return ID.toString();
     if ("integer".equals(parameter.wireType())) return parameter.defaultValue() == null
         ? "1" : parameter.defaultValue();
+    if ("string".equals(parameter.wireType())) return "W/\"cached\"";
     throw new AssertionError("No request value for " + parameter);
   }
 
@@ -1208,6 +1504,23 @@ class MaintenanceOpenApiParityTest {
     values.put(
         ReplaceRepairCapacitySettingsRequest.class, "ReplaceRepairCapacitySettingsRequest");
     values.put(RepairCapacitySettingsResponse.class, "RepairCapacitySettings");
+    values.put(
+        ReplaceRepairComplexitySettingsRequest.class,
+        "ReplaceRepairComplexitySettingsRequest");
+    values.put(
+        ImportRepairComplexitySettingsRequest.class,
+        "ImportRepairComplexitySettingsRequest");
+    values.put(RepairComplexitySettingsResponse.class, "RepairComplexitySettings");
+    values.put(RepairPlaceTransitionRequest.class, "RepairPlaceTransitionRequest");
+    values.put(RepairPlaceAllocationResponse.class, "RepairPlaceAllocation");
+    values.put(RepairPlaceProjectionResponse.class, "RepairPlaceProjection");
+    values.put(
+        LogisticsRepairPlaceAllocationResponse.class,
+        "LogisticsRepairPlaceAllocation");
+    values.put(
+        LogisticsRepairPlaceProjectionResponse.class,
+        "LogisticsRepairPlaceProjection");
+    values.put(LogisticsCapitalRepairResponse.class, "LogisticsCapitalRepair");
     values.put(
         ReplaceRepairComplexityColorsRequest.class, "ReplaceRepairComplexityColorsRequest");
     values.put(RepairComplexityColorsResponse.class, "RepairComplexityColors");
@@ -1263,6 +1576,11 @@ class MaintenanceOpenApiParityTest {
     values.put(InventoryPlanLineType.class, "InventoryPlanLineType");
     values.put(EstimateLineType.class, "EstimateLineType");
     values.put(RepairComplexity.class, "RepairComplexity");
+    values.put(RepairReclassificationState.class, "RepairReclassificationState");
+    values.put(RepairPlaceAllocationState.class, "RepairPlaceAllocationState");
+    values.put(
+        RepairLogisticsPlanningMode.class,
+        "RepairLogisticsPlanningMode");
     return Map.copyOf(values);
   }
 
@@ -1285,6 +1603,13 @@ class MaintenanceOpenApiParityTest {
     values.put(QueueRepairRequest.class, "PriorityVersionRequest");
     values.put(
         ReplaceRepairCapacitySettingsRequest.class, "ReplaceRepairCapacitySettingsRequest");
+    values.put(
+        ReplaceRepairComplexitySettingsRequest.class,
+        "ReplaceRepairComplexitySettingsRequest");
+    values.put(
+        ImportRepairComplexitySettingsRequest.class,
+        "ImportRepairComplexitySettingsRequest");
+    values.put(RepairPlaceTransitionRequest.class, "RepairPlaceTransitionRequest");
     values.put(
         ReplaceRepairComplexityColorsRequest.class, "ReplaceRepairComplexityColorsRequest");
     values.put(CatalogNodeSnapshot.class, "CatalogNodeSnapshot");
@@ -1340,6 +1665,10 @@ class MaintenanceOpenApiParityTest {
     return new ParameterSpec(name, "header", true, "uuid", null);
   }
 
+  private static ParameterSpec optionalHeader(String name) {
+    return new ParameterSpec(name, "header", false, "string", null);
+  }
+
   @SafeVarargs
   private static <T> List<T> append(List<T> values, T... extra) {
     List<T> result = new ArrayList<>(values);
@@ -1372,7 +1701,10 @@ class MaintenanceOpenApiParityTest {
         MaintenanceInventoryController.class,
         MaintenanceLogisticsController.class,
         MaintenanceTransferRepairController.class,
+        MaintenanceRepairPlaceLogisticsController.class,
         MaintenanceSettingsController.class,
+        RepairComplexitySettingsController.class,
+        RepairPlaceController.class,
         RepairComplexityColorsController.class)) {
       RequestMapping root = AnnotatedElementUtils.findMergedAnnotation(controller, RequestMapping.class);
       for (Method method : controller.getDeclaredMethods()) {

@@ -31,6 +31,7 @@ data class WorkerCategoryDto(
     val queueId: String,
     val name: String,
     val type: String,
+    val queuePurpose: String,
     val sortOrder: Int,
     val audienceModes: List<String>,
     val resultPhotoMinCount: Int,
@@ -210,6 +211,8 @@ data class AudienceSelectorDto(
     val id: String,
     val mode: String,
     val interruptOnTake: Boolean,
+    // Default is only for previously cached sanitized detail JSON.
+    val notifyOnPrimaryTake: Boolean = false,
 )
 
 @Serializable
@@ -252,6 +255,7 @@ data class WorkerActionRequestDto(
     val action: String,
     val expectedVersion: Long,
     val workerGroupId: String?,
+    val evidenceId: String?,
     val occurredAt: String,
     val offlineLeaseId: String,
 )

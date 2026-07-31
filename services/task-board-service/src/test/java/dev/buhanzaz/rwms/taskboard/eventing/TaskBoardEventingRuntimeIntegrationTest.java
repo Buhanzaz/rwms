@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.taskboard.eventing;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import dev.buhanzaz.rwms.taskboard.domain.TaskLane;
 import dev.buhanzaz.rwms.taskboard.domain.TaskStatus;
 import dev.buhanzaz.rwms.taskboard.domain.WorkerClass;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventPayloads.BoardTaskFact;
@@ -91,6 +92,7 @@ class TaskBoardEventingRuntimeIntegrationTest {
                     externalTaskId,
                     TaskStatus.ACTIVE,
                     LocalDate.of(2026, 7, 24),
+                    TaskLane.SCHEDULED,
                     2,
                     true,
                     null,

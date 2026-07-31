@@ -22,6 +22,14 @@ class FeedCacheValidationTest {
                 listOf(categoryDto("furniture", "Перемещение мебели", 20)),
             ),
         ).isFalse()
+        assertThat(
+            cachedFeedMatchesContext(
+                session(),
+                listOf(cached),
+                11,
+                listOf(remote.copy(queuePurpose = "LOGISTICS_DRIVER")),
+            ),
+        ).isFalse()
     }
 
     @Test
@@ -55,6 +63,7 @@ class FeedCacheValidationTest {
         queueId = queueId,
         name = name,
         type = "REPAIR",
+        queuePurpose = "GENERAL",
         sortOrder = sortOrder,
         audienceModes = listOf("MANDATORY", "AVAILABLE"),
         resultPhotoMinCount = 1,
@@ -66,6 +75,7 @@ class FeedCacheValidationTest {
         queueId = dto.queueId,
         name = dto.name,
         type = dto.type,
+        queuePurpose = dto.queuePurpose,
         sortOrder = dto.sortOrder,
         audienceModesKey = dto.normalizedAudienceModesKey(),
         resultPhotoMinCount = dto.resultPhotoMinCount,

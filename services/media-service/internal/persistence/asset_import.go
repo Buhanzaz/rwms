@@ -555,6 +555,10 @@ func (repository *Repository) ImportAsset(ctx context.Context, command assetimpo
 	if err != nil {
 		return assetimport.ImportAssetResult{}, translateAssetImportError(err)
 	}
+	if err := associateCabinImageUpload(ctx, tx, command.CabinID, command.MediaID,
+		command.WarehouseID, 0, now); err != nil {
+		return assetimport.ImportAssetResult{}, err
+	}
 	jobID := uuid.New()
 	_, err = tx.Exec(ctx, `insert into media_processing_job (
 		processing_job_id,media_id,generation,processing_kind,requested_rotation_degrees,job_status,

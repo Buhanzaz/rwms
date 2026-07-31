@@ -110,6 +110,66 @@ class MaintenanceCatalogUiPolicyTest {
     }
 
     @Test
+    fun `outgoing arrows take priority over flat editor hierarchy`() {
+        val exterior = node(id = "exterior", type = "CATEGORY", mainMenu = true)
+        val roof = node(id = "roof", type = "CATEGORY", parentId = exterior.id)
+        val walls = node(id = "walls", type = "CATEGORY", parentId = exterior.id)
+        val frame = node(id = "frame", type = "CATEGORY", parentId = exterior.id)
+        val accidentalFlatWork = node(id = "advertising", type = "WORK", parentId = exterior.id)
+        val roofPainting = node(id = "roof-painting", type = "WORK", parentId = roof.id)
+        val roofWaterproofing = node(id = "roof-waterproofing", type = "WORK", parentId = roof.id)
+        val tapeRepair = node(id = "tape-repair", type = "WORK", parentId = roof.id)
+        val sheetReplacement = node(id = "sheet-replacement", type = "WORK", parentId = roof.id)
+        val tape = node(id = "waterproof-tape", type = "MATERIAL", parentId = roof.id)
+        val catalog = maintenanceCatalogIndex(
+            listOf(
+                exterior,
+                roof,
+                walls,
+                frame,
+                accidentalFlatWork,
+                roofPainting,
+                roofWaterproofing,
+                tapeRepair,
+                sheetReplacement,
+                tape,
+            ),
+            listOf(
+                link("exterior-roof", exterior.id, roof.id, "FOLLOW_UP"),
+                link("exterior-walls", exterior.id, walls.id, "FOLLOW_UP"),
+                link("exterior-frame", exterior.id, frame.id, "FOLLOW_UP"),
+                link("roof-painting", roof.id, roofPainting.id, "FOLLOW_UP"),
+                link("roof-waterproofing", roof.id, roofWaterproofing.id, "FOLLOW_UP"),
+                link("roof-tape-repair", roof.id, tapeRepair.id, "FOLLOW_UP"),
+                link("roof-sheet-replacement", roof.id, sheetReplacement.id, "FOLLOW_UP"),
+                link("repair-tape", tapeRepair.id, tape.id, "DEPENDENCY"),
+            ),
+        )
+
+        assertThat(
+            maintenanceCatalogVisibleNodes(
+                catalog = catalog,
+                mode = MaintenanceCatalogMode.LINKED_SET,
+                path = listOf(exterior.id),
+            ).map(CatalogNodeDto::id),
+        ).containsExactly(roof.id, walls.id, frame.id)
+        assertThat(
+            maintenanceCatalogVisibleNodes(
+                catalog = catalog,
+                mode = MaintenanceCatalogMode.LINKED_SET,
+                path = listOf(exterior.id, roof.id),
+            ).map(CatalogNodeDto::id),
+        ).containsExactly(roofPainting.id, roofWaterproofing.id, tapeRepair.id, sheetReplacement.id)
+        assertThat(
+            maintenanceCatalogVisibleNodes(
+                catalog = catalog,
+                mode = MaintenanceCatalogMode.LINKED_SET,
+                path = listOf(exterior.id, roof.id, tapeRepair.id),
+            ).map(CatalogNodeDto::id),
+        ).containsExactly(tape.id)
+    }
+
+    @Test
     fun `active root category remains visible when only its child positions enter estimates`() {
         val category = node(
             id = "standard-options",

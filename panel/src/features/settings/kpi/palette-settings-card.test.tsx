@@ -30,11 +30,6 @@ const settings: WarehouseKpiSettings = {
   status: "DRAFT",
   version: 3,
   dataAvailableFrom: null,
-  repairComplexity: {
-    lightBoundaryMinutes: 60,
-    mediumBoundaryMinutes: 180,
-    complexBoundaryMinutes: 360,
-  },
   palette: {
     version: 1,
     ranges: [

@@ -10,6 +10,7 @@ import dev.buhanzaz.rwms.maintenance.domain.MaintenanceReconciliation;
 import dev.buhanzaz.rwms.maintenance.domain.MaintenanceRepair;
 import dev.buhanzaz.rwms.maintenance.domain.MediaFactProjection;
 import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
+import dev.buhanzaz.rwms.maintenance.domain.RepairLogisticsPlanningMode;
 import dev.buhanzaz.rwms.maintenance.domain.RepairOrigin;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
 import dev.buhanzaz.rwms.maintenance.domain.RentalItemFactProjection;
@@ -98,9 +99,6 @@ class MaintenanceInventoryBoundaryIntegrationTest {
     workNodeId = UUID.randomUUID();
     insertActiveCatalog(catalogId, workNodeId, "WORK_A");
     org.mockito.Mockito.reset(dependencies);
-    when(dependencies.repairComplexityThresholds(any(UUID.class)))
-        .thenAnswer(invocation -> new MaintenanceDependencyGateway.RepairComplexityThresholds(
-            invocation.getArgument(0), 0L, 60, 180, 360));
     when(dependencies.preflightMaintenanceRouting(any(UUID.class), anyList()))
         .thenAnswer(invocation -> {
           UUID requestedWarehouseId = invocation.getArgument(0);
@@ -234,9 +232,6 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         where repair_id=? and operation_type='QUEUE_REPAIR'
         """, created.repairId());
     org.mockito.Mockito.reset(dependencies);
-    when(dependencies.repairComplexityThresholds(warehouseId))
-        .thenReturn(new MaintenanceDependencyGateway.RepairComplexityThresholds(
-            warehouseId, 0L, 60, 180, 360));
     when(dependencies.preflightMaintenanceRouting(eq(warehouseId), anyList()))
         .thenAnswer(invocation -> {
           List<MaintenanceDependencyGateway.RoutingQueueRequirement> requirements =
@@ -318,6 +313,184 @@ class MaintenanceInventoryBoundaryIntegrationTest {
         first.response().fingerprint(), first.response().snapshot());
     assertThatThrownBy(() -> inventory.upsert(inventoryId, findingId, changed))
         .isInstanceOf(MaintenanceConflictException.class);
+  }
+
+  @Test
+  void frozenInventoryPlanningCreatesTheSameCanonicalDriverTaskWithInventorySource() {
+    UUID inventoryId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    UUID moveToNode = insertMovementLocation("Доставка в ремонт");
+    UUID moveFromNode = insertMovementLocation("Вывоз из ремонта");
+    LocalDate scheduledDate = LocalDate.of(2026, 8, 5);
+    FreezeInventoryPlanRequest freeze =
+        new FreezeInventoryPlanRequest(
+            warehouseId,
+            inventoryId,
+            findingId,
+            3L,
+            InventoryPlanMode.AUTO,
+            List.of(
+                catalogLine(
+                    workNodeId, "1", null, List.of())),
+            List.of(
+                new InventoryPlanStageSelection(
+                    moveToNode,
+                    RepairStageKind.MOVE_TO_REPAIR,
+                    0),
+                new InventoryPlanStageSelection(
+                    moveFromNode,
+                    RepairStageKind.MOVE_FROM_REPAIR,
+                    2)),
+            List.of(),
+            4,
+            null,
+            RepairLogisticsPlanningMode.FIXED_DATE,
+            scheduledDate);
+
+    FrozenInventoryPlanResponse frozen =
+        inventory.freeze(freeze).response();
+
+    assertThat(frozen.snapshot().logisticsPlanningMode())
+        .isEqualTo(RepairLogisticsPlanningMode.FIXED_DATE);
+    assertThat(frozen.snapshot().logisticsScheduledDate())
+        .isEqualTo(scheduledDate);
+    assertThat(frozen.snapshot().moveToRepairRequired()).isTrue();
+    assertThat(frozen.snapshot().moveFromRepairRequired()).isTrue();
+
+    UUID rentalItemId = UUID.randomUUID();
+    rentalItems.saveAndFlush(
+        RentalItemFactProjection.create(
+            rentalItemId, warehouseId, "FREE", 7));
+    InventoryMaintenanceService.UpsertResult created =
+        inventory.upsert(
+            inventoryId,
+            findingId,
+            new UpsertInventoryRepairRequest(
+                warehouseId,
+                3L,
+                rentalItemId,
+                7L,
+                LocalDate.of(2026, 8, 1),
+                frozen.fingerprint(),
+                frozen.snapshot()));
+    UUID leaseId = UUID.randomUUID();
+    when(dependencies.getRentalItemSnapshot(rentalItemId))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                rentalItemId,
+                7,
+                warehouseId,
+                "БТ-INV-1",
+                "FREE"));
+    when(
+            dependencies.acquireLease(
+                any(),
+                eq(rentalItemId),
+                eq(7L),
+                eq("MAINTENANCE_REPAIR"),
+                eq(created.repairId().toString())))
+        .thenReturn(
+            new MaintenanceDependencyGateway.LeaseSnapshot(
+                leaseId,
+                0,
+                rentalItemId,
+                "MAINTENANCE_REPAIR",
+                created.repairId(),
+                11,
+                OffsetDateTime.now(ZoneOffset.UTC)
+                    .plusMinutes(15)));
+    when(
+            dependencies.fencedStatus(
+                any(),
+                eq(rentalItemId),
+                eq(warehouseId),
+                eq(7L),
+                eq(leaseId),
+                eq(11L),
+                eq("MAINTENANCE_REPAIR"),
+                eq(created.repairId().toString()),
+                eq("QUEUE_TO_REPAIR"),
+                eq(false)))
+        .thenReturn(
+            new MaintenanceDependencyGateway.AssetSnapshot(
+                rentalItemId,
+                8,
+                warehouseId,
+                "БТ-INV-1",
+                "REPAIR"));
+    assertThat(maintenance.reconcileOneTask()).isTrue();
+
+    jdbc.update(
+        """
+        update integration_reconciliation
+           set next_attempt_at=clock_timestamp() + interval '1 day'
+         where repair_id=? and operation_type='REGISTER_TASK'
+        """,
+        created.repairId());
+    UUID driverTaskId = UUID.randomUUID();
+    when(
+            dependencies.createDriverTask(
+                any(),
+                any(
+                    MaintenanceDependencyGateway.DriverTaskCommand
+                        .class)))
+        .thenAnswer(
+            invocation -> {
+              MaintenanceDependencyGateway.DriverTaskCommand command =
+                  invocation.getArgument(1);
+              return new MaintenanceDependencyGateway.DriverTaskSnapshot(
+                  driverTaskId,
+                  0,
+                  command.warehouseId(),
+                  command.cabinId(),
+                  command.repairId(),
+                  command.sourceType(),
+                  command.sourceId(),
+                  command.kind(),
+                  command.planningMode(),
+                  command.scheduledDate(),
+                  command.priority(),
+                  "SCHEDULED");
+            });
+    assertThat(maintenance.reconcileOneTask()).isTrue();
+
+    ArgumentCaptor<MaintenanceDependencyGateway.DriverTaskCommand>
+        command =
+            ArgumentCaptor.forClass(
+                MaintenanceDependencyGateway.DriverTaskCommand.class);
+    verify(dependencies).createDriverTask(any(), command.capture());
+    assertThat(command.getValue())
+        .satisfies(
+            value -> {
+              assertThat(value.sourceType())
+                  .isEqualTo("INVENTORY");
+              assertThat(value.sourceId()).isEqualTo(findingId);
+              assertThat(value.repairId())
+                  .isEqualTo(created.repairId());
+              assertThat(value.planningMode())
+                  .isEqualTo(
+                      RepairLogisticsPlanningMode.FIXED_DATE);
+              assertThat(value.scheduledDate())
+                  .isEqualTo(scheduledDate);
+            });
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select logistics_planning_mode
+                from maintenance_repair where id=?
+                """,
+                String.class,
+                created.repairId()))
+        .isEqualTo("FIXED_DATE");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select logistics_scheduled_date
+                from maintenance_repair where id=?
+                """,
+                LocalDate.class,
+                created.repairId()))
+        .isEqualTo(scheduledDate);
   }
 
   @Test
@@ -769,6 +942,33 @@ class MaintenanceInventoryBoundaryIntegrationTest {
           ?,?,?)
         """, UUID.randomUUID(), nodeId, catalogId,
         nodeType, queueId, routed ? "Repair" : null, routed ? "REPAIR" : null);
+    return nodeId;
+  }
+
+  private UUID insertMovementLocation(String name) {
+    UUID nodeId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into catalog_node(
+          row_id,node_id,catalog_version_id,node_type,name,active,
+          duration_minutes,include_in_estimate,common_item,show_in_main_menu,
+          routing_queue_id,routing_queue_name,routing_queue_type)
+        values (?,?,?,'LOCATION',?,true,0,false,false,false,
+          ?,?,'MOVEMENT')
+        """,
+        UUID.randomUUID(),
+        nodeId,
+        catalogId,
+        name,
+        UUID.randomUUID(),
+        name);
+    jdbc.update(
+        """
+        update catalog_version
+           set node_count=node_count+1
+         where id=?
+        """,
+        catalogId);
     return nodeId;
   }
 

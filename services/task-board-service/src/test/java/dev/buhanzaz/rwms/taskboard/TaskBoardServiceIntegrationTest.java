@@ -199,7 +199,13 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   @Test
   void movementCapabilityUsesActiveVisibleWarehouseBindingOfStableDefinition() {
     var movementW1 =
-        registry.createQueue(W1, queue("GLOBAL_DRIVERS", QueueType.MOVEMENT, List.of()));
+        registry.createQueue(
+            W1,
+            queue(
+                "GLOBAL_DRIVERS",
+                QueueType.MOVEMENT,
+                QueuePurpose.LOGISTICS_DRIVER,
+                List.of()));
 
     assertThat(registry.queueCapabilities(W1).movementToShipmentAvailable()).isTrue();
     assertThat(registry.queueCapabilities(W1).movementQueueDefinitions())
@@ -208,7 +214,13 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(registry.queueCapabilities(W2).movementToShipmentAvailable()).isFalse();
 
     var movementW2 =
-        registry.createQueue(W2, queue("GLOBAL_DRIVERS", QueueType.MOVEMENT, List.of()));
+        registry.createQueue(
+            W2,
+            queue(
+                "GLOBAL_DRIVERS",
+                QueueType.MOVEMENT,
+                QueuePurpose.LOGISTICS_DRIVER,
+                List.of()));
     assertThat(movementW2.definitionId()).isEqualTo(movementW1.definitionId());
     assertThat(registry.queueCapabilities(W2).movementToShipmentAvailable()).isTrue();
 
@@ -237,8 +249,10 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     var slingerClass = registry.createClass(workerClass("SLINGER_ORDERED"));
     List<QueueBindingRequest> bindings =
         List.of(
-            new QueueBindingRequest(driverClass.id(), 0, false, false),
-            new QueueBindingRequest(slingerClass.id(), 1, true, true));
+            new QueueBindingRequest(
+                driverClass.id(), 0, false, ParticipationPolicy.PRIMARY, false),
+            new QueueBindingRequest(
+                slingerClass.id(), 1, true, ParticipationPolicy.REQUIRED, true));
     var created =
         registry.createQueue(W1, queue("ORDERED_MOVEMENT", QueueType.MOVEMENT, bindings));
 
@@ -265,7 +279,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(updated.bindings()).extracting(QueueBindingDto::order).containsExactly(0, 1);
     assertThat(updated.bindings()).extracting(QueueBindingDto::primary).containsExactly(true, false);
     assertThat(updated.bindings())
-        .extracting(QueueBindingDto::notifyUrgent)
+        .extracting(QueueBindingDto::notifyOnPrimaryTake)
         .containsExactly(false, true);
   }
 
@@ -1803,7 +1817,9 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             queue(
                 "BRIGADE_REPAIR",
                 QueueType.REPAIR,
-                List.of(new QueueBindingRequest(generalClass.id(), 0, false, false))));
+                List.of(
+                    new QueueBindingRequest(
+                        generalClass.id(), 0, false, ParticipationPolicy.PRIMARY, false))));
     var movementQueue =
         registry.createQueue(
             W1,
@@ -1811,8 +1827,10 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 "DRIVER_WITH_SLINGER",
                 QueueType.MOVEMENT,
                 List.of(
-                    new QueueBindingRequest(driverClass.id(), 0, false, false),
-                    new QueueBindingRequest(slingerClass.id(), 1, true, true))));
+                    new QueueBindingRequest(
+                        driverClass.id(), 0, false, ParticipationPolicy.PRIMARY, false),
+                    new QueueBindingRequest(
+                        slingerClass.id(), 1, true, ParticipationPolicy.REQUIRED, true))));
     var driver =
         workforce.createWorker(
             W1,
@@ -1943,8 +1961,10 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 "MOVEMENT_VISIBILITY",
                 QueueType.MOVEMENT,
                 List.of(
-                    new QueueBindingRequest(driverClass.id(), 0, false, false),
-                    new QueueBindingRequest(slingerClass.id(), 1, true, true))));
+                    new QueueBindingRequest(
+                        driverClass.id(), 0, false, ParticipationPolicy.PRIMARY, false),
+                    new QueueBindingRequest(
+                        slingerClass.id(), 1, true, ParticipationPolicy.REQUIRED, true))));
     var driver =
         workforce.createWorker(
             W1,
@@ -2005,7 +2025,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             driver.id());
 
     assertThat(workerBoard.detail(slinger.id(), W1, started.id()).availabilityMode())
-        .isEqualTo("MANDATORY");
+        .isEqualTo("REQUIRED_JOIN");
   }
 
   @Test
@@ -3549,17 +3569,26 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   private WorkQueueRequest queue(String name, QueueType type, List<QueueBindingRequest> bindings) {
+    return queue(name, type, QueuePurpose.GENERAL, bindings);
+  }
+
+  private WorkQueueRequest queue(
+      String name,
+      QueueType type,
+      QueuePurpose purpose,
+      List<QueueBindingRequest> bindings) {
     QueueDefinitionDto definition =
         registry.listQueueDefinitions().stream()
             .filter(
                 candidate ->
                     candidate.name().equalsIgnoreCase(name)
-                        && candidate.type() == type)
+                        && candidate.type() == type
+                        && candidate.purpose() == purpose)
             .findFirst()
             .orElseGet(
                 () ->
                     registry.createQueueDefinition(
-                        new QueueDefinitionRequest(0L, name, null, type)));
+                        new QueueDefinitionRequest(0L, name, null, type, purpose)));
     return new WorkQueueRequest(
         0L,
         definition.id(),

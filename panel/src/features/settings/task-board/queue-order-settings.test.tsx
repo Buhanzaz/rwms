@@ -13,6 +13,7 @@ const queue: WorkQueueDto = {
   name: "Ремонт",
   description: null,
   type: "REPAIR",
+  purpose: "GENERAL",
   sortOrder: 0,
   active: true,
   hidden: false,
