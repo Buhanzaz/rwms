@@ -51,7 +51,8 @@ describe("HttpTaskBoardSettingsClient gateway routes", () => {
           workerClassId: "class-id",
           order: 0,
           stopTaskOnTake: true,
-          notifyUrgent: true,
+          participationPolicy: "PRIMARY",
+          notifyOnPrimaryTake: false,
         },
       ],
     })
@@ -76,7 +77,8 @@ describe("HttpTaskBoardSettingsClient gateway routes", () => {
           workerClassId: "class-id",
           order: 0,
           stopTaskOnTake: true,
-          notifyUrgent: true,
+          participationPolicy: "PRIMARY",
+          notifyOnPrimaryTake: false,
         },
       ],
     })
@@ -97,6 +99,7 @@ describe("HttpTaskBoardSettingsClient gateway routes", () => {
       name: "Внешние работы",
       description: null,
       type: "REPAIR",
+      purpose: "GENERAL",
     })
     await client.deleteQueueDefinition("token", "definition/id", 4)
 

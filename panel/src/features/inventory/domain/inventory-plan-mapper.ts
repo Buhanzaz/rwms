@@ -5,6 +5,7 @@ import type {
   InventoryPlanSelection,
 } from "@/features/inventory/model/inventory-service"
 import type {
+  LogisticsPlanningMode,
   RepairEstimateCompletionMode,
   RepairEstimateLineDto,
   RepairPriority,
@@ -66,6 +67,8 @@ function planLine(
 export function buildInventoryPlanSelection(input: {
   completionMode: RepairEstimateCompletionMode
   movementRequired: boolean
+  logisticsPlanningMode: LogisticsPlanningMode
+  logisticsScheduledDate: string | null
   movementCatalogNodeId?: string | null
   priority: RepairPriority
   coverMediaId: string | null
@@ -73,6 +76,25 @@ export function buildInventoryPlanSelection(input: {
   lines: RepairEstimateLineDto[]
   media: InventoryMediaReference[]
 }): Exclude<InventoryPlanSelection, null> {
+  if (!input.movementRequired) {
+    if (
+      input.logisticsPlanningMode !== "AUTO" ||
+      input.logisticsScheduledDate !== null
+    ) {
+      throw new Error(
+        "Параметры логистической очереди недоступны без перемещения."
+      )
+    }
+  } else if (
+    (input.logisticsPlanningMode === "AUTO" &&
+      input.logisticsScheduledDate !== null) ||
+    (input.logisticsPlanningMode === "FIXED_DATE" &&
+      !input.logisticsScheduledDate)
+  ) {
+    throw new Error(
+      "Дата логистического задания должна быть задана только при выборе конкретной даты."
+    )
+  }
   if (input.movementRequired && !input.movementCatalogNodeId) {
     throw new Error("В каталоге не настроено расположение для перемещения.")
   }
@@ -122,6 +144,8 @@ export function buildInventoryPlanSelection(input: {
       mode: "AUTO",
       priority: input.priority,
       coverMediaId: input.coverMediaId,
+      logisticsPlanningMode: input.logisticsPlanningMode,
+      logisticsScheduledDate: input.logisticsScheduledDate,
       lines: catalogLines,
       stages,
     }
@@ -154,6 +178,8 @@ export function buildInventoryPlanSelection(input: {
     mode: "MANUAL",
     priority: input.priority,
     coverMediaId: input.coverMediaId,
+    logisticsPlanningMode: input.logisticsPlanningMode,
+    logisticsScheduledDate: input.logisticsScheduledDate,
     lines,
     stages: input.movementRequired
       ? [

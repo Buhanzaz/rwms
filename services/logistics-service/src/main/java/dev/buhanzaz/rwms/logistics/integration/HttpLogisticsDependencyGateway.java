@@ -40,7 +40,11 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   private final String warehouseBase;
   private final String maintenanceBase;
   private final String mediaBase;
+  private final String taskBoardBase;
   private final String taskBoardEquipmentMovementBase;
+  private final String taskBoardTaskBase;
+  private final String taskBoardDriverBase;
+  private final String taskBoardDriverTaskBase;
 
   HttpLogisticsDependencyGateway(
       RestClient client,
@@ -54,9 +58,15 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
     maintenanceBase =
         strip(properties.maintenanceBaseUrl().toString()) + "/api/internal/maintenance/v1/logistics";
     mediaBase = strip(properties.mediaBaseUrl().toString()) + "/api/internal/media/v1";
+    taskBoardBase = strip(properties.taskBoardBaseUrl().toString());
     taskBoardEquipmentMovementBase =
-        strip(properties.taskBoardBaseUrl().toString())
-            + "/api/internal/task-board/v1/logistics/equipment-movement-tasks";
+        taskBoardBase + "/api/internal/task-board/v1/logistics/equipment-movement-tasks";
+    taskBoardTaskBase =
+        taskBoardBase + "/api/internal/task-board/v1/tasks";
+    taskBoardDriverBase =
+        taskBoardBase + "/api/internal/task-board/v1/logistics/warehouses";
+    taskBoardDriverTaskBase =
+        taskBoardBase + "/api/internal/task-board/v1/logistics/tasks";
   }
 
   @Override
@@ -794,6 +804,324 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
   }
 
   @Override
+  public WarehouseDriverQueue readWarehouseDriverQueue(UUID warehouseId) {
+    WarehouseQueueCapabilitiesResponse response = readWarehouseQueueCapabilities(warehouseId);
+    if (response.warehouseId() == null
+        || !warehouseId.equals(response.warehouseId())
+        || response.movementQueueDefinitions() == null
+        || response.movementQueueDefinitions().size() != 1) {
+      throw malformed(
+          "Task-board must expose exactly one active warehouse driver queue");
+    }
+    MovementQueueCapabilityResponse queue = response.movementQueueDefinitions().getFirst();
+    if (queue.queueDefinitionId() == null || queue.workQueueId() == null) {
+      throw malformed("Task-board returned an invalid warehouse driver queue");
+    }
+    return new WarehouseDriverQueue(
+        warehouseId, queue.queueDefinitionId(), queue.workQueueId());
+  }
+
+  @Override
+  public boolean isWarehouseDriverQueueAvailable(UUID warehouseId) {
+    WarehouseQueueCapabilitiesResponse response = readWarehouseQueueCapabilities(warehouseId);
+    if (response.warehouseId() == null
+        || !warehouseId.equals(response.warehouseId())
+        || response.movementQueueDefinitions() == null) {
+      throw malformed("Task-board returned invalid warehouse queue capabilities");
+    }
+    int queueCount = response.movementQueueDefinitions().size();
+    if (queueCount > 1) {
+      throw malformed("Task-board exposes more than one active warehouse driver queue");
+    }
+    return queueCount == 1;
+  }
+
+  private WarehouseQueueCapabilitiesResponse readWarehouseQueueCapabilities(UUID warehouseId) {
+    return get(
+        taskBoardBase
+            + "/api/internal/task-board/v1/warehouses/"
+            + warehouseId
+            + "/queue-capabilities",
+        WarehouseQueueCapabilitiesResponse.class,
+        TASK_BOARD_CLIENT,
+        TASK_BOARD_SCOPE);
+  }
+
+  @Override
+  public DriverBoardTask registerDriverTask(
+      UUID warehouseId,
+      UUID externalTaskId,
+      UUID sourceId,
+      String title,
+      String unitNumber,
+      String description,
+      UUID queueDefinitionId,
+      LocalDate scheduledDate,
+      int priority) {
+    DriverBoardTaskResponse response =
+        postWithoutIdempotency(
+            taskBoardTaskBase,
+            new RegisterDriverTaskRequest(
+                warehouseId,
+                externalTaskId,
+                title,
+                unitNumber,
+                description,
+                null,
+                null,
+                List.of(new DriverRouteStepRequest(queueDefinitionId, description, null)),
+                scheduledDate,
+                priority,
+                null,
+                new DriverTaskSourceRequest("LOGISTICS_DRIVER_TASK", sourceId),
+                "SCHEDULED"),
+            DriverBoardTaskResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE);
+    return driverBoardTask(response);
+  }
+
+  @Override
+  public DriverBoardTask readDriverTask(UUID externalTaskId) {
+    return driverBoardTask(
+        get(
+            taskBoardTaskBase + "/" + externalTaskId,
+            DriverBoardTaskResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE));
+  }
+
+  @Override
+  public DriverBoardTask setDriverTaskLane(
+      UUID externalTaskId, long expectedTaskVersion, String lane) {
+    return driverBoardTask(
+        postWithoutIdempotency(
+            taskBoardTaskBase + "/" + externalTaskId + "/lane",
+            new SetDriverTaskLaneRequest(expectedTaskVersion, lane),
+            DriverBoardTaskResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE));
+  }
+
+  @Override
+  public DriverBoardSnapshot readDriverBoard(UUID warehouseId) {
+    DriverBoardSnapshotResponse response =
+        get(
+            taskBoardDriverBase + "/" + warehouseId + "/board",
+            DriverBoardSnapshotResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE);
+    if (response.warehouseId() == null
+        || !warehouseId.equals(response.warehouseId())
+        || response.queueId() == null
+        || response.queueVersion() < 0
+        || response.current() == null
+        || response.dates() == null) {
+      throw malformed("Task-board returned an invalid driver board");
+    }
+    return new DriverBoardSnapshot(
+        warehouseId,
+        response.queueId(),
+        response.queueVersion(),
+        response.current().stream()
+            .map(entry -> driverBoardEntry(entry, warehouseId))
+            .toList(),
+        response.dates().stream()
+            .map(
+                column -> {
+                  if (column.date() == null || column.entries() == null) {
+                    throw malformed("Task-board returned an invalid driver date column");
+                  }
+                  return new DriverBoardDateColumn(
+                      column.date(),
+                      column.entries().stream()
+                          .map(entry -> driverBoardEntry(entry, warehouseId))
+                          .toList());
+                })
+            .toList());
+  }
+
+  @Override
+  public DriverBoardTask moveDriverTask(
+      UUID externalTaskId,
+      long expectedTaskVersion,
+      long expectedEntryVersion,
+      LocalDate targetDate,
+      int targetIndex) {
+    return driverBoardTask(
+        postWithoutIdempotency(
+            taskBoardDriverTaskBase + "/" + externalTaskId + "/move",
+            new MoveDriverTaskRequest(
+                expectedTaskVersion, expectedEntryVersion, targetDate, targetIndex),
+            DriverBoardTaskResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE));
+  }
+
+  @Override
+  public DriverCompletionEvidence readDriverCompletionEvidence(UUID externalTaskId) {
+    DriverCompletionEvidenceResponse response =
+        get(
+            taskBoardTaskBase + "/" + externalTaskId + "/completion-evidence",
+            DriverCompletionEvidenceResponse.class,
+            TASK_BOARD_CLIENT,
+            TASK_BOARD_SCOPE);
+    if (response.externalTaskId() == null
+        || !externalTaskId.equals(response.externalTaskId())
+        || response.taskId() == null
+        || response.entryId() == null
+        || response.evidenceId() == null
+        || response.mediaId() == null
+        || response.mediaGeneration() < 1
+        || response.warehouseId() == null
+        || response.recordedAt() == null) {
+      throw malformed("Task-board returned invalid driver completion evidence");
+    }
+    return new DriverCompletionEvidence(
+        response.externalTaskId(),
+        response.taskId(),
+        response.entryId(),
+        response.evidenceId(),
+        response.mediaId(),
+        response.mediaGeneration(),
+        response.warehouseId(),
+        response.recordedAt());
+  }
+
+  @Override
+  public CapitalRepairPage readCapitalRepairs(UUID warehouseId, int page, int size) {
+    String uri =
+        UriComponentsBuilder.fromUriString(maintenanceBase + "/repairs/capital")
+            .queryParam("warehouseId", warehouseId)
+            .queryParam("page", page)
+            .queryParam("size", size)
+            .build()
+            .encode()
+            .toUriString();
+    CapitalRepairPageResponse response =
+        get(uri, CapitalRepairPageResponse.class, MAINTENANCE_CLIENT, MAINTENANCE_SCOPE);
+    if (response.items() == null
+        || response.page() != page
+        || response.size() != size
+        || response.totalElements() < 0) {
+      throw malformed("Maintenance-service returned invalid capital-repair page");
+    }
+    return new CapitalRepairPage(
+        response.items().stream()
+            .map(HttpLogisticsDependencyGateway::capitalRepair)
+            .toList(),
+        response.page(),
+        response.size(),
+        response.totalElements());
+  }
+
+  @Override
+  public CapitalRepair readCapitalRepair(UUID repairId) {
+    return capitalRepair(
+        get(
+            maintenanceBase + "/repairs/capital/" + repairId,
+            CapitalRepairResponse.class,
+            MAINTENANCE_CLIENT,
+            MAINTENANCE_SCOPE));
+  }
+
+  @Override
+  public RepairPlaceProjection readRepairPlaces(UUID warehouseId) {
+    RepairPlaceProjectionResponse response =
+        get(
+            maintenanceBase + "/repair-places/" + warehouseId,
+            RepairPlaceProjectionResponse.class,
+            MAINTENANCE_CLIENT,
+            MAINTENANCE_SCOPE);
+    if (response.warehouseId() == null
+        || !warehouseId.equals(response.warehouseId())
+        || response.repairPlaceCount() < 1
+        || response.availableCount() < 0
+        || response.allocations() == null) {
+      throw malformed("Maintenance-service returned invalid repair-place projection");
+    }
+    return new RepairPlaceProjection(
+        warehouseId,
+        response.repairPlaceCount(),
+        response.reservedCount(),
+        response.occupiedCount(),
+        response.readyToReleaseCount(),
+        response.availableCount(),
+        response.overCapacity(),
+        response.allocations().stream()
+            .map(HttpLogisticsDependencyGateway::repairPlaceAllocation)
+            .toList());
+  }
+
+  @Override
+  public RepairPlaceAllocation transitionRepairPlace(
+      UUID idempotencyKey,
+      UUID warehouseId,
+      UUID repairId,
+      long expectedVersion,
+      String transition) {
+    if (!Set.of("reserve", "occupy", "release").contains(transition)) {
+      throw new IllegalArgumentException("Unsupported repair-place transition");
+    }
+    RepairPlaceAllocationResponse response =
+        post(
+            maintenanceBase
+                + "/repair-places/"
+                + warehouseId
+                + "/allocations/"
+                + repairId
+                + "/"
+                + transition,
+            idempotencyKey,
+            new RepairPlaceTransitionRequest(expectedVersion),
+            RepairPlaceAllocationResponse.class,
+            MAINTENANCE_CLIENT,
+            MAINTENANCE_SCOPE);
+    RepairPlaceAllocation allocation = repairPlaceAllocation(response);
+    if (!warehouseId.equals(allocation.warehouseId())
+        || !repairId.equals(allocation.repairId())) {
+      throw malformed("Maintenance-service returned a mismatched repair-place allocation");
+    }
+    return allocation;
+  }
+
+  @Override
+  public CabinCoverChange setCabinCoverFromTaskEvidence(
+      UUID idempotencyKey,
+      UUID cabinId,
+      UUID taskBoardEntryId,
+      UUID evidenceMediaId) {
+    CabinCoverChangeResponse response =
+        post(
+            mediaBase + "/logistics/cabins/" + cabinId + "/cover-from-task-evidence",
+            idempotencyKey,
+            new SetCabinCoverFromTaskEvidenceRequest(taskBoardEntryId, evidenceMediaId),
+            CabinCoverChangeResponse.class,
+            MEDIA_CLIENT,
+            MEDIA_SCOPE);
+    if (response.cabinId() == null
+        || !cabinId.equals(response.cabinId())
+        || response.warehouseId() == null
+        || response.coverMediaId() == null
+        || !evidenceMediaId.equals(response.coverMediaId())
+        || response.generation() < 1
+        || response.taskBoardEntryId() == null
+        || !taskBoardEntryId.equals(response.taskBoardEntryId())
+        || response.version() < 0
+        || response.changedAt() == null) {
+      throw malformed("Media-service returned a mismatched cabin cover");
+    }
+    return new CabinCoverChange(
+        response.cabinId(),
+        response.warehouseId(),
+        response.coverMediaId(),
+        response.generation(),
+        response.taskBoardEntryId(),
+        response.version(),
+        response.changedAt());
+  }
+
+  @Override
   public OrderUnitCandidatePage readOrderUnitCandidates(
       UUID orderId, UUID warehouseId, int page, int size, String search) {
     String uri =
@@ -1420,6 +1748,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         response.assetId(),
         response.version(),
         response.warehouseId(),
+        response.number(),
         response.status(),
         response.contents().stream()
             .map(content -> new EquipmentContent(content.equipmentId(), content.quantity()))
@@ -1537,6 +1866,144 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
         response.externalTaskId(),
         response.status(),
         response.doneAt());
+  }
+
+  private static DriverBoardTask driverBoardTask(DriverBoardTaskResponse response) {
+    if (response == null
+        || response.taskId() == null
+        || response.taskVersion() < 0
+        || response.warehouseId() == null
+        || response.externalTaskId() == null
+        || response.status() == null
+        || response.scheduledDate() == null
+        || response.lane() == null
+        || response.priority() < 1
+        || response.priority() > 5
+        || response.route() == null
+        || response.route().size() != 1) {
+      throw malformed("Task-board returned an invalid driver task");
+    }
+    DriverRouteStepResponse entry = response.route().getFirst();
+    if (entry.entryId() == null
+        || entry.entryVersion() < 0
+        || entry.status() == null
+        || entry.queuePosition() < 0) {
+      throw malformed("Task-board returned an invalid driver task route");
+    }
+    return new DriverBoardTask(
+        response.taskId(),
+        response.taskVersion(),
+        response.warehouseId(),
+        response.externalTaskId(),
+        response.title(),
+        response.unitNumber(),
+        entry.taskText(),
+        response.status(),
+        response.scheduledDate(),
+        response.lane(),
+        response.priority(),
+        response.pinned(),
+        response.doneAt(),
+        entry.entryId(),
+        entry.entryVersion(),
+        entry.status(),
+        entry.queuePosition());
+  }
+
+  private static DriverBoardTask driverBoardEntry(
+      DriverBoardEntryResponse response, UUID warehouseId) {
+    if (response == null
+        || response.taskId() == null
+        || response.taskVersion() < 0
+        || response.externalTaskId() == null
+        || response.taskStatus() == null
+        || response.scheduledDate() == null
+        || response.lane() == null
+        || response.priority() < 1
+        || response.priority() > 5
+        || response.id() == null
+        || response.version() < 0
+        || response.status() == null
+        || response.queuePosition() < 0) {
+      throw malformed("Task-board returned an invalid driver board entry");
+    }
+    return new DriverBoardTask(
+        response.taskId(),
+        response.taskVersion(),
+        warehouseId,
+        response.externalTaskId(),
+        response.title(),
+        response.unitNumber(),
+        response.taskText(),
+        response.taskStatus(),
+        response.scheduledDate(),
+        response.lane(),
+        response.priority(),
+        response.pinned(),
+        response.doneAt(),
+        response.id(),
+        response.version(),
+        response.status(),
+        response.queuePosition());
+  }
+
+  private static RepairPlaceAllocation repairPlaceAllocation(
+      RepairPlaceAllocationResponse response) {
+    if (response == null
+        || response.id() == null
+        || response.version() < 0
+        || response.warehouseId() == null
+        || response.repairId() == null
+        || response.rentalItemId() == null
+        || response.state() == null
+        || response.createdAt() == null
+        || response.updatedAt() == null) {
+      throw malformed("Maintenance-service returned invalid repair-place allocation");
+    }
+    return new RepairPlaceAllocation(
+        response.id(),
+        response.version(),
+        response.warehouseId(),
+        response.repairId(),
+        response.rentalItemId(),
+        response.state(),
+        response.createdAt(),
+        response.updatedAt());
+  }
+
+  private static CapitalRepair capitalRepair(CapitalRepairResponse response) {
+    if (response == null
+        || response.repairId() == null
+        || response.rentalItemId() == null
+        || response.warehouseId() == null
+        || response.priority() < 1
+        || response.priority() > 5
+        || response.complexity() == null
+        || response.version() < 0) {
+      throw malformed("Maintenance-service returned invalid capital repair");
+    }
+    RepairComplexitySnapshotResponse complexity = response.complexity();
+    if (!"CAPITAL".equals(complexity.type())
+        || complexity.name() == null
+        || complexity.name().isBlank()
+        || complexity.color() == null
+        || !complexity.color().matches("^#[0-9A-F]{6}$")
+        || complexity.plannedMinutes() == null
+        || complexity.plannedMinutes().isBlank()) {
+      throw malformed("Maintenance-service returned invalid capital complexity");
+    }
+    return new CapitalRepair(
+        response.repairId(),
+        response.rentalItemId(),
+        response.warehouseId(),
+        response.priority(),
+        new RepairComplexitySnapshot(
+            complexity.type(),
+            complexity.name(),
+            complexity.color(),
+            complexity.plannedMinutes(),
+            complexity.forcedCapital()),
+        response.version());
   }
 
   private static boolean sameReturnEquipmentReceiptLines(
@@ -1961,6 +2428,7 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID assetId,
       long version,
       UUID warehouseId,
+      String number,
       String status,
       List<EquipmentContentResponse> contents) {}
 
@@ -2199,6 +2667,164 @@ final class HttpLogisticsDependencyGateway implements LogisticsDependencyGateway
       UUID externalTaskId,
       String status,
       OffsetDateTime doneAt) {}
+
+  private record MovementQueueCapabilityResponse(
+      UUID queueDefinitionId, UUID workQueueId) {}
+
+  private record WarehouseQueueCapabilitiesResponse(
+      UUID warehouseId,
+      boolean movementToShipmentAvailable,
+      List<MovementQueueCapabilityResponse> movementQueueDefinitions) {}
+
+  private record DriverTaskSourceRequest(String type, UUID sourceId) {}
+
+  private record DriverRouteStepRequest(
+      UUID queueDefinitionId, String taskText, Integer plannedDurationMinutes) {}
+
+  private record RegisterDriverTaskRequest(
+      UUID warehouseId,
+      UUID externalTaskId,
+      String title,
+      String unitNumber,
+      String description,
+      Integer plannedDurationMinutes,
+      OffsetDateTime deadlineAt,
+      List<DriverRouteStepRequest> route,
+      LocalDate scheduledDate,
+      Integer priority,
+      Integer dailyCapacity,
+      DriverTaskSourceRequest source,
+      String lane) {}
+
+  private record SetDriverTaskLaneRequest(long expectedTaskVersion, String lane) {}
+
+  private record DriverRouteStepResponse(
+      UUID entryId,
+      long entryVersion,
+      UUID queueDefinitionId,
+      UUID workQueueId,
+      String queueName,
+      int routeIndex,
+      int queuePosition,
+      String entryType,
+      String status,
+      String taskText,
+      Integer plannedDurationMinutes) {}
+
+  private record DriverBoardTaskResponse(
+      UUID taskId,
+      long taskVersion,
+      UUID warehouseId,
+      UUID externalTaskId,
+      String title,
+      String unitNumber,
+      String description,
+      String status,
+      Integer plannedDurationMinutes,
+      OffsetDateTime deadlineAt,
+      LocalDate scheduledDate,
+      String lane,
+      int priority,
+      boolean pinned,
+      OffsetDateTime doneAt,
+      List<DriverRouteStepResponse> route) {}
+
+  private record DriverBoardEntryResponse(
+      UUID id,
+      long version,
+      UUID taskId,
+      UUID externalTaskId,
+      long taskVersion,
+      UUID warehouseId,
+      String title,
+      String unitNumber,
+      String taskText,
+      String taskStatus,
+      LocalDate scheduledDate,
+      String lane,
+      int priority,
+      boolean pinned,
+      int queuePosition,
+      String status,
+      OffsetDateTime doneAt) {}
+
+  private record DriverBoardDateColumnResponse(
+      LocalDate date, List<DriverBoardEntryResponse> entries) {}
+
+  private record DriverBoardSnapshotResponse(
+      UUID warehouseId,
+      UUID queueId,
+      long queueVersion,
+      List<DriverBoardEntryResponse> current,
+      List<DriverBoardDateColumnResponse> dates) {}
+
+  private record MoveDriverTaskRequest(
+      long expectedTaskVersion,
+      long expectedEntryVersion,
+      LocalDate targetDate,
+      int targetIndex) {}
+
+  private record DriverCompletionEvidenceResponse(
+      UUID externalTaskId,
+      UUID taskId,
+      UUID entryId,
+      UUID evidenceId,
+      UUID mediaId,
+      long mediaGeneration,
+      UUID warehouseId,
+      OffsetDateTime recordedAt) {}
+
+  private record RepairPlaceTransitionRequest(long expectedVersion) {}
+
+  private record RepairPlaceAllocationResponse(
+      UUID id,
+      long version,
+      UUID warehouseId,
+      UUID repairId,
+      UUID rentalItemId,
+      String state,
+      OffsetDateTime createdAt,
+      OffsetDateTime updatedAt) {}
+
+  private record RepairPlaceProjectionResponse(
+      UUID warehouseId,
+      int repairPlaceCount,
+      long reservedCount,
+      long occupiedCount,
+      long readyToReleaseCount,
+      long availableCount,
+      boolean overCapacity,
+      List<RepairPlaceAllocationResponse> allocations) {}
+
+  private record RepairComplexitySnapshotResponse(
+      String type,
+      String name,
+      String color,
+      String plannedMinutes,
+      boolean forcedCapital) {}
+
+  private record CapitalRepairResponse(
+      UUID repairId,
+      UUID rentalItemId,
+      UUID warehouseId,
+      int priority,
+      RepairComplexitySnapshotResponse complexity,
+      long version) {}
+
+  private record CapitalRepairPageResponse(
+      List<CapitalRepairResponse> items, int page, int size, long totalElements) {}
+
+  private record SetCabinCoverFromTaskEvidenceRequest(
+      UUID taskBoardEntryId, UUID evidenceMediaId) {}
+
+  private record CabinCoverChangeResponse(
+      UUID cabinId,
+      UUID warehouseId,
+      UUID coverMediaId,
+      long generation,
+      UUID taskBoardEntryId,
+      long version,
+      OffsetDateTime changedAt) {}
 
   private record ReserveOrderUnitRequest(
       UUID warehouseId,

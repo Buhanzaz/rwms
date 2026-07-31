@@ -19,6 +19,8 @@ internal data class CachedMaintenanceCatalog(
     /** The snapshot must never be reused for another warehouse. */
     val warehouseId: String,
     val revision: ActiveMaintenanceCatalogRevision,
+    /** Validator from the active-version response that verified this snapshot. */
+    val activeVersionEtag: String? = null,
     val nodes: List<CatalogNodeDto>,
     val links: List<CatalogLinkDto>,
 )

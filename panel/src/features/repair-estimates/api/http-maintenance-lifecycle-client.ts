@@ -255,13 +255,15 @@ export type MaintenanceRepair = {
     name:
       | "Лёгкий ремонт"
       | "Средний ремонт"
-      | "Сложный ремонт"
+      | "Тяжёлый ремонт"
       | "Капитальный ремонт"
     color: string
     plannedMinutes: string
     forcedCapital: boolean
   }
   movementToShipment: boolean
+  logisticsPlanningMode: "AUTO" | "FIXED_DATE"
+  logisticsScheduledDate: string | null
   createdAt: string
   updatedAt: string
   actor: MaintenanceActorSnapshot
@@ -308,6 +310,21 @@ function json(
   headers?: HeadersInit
 ): RequestInit {
   return { method, headers, body: JSON.stringify(body) }
+}
+
+function validateLogisticsPlanning(
+  logisticsPlanningMode: "AUTO" | "FIXED_DATE",
+  logisticsScheduledDate: string | null
+) {
+  if (
+    (logisticsPlanningMode === "AUTO" && logisticsScheduledDate !== null) ||
+    (logisticsPlanningMode === "FIXED_DATE" && !logisticsScheduledDate)
+  ) {
+    throw new Error(
+      "Дата логистического задания должна быть задана только для режима выбора конкретной даты."
+    )
+  }
+  return { logisticsPlanningMode, logisticsScheduledDate }
 }
 
 function collectionEndpoint(
@@ -408,14 +425,20 @@ export function completeMaintenanceEstimate(
   estimateId: string,
   expectedVersion: number,
   priority: number,
-  idempotencyKey: string
+  idempotencyKey: string,
+  logisticsPlanningMode: "AUTO" | "FIXED_DATE",
+  logisticsScheduledDate: string | null
 ) {
+  const logisticsPlanning = validateLogisticsPlanning(
+    logisticsPlanningMode,
+    logisticsScheduledDate
+  )
   return bearerRequest<MaintenanceEstimateCommandResult>(
     accessToken,
     itemEndpoint("estimates", warehouseId, estimateId, "/complete"),
     json(
       "POST",
-      { expectedVersion, priority },
+      { expectedVersion, priority, ...logisticsPlanning },
       { "Idempotency-Key": idempotencyKey }
     )
   )
@@ -526,14 +549,20 @@ export function queueMaintenanceRepair(
   repairId: string,
   expectedVersion: number,
   priority: number,
-  idempotencyKey: string
+  idempotencyKey: string,
+  logisticsPlanningMode: "AUTO" | "FIXED_DATE",
+  logisticsScheduledDate: string | null
 ) {
+  const logisticsPlanning = validateLogisticsPlanning(
+    logisticsPlanningMode,
+    logisticsScheduledDate
+  )
   return bearerRequest<MaintenanceRepairCommandResult>(
     accessToken,
     itemEndpoint("repairs", warehouseId, repairId, "/plan"),
     json(
       "POST",
-      { expectedVersion, priority },
+      { expectedVersion, priority, ...logisticsPlanning },
       { "Idempotency-Key": idempotencyKey }
     )
   )

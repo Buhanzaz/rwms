@@ -9,6 +9,7 @@ import {
 } from "@/features/repair-estimates/domain/repair-estimate-domain"
 import type {
   EstimateRentalItemSearchQuery,
+  LogisticsPlanningMode,
   PendingEstimateMediaUpload,
   RepairEstimateCompletionMode,
   RepairEstimateDto,
@@ -119,6 +120,9 @@ function buildWriteCommand(params: {
   draft: RepairTaskEditorDraft
   warehouseId: string
   subtasks: RepairTaskSubtaskDto[]
+  movementRequired?: boolean
+  logisticsPlanningMode?: LogisticsPlanningMode
+  logisticsScheduledDate?: string | null
   priority?: RepairPriority
 }): RepairTaskWriteCommand {
   if (params.draft.pendingUploads.length > 0 || params.draft.media.length > 0) {
@@ -145,6 +149,15 @@ function buildWriteCommand(params: {
     coverMediaId: params.draft.coverMediaId,
     subtasks: params.subtasks,
     priority: params.priority,
+    logisticsPlanningMode:
+      params.movementRequired === true
+        ? (params.logisticsPlanningMode ?? "AUTO")
+        : "AUTO",
+    logisticsScheduledDate:
+      params.movementRequired === true &&
+      params.logisticsPlanningMode === "FIXED_DATE"
+        ? (params.logisticsScheduledDate ?? null)
+        : null,
   }
 }
 
@@ -155,6 +168,8 @@ async function planSubtasks(params: {
   taskPlans?: RepairEstimateTaskPlanDto[]
   completionMode?: RepairEstimateCompletionMode
   movementRequired?: boolean
+  logisticsPlanningMode?: LogisticsPlanningMode
+  logisticsScheduledDate?: string | null
   priority?: RepairPriority
 }) {
   const existing = params.draft.taskId
@@ -237,6 +252,8 @@ async function persistRepair(params: {
   taskPlans?: RepairEstimateTaskPlanDto[]
   completionMode?: RepairEstimateCompletionMode
   movementRequired?: boolean
+  logisticsPlanningMode?: LogisticsPlanningMode
+  logisticsScheduledDate?: string | null
   priority?: RepairPriority
 }) {
   const subtasks = await planSubtasks(params)
@@ -258,6 +275,8 @@ export function queueRepairTask(params: {
   warehouseId: string
   completionMode: RepairEstimateCompletionMode
   movementRequired: boolean
+  logisticsPlanningMode: LogisticsPlanningMode
+  logisticsScheduledDate: string | null
   taskPlans: RepairEstimateTaskPlanDto[]
   priority: RepairPriority
 }) {

@@ -110,6 +110,11 @@ func (repository *Repository) Delete(
 	if err != nil {
 		return AssetRecord{}, false, err
 	}
+	if _, err := tx.Exec(ctx, `update media_cabin_photo_library
+		set cover_media_id=null,version=version+1,updated_at=$2
+		where cover_media_id=$1`, asset.ID, now); err != nil {
+		return AssetRecord{}, false, err
+	}
 	_, err = tx.Exec(ctx, `insert into media_command_idempotency (
 		principal_type,subject_id,command_type,idempotency_key,request_sha256,media_id,created_at,expires_at)
 	values ('USER',$1,'DELETE',$2,$3,$4,$5,$6)`, command.SubjectID, command.IdempotencyKey,

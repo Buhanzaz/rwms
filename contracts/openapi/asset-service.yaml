@@ -794,8 +794,8 @@ paths:
       operationId: readLogisticsRentalItemSnapshot
       description: >-
         Requires SERVICE logistics-service with exactly asset.logistics. Returns only the canonical
-        asset ID, version, warehouse, status and opaque equipment quantities; it never exposes a
-        cabin number, passport, local comments or generic asset read data.
+        asset ID, version, warehouse, canonical number used on driver cards, status and opaque
+        equipment quantities; it never exposes a passport, local comments or generic asset read data.
       responses:
         '200': { description: Narrow canonical asset snapshot., content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsRentalItemSnapshot' } } } }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -2704,11 +2704,12 @@ components:
     LogisticsRentalItemSnapshot:
       type: object
       additionalProperties: false
-      required: [assetId, version, warehouseId, status, contents]
+      required: [assetId, version, warehouseId, number, status, contents]
       properties:
         assetId: { type: string, format: uuid }
         version: { $ref: '#/components/schemas/ExpectedVersion' }
         warehouseId: { type: string, format: uuid }
+        number: { type: string, minLength: 1, maxLength: 64 }
         status: { $ref: '#/components/schemas/RentalItemStatus' }
         contents:
           type: array

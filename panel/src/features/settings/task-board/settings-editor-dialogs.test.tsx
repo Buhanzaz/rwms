@@ -16,6 +16,7 @@ import {
   GroupEditorDialog,
   QueueDefinitionEditorDialog,
   QueueEditorDialog,
+  WorkerEditorDialog,
 } from "@/features/settings/task-board/settings-editor-dialogs"
 import type {
   QueueDefinitionDto,
@@ -46,6 +47,7 @@ const movementDefinition: QueueDefinitionDto = {
   name: "Перемещение",
   description: null,
   type: "MOVEMENT",
+  purpose: "GENERAL",
 }
 
 const queue: WorkQueueDto = {
@@ -57,6 +59,7 @@ const queue: WorkQueueDto = {
   name: "Перемещение",
   description: null,
   type: "MOVEMENT",
+  purpose: "GENERAL",
   sortOrder: 3,
   active: true,
   hidden: false,
@@ -73,7 +76,8 @@ const queue: WorkQueueDto = {
       order: 0,
       primary: true,
       stopTaskOnTake: false,
-      notifyUrgent: false,
+      participationPolicy: "PRIMARY",
+      notifyOnPrimaryTake: false,
     },
     {
       id: "binding-slinger",
@@ -82,7 +86,8 @@ const queue: WorkQueueDto = {
       order: 1,
       primary: false,
       stopTaskOnTake: true,
-      notifyUrgent: true,
+      participationPolicy: "REQUIRED",
+      notifyOnPrimaryTake: true,
     },
   ],
 }
@@ -234,12 +239,13 @@ describe("QueueDefinitionEditorDialog", () => {
       name: "Водители",
       description: null,
       type: "MOVEMENT",
+      purpose: "GENERAL",
     })
   })
 })
 
 describe("QueueEditorDialog", () => {
-  it("preserves the primary/secondary order and secondary urgent behavior", async () => {
+  it("preserves the primary/secondary participation and notification behavior", async () => {
     const user = userEvent.setup()
     const onSave = vi.fn(async () => undefined)
 
@@ -267,7 +273,7 @@ describe("QueueEditorDialog", () => {
     expect(
       screen
         .getByRole("checkbox", {
-          name: "Оповещать о срочности задания",
+          name: "Уведомлять после принятия основным исполнителем",
         })
         .getAttribute("data-state")
     ).toBe("checked")
@@ -281,13 +287,15 @@ describe("QueueEditorDialog", () => {
             workerClassId: driverClass.id,
             order: 0,
             stopTaskOnTake: false,
-            notifyUrgent: false,
+            participationPolicy: "PRIMARY",
+            notifyOnPrimaryTake: false,
           },
           {
             workerClassId: slingerClass.id,
             order: 1,
             stopTaskOnTake: true,
-            notifyUrgent: true,
+            participationPolicy: "REQUIRED",
+            notifyOnPrimaryTake: true,
           },
         ],
       })
@@ -324,7 +332,7 @@ describe("QueueEditorDialog", () => {
     )
     await user.click(
       screen.getByRole("checkbox", {
-        name: "Оповещать о срочности задания",
+        name: "Уведомлять после принятия основным исполнителем",
       })
     )
     await user.click(screen.getByRole("button", { name: "Сохранить" }))
@@ -337,13 +345,15 @@ describe("QueueEditorDialog", () => {
             workerClassId: slingerClass.id,
             order: 0,
             stopTaskOnTake: false,
-            notifyUrgent: false,
+            participationPolicy: "PRIMARY",
+            notifyOnPrimaryTake: false,
           },
           {
             workerClassId: driverClass.id,
             order: 1,
             stopTaskOnTake: true,
-            notifyUrgent: true,
+            participationPolicy: "OPTIONAL",
+            notifyOnPrimaryTake: true,
           },
         ],
       })
@@ -381,6 +391,42 @@ describe("QueueEditorDialog", () => {
       )
     ).toBeTruthy()
     expect(onSave).not.toHaveBeenCalled()
+  })
+})
+
+describe("WorkerEditorDialog", () => {
+  it("preserves an existing qualification hidden from this settings section", async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async () => undefined)
+    const driver = worker("driver-worker", "Алексей Водитель", [driverClass])
+
+    render(
+      <WorkerEditorDialog
+        item={driver}
+        classes={[generalClass]}
+        pending={false}
+        error={null}
+        onClose={vi.fn()}
+        onSave={onSave}
+      />
+    )
+
+    expect(
+      screen.queryByRole("checkbox", { name: driverClass.name })
+    ).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Сохранить" }))
+
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        qualifications: [
+          {
+            workerClassId: driverClass.id,
+            active: true,
+            comment: null,
+          },
+        ],
+      })
+    )
   })
 })
 

@@ -127,14 +127,38 @@ class TaskBoardOpenApiParityTest {
     assertThat(child(queueRequest, "properties")).doesNotContainKey("groupBindings");
 
     assertThat(list(child(schemas, "QueueBinding").get("required")))
-        .contains("order", "primary", "stopTaskOnTake", "notifyUrgent");
+        .contains(
+            "order",
+            "primary",
+            "stopTaskOnTake",
+            "participationPolicy",
+            "notifyOnPrimaryTake");
     assertThat(list(child(schemas, "QueueBindingRequest").get("required")))
-        .contains("order", "stopTaskOnTake", "notifyUrgent");
+        .contains("order", "stopTaskOnTake", "participationPolicy", "notifyOnPrimaryTake");
 
     assertThat(child(child(schemas, "GroupMember"), "properties"))
         .doesNotContainKey("roleInGroup");
     assertThat(child(child(schemas, "GroupMemberRequest"), "properties"))
         .doesNotContainKey("roleInGroup");
+  }
+
+  @Test
+  void taskBoardContractDoesNotExposeMaintenanceOwnedRepairComplexity() throws Exception {
+    Map<String, Object> document = openApiDocument();
+    Map<String, Object> paths = child(document, "paths");
+    Map<String, Object> schemas = child(child(document, "components"), "schemas");
+
+    assertThat(paths)
+        .doesNotContainKeys(
+            "/internal/task-board/v1/warehouses/{warehouseId}/repair-complexity",
+            "/warehouses/{warehouseId}/task-board/kpi-settings/repair-complexity");
+    assertThat(schemas)
+        .doesNotContainKeys(
+            "RepairComplexityThresholds",
+            "RepairComplexityThresholdsResponse",
+            "SaveRepairComplexityThresholdsRequest");
+    assertThat(child(child(schemas, "WarehouseKpiSettings"), "properties"))
+        .doesNotContainKey("repairComplexity");
   }
 
   private Set<Endpoint> controllerEndpoints() throws ClassNotFoundException {

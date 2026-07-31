@@ -25,4 +25,5 @@ class WorkerRealtimeNotificationAlert @Inject constructor(
     }
 }
 
-internal fun shouldShowRealtimeNotification(type: String): Boolean = type == "MANDATORY_TASK"
+internal fun shouldShowRealtimeNotification(type: String): Boolean =
+    type == "MANDATORY_TASK" || type == "TASK_JOIN_AVAILABLE"

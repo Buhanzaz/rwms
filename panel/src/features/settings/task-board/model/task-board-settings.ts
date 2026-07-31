@@ -1,4 +1,6 @@
 export type QueueType = "MOVEMENT" | "REPAIR" | "HOLDING" | "FURNITURE_MOVEMENT"
+export type QueuePurpose = "GENERAL" | "LOGISTICS_DRIVER"
+export type ParticipationPolicy = "PRIMARY" | "REQUIRED" | "OPTIONAL"
 export type CredentialStatus =
   "NOT_CONFIGURED" | "PENDING" | "ACTIVE" | "DISABLED" | "ERROR"
 export type OperationalAvailability = "AVAILABLE" | "DISABLED"
@@ -22,14 +24,16 @@ export type QueueBindingDto = {
   order: number
   primary: boolean
   stopTaskOnTake: boolean
-  notifyUrgent: boolean
+  participationPolicy: ParticipationPolicy
+  notifyOnPrimaryTake: boolean
 }
 
 export type QueueBindingRequest = {
   workerClassId: string
   order: number
   stopTaskOnTake: boolean
-  notifyUrgent: boolean
+  participationPolicy: ParticipationPolicy
+  notifyOnPrimaryTake: boolean
 }
 
 export type QueueDefinitionDto = {
@@ -38,6 +42,7 @@ export type QueueDefinitionDto = {
   name: string
   description: string | null
   type: QueueType
+  purpose: QueuePurpose
 }
 
 export type QueueDefinitionRequest = Omit<QueueDefinitionDto, "id">
@@ -51,6 +56,7 @@ export type WorkQueueDto = {
   name: string
   description: string | null
   type: QueueType
+  purpose: QueuePurpose
   sortOrder: number
   active: boolean
   hidden: boolean
@@ -162,6 +168,12 @@ export const queueTypeLabels: Record<QueueType, string> = {
   REPAIR: "Ремонт",
   HOLDING: "Удержание",
   FURNITURE_MOVEMENT: "Перемещение мебели",
+}
+
+export const participationPolicyLabels: Record<ParticipationPolicy, string> = {
+  PRIMARY: "Основной",
+  REQUIRED: "Обязательное участие",
+  OPTIONAL: "По желанию",
 }
 
 export const credentialStatusLabels: Record<CredentialStatus, string> = {

@@ -197,7 +197,7 @@ func PostgresDatabaseURL(baseURL, databaseName string) (string, error) {
 	return databaseURL, nil
 }
 
-// NewMigratedMediaDatabase returns an isolated database at exact current V9.
+// NewMigratedMediaDatabase returns an isolated database at the exact current schema.
 // It is used by legacy integration tests that otherwise share mutable outbox
 // and owner-projection state through MEDIA_TEST_DATABASE_URL.
 func NewMigratedMediaDatabase(t testing.TB, baseURL string) string {
@@ -237,6 +237,7 @@ func NewMigratedMediaDatabase(t testing.TB, baseURL string) string {
 		{"dynamic cabin owner projection", "V7__dynamic_cabin_owner_projection.sql", mediamigration.V7},
 		{"task board worker media", "V8__task_board_worker_media.sql", mediamigration.V8},
 		{"asset import worker", "V9__asset_import_worker.sql", mediamigration.V9},
+		{"canonical cabin photo library", "V10__canonical_cabin_photo_library.sql", mediamigration.V10},
 	}
 	for index, migration := range migrations {
 		started := time.Now()
@@ -246,7 +247,7 @@ func NewMigratedMediaDatabase(t testing.TB, baseURL string) string {
 		if _, err := pool.Exec(ctx, `insert into flyway_schema_history (
 			installed_rank,version,description,type,script,checksum,installed_by,execution_time,success)
 		values ($1,$2,$3,'SQL',$4,$5,current_user,$6,true)`, index+1,
-			[]string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9"}[index],
+			[]string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10"}[index],
 			migration.description, migration.script, realFlywayChecksum(migration.body),
 			int(time.Since(started)/time.Millisecond)); err != nil {
 			t.Fatalf("record isolated media %s: %v", migration.script, err)

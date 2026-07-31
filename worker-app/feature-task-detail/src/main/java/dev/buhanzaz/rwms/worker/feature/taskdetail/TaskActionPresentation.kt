@@ -4,6 +4,7 @@ import dev.buhanzaz.rwms.worker.core.database.WorkerAssignmentEntity
 
 internal enum class WorkerTaskAction(val wireValue: String) {
     TAKE("TAKE"),
+    JOIN("JOIN"),
     PAUSE("PAUSE"),
     COMPLETE("COMPLETE"),
     RESUME("RESUME"),
@@ -17,25 +18,33 @@ internal data class TaskActionPresentation(
     val takeLabel: String,
 )
 
-internal fun managerSelectedGroupForAction(
+internal fun selectedGroupForAction(
     action: WorkerTaskAction,
     currentGroupId: String?,
+    queuePurpose: String?,
 ): String? {
-    if (action == WorkerTaskAction.TAKE) {
+    if (action == WorkerTaskAction.TAKE && queuePurpose != LOGISTICS_DRIVER_QUEUE_PURPOSE) {
         requireNotNull(currentGroupId) { "Руководитель ещё не выбрал текущую группу" }
     }
-    return currentGroupId
+    return when (action) {
+        WorkerTaskAction.TAKE -> currentGroupId
+            .takeUnless { queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE }
+        WorkerTaskAction.JOIN -> null
+        else -> currentGroupId
+    }
 }
 
 internal fun taskActionPresentation(
     currentWorkerId: String,
     taskStatus: String?,
     availabilityMode: String?,
+    queuePurpose: String? = null,
     assignments: List<WorkerAssignmentEntity>,
     locallyPending: Boolean,
     hasCurrentGroup: Boolean = true,
     operationalAvailability: String = "AVAILABLE",
 ): TaskActionPresentation {
+    val isIndividualLogistics = queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE
     val liveAssignments = assignments.filter { it.status == "ACTIVE" || it.status == "PAUSED" }
     val currentWorkerHasActiveAssignment = liveAssignments.any {
         it.workerId == currentWorkerId && it.status == "ACTIVE"
@@ -48,11 +57,21 @@ internal fun taskActionPresentation(
     val canJoinMandatoryTask = taskStatus == "IN_PROGRESS" &&
         availabilityMode == "MANDATORY" &&
         assignedOnlyToOthers
+    val canJoinOptionalLogisticsTask = taskStatus == "IN_PROGRESS" &&
+        availabilityMode == "OPTIONAL_JOIN" &&
+        assignedOnlyToOthers
+    val canJoinRequiredTask = taskStatus == "IN_PROGRESS" &&
+        availabilityMode == "REQUIRED_JOIN" &&
+        assignedOnlyToOthers
     val candidateActions = when {
         taskStatus == "WAITING" &&
             availabilityMode != "SECONDARY_PENDING" &&
             liveAssignments.isEmpty() ->
             listOf(WorkerTaskAction.TAKE)
+        canJoinOptionalLogisticsTask ->
+            listOf(WorkerTaskAction.JOIN)
+        canJoinRequiredTask ->
+            listOf(WorkerTaskAction.JOIN)
         canJoinMandatoryTask ->
             listOf(WorkerTaskAction.TAKE)
         taskStatus == "IN_PROGRESS" && currentWorkerHasActiveAssignment ->
@@ -63,7 +82,10 @@ internal fun taskActionPresentation(
     }
     val actions = when {
         operationalAvailability != "AVAILABLE" -> emptyList()
-        !hasCurrentGroup && WorkerTaskAction.TAKE in candidateActions -> emptyList()
+        !isIndividualLogistics &&
+            !hasCurrentGroup &&
+            WorkerTaskAction.TAKE in candidateActions ->
+            emptyList()
         else -> candidateActions
     }
     val performers = liveAssignments.mapNotNull { assignment ->
@@ -73,12 +95,16 @@ internal fun taskActionPresentation(
     }.distinct()
     val message = when {
         locallyPending -> "Действие ожидает синхронизации"
-        operationalAvailability != "AVAILABLE" -> "Группа временно недоступна"
-        !hasCurrentGroup && WorkerTaskAction.TAKE in candidateActions ->
+        operationalAvailability != "AVAILABLE" -> "Рабочий временно недоступен"
+        !isIndividualLogistics &&
+            !hasCurrentGroup &&
+            WorkerTaskAction.TAKE in candidateActions ->
             "Руководитель ещё не выбрал текущую группу"
         taskStatus == "WAITING" && availabilityMode == "SECONDARY_PENDING" ->
             "Ожидает основного исполнителя"
         canJoinMandatoryTask -> "Срочное задание: присоединитесь к выполнению"
+        canJoinRequiredTask -> "Для продолжения задания требуется присоединиться"
+        canJoinOptionalLogisticsTask -> "Водитель принял задание — можно присоединиться"
         actions.isNotEmpty() -> null
         assignedOnlyToOthers -> "Задание выполняет другой рабочий"
         else -> "Действия недоступны в текущем состоянии"
@@ -91,3 +117,17 @@ internal fun taskActionPresentation(
         takeLabel = if (canJoinMandatoryTask) "Взять срочное" else "Взять",
     )
 }
+
+internal fun completionEvidenceId(
+    queuePurpose: String?,
+    readyEvidenceIds: Set<String>,
+    selectedEvidenceId: String?,
+): String? {
+    if (queuePurpose != LOGISTICS_DRIVER_QUEUE_PURPOSE) return null
+    return when (readyEvidenceIds.size) {
+        1 -> readyEvidenceIds.single()
+        else -> selectedEvidenceId?.takeIf(readyEvidenceIds::contains)
+    }
+}
+
+internal const val LOGISTICS_DRIVER_QUEUE_PURPOSE = "LOGISTICS_DRIVER"

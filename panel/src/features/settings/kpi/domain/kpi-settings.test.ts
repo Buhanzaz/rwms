@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  hoursToMinutes,
+  formatRepairDuration,
+  hoursAndMinutesToMinutes,
   mergePaletteBoundary,
-  minutesToHours,
+  splitMinutes,
   movePaletteBoundary,
   splitPaletteRange,
   validatePalette,
@@ -13,10 +14,11 @@ import {
 } from "@/features/settings/kpi/domain/kpi-settings"
 
 describe("repair complexity boundaries", () => {
-  it("converts display hours to canonical minutes without gaps", () => {
-    expect(hoursToMinutes("1")).toBe(60)
-    expect(hoursToMinutes("1.5")).toBe(90)
-    expect(minutesToHours(360)).toBe("6")
+  it("converts hours and minutes without changing canonical minutes", () => {
+    expect(hoursAndMinutesToMinutes("1", "30")).toBe(90)
+    expect(splitMinutes(500)).toEqual({ hours: 8, minutes: 20 })
+    expect(formatRepairDuration(500, "MINUTES")).toBe("500 мин")
+    expect(formatRepairDuration(500, "HOURS")).toBe("8 ч 20 мин")
   })
 
   it("requires three positive strictly increasing boundaries", () => {

@@ -15,14 +15,20 @@ public class TaskSyncAuthorizer {
 
   public String requireTaskSync(Jwt jwt) {
     String clientId = jwt == null ? null : jwt.getClaimAsString("client_id");
-    if (jwt == null
-        || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
-        || clientId == null
-        || !clientId.equals(jwt.getSubject())
-        || !MAINTENANCE_SERVICE.equals(clientId)
-        || !scopes(jwt).equals(List.of(REQUIRED_SCOPE))) {
+    boolean validService =
+        jwt != null
+            && "SERVICE".equals(jwt.getClaimAsString("principal_type"))
+            && clientId != null
+            && clientId.equals(jwt.getSubject());
+    boolean maintenance =
+        MAINTENANCE_SERVICE.equals(clientId)
+            && scopes(jwt).equals(List.of(REQUIRED_SCOPE));
+    boolean logistics =
+        LOGISTICS_SERVICE.equals(clientId)
+            && scopes(jwt).equals(List.of(LOGISTICS_SCOPE));
+    if (!validService || (!maintenance && !logistics)) {
       throw new AccessDeniedException(
-          "A permitted service credential with exactly task-board.task-sync is required");
+          "A permitted maintenance or logistics service credential with its exact task-sync scope is required");
     }
     return clientId;
   }

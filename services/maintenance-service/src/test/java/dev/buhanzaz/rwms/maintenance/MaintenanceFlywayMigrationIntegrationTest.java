@@ -42,7 +42,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
   void cleanInstallIsRepeatSafeAndContainsTheAuthoritativeMaintenanceSchema() {
     Flyway flyway = flyway(MIGRATIONS);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(22);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(24);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
     assertThat(tableNames()).contains(
@@ -56,22 +56,44 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "maintenance_idempotency_record", "integration_reconciliation",
         "inventory_repair_source_operation", "inventory_repair_source",
         "logistics_return_shortage", "repair_capacity_settings", "repair_task_evidence",
-        "repair_complexity_colors");
+        "repair_complexity_colors", "repair_complexity_settings", "repair_place_allocation");
     assertThat(columnCount("maintenance_estimate", "rental_item_version_snapshot")).isOne();
     assertThat(columnCount("maintenance_repair", "rental_item_version_snapshot")).isOne();
     assertThat(columnCount("maintenance_repair", "dispatch_date")).isOne();
     assertThat(columnCount("maintenance_repair", "priority")).isOne();
     assertThat(columns("maintenance_repair")).contains(
         "movement_to_shipment", "transfer_state", "transfer_document_id",
-        "transfer_line_id", "transfer_target_warehouse_id");
+        "transfer_line_id", "transfer_target_warehouse_id",
+        "logistics_planning_mode", "logistics_scheduled_date");
+    assertThat(
+            constraintDefinition(
+                "maintenance_repair",
+                "ck_maintenance_repair_logistics_planning"))
+        .contains(
+            "AUTO",
+            "FIXED_DATE",
+            "logistics_scheduled_date IS NULL",
+            "logistics_scheduled_date IS NOT NULL");
     assertThat(columnCount("maintenance_estimate", "cover_media_id")).isOne();
     assertThat(columnCount("maintenance_repair", "cover_media_id")).isOne();
     assertThat(columns("repair_capacity_settings")).containsExactlyInAnyOrder(
-        "warehouse_id", "version", "max_repairs_per_day", "created_at", "updated_at");
-    assertThat(columnDefault("repair_capacity_settings", "max_repairs_per_day")).contains("6");
+        "warehouse_id", "version", "repair_place_count", "created_at", "updated_at");
+    assertThat(columnDefault("repair_capacity_settings", "repair_place_count")).contains("6");
     assertThat(constraintDefinition(
-        "repair_capacity_settings", "ck_repair_capacity_settings_max"))
-        .contains("max_repairs_per_day > 0");
+        "repair_capacity_settings", "ck_repair_capacity_settings_count"))
+        .contains("repair_place_count > 0");
+    assertThat(columns("repair_complexity_settings")).contains(
+        "warehouse_id", "version", "light_boundary_minutes", "medium_boundary_minutes",
+        "complex_boundary_minutes", "imported_from_task_board_version", "imported_at");
+    assertThat(columns("repair_place_allocation")).contains(
+        "id", "version", "warehouse_id", "repair_id", "state");
+    assertThat(indexDefinition("uk_repair_place_allocation_active_repair"))
+        .contains("UNIQUE INDEX", "repair_id", "WHERE", "state", "RELEASED");
+    assertThat(columns("maintenance_repair")).contains("reclassification_state");
+    assertThat(constraintDefinition("maintenance_repair", "ck_repair_task_generation"))
+        .contains("NOT_REQUIRED");
+    assertThat(constraintDefinition("repair_stage", "ck_repair_stage_generation"))
+        .contains("NOT_REQUIRED");
     assertThat(columnCount("repair_stage", "external_queue_entry_id")).isOne();
     assertThat(columns("catalog_node")).contains(
         "active", "parent_node_id", "furniture_category", "furniture_equipment_id",
@@ -122,7 +144,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
         "catalog_external_reference_id");
     assertThat(constraintDefinition(
         "integration_reconciliation", "ck_reconciliation_dependency"))
-        .contains("MEDIA");
+        .contains("MEDIA", "LOGISTICS");
     assertThat(constraintDefinition(
         "integration_reconciliation", "ck_reconciliation_catalog_identity"))
         .contains(
@@ -239,7 +261,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
   }
 
   @Test
-  void v19ThroughV22UpgradeWithoutRebuildingExistingAggregates() {
+  void v19ThroughV23UpgradeWithoutRebuildingExistingAggregates() {
     Flyway beforeV19 = Flyway.configure()
         .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
         .locations(MIGRATIONS)
@@ -256,8 +278,21 @@ class MaintenanceFlywayMigrationIntegrationTest {
     UUID catalogId = UUID.randomUUID();
     insertCatalogVersion(catalogId, warehouseId, "d".repeat(64));
 
-    Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
+    Flyway upgraded =
+        Flyway.configure()
+            .dataSource(
+                POSTGRES.getJdbcUrl(),
+                POSTGRES.getUsername(),
+                POSTGRES.getPassword())
+            .locations(MIGRATIONS)
+            .target("23")
+            .baselineOnMigrate(false)
+            .cleanDisabled(true)
+            .validateOnMigrate(true)
+            .validateMigrationNaming(true)
+            .outOfOrder(false)
+            .load();
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(5);
     upgraded.validate();
     assertThat(columns("catalog_node")).contains("display_color");
     assertThat(constraintDefinition("catalog_node", "ck_catalog_node_display_color"))
@@ -269,7 +304,286 @@ class MaintenanceFlywayMigrationIntegrationTest {
   }
 
   @Test
-  void v20ToV22GloballyConsolidatesCatalogsAndCanonicalizesLegacySnapshots() {
+  void v23ExtendsExistingRepairSnapshotsAndKeepsTheirCanonicalHashesAligned() {
+    Flyway beforeV23 =
+        Flyway.configure()
+            .dataSource(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+            .locations(MIGRATIONS)
+            .target("22")
+            .baselineOnMigrate(false)
+            .cleanDisabled(true)
+            .validateOnMigrate(true)
+            .validateMigrationNaming(true)
+            .outOfOrder(false)
+            .load();
+    assertThat(beforeV23.migrate().migrationsExecuted).isEqualTo(22);
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    UUID eventId = UUID.randomUUID();
+    insertRepair(
+        repairId,
+        warehouseId,
+        null,
+        "DIRECT_REPAIR",
+        "PRIMARY",
+        null,
+        null);
+    String state =
+        """
+        {"id":"%s","version":0,"warehouseId":"%s","executionState":"DRAFT"}
+        """
+            .formatted(repairId, warehouseId);
+    String payload =
+        """
+        {"model":"maintenance-full-state-v1","event":%s,"state":%s}
+        """
+            .formatted(state, state);
+    jdbc.update(
+        """
+        insert into event_stream_head(
+          aggregate_type,aggregate_id,current_version,last_event_id,updated_at)
+        values ('REPAIR',?,0,?,clock_timestamp())
+        """,
+        repairId.toString(),
+        eventId);
+    jdbc.update(
+        """
+        insert into domain_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,event_version,
+          occurred_at,recorded_at,correlation_id,payload,payload_sha256,baseline)
+        values (?,'REPAIR',?,0,'maintenance.repair.created.v1',1,clock_timestamp(),
+          clock_timestamp(),?,?::jsonb,?,false)
+        """,
+        eventId,
+        repairId.toString(),
+        UUID.randomUUID(),
+        payload,
+        "0".repeat(64));
+    jdbc.update(
+        """
+        insert into aggregate_snapshot(
+          aggregate_type,aggregate_id,aggregate_version,state,state_sha256,recorded_at)
+        values ('REPAIR',?,0,?::jsonb,?,clock_timestamp())
+        """,
+        repairId.toString(),
+        state,
+        "0".repeat(64));
+    jdbc.update(
+        """
+        insert into projection_checkpoint(
+          projection_name,aggregate_type,aggregate_id,aggregate_version,
+          projection_sha256,updated_at)
+        values ('maintenance-live-v1','REPAIR',?,0,?,clock_timestamp())
+        """,
+        repairId.toString(),
+        "0".repeat(64));
+
+    Flyway upgraded =
+        Flyway.configure()
+            .dataSource(
+                POSTGRES.getJdbcUrl(),
+                POSTGRES.getUsername(),
+                POSTGRES.getPassword())
+            .locations(MIGRATIONS)
+            .target("23")
+            .baselineOnMigrate(false)
+            .cleanDisabled(true)
+            .validateOnMigrate(true)
+            .validateMigrationNaming(true)
+            .outOfOrder(false)
+            .load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select reclassification_state from maintenance_repair where id=?",
+                String.class,
+                repairId))
+        .isEqualTo("STABLE");
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select payload #>> '{state,reclassificationState}' = 'STABLE'
+                  and payload_sha256 =
+                    encode(sha256(convert_to(payload::text, 'UTF8')), 'hex')
+                from domain_event where event_id=?
+                """,
+                Boolean.class,
+                eventId))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select state ->> 'reclassificationState' = 'STABLE'
+                  and state_sha256 =
+                    encode(sha256(convert_to(state::text, 'UTF8')), 'hex')
+                from aggregate_snapshot
+                where aggregate_type='REPAIR' and aggregate_id=? and aggregate_version=0
+                """,
+                Boolean.class,
+                repairId.toString()))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select checkpoint.projection_sha256 = snapshot.state_sha256
+                from projection_checkpoint checkpoint
+                join aggregate_snapshot snapshot
+                  on snapshot.aggregate_type=checkpoint.aggregate_type
+                 and snapshot.aggregate_id=checkpoint.aggregate_id
+                 and snapshot.aggregate_version=checkpoint.aggregate_version
+                where checkpoint.projection_name='maintenance-live-v1'
+                  and checkpoint.aggregate_type='REPAIR'
+                  and checkpoint.aggregate_id=?
+                """,
+                Boolean.class,
+                repairId.toString()))
+        .isTrue();
+  }
+
+  @Test
+  void v24AddsCanonicalRepairPlanningAndRealignsHistoricalStateHashes() {
+    Flyway beforeV24 =
+        Flyway.configure()
+            .dataSource(
+                POSTGRES.getJdbcUrl(),
+                POSTGRES.getUsername(),
+                POSTGRES.getPassword())
+            .locations(MIGRATIONS)
+            .target("23")
+            .baselineOnMigrate(false)
+            .cleanDisabled(true)
+            .validateOnMigrate(true)
+            .validateMigrationNaming(true)
+            .outOfOrder(false)
+            .load();
+    assertThat(beforeV24.migrate().migrationsExecuted)
+        .isEqualTo(23);
+
+    UUID warehouseId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    UUID eventId = UUID.randomUUID();
+    insertRepair(
+        repairId,
+        warehouseId,
+        null,
+        "DIRECT_REPAIR",
+        "PRIMARY",
+        null,
+        null);
+    String state =
+        """
+        {"id":"%s","version":0,"warehouseId":"%s","reclassificationState":"STABLE"}
+        """
+            .formatted(repairId, warehouseId);
+    String payload =
+        """
+        {"model":"maintenance-full-state-v1","event":%s,"state":%s}
+        """
+            .formatted(state, state);
+    jdbc.update(
+        """
+        insert into event_stream_head(
+          aggregate_type,aggregate_id,current_version,last_event_id,updated_at)
+        values ('REPAIR',?,0,?,clock_timestamp())
+        """,
+        repairId.toString(),
+        eventId);
+    jdbc.update(
+        """
+        insert into domain_event(
+          event_id,aggregate_type,aggregate_id,aggregate_version,event_type,event_version,
+          occurred_at,recorded_at,correlation_id,payload,payload_sha256,baseline)
+        values (?,'REPAIR',?,0,'maintenance.repair.created.v1',1,clock_timestamp(),
+          clock_timestamp(),?,?::jsonb,?,false)
+        """,
+        eventId,
+        repairId.toString(),
+        UUID.randomUUID(),
+        payload,
+        "0".repeat(64));
+    jdbc.update(
+        """
+        insert into aggregate_snapshot(
+          aggregate_type,aggregate_id,aggregate_version,state,state_sha256,recorded_at)
+        values ('REPAIR',?,0,?::jsonb,?,clock_timestamp())
+        """,
+        repairId.toString(),
+        state,
+        "0".repeat(64));
+    jdbc.update(
+        """
+        insert into projection_checkpoint(
+          projection_name,aggregate_type,aggregate_id,aggregate_version,
+          projection_sha256,updated_at)
+        values ('maintenance-live-v1','REPAIR',?,0,?,clock_timestamp())
+        """,
+        repairId.toString(),
+        "0".repeat(64));
+
+    Flyway upgraded = flyway(MIGRATIONS);
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select logistics_planning_mode,logistics_scheduled_date
+                from maintenance_repair where id=?
+                """,
+                repairId))
+        .containsEntry("logistics_planning_mode", "AUTO")
+        .containsEntry("logistics_scheduled_date", null);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select payload #>> '{state,logisticsPlanningMode}' = 'AUTO'
+                  and payload #> '{state,logisticsScheduledDate}' = 'null'::jsonb
+                  and payload_sha256 =
+                    encode(sha256(convert_to(payload::text, 'UTF8')), 'hex')
+                from domain_event where event_id=?
+                """,
+                Boolean.class,
+                eventId))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select state ->> 'logisticsPlanningMode' = 'AUTO'
+                  and state -> 'logisticsScheduledDate' = 'null'::jsonb
+                  and state_sha256 =
+                    encode(sha256(convert_to(state::text, 'UTF8')), 'hex')
+                from aggregate_snapshot
+                where aggregate_type='REPAIR'
+                  and aggregate_id=?
+                  and aggregate_version=0
+                """,
+                Boolean.class,
+                repairId.toString()))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select checkpoint.projection_sha256 = snapshot.state_sha256
+                from projection_checkpoint checkpoint
+                join aggregate_snapshot snapshot
+                  on snapshot.aggregate_type=checkpoint.aggregate_type
+                 and snapshot.aggregate_id=checkpoint.aggregate_id
+                 and snapshot.aggregate_version=checkpoint.aggregate_version
+                where checkpoint.projection_name='maintenance-live-v1'
+                  and checkpoint.aggregate_type='REPAIR'
+                  and checkpoint.aggregate_id=?
+                """,
+                Boolean.class,
+                repairId.toString()))
+        .isTrue();
+  }
+
+  @Test
+  void v20ToV24GloballyConsolidatesCatalogsAndCanonicalizesLegacySnapshots() {
     Flyway beforeV21 = Flyway.configure()
         .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
         .locations(MIGRATIONS)
@@ -323,7 +637,7 @@ class MaintenanceFlywayMigrationIntegrationTest {
     insertV20CatalogStreamArtifacts(otherCatalogId, otherNodeId, "ACTIVE");
 
     Flyway upgraded = flyway(MIGRATIONS);
-    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(2);
+    assertThat(upgraded.migrate().migrationsExecuted).isEqualTo(4);
     upgraded.validate();
 
     assertThat(jdbc.queryForObject(

@@ -39,6 +39,7 @@ private data class DetailKey(val userId: String, val entryId: String)
 data class TaskDetailUiState(
     val task: WorkerTaskEntity? = null,
     val detail: WorkerTaskDetailDto? = null,
+    val queuePurpose: String? = null,
     val session: WorkerSessionEntity? = null,
     val assignments: List<WorkerAssignmentEntity> = emptyList(),
     val evidence: List<TaskEvidenceEntity> = emptyList(),
@@ -51,6 +52,7 @@ private data class SupportingState(
     val retryableEvidenceIds: Set<String>,
     val assignments: List<WorkerAssignmentEntity>,
     val session: WorkerSessionEntity?,
+    val categoryPurposes: Map<String, String>,
 )
 
 @HiltViewModel
@@ -74,7 +76,8 @@ class TaskDetailViewModel @Inject constructor(
                 localStore.observePendingOutbox(requested.userId),
                 localStore.observeSession(requested.userId),
                 localStore.observeAssignments(requested.userId, requested.entryId),
-            ) { evidence, outbox, session, assignments ->
+                localStore.observeCategories(requested.userId),
+            ) { evidence, outbox, session, assignments, categories ->
                 val activeLeaseId = session?.let {
                     val server = it.serverEpochMillis ?: return@let null
                     val elapsed = it.elapsedRealtimeAtSyncMillis ?: return@let null
@@ -103,7 +106,13 @@ class TaskDetailViewModel @Inject constructor(
                         }
                         .mapTo(mutableSetOf()) { (_, payload) -> payload.evidenceId }
                 }
-                SupportingState(evidence, retryable, assignments, session)
+                SupportingState(
+                    evidence = evidence,
+                    retryableEvidenceIds = retryable,
+                    assignments = assignments,
+                    session = session,
+                    categoryPurposes = categories.associate { it.queueId to it.queuePurpose },
+                )
             }.flowOn(Dispatchers.IO)
             combine(
                 localStore.observeTasks(requested.userId),
@@ -111,11 +120,13 @@ class TaskDetailViewModel @Inject constructor(
                 supportingState,
                 errors,
             ) { tasks, detailRow, evidenceWithRetry, error ->
+                val task = tasks.firstOrNull { it.entryId == requested.entryId }
                 TaskDetailUiState(
-                    task = tasks.firstOrNull { it.entryId == requested.entryId },
+                    task = task,
                     detail = detailRow?.sanitizedDetailJson?.let { raw ->
                         runCatching { json.decodeFromString<WorkerTaskDetailDto>(raw) }.getOrNull()
                     },
+                    queuePurpose = task?.categoryId?.let(evidenceWithRetry.categoryPurposes::get),
                     session = evidenceWithRetry.session,
                     assignments = evidenceWithRetry.assignments,
                     evidence = evidenceWithRetry.evidence.filter { it.entryId == requested.entryId },
@@ -154,7 +165,7 @@ class TaskDetailViewModel @Inject constructor(
         errors.value = null
     }
 
-    fun perform(action: String) {
+    fun perform(action: String, evidenceId: String? = null) {
         val current = key.value ?: return
         val state = uiState.value
         val task = state.task ?: return
@@ -163,6 +174,7 @@ class TaskDetailViewModel @Inject constructor(
             currentWorkerId = current.userId,
             taskStatus = if (task.locallyPending) state.detail?.status ?: task.status else task.status,
             availabilityMode = state.detail?.availabilityMode,
+            queuePurpose = state.queuePurpose,
             assignments = state.assignments,
             locallyPending = task.locallyPending,
             hasCurrentGroup = state.session?.currentGroupId != null,
@@ -170,6 +182,34 @@ class TaskDetailViewModel @Inject constructor(
         )
         if (!presentation.actionsEnabled || requestedAction !in presentation.actions) {
             errors.value = presentation.message ?: "Действие недоступно для текущего рабочего"
+            return
+        }
+        val readyEvidenceIds = state.detail?.evidence.orEmpty()
+            .asSequence()
+            .filter { it.state == "READY" }
+            .mapTo(mutableSetOf()) { it.evidenceId }
+            .apply {
+                addAll(
+                    state.evidence.asSequence()
+                        .filter { it.state == "READY" }
+                        .map { it.evidenceId },
+                )
+            }
+        val selectedEvidenceId = completionEvidenceId(
+            queuePurpose = state.queuePurpose,
+            readyEvidenceIds = readyEvidenceIds,
+            selectedEvidenceId = evidenceId,
+        )
+        if (
+            requestedAction == WorkerTaskAction.COMPLETE &&
+            state.queuePurpose == LOGISTICS_DRIVER_QUEUE_PURPOSE &&
+            selectedEvidenceId == null
+        ) {
+            errors.value = if (readyEvidenceIds.isEmpty()) {
+                "Для завершения логистического задания добавьте фотографию"
+            } else {
+                "Выберите фотографию для завершения логистического задания"
+            }
             return
         }
         viewModelScope.launch {
@@ -180,10 +220,12 @@ class TaskDetailViewModel @Inject constructor(
                     operationId = UUID.randomUUID().toString(),
                     action = action,
                     expectedVersion = task.version,
-                    workerGroupId = managerSelectedGroupForAction(
+                    workerGroupId = selectedGroupForAction(
                         requestedAction,
                         state.session?.currentGroupId,
+                        state.queuePurpose,
                     ),
+                    evidenceId = selectedEvidenceId,
                     occurredAt = Instant.ofEpochMilli(
                         lease.estimatedServerNow(SystemClock.elapsedRealtime()),
                     ).toString(),
@@ -204,7 +246,7 @@ class TaskDetailViewModel @Inject constructor(
 }
 
 private fun String.statusAfterAction(): String = when (this) {
-    "TAKE", "RESUME" -> "IN_PROGRESS"
+    "TAKE", "JOIN", "RESUME" -> "IN_PROGRESS"
     "PAUSE" -> "PAUSED"
     "COMPLETE" -> "DONE"
     else -> error("Unknown worker action")

@@ -23,6 +23,7 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 	v7 := flywayChecksum(mediamigration.V7)
 	v8 := flywayChecksum(mediamigration.V8)
 	v9 := flywayChecksum(mediamigration.V9)
+	v10 := flywayChecksum(mediamigration.V10)
 	const (
 		flyway124V1      int32 = -1307356325
 		flyway124V2      int32 = -573926044
@@ -35,12 +36,14 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 		flyway124V7      int32 = 725844632
 		flyway124V8      int32 = -405784491
 		flyway124V9      int32 = -122399598
+		flyway124V10     int32 = 1320117672
 	)
 	if v1 != flyway124V1 || v2 != flyway124V2 || v3 != flyway124V3 || v4 != flyway124V4 ||
 		v4Guard != flyway124V4Guard || v5 != flyway124V5 || v5Guard != flyway124V5Guard ||
-		v6 != flyway124V6 || v7 != flyway124V7 || v8 != flyway124V8 || v9 != flyway124V9 {
+		v6 != flyway124V6 || v7 != flyway124V7 || v8 != flyway124V8 || v9 != flyway124V9 ||
+		v10 != flyway124V10 {
 		t.Fatalf(
-			"Flyway 12.4 checksum drift: V1=%d (want %d), V2=%d (want %d), V3=%d (want %d), V4=%d (want %d), V4.1=%d (want %d), V5=%d (want %d), V5.1=%d (want %d), V6=%d (want %d), V7=%d (want %d), V8=%d (want %d), V9=%d (want %d)",
+			"Flyway 12.4 checksum drift: V1=%d (want %d), V2=%d (want %d), V3=%d (want %d), V4=%d (want %d), V4.1=%d (want %d), V5=%d (want %d), V5.1=%d (want %d), V6=%d (want %d), V7=%d (want %d), V8=%d (want %d), V9=%d (want %d), V10=%d (want %d)",
 			v1,
 			flyway124V1,
 			v2,
@@ -63,6 +66,8 @@ func TestEmbeddedMigrationChecksumsAreStableAndDistinct(t *testing.T) {
 			flyway124V8,
 			v9,
 			flyway124V9,
+			v10,
+			flyway124V10,
 		)
 	}
 }
@@ -79,6 +84,7 @@ func TestVerifyMigrationHistoryAcceptsCanonicalAndOutOfOrderFlywayRanks(t *testi
 	outOfOrder := []migrationHistoryRow{
 		canonical[0], canonical[1], canonical[2], canonical[3], canonical[5],
 		canonical[4], canonical[6], canonical[7], canonical[8], canonical[9], canonical[10],
+		canonical[11],
 	}
 	if err := verifyMigrationHistory(outOfOrder); err != nil {
 		t.Fatalf("real out-of-order Flyway upgrade history rejected: %v", err)
@@ -192,6 +198,7 @@ func approvedMigrationHistory() []migrationHistoryRow {
 		{"7", "dynamic cabin owner projection", "V7__dynamic_cabin_owner_projection.sql", mediamigration.V7},
 		{"8", "task board worker media", "V8__task_board_worker_media.sql", mediamigration.V8},
 		{"9", "asset import worker", "V9__asset_import_worker.sql", mediamigration.V9},
+		{"10", "canonical cabin photo library", "V10__canonical_cabin_photo_library.sql", mediamigration.V10},
 	}
 	history := make([]migrationHistoryRow, 0, len(migrations))
 	for _, migration := range migrations {

@@ -957,9 +957,7 @@ internal fun MaintenanceCatalogStep(
     }
 
     fun nodeHasMenu(node: CatalogNodeDto): Boolean = maintenanceCatalogNodesForUsage(
-        nodes = catalog.childrenOf(node.id) +
-            catalog.dependencyNodesOf(node.id) +
-            catalog.followUpNodesOf(node.id),
+        nodes = maintenanceCatalogNavigationNodes(catalog, node.id),
         catalog = catalog,
         excludeFurniture = excludeFurniture,
     ).isNotEmpty()
@@ -1036,9 +1034,7 @@ internal fun MaintenanceCatalogStep(
                 val pendingWork = pendingWorkId?.let(catalog.nodesById::get)
                 if (pendingWork != null && mode == MaintenanceCatalogMode.LINKED_SET) {
                     val locations = maintenanceCatalogNodesForUsage(
-                        nodes = catalog.childrenOf(node.id) +
-                            catalog.dependencyNodesOf(node.id) +
-                            catalog.followUpNodesOf(node.id),
+                        nodes = maintenanceCatalogNavigationNodes(catalog, node.id),
                         catalog = catalog,
                         excludeFurniture = excludeFurniture,
                     ).filter { candidate -> candidate.nodeType == "LOCATION" }
@@ -1862,17 +1858,11 @@ internal fun maintenanceCatalogVisibleNodes(
     excludeFurniture: Boolean = false,
 ): List<CatalogNodeDto> {
     val candidates = when {
-        pendingMaterialId != null -> {
-            catalog.childrenOf(pendingMaterialId) +
-                catalog.followUpNodesOf(pendingMaterialId) +
-                catalog.dependencyNodesOf(pendingMaterialId)
-        }
+        pendingMaterialId != null -> maintenanceCatalogNavigationNodes(catalog, pendingMaterialId)
 
         pendingWorkId != null -> catalog.dependencyRelatedNodesOf(pendingWorkId)
         else -> path.lastOrNull()?.let(catalog.nodesById::get)?.let { node ->
-            catalog.childrenOf(node.id) +
-                catalog.dependencyNodesOf(node.id) +
-                catalog.followUpNodesOf(node.id)
+            maintenanceCatalogNavigationNodes(catalog, node.id)
         } ?: catalog.operationalMenuNodes
     }
     return maintenanceCatalogNodesForUsage(candidates, catalog, excludeFurniture)
@@ -1893,6 +1883,20 @@ internal fun maintenanceCatalogVisibleNodes(
         }
         .distinctBy(CatalogNodeDto::id)
         .sortedWith(catalogNodeOrder)
+}
+
+/**
+ * The catalog editor stores all nodes of a visual branch below the same parent so the canvas can
+ * move them together. Estimators navigate by outgoing arrows instead: a node with arrows exposes
+ * only their targets, while plain branches retain their parent-child fallback.
+ */
+internal fun maintenanceCatalogNavigationNodes(
+    catalog: MaintenanceCatalogIndex,
+    nodeId: String,
+): List<CatalogNodeDto> {
+    val linked = (catalog.followUpNodesOf(nodeId) + catalog.dependencyNodesOf(nodeId))
+        .distinctBy(CatalogNodeDto::id)
+    return linked.ifEmpty { catalog.childrenOf(nodeId) }
 }
 
 internal fun maintenanceCatalogNodesForUsage(

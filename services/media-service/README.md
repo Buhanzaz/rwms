@@ -31,12 +31,13 @@ Flyway is external to this process. Apply
 `db/migration/V6__service_owner_proofs_and_soft_delete.sql`, then
 `db/migration/V7__dynamic_cabin_owner_projection.sql`, then
 `db/migration/V8__task_board_worker_media.sql` and
-`db/migration/V9__asset_import_worker.sql` before starting the service. The
+`db/migration/V9__asset_import_worker.sql`, then
+`db/migration/V10__canonical_cabin_photo_library.sql` before starting the service. The
 Go application never migrates, baselines, repairs or silently adopts a
 database.
 
-- New local/test databases migrate through V1 to V9.
-- A database already at the exact V8 history is upgraded by applying V9.
+- New local/test databases migrate through V1 to V10.
+- A database already at the exact V9 history is upgraded by applying V10.
 - `baselineOnMigrate` must remain `false`; a non-empty unversioned database is
   rejected.
 - Startup verifies both successful Flyway history rows, their versions,
@@ -243,6 +244,6 @@ go build -trimpath -o /tmp/rwms-media-service ./cmd/media-service
 ```
 
 Migration verification must run separately with Flyway and PostgreSQL and cover
-clean V1-to-V9 install, V8-to-V9 upgrade, repeat, checksum drift and non-empty
+clean V1-to-V10 install, V9-to-V10 upgrade, repeat, checksum drift and non-empty
 unversioned rejection. MinIO integration checks must use a versioned local/test
 bucket; Kafka checks must use the canonical topics and broker acknowledgements.

@@ -54,6 +54,8 @@ data class WorkerCategoryEntity(
     val queueId: String,
     val name: String,
     val type: String,
+    @ColumnInfo(defaultValue = "'GENERAL'")
+    val queuePurpose: String,
     val sortOrder: Int,
     val audienceModesKey: String,
     val resultPhotoMinCount: Int,

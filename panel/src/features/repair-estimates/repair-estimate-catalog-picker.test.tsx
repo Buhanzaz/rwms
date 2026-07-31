@@ -75,7 +75,8 @@ function estimateNode(
   id: string,
   name: string,
   nodeType: "WORK" | "MATERIAL" | "OPTION",
-  showInMainMenu = false
+  showInMainMenu = false,
+  overrides: Partial<RepairEstimateCatalogNodeDto> = {}
 ) {
   return createNode({
     id,
@@ -86,6 +87,7 @@ function estimateNode(
     unit: "шт.",
     unitPrice: "100.00",
     durationMinutes: nodeType === "WORK" ? 30 : null,
+    ...overrides,
   })
 }
 
@@ -152,7 +154,7 @@ describe("RepairEstimateCatalogPicker", () => {
     expect(card?.getAttribute("style")).toContain("color: rgb(17, 24, 39)")
   })
 
-  it("places the compact catalog back button before the breadcrumb path", async () => {
+  it("places catalog root and back buttons before the breadcrumb path", async () => {
     catalogApi.getOperationalRepairEstimateCatalog.mockResolvedValue(catalog)
     const user = userEvent.setup()
     const queryClient = new QueryClient({
@@ -174,13 +176,21 @@ describe("RepairEstimateCatalogPicker", () => {
         name: "Открыть: Внутренняя отделка",
       })
     )
+    await user.click(
+      await screen.findByRole("button", { name: "Выбрать: Покраска" })
+    )
 
     const path = screen.getByRole("navigation", { name: "Путь по каталогу" })
+    const rootButton = screen.getByRole("button", {
+      name: "К корню каталога",
+    })
     const backButton = screen.getByRole("button", {
       name: "Назад по каталогу",
     })
 
-    expect(path.firstElementChild).toBe(backButton)
+    expect(path.firstElementChild).toBe(rootButton)
+    expect(rootButton.getAttribute("data-variant")).toBe("outline")
+    expect(rootButton.getAttribute("data-size")).toBe("icon")
     expect(backButton.getAttribute("data-variant")).toBe("outline")
     expect(backButton.getAttribute("data-size")).toBe("icon")
     expect(screen.queryByText("Назад")).toBeNull()
@@ -189,9 +199,244 @@ describe("RepairEstimateCatalogPicker", () => {
 
     await waitFor(() => {
       expect(
+        screen.queryByRole("button", { name: "Покраска" })
+      ).toBeNull()
+      expect(
+        screen.getByRole("button", { name: "К корню каталога" })
+      ).toBeTruthy()
+    })
+
+    await user.click(screen.getByRole("button", { name: "К корню каталога" }))
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "К корню каталога" })
+      ).toBeNull()
+      expect(
         screen.queryByRole("button", { name: "Назад по каталогу" })
       ).toBeNull()
     })
+  })
+
+  it("uses canvas arrows before flat category membership when showing catalog buttons", async () => {
+    const exterior = createNode({
+      id: "10111111-1111-4111-8111-111111111111",
+      name: "Внешняя отделка",
+      showInMainMenu: true,
+    })
+    const roof = createNode({
+      id: "10222222-2222-4222-8222-222222222222",
+      name: "Крыша",
+      nodeType: "SUBCATEGORY",
+      parentId: exterior.id,
+      showInMainMenu: false,
+    })
+    const walls = createNode({
+      id: "10333333-3333-4333-8333-333333333333",
+      name: "Стены",
+      nodeType: "SUBCATEGORY",
+      parentId: exterior.id,
+      showInMainMenu: false,
+    })
+    const frame = createNode({
+      id: "10444444-4444-4444-8444-444444444444",
+      name: "Каркас",
+      nodeType: "SUBCATEGORY",
+      parentId: exterior.id,
+      showInMainMenu: false,
+    })
+    const paint = estimateNode(
+      "10555555-5555-4555-8555-555555555555",
+      "Окраска крыши суриком",
+      "WORK",
+      false,
+      { parentId: exterior.id }
+    )
+    const waterproofing = estimateNode(
+      "10666666-6666-4666-8666-666666666666",
+      "Гидроизоляция",
+      "WORK",
+      false,
+      { parentId: exterior.id }
+    )
+    const tapeRepair = estimateNode(
+      "10777777-7777-4777-8777-777777777777",
+      "Ремонт крыши гидроизоляционной лентой",
+      "WORK",
+      false,
+      { parentId: exterior.id }
+    )
+    const sheetReplacement = estimateNode(
+      "10888888-8888-4888-8888-888888888888",
+      "Замена профлиста",
+      "WORK",
+      false,
+      { parentId: exterior.id }
+    )
+    const tape = estimateNode(
+      "10999999-9999-4999-8999-999999999999",
+      "Гидроизоляционная лента",
+      "MATERIAL",
+      false,
+      { parentId: exterior.id }
+    )
+    const looseMastic = estimateNode(
+      "11000000-0000-4000-8000-000000000000",
+      "Мастика",
+      "MATERIAL",
+      false,
+      { parentId: exterior.id }
+    )
+    const catalogSnapshot = graphCatalog(
+      [
+        exterior,
+        roof,
+        walls,
+        frame,
+        paint,
+        waterproofing,
+        tapeRepair,
+        sheetReplacement,
+        tape,
+        looseMastic,
+      ],
+      [
+        graphLink(
+          "20111111-1111-4111-8111-111111111111",
+          exterior.id,
+          roof.id,
+          "FOLLOW_UP"
+        ),
+        graphLink(
+          "20222222-2222-4222-8222-222222222222",
+          exterior.id,
+          walls.id,
+          "FOLLOW_UP"
+        ),
+        graphLink(
+          "20333333-3333-4333-8333-333333333333",
+          exterior.id,
+          frame.id,
+          "FOLLOW_UP"
+        ),
+        graphLink(
+          "20444444-4444-4444-8444-444444444444",
+          roof.id,
+          paint.id,
+          "FOLLOW_UP"
+        ),
+        graphLink(
+          "20555555-5555-4555-8555-555555555555",
+          roof.id,
+          waterproofing.id,
+          "FOLLOW_UP"
+        ),
+        graphLink(
+          "20666666-6666-4666-8666-666666666666",
+          roof.id,
+          tapeRepair.id,
+          "FOLLOW_UP"
+        ),
+        graphLink(
+          "20777777-7777-4777-8777-777777777777",
+          roof.id,
+          sheetReplacement.id,
+          "FOLLOW_UP"
+        ),
+        graphLink(
+          "20888888-8888-4888-8888-888888888888",
+          tapeRepair.id,
+          tape.id,
+          "DEPENDENCY"
+        ),
+      ]
+    )
+    catalogApi.getOperationalRepairEstimateCatalog.mockResolvedValue(
+      catalogSnapshot
+    )
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RepairEstimateCatalogPicker
+          lines={[]}
+          readOnly={false}
+          onChange={onChange}
+        />
+      </QueryClientProvider>
+    )
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Открыть: Внешняя отделка",
+      })
+    )
+
+    expect(
+      screen.getByRole("button", { name: "Открыть: Крыша" })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "Выбрать: Стены" })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "Выбрать: Каркас" })
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("button", {
+        name: "Выбрать: Гидроизоляционная лента",
+      })
+    ).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: "Выбрать: Мастика" })
+    ).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: "Открыть: Крыша" }))
+
+    expect(
+      screen.getByRole("button", {
+        name: "Выбрать: Окраска крыши суриком",
+      })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "Выбрать: Гидроизоляция" })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("button", {
+        name: "Выбрать: Ремонт крыши гидроизоляционной лентой",
+      })
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "Выбрать: Замена профлиста" })
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("button", { name: "Выбрать: Мастика" })
+    ).toBeNull()
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Выбрать: Ремонт крыши гидроизоляционной лентой",
+      })
+    )
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Выбрать: Гидроизоляционная лента",
+      })
+    )
+    await user.click(await screen.findByRole("button", { name: "Добавить" }))
+
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(
+      (onChange.mock.calls[0]?.[0] as Array<{ description: string }>).map(
+        (line) => line.description
+      )
+    ).toEqual([
+      "Ремонт крыши гидроизоляционной лентой",
+      "Гидроизоляционная лента",
+    ])
   })
 
   it("continues from an added node through its outgoing single-arrow link", async () => {

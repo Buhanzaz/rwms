@@ -18,6 +18,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
+import dev.buhanzaz.rwms.taskboard.domain.TaskLane;
 import dev.buhanzaz.rwms.taskboard.domain.TaskSourceType;
 import dev.buhanzaz.rwms.taskboard.eventing.TaskBoardEventTypes;
 import dev.buhanzaz.rwms.taskboard.service.NotFoundException;
@@ -489,7 +490,8 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
         null,
         null,
         null,
-        new TaskSourceReferenceDto(TaskSourceType.MAINTENANCE_REPAIR, repairId));
+        new TaskSourceReferenceDto(TaskSourceType.MAINTENANCE_REPAIR, repairId),
+        TaskLane.SCHEDULED);
   }
 
   private RegisterExternalTaskRequest repeatedQueueRegistration(

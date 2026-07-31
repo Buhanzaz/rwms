@@ -822,6 +822,12 @@ function RepairTaskEditorContent({
         initialMovementRequired={planSource?.subtasks.some(
           (subtask) => subtask.kind !== "REPAIR_WORK"
         )}
+        initialLogisticsPlanningMode={
+          planSource?.logisticsPlanningMode ?? "AUTO"
+        }
+        initialLogisticsScheduledDate={
+          planSource?.logisticsScheduledDate ?? null
+        }
         reconcileInitialPlans={
           draft.lines.length === 0 && planSource
             ? () =>

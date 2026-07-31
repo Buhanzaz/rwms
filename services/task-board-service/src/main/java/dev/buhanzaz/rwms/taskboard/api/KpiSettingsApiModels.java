@@ -51,24 +51,6 @@ public final class KpiSettingsApiModels {
 
   public record ActivateKpiSettingsRequest(@Min(0) long expectedVersion) {}
 
-  public record SaveRepairComplexityThresholdsRequest(
-      @Min(0) long expectedVersion,
-      @Min(1) int lightBoundaryMinutes,
-      @Min(1) int mediumBoundaryMinutes,
-      @Min(1) int complexBoundaryMinutes) {}
-
-  public record RepairComplexityThresholdsDto(
-      int lightBoundaryMinutes,
-      int mediumBoundaryMinutes,
-      int complexBoundaryMinutes) {}
-
-  public record RepairComplexityThresholdsResponse(
-      UUID warehouseId,
-      long settingsVersion,
-      int lightBoundaryMinutes,
-      int mediumBoundaryMinutes,
-      int complexBoundaryMinutes) {}
-
   public record KpiPaletteRangeDto(int fromPercent, int toPercent, String color) {}
 
   public record KpiPaletteDto(
@@ -93,7 +75,6 @@ public final class KpiSettingsApiModels {
       KpiSettingsStatus status,
       long version,
       LocalDate dataAvailableFrom,
-      RepairComplexityThresholdsDto repairComplexity,
       KpiPaletteDto palette,
       KpiWorkScheduleDto activeSchedule,
       KpiWorkScheduleDto pendingSchedule) {}

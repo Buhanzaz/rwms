@@ -60,7 +60,7 @@ class RepairCapacitySettingsServiceTest {
         ArgumentCaptor.forClass(RepairCapacitySettings.class);
     verify(repository).saveAndFlush(saved.capture());
     assertThat(saved.getValue().getWarehouseId()).isEqualTo(warehouseId);
-    assertThat(saved.getValue().getMaxRepairsPerDay()).isEqualTo(9);
+    assertThat(saved.getValue().getRepairPlaceCount()).isEqualTo(9);
   }
 
   @Test
@@ -85,7 +85,7 @@ class RepairCapacitySettingsServiceTest {
 
     assertThat(service.replace(
             warehouseId, new ReplaceRepairCapacitySettingsRequest(0L, 8))
-        .maxRepairsPerDay())
+        .repairPlaceCount())
         .isEqualTo(8);
 
     assertThatThrownBy(() -> service.replace(

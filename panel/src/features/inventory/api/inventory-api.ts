@@ -19,6 +19,7 @@ import type {
 } from "@/features/inventory/model/inventory"
 import type { InventorySessionView } from "@/features/inventory/model/inventory-service"
 import type {
+  LogisticsPlanningMode,
   RepairEstimateCompletionMode,
   RepairEstimateLineDto,
   RepairPriority,
@@ -301,6 +302,8 @@ export async function saveInventoryFinding(input: {
   repairPlans: ReturnType<typeof toInventoryRepairPlanSnapshot>[]
   repairCompletionMode?: RepairEstimateCompletionMode | null
   movementRequired?: boolean
+  logisticsPlanningMode?: LogisticsPlanningMode
+  logisticsScheduledDate?: string | null
   priority?: RepairPriority
 }) {
   const token = await accessToken()
@@ -360,6 +363,12 @@ export async function saveInventoryFinding(input: {
     planSelection = buildInventoryPlanSelection({
       completionMode: input.repairCompletionMode ?? "MANUAL",
       movementRequired,
+      logisticsPlanningMode:
+        movementRequired ? (input.logisticsPlanningMode ?? "AUTO") : "AUTO",
+      logisticsScheduledDate:
+        movementRequired && input.logisticsPlanningMode === "FIXED_DATE"
+          ? (input.logisticsScheduledDate ?? null)
+          : null,
       movementCatalogNodeId,
       priority: input.priority ?? 3,
       coverMediaId: input.coverMediaId,

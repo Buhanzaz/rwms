@@ -95,6 +95,15 @@ func TestMigratedCabinOwnerBindingsAuthorizeOnlyTheirCanonicalWarehouseIntegrati
 			t.Fatalf("prepare additional ready cabin asset %s: %v", ready.MediaID, err)
 		}
 	}
+	if _, err := database.Pool.Exec(ctx, `update media_cabin_photo
+		set media_generation=1 where cabin_id=$1`, cabinID); err != nil {
+		t.Fatalf("project canonical cabin photo associations: %v", err)
+	}
+	if _, err := database.Pool.Exec(ctx, `update media_cabin_photo_library
+		set cover_media_id=$2,version=1,updated_at=clock_timestamp()
+		where cabin_id=$1`, cabinID, command.MediaID); err != nil {
+		t.Fatalf("project canonical cabin cover pointer: %v", err)
+	}
 	for _, variant := range []struct {
 		name   media.Variant
 		suffix string

@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.worker.core.database.WorkerTaskEntity
 internal data class TaskQueueSection(
     val queueId: String,
     val name: String,
+    val queuePurpose: String,
     val sortOrder: Int,
     val tasks: List<WorkerTaskEntity>,
 )
@@ -50,6 +51,7 @@ internal fun buildTaskQueueSections(
         TaskQueueSection(
             queueId = category.queueId,
             name = category.name,
+            queuePurpose = category.queuePurpose,
             sortOrder = category.sortOrder,
             tasks = tasksByQueue[category.queueId].orEmpty().orderedWithinQueue(),
         )
@@ -63,6 +65,7 @@ internal fun buildTaskQueueSections(
                 TaskQueueSection(
                     queueId = first.categoryId,
                     name = first.categoryName,
+                    queuePurpose = "GENERAL",
                     sortOrder = first.categorySortOrder,
                     tasks = queueTasks.orderedWithinQueue(),
                 )

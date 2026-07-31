@@ -60,6 +60,7 @@ class LogisticsFlywayMigrationIntegrationTest {
             "client_presentation",
             "client_presentation_item",
             "consumer_aggregate_checkpoint",
+            "driver_logistics_task",
             "equipment_movement_task",
             "equipment_movement_task_line",
             "domain_event",
@@ -752,6 +753,61 @@ class LogisticsFlywayMigrationIntegrationTest {
                     """,
                     lineId))
         .hasMessageContaining("ck_logistics_document_line_repair_truth");
+    assertJpaValidationStarts();
+  }
+
+  @Test
+  void v27AddsDriverTaskIntentStateWithoutFabricatingTaskBoardOrRepairPlaceFacts() {
+    Flyway beforeV27 = configuration(MIGRATIONS).target("26").load();
+    assertThat(beforeV27.migrate().migrationsExecuted).isEqualTo(26);
+
+    Flyway upgraded = configuration(MIGRATIONS).target("27").load();
+    assertThat(upgraded.migrate().migrationsExecuted).isOne();
+    upgraded.validate();
+
+    UUID id = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into driver_logistics_task(
+          id,version,warehouse_id,cabin_id,repair_id,source_type,source_id,task_kind,
+          planning_mode,scheduled_date,priority,unit_number,driver_queue_definition_id,
+          external_task_id,state,cover_applied,repair_place_effect_applied,
+          created_by_subject_id,idempotency_key,request_sha256,retry_count,
+          created_at,updated_at)
+        values (?,0,?,?,?,'REPAIR',?,'DELIVER_TO_REPAIR','AUTO',current_date,3,
+          'БЫТ-001',?,?,'REGISTERING',false,false,?,?,?,0,
+          clock_timestamp(),clock_timestamp())
+        """,
+        id,
+        warehouseId,
+        UUID.randomUUID(),
+        repairId,
+        repairId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        "a".repeat(64));
+
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select task_board_task_id,task_board_entry_id,
+                       repair_place_allocation_id,completion_evidence_id
+                  from driver_logistics_task
+                 where id=?
+                """,
+                id))
+        .allSatisfy((ignored, value) -> assertThat(value).isNull());
+
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "update driver_logistics_task set priority=0 where id=?",
+                    id))
+        .hasMessageContaining("ck_driver_logistics_task_priority");
     assertJpaValidationStarts();
   }
 

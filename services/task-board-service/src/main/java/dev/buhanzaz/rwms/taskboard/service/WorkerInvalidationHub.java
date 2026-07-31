@@ -46,18 +46,20 @@ public class WorkerInvalidationHub {
       UUID actorWorkerId,
       UUID entryId,
       long revision,
-      Set<UUID> urgentWorkerIds) {
+      Set<UUID> joinWorkerIds) {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     emitters.forEach(
         (workerId, workerEmitters) -> {
           boolean actor = workerId.equals(actorWorkerId);
-          boolean urgent = !actor && urgentWorkerIds.contains(workerId);
+          boolean joinAvailable = !actor && joinWorkerIds.contains(workerId);
           WorkerInvalidationEvent event =
               new WorkerInvalidationEvent(
                   UUID.randomUUID(),
                   revision,
-                  actor ? "ENTRY_CHANGED" : urgent ? "MANDATORY_TASK" : "FEED_CHANGED",
-                  actor || urgent ? entryId : null,
+                  actor
+                      ? "ENTRY_CHANGED"
+                      : joinAvailable ? "TASK_JOIN_AVAILABLE" : "FEED_CHANGED",
+                  actor || joinAvailable ? entryId : null,
                   now);
           workerEmitters.forEach(emitter -> send(workerId, emitter, event));
         });

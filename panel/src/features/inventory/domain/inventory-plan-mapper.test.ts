@@ -39,6 +39,8 @@ describe("inventory plan mapper", () => {
     const result = buildInventoryPlanSelection({
       completionMode: "MANUAL",
       movementRequired: false,
+      logisticsPlanningMode: "AUTO",
+      logisticsScheduledDate: null,
       priority: 2,
       coverMediaId: "00000000-0000-4000-8000-000000000102",
       lines: [catalogWork, manualMaterial],
@@ -94,6 +96,8 @@ describe("inventory plan mapper", () => {
       buildInventoryPlanSelection({
         completionMode: "AUTO",
         movementRequired: true,
+        logisticsPlanningMode: "AUTO",
+        logisticsScheduledDate: null,
         priority: 3,
         coverMediaId: null,
         taskPlans: [],
@@ -108,6 +112,8 @@ describe("inventory plan mapper", () => {
       buildInventoryPlanSelection({
         completionMode: "AUTO",
         movementRequired: false,
+        logisticsPlanningMode: "AUTO",
+        logisticsScheduledDate: null,
         priority: 3,
         coverMediaId: null,
         taskPlans: [],
@@ -115,5 +121,39 @@ describe("inventory plan mapper", () => {
         media: [],
       })
     ).toThrow("Автоматический режим доступен только для позиций каталога")
+  })
+
+  it("preserves a fixed logistics date and rejects inconsistent planning", () => {
+    const fixed = buildInventoryPlanSelection({
+      completionMode: "AUTO",
+      movementRequired: true,
+      logisticsPlanningMode: "FIXED_DATE",
+      logisticsScheduledDate: "2026-08-12",
+      movementCatalogNodeId: "00000000-0000-4000-8000-000000000104",
+      priority: 1,
+      coverMediaId: null,
+      taskPlans: [],
+      lines: [catalogWork],
+      media: [],
+    })
+
+    expect(fixed).toMatchObject({
+      logisticsPlanningMode: "FIXED_DATE",
+      logisticsScheduledDate: "2026-08-12",
+    })
+    expect(() =>
+      buildInventoryPlanSelection({
+        completionMode: "AUTO",
+        movementRequired: true,
+        logisticsPlanningMode: "FIXED_DATE",
+        logisticsScheduledDate: null,
+        movementCatalogNodeId: "00000000-0000-4000-8000-000000000104",
+        priority: 1,
+        coverMediaId: null,
+        taskPlans: [],
+        lines: [catalogWork],
+        media: [],
+      })
+    ).toThrow("Дата логистического задания")
   })
 })

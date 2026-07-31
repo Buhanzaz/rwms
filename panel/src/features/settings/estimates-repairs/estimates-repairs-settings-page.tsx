@@ -202,7 +202,7 @@ const DISPLAY_COLOR_PICKER_FALLBACK = "#64748B"
 const REPAIR_COMPLEXITY_COLOR_FIELDS = [
   { key: "lightColor", label: "Лёгкий ремонт" },
   { key: "mediumColor", label: "Средний ремонт" },
-  { key: "complexColor", label: "Сложный ремонт" },
+  { key: "complexColor", label: "Тяжёлый ремонт" },
   { key: "capitalColor", label: "Капитальный ремонт" },
 ] as const
 

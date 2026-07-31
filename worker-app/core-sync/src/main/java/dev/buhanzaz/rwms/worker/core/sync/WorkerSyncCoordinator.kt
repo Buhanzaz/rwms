@@ -209,6 +209,7 @@ class WorkerSyncCoordinator @Inject constructor(
                     action = pending.action,
                     expectedVersion = pending.expectedVersion,
                     workerGroupId = pending.workerGroupId,
+                    evidenceId = pending.evidenceId,
                     occurredAt = pending.occurredAt,
                     offlineLeaseId = pending.offlineLeaseId,
                 ),
@@ -523,6 +524,7 @@ internal fun cachedFeedMatchesContext(
         val cached = cachedByQueue[remote.queueId] ?: return@all false
         cached.name == remote.name &&
             cached.type == remote.type &&
+            cached.queuePurpose == remote.queuePurpose &&
             cached.sortOrder == remote.sortOrder &&
             cached.audienceModesKey == remote.normalizedAudienceModesKey() &&
             cached.resultPhotoMinCount == remote.resultPhotoMinCount

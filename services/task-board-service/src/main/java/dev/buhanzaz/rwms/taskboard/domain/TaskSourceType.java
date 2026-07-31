@@ -6,5 +6,6 @@ package dev.buhanzaz.rwms.taskboard.domain;
  * panel consumers.
  */
 public enum TaskSourceType {
-  MAINTENANCE_REPAIR
+  MAINTENANCE_REPAIR,
+  LOGISTICS_DRIVER_TASK
 }

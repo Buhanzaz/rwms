@@ -191,6 +191,7 @@ class FullSyncConflictResolutionRobolectricTest {
         queueId = queueId,
         name = name,
         type = "REPAIR",
+        queuePurpose = "GENERAL",
         sortOrder = sortOrder,
         audienceModes = listOf("AVAILABLE"),
         resultPhotoMinCount = 1,

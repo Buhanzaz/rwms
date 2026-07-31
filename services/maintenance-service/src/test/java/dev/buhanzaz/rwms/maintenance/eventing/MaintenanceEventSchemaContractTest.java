@@ -155,6 +155,35 @@ class MaintenanceEventSchemaContractTest {
   }
 
   @Test
+  void externallyExecutedCapitalRepairPublishesNotRequiredTaskGenerationTruth()
+      throws Exception {
+    FactCase repair =
+        MaintenanceEventContractFixtures.fact(MaintenanceEventType.REPAIR_PLAN_CHANGED);
+    var envelope =
+        new DomainEventEnvelopeV2<>(
+            2,
+            UUID.randomUUID(),
+            MaintenanceEventType.REPAIR_PLAN_CHANGED.value(),
+            1,
+            RECORDED_AT,
+            RECORDED_AT,
+            "maintenance-service",
+            repair.aggregateType().name(),
+            repair.aggregateId().toString(),
+            2,
+            new CorrelationContext(UUID.randomUUID(), null),
+            null,
+            repair.payload());
+    var wire = SCHEMA_MAPPER.readTree(WIRE_MAPPER.writeValueAsString(envelope));
+    var taskSync =
+        (com.fasterxml.jackson.databind.node.ObjectNode)
+            wire.required("payload").required("stages").required(0).required("taskSync");
+    taskSync.put("generationState", "NOT_REQUIRED");
+
+    assertThat(schema().validate(wire)).isEmpty();
+  }
+
+  @Test
   void asyncApiBindsEachAggregateFamilyChannelToItsExactEventTypes() throws Exception {
     String asyncApi = Files.readString(
         Path.of(System.getProperty("rwms.contracts.dir"), "events/maintenance-events.yaml"));

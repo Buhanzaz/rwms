@@ -13,10 +13,15 @@ import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35], manifest = Config.NONE)
 class RwmsApiHttpContractTest {
     private lateinit var server: MockWebServer
     private lateinit var api: RwmsApi
@@ -654,6 +659,38 @@ class RwmsApiHttpContractTest {
     }
 
     @Test
+    fun `conditional maintenance and queue reads send validators and expose not modified`() = runTest {
+        val warehouseId = "11111111-aaaa-bbbb-cccc-111111111111"
+        val validator = "W/\"rwms-local-v1\""
+        repeat(4) {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(304)
+                    .setHeader("ETag", validator),
+            )
+        }
+
+        val catalog = api.catalogVersions(warehouseId = warehouseId, ifNoneMatch = validator)
+        val estimates = api.estimates(warehouseId = warehouseId, ifNoneMatch = validator)
+        val repairs = api.repairs(warehouseId = warehouseId, ifNoneMatch = validator)
+        val queue = api.taskBoard(warehouseId = warehouseId, ifNoneMatch = validator)
+
+        assertThat(listOf(catalog, estimates, repairs, queue).map { it.code() })
+            .containsExactly(304, 304, 304, 304)
+            .inOrder()
+        val requests = List(4) { checkNotNull(server.takeRequest(5, TimeUnit.SECONDS)) }
+        assertThat(requests.map { it.getHeader("If-None-Match") })
+            .containsExactly(validator, validator, validator, validator)
+            .inOrder()
+        assertThat(requests.map { it.path }).containsExactly(
+            "/api/maintenance/v1/catalog/versions?warehouseId=$warehouseId&page=0&size=200&lifecycle=ACTIVE",
+            "/api/maintenance/v1/estimates?warehouseId=$warehouseId&page=0&size=100",
+            "/api/maintenance/v1/repairs?warehouseId=$warehouseId&page=0&size=100",
+            "/api/task-board/warehouses/$warehouseId/task-board?includeShadow=true",
+        ).inOrder()
+    }
+
+    @Test
     fun `custom material command carries explicit type unit and zero duration`() = runTest {
         val warehouseId = "71717171-aaaa-bbbb-cccc-717171717171"
         val rentalItemId = "72727272-aaaa-bbbb-cccc-727272727272"
@@ -1195,9 +1232,14 @@ class RwmsApiHttpContractTest {
     private suspend fun captureRequest(command: suspend () -> Any?): RecordedRequest {
         server.enqueue(MockResponse().setResponseCode(500))
 
-        val failure = runCatching { command() }.exceptionOrNull()
+        val result = runCatching { command() }
+        val response = result.getOrNull()
+        if (response is retrofit2.Response<*>) {
+            assertThat(response.code()).isEqualTo(500)
+        } else {
+            assertThat(result.exceptionOrNull()).isInstanceOf(HttpException::class.java)
+        }
 
-        assertThat(failure).isInstanceOf(HttpException::class.java)
         return checkNotNull(server.takeRequest(5, TimeUnit.SECONDS))
     }
 

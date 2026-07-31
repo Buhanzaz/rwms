@@ -99,38 +99,6 @@ public class KpiSettingsService {
   }
 
   @Transactional
-  public WarehouseKpiSettingsResponse saveRepairComplexity(
-      UUID warehouseId, SaveRepairComplexityThresholdsRequest request) {
-    WarehouseKpiSettings settings =
-        loadOrCreate(warehouseId, request.expectedVersion());
-    settings.setRepairComplexityBoundaries(
-        request.lightBoundaryMinutes(),
-        request.mediumBoundaryMinutes(),
-        request.complexBoundaryMinutes());
-    settingsRepository.saveAndFlush(settings);
-    return response(settings);
-  }
-
-  @Transactional
-  public RepairComplexityThresholdsResponse repairComplexity(UUID warehouseId) {
-    WarehouseMetadata warehouse = warehouse(warehouseId);
-    WarehouseKpiSettings settings =
-        settingsRepository
-            .findByWarehouseId(warehouseId)
-            .orElseGet(
-                () ->
-                    WarehouseKpiSettings.create(
-                        warehouseId, warehouse.getTimeZone()));
-    synchronize(settings, warehouse);
-    return new RepairComplexityThresholdsResponse(
-        warehouseId,
-        settings.getVersion(),
-        settings.getRepairLightBoundaryMinutes(),
-        settings.getRepairMediumBoundaryMinutes(),
-        settings.getRepairComplexBoundaryMinutes());
-  }
-
-  @Transactional
   public void deletePendingWorkSchedule(UUID warehouseId, long expectedVersion) {
     WarehouseKpiSettings settings = requireSettings(warehouseId);
     requireVersion(settings, expectedVersion);

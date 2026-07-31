@@ -124,6 +124,8 @@ vi.mock("@/features/repair-estimates/repair-work-completion-dialog", () => ({
     onComplete: (completion: {
       completionMode: "MANUAL"
       movementRequired: false
+      logisticsPlanningMode: "AUTO"
+      logisticsScheduledDate: null
       taskPlans: []
       priority: 1
     }) => void
@@ -135,6 +137,8 @@ vi.mock("@/features/repair-estimates/repair-work-completion-dialog", () => ({
           onComplete({
             completionMode: "MANUAL",
             movementRequired: false,
+            logisticsPlanningMode: "AUTO",
+            logisticsScheduledDate: null,
             taskPlans: [],
             priority: 1,
           })
@@ -193,6 +197,8 @@ const queuedTask: RepairTaskDto = {
   sourceInventoryFindingId: null,
   sourceRepairTaskId: null,
   sourceRepairTaskVersion: null,
+  logisticsPlanningMode: "AUTO",
+  logisticsScheduledDate: null,
   createdAt: "2026-07-24T10:00:00Z",
   updatedAt: "2026-07-24T10:01:00Z",
 }

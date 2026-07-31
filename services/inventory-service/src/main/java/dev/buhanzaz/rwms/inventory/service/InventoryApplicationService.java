@@ -8,6 +8,7 @@ import dev.buhanzaz.rwms.inventory.domain.InspectionState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
 import dev.buhanzaz.rwms.inventory.domain.InventoryExpectedItem;
 import dev.buhanzaz.rwms.inventory.domain.InventoryMembershipMovement;
+import dev.buhanzaz.rwms.inventory.domain.LogisticsPlanningMode;
 import dev.buhanzaz.rwms.inventory.domain.InventorySourceAttachment;
 import dev.buhanzaz.rwms.inventory.domain.InventoryValidationSnapshot;
 import dev.buhanzaz.rwms.inventory.domain.InventoryValidationItem;
@@ -1832,6 +1833,13 @@ public class InventoryApplicationService {
     body.put("sourceRevision", Math.addExact(finding.getRevision(), 1));
     body.put("mode", selection.mode());
     body.put("priority", selection.priority());
+    body.put("logisticsPlanningMode", selection.logisticsPlanningMode().name());
+    if (selection.logisticsScheduledDate() == null) {
+      body.putNull("logisticsScheduledDate");
+    } else {
+      body.put(
+          "logisticsScheduledDate", selection.logisticsScheduledDate().toString());
+    }
     if (selection.coverMediaId() == null) body.putNull("coverMediaId");
     else body.put("coverMediaId", selection.coverMediaId().toString());
     body.set("lines", mapper.valueToTree(selection.lines()));
@@ -1891,6 +1899,9 @@ public class InventoryApplicationService {
     }
     if (selection.priority() == null || selection.priority() < 1 || selection.priority() > 5) {
       throw new IllegalArgumentException("Inventory plan priority must be between 1 and 5");
+    }
+    if (!selection.isLogisticsPlanningValid()) {
+      throw new IllegalArgumentException("Inventory logistics planning is invalid");
     }
     boolean manualMode = "MANUAL".equals(selection.mode());
     Set<UUID> catalogLines = new HashSet<>();
@@ -2024,12 +2035,39 @@ public class InventoryApplicationService {
       InventoryDependencyGateway.FrozenPlan frozen) {
     JsonNode snapshot = frozen.snapshot();
     UUID catalogVersionId = UUID.fromString(snapshot.path("catalogVersionId").asText());
+    LogisticsPlanningMode logisticsPlanningMode;
+    LocalDate logisticsScheduledDate;
+    try {
+      logisticsPlanningMode =
+          LogisticsPlanningMode.valueOf(
+              requiredText(
+                  snapshot, "logisticsPlanningMode", "frozen logistics planning mode"));
+      logisticsScheduledDate =
+          snapshot.path("logisticsScheduledDate").isNull()
+              ? null
+              : LocalDate.parse(
+                  requiredText(
+                      snapshot,
+                      "logisticsScheduledDate",
+                      "frozen logistics scheduled date"));
+    } catch (IllegalArgumentException exception) {
+      throw new IllegalStateException(
+          "Persisted frozen logistics planning is invalid", exception);
+    }
+    if (logisticsPlanningMode != selection.logisticsPlanningMode()
+        || !java.util.Objects.equals(
+            logisticsScheduledDate, selection.logisticsScheduledDate())) {
+      throw InventoryException.dependency(
+          "Maintenance-service returned mismatched logistics planning");
+    }
     planSnapshots.saveAndFlush(
         new FindingPlanSnapshot(
             finding.getId(),
             finding.getRevision(),
             finding.getInventoryId(),
             selection.mode(),
+            logisticsPlanningMode,
+            logisticsScheduledDate,
             catalogVersionId,
             frozen.fingerprint(),
             write(snapshot)));
@@ -3071,10 +3109,9 @@ public class InventoryApplicationService {
 
   private JsonNode publicationRequest(InventorySession session, InventoryPublicationIntent intent) {
     InventoryFinding finding = requireFinding(session.getId(), intent.getFindingId());
-    String snapshot =
+    FindingPlanSnapshot frozenPlan =
         planSnapshots
             .findByFindingIdAndFindingRevision(finding.getId(), finding.getRevision())
-            .map(FindingPlanSnapshot::getSourceSnapshot)
             .orElseThrow(() -> InventoryException.conflict("Frozen maintenance plan is missing"));
     ObjectNode request = mapper.createObjectNode();
     request.put("warehouseId", session.getWarehouseId().toString());
@@ -3083,7 +3120,7 @@ public class InventoryApplicationService {
     request.put("rentalItemVersion", finding.getAssetVersion());
     request.put("dispatchDate", session.getBusinessDate().toString());
     request.put("planFingerprint", finding.getMaintenancePlanFingerprintSha256());
-    request.set("snapshot", read(snapshot));
+    request.set("snapshot", read(frozenPlan.getSourceSnapshot()));
     return request;
   }
 
@@ -3571,6 +3608,8 @@ public class InventoryApplicationService {
         snapshot.getFingerprint(),
         priority,
         coverMediaId,
+        snapshot.getLogisticsPlanningMode(),
+        snapshot.getLogisticsScheduledDate(),
         lineViews,
         stageViews);
   }

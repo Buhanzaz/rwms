@@ -124,6 +124,11 @@ const navGroups: SidebarNavGroup[] = [
     title: "Логистика",
     items: [
       {
+        title: "Задания водителей",
+        url: "/logistics/tasks",
+        icon: KanbanIcon,
+      },
+      {
         title: "Возврат из аренды",
         url: "/logistics/returns",
         icon: DeliveryReturn01Icon,
@@ -202,6 +207,11 @@ const settingsNavItems: SidebarNavItem[] = [
     title: "Настройка Доски задач",
     url: "/settings/task-board",
     icon: KanbanIcon,
+  },
+  {
+    title: "Настройки логистики",
+    url: "/settings/logistics",
+    icon: Exchange01Icon,
   },
 ]
 

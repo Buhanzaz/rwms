@@ -23,6 +23,7 @@ interface RwmsApi {
     @GET("api/inventory/v1/sessions/active")
     suspend fun activeInventory(
         @Query("warehouseId") warehouseId: String,
+        @Header("If-None-Match") ifNoneMatch: String? = null,
     ): Response<InventorySessionDto>
 
     @POST("api/inventory/v1/sessions")
@@ -256,7 +257,8 @@ interface RwmsApi {
         @Query("size") size: Int = 100,
         @Query("lifecycle") lifecycle: String? = null,
         @Query("rentalItemId") rentalItemId: String? = null,
-    ): EstimatePageDto
+        @Header("If-None-Match") ifNoneMatch: String? = null,
+    ): Response<EstimatePageDto>
 
     @POST("api/maintenance/v1/estimates")
     suspend fun createEstimate(
@@ -301,7 +303,8 @@ interface RwmsApi {
         @Query("executionState") executionState: String? = null,
         @Query("acceptanceState") acceptanceState: String? = null,
         @Query("rentalItemId") rentalItemId: String? = null,
-    ): RepairPageDto
+        @Header("If-None-Match") ifNoneMatch: String? = null,
+    ): Response<RepairPageDto>
 
     @GET("api/maintenance/v1/acceptance")
     suspend fun acceptance(
@@ -365,7 +368,8 @@ interface RwmsApi {
         @Path("warehouseId") warehouseId: String,
         @Query("includeShadow") includeShadow: Boolean = true,
         @Query("date") date: String? = null,
-    ): TaskBoardSnapshotDto
+        @Header("If-None-Match") ifNoneMatch: String? = null,
+    ): Response<TaskBoardSnapshotDto>
 
     @POST("api/task-board/warehouses/{warehouseId}/task-board/entries/{entryId}/move")
     suspend fun moveTaskBoardEntry(
@@ -386,7 +390,8 @@ interface RwmsApi {
         @Query("page") page: Int = 0,
         @Query("size") size: Int = 200,
         @Query("lifecycle") lifecycle: String = "ACTIVE",
-    ): CatalogVersionPageDto
+        @Header("If-None-Match") ifNoneMatch: String? = null,
+    ): Response<CatalogVersionPageDto>
 
     @GET("api/maintenance/v1/catalog/versions/{catalogVersionId}/nodes")
     suspend fun catalogNodes(

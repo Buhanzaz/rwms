@@ -28,7 +28,7 @@ public class RepairCapacitySettingsService {
         .orElseGet(() -> new RepairCapacitySettingsResponse(
             warehouseId,
             0,
-            RepairCapacitySettings.DEFAULT_MAX_REPAIRS_PER_DAY,
+            RepairCapacitySettings.DEFAULT_REPAIR_PLACE_COUNT,
             null,
             null));
   }
@@ -42,12 +42,12 @@ public class RepairCapacitySettingsService {
       if (expectedVersion != 0) {
         throw versionConflict(warehouseId, expectedVersion, null);
       }
-      settings = RepairCapacitySettings.create(warehouseId, request.maxRepairsPerDay());
+      settings = RepairCapacitySettings.create(warehouseId, request.repairPlaceCount());
     } else {
       if (settings.getVersion() != expectedVersion) {
         throw versionConflict(warehouseId, expectedVersion, settings.getVersion());
       }
-      settings.replace(request.maxRepairsPerDay());
+      settings.replace(request.repairPlaceCount());
     }
     return mapper.toResponse(repository.saveAndFlush(settings));
   }
@@ -57,7 +57,7 @@ public class RepairCapacitySettingsService {
     String actual = actualVersion == null ? "absent" : actualVersion.toString();
     return new MaintenanceConflictException(
         "MAINTENANCE_VERSION_CONFLICT",
-        "Repair capacity settings for warehouse %s expected version %d but were %s"
+        "Repair-place settings for warehouse %s expected version %d but were %s"
             .formatted(warehouseId, expectedVersion, actual));
   }
 }

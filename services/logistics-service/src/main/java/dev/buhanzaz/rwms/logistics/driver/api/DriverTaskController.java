@@ -1,0 +1,89 @@
+package dev.buhanzaz.rwms.logistics.driver.api;
+
+import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.CreateDriverTaskRequest;
+import dev.buhanzaz.rwms.logistics.driver.api.DriverTaskApiModels.DriverTaskResponse;
+import dev.buhanzaz.rwms.logistics.driver.service.DriverQueueScheduler;
+import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskProcessor;
+import dev.buhanzaz.rwms.logistics.driver.service.DriverTaskService;
+import dev.buhanzaz.rwms.logistics.security.LogisticsAuthorizer;
+import jakarta.validation.Valid;
+import java.util.List;
+import java.util.UUID;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@Validated
+@RequiredArgsConstructor
+@RequestMapping("/api/logistics/v1/driver-tasks")
+public class DriverTaskController {
+  private final DriverTaskService service;
+  private final DriverTaskProcessor processor;
+  private final DriverQueueScheduler scheduler;
+  private final LogisticsAuthorizer access;
+
+  @PostMapping
+  public ResponseEntity<DriverTaskResponse> create(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestHeader("Idempotency-Key") UUID idempotencyKey,
+      @Valid @RequestBody CreateDriverTaskRequest request) {
+    access.requireEdit(jwt, request.warehouseId());
+    DriverTaskService.CreateResult result =
+        service.create(access.subjectId(jwt), idempotencyKey, request);
+    processor.processUntilIdle(result.response().id());
+    if (result.activateNow()) scheduler.promoteRequested(result.response().id());
+    DriverTaskResponse response = service.get(result.response().id());
+    return response(
+        response,
+        result.replayed() ? HttpStatus.OK : HttpStatus.CREATED,
+        result.replayed());
+  }
+
+  @GetMapping
+  public List<DriverTaskResponse> list(
+      @AuthenticationPrincipal Jwt jwt, @RequestParam UUID warehouseId) {
+    access.requireRead(jwt, warehouseId);
+    return service.list(warehouseId);
+  }
+
+  @GetMapping("/{taskId}")
+  public DriverTaskResponse get(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID taskId) {
+    DriverTaskResponse response = service.get(taskId);
+    access.requireRead(jwt, response.warehouseId());
+    return response;
+  }
+
+  @PostMapping("/{taskId}/promote")
+  public ResponseEntity<DriverTaskResponse> promote(
+      @AuthenticationPrincipal Jwt jwt, @PathVariable UUID taskId) {
+    DriverTaskResponse current = service.get(taskId);
+    access.requireEdit(jwt, current.warehouseId());
+    scheduler.promoteRequested(taskId);
+    return ResponseEntity.accepted()
+        .eTag('"' + Long.toString(service.get(taskId).version()) + '"')
+        .body(service.get(taskId));
+  }
+
+  private static ResponseEntity<DriverTaskResponse> response(
+      DriverTaskResponse body, HttpStatus status, boolean replayed) {
+    ResponseEntity.BodyBuilder builder =
+        ResponseEntity.status(status)
+            .header(HttpHeaders.ETAG, '"' + Long.toString(body.version()) + '"');
+    if (replayed) builder.header("Idempotency-Replayed", "true");
+    return builder.body(body);
+  }
+}

@@ -173,7 +173,7 @@ class InventoryIdempotencyRecoveryIntegrationTest {
     UUID assetId = UUID.randomUUID();
     UUID currentWarehouseId = UUID.randomUUID();
     seedSession(inventoryId, warehouseId);
-    seedFinding(inventoryId, findingId, assetId, warehouseId);
+    seedFinding(inventoryId, findingId, assetId);
     InventoryDependencyGateway.ValidationItem item =
         new InventoryDependencyGateway.ValidationItem(
             assetId,
@@ -200,7 +200,7 @@ class InventoryIdempotencyRecoveryIntegrationTest {
             new CompletionPreviewRequest(
                 0, List.of(new RevisionExpectation(findingId, 0))));
 
-    assertThat(preview.statistics().missingCount()).isOne();
+    assertThat(preview.statistics().missingCount()).isZero();
     assertThat(preview.statistics().conflictCount()).isZero();
     assertThat(preview.risks())
         .extracting(dev.buhanzaz.rwms.inventory.api.InventoryApiModels.CompletionRisk::code)
@@ -553,23 +553,21 @@ class InventoryIdempotencyRecoveryIntegrationTest {
         now);
   }
 
-  private void seedFinding(
-      UUID inventoryId, UUID findingId, UUID assetId, UUID warehouseId) {
+  private void seedFinding(UUID inventoryId, UUID findingId, UUID assetId) {
     OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
     jdbc.update(
         """
         insert into inventory_finding(
           id,inventory_id,finding_revision,origin,inspection,reconciliation,
-          asset_id,asset_version_snapshot,current_warehouse_id,current_status,
-          display_canonical_number,identity_match_key,passport_observation_state,
+          asset_id,asset_version_snapshot,display_canonical_number,identity_match_key,
+          passport_observation_state,
           equipment_observation_state,mutation_state,actor_ref,created_at,updated_at)
-        values (?,?,0,'UNEXPECTED_EXISTING','READY','MATCHED',?,1,?,'WAREHOUSE',
+        values (?,?,0,'UNEXPECTED_EXISTING','NOT_INSPECTED','MATCHED',?,1,
           'AA-01','AA01','ABSENT','ABSENT','IDLE',?::jsonb,?,?)
         """,
         findingId,
         inventoryId,
         assetId,
-        warehouseId,
         actorJson(),
         now,
         now);

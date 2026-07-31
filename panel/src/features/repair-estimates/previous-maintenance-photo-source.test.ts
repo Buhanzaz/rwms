@@ -87,6 +87,8 @@ function repair(
       forcedCapital: false,
     },
     movementToShipment: false,
+    logisticsPlanningMode: "AUTO",
+    logisticsScheduledDate: null,
     createdAt: updatedAt,
     updatedAt,
     actor: {

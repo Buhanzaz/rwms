@@ -495,7 +495,7 @@ public class GroupKpiEvidenceService {
                             value.getEntryType() == EntryType.REAL
                                 && !value.getTask().getScheduledDate().isAfter(localDate));
               }
-              if (!binding.isNotifyUrgent()) return false;
+              if (!binding.isNotifyOnPrimaryTake()) return false;
               return entries
                   .findAllByQueueIdAndStatusInOrderByQueuePositionAsc(
                       binding.getQueue().getId(), Set.of(EntryStatus.IN_PROGRESS))

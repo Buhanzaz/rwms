@@ -7,8 +7,11 @@ import dev.buhanzaz.rwms.taskboard.domain.GroupOperationalStatus;
 import dev.buhanzaz.rwms.taskboard.domain.GroupKpiOpenState;
 import dev.buhanzaz.rwms.taskboard.domain.PauseOrigin;
 import dev.buhanzaz.rwms.taskboard.domain.QueueReferenceType;
+import dev.buhanzaz.rwms.taskboard.domain.ParticipationPolicy;
+import dev.buhanzaz.rwms.taskboard.domain.QueuePurpose;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
 import dev.buhanzaz.rwms.taskboard.domain.TaskStatus;
+import dev.buhanzaz.rwms.taskboard.domain.TaskLane;
 import dev.buhanzaz.rwms.taskboard.domain.TimeEventType;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -94,14 +97,15 @@ public final class TaskBoardEventPayloads {
       UUID workerClassId,
       int bindingOrder,
       boolean stopTaskOnTake,
-      boolean notifyUrgent) {}
+      ParticipationPolicy participationPolicy,
+      boolean notifyOnPrimaryTake) {}
 
   public record WorkQueueFact(
       UUID workQueueId,
       UUID revisionMarker,
       UUID warehouseId,
       UUID queueDefinitionId,
-      QueueType queueType, int sortOrder, boolean active, boolean hidden,
+      QueueType queueType, QueuePurpose queuePurpose, int sortOrder, boolean active, boolean hidden,
       boolean collapsed, Integer holdingPeriodMinutes, Integer notificationThreshold,
       boolean notifyWhenThresholdReached, int resultPhotoMinCount,
       List<QueueBindingFact> classBindings, boolean deleted) {
@@ -114,7 +118,7 @@ public final class TaskBoardEventPayloads {
       UUID queueId, QueueReferenceType referenceType, String externalReferenceHash, boolean deleted) {}
 
   public record BoardTaskFact(UUID boardTaskId, UUID warehouseId, UUID externalTaskId,
-      TaskStatus status, LocalDate scheduledDate, int priority, boolean pinned,
+      TaskStatus status, LocalDate scheduledDate, TaskLane lane, int priority, boolean pinned,
       Integer plannedDurationMinutes, OffsetDateTime deadlineAt, OffsetDateTime doneAt,
       boolean deleted) {
     public BoardTaskFact {

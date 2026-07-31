@@ -8,8 +8,13 @@ import dev.buhanzaz.rwms.inventory.service.InventoryIdempotencyPort;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.HexFormat;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
@@ -28,15 +33,19 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.context.request.RequestAttributes;
 import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.WebRequest;
+import tools.jackson.databind.ObjectMapper;
 
 @RestController
 @Validated
 @RequestMapping("/api/inventory/v1")
 public class InventoryController {
   private final InventoryApplicationService inventory;
+  private final ObjectMapper objectMapper;
 
-  public InventoryController(InventoryApplicationService inventory) {
+  public InventoryController(InventoryApplicationService inventory, ObjectMapper objectMapper) {
     this.inventory = inventory;
+    this.objectMapper = objectMapper;
   }
 
   @GetMapping("/sessions")
@@ -84,11 +93,16 @@ public class InventoryController {
 
   @GetMapping("/sessions/active")
   public ResponseEntity<SessionView> active(
-      @AuthenticationPrincipal Jwt jwt, @RequestParam UUID warehouseId) {
-    return inventory
-        .active(jwt, warehouseId)
-        .map(ResponseEntity::ok)
-        .orElseGet(() -> ResponseEntity.noContent().build());
+      @AuthenticationPrincipal Jwt jwt, @RequestParam UUID warehouseId, WebRequest webRequest) {
+    Optional<SessionView> active = inventory.active(jwt, warehouseId);
+    String eTag = activeEtag(warehouseId, active);
+    if (webRequest.checkNotModified(eTag)) {
+      return ResponseEntity.status(HttpStatus.NOT_MODIFIED).eTag(eTag).build();
+    }
+    if (active.isPresent()) {
+      return ResponseEntity.ok().eTag(eTag).body(active.orElseThrow());
+    }
+    return ResponseEntity.status(HttpStatus.NO_CONTENT).eTag(eTag).build();
   }
 
   @GetMapping("/sessions/{inventoryId}")
@@ -275,5 +289,22 @@ public class InventoryController {
     return ResponseEntity.status(status)
         .header("Idempotency-Replayed", Boolean.TRUE.equals(replayed) ? "true" : "false")
         .body(body);
+  }
+
+  private String activeEtag(UUID warehouseId, Optional<SessionView> active) {
+    byte[] representation =
+        active
+            .map(objectMapper::writeValueAsBytes)
+            .orElseGet(
+                () ->
+                    ("active-inventory:none:" + warehouseId)
+                        .getBytes(StandardCharsets.UTF_8));
+    try {
+      String fingerprint =
+          HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(representation));
+      return "\"" + fingerprint + "\"";
+    } catch (NoSuchAlgorithmException exception) {
+      throw new IllegalStateException("The Java runtime does not provide SHA-256", exception);
+    }
   }
 }

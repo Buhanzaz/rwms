@@ -1160,4 +1160,119 @@ class HttpLogisticsDependencyGatewayTest {
         .satisfies(line -> assertThat(line.reservationVersion()).isOne());
     server.verify();
   }
+
+  @Test
+  void movesTheSameDriverTaskThroughThePrivateTaskBoardBoundary() {
+    UUID externalTaskId = UUID.randomUUID();
+    UUID taskId = UUID.randomUUID();
+    UUID entryId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID queueDefinitionId = UUID.randomUUID();
+    UUID queueId = UUID.randomUUID();
+    LocalDate targetDate = LocalDate.parse("2026-08-03");
+    server
+        .expect(
+            requestTo(
+                "http://task-board.test/api/internal/task-board/v1/logistics/tasks/"
+                    + externalTaskId
+                    + "/move"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer test-task-board.logistics"))
+        .andExpect(jsonPath("$.expectedTaskVersion").value(3))
+        .andExpect(jsonPath("$.expectedEntryVersion").value(5))
+        .andExpect(jsonPath("$.targetDate").value(targetDate.toString()))
+        .andExpect(jsonPath("$.targetIndex").value(2))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "taskId":"%s","taskVersion":4,"warehouseId":"%s",
+                  "externalTaskId":"%s","title":"Доставить бытовку в ремонт",
+                  "unitNumber":"СПБ-001","description":"Доставить бытовку в ремонт",
+                  "status":"ACTIVE","plannedDurationMinutes":null,"deadlineAt":null,
+                  "scheduledDate":"%s","lane":"SCHEDULED","priority":2,
+                  "pinned":false,"doneAt":null,
+                  "route":[{
+                    "entryId":"%s","entryVersion":6,
+                    "queueDefinitionId":"%s","workQueueId":"%s","queueName":"Водители",
+                    "routeIndex":0,"queuePosition":2,"entryType":"REAL",
+                    "status":"WAITING","taskText":"Доставить бытовку в ремонт",
+                    "plannedDurationMinutes":null
+                  }]
+                }
+                """
+                    .formatted(
+                        taskId,
+                        warehouseId,
+                        externalTaskId,
+                        targetDate,
+                        entryId,
+                        queueDefinitionId,
+                        queueId),
+                MediaType.APPLICATION_JSON));
+
+    LogisticsDependencyGateway.DriverBoardTask moved =
+        gateway.moveDriverTask(externalTaskId, 3, 5, targetDate, 2);
+
+    assertThat(moved.scheduledDate()).isEqualTo(targetDate);
+    assertThat(moved.queuePosition()).isEqualTo(2);
+    assertThat(moved.unitNumber()).isEqualTo("СПБ-001");
+    server.verify();
+  }
+
+  @Test
+  void usesOnlyTheVersionedMaintenanceLogisticsRoutesForCapacityAndCapitalRepair() {
+    UUID warehouseId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    server
+        .expect(
+            requestTo(
+                "http://maintenance.test/api/internal/maintenance/v1/logistics/repair-places/"
+                    + warehouseId))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-maintenance.logistics"))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "warehouseId":"%s","repairPlaceCount":3,"reservedCount":0,
+                  "occupiedCount":2,"readyToReleaseCount":0,"availableCount":1,
+                  "overCapacity":false,"allocations":[]
+                }
+                """
+                    .formatted(warehouseId),
+                MediaType.APPLICATION_JSON));
+    server
+        .expect(
+            requestTo(
+                "http://maintenance.test/api/internal/maintenance/v1/logistics/repairs/capital/"
+                    + repairId))
+        .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer test-maintenance.logistics"))
+        .andRespond(
+            withSuccess(
+                """
+                {
+                  "repairId":"%s","rentalItemId":"%s","warehouseId":"%s",
+                  "priority":1,
+                  "complexity":{
+                    "type":"CAPITAL","name":"Капитальный ремонт","color":"#AA1122",
+                    "plannedMinutes":"510","forcedCapital":true
+                  },
+                  "version":7
+                }
+                """
+                    .formatted(repairId, cabinId, warehouseId),
+                MediaType.APPLICATION_JSON));
+
+    assertThat(gateway.readRepairPlaces(warehouseId).availableCount()).isOne();
+    assertThat(gateway.readCapitalRepair(repairId))
+        .satisfies(
+            repair -> {
+              assertThat(repair.rentalItemId()).isEqualTo(cabinId);
+              assertThat(repair.complexity().forcedCapital()).isTrue();
+            });
+    server.verify();
+  }
 }

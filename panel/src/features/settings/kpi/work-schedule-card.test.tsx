@@ -15,11 +15,6 @@ function settingsWithBreaks(
     status: "DRAFT",
     version: 3,
     dataAvailableFrom: null,
-    repairComplexity: {
-      lightBoundaryMinutes: 60,
-      mediumBoundaryMinutes: 180,
-      complexBoundaryMinutes: 360,
-    },
     palette: null,
     activeSchedule: {
       id: "00000000-0000-4000-8000-000000000002",

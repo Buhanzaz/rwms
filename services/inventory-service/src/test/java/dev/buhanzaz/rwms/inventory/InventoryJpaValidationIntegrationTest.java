@@ -67,7 +67,7 @@ class InventoryJpaValidationIntegrationTest {
         assertThat(
             jdbc.queryForObject(
                 "select count(*) from flyway_schema_history where success", Integer.class))
-        .isEqualTo(10);
+        .isEqualTo(11);
     assertThat(entityManagerFactory.getMetamodel().getEntities())
         .extracting(value -> value.getJavaType().getSimpleName())
         .contains(

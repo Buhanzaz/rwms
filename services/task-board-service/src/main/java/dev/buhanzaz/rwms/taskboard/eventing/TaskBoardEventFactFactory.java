@@ -84,7 +84,8 @@ public class TaskBoardEventFactFactory {
     var bindingFacts = bindings.findAllByQueueIdOrderByBindingOrderAscIdAsc(value.getId()).stream()
         .map(binding -> new QueueBindingFact(
             binding.getId(), binding.getVersion(), binding.getWorkerClass().getId(),
-            binding.getBindingOrder(), binding.isStopTaskOnTake(), binding.isNotifyUrgent()))
+            binding.getBindingOrder(), binding.isStopTaskOnTake(),
+            binding.getParticipationPolicy(), binding.isNotifyOnPrimaryTake()))
         .toList();
     return new WorkQueueFact(
         value.getId(),
@@ -92,6 +93,7 @@ public class TaskBoardEventFactFactory {
         value.getWarehouseId(),
         value.getDefinition().getId(),
         value.getType(),
+        value.getPurpose(),
         value.getSortOrder(), value.isActive(), value.isHidden(),
         value.isCollapsed(), value.getHoldingPeriodMinutes(), value.getNotificationThreshold(),
         value.isNotifyWhenThresholdReached(), value.getResultPhotoMinCount(),
@@ -113,7 +115,7 @@ public class TaskBoardEventFactFactory {
   public BoardTaskFact boardTask(BoardTask value, boolean deleted) {
     return new BoardTaskFact(
         value.getId(), value.getWarehouseId(), value.getExternalTaskId(), value.getStatus(),
-        value.getScheduledDate(), value.getPriority(), value.isPinned(),
+        value.getScheduledDate(), value.getLane(), value.getPriority(), value.isPinned(),
         value.getPlannedDurationMinutes(), value.getDeadlineAt(), value.getDoneAt(), deleted);
   }
 

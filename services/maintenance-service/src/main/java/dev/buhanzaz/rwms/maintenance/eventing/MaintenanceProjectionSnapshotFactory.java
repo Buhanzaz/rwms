@@ -231,12 +231,19 @@ public class MaintenanceProjectionSnapshotFactory {
     result.put("kind", value.getKind().name());
     result.put("executionState", value.getExecutionState().name());
     result.put("acceptanceState", value.getAcceptanceState().name());
+    result.put("reclassificationState", value.getReclassificationState().name());
     result.put("dispatchDate", text(value.getDispatchDate()));
     result.put("priority", value.getPriority());
     result.put("sourceParty", value.getSourceParty());
     result.put("coverMediaId", text(value.getCoverMediaId()));
     result.put(
         "movementToShipment", value.isMovementToShipment());
+    result.put(
+        "logisticsPlanningMode",
+        value.getLogisticsPlanningMode().name());
+    result.put(
+        "logisticsScheduledDate",
+        text(value.getLogisticsScheduledDate()));
     result.put("transferState", value.getTransferState());
     result.put(
         "transferDocumentId", text(value.getTransferDocumentId()));

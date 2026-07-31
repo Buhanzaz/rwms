@@ -11,8 +11,9 @@ import (
 // by logistics to assemble a cabin presentation. It contains no object-store
 // locator, filename, content type, or other media metadata.
 type CabinPresentationSnapshotRecord struct {
-	CabinID uuid.UUID
-	Photos  []CabinPresentationPhotoRecord
+	CabinID      uuid.UUID
+	CoverMediaID *uuid.UUID
+	Photos       []CabinPresentationPhotoRecord
 }
 
 // CabinPresentationPhotoRecord names one currently displayable cabin image and
@@ -115,20 +116,26 @@ func (repository *Repository) ReadCabinPresentationSnapshots(
 	}
 
 	rows, err = tx.Query(ctx, `/* media_logistics_cabin_presentation_photos */
-		select a.owner_id,a.media_id,a.current_generation,a.sort_order,
+		select photo.cabin_id::text,asset.media_id,asset.current_generation,photo.sort_order,
+			(asset.media_id=library.cover_media_id) as is_cover,
 			bool_or(variant.variant='SMALL') as has_small,
 			bool_or(variant.variant='LARGE') as has_large
-		from media_asset a
-		join media_variant variant on variant.media_id=a.media_id
-		 and variant.generation=a.current_generation
+		from media_cabin_photo photo
+		join media_cabin_photo_library library on library.cabin_id=photo.cabin_id
+		join media_asset asset on asset.media_id=photo.media_id
+		join media_variant variant on variant.media_id=asset.media_id
+		 and variant.generation=asset.current_generation
 		 and variant.variant in ('SMALL','LARGE')
 		 and variant.object_version_id<>''
-		where a.owner_type='CABIN' and a.warehouse_id=$1
-		  and a.owner_id=any($2::text[]) and a.media_kind='IMAGE'
-		  and a.processing_status='READY' and a.current_generation>0
-		  and a.deleted_at is null and media_asset_is_available(a.media_id)
-		group by a.owner_id,a.media_id,a.current_generation,a.sort_order,a.created_at
-		order by array_position($2::text[], a.owner_id),a.sort_order,a.created_at,a.media_id`,
+		where photo.warehouse_id=$1 and photo.cabin_id::text=any($2::text[])
+		  and photo.media_generation=asset.current_generation
+		  and asset.media_kind='IMAGE' and asset.processing_status='READY'
+		  and asset.current_generation>0 and asset.deleted_at is null
+		  and media_asset_is_available(asset.media_id)
+		group by photo.cabin_id,asset.media_id,asset.current_generation,photo.sort_order,
+			photo.attached_at,library.cover_media_id
+		order by array_position($2::text[], photo.cabin_id::text),
+			photo.sort_order,photo.attached_at,asset.media_id`,
 		warehouseID, authorized)
 	if err != nil {
 		return err
@@ -136,7 +143,9 @@ func (repository *Repository) ReadCabinPresentationSnapshots(
 	for rows.Next() {
 		var ownerID string
 		var photo CabinPresentationPhotoRecord
+		var isCover bool
 		if err := rows.Scan(&ownerID, &photo.MediaID, &photo.Generation, &photo.SortOrder,
+			&isCover,
 			&photo.HasSmall, &photo.HasLarge); err != nil {
 			rows.Close()
 			return err
@@ -147,6 +156,10 @@ func (repository *Repository) ReadCabinPresentationSnapshots(
 			return ErrConflict
 		}
 		records[index].Photos = append(records[index].Photos, photo)
+		if isCover {
+			copyOfMediaID := photo.MediaID
+			records[index].CoverMediaID = &copyOfMediaID
+		}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()

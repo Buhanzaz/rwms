@@ -26,5 +26,7 @@ rwms:
       relay-enabled: false
     equipment-movement:
       relay-enabled: false
+    driver-queue:
+      relay-enabled: false
     security:
       dev-auth-bypass: false

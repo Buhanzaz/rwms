@@ -223,6 +223,10 @@ export function toInventoryFindingView(
     movementRequired:
       finding.frozenPlan?.stages.some((stage) => stage.movementRequired) ??
       false,
+    logisticsPlanningMode:
+      finding.frozenPlan?.logisticsPlanningMode ?? "AUTO",
+    logisticsScheduledDate:
+      finding.frozenPlan?.logisticsScheduledDate ?? null,
     repairPlans: viewPlans(finding, lines),
     publicationStatus: publicationStatus(finding.publication),
     publicationOperationKey: finding.publication?.id ?? null,

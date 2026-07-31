@@ -52,6 +52,8 @@ class AuthFlywayConfigurationTest {
                 .isEqualTo("maintenance-service");
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].enabled"))
                 .isEqualTo("${MAINTENANCE_CLIENT_ENABLED:false}");
+        assertThat(source.getProperty("rwms.auth.oauth.clients[6].revision"))
+                .isEqualTo("${MAINTENANCE_CLIENT_REVISION:2}");
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].authentication-methods[0]"))
                 .isEqualTo("client_secret_basic");
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].grant-types[0]"))
@@ -65,6 +67,8 @@ class AuthFlywayConfigurationTest {
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].scopes[3]"))
                 .isEqualTo("media.maintenance");
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].scopes[4]"))
+                .isEqualTo("logistics.maintenance");
+        assertThat(source.getProperty("rwms.auth.oauth.clients[6].scopes[5]"))
                 .isNull();
         assertThat(source.getProperty("rwms.auth.oauth.clients[6].audiences[0]"))
                 .isEqualTo("rwms-services");

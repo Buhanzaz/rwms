@@ -287,6 +287,16 @@ func (repository *Repository) CreateUpload(ctx context.Context, command CreateUp
 	if err != nil {
 		return AssetRecord{}, false, translateConstraint(err)
 	}
+	if command.OwnerType == OwnerTypeCabin && command.Kind == media.KindImage {
+		cabinID, parseErr := uuid.Parse(command.OwnerID)
+		if parseErr != nil || cabinID == uuid.Nil {
+			return AssetRecord{}, false, ErrConflict
+		}
+		if err := associateCabinImageUpload(ctx, tx, cabinID, assetID,
+			command.WarehouseID, command.SortOrder, now); err != nil {
+			return AssetRecord{}, false, err
+		}
+	}
 	_, err = tx.Exec(ctx, `
 		insert into media_upload_session (
 			upload_session_id, media_id, principal_type, subject_id, idempotency_key,
@@ -927,7 +937,14 @@ func (repository *Repository) ReadOwnerAssets(
 		return err
 	}
 	defer tx.Rollback(ctx)
-	records, err := readOwnerAssets(ctx, tx, ownerType, ownerID, warehouseID, limit, after, repository.now)
+	var records []AssetWithVariants
+	if ownerType == OwnerTypeCabin {
+		records, err = readCabinPhotoAssets(ctx, tx, ownerID, warehouseID, limit, after,
+			repository.now)
+	} else {
+		records, err = readOwnerAssets(ctx, tx, ownerType, ownerID, warehouseID, limit, after,
+			repository.now)
+	}
 	if err != nil {
 		return err
 	}
@@ -1157,12 +1174,14 @@ func (repository *Repository) ReadCabinCovers(
 
 	rows, err = tx.Query(ctx, `/* media_public_cabin_covers */
 		with image_assets as materialized (
-			select a.media_id,a.owner_id,a.processing_status,a.current_generation,
-				a.sort_order,a.created_at
-			from media_asset a
-			where a.owner_type='CABIN' and a.warehouse_id=$1
-			  and a.owner_id=any($2::text[]) and a.media_kind='IMAGE'
-			  and a.deleted_at is null and media_asset_is_available(a.media_id)
+			select asset.media_id,photo.cabin_id::text as owner_id,
+				asset.processing_status,asset.current_generation,
+				photo.sort_order,photo.attached_at as created_at
+			from media_cabin_photo photo
+			join media_asset asset on asset.media_id=photo.media_id
+			where photo.warehouse_id=$1 and photo.cabin_id::text=any($2::text[])
+			  and asset.media_kind='IMAGE' and asset.deleted_at is null
+			  and media_asset_is_available(asset.media_id)
 		), counts as (
 			select owner_id,count(*)::bigint as photo_count
 			from image_assets group by owner_id
@@ -1180,8 +1199,10 @@ func (repository *Repository) ReadCabinCovers(
 		)
 		select counts.owner_id,counts.photo_count,preview.media_id,preview.current_generation,
 			preview.variant,preview.object_version_id,preview.content_type,preview.size_bytes,
-			preview.width,preview.height,preview.checksum_sha256
+			preview.width,preview.height,preview.checksum_sha256,
+			(preview.media_id=library.cover_media_id) as is_cover
 		from counts
+		join media_cabin_photo_library library on library.cabin_id=counts.owner_id::uuid
 		left join previews preview on preview.owner_id=counts.owner_id
 		 and preview.preview_rank<=100
 		order by counts.owner_id,preview.preview_rank nulls last`, warehouseID, authorized)
@@ -1198,8 +1219,10 @@ func (repository *Repository) ReadCabinCovers(
 		var variantName, objectVersionID, contentType, checksum *string
 		var sizeBytes *int64
 		var width, height *int
+		var isCover *bool
 		if err := rows.Scan(&ownerID, &photoCount, &mediaID, &generation, &variantName,
-			&objectVersionID, &contentType, &sizeBytes, &width, &height, &checksum); err != nil {
+			&objectVersionID, &contentType, &sizeBytes, &width, &height, &checksum,
+			&isCover); err != nil {
 			rows.Close()
 			return err
 		}
@@ -1226,10 +1249,10 @@ func (repository *Repository) ReadCabinCovers(
 			records[index].Previews = append(records[index].Previews, CabinPreviewRecord{
 				MediaID: *mediaID, Generation: *generation, Variant: variant,
 			})
-			if records[index].Variant == nil {
+			if isCover != nil && *isCover {
 				records[index].MediaID = *mediaID
 				records[index].Generation = *generation
-				records[index].Variant = &records[index].Previews[0].Variant
+				records[index].Variant = &records[index].Previews[len(records[index].Previews)-1].Variant
 			}
 		}
 	}
@@ -1385,6 +1408,14 @@ func (repository *Repository) ReadCurrentVariant(
 	case media.VariantSmall, media.VariantMedium, media.VariantLarge:
 	default:
 		return ErrConflict
+	}
+	if ownerType == OwnerTypeCabin {
+		cabinID, err := uuid.Parse(ownerID)
+		if err != nil || cabinID == uuid.Nil {
+			return ErrConflict
+		}
+		return repository.ReadCabinPhotoVariant(ctx, cabinID, warehouseID, mediaID,
+			generation, requestedVariant, consume)
 	}
 	tx, err := repository.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {

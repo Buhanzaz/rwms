@@ -41,15 +41,6 @@ public class WarehouseKpiSettings extends AbstractVersionedEntity {
   @Column(name = "data_available_from")
   private LocalDate dataAvailableFrom;
 
-  @Column(name = "repair_light_boundary_minutes", nullable = false)
-  private int repairLightBoundaryMinutes = 60;
-
-  @Column(name = "repair_medium_boundary_minutes", nullable = false)
-  private int repairMediumBoundaryMinutes = 180;
-
-  @Column(name = "repair_complex_boundary_minutes", nullable = false)
-  private int repairComplexBoundaryMinutes = 360;
-
   @OneToOne(fetch = FetchType.LAZY)
   @JoinColumn(
       name = "palette_id",
@@ -128,22 +119,6 @@ public class WarehouseKpiSettings extends AbstractVersionedEntity {
     }
   }
 
-  public void setRepairComplexityBoundaries(
-      int lightBoundaryMinutes,
-      int mediumBoundaryMinutes,
-      int complexBoundaryMinutes) {
-    if (lightBoundaryMinutes <= 0
-        || lightBoundaryMinutes >= mediumBoundaryMinutes
-        || mediumBoundaryMinutes >= complexBoundaryMinutes) {
-      throw new IllegalArgumentException(
-          "Границы сложности ремонта должны быть положительными и строго возрастать");
-    }
-    repairLightBoundaryMinutes = lightBoundaryMinutes;
-    repairMediumBoundaryMinutes = mediumBoundaryMinutes;
-    repairComplexBoundaryMinutes = complexBoundaryMinutes;
-    touch();
-  }
-
   public UUID getWarehouseId() {
     return warehouseId;
   }
@@ -158,18 +133,6 @@ public class WarehouseKpiSettings extends AbstractVersionedEntity {
 
   public LocalDate getDataAvailableFrom() {
     return dataAvailableFrom;
-  }
-
-  public int getRepairLightBoundaryMinutes() {
-    return repairLightBoundaryMinutes;
-  }
-
-  public int getRepairMediumBoundaryMinutes() {
-    return repairMediumBoundaryMinutes;
-  }
-
-  public int getRepairComplexBoundaryMinutes() {
-    return repairComplexBoundaryMinutes;
   }
 
   public KpiPalette getPalette() {

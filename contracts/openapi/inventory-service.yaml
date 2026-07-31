@@ -71,12 +71,32 @@ paths:
     get:
       tags: [Sessions]
       operationId: getActiveInventorySession
-      description: Requires USER, rwms.read and warehouse VIEW.
+      description: >-
+        Requires USER, rwms.read and warehouse VIEW. The response carries an
+        ETag for both an active session and the no-active-session state; clients
+        can send If-None-Match to retain their local snapshot when it is current.
       parameters:
         - { $ref: '#/components/parameters/WarehouseId' }
+        - { $ref: '#/components/parameters/IfNoneMatch' }
       responses:
-        '200': { $ref: '#/components/responses/SessionDetailResponse' }
-        '204': { description: The warehouse has no active inventory session. }
+        '200':
+          description: Warehouse-scoped active inventory session.
+          headers:
+            X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }
+            ETag: { $ref: '#/components/headers/ETag' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionDetail' }
+        '204':
+          description: The warehouse has no active inventory session.
+          headers:
+            X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }
+            ETag: { $ref: '#/components/headers/ETag' }
+        '304':
+          description: The active-session state has not changed.
+          headers:
+            X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }
+            ETag: { $ref: '#/components/headers/ETag' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /api/inventory/v1/sessions/{inventoryId}:
@@ -406,12 +426,20 @@ components:
     X-Correlation-Id:
       required: true
       schema: { type: string, format: uuid }
+    ETag:
+      required: true
+      schema: { type: string }
     Idempotency-Replayed:
       schema: { type: string, const: 'true' }
   parameters:
     InventoryId: { name: inventoryId, in: path, required: true, schema: { type: string, format: uuid } }
     FindingId: { name: findingId, in: path, required: true, schema: { type: string, format: uuid } }
     WarehouseId: { name: warehouseId, in: query, required: true, schema: { type: string, format: uuid } }
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      schema: { type: string, minLength: 1, maxLength: 256 }
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -503,6 +531,7 @@ components:
       type: string
       enum: [RENTED, BOOKED, REPAIR, WAITING_REPAIR_CHECK, WRITTEN_OFF, CAPITAL_REPAIR, AFTER_RENT, WAITING_ESTIMATE_CONFIRMATION, SALE, USED_SALE, RESERVED, FREE, WAREHOUSE, OWN_NEEDS, IN_TRANSFER]
     InspectionState: { type: string, enum: [NOT_INSPECTED, READY, WORK_STAGED] }
+    LogisticsPlanningMode: { type: string, enum: [AUTO, FIXED_DATE] }
     ReconciliationState: { type: string, enum: [MATCHED, MISSING, CONFLICT] }
     ConflictResolutionStrategy: { type: string, enum: [ACCEPT_REGISTRY, KEEP_INSPECTION] }
     ObservationPresence: { type: string, enum: [ABSENT, EXPLICIT_EMPTY, PRESENT] }
@@ -639,11 +668,15 @@ components:
       oneOf:
         - type: object
           additionalProperties: false
-          required: [mode, priority, coverMediaId, lines, stages]
+          required: [mode, priority, coverMediaId, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
           properties:
             mode: { type: string, const: AUTO }
             priority: { type: integer, minimum: 1, maximum: 5 }
             coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
+            logisticsPlanningMode: { $ref: '#/components/schemas/LogisticsPlanningMode' }
+            logisticsScheduledDate:
+              oneOf: [{ type: string, format: date }, { type: 'null' }]
+              description: Required only for FIXED_DATE and null for AUTO.
             lines:
               type: array
               minItems: 1
@@ -653,13 +686,24 @@ components:
               type: array
               maxItems: 1000
               items: { $ref: '#/components/schemas/InventoryPlanStageSelection' }
+          oneOf:
+            - properties:
+                logisticsPlanningMode: { const: AUTO }
+                logisticsScheduledDate: { type: 'null' }
+            - properties:
+                logisticsPlanningMode: { const: FIXED_DATE }
+                logisticsScheduledDate: { type: string, format: date }
         - type: object
           additionalProperties: false
-          required: [mode, priority, coverMediaId, lines, stages]
+          required: [mode, priority, coverMediaId, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
           properties:
             mode: { type: string, const: MANUAL }
             priority: { type: integer, minimum: 1, maximum: 5 }
             coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
+            logisticsPlanningMode: { $ref: '#/components/schemas/LogisticsPlanningMode' }
+            logisticsScheduledDate:
+              oneOf: [{ type: string, format: date }, { type: 'null' }]
+              description: Required only for FIXED_DATE and null for AUTO.
             lines:
               type: array
               minItems: 1
@@ -670,6 +714,13 @@ components:
               minItems: 1
               maxItems: 1000
               items: { $ref: '#/components/schemas/InventoryPlanStageSelection' }
+          oneOf:
+            - properties:
+                logisticsPlanningMode: { const: AUTO }
+                logisticsScheduledDate: { type: 'null' }
+            - properties:
+                logisticsPlanningMode: { const: FIXED_DATE }
+                logisticsScheduledDate: { type: string, format: date }
     SaveInspectionRequest:
       oneOf:
         - type: object
@@ -997,7 +1048,7 @@ components:
     FrozenPlan:
       type: object
       additionalProperties: false
-      required: [mode, catalogVersionId, fingerprintSha256, priority, coverMediaId, lines, stages]
+      required: [mode, catalogVersionId, fingerprintSha256, priority, coverMediaId, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
       properties:
         mode: { type: string, enum: [AUTO, MANUAL] }
         catalogVersionId: { type: string, format: uuid }
@@ -1008,8 +1059,19 @@ components:
           maximum: 5
           description: Defaults to 3 only when reading a legacy frozen snapshot.
         coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
+        logisticsPlanningMode: { $ref: '#/components/schemas/LogisticsPlanningMode' }
+        logisticsScheduledDate:
+          oneOf: [{ type: string, format: date }, { type: 'null' }]
+          description: Required only for FIXED_DATE and null for AUTO.
         lines: { type: array, minItems: 1, maxItems: 2000, items: { $ref: '#/components/schemas/FrozenPlanLine' } }
         stages: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/FrozenPlanStage' } }
+      oneOf:
+        - properties:
+            logisticsPlanningMode: { const: AUTO }
+            logisticsScheduledDate: { type: 'null' }
+        - properties:
+            logisticsPlanningMode: { const: FIXED_DATE }
+            logisticsScheduledDate: { type: string, format: date }
     FrozenPlanLine:
       type: object
       additionalProperties: false

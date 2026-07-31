@@ -1,6 +1,7 @@
 import type { RepairEstimateCatalogRouteQueueKind } from "@/features/repair-estimate-catalog/model/repair-estimate-catalog"
 import type {
   PendingEstimateMediaUpload,
+  LogisticsPlanningMode,
   MaintenanceMediaReferenceDto,
   RepairEstimateLineDto,
   RepairEstimateMediaRefDto,
@@ -114,6 +115,8 @@ export type RepairTaskDto = {
   writtenOffAt?: string | null
   decisionActorId?: string | null
   taskBoardAvailable?: boolean
+  logisticsPlanningMode: LogisticsPlanningMode
+  logisticsScheduledDate: string | null
   createdAt: string
   updatedAt: string
 }
@@ -157,6 +160,8 @@ export type RepairTaskWriteCommand = {
   coverMediaId: string | null
   subtasks: RepairTaskSubtaskDto[]
   priority?: RepairPriority
+  logisticsPlanningMode: LogisticsPlanningMode
+  logisticsScheduledDate: string | null
 }
 
 export type RepairTaskReworkSeed = {

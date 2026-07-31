@@ -36,6 +36,7 @@ class MaintenanceCatalogCacheTest {
         val catalog = CachedMaintenanceCatalog(
             warehouseId = "warehouse-1",
             revision = ActiveMaintenanceCatalogRevision("catalog-1", 7),
+            activeVersionEtag = "W/\"catalog-7\"",
             nodes = listOf(
                 CatalogNodeDto(
                     id = "node-1",

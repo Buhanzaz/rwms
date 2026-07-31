@@ -2,10 +2,13 @@ package dev.buhanzaz.rwms.inventory.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.IdClass;
 import jakarta.persistence.Table;
 import java.io.Serializable;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Objects;
@@ -21,6 +24,10 @@ public class FindingPlanSnapshot {
   @Id @Column(name = "finding_revision", nullable = false) private long findingRevision;
   @Column(name = "inventory_id", nullable = false) private UUID inventoryId;
   @Column(name = "plan_mode", nullable = false, length = 16) private String planMode;
+  @Enumerated(EnumType.STRING)
+  @Column(name = "logistics_planning_mode", nullable = false, length = 16)
+  private LogisticsPlanningMode logisticsPlanningMode;
+  @Column(name = "logistics_scheduled_date") private LocalDate logisticsScheduledDate;
   @Column(name = "catalog_version_id", nullable = false) private UUID catalogVersionId;
   @Column(name = "plan_fingerprint_sha256", nullable = false, length = 64)
   private String fingerprint;
@@ -36,6 +43,8 @@ public class FindingPlanSnapshot {
       long findingRevision,
       UUID inventoryId,
       String planMode,
+      LogisticsPlanningMode logisticsPlanningMode,
+      LocalDate logisticsScheduledDate,
       UUID catalogVersionId,
       String fingerprint,
       String sourceSnapshot) {
@@ -43,6 +52,9 @@ public class FindingPlanSnapshot {
     this.findingRevision = findingRevision;
     this.inventoryId = inventoryId;
     this.planMode = planMode;
+    validateLogisticsPlanning(logisticsPlanningMode, logisticsScheduledDate);
+    this.logisticsPlanningMode = logisticsPlanningMode;
+    this.logisticsScheduledDate = logisticsScheduledDate;
     this.catalogVersionId = catalogVersionId;
     this.fingerprint = fingerprint;
     this.sourceSnapshot = sourceSnapshot;
@@ -69,8 +81,25 @@ public class FindingPlanSnapshot {
     return planMode;
   }
 
+  public LogisticsPlanningMode getLogisticsPlanningMode() {
+    return logisticsPlanningMode;
+  }
+
+  public LocalDate getLogisticsScheduledDate() {
+    return logisticsScheduledDate;
+  }
+
   public UUID getCatalogVersionId() {
     return catalogVersionId;
+  }
+
+  private static void validateLogisticsPlanning(
+      LogisticsPlanningMode mode, LocalDate scheduledDate) {
+    if (mode == null
+        || (mode == LogisticsPlanningMode.AUTO && scheduledDate != null)
+        || (mode == LogisticsPlanningMode.FIXED_DATE && scheduledDate == null)) {
+      throw new IllegalArgumentException("Inventory logistics planning is invalid");
+    }
   }
 
   public static class Key implements Serializable {

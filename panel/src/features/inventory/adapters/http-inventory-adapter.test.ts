@@ -211,6 +211,8 @@ describe("http inventory adapter", () => {
         mode: "AUTO",
         priority: 3,
         coverMediaId: "00000000-0000-4000-8000-000000000131",
+        logisticsPlanningMode: "AUTO",
+        logisticsScheduledDate: null,
         lines: [
           {
             aggregationKind: "CATALOG",
@@ -246,6 +248,8 @@ describe("http inventory adapter", () => {
       ],
       planSelection: {
         mode: "AUTO",
+        logisticsPlanningMode: "AUTO",
+        logisticsScheduledDate: null,
       },
     })
   })

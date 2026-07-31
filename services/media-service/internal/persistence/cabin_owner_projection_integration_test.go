@@ -83,7 +83,8 @@ func TestDynamicCabinOwnerProjectionAuthorizesServerCreatedCabinAndMovesWarehous
 	}
 	assets, err := repository.ListOwner(ctx, OwnerTypeCabin, cabinID.String(), secondWarehouseID,
 		10, nil)
-	if err != nil || len(assets) != 1 || assets[0].ID != newWarehouseUpload.MediaID {
+	if err != nil || len(assets) != 2 || assets[0].ID != upload.MediaID ||
+		assets[1].ID != newWarehouseUpload.MediaID {
 		t.Fatalf("ListOwner(post-move new warehouse) = %#v, %v", assets, err)
 	}
 

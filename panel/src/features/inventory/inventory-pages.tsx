@@ -318,6 +318,14 @@ function FindingEditor({
         repairCompletionMode: completion?.completionMode ?? null,
         movementRequired:
           movementRouteAvailable && completion?.movementRequired === true,
+        logisticsPlanningMode:
+          movementRouteAvailable && completion?.movementRequired === true
+            ? completion.logisticsPlanningMode
+            : "AUTO",
+        logisticsScheduledDate:
+          movementRouteAvailable && completion?.movementRequired === true
+            ? completion.logisticsScheduledDate
+            : null,
         priority: completion?.priority ?? finding.repairPriority,
       })
     },
@@ -432,6 +440,8 @@ function FindingEditor({
         previewKey={`inventory:${session.id}:${finding.id}:${session.version}`}
         initialCompletionMode={finding.repairCompletionMode ?? undefined}
         initialMovementRequired={finding.movementRequired}
+        initialLogisticsPlanningMode={finding.logisticsPlanningMode}
+        initialLogisticsScheduledDate={finding.logisticsScheduledDate}
         initialPriority={finding.repairPriority}
         movementRouteAvailable={movementRouteAvailable}
         routingSelectionAvailable={false}
