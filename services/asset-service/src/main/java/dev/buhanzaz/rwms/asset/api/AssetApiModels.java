@@ -309,11 +309,12 @@ public final class AssetApiModels {
     REPAIR
   }
 
-  /** Read projection deliberately excludes cabin number, passport and local comments. */
+  /** Narrow logistics projection; the number is the canonical driver-card label. */
   public record LogisticsRentalItemSnapshot(
       UUID assetId,
       long version,
       UUID warehouseId,
+      String number,
       RentalItemStatus status,
       List<LogisticsEquipmentContentSnapshot> contents) {}
   public record LogisticsEquipmentContentSnapshot(UUID equipmentId, long quantity) {}

@@ -4,12 +4,14 @@ import dev.buhanzaz.rwms.inventory.domain.FindingOrigin;
 import dev.buhanzaz.rwms.inventory.domain.ConflictResolutionStrategy;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryMembershipMovementType;
+import dev.buhanzaz.rwms.inventory.domain.LogisticsPlanningMode;
 import dev.buhanzaz.rwms.inventory.domain.MutationState;
 import dev.buhanzaz.rwms.inventory.domain.ObservationPresence;
 import dev.buhanzaz.rwms.inventory.domain.PublicationState;
 import dev.buhanzaz.rwms.inventory.domain.ReconciliationState;
 import dev.buhanzaz.rwms.inventory.domain.SessionLifecycle;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -66,8 +68,29 @@ public final class InventoryApiModels {
       @NotBlank @Pattern(regexp = "^(AUTO|MANUAL)$") String mode,
       @NotNull @Min(1) @Max(5) Integer priority,
       UUID coverMediaId,
+      @NotNull LogisticsPlanningMode logisticsPlanningMode,
+      LocalDate logisticsScheduledDate,
       @NotNull @Size(min = 1, max = 2000) List<@Valid PlanLineInput> lines,
-      @NotNull @Size(max = 1000) List<@Valid PlanStageSelection> stages) {}
+      @NotNull @Size(max = 1000) List<@Valid PlanStageSelection> stages) {
+    @AssertTrue(message = "logistics planning must match movement stages")
+    public boolean isLogisticsPlanningValid() {
+      if (logisticsPlanningMode == null || stages == null) return false;
+      boolean movementRequired =
+          stages.stream()
+              .anyMatch(
+                  stage ->
+                      "MOVE_TO_REPAIR".equals(stage.kind())
+                          || "MOVE_FROM_REPAIR".equals(stage.kind()));
+      if (!movementRequired) {
+        return logisticsPlanningMode == LogisticsPlanningMode.AUTO
+            && logisticsScheduledDate == null;
+      }
+      return (logisticsPlanningMode == LogisticsPlanningMode.AUTO
+              && logisticsScheduledDate == null)
+          || (logisticsPlanningMode == LogisticsPlanningMode.FIXED_DATE
+              && logisticsScheduledDate != null);
+    }
+  }
 
   public record SaveInspectionRequest(
       @Min(0) long expectedSessionRevision,
@@ -256,6 +279,8 @@ public final class InventoryApiModels {
       String fingerprintSha256,
       int priority,
       UUID coverMediaId,
+      LogisticsPlanningMode logisticsPlanningMode,
+      LocalDate logisticsScheduledDate,
       List<FrozenPlanLineView> lines,
       List<FrozenPlanStageView> stages) {}
 

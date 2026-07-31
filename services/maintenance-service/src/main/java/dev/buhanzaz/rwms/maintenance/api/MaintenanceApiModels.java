@@ -1,5 +1,6 @@
 package dev.buhanzaz.rwms.maintenance.api;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonSetter;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
@@ -9,12 +10,15 @@ import dev.buhanzaz.rwms.maintenance.domain.CatalogVersionState;
 import dev.buhanzaz.rwms.maintenance.domain.EstimateState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairAcceptanceState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairComplexity;
+import dev.buhanzaz.rwms.maintenance.domain.RepairReclassificationState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState;
 import dev.buhanzaz.rwms.maintenance.domain.RepairKind;
+import dev.buhanzaz.rwms.maintenance.domain.RepairLogisticsPlanningMode;
 import dev.buhanzaz.rwms.maintenance.domain.RepairOrigin;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageState;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -38,6 +42,16 @@ import tools.jackson.databind.exc.InvalidNullException;
 public final class MaintenanceApiModels {
   private MaintenanceApiModels() {}
 
+  private static boolean validLogisticsPlanning(
+      RepairLogisticsPlanningMode mode, LocalDate scheduledDate) {
+    return mode != null
+        && ((mode == RepairLogisticsPlanningMode.AUTO
+                && scheduledDate == null)
+            || (mode
+                    == RepairLogisticsPlanningMode.FIXED_DATE
+                && scheduledDate != null));
+  }
+
   public enum ActorType { USER, SERVICE }
   public enum CatalogNodeType { CATEGORY, SUBCATEGORY, WORK, MATERIAL, LOCATION, OPTION }
   public enum CatalogLinkType { DEPENDENCY, FOLLOW_UP }
@@ -46,7 +60,7 @@ public final class MaintenanceApiModels {
   public enum LeaseReconciliationState {
     NOT_ACQUIRED, ACTIVE, RELEASED, RECONCILIATION_REQUIRED
   }
-  public enum GenerationState { PENDING_GENERATION, GENERATED, FAILED }
+  public enum GenerationState { PENDING_GENERATION, GENERATED, NOT_REQUIRED, FAILED }
   public enum InventoryPlanMode { AUTO, MANUAL }
   public enum InventoryPlanLineKind { CATALOG, MANUAL }
   public enum InventoryPlanLineType { WORK, MATERIAL }
@@ -259,14 +273,60 @@ public final class MaintenanceApiModels {
   public record VersionCommand(@NotNull @Min(0) Long expectedVersion) {}
   public record CompleteEstimateRequest(
       @NotNull @Min(0) Long expectedVersion,
-      @NotNull @Min(1) @Max(5) Integer priority) {
+      @NotNull @Min(1) @Max(5) Integer priority,
+      @NotNull RepairLogisticsPlanningMode logisticsPlanningMode,
+      @JsonProperty(required = true)
+          LocalDate logisticsScheduledDate) {
     public CompleteEstimateRequest(Long expectedVersion) {
-      this(expectedVersion, 3);
+      this(
+          expectedVersion,
+          3,
+          RepairLogisticsPlanningMode.AUTO,
+          null);
+    }
+
+    public CompleteEstimateRequest(
+        Long expectedVersion, Integer priority) {
+      this(
+          expectedVersion,
+          priority,
+          RepairLogisticsPlanningMode.AUTO,
+          null);
+    }
+
+    @AssertTrue(
+        message =
+            "logisticsScheduledDate must be set only for FIXED_DATE")
+    @JsonIgnore
+    public boolean isLogisticsPlanningValid() {
+      return validLogisticsPlanning(
+          logisticsPlanningMode, logisticsScheduledDate);
     }
   }
   public record QueueRepairRequest(
       @NotNull @Min(0) Long expectedVersion,
-      @NotNull @Min(1) @Max(5) Integer priority) {}
+      @NotNull @Min(1) @Max(5) Integer priority,
+      @NotNull RepairLogisticsPlanningMode logisticsPlanningMode,
+      @JsonProperty(required = true)
+          LocalDate logisticsScheduledDate) {
+    public QueueRepairRequest(
+        Long expectedVersion, Integer priority) {
+      this(
+          expectedVersion,
+          priority,
+          RepairLogisticsPlanningMode.AUTO,
+          null);
+    }
+
+    @AssertTrue(
+        message =
+            "logisticsScheduledDate must be set only for FIXED_DATE")
+    @JsonIgnore
+    public boolean isLogisticsPlanningValid() {
+      return validLogisticsPlanning(
+          logisticsPlanningMode, logisticsScheduledDate);
+    }
+  }
 
   public record CatalogCounts(int nodes, int links) {}
   public record CatalogValidationReport(
@@ -711,6 +771,7 @@ public final class MaintenanceApiModels {
       RepairKind kind,
       RepairExecutionState executionState,
       RepairAcceptanceState acceptanceState,
+      @NotNull RepairReclassificationState reclassificationState,
       long version,
       LocalDate dispatchDate,
       int priority,
@@ -722,6 +783,8 @@ public final class MaintenanceApiModels {
       UUID coverMediaId,
       RepairComplexitySnapshot complexity,
       boolean movementToShipment,
+      @NotNull RepairLogisticsPlanningMode logisticsPlanningMode,
+      LocalDate logisticsScheduledDate,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt,
       ActorSnapshot actor) {
@@ -756,7 +819,59 @@ public final class MaintenanceApiModels {
       @NotNull @Size(max = 1000) List<@Valid InventoryPlanStageSelection> plan,
       @NotNull @Size(max = 100) List<@Valid MediaReferenceInput> mediaReferences,
       @NotNull @Min(1) @Max(5) Integer priority,
-      @JsonProperty(required = true) UUID coverMediaId) {}
+      @JsonProperty(required = true) UUID coverMediaId,
+      @NotNull RepairLogisticsPlanningMode logisticsPlanningMode,
+      @JsonProperty(required = true)
+          LocalDate logisticsScheduledDate) {
+    public FreezeInventoryPlanRequest(
+        UUID warehouseId,
+        UUID inventoryId,
+        UUID findingId,
+        Long sourceRevision,
+        InventoryPlanMode mode,
+        List<InventoryPlanLineInput> lines,
+        List<InventoryPlanStageSelection> plan,
+        List<MediaReferenceInput> mediaReferences,
+        Integer priority,
+        UUID coverMediaId) {
+      this(
+          warehouseId,
+          inventoryId,
+          findingId,
+          sourceRevision,
+          mode,
+          lines,
+          plan,
+          mediaReferences,
+          priority,
+          coverMediaId,
+          RepairLogisticsPlanningMode.AUTO,
+          null);
+    }
+
+    @AssertTrue(
+        message =
+            "logistics planning must match inventory movement stages")
+    @JsonIgnore
+    public boolean isLogisticsPlanningValid() {
+      if (!validLogisticsPlanning(
+          logisticsPlanningMode, logisticsScheduledDate)) {
+        return false;
+      }
+      boolean movementRequired =
+          plan != null
+              && plan.stream()
+                  .anyMatch(
+                      stage ->
+                          stage.kind() == RepairStageKind.MOVE_TO_REPAIR
+                              || stage.kind()
+                                  == RepairStageKind.MOVE_FROM_REPAIR);
+      return movementRequired
+          || (logisticsPlanningMode
+                  == RepairLogisticsPlanningMode.AUTO
+              && logisticsScheduledDate == null);
+    }
+  }
   public record InventoryPlanLineSnapshot(
       @NotNull InventoryPlanLineKind aggregationKind,
       @JsonProperty(required = true) UUID catalogVersionId,
@@ -791,7 +906,50 @@ public final class MaintenanceApiModels {
       boolean moveFromRepairRequired,
       @NotNull List<@Valid MediaReferenceInput> mediaReferences,
       @NotNull @Min(1) @Max(5) Integer priority,
-      @JsonProperty(required = true) UUID coverMediaId) {}
+      @JsonProperty(required = true) UUID coverMediaId,
+      @NotNull RepairLogisticsPlanningMode logisticsPlanningMode,
+      @JsonProperty(required = true)
+          LocalDate logisticsScheduledDate) {
+    public FrozenInventoryPlanSnapshot(
+        UUID catalogVersionId,
+        InventoryPlanMode mode,
+        List<InventoryPlanLineSnapshot> lines,
+        List<InventoryPlanStageSnapshot> stages,
+        boolean moveToRepairRequired,
+        boolean moveFromRepairRequired,
+        List<MediaReferenceInput> mediaReferences,
+        Integer priority,
+        UUID coverMediaId) {
+      this(
+          catalogVersionId,
+          mode,
+          lines,
+          stages,
+          moveToRepairRequired,
+          moveFromRepairRequired,
+          mediaReferences,
+          priority,
+          coverMediaId,
+          RepairLogisticsPlanningMode.AUTO,
+          null);
+    }
+
+    @AssertTrue(
+        message =
+            "logistics planning must match frozen movement stages")
+    @JsonIgnore
+    public boolean isLogisticsPlanningValid() {
+      if (!validLogisticsPlanning(
+          logisticsPlanningMode, logisticsScheduledDate)) {
+        return false;
+      }
+      return moveToRepairRequired
+          || moveFromRepairRequired
+          || (logisticsPlanningMode
+                  == RepairLogisticsPlanningMode.AUTO
+              && logisticsScheduledDate == null);
+    }
+  }
   public record FrozenInventoryPlanResponse(
       UUID warehouseId,
       UUID inventoryId,

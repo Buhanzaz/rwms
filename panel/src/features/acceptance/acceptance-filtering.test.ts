@@ -34,6 +34,8 @@ function task(
     sourceRepairTaskId: null,
     sourceRepairTaskVersion: null,
     readyAt: "2026-07-20T08:00:00Z",
+    logisticsPlanningMode: "AUTO",
+    logisticsScheduledDate: null,
     createdAt: "2026-07-19T08:00:00Z",
     updatedAt: "2026-07-20T08:00:00Z",
     ...overrides,

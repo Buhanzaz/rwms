@@ -41,6 +41,7 @@ class AuthMaintenanceServiceClientIntegrationTest {
         assertExactToken("task-board.task-sync");
         assertExactToken("queue-registry.write");
         assertExactToken("media.maintenance");
+        assertExactToken("logistics.maintenance");
 
         tokenRequest("task-board.task-sync queue-registry.write")
                 .andExpect(status().isBadRequest())

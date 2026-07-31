@@ -10,7 +10,7 @@ const warehouseId = "warehouse/id"
 const setting = {
   warehouseId,
   version: 4,
-  maxRepairsPerDay: 6,
+  repairPlaceCount: 6,
   createdAt: "2026-07-25T09:00:00Z",
   updatedAt: "2026-07-25T10:00:00Z",
 }
@@ -45,8 +45,8 @@ describe("repair capacity API", () => {
     )
   })
 
-  it("sends expectedVersion and the daily limit in an authenticated PUT", async () => {
-    const saved = { ...setting, version: 5, maxRepairsPerDay: 8 }
+  it("sends expectedVersion and the repair-place count in an authenticated PUT", async () => {
+    const saved = { ...setting, version: 5, repairPlaceCount: 8 }
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(jsonResponse(saved))
@@ -54,7 +54,7 @@ describe("repair capacity API", () => {
     await expect(
       updateRepairCapacity("access-token", warehouseId, {
         expectedVersion: 4,
-        maxRepairsPerDay: 8,
+        repairPlaceCount: 8,
       })
     ).resolves.toEqual(saved)
 
@@ -68,7 +68,7 @@ describe("repair capacity API", () => {
     )
     expect(JSON.parse(String(init?.body))).toEqual({
       expectedVersion: 4,
-      maxRepairsPerDay: 8,
+      repairPlaceCount: 8,
     })
   })
 
@@ -82,7 +82,7 @@ describe("repair capacity API", () => {
 
     const request = updateRepairCapacity("access-token", warehouseId, {
       expectedVersion: 4,
-      maxRepairsPerDay: 8,
+      repairPlaceCount: 8,
     })
 
     await expect(request).rejects.toBeInstanceOf(ApiError)

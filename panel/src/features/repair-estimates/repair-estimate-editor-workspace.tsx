@@ -24,6 +24,7 @@ import {
   toEstimateEditorDraft,
 } from "@/features/repair-estimates/domain/repair-estimate-domain"
 import type {
+  LogisticsPlanningMode,
   RepairEstimateCompletionMode,
   RepairEstimateDto,
   RepairEstimateEditorDraft,
@@ -253,6 +254,8 @@ function RepairEstimateEditorContent({
     mutationFn: async (params: {
       completionMode: RepairEstimateCompletionMode
       movementRequired: boolean
+      logisticsPlanningMode: LogisticsPlanningMode
+      logisticsScheduledDate: string | null
       taskPlans: RepairEstimateTaskPlanDto[]
       priority: RepairPriority
     }) => {

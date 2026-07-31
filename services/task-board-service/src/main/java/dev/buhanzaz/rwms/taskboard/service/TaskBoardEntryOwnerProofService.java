@@ -50,7 +50,7 @@ public class TaskBoardEntryOwnerProofService {
    *
    * <p>A terminal entry remains active only while an already-reserved image is
    * still being uploaded. This lets a secondary worker finish a capture that
-   * began before a primary worker completed the shared urgent task, without
+   * began before a primary worker completed the shared multi-class task, without
    * allowing a new reservation after completion.
    */
   @Transactional(propagation = Propagation.MANDATORY)

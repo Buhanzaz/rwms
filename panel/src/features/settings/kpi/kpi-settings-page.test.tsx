@@ -38,9 +38,20 @@ const manager = {
 const defaultSetting = {
   warehouseId,
   version: 0,
-  maxRepairsPerDay: 6,
+  repairPlaceCount: 6,
   createdAt: null,
   updatedAt: null,
+}
+const defaultComplexitySetting = {
+  warehouseId,
+  version: 2,
+  lightBoundaryMinutes: 120,
+  mediumBoundaryMinutes: 300,
+  complexBoundaryMinutes: 500,
+  importedFromTaskBoardVersion: 3,
+  importedAt: "2026-07-30T12:00:00Z",
+  createdAt: "2026-07-30T12:00:00Z",
+  updatedAt: "2026-07-30T12:00:00Z",
 }
 const defaultKpiSettings = {
   warehouseId,
@@ -48,11 +59,6 @@ const defaultKpiSettings = {
   status: "DRAFT",
   version: 3,
   dataAvailableFrom: null,
-  repairComplexity: {
-    lightBoundaryMinutes: 60,
-    mediumBoundaryMinutes: 180,
-    complexBoundaryMinutes: 360,
-  },
   palette: {
     version: 1,
     ranges: [{ fromPercent: 0, toPercent: 100, color: "#16A34A" }],
@@ -65,9 +71,10 @@ const defaultKpiSettings = {
 const mocks = vi.hoisted(() => ({
   getRepairCapacity: vi.fn(),
   updateRepairCapacity: vi.fn(),
+  getRepairComplexity: vi.fn(),
+  updateRepairComplexity: vi.fn(),
   getKpiSettings: vi.fn(),
   saveKpiPalette: vi.fn(),
-  saveRepairComplexity: vi.fn(),
   saveWorkSchedule: vi.fn(),
   deletePendingWorkSchedule: vi.fn(),
   activateKpiSettings: vi.fn(),
@@ -99,6 +106,22 @@ vi.mock(
 )
 
 vi.mock(
+  "@/features/settings/kpi/api/repair-complexity-api",
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("@/features/settings/kpi/api/repair-complexity-api")
+      >()
+
+    return {
+      ...original,
+      getRepairComplexity: mocks.getRepairComplexity,
+      updateRepairComplexity: mocks.updateRepairComplexity,
+    }
+  }
+)
+
+vi.mock(
   "@/features/settings/kpi/api/kpi-settings-api",
   async (importOriginal) => {
     const original =
@@ -110,7 +133,6 @@ vi.mock(
       ...original,
       getKpiSettings: mocks.getKpiSettings,
       saveKpiPalette: mocks.saveKpiPalette,
-      saveRepairComplexity: mocks.saveRepairComplexity,
       saveWorkSchedule: mocks.saveWorkSchedule,
       deletePendingWorkSchedule: mocks.deletePendingWorkSchedule,
       activateKpiSettings: mocks.activateKpiSettings,
@@ -158,12 +180,13 @@ beforeEach(() => {
     ...defaultSetting,
     version: 1,
   })
+  mocks.getRepairComplexity.mockResolvedValue(defaultComplexitySetting)
+  mocks.updateRepairComplexity.mockResolvedValue({
+    ...defaultComplexitySetting,
+    version: 3,
+  })
   mocks.getKpiSettings.mockResolvedValue(defaultKpiSettings)
   mocks.saveKpiPalette.mockResolvedValue({
-    ...defaultKpiSettings,
-    version: 4,
-  })
-  mocks.saveRepairComplexity.mockResolvedValue({
     ...defaultKpiSettings,
     version: 4,
   })
@@ -185,21 +208,16 @@ afterEach(() => {
 })
 
 describe("KpiSettingsPage", () => {
-  it("shows the service default as 6 / 6 / 6", async () => {
+  it("shows the service repair-place count", async () => {
     renderPage()
 
     const input = await screen.findByRole("spinbutton", {
-      name: "Максимум ремонтов в день",
+      name: "Количество ремонтных мест",
     })
 
     expect((input as HTMLInputElement).value).toBe("6")
-    for (const day of ["Сегодня", "Завтра", "Послезавтра"]) {
-      expect(screen.getByLabelText(`${day}: лимит ремонтов`).textContent).toBe(
-        "6"
-      )
-    }
     expect(
-      screen.getByText("Сейчас используется значение по умолчанию.")
+      screen.getByText("Настройка ещё не сохранялась для выбранного склада.")
     ).toBeTruthy()
   })
 
@@ -208,7 +226,7 @@ describe("KpiSettingsPage", () => {
     mocks.getRepairCapacity.mockResolvedValue(defaultSetting)
     mocks.updateRepairCapacity.mockResolvedValue({
       ...defaultSetting,
-      maxRepairsPerDay: 9,
+      repairPlaceCount: 9,
       createdAt: "2026-07-25T12:00:00Z",
       updatedAt: "2026-07-25T12:00:00Z",
     })
@@ -216,7 +234,7 @@ describe("KpiSettingsPage", () => {
     renderPage()
 
     const input = await screen.findByRole("spinbutton", {
-      name: "Максимум ремонтов в день",
+      name: "Количество ремонтных мест",
     })
     await user.clear(input)
     await user.type(input, "9")
@@ -228,16 +246,22 @@ describe("KpiSettingsPage", () => {
         warehouseId,
         {
           expectedVersion: 0,
-          maxRepairsPerDay: 9,
+          repairPlaceCount: 9,
         }
       )
     )
     await waitFor(() =>
-      expect(screen.getByLabelText("Сегодня: лимит ремонтов").textContent).toBe(
-        "9"
-      )
+      expect(
+        (
+          screen.getByRole("spinbutton", {
+            name: "Количество ремонтных мест",
+          }) as HTMLInputElement
+        ).value
+      ).toBe("9")
     )
-    expect(mocks.toastSuccess).toHaveBeenCalledWith("Лимит ремонтов сохранён.")
+    expect(mocks.toastSuccess).toHaveBeenCalledWith(
+      "Количество ремонтных мест сохранено."
+    )
     expect(
       screen.getByText("Настройка сохранена в сервисе ремонтов.")
     ).toBeTruthy()
@@ -279,7 +303,7 @@ describe("KpiSettingsPage", () => {
     const refreshed = {
       ...defaultSetting,
       version: 5,
-      maxRepairsPerDay: 7,
+      repairPlaceCount: 7,
       updatedAt: "2026-07-25T12:30:00Z",
     }
     mocks.getRepairCapacity
@@ -293,7 +317,7 @@ describe("KpiSettingsPage", () => {
     renderPage()
 
     const input = await screen.findByRole("spinbutton", {
-      name: "Максимум ремонтов в день",
+      name: "Количество ремонтных мест",
     })
     await user.clear(input)
     await user.type(input, "8")
@@ -309,7 +333,7 @@ describe("KpiSettingsPage", () => {
       expect(
         (
           screen.getByRole("spinbutton", {
-            name: "Максимум ремонтов в день",
+            name: "Количество ремонтных мест",
           }) as HTMLInputElement
         ).value
       ).toBe("7")
@@ -322,8 +346,46 @@ describe("KpiSettingsPage", () => {
     expect(await screen.findByText("Сложность ремонта")).toBeTruthy()
     expect(await screen.findByText("Рабочий график")).toBeTruthy()
     expect(screen.getByText("Диапазоны KPI")).toBeTruthy()
-    expect(screen.getByText("Лимит ремонтов")).toBeTruthy()
+    expect(screen.getAllByText("Количество ремонтных мест")).toHaveLength(2)
     expect(screen.getByText("Europe/Moscow")).toBeTruthy()
+  })
+
+  it("loads maintenance complexity independently when task-board KPI is unavailable", async () => {
+    mocks.getKpiSettings.mockRejectedValue(
+      new ApiError("task-board-service недоступен", 503)
+    )
+
+    renderPage()
+
+    expect(
+      await screen.findByRole("spinbutton", {
+        name: "Лёгкий ремонт, до и включая, минуты",
+      })
+    ).toBeTruthy()
+    expect(screen.getByText("task-board-service недоступен")).toBeTruthy()
+    expect(mocks.getRepairComplexity).toHaveBeenCalledWith(
+      "access-token",
+      warehouseId
+    )
+  })
+
+  it("does not fall back to task-board when maintenance complexity is unavailable", async () => {
+    mocks.getRepairComplexity.mockRejectedValue(
+      new ApiError("maintenance-service недоступен", 503)
+    )
+
+    renderPage()
+
+    expect(
+      await screen.findByText(
+        "Границы не подменяются настройками доски задач."
+      )
+    ).toBeTruthy()
+    expect(
+      screen.queryByRole("spinbutton", {
+        name: "Лёгкий ремонт, до и включая, минуты",
+      })
+    ).toBeNull()
   })
 
   it("saves strictly increasing repair boundaries as minutes", async () => {
@@ -331,28 +393,70 @@ describe("KpiSettingsPage", () => {
     renderPage()
 
     const light = await screen.findByRole("spinbutton", {
-      name: "Лёгкий ремонт, до и включая",
+      name: "Лёгкий ремонт, до и включая, минуты",
     })
     const medium = screen.getByRole("spinbutton", {
-      name: "Средний ремонт, до и включая",
+      name: "Средний ремонт, до и включая, минуты",
     })
     const complex = screen.getByRole("spinbutton", {
-      name: "Сложный ремонт, до и включая",
+      name: "Тяжёлый ремонт, до и включая, минуты",
     })
-    fireEvent.change(light, { target: { value: "1.5" } })
-    fireEvent.change(medium, { target: { value: "4" } })
-    fireEvent.change(complex, { target: { value: "8" } })
+    fireEvent.change(light, { target: { value: "90" } })
+    fireEvent.change(medium, { target: { value: "240" } })
+    fireEvent.change(complex, { target: { value: "480" } })
     await user.click(screen.getByRole("button", { name: "Сохранить границы" }))
 
     await waitFor(() =>
-      expect(mocks.saveRepairComplexity).toHaveBeenCalledWith(
+      expect(mocks.updateRepairComplexity).toHaveBeenCalledWith(
         "access-token",
         warehouseId,
         {
-          expectedVersion: 3,
+          expectedVersion: 2,
           lightBoundaryMinutes: 90,
           mediumBoundaryMinutes: 240,
           complexBoundaryMinutes: 480,
+        }
+      )
+    )
+  })
+
+  it("switches display to hours and minutes without changing saved minutes", async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findByRole("spinbutton", {
+      name: "Лёгкий ремонт, до и включая, минуты",
+    })
+    await user.click(
+      screen.getByRole("radio", { name: "Часы и минуты" })
+    )
+
+    expect(
+      (
+        screen.getByRole("spinbutton", {
+          name: "Тяжёлый ремонт, до и включая, часы",
+        }) as HTMLInputElement
+      ).value
+    ).toBe("8")
+    expect(
+      (
+        screen.getByRole("spinbutton", {
+          name: "Тяжёлый ремонт, до и включая, остаток минут",
+        }) as HTMLInputElement
+      ).value
+    ).toBe("20")
+
+    await user.click(screen.getByRole("button", { name: "Сохранить границы" }))
+
+    await waitFor(() =>
+      expect(mocks.updateRepairComplexity).toHaveBeenCalledWith(
+        "access-token",
+        warehouseId,
+        {
+          expectedVersion: 2,
+          lightBoundaryMinutes: 120,
+          mediumBoundaryMinutes: 300,
+          complexBoundaryMinutes: 500,
         }
       )
     )

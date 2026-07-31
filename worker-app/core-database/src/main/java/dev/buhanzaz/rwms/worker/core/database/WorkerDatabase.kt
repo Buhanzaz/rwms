@@ -27,7 +27,7 @@ import javax.inject.Singleton
         WorkerConflictEntity::class,
         WorkerInvalidationEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class WorkerDatabase : RoomDatabase() {
@@ -284,6 +284,20 @@ abstract class WorkerDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `worker_task` ADD COLUMN `timerServerTime` TEXT")
             }
         }
+
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Version 4 categories predate stable queue purposes. They
+                // were all ordinary task-board queues; the authenticated
+                // context refresh can later replace this canonical purpose.
+                db.execSQL(
+                    """
+                    ALTER TABLE `worker_category`
+                    ADD COLUMN `queuePurpose` TEXT NOT NULL DEFAULT 'GENERAL'
+                    """.trimIndent(),
+                )
+            }
+        }
     }
 }
 
@@ -298,6 +312,7 @@ object WorkerDatabaseModule {
                 WorkerDatabase.MIGRATION_1_2,
                 WorkerDatabase.MIGRATION_2_3,
                 WorkerDatabase.MIGRATION_3_4,
+                WorkerDatabase.MIGRATION_4_5,
             )
             .build()
 }

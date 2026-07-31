@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rwms.local/contracts/events/media/cabin-photo-facts-v1.schema.json",
+  "title": "RWMS canonical cabin cover changed fact v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelopeVersion",
+    "eventId",
+    "eventType",
+    "eventVersion",
+    "occurredAt",
+    "recordedAt",
+    "producer",
+    "aggregateType",
+    "aggregateId",
+    "aggregateVersion",
+    "correlation",
+    "actorRef",
+    "payload"
+  ],
+  "properties": {
+    "envelopeVersion": {"const": 2},
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {"const": "media.cabin.cover-changed.v1"},
+    "eventVersion": {"const": 1},
+    "occurredAt": {"type": "null"},
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "producer": {"const": "media-service"},
+    "aggregateType": {"const": "CABIN_PHOTO_LIBRARY"},
+    "aggregateId": {"type": "string", "format": "uuid"},
+    "aggregateVersion": {"type": "integer", "minimum": 1},
+    "correlation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["correlationId", "causationId"],
+      "properties": {
+        "correlationId": {"type": "string", "format": "uuid"},
+        "causationId": {"type": "null"}
+      }
+    },
+    "actorRef": {"type": "null"},
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cabinId",
+        "warehouseId",
+        "mediaId",
+        "generation",
+        "taskBoardEntryId",
+        "previousCoverMediaId",
+        "changedAt"
+      ],
+      "properties": {
+        "cabinId": {"type": "string", "format": "uuid"},
+        "warehouseId": {"type": "string", "format": "uuid"},
+        "mediaId": {"type": "string", "format": "uuid"},
+        "generation": {"type": "integer", "minimum": 1},
+        "taskBoardEntryId": {
+          "oneOf": [
+            {"type": "string", "format": "uuid"},
+            {"type": "null"}
+          ]
+        },
+        "previousCoverMediaId": {
+          "oneOf": [
+            {"type": "string", "format": "uuid"},
+            {"type": "null"}
+          ]
+        },
+        "changedAt": {"type": "string", "format": "date-time"}
+      }
+    }
+  },
+  "x-rwms-topic": "rwms.media.cabin-photo.v1",
+  "x-rwms-record-key": "aggregateId",
+  "x-rwms-invariants": [
+    "aggregateId equals payload.cabinId",
+    "one cabin has exactly one current cover pointer",
+    "the referenced media asset is not copied when it joins cabin history"
+  ]
+}

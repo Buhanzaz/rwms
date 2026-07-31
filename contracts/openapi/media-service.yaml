@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Media Service API
-  version: 1.12.0
+  version: 1.13.0
   license: { name: UNLICENSED }
   description: >-
     Stateful Go media API. PostgreSQL owns metadata and replay state; MinIO
@@ -251,7 +251,8 @@ paths:
         Requires only a SERVICE JWT with sub=client_id=logistics-service,
         audience rwms-services and exactly media.logistics. This private,
         read-only projection returns active canonical CABIN owner bindings and
-        only their READY IMAGE assets at the current generation. Each photo
+        only READY current-generation IMAGE assets in their canonical photo
+        associations. Each photo
         contains just an opaque media ID, generation, sort order and the
         SMALL/LARGE variants currently available for a later private stream;
         it never exposes a browser route, object-store locator, signed URL,
@@ -273,6 +274,47 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '503': { $ref: '#/components/responses/Unavailable' }
+  /api/internal/media/v1/logistics/cabins/{cabinId}/cover-from-task-evidence:
+    post:
+      summary: Attach exact task evidence to cabin history and make it the cover
+      operationId: setCabinCoverFromTaskEvidence
+      description: >-
+        Requires only a SERVICE JWT with sub=client_id=logistics-service,
+        audience rwms-services and exactly media.logistics. The command proves
+        that evidenceMediaId is a READY IMAGE owned by taskBoardEntryId and
+        that the task entry and active cabin owner proof resolve to the same
+        warehouse. The existing media asset is associated without copying it.
+        The cabin's single cover pointer is replaced atomically; the old photo
+        remains in history. Exact Idempotency-Key replay returns the same
+        result and changed payload reuse is rejected.
+      parameters:
+        - $ref: '#/components/parameters/CabinId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetCabinCoverFromTaskEvidenceRequest' }
+      responses:
+        '200':
+          description: Exact idempotent replay or the evidence was already the canonical cover.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CabinCoverChange' }
+        '201':
+          description: Evidence attached and the single cover pointer atomically replaced.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CabinCoverChange' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/Unavailable' }
   /api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content:
     get:
       summary: Stream one opaque current CABIN presentation variant for logistics
@@ -280,8 +322,8 @@ paths:
       description: >-
         Requires only a SERVICE JWT with sub=client_id=logistics-service,
         audience rwms-services and exactly media.logistics. variant is exactly
-        SMALL or LARGE. The service verifies CABIN owner type, cabinId,
-        warehouseId, READY state, exact current generation and variant
+        SMALL or LARGE. The service verifies the canonical cabin association,
+        cabinId, warehouseId, READY state, exact current generation and variant
         existence before streaming immutable bytes. Every scope, owner,
         warehouse, state, generation and variant mismatch is a uniform 404;
         no object-store locator or public media route is exposed.
@@ -461,10 +503,10 @@ paths:
       description: >-
         Requires USER, rwms.read and warehouse VIEW. The service returns only
         cabins with a current canonical media owner binding. photoCount counts
-        logical non-deleted IMAGE assets, never derived variant rows. previews
-        contains at most 100 ordered READY images with exactly one SMALL
-        variant per logical image. The optional cover is the first previews
-        item and remains for compatibility.
+        logical non-deleted IMAGE associations, never derived variant rows.
+        previews contains at most 100 ordered READY images with exactly one
+        SMALL variant per logical image. cover is resolved only through the
+        canonical single cover pointer and never by a sort-order fallback.
       requestBody:
         required: true
         content:
@@ -972,9 +1014,14 @@ components:
     CabinPresentationSnapshot:
       type: object
       additionalProperties: false
-      required: [cabinId, photos]
+      required: [cabinId, coverMediaId, photos]
       properties:
         cabinId: { type: string, format: uuid }
+        coverMediaId:
+          description: Canonical cover pointer; null when the cabin has no current READY cover variant.
+          oneOf:
+            - { type: string, format: uuid }
+            - { type: 'null' }
         photos:
           description: READY current-generation CABIN IMAGE assets with at least one available private presentation variant, in stable presentation order.
           type: array
@@ -994,6 +1041,32 @@ components:
           maxItems: 2
           uniqueItems: true
           items: { enum: [SMALL, LARGE] }
+    SetCabinCoverFromTaskEvidenceRequest:
+      type: object
+      additionalProperties: false
+      required: [taskBoardEntryId, evidenceMediaId]
+      properties:
+        taskBoardEntryId: { type: string, format: uuid }
+        evidenceMediaId: { type: string, format: uuid }
+    CabinCoverChange:
+      type: object
+      additionalProperties: false
+      required:
+        - cabinId
+        - warehouseId
+        - coverMediaId
+        - generation
+        - taskBoardEntryId
+        - version
+        - changedAt
+      properties:
+        cabinId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        coverMediaId: { type: string, format: uuid }
+        generation: { type: integer, minimum: 1 }
+        taskBoardEntryId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        changedAt: { type: string, format: date-time }
     CreateUploadSessionRequest:
       type: object
       additionalProperties: false
@@ -1164,7 +1237,7 @@ components:
           minimum: 1
           maximum: 100
         cover:
-          description: First previews item, retained for compatibility; null when previews is empty.
+          description: Exact canonical cover pointer projection; null when the pointer has no READY SMALL variant.
           oneOf:
             - { $ref: '#/components/schemas/CabinCoverVariant' }
             - { type: 'null' }

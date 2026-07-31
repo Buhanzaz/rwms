@@ -20,6 +20,7 @@ import {
   toEstimateEditorDraft,
 } from "@/features/repair-estimates/domain/repair-estimate-domain"
 import type {
+  LogisticsPlanningMode,
   RepairEstimateCompletionMode,
   RepairEstimateDto,
   RepairEstimateEditorDraft,
@@ -168,6 +169,8 @@ export function RepairEstimateCompletedWorkspace({
     mutationFn: (params: {
       completionMode: RepairEstimateCompletionMode
       movementRequired: boolean
+      logisticsPlanningMode: LogisticsPlanningMode
+      logisticsScheduledDate: string | null
       taskPlans: RepairEstimateTaskPlanDto[]
     }) => {
       if (!canAmend) {
@@ -528,6 +531,12 @@ export function RepairEstimateCompletedWorkspace({
         error={error}
         mode="AMEND"
         initialMovementRequired={amendmentMovementRequired}
+        initialLogisticsPlanningMode={
+          linkedTask?.logisticsPlanningMode ?? "AUTO"
+        }
+        initialLogisticsScheduledDate={
+          linkedTask?.logisticsScheduledDate ?? null
+        }
         initialTaskPlans={amendmentTaskPlans}
         onOpenChange={setCompletionOpen}
         onComplete={(params) => {

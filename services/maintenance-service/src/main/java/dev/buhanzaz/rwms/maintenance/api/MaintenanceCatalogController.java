@@ -11,6 +11,7 @@ import jakarta.validation.constraints.Min;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -35,17 +36,22 @@ public class MaintenanceCatalogController {
   private final MaintenanceAuthorizer access;
 
   @GetMapping("/versions")
-  public PageResponse<CatalogVersionResponse> versions(
+  public ResponseEntity<PageResponse<CatalogVersionResponse>> versions(
       @AuthenticationPrincipal Jwt jwt,
       @RequestParam UUID warehouseId,
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "50") @Min(1) @Max(200) int size,
-      @RequestParam(required = false) CatalogVersionState lifecycle) {
+      @RequestParam(required = false) CatalogVersionState lifecycle,
+      @RequestHeader(name = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch) {
     access.requireRead(jwt, warehouseId);
     List<CatalogVersionResponse> values = service.catalogVersions(warehouseId).stream()
         .filter(value -> lifecycle == null || value.lifecycle() == lifecycle)
         .toList();
-    return page(values, page, size);
+    PageResponse<CatalogVersionResponse> response = page(values, page, size);
+    return ConditionalGet.response(
+        "catalog-versions:" + warehouseId + ':' + page + ':' + size + ':' + lifecycle,
+        response,
+        ifNoneMatch);
   }
 
   @PutMapping("/versions/{id}")

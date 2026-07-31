@@ -70,7 +70,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
   void cumulativeVersionFourEventSourcingAndTaskSyncMigrateCleanDatabaseAndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(17);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(19);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -121,7 +121,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
     assertThat(columnCounts())
         .containsAllEntriesOf(
             Map.ofEntries(
-                Map.entry("board_task", 16),
+                Map.entry("board_task", 17),
                 Map.entry("queue_entry", 22),
                 Map.entry("queue_usage_reference", 6),
                 Map.entry("task_assignment", 12),
@@ -130,8 +130,9 @@ class TaskBoardFlywayMigrationIntegrationTest {
                 Map.entry("task_board_outbox", 24),
                 Map.entry("task_sync_source", 6),
                 Map.entry("task_time_event", 10),
+                Map.entry("warehouse_kpi_settings", 10),
                 Map.entry("work_queue", 13),
-                Map.entry("work_queue_class_binding", 7),
+                Map.entry("work_queue_class_binding", 8),
                 Map.entry("worker", 17),
                 Map.entry("worker_class", 8),
                 Map.entry("worker_class_assignment", 6),
@@ -275,6 +276,22 @@ class TaskBoardFlywayMigrationIntegrationTest {
         .containsEntry("description", "canonicalize task board runtime state")
         .containsEntry(
             "script", "V20__canonicalize_task_board_runtime_state.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='21'"))
+        .containsEntry("version", "21")
+        .containsEntry("description", "driver logistics queue")
+        .containsEntry("script", "V21__driver_logistics_queue.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='22'"))
+        .containsEntry("version", "22")
+        .containsEntry("description", "remove legacy repair complexity")
+        .containsEntry("script", "V22__remove_legacy_repair_complexity.sql")
         .containsEntry("success", true);
     assertThat(
             jdbc.queryForObject(
@@ -442,6 +459,288 @@ class TaskBoardFlywayMigrationIntegrationTest {
   }
 
   @Test
+  void versionTwentyOneCutsReviewedSpbDriverQueueOverOnceWithoutLosingTaskState() {
+    configuration(MIGRATION_LOCATION).target("20").load().migrate();
+    UUID spb = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    UUID msk = UUID.fromString("00000000-0000-0000-0000-000000000002");
+    UUID driverDefinition =
+        UUID.fromString("c4d01176-43d3-4b69-ae1f-9a2a2e6c9971");
+    UUID driverClass = UUID.fromString("442f7eed-563a-4a98-8a6c-84886256a07a");
+    UUID slingerClass = UUID.fromString("60000000-0000-0000-0000-000000000001");
+    UUID secondaryBinding = UUID.fromString("61000000-0000-0000-0000-000000000001");
+    UUID mskQueue = UUID.fromString("62000000-0000-0000-0000-000000000001");
+    UUID taskId = UUID.fromString("63000000-0000-0000-0000-000000000001");
+    UUID entryId = UUID.fromString("64000000-0000-0000-0000-000000000001");
+    UUID historyId = UUID.fromString("65000000-0000-0000-0000-000000000001");
+
+    jdbc.update(
+        """
+        insert into queue_definition(
+          id,version,revision_marker,name,normalized_name,description,queue_type)
+        values (?,0,?,'Перемещения','перемещения','СПБ source','MOVEMENT')
+        """,
+        driverDefinition,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into worker_class(
+          id,version,revision_marker,name,description,comment_text,sort_order,active)
+        values
+          (?,0,?,'Старое имя водителей',null,null,10,true),
+          (?,0,?,'Стропальщики',null,null,20,true)
+        """,
+        driverClass,
+        UUID.randomUUID(),
+        slingerClass,
+        UUID.randomUUID());
+    jdbc.update(
+        """
+        insert into work_queue(
+          id,version,revision_marker,warehouse_id,sort_order,active,hidden,collapsed,
+          holding_period_minutes,notification_threshold,notify_when_threshold_reached,
+          result_photo_min_count,definition_id)
+        values
+          (?,0,?,?,7,true,false,false,null,null,false,0,?),
+          (?,0,?,?,4,true,false,false,null,null,false,0,?)
+        """,
+        driverDefinition,
+        UUID.randomUUID(),
+        spb,
+        driverDefinition,
+        mskQueue,
+        UUID.randomUUID(),
+        msk,
+        driverDefinition);
+    jdbc.update(
+        """
+        insert into work_queue_class_binding(
+          id,version,queue_id,worker_class_id,stop_task_on_take,binding_order,notify_urgent)
+        values
+          (?,0,?,?,false,0,false),
+          (?,0,?,?,false,1,true),
+          (?,0,?,?,false,0,false)
+        """,
+        UUID.randomUUID(),
+        driverDefinition,
+        driverClass,
+        secondaryBinding,
+        driverDefinition,
+        slingerClass,
+        UUID.randomUUID(),
+        mskQueue,
+        slingerClass);
+    jdbc.update(
+        """
+        insert into board_task(
+          id,version,warehouse_id,external_task_id,title,status,priority,pinned,
+          completion_deadline_enforced)
+        values (?,3,?,null,'Существующее перемещение','ACTIVE',2,true,false)
+        """,
+        taskId,
+        spb);
+    jdbc.update(
+        """
+        insert into queue_entry(
+          id,version,revision_marker,task_id,queue_id,route_index,queue_position,
+          entry_type,status,active_work_seconds)
+        values (?,5,?,?,?,0,11,'REAL','IN_PROGRESS',125)
+        """,
+        entryId,
+        UUID.randomUUID(),
+        taskId,
+        driverDefinition);
+    jdbc.update(
+        """
+        insert into task_time_event(
+          id,version,queue_entry_id,event_type,reason,created_at)
+        values (?,2,?,'STARTED','История существующего задания',clock_timestamp())
+        """,
+        historyId,
+        entryId);
+
+    Flyway cutover = configuration(MIGRATION_LOCATION).target("21").load();
+    assertThat(cutover.migrate().migrationsExecuted).isOne();
+
+    assertThat(
+            jdbc.queryForMap(
+                "select queue_purpose,name from queue_definition where id=?",
+                driverDefinition))
+        .containsEntry("queue_purpose", "LOGISTICS_DRIVER")
+        .containsEntry("name", "Перемещения");
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select sort_order,active,hidden,result_photo_min_count
+                  from work_queue
+                 where id=?
+                """,
+                driverDefinition))
+        .containsEntry("sort_order", 7)
+        .containsEntry("active", true)
+        .containsEntry("hidden", false)
+        .containsEntry("result_photo_min_count", 1);
+    assertThat(
+            jdbc.queryForMap(
+                "select active,hidden from work_queue where id=?", mskQueue))
+        .containsEntry("active", false)
+        .containsEntry("hidden", true);
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select participation_policy,notify_on_primary_take
+                  from work_queue_class_binding
+                 where id=?
+                """,
+                secondaryBinding))
+        .containsEntry("participation_policy", "OPTIONAL")
+        .containsEntry("notify_on_primary_take", true);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                  from information_schema.columns
+                 where table_schema='public'
+                   and table_name='work_queue_class_binding'
+                   and column_name='notify_urgent'
+                """,
+                Integer.class))
+        .isZero();
+    assertThat(
+            jdbc.queryForMap(
+                "select version,status,title,task_lane from board_task where id=?", taskId))
+        .containsEntry("version", 3L)
+        .containsEntry("status", "ACTIVE")
+        .containsEntry("title", "Существующее перемещение")
+        .containsEntry("task_lane", "SCHEDULED");
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select version,queue_id,queue_position,status,active_work_seconds
+                  from queue_entry
+                 where id=?
+                """,
+                entryId))
+        .containsEntry("version", 5L)
+        .containsEntry("queue_id", driverDefinition)
+        .containsEntry("queue_position", 11)
+        .containsEntry("status", "IN_PROGRESS")
+        .containsEntry("active_work_seconds", 125L);
+    assertThat(
+            jdbc.queryForMap(
+                "select version,queue_entry_id,event_type,reason from task_time_event where id=?",
+                historyId))
+        .containsEntry("version", 2L)
+        .containsEntry("queue_entry_id", entryId)
+        .containsEntry("event_type", "STARTED")
+        .containsEntry("reason", "История существующего задания");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from queue_definition where queue_purpose='LOGISTICS_DRIVER'",
+                Integer.class))
+        .isOne();
+    assertThat(cutover.migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
+  void versionTwentyTwoRemovesOnlyDefaultLegacyRepairComplexityAndPreservesSettings() {
+    configuration(MIGRATION_LOCATION).target("21").load().migrate();
+    UUID settingsId = UUID.fromString("71000000-0000-0000-0000-000000000001");
+    UUID warehouseId = UUID.fromString("72000000-0000-0000-0000-000000000001");
+    jdbc.update(
+        """
+        insert into warehouse_kpi_settings(
+          id,version,revision_marker,warehouse_id,time_zone,status,data_available_from,
+          palette_id,active_schedule_id,pending_schedule_id,
+          repair_light_boundary_minutes,repair_medium_boundary_minutes,
+          repair_complex_boundary_minutes)
+        values (?,4,?,?,?,'DRAFT',null,null,null,null,60,180,360)
+        """,
+        settingsId,
+        UUID.randomUUID(),
+        warehouseId,
+        "Europe/Moscow");
+
+    Flyway cutover = configuration(MIGRATION_LOCATION).target("22").load();
+    assertThat(cutover.migrate().migrationsExecuted).isOne();
+
+    assertThat(
+            jdbc.queryForMap(
+                """
+                select id,version,warehouse_id,time_zone,status
+                  from warehouse_kpi_settings
+                 where id=?
+                """,
+                settingsId))
+        .containsEntry("id", settingsId)
+        .containsEntry("version", 4L)
+        .containsEntry("warehouse_id", warehouseId)
+        .containsEntry("time_zone", "Europe/Moscow")
+        .containsEntry("status", "DRAFT");
+    assertThat(
+            jdbc.queryForList(
+                """
+                select column_name
+                  from information_schema.columns
+                 where table_schema='public'
+                   and table_name='warehouse_kpi_settings'
+                   and column_name in (
+                     'repair_light_boundary_minutes',
+                     'repair_medium_boundary_minutes',
+                     'repair_complex_boundary_minutes')
+                """,
+                String.class))
+        .isEmpty();
+    assertThat(cutover.migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
+  void versionTwentyTwoFailsBeforeDroppingNonDefaultLegacyRepairComplexity() {
+    configuration(MIGRATION_LOCATION).target("21").load().migrate();
+    jdbc.update(
+        """
+        insert into warehouse_kpi_settings(
+          id,version,revision_marker,warehouse_id,time_zone,status,data_available_from,
+          palette_id,active_schedule_id,pending_schedule_id,
+          repair_light_boundary_minutes,repair_medium_boundary_minutes,
+          repair_complex_boundary_minutes)
+        values (?,?,?,?,'Europe/Moscow','DRAFT',null,null,null,null,45,120,300)
+        """,
+        UUID.randomUUID(),
+        7L,
+        UUID.randomUUID(),
+        UUID.randomUUID());
+
+    Flyway cutover = configuration(MIGRATION_LOCATION).target("22").load();
+    assertThatThrownBy(cutover::migrate)
+        .isInstanceOf(FlywayException.class)
+        .hasStackTraceContaining("On the old deployment, first run the controlled maintenance import");
+
+    assertThat(
+            jdbc.queryForList(
+                """
+                select column_name
+                  from information_schema.columns
+                 where table_schema='public'
+                   and table_name='warehouse_kpi_settings'
+                   and column_name in (
+                     'repair_light_boundary_minutes',
+                     'repair_medium_boundary_minutes',
+                     'repair_complex_boundary_minutes')
+                 order by column_name
+                """,
+                String.class))
+        .containsExactly(
+            "repair_complex_boundary_minutes",
+            "repair_light_boundary_minutes",
+            "repair_medium_boundary_minutes");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history where version='22' and success",
+                Integer.class))
+        .isZero();
+  }
+
+  @Test
   void nonEmptyUnversionedSchemaIsNeverAdoptedAutomatically() throws Exception {
     applyHistoricalSchema();
     createHistoricalMigrationEvidence();
@@ -510,7 +809,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(16);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(18);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
 
@@ -660,7 +959,7 @@ class TaskBoardFlywayMigrationIntegrationTest {
     String json =
         "board_task".equals(table)
             ? "to_jsonb(row_value) - array['completion_deadline_enforced',"
-                + "'scheduled_date','priority','pinned','request_fingerprint']"
+                + "'scheduled_date','task_lane','priority','pinned','request_fingerprint']"
             : "queue_entry".equals(table)
                 ? "to_jsonb(row_value) - array['queue_code','worker_works','worker_materials',"
                     + "'worker_comments','source_media_references','revision_marker',"
@@ -673,7 +972,8 @@ class TaskBoardFlywayMigrationIntegrationTest {
                     : "worker_class".equals(table)
                         ? "to_jsonb(row_value) - 'code'"
                     : "work_queue_class_binding".equals(table)
-                        ? "to_jsonb(row_value) - array['binding_order','notify_urgent']"
+                        ? "to_jsonb(row_value) - array['binding_order','notify_urgent',"
+                            + "'participation_policy','notify_on_primary_take']"
                         : "worker_group_member".equals(table)
                             ? "to_jsonb(row_value) - 'role_in_group'"
                             : "worker".equals(table)

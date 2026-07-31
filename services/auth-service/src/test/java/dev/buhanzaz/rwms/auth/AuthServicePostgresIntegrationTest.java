@@ -72,7 +72,8 @@ class AuthServicePostgresIntegrationTest {
                                     "asset.maintenance",
                                     "task-board.task-sync",
                                     "queue-registry.write",
-                                    "media.maintenance")
+                                    "media.maintenance",
+                                    "logistics.maintenance")
                             .doesNotContain("asset.internal", "rwms.write", "warehouse.read");
                     assertThat(String.valueOf(row.get("client_settings")))
                             .contains("\"rwms.client.enabled\":false");

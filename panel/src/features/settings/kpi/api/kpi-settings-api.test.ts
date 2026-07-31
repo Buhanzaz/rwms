@@ -5,7 +5,6 @@ import {
   deletePendingWorkSchedule,
   getKpiSettings,
   saveKpiPalette,
-  saveRepairComplexity,
   saveWorkSchedule,
 } from "@/features/settings/kpi/api/kpi-settings-api"
 
@@ -16,11 +15,6 @@ const settings = {
   status: "DRAFT",
   version: 3,
   dataAvailableFrom: null,
-  repairComplexity: {
-    lightBoundaryMinutes: 60,
-    mediumBoundaryMinutes: 180,
-    complexBoundaryMinutes: 360,
-  },
   palette: null,
   activeSchedule: null,
   pendingSchedule: null,
@@ -73,27 +67,6 @@ describe("KPI settings API", () => {
     const [url, init] = fetchMock.mock.calls[0]!
     expect(new URL(String(url)).pathname).toBe(
       "/api/task-board/warehouses/warehouse%2Fid/task-board/kpi-settings/palette"
-    )
-    expect(init?.method).toBe("PUT")
-    expect(JSON.parse(String(init?.body))).toEqual(input)
-  })
-
-  it("saves repair complexity boundaries in canonical minutes", async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(jsonResponse({ ...settings, version: 4 }))
-    const input = {
-      expectedVersion: 3,
-      lightBoundaryMinutes: 60,
-      mediumBoundaryMinutes: 180,
-      complexBoundaryMinutes: 360,
-    }
-
-    await saveRepairComplexity("access-token", warehouseId, input)
-
-    const [url, init] = fetchMock.mock.calls[0]!
-    expect(new URL(String(url)).pathname).toBe(
-      "/api/task-board/warehouses/warehouse%2Fid/task-board/kpi-settings/repair-complexity"
     )
     expect(init?.method).toBe("PUT")
     expect(JSON.parse(String(init?.body))).toEqual(input)

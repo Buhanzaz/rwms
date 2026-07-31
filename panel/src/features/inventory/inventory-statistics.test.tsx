@@ -56,6 +56,8 @@ function finding(): InventoryFindingDto {
     repairCompletionMode: "AUTO",
     repairPriority: 2,
     movementRequired: true,
+    logisticsPlanningMode: "AUTO",
+    logisticsScheduledDate: null,
     repairPlans: [],
     publicationStatus: "READY",
     publicationOperationKey: null,

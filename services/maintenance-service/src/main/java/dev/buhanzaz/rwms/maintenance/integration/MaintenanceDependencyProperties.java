@@ -13,6 +13,7 @@ public record MaintenanceDependencyProperties(
     String assetBaseUrl,
     String taskBoardBaseUrl,
     String mediaBaseUrl,
+    String logisticsBaseUrl,
     Duration connectTimeout,
     Duration readTimeout) {
 
@@ -22,6 +23,7 @@ public record MaintenanceDependencyProperties(
         uri(tokenUri, "token-uri"), required(clientId, "client-id"),
         required(clientSecret, "client-secret"), uri(assetBaseUrl, "asset-base-url"),
         uri(taskBoardBaseUrl, "task-board-base-url"), uri(mediaBaseUrl, "media-base-url"),
+        uri(logisticsBaseUrl, "logistics-base-url"),
         positive(connectTimeout, "connect-timeout"),
         positive(readTimeout, "read-timeout"));
   }
@@ -57,6 +59,7 @@ public record MaintenanceDependencyProperties(
       URI assetBaseUrl,
       URI taskBoardBaseUrl,
       URI mediaBaseUrl,
+      URI logisticsBaseUrl,
       Duration connectTimeout,
       Duration readTimeout) {}
 }

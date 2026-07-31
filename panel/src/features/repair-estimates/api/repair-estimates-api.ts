@@ -203,9 +203,42 @@ function completionPlans(
   })
 }
 
+function assertLogisticsPlanningSelection(input: {
+  movementRequired: boolean
+  logisticsPlanningMode: "AUTO" | "FIXED_DATE"
+  logisticsScheduledDate: string | null
+}) {
+  if (!input.movementRequired) {
+    if (
+      input.logisticsPlanningMode !== "AUTO" ||
+      input.logisticsScheduledDate !== null
+    ) {
+      throw new Error(
+        "Параметры логистической очереди недоступны без перемещения."
+      )
+    }
+    return
+  }
+  if (
+    input.logisticsPlanningMode === "AUTO" &&
+    input.logisticsScheduledDate !== null
+  ) {
+    throw new Error(
+      "Для автоматического добавления дата логистического задания не задаётся."
+    )
+  }
+  if (
+    input.logisticsPlanningMode === "FIXED_DATE" &&
+    !input.logisticsScheduledDate
+  ) {
+    throw new Error("Выберите дату логистического задания.")
+  }
+}
+
 export async function completeRepairEstimate(
   input: CompleteRepairEstimateInput
 ) {
+  assertLogisticsPlanningSelection(input)
   const taskPlans = await completionPlans(input)
   return repairEstimatesClient.complete({
     ...buildDraftCommand(input),
@@ -213,6 +246,10 @@ export async function completeRepairEstimate(
       input.draft.lines.length === 0 ? "MANUAL" : input.completionMode,
     movementRequired:
       input.draft.lines.length === 0 ? false : input.movementRequired,
+    logisticsPlanningMode:
+      input.draft.lines.length === 0 ? "AUTO" : input.logisticsPlanningMode,
+    logisticsScheduledDate:
+      input.draft.lines.length === 0 ? null : input.logisticsScheduledDate,
     taskPlans: taskPlans.map(toTaskPlanCommand),
     priority: input.priority,
   })
@@ -221,6 +258,7 @@ export async function completeRepairEstimate(
 export async function amendCompletedRepairEstimate(
   input: AmendCompletedRepairEstimateInput
 ) {
+  assertLogisticsPlanningSelection(input)
   if (input.draft.estimateId === null || input.draft.expectedVersion === null) {
     throw new Error("Для дополнения нужна сохранённая завершённая смета")
   }
@@ -238,6 +276,10 @@ export async function amendCompletedRepairEstimate(
       input.draft.lines.length === 0 ? "MANUAL" : input.completionMode,
     movementRequired:
       input.draft.lines.length === 0 ? false : input.movementRequired,
+    logisticsPlanningMode:
+      input.draft.lines.length === 0 ? "AUTO" : input.logisticsPlanningMode,
+    logisticsScheduledDate:
+      input.draft.lines.length === 0 ? null : input.logisticsScheduledDate,
     taskPlans: taskPlans.map(toTaskPlanCommand),
   })
 }

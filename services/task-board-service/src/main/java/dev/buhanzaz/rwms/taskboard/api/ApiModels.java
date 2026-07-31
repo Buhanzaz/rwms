@@ -7,8 +7,11 @@ import dev.buhanzaz.rwms.taskboard.domain.EquipmentMovementDirection;
 import dev.buhanzaz.rwms.taskboard.domain.EntryStatus;
 import dev.buhanzaz.rwms.taskboard.domain.EntryType;
 import dev.buhanzaz.rwms.taskboard.domain.GroupOperationalStatus;
+import dev.buhanzaz.rwms.taskboard.domain.ParticipationPolicy;
+import dev.buhanzaz.rwms.taskboard.domain.QueuePurpose;
 import dev.buhanzaz.rwms.taskboard.domain.QueueReferenceType;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
+import dev.buhanzaz.rwms.taskboard.domain.TaskLane;
 import dev.buhanzaz.rwms.taskboard.domain.TaskSourceType;
 import dev.buhanzaz.rwms.taskboard.domain.TaskStatus;
 import jakarta.validation.Valid;
@@ -50,24 +53,33 @@ public final class ApiModels {
       @NotNull UUID workerClassId,
       @Min(0) int order,
       boolean stopTaskOnTake,
-      boolean notifyUrgent) {
+      ParticipationPolicy participationPolicy,
+      boolean notifyOnPrimaryTake) {
     public QueueBindingRequest(UUID workerClassId, boolean stopTaskOnTake) {
-      this(workerClassId, 0, stopTaskOnTake, false);
+      this(workerClassId, 0, stopTaskOnTake, ParticipationPolicy.PRIMARY, false);
     }
+
   }
 
   public record QueueDefinitionRequest(
       @NotNull @Min(0) Long version,
       @NotBlank @Size(max = 128) String name,
       @Size(max = 1000) String description,
-      @NotNull QueueType type) {}
+      @NotNull QueueType type,
+      @NotNull QueuePurpose purpose) {
+    public QueueDefinitionRequest(
+        Long version, String name, String description, QueueType type) {
+      this(version, name, description, type, QueuePurpose.GENERAL);
+    }
+  }
 
   public record QueueDefinitionDto(
       UUID id,
       long version,
       String name,
       String description,
-      QueueType type) {}
+      QueueType type,
+      QueuePurpose purpose) {}
 
   public record WorkQueueRequest(
       @NotNull @Min(0) Long version,
@@ -88,7 +100,8 @@ public final class ApiModels {
       int order,
       boolean primary,
       boolean stopTaskOnTake,
-      boolean notifyUrgent) {}
+      ParticipationPolicy participationPolicy,
+      boolean notifyOnPrimaryTake) {}
 
   public record WorkQueueDto(
       UUID id,
@@ -99,6 +112,7 @@ public final class ApiModels {
       String name,
       String description,
       QueueType type,
+      QueuePurpose purpose,
       int sortOrder,
       boolean active,
       boolean hidden,
@@ -431,7 +445,8 @@ public final class ApiModels {
       LocalDate scheduledDate,
       @Min(1) @Max(5) Integer priority,
       @Min(1) Integer dailyCapacity,
-      @Valid TaskSourceReferenceDto source) {
+      @Valid TaskSourceReferenceDto source,
+      TaskLane lane) {
     public RegisterExternalTaskRequest(
         UUID warehouseId,
         UUID externalTaskId,
@@ -453,7 +468,8 @@ public final class ApiModels {
           null,
           null,
           null,
-          null);
+          null,
+          TaskLane.SCHEDULED);
     }
 
     public RegisterExternalTaskRequest(
@@ -479,7 +495,8 @@ public final class ApiModels {
           scheduledDate,
           priority,
           null,
-          null);
+          null,
+          TaskLane.SCHEDULED);
     }
 
     public RegisterExternalTaskRequest(
@@ -506,7 +523,8 @@ public final class ApiModels {
           scheduledDate,
           priority,
           dailyCapacity,
-          null);
+          null,
+          TaskLane.SCHEDULED);
     }
   }
 
@@ -557,6 +575,19 @@ public final class ApiModels {
 
   public record VersionCommand(@NotNull @Min(0) Long expectedVersion) {}
 
+  public record SetTaskLaneRequest(
+      @NotNull @Min(0) Long expectedTaskVersion, @NotNull TaskLane lane) {}
+
+  public record SelectedCompletionEvidenceDto(
+      UUID externalTaskId,
+      UUID taskId,
+      UUID entryId,
+      UUID evidenceId,
+      UUID mediaId,
+      long mediaGeneration,
+      UUID warehouseId,
+      OffsetDateTime recordedAt) {}
+
   public record CancelTaskRequest(
       @NotNull @Min(0) Long expectedTaskVersion,
       @NotBlank @Size(max = 1000) String reason) {}
@@ -593,6 +624,7 @@ public final class ApiModels {
       Integer plannedDurationMinutes,
       OffsetDateTime deadlineAt,
       LocalDate scheduledDate,
+      TaskLane lane,
       int priority,
       boolean pinned,
       OffsetDateTime doneAt,
@@ -607,6 +639,12 @@ public final class ApiModels {
       @NotNull UUID targetQueueId,
       @NotNull @Min(0) Integer targetIndex,
       @NotNull LocalDate targetDate) {}
+
+  public record MoveExternalLogisticsTaskRequest(
+      @NotNull @Min(0) Long expectedTaskVersion,
+      @NotNull @Min(0) Long expectedEntryVersion,
+      @NotNull LocalDate targetDate,
+      @NotNull @Min(0) Integer targetIndex) {}
 
   /**
    * Exchanges the scheduled dates assigned to two complete visual task-board date columns.
@@ -665,9 +703,11 @@ public final class ApiModels {
       String unitNumber,
       TaskStatus taskStatus,
       LocalDate scheduledDate,
+      TaskLane lane,
       int priority,
       boolean pinned,
       UUID queueId,
+      QueuePurpose queuePurpose,
       int routeIndex,
       int queuePosition,
       EntryType entryType,
@@ -685,6 +725,7 @@ public final class ApiModels {
       UUID queueId,
       String queueName,
       QueueType queueType,
+      QueuePurpose queuePurpose,
       int sortOrder,
       List<BoardEntryDto> entries) {}
 
@@ -693,6 +734,25 @@ public final class ApiModels {
       LocalDate selectedDate,
       List<LocalDate> availableDates,
       List<BoardColumnDto> columns) {}
+
+  public record LogisticsDateColumnDto(
+      @NotNull LocalDate date, List<BoardEntryDto> entries) {
+    public LogisticsDateColumnDto {
+      entries = List.copyOf(entries);
+    }
+  }
+
+  public record LogisticsBoardSnapshot(
+      UUID warehouseId,
+      UUID queueId,
+      long queueVersion,
+      List<BoardEntryDto> current,
+      List<LogisticsDateColumnDto> dates) {
+    public LogisticsBoardSnapshot {
+      current = List.copyOf(current);
+      dates = List.copyOf(dates);
+    }
+  }
 
   public record QueueReferenceRequest(
       @NotNull QueueReferenceType type, @NotBlank @Size(max = 128) String externalReferenceId) {}

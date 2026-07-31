@@ -89,6 +89,7 @@ public final class MaintenanceEventPayloads {
   public enum GenerationState {
     PENDING_GENERATION,
     GENERATED,
+    NOT_REQUIRED,
     FAILED
   }
 

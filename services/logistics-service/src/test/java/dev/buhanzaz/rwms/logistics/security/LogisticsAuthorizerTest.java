@@ -63,6 +63,37 @@ class LogisticsAuthorizerTest {
         .hasMessageContaining("Required USER scope");
   }
 
+  @Test
+  void grantsOnlyExactMaintenanceServiceTokenAtDriverTaskIntake() {
+    Jwt exact =
+        serviceJwt(
+            "maintenance-service",
+            "maintenance-service",
+            List.of("logistics.maintenance"),
+            List.of("rwms-services"));
+
+    assertThatCode(() -> authorizer.requireMaintenanceDriverTaskIntake(exact))
+        .doesNotThrowAnyException();
+    assertThatThrownBy(
+            () ->
+                authorizer.requireMaintenanceDriverTaskIntake(
+                    serviceJwt(
+                        "maintenance-service",
+                        "maintenance-service",
+                        List.of("logistics.maintenance", "rwms.write"),
+                        List.of("rwms-services"))))
+        .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(
+            () ->
+                authorizer.requireMaintenanceDriverTaskIntake(
+                    serviceJwt(
+                        "other-service",
+                        "maintenance-service",
+                        List.of("logistics.maintenance"),
+                        List.of("rwms-services"))))
+        .isInstanceOf(AccessDeniedException.class);
+  }
+
   private static Jwt userJwt(String scope, List<Map<String, String>> warehouseAccess) {
     return Jwt.withTokenValue("token")
         .header("alg", "none")
@@ -72,6 +103,20 @@ class LogisticsAuthorizerTest {
         .claim("principal_type", "USER")
         .claim("scope", scope)
         .claim("warehouse_access", warehouseAccess)
+        .build();
+  }
+
+  private static Jwt serviceJwt(
+      String subject, String clientId, List<String> scopes, List<String> audience) {
+    return Jwt.withTokenValue("token")
+        .header("alg", "none")
+        .subject(subject)
+        .issuedAt(Instant.now())
+        .expiresAt(Instant.now().plusSeconds(60))
+        .audience(audience)
+        .claim("principal_type", "SERVICE")
+        .claim("client_id", clientId)
+        .claim("scope", scopes)
         .build();
   }
 }

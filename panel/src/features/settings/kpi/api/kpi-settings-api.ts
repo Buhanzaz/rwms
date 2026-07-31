@@ -31,19 +31,12 @@ export type KpiWorkSchedule = {
   breaks: KpiWorkBreak[]
 }
 
-export type RepairComplexityThresholds = {
-  lightBoundaryMinutes: number
-  mediumBoundaryMinutes: number
-  complexBoundaryMinutes: number
-}
-
 export type WarehouseKpiSettings = {
   warehouseId: string
   timeZone: string
   status: KpiSettingsStatus
   version: number
   dataAvailableFrom: string | null
-  repairComplexity: RepairComplexityThresholds
   palette: KpiPalette | null
   activeSchedule: KpiWorkSchedule | null
   pendingSchedule: KpiWorkSchedule | null
@@ -62,10 +55,6 @@ export type SaveWorkScheduleInput = {
   shiftEnd: string
   daysOff: number[]
   breaks: KpiWorkBreak[]
-}
-
-export type SaveRepairComplexityInput = RepairComplexityThresholds & {
-  expectedVersion: number
 }
 
 export const kpiSettingsKeys = {
@@ -151,27 +140,6 @@ function parsePalette(value: unknown): KpiPalette | null {
   return { version: value.version, ranges, overdueColor: value.overdueColor }
 }
 
-function parseRepairComplexity(value: unknown): RepairComplexityThresholds {
-  if (
-    !isRecord(value) ||
-    !isVersion(value.lightBoundaryMinutes) ||
-    !isVersion(value.mediumBoundaryMinutes) ||
-    !isVersion(value.complexBoundaryMinutes) ||
-    value.lightBoundaryMinutes < 1 ||
-    value.lightBoundaryMinutes >= value.mediumBoundaryMinutes ||
-    value.mediumBoundaryMinutes >= value.complexBoundaryMinutes
-  ) {
-    throw new Error(
-      "Сервис доски задач вернул некорректные границы сложности ремонта."
-    )
-  }
-  return {
-    lightBoundaryMinutes: value.lightBoundaryMinutes,
-    mediumBoundaryMinutes: value.mediumBoundaryMinutes,
-    complexBoundaryMinutes: value.complexBoundaryMinutes,
-  }
-}
-
 function parseSettings(value: unknown): WarehouseKpiSettings {
   const statuses: KpiSettingsStatus[] = [
     "UNCONFIGURED",
@@ -186,8 +154,7 @@ function parseSettings(value: unknown): WarehouseKpiSettings {
     typeof value.status !== "string" ||
     !statuses.includes(value.status as KpiSettingsStatus) ||
     !isVersion(value.version) ||
-    !(value.dataAvailableFrom === null || isString(value.dataAvailableFrom)) ||
-    !("repairComplexity" in value)
+    !(value.dataAvailableFrom === null || isString(value.dataAvailableFrom))
   ) {
     throw new Error("Сервис доски задач вернул некорректные настройки KPI.")
   }
@@ -198,7 +165,6 @@ function parseSettings(value: unknown): WarehouseKpiSettings {
     status: value.status as KpiSettingsStatus,
     version: value.version,
     dataAvailableFrom: value.dataAvailableFrom,
-    repairComplexity: parseRepairComplexity(value.repairComplexity),
     palette: parsePalette(value.palette),
     activeSchedule: parseSchedule(value.activeSchedule),
     pendingSchedule: parseSchedule(value.pendingSchedule),
@@ -243,20 +209,6 @@ export async function saveWorkSchedule(
     await bearerRequest<unknown>(
       accessToken,
       `${settingsEndpoint(warehouseId)}/work-schedule`,
-      json("PUT", input)
-    )
-  )
-}
-
-export async function saveRepairComplexity(
-  accessToken: string,
-  warehouseId: string,
-  input: SaveRepairComplexityInput
-) {
-  return parseSettings(
-    await bearerRequest<unknown>(
-      accessToken,
-      `${settingsEndpoint(warehouseId)}/repair-complexity`,
       json("PUT", input)
     )
   )

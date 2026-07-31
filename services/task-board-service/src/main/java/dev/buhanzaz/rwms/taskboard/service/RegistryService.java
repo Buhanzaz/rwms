@@ -4,6 +4,8 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 
 import dev.buhanzaz.rwms.taskboard.domain.QueueReferenceType;
 import dev.buhanzaz.rwms.taskboard.domain.QueueDefinition;
+import dev.buhanzaz.rwms.taskboard.domain.ParticipationPolicy;
+import dev.buhanzaz.rwms.taskboard.domain.QueuePurpose;
 import dev.buhanzaz.rwms.taskboard.domain.QueueType;
 import dev.buhanzaz.rwms.taskboard.domain.QueueUsageReference;
 import dev.buhanzaz.rwms.taskboard.domain.WorkQueue;
@@ -209,7 +211,7 @@ public class RegistryService {
     List<MovementQueueCapability> movementQueues =
         queues.findAllActiveOrderedByWarehouseId(warehouseId).stream()
             .filter(queue -> !queue.isHidden())
-            .filter(queue -> queue.getType() == QueueType.MOVEMENT)
+            .filter(queue -> queue.getPurpose() == QueuePurpose.LOGISTICS_DRIVER)
             .map(
                 queue ->
                     new MovementQueueCapability(
@@ -481,9 +483,15 @@ public class RegistryService {
   }
 
   private void apply(QueueDefinition entity, QueueDefinitionRequest request) {
+    if (request.purpose() == QueuePurpose.LOGISTICS_DRIVER
+        && request.type() != QueueType.MOVEMENT) {
+      throw new IllegalArgumentException(
+          "Логистическая очередь водителей должна иметь тип MOVEMENT");
+    }
     entity.setName(request.name());
     entity.setDescription(request.description());
     entity.setType(request.type());
+    entity.setPurpose(request.purpose());
   }
 
   private void apply(WorkQueue q, WorkQueueRequest r, boolean update) {
@@ -526,7 +534,17 @@ public class RegistryService {
       b.setWorkerClass(requireClass(r.workerClassId()));
       b.setBindingOrder(order);
       b.setStopTaskOnTake(r.stopTaskOnTake());
-      b.setNotifyUrgent(order > 0 && r.notifyUrgent());
+      ParticipationPolicy policy =
+          order == 0
+              ? ParticipationPolicy.PRIMARY
+              : r.participationPolicy() == null
+                  ? ParticipationPolicy.OPTIONAL
+                  : r.participationPolicy();
+      if (order > 0 && policy == ParticipationPolicy.PRIMARY) {
+        throw new ConflictException("Вторичный класс не может иметь PRIMARY-политику");
+      }
+      b.setParticipationPolicy(policy);
+      b.setNotifyOnPrimaryTake(order > 0 && r.notifyOnPrimaryTake());
       projectionWriter.save(bindings, b);
       order++;
     }

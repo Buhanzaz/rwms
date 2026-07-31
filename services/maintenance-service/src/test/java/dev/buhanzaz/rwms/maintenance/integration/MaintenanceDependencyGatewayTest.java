@@ -18,6 +18,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import dev.buhanzaz.rwms.maintenance.domain.RepairStageKind;
+import dev.buhanzaz.rwms.maintenance.domain.RepairLogisticsPlanningMode;
 import dev.buhanzaz.rwms.maintenance.service.MaintenanceDependencyException;
 import java.net.URI;
 import java.time.Duration;
@@ -60,8 +61,77 @@ class MaintenanceDependencyGatewayTest {
             URI.create("http://asset.test"),
             URI.create("http://task.test"),
             URI.create("http://media.test"),
+            URI.create("http://logistics.test"),
             Duration.ofSeconds(1),
             Duration.ofSeconds(2)));
+  }
+
+  @Test
+  void driverTaskUsesExactMaintenanceLogisticsBoundaryAndScope() {
+    UUID key = UUID.randomUUID();
+    UUID taskId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID cabinId = UUID.randomUUID();
+    UUID repairId = UUID.randomUUID();
+    UUID findingId = UUID.randomUUID();
+    LocalDate scheduledDate = LocalDate.of(2026, 8, 3);
+    authorize("logistics-token", "logistics.maintenance");
+    server
+        .expect(
+            requestTo(
+                "http://logistics.test/api/internal/logistics/v1/maintenance/driver-tasks"))
+        .andExpect(method(HttpMethod.POST))
+        .andExpect(
+            header(
+                HttpHeaders.AUTHORIZATION,
+                "Bearer logistics-token"))
+        .andExpect(header("Idempotency-Key", key.toString()))
+        .andExpect(
+            content()
+                .string(
+                    equalTo(
+                        """
+                        {"warehouseId":"%s","cabinId":"%s","repairId":"%s","sourceType":"INVENTORY","sourceId":"%s","kind":"DELIVER_TO_REPAIR","planningMode":"FIXED_DATE","scheduledDate":"%s","priority":2,"activateNow":false}
+                        """
+                            .formatted(
+                                warehouseId,
+                                cabinId,
+                                repairId,
+                                findingId,
+                                scheduledDate)
+                            .strip())))
+        .andRespond(
+            withSuccess(
+                """
+                {"id":"%s","version":4,"warehouseId":"%s","cabinId":"%s","repairId":"%s","sourceType":"INVENTORY","sourceId":"%s","kind":"DELIVER_TO_REPAIR","planningMode":"FIXED_DATE","scheduledDate":"%s","priority":2,"state":"SCHEDULED"}
+                """
+                    .formatted(
+                        taskId,
+                        warehouseId,
+                        cabinId,
+                        repairId,
+                        findingId,
+                        scheduledDate),
+                MediaType.APPLICATION_JSON));
+
+    var response =
+        gateway.createDriverTask(
+            key,
+            new MaintenanceDependencyGateway.DriverTaskCommand(
+                warehouseId,
+                cabinId,
+                repairId,
+                "INVENTORY",
+                findingId,
+                "DELIVER_TO_REPAIR",
+                RepairLogisticsPlanningMode.FIXED_DATE,
+                scheduledDate,
+                2,
+                false));
+
+    assertThat(response.id()).isEqualTo(taskId);
+    assertThat(response.scheduledDate()).isEqualTo(scheduledDate);
+    server.verify();
   }
 
   @Test

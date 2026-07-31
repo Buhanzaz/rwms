@@ -16,6 +16,9 @@ import org.springframework.data.repository.query.Param;
 
 public interface MaintenanceRepairRepository extends JpaRepository<MaintenanceRepair, UUID> {
   List<MaintenanceRepair> findAllByWarehouseIdOrderByCreatedAtDesc(UUID warehouseId);
+  List<MaintenanceRepair> findAllByWarehouseIdAndExecutionStateInOrderByCreatedAtAscIdAsc(
+      UUID warehouseId,
+      java.util.Collection<dev.buhanzaz.rwms.maintenance.domain.RepairExecutionState> states);
   Optional<MaintenanceRepair> findByIdAndWarehouseId(UUID id, UUID warehouseId);
   List<MaintenanceRepair> findAllByRentalItemIdOrderByCreatedAtAscIdAsc(UUID rentalItemId);
   List<MaintenanceRepair> findAllByTransferLineIdOrderByCreatedAtAscIdAsc(UUID transferLineId);

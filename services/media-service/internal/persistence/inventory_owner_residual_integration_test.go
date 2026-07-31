@@ -42,17 +42,67 @@ func TestInventoryOwnerResidualPostgresDatabaseURLTargetsRequestedDatabase(t *te
 func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 	environment := testsupport.RequireRealEnvironment(t, testsupport.PostgreSQL)
 
-	t.Run("clean V1 through V9 repeat and checksum drift", func(t *testing.T) {
+	t.Run("V10 backfills cabin history and one explicit first READY cover", func(t *testing.T) {
 		databaseURL := testsupport.NewIsolatedPostgresDatabase(t, environment.DatabaseURL)
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		pool := openResidualPool(t, ctx, databaseURL)
 		installResidualMigrations(t, ctx, pool, 11)
+		cabinID := uuid.MustParse("51000000-0000-4000-8000-000000000001")
+		warehouseID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+		firstID, secondID := uuid.New(), uuid.New()
+		for index, fixture := range []struct {
+			mediaID   uuid.UUID
+			sortOrder int64
+		}{
+			{mediaID: firstID, sortOrder: 8},
+			{mediaID: secondID, sortOrder: 2},
+		} {
+			checksum := hex64(byte('a' + index))
+			if _, err := pool.Exec(ctx, `insert into media_asset (
+				media_id,folder_id,owner_type,owner_id,warehouse_id,media_kind,
+				original_file_name,original_content_type,source_object_key,
+				source_version_id,source_etag,source_checksum_sha256,
+				finalized_content_type,finalized_size_bytes,processing_status,
+				current_generation,next_generation,sort_order,size_bytes,version)
+			values ($1,$1,'CABIN',$2,$3,'IMAGE','backfill.jpg','image/jpeg',$4,
+				'version','etag',$5,'image/jpeg',128,'READY',1,2,$6,128,2)`,
+				fixture.mediaID, cabinID.String(), warehouseID,
+				"media/"+fixture.mediaID.String()+"/source/backfill.jpg",
+				checksum, fixture.sortOrder); err != nil {
+				pool.Close()
+				t.Fatalf("seed V9 CABIN media %s: %v", fixture.mediaID, err)
+			}
+		}
+		applyResidualMigration(t, ctx, pool, 12, "10", "canonical cabin photo library",
+			"V10__canonical_cabin_photo_library.sql", mediamigration.V10)
+		var photoCount int
+		var coverID uuid.UUID
+		if err := pool.QueryRow(ctx, `select
+			(select count(*) from media_cabin_photo where cabin_id=$1),
+			(select cover_media_id from media_cabin_photo_library where cabin_id=$1)`,
+			cabinID).Scan(&photoCount, &coverID); err != nil {
+			pool.Close()
+			t.Fatalf("read V10 cabin backfill: %v", err)
+		}
+		pool.Close()
+		if photoCount != 2 || coverID != secondID {
+			t.Fatalf("V10 backfill photoCount=%d cover=%s, want 2 and %s",
+				photoCount, coverID, secondID)
+		}
+	})
+
+	t.Run("clean V1 through V10 repeat and checksum drift", func(t *testing.T) {
+		databaseURL := testsupport.NewIsolatedPostgresDatabase(t, environment.DatabaseURL)
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		pool := openResidualPool(t, ctx, databaseURL)
+		installResidualMigrations(t, ctx, pool, 12)
 		pool.Close()
 
 		first, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open clean V1 through V9 database: %v", err)
+			t.Fatalf("open clean V1 through V10 database: %v", err)
 		}
 		assertTaskBoardV8ConstraintsValidated(t, ctx, first.Pool)
 		first.Close()
@@ -110,10 +160,12 @@ func TestInventoryOwnerResidualMigrationGateReal(t *testing.T) {
 			"V8__task_board_worker_media.sql", mediamigration.V8)
 		applyResidualMigration(t, ctx, pool, 11, "9", "asset import worker",
 			"V9__asset_import_worker.sql", mediamigration.V9)
+		applyResidualMigration(t, ctx, pool, 12, "10", "canonical cabin photo library",
+			"V10__canonical_cabin_photo_library.sql", mediamigration.V10)
 		pool.Close()
 		database, err := Open(ctx, databaseURL)
 		if err != nil {
-			t.Fatalf("open upgraded V9 database: %v", err)
+			t.Fatalf("open upgraded V10 database: %v", err)
 		}
 		defer database.Close()
 		assertTaskBoardV8ConstraintsValidated(t, ctx, database.Pool)
@@ -187,7 +239,7 @@ func TestInventoryOwnerResidualStreamAndReconciliationGateReal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	pool := openResidualPool(t, ctx, databaseURL)
-	installResidualMigrations(t, ctx, pool, 11)
+	installResidualMigrations(t, ctx, pool, 12)
 	pool.Close()
 	database, err := Open(ctx, databaseURL)
 	if err != nil {
@@ -464,10 +516,11 @@ func installResidualMigrations(t testing.TB, ctx context.Context, pool *pgxpool.
 		{"dynamic cabin owner projection", "V7__dynamic_cabin_owner_projection.sql", mediamigration.V7},
 		{"task board worker media", "V8__task_board_worker_media.sql", mediamigration.V8},
 		{"asset import worker", "V9__asset_import_worker.sql", mediamigration.V9},
+		{"canonical cabin photo library", "V10__canonical_cabin_photo_library.sql", mediamigration.V10},
 	}
 	for index := 0; index < through; index++ {
 		migration := migrations[index]
-		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9"}
+		versions := []string{"1", "2", "3", "4", "4.1", "5", "5.1", "6", "7", "8", "9", "10"}
 		applyResidualMigration(t, ctx, pool, index+1, versions[index], migration.description,
 			migration.script, migration.body)
 	}

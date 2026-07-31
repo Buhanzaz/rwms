@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   createRepairEstimateCatalogIndex,
@@ -28,6 +29,7 @@ import type {
   RepairEstimateCompletionMode,
   RepairEstimateLineDto,
   RepairEstimateTaskPlanDto,
+  LogisticsPlanningMode,
   RepairPriority,
 } from "@/features/repair-estimates/model/repair-estimate"
 import {
@@ -38,6 +40,8 @@ import {
 export type RepairWorkCompletionResult = {
   completionMode: RepairEstimateCompletionMode
   movementRequired: boolean
+  logisticsPlanningMode: LogisticsPlanningMode
+  logisticsScheduledDate: string | null
   taskPlans: RepairEstimateTaskPlanDto[]
   priority: RepairPriority
 }
@@ -60,6 +64,8 @@ type RepairWorkCompletionDialogProps = {
   emptyCompleteLabel?: string
   initialCompletionMode?: RepairEstimateCompletionMode
   initialMovementRequired?: boolean
+  initialLogisticsPlanningMode?: LogisticsPlanningMode
+  initialLogisticsScheduledDate?: string | null
   initialPriority?: RepairPriority
   movementRouteAvailable?: boolean
   routingSelectionAvailable?: boolean
@@ -89,6 +95,8 @@ export function RepairWorkCompletionDialog({
   emptyDescription = "Пустая смета завершит осмотр, переведёт бытовку в статус «Свободная» и не создаст задание или перемещение.",
   emptyCompleteLabel = "Завершить и освободить",
   initialMovementRequired,
+  initialLogisticsPlanningMode = "AUTO",
+  initialLogisticsScheduledDate = null,
   initialPriority = 3,
   movementRouteAvailable = true,
   selectPriority = true,
@@ -159,7 +167,7 @@ export function RepairWorkCompletionDialog({
           </p>
         ) : (
           <RepairWorkCompletionForm
-            key={`${movementAvailable && initialMovementRequired ? "movement" : "no-movement"}:${previewQuery.data.taskPlans.map((plan) => `${plan.id}:${plan.sortOrder}`).join(":")}`}
+            key={`${movementAvailable && initialMovementRequired ? "movement" : "no-movement"}:${initialLogisticsPlanningMode}:${initialLogisticsScheduledDate ?? "auto"}:${previewQuery.data.taskPlans.map((plan) => `${plan.id}:${plan.sortOrder}`).join(":")}`}
             lines={lines}
             initialPlans={previewQuery.data.taskPlans}
             autoIssues={previewQuery.data.issues}
@@ -171,6 +179,8 @@ export function RepairWorkCompletionDialog({
             pendingLabel={pendingLabel}
             emptyCompleteLabel={emptyCompleteLabel}
             initialMovementRequired={initialMovementRequired}
+            initialLogisticsPlanningMode={initialLogisticsPlanningMode}
+            initialLogisticsScheduledDate={initialLogisticsScheduledDate}
             initialPriority={initialPriority}
             movementAvailable={movementAvailable}
             selectPriority={selectPriority}
@@ -195,6 +205,8 @@ function RepairWorkCompletionForm({
   pendingLabel,
   emptyCompleteLabel,
   initialMovementRequired,
+  initialLogisticsPlanningMode,
+  initialLogisticsScheduledDate,
   initialPriority,
   movementAvailable,
   selectPriority,
@@ -212,6 +224,8 @@ function RepairWorkCompletionForm({
   pendingLabel: string
   emptyCompleteLabel: string
   initialMovementRequired?: boolean
+  initialLogisticsPlanningMode: LogisticsPlanningMode
+  initialLogisticsScheduledDate: string | null
   initialPriority: RepairPriority
   movementAvailable: boolean
   selectPriority: boolean
@@ -221,7 +235,18 @@ function RepairWorkCompletionForm({
   const empty = allowEmpty && lines.length === 0
   const initialMovement =
     empty || !movementAvailable ? false : (initialMovementRequired ?? true)
+  const initialFixedDate =
+    initialMovement &&
+    initialLogisticsPlanningMode === "FIXED_DATE" &&
+    Boolean(initialLogisticsScheduledDate)
   const [movementRequired, setMovementRequired] = useState(initialMovement)
+  const [logisticsPlanningMode, setLogisticsPlanningMode] =
+    useState<LogisticsPlanningMode>(
+      initialFixedDate ? "FIXED_DATE" : "AUTO"
+    )
+  const [logisticsScheduledDate, setLogisticsScheduledDate] = useState(
+    initialFixedDate ? initialLogisticsScheduledDate! : ""
+  )
   const [movementPlans] = useState(() => [
     createRepairEstimateMovementTaskPlan("MOVE_TO_REPAIR"),
     createRepairEstimateMovementTaskPlan("MOVE_FROM_REPAIR"),
@@ -337,34 +362,97 @@ function RepairWorkCompletionForm({
       ) : (
         <div className="flex flex-col gap-4">
           {movementAvailable ? (
-            <Field orientation="horizontal" data-disabled={pending}>
-              <Checkbox
-                id="repair-work-movement-required"
-                aria-label="Перемещение на отгрузку"
-                checked={movementRequired}
-                disabled={pending}
-                onCheckedChange={(checked) => {
-                  const required = checked === true
-                  setMovementRequired(required)
-                  setPlans((current) =>
-                    applyRepairEstimateMovementPlans({
-                      plans: current,
-                      movementRequired: required,
-                      movementPlans,
-                    })
-                  )
-                }}
-              />
-              <div className="flex flex-col gap-1">
-                <FieldLabel htmlFor="repair-work-movement-required">
-                  Перемещение на отгрузку
-                </FieldLabel>
-                <FieldDescription>
-                  После завершения будет создано предусмотренное процессом
-                  задание на перемещение.
-                </FieldDescription>
-              </div>
-            </Field>
+            <>
+              <Field orientation="horizontal" data-disabled={pending}>
+                <Checkbox
+                  id="repair-work-movement-required"
+                  aria-label="Перемещение на отгрузку"
+                  checked={movementRequired}
+                  disabled={pending}
+                  onCheckedChange={(checked) => {
+                    const required = checked === true
+                    setMovementRequired(required)
+                    if (!required) {
+                      setLogisticsPlanningMode("AUTO")
+                      setLogisticsScheduledDate("")
+                    }
+                    setPlans((current) =>
+                      applyRepairEstimateMovementPlans({
+                        plans: current,
+                        movementRequired: required,
+                        movementPlans,
+                      })
+                    )
+                  }}
+                />
+                <div className="flex flex-col gap-1">
+                  <FieldLabel htmlFor="repair-work-movement-required">
+                    Перемещение на отгрузку
+                  </FieldLabel>
+                  <FieldDescription>
+                    После завершения будет создано предусмотренное процессом
+                    задание на перемещение.
+                  </FieldDescription>
+                </div>
+              </Field>
+
+              {movementRequired ? (
+                <Field>
+                  <FieldLabel>Добавление в логистику</FieldLabel>
+                  <ToggleGroup
+                    type="single"
+                    value={logisticsPlanningMode}
+                    variant="outline"
+                    spacing={2}
+                    className="grid w-full grid-cols-1 sm:grid-cols-2"
+                    aria-label="Способ добавления логистического задания"
+                    disabled={pending}
+                    onValueChange={(value) => {
+                      if (value !== "AUTO" && value !== "FIXED_DATE") return
+                      setLogisticsPlanningMode(value)
+                      if (value === "AUTO") setLogisticsScheduledDate("")
+                    }}
+                  >
+                    <ToggleGroupItem value="AUTO">
+                      Автоматически добавить в очередь
+                    </ToggleGroupItem>
+                    <ToggleGroupItem value="FIXED_DATE">
+                      Выбрать конкретную дату
+                    </ToggleGroupItem>
+                  </ToggleGroup>
+                  <FieldDescription>
+                    Автоматический режим учитывает доступные ремонтные места,
+                    приоритет и текущий порядок логистической очереди.
+                  </FieldDescription>
+                </Field>
+              ) : null}
+
+              {movementRequired &&
+              logisticsPlanningMode === "FIXED_DATE" ? (
+                <Field
+                  data-invalid={!logisticsScheduledDate}
+                  data-disabled={pending}
+                >
+                  <FieldLabel htmlFor="repair-work-logistics-date">
+                    Дата логистического задания
+                  </FieldLabel>
+                  <Input
+                    id="repair-work-logistics-date"
+                    type="date"
+                    value={logisticsScheduledDate}
+                    disabled={pending}
+                    required
+                    aria-invalid={!logisticsScheduledDate}
+                    onChange={(event) =>
+                      setLogisticsScheduledDate(event.target.value)
+                    }
+                  />
+                  <FieldDescription>
+                    Задание будет добавлено в конец очереди выбранной даты.
+                  </FieldDescription>
+                </Field>
+              ) : null}
+            </>
           ) : null}
         </div>
       )}
@@ -399,11 +487,25 @@ function RepairWorkCompletionForm({
         </Button>
         <Button
           type="button"
-          disabled={pending || (!empty && autoIssues.length > 0)}
+          disabled={
+            pending ||
+            (!empty && autoIssues.length > 0) ||
+            (movementRequired &&
+              logisticsPlanningMode === "FIXED_DATE" &&
+              !logisticsScheduledDate)
+          }
           onClick={() => {
             const result: RepairWorkCompletionResult = {
               completionMode: empty ? "MANUAL" : "AUTO",
               movementRequired: empty ? false : movementRequired,
+              logisticsPlanningMode:
+                empty || !movementRequired ? "AUTO" : logisticsPlanningMode,
+              logisticsScheduledDate:
+                !empty &&
+                movementRequired &&
+                logisticsPlanningMode === "FIXED_DATE"
+                  ? logisticsScheduledDate
+                  : null,
               taskPlans: empty ? [] : plans,
               priority: 3,
             }

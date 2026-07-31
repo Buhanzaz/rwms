@@ -44,6 +44,19 @@ public class LogisticsAuthorizer {
     requireWarehouse(jwt, warehouseId, AccessLevel.MANAGE);
   }
 
+  public void requireMaintenanceDriverTaskIntake(Jwt jwt) {
+    if (developmentBypass) return;
+    if (jwt == null
+        || !"SERVICE".equals(jwt.getClaimAsString("principal_type"))
+        || !"maintenance-service".equals(jwt.getSubject())
+        || !"maintenance-service".equals(jwt.getClaimAsString("client_id"))
+        || !List.of("rwms-services").equals(audiences(jwt))
+        || !List.of("logistics.maintenance").equals(scopes(jwt))) {
+      throw new AccessDeniedException(
+          "Exact maintenance-service logistics.maintenance token is required");
+    }
+  }
+
   public UUID subjectId(Jwt jwt) {
     if (developmentBypass) return DEVELOPMENT_SUBJECT;
     if (jwt == null || !"USER".equals(jwt.getClaimAsString("principal_type"))) {
@@ -105,6 +118,12 @@ public class LogisticsAuthorizer {
           .toList();
     }
     return List.of();
+  }
+
+  private static List<String> audiences(Jwt jwt) {
+    if (jwt == null) return List.of();
+    List<String> audiences = jwt.getAudience();
+    return audiences == null ? List.of() : audiences;
   }
 
   private enum AccessLevel {

@@ -330,6 +330,59 @@ class WorkerDatabaseCreateOpenRobolectricTest {
         context.deleteDatabase(name)
     }
 
+    @Test
+    fun migrationFourToFiveMarksExistingCategoriesAsGeneralPurpose() {
+        val context = RuntimeEnvironment.getApplication()
+        val name = "worker-room-logistics-migration.db"
+        context.deleteDatabase(name)
+        val versionFour = openHelper(
+            context = context,
+            name = name,
+            version = 4,
+            onCreate = { database ->
+                database.execSQL(
+                    """
+                    CREATE TABLE `worker_category` (
+                        `localId` TEXT NOT NULL,
+                        `userId` TEXT NOT NULL,
+                        `queueId` TEXT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `type` TEXT NOT NULL,
+                        `sortOrder` INTEGER NOT NULL,
+                        `audienceModesKey` TEXT NOT NULL,
+                        `resultPhotoMinCount` INTEGER NOT NULL,
+                        `lastServerRevision` INTEGER NOT NULL,
+                        PRIMARY KEY(`localId`)
+                    )
+                    """.trimIndent(),
+                )
+            },
+        )
+        versionFour.writableDatabase.execSQL(
+            """
+            INSERT INTO `worker_category` VALUES
+                ('worker:repair', 'worker', 'repair', 'Ремонты', 'REPAIR', 10, 'AVAILABLE', 1, 7)
+            """.trimIndent(),
+        )
+        versionFour.close()
+
+        val versionFive = openHelper(
+            context = context,
+            name = name,
+            version = 5,
+            onCreate = { error("Expected the version 4 database to exist") },
+            onUpgrade = { database -> WorkerDatabase.MIGRATION_4_5.migrate(database) },
+        )
+        versionFive.writableDatabase.query(
+            "SELECT `queuePurpose` FROM `worker_category` WHERE `localId`='worker:repair'",
+        ).use { cursor ->
+            assertThat(cursor.moveToFirst()).isTrue()
+            assertThat(cursor.getString(0)).isEqualTo("GENERAL")
+        }
+        versionFive.close()
+        context.deleteDatabase(name)
+    }
+
     private fun columns(database: SupportSQLiteDatabase, table: String): List<String> =
         database.query("PRAGMA table_info(`$table`)").use { cursor ->
             buildList {

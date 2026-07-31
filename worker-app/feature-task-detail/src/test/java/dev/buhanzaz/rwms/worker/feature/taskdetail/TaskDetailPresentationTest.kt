@@ -224,19 +224,112 @@ class TaskDetailPresentationTest {
         assertThat(withoutGroup.actions).isEmpty()
         assertThat(withoutGroup.message).isEqualTo("Руководитель ещё не выбрал текущую группу")
         assertThat(disabled.actions).isEmpty()
-        assertThat(disabled.message).isEqualTo("Группа временно недоступна")
+        assertThat(disabled.message).isEqualTo("Рабочий временно недоступен")
     }
 
     @Test
     fun `take payload can only use the manager selected current group`() {
         assertThat(
-            managerSelectedGroupForAction(WorkerTaskAction.TAKE, "group-current"),
+            selectedGroupForAction(WorkerTaskAction.TAKE, "group-current", "GENERAL"),
         ).isEqualTo("group-current")
 
         val failure = assertThrows(IllegalArgumentException::class.java) {
-            managerSelectedGroupForAction(WorkerTaskAction.TAKE, null)
+            selectedGroupForAction(WorkerTaskAction.TAKE, null, "GENERAL")
         }
         assertThat(failure).hasMessageThat().contains("Руководитель")
+    }
+
+    @Test
+    fun `driver can take a logistics task without a current group`() {
+        val presentation = taskActionPresentation(
+            currentWorkerId = "driver",
+            taskStatus = "WAITING",
+            availabilityMode = "AVAILABLE",
+            queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+            assignments = emptyList(),
+            locallyPending = false,
+            hasCurrentGroup = false,
+        )
+
+        assertThat(presentation.actions).containsExactly(WorkerTaskAction.TAKE)
+        assertThat(
+            selectedGroupForAction(
+                WorkerTaskAction.TAKE,
+                currentGroupId = null,
+                queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+            ),
+        ).isNull()
+    }
+
+    @Test
+    fun `qualified secondary worker joins the same optional logistics task`() {
+        val presentation = taskActionPresentation(
+            currentWorkerId = "slinger",
+            taskStatus = "IN_PROGRESS",
+            availabilityMode = "OPTIONAL_JOIN",
+            queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+            assignments = listOf(assignment("driver", "Водитель", "ACTIVE")),
+            locallyPending = false,
+            hasCurrentGroup = false,
+        )
+
+        assertThat(presentation.actions).containsExactly(WorkerTaskAction.JOIN)
+        assertThat(presentation.message).contains("можно присоединиться")
+        assertThat(
+            selectedGroupForAction(
+                WorkerTaskAction.JOIN,
+                currentGroupId = null,
+                queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+            ),
+        ).isNull()
+    }
+
+    @Test
+    fun `required secondary participation also uses join instead of a second take`() {
+        val presentation = taskActionPresentation(
+            currentWorkerId = "slinger",
+            taskStatus = "IN_PROGRESS",
+            availabilityMode = "REQUIRED_JOIN",
+            queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+            assignments = listOf(assignment("driver", "Водитель", "ACTIVE")),
+            locallyPending = false,
+            hasCurrentGroup = false,
+        )
+
+        assertThat(presentation.actions).containsExactly(WorkerTaskAction.JOIN)
+        assertThat(presentation.message).contains("требуется присоединиться")
+    }
+
+    @Test
+    fun `logistics completion auto selects only one ready evidence`() {
+        assertThat(
+            completionEvidenceId(
+                queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+                readyEvidenceIds = setOf("photo-one"),
+                selectedEvidenceId = null,
+            ),
+        ).isEqualTo("photo-one")
+        assertThat(
+            completionEvidenceId(
+                queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+                readyEvidenceIds = setOf("photo-one", "photo-two"),
+                selectedEvidenceId = null,
+            ),
+        ).isNull()
+        assertThat(
+            completionEvidenceId(
+                queuePurpose = LOGISTICS_DRIVER_QUEUE_PURPOSE,
+                readyEvidenceIds = setOf("photo-one", "photo-two"),
+                selectedEvidenceId = "photo-two",
+            ),
+        ).isEqualTo("photo-two")
+        assertThat(
+            completionEvidenceId(
+                queuePurpose = "GENERAL",
+                readyEvidenceIds = setOf("photo-one"),
+                selectedEvidenceId = "photo-one",
+            ),
+        ).isNull()
     }
 
     @Test

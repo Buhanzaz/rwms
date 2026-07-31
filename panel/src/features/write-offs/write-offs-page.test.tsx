@@ -84,6 +84,8 @@ function task(
     sourceRepairTaskVersion: null,
     writtenOffAt: "2026-07-20T12:00:00Z",
     decisionActorId: AUTHOR_ID,
+    logisticsPlanningMode: "AUTO",
+    logisticsScheduledDate: null,
     createdAt: "2026-07-19T08:00:00Z",
     updatedAt: "2026-07-20T12:00:00Z",
     ...overrides,

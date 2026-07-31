@@ -284,6 +284,8 @@ function repair(params: {
     sourceInventoryFindingId: null,
     sourceRepairTaskId: null,
     sourceRepairTaskVersion: null,
+    logisticsPlanningMode: "AUTO",
+    logisticsScheduledDate: null,
     createdAt: "2026-07-24T08:00:00Z",
     updatedAt: "2026-07-24T08:00:00Z",
   }

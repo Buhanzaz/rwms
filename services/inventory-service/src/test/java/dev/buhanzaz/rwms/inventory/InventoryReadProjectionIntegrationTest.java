@@ -33,6 +33,7 @@ import dev.buhanzaz.rwms.inventory.domain.FindingPlanSnapshot;
 import dev.buhanzaz.rwms.inventory.domain.FindingPlanStage;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
 import dev.buhanzaz.rwms.inventory.domain.InventoryExpectedItem;
+import dev.buhanzaz.rwms.inventory.domain.LogisticsPlanningMode;
 import dev.buhanzaz.rwms.inventory.domain.InventoryFinding;
 import dev.buhanzaz.rwms.inventory.domain.InventoryMembershipMovementType;
 import dev.buhanzaz.rwms.inventory.domain.ObservationPresence;
@@ -51,6 +52,7 @@ import dev.buhanzaz.rwms.inventory.service.InventoryException;
 import dev.buhanzaz.rwms.platform.contracts.OpaqueActorReference;
 import jakarta.persistence.EntityManagerFactory;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -220,6 +222,10 @@ class InventoryReadProjectionIntegrationTest {
     assertThat(expected.frozenPlan().fingerprintSha256()).isEqualTo(FINGERPRINT);
     assertThat(expected.frozenPlan().priority()).isEqualTo(3);
     assertThat(expected.frozenPlan().coverMediaId()).isNull();
+    assertThat(expected.frozenPlan().logisticsPlanningMode())
+        .isEqualTo(LogisticsPlanningMode.FIXED_DATE);
+    assertThat(expected.frozenPlan().logisticsScheduledDate())
+        .isEqualTo(LocalDate.of(2026, 8, 12));
     assertThat(expected.frozenPlan().lines())
         .extracting(line -> line.description())
         .containsExactly("First work", "Second material");
@@ -376,6 +382,8 @@ class InventoryReadProjectionIntegrationTest {
     snapshot.put("mode", "AUTO");
     snapshot.put("priority", 4);
     snapshot.putNull("coverMediaId");
+    snapshot.put("logisticsPlanningMode", "AUTO");
+    snapshot.putNull("logisticsScheduledDate");
     snapshot
         .putArray("lines")
         .addObject()
@@ -442,6 +450,8 @@ class InventoryReadProjectionIntegrationTest {
                     "AUTO",
                     4,
                     null,
+                    LogisticsPlanningMode.AUTO,
+                    null,
                     List.of(
                         new PlanLineInput(
                             "CATALOG",
@@ -458,9 +468,16 @@ class InventoryReadProjectionIntegrationTest {
 
     assertThat(freezeRequest.get().required("priority").asInt()).isEqualTo(4);
     assertThat(freezeRequest.get().required("coverMediaId").isNull()).isTrue();
+    assertThat(freezeRequest.get().required("logisticsPlanningMode").asText())
+        .isEqualTo("AUTO");
+    assertThat(freezeRequest.get().required("logisticsScheduledDate").isNull())
+        .isTrue();
     assertThat(freezeRequest.get().required("lines")).hasSize(1);
     assertThat(saved.inspectionSource()).isEqualTo("INVENTORY");
     assertThat(saved.frozenPlan().priority()).isEqualTo(4);
+    assertThat(saved.frozenPlan().logisticsPlanningMode())
+        .isEqualTo(LogisticsPlanningMode.AUTO);
+    assertThat(saved.frozenPlan().logisticsScheduledDate()).isNull();
     assertThat(saved.frozenPlan().lines())
         .singleElement()
         .satisfies(
@@ -1555,9 +1572,12 @@ class InventoryReadProjectionIntegrationTest {
             expected.getRevision(),
             activeInventoryId,
             "MANUAL",
+            LogisticsPlanningMode.FIXED_DATE,
+            LocalDate.of(2026, 8, 12),
             catalogVersionId,
             FINGERPRINT,
-            "{\"stages\":["
+            "{\"logisticsPlanningMode\":\"FIXED_DATE\","
+                + "\"logisticsScheduledDate\":\"2026-08-12\",\"stages\":["
                 + "{\"id\":\"00000000-0000-0000-0000-000000000811\","
                 + "\"catalogNodeId\":\"00000000-0000-0000-0000-000000000812\","
                 + "\"catalogNodeName\":\"Repair A\",\"normativeDurationMinutes\":150},"

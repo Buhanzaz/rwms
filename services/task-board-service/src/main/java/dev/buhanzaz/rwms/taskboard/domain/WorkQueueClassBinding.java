@@ -2,6 +2,8 @@ package dev.buhanzaz.rwms.taskboard.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.ForeignKey;
 import jakarta.persistence.JoinColumn;
@@ -37,8 +39,12 @@ public class WorkQueueClassBinding extends AbstractVersionedEntity {
   @Column(name = "binding_order", nullable = false)
   private int bindingOrder;
 
-  @Column(name = "notify_urgent", nullable = false)
-  private boolean notifyUrgent;
+  @Enumerated(EnumType.STRING)
+  @Column(name = "participation_policy", nullable = false, length = 16)
+  private ParticipationPolicy participationPolicy = ParticipationPolicy.PRIMARY;
+
+  @Column(name = "notify_on_primary_take", nullable = false)
+  private boolean notifyOnPrimaryTake;
 
   public WorkQueue getQueue() {
     return queue;
@@ -72,11 +78,19 @@ public class WorkQueueClassBinding extends AbstractVersionedEntity {
     bindingOrder = v;
   }
 
-  public boolean isNotifyUrgent() {
-    return notifyUrgent;
+  public ParticipationPolicy getParticipationPolicy() {
+    return participationPolicy;
   }
 
-  public void setNotifyUrgent(boolean v) {
-    notifyUrgent = v;
+  public void setParticipationPolicy(ParticipationPolicy value) {
+    participationPolicy = value;
+  }
+
+  public boolean isNotifyOnPrimaryTake() {
+    return notifyOnPrimaryTake;
+  }
+
+  public void setNotifyOnPrimaryTake(boolean value) {
+    notifyOnPrimaryTake = value;
   }
 }

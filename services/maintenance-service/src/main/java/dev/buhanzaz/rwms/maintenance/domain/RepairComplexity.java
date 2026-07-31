@@ -4,7 +4,7 @@ package dev.buhanzaz.rwms.maintenance.domain;
 public enum RepairComplexity {
   LIGHT("Лёгкий ремонт"),
   MEDIUM("Средний ремонт"),
-  COMPLEX("Сложный ремонт"),
+  COMPLEX("Тяжёлый ремонт"),
   CAPITAL("Капитальный ремонт");
 
   private final String displayName;

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: RWMS Task Board Service API
-  version: 1.3.0
+  version: 1.4.0
   description: >-
     Canonical F2 inventory of the active task-board, workforce and queue
     registry HTTP API. All warehouse-scoped operations validate the warehouse
@@ -133,7 +133,8 @@ paths:
       description: >-
         Reports process capabilities from active, visible warehouse bindings.
         movementToShipmentAvailable is true only when this warehouse has an
-        active visible binding to a MOVEMENT queue definition.
+        active visible binding whose queue definition has the stable
+        LOGISTICS_DRIVER purpose.
       responses:
         '200': { $ref: '#/components/responses/WarehouseQueueCapabilitiesOk' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -222,21 +223,6 @@ paths:
         '200': { $ref: '#/components/responses/WarehouseQueueCapabilitiesOk' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-  /internal/task-board/v1/warehouses/{warehouseId}/repair-complexity:
-    parameters:
-      - $ref: '#/components/parameters/WarehouseId'
-    get:
-      operationId: getInternalRepairComplexityThresholds
-      description: >-
-        Returns the selected warehouse's three strictly increasing thresholds.
-        Classification uses upper-bound inclusion: total minutes less than or
-        equal to light are light; then less than or equal to medium; then less
-        than or equal to complex; larger totals are capital repairs.
-      responses:
-        '200': { $ref: '#/components/responses/RepairComplexityThresholdsOk' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
   /worker-classes:
     get:
       operationId: listWorkerClasses
@@ -283,6 +269,12 @@ paths:
       - $ref: '#/components/parameters/WarehouseId'
     get:
       operationId: getTaskBoard
+      description: >-
+        Returns the requested operational-board representation. If-None-Match
+        is evaluated with a weak semantic ETag over stable snapshot state,
+        including the date and includeShadow query dimensions. Rolling timer
+        counters and serverTime do not invalidate the ETag; timer state and
+        the next transition do.
       parameters:
         - name: includeShadow
           in: query
@@ -293,10 +285,46 @@ paths:
           required: false
           description: Requested operational queue date. Defaults to today when available, otherwise the nearest available date.
           schema: { type: string, format: date }
+        - name: If-None-Match
+          in: header
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 256 }
       responses:
-        '200': { $ref: '#/components/responses/TaskBoardSnapshotOk' }
+        '200':
+          description: Current task-board snapshot for the requested representation.
+          headers:
+            ETag:
+              required: true
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskBoardSnapshot' }
+        '304':
+          description: The requested task-board representation has not changed.
+          headers:
+            ETag:
+              required: true
+              schema: { type: string }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /warehouses/{warehouseId}/task-board/logistics:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: getDriverLogisticsBoard
+      description: >-
+        Returns the dedicated driver queue as one sticky CURRENT lane followed
+        by the finite set of non-empty scheduled-date columns. Ordinary repair
+        queues are not mixed into this response.
+      responses:
+        '200':
+          description: Current driver-logistics board.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LogisticsBoardSnapshot' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /warehouses/{warehouseId}/task-board/kpi-settings:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -335,27 +363,6 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/SaveKpiWorkScheduleRequest' }
-      responses:
-        '200': { $ref: '#/components/responses/KpiSettingsOk' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-  /warehouses/{warehouseId}/task-board/kpi-settings/repair-complexity:
-    parameters:
-      - $ref: '#/components/parameters/WarehouseId'
-    put:
-      operationId: replaceWarehouseRepairComplexityThresholds
-      description: >-
-        Replaces the selected warehouse's three strictly increasing boundaries.
-        Defaults are 60, 180 and 360 minutes. Classification uses upper-bound
-        inclusion consistently: <= light, <= medium, <= complex, then capital.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/SaveRepairComplexityThresholdsRequest' }
       responses:
         '200': { $ref: '#/components/responses/KpiSettingsOk' }
         '400': { $ref: '#/components/responses/BadRequest' }
@@ -482,14 +489,15 @@ paths:
     post:
       operationId: registerExternalBoardTask
       description: >-
-        Private only. Requires a SERVICE principal whose subject equals the
-        maintenance-service client_id and whose granted scope is exactly
-        task-board.task-sync. externalTaskId is mandatory. Identical replay by
-        the same authenticated source returns the existing registration;
-        changed immutable input or another source returns 409. When
-        dailyCapacity is supplied, task-board selects the first date on or
-        after the requested/default scheduledDate with available maintenance
-        capacity and returns that selected scheduledDate.
+        Private only. Accepts either the maintenance-service SERVICE principal
+        with exactly task-board.task-sync or the logistics-service SERVICE
+        principal with exactly task-board.logistics. externalTaskId and a
+        source reference owned by that caller are mandatory for driver tasks.
+        Identical replay by the same authenticated source returns the existing
+        registration; changed immutable input or another source returns 409.
+        dailyCapacity is maintenance-only; when supplied, task-board selects
+        the first date on or after the requested/default scheduledDate with
+        available maintenance capacity and returns that selected date.
       requestBody:
         required: true
         content:
@@ -531,6 +539,50 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /internal/task-board/v1/logistics/warehouses/{warehouseId}/board:
+    parameters:
+      - $ref: '#/components/parameters/WarehouseId'
+    get:
+      operationId: getInternalDriverLogisticsBoard
+      description: >-
+        Private logistics-service projection of the dedicated driver queue.
+        Requires exactly the logistics-service SERVICE principal with one
+        task-board.logistics scope. The response has one server-controlled
+        CURRENT lane and a finite ordered set of non-empty date columns.
+      responses:
+        '200':
+          description: Current driver-logistics board.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LogisticsBoardSnapshot' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /internal/task-board/v1/logistics/tasks/{externalTaskId}/move:
+    parameters:
+      - $ref: '#/components/parameters/ExternalTaskId'
+    post:
+      operationId: moveInternalDriverLogisticsTask
+      description: >-
+        Private logistics-service command for reordering one SCHEDULED driver
+        task inside its sole warehouse driver queue or moving it to another
+        calendar date. CURRENT and already-running tasks are rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MoveExternalLogisticsTaskRequest' }
+      responses:
+        '200':
+          description: Current source-owned task registration after the move.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BoardTaskRegistration' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
   /internal/task-board/v1/logistics/equipment-movement-tasks/{externalTaskId}:
     parameters:
@@ -662,6 +714,50 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/BoardTaskRegistration' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /internal/task-board/v1/tasks/{externalTaskId}/lane:
+    parameters:
+      - $ref: '#/components/parameters/ExternalTaskId'
+    post:
+      operationId: setExternalDriverTaskLane
+      description: >-
+        Logistics-service moves its not-started driver task between SCHEDULED
+        and CURRENT using task-version CAS. A task already in work cannot be
+        moved and no ordinary task can use this operation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetTaskLaneRequest' }
+      responses:
+        '200':
+          description: Current task registration.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BoardTaskRegistration' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /internal/task-board/v1/tasks/{externalTaskId}/completion-evidence:
+    parameters:
+      - $ref: '#/components/parameters/ExternalTaskId'
+    get:
+      operationId: getExternalDriverTaskCompletionEvidence
+      description: >-
+        Returns the one READY result photo selected by the completing
+        participant. It is visible only to logistics-service after the driver
+        task is DONE.
+      responses:
+        '200':
+          description: Canonical selected completion evidence.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SelectedCompletionEvidence' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1369,7 +1465,7 @@ components:
       additionalProperties: false
     WarehouseKpiSettings:
       type: object
-      required: [warehouseId, timeZone, status, version, dataAvailableFrom, repairComplexity, palette, activeSchedule, pendingSchedule]
+      required: [warehouseId, timeZone, status, version, dataAvailableFrom, palette, activeSchedule, pendingSchedule]
       properties:
         warehouseId: { type: string, format: uuid }
         timeZone: { type: string, minLength: 1, maxLength: 64 }
@@ -1379,8 +1475,6 @@ components:
           oneOf:
             - { type: string, format: date }
             - { type: 'null' }
-        repairComplexity:
-          $ref: '#/components/schemas/RepairComplexityThresholds'
         palette:
           oneOf:
             - { $ref: '#/components/schemas/KpiPalette' }
@@ -1393,27 +1487,6 @@ components:
           oneOf:
             - { $ref: '#/components/schemas/KpiWorkSchedule' }
             - { type: 'null' }
-      additionalProperties: false
-    RepairComplexityThresholds:
-      type: object
-      required: [lightBoundaryMinutes, mediumBoundaryMinutes, complexBoundaryMinutes]
-      properties:
-        lightBoundaryMinutes: { type: integer, minimum: 1, default: 60 }
-        mediumBoundaryMinutes: { type: integer, minimum: 1, default: 180 }
-        complexBoundaryMinutes: { type: integer, minimum: 1, default: 360 }
-      description: >-
-        Strictly increasing upper bounds. A total equal to a boundary remains
-        in the lower complexity band.
-      additionalProperties: false
-    RepairComplexityThresholdsResponse:
-      type: object
-      required: [warehouseId, settingsVersion, lightBoundaryMinutes, mediumBoundaryMinutes, complexBoundaryMinutes]
-      properties:
-        warehouseId: { type: string, format: uuid }
-        settingsVersion: { type: integer, format: int64, minimum: 0 }
-        lightBoundaryMinutes: { type: integer, minimum: 1 }
-        mediumBoundaryMinutes: { type: integer, minimum: 1 }
-        complexBoundaryMinutes: { type: integer, minimum: 1 }
       additionalProperties: false
     SaveKpiPaletteRequest:
       type: object
@@ -1445,16 +1518,6 @@ components:
           maxItems: 20
           items: { $ref: '#/components/schemas/KpiWorkBreak' }
       additionalProperties: false
-    SaveRepairComplexityThresholdsRequest:
-      type: object
-      required: [expectedVersion, lightBoundaryMinutes, mediumBoundaryMinutes, complexBoundaryMinutes]
-      properties:
-        expectedVersion: { type: integer, format: int64, minimum: 0 }
-        lightBoundaryMinutes: { type: integer, minimum: 1 }
-        mediumBoundaryMinutes: { type: integer, minimum: 1 }
-        complexBoundaryMinutes: { type: integer, minimum: 1 }
-      description: Values must satisfy lightBoundaryMinutes < mediumBoundaryMinutes < complexBoundaryMinutes.
-      additionalProperties: false
     ActivateKpiSettingsRequest:
       type: object
       required: [expectedVersion]
@@ -1478,29 +1541,40 @@ components:
       items: { $ref: '#/components/schemas/WorkerClass' }
     QueueDefinition:
       type: object
-      required: [id, version, name, description, type]
+      required: [id, version, name, description, type, purpose]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         name: { type: string, minLength: 1, maxLength: 128 }
         description: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
         type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
+        purpose: { $ref: '#/components/schemas/QueuePurpose' }
       additionalProperties: false
     QueueDefinitionList:
       type: array
       items: { $ref: '#/components/schemas/QueueDefinition' }
     QueueDefinitionRequest:
       type: object
-      required: [version, name, type]
+      required: [version, name, type, purpose]
       properties:
         version: { type: integer, format: int64, minimum: 0 }
         name: { type: string, minLength: 1, maxLength: 128 }
         description: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
         type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
+        purpose: { $ref: '#/components/schemas/QueuePurpose' }
       additionalProperties: false
+    QueuePurpose:
+      type: string
+      enum: [GENERAL, LOGISTICS_DRIVER]
+    ParticipationPolicy:
+      type: string
+      enum: [PRIMARY, REQUIRED, OPTIONAL]
+    TaskLane:
+      type: string
+      enum: [SCHEDULED, CURRENT]
     QueueBinding:
       type: object
-      required: [id, version, workerClass, order, primary, stopTaskOnTake, notifyUrgent]
+      required: [id, version, workerClass, order, primary, stopTaskOnTake, participationPolicy, notifyOnPrimaryTake]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
@@ -1508,20 +1582,22 @@ components:
         order: { type: integer, minimum: 0 }
         primary: { type: boolean }
         stopTaskOnTake: { type: boolean }
-        notifyUrgent: { type: boolean }
+        participationPolicy: { $ref: '#/components/schemas/ParticipationPolicy' }
+        notifyOnPrimaryTake: { type: boolean }
       additionalProperties: false
     AudienceSelector:
       type: object
-      required: [kind, id, mode, interruptOnTake]
+      required: [kind, id, mode, interruptOnTake, notifyOnPrimaryTake]
       properties:
         kind: { type: string, enum: [WORKER_CLASS, WORKER_GROUP] }
         id: { type: string, format: uuid }
-        mode: { type: string, enum: [AVAILABLE, MANDATORY] }
+        mode: { type: string, enum: [AVAILABLE, MANDATORY, REQUIRED_JOIN, OPTIONAL_JOIN] }
         interruptOnTake: { type: boolean }
+        notifyOnPrimaryTake: { type: boolean }
       additionalProperties: false
     WorkQueue:
       type: object
-      required: [id, version, warehouseId, definitionId, definitionVersion, name, description, type, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, resultPhotoMinCount, bindings]
+      required: [id, version, warehouseId, definitionId, definitionVersion, name, description, type, purpose, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, resultPhotoMinCount, bindings]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
@@ -1531,6 +1607,7 @@ components:
         name: { type: string }
         description: { oneOf: [{ type: string }, { type: 'null' }] }
         type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
+        purpose: { $ref: '#/components/schemas/QueuePurpose' }
         sortOrder: { type: integer }
         active: { type: boolean }
         hidden: { type: boolean }
@@ -1779,7 +1856,7 @@ components:
       additionalProperties: false
     BoardEntry:
       type: object
-      required: [id, version, taskId, externalTaskId, source, taskVersion, title, unitNumber, taskStatus, scheduledDate, priority, pinned, queueId, routeIndex, queuePosition, entryType, status, taskText, plannedDurationMinutes, activeStartedAt, pausedAt, activeWorkSeconds, audienceSelectors, assignments, timerSnapshot]
+      required: [id, version, taskId, externalTaskId, source, taskVersion, title, unitNumber, taskStatus, scheduledDate, lane, priority, pinned, queueId, queuePurpose, routeIndex, queuePosition, entryType, status, taskText, plannedDurationMinutes, activeStartedAt, pausedAt, activeWorkSeconds, audienceSelectors, assignments, timerSnapshot]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64 }
@@ -1791,9 +1868,11 @@ components:
         unitNumber: { oneOf: [{ type: string }, { type: 'null' }] }
         taskStatus: { type: string, enum: [ACTIVE, DONE, CANCELLED] }
         scheduledDate: { type: string, format: date }
+        lane: { $ref: '#/components/schemas/TaskLane' }
         priority: { type: integer, minimum: 1, maximum: 5 }
         pinned: { type: boolean }
         queueId: { type: string, format: uuid }
+        queuePurpose: { $ref: '#/components/schemas/QueuePurpose' }
         routeIndex: { type: integer }
         queuePosition: { type: integer }
         entryType: { type: string, enum: [REAL, SHADOW] }
@@ -1818,16 +1897,17 @@ components:
       type: object
       required: [type, sourceId]
       properties:
-        type: { type: string, enum: [MAINTENANCE_REPAIR] }
+        type: { type: string, enum: [MAINTENANCE_REPAIR, LOGISTICS_DRIVER_TASK] }
         sourceId: { type: string, format: uuid }
       additionalProperties: false
     BoardColumn:
       type: object
-      required: [queueId, queueName, queueType, sortOrder, entries]
+      required: [queueId, queueName, queueType, queuePurpose, sortOrder, entries]
       properties:
         queueId: { type: string, format: uuid }
         queueName: { type: string }
         queueType: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
+        queuePurpose: { $ref: '#/components/schemas/QueuePurpose' }
         sortOrder: { type: integer }
         entries:
           type: array
@@ -1846,6 +1926,38 @@ components:
         columns:
           type: array
           items: { $ref: '#/components/schemas/BoardColumn' }
+      additionalProperties: false
+    LogisticsDateColumn:
+      type: object
+      required: [date, entries]
+      properties:
+        date: { type: string, format: date }
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/BoardEntry' }
+      additionalProperties: false
+    LogisticsBoardSnapshot:
+      type: object
+      required: [warehouseId, queueId, queueVersion, current, dates]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        queueId: { type: string, format: uuid }
+        queueVersion: { type: integer, format: int64, minimum: 0 }
+        current:
+          type: array
+          items: { $ref: '#/components/schemas/BoardEntry' }
+        dates:
+          type: array
+          items: { $ref: '#/components/schemas/LogisticsDateColumn' }
+      additionalProperties: false
+    MoveExternalLogisticsTaskRequest:
+      type: object
+      required: [expectedTaskVersion, expectedEntryVersion, targetDate, targetIndex]
+      properties:
+        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
+        expectedEntryVersion: { type: integer, format: int64, minimum: 0 }
+        targetDate: { type: string, format: date }
+        targetIndex: { type: integer, minimum: 0 }
       additionalProperties: false
     TimeEvent:
       type: object
@@ -1878,12 +1990,13 @@ components:
       additionalProperties: false
     QueueBindingRequest:
       type: object
-      required: [workerClassId, order, stopTaskOnTake, notifyUrgent]
+      required: [workerClassId, order, stopTaskOnTake, participationPolicy, notifyOnPrimaryTake]
       properties:
         workerClassId: { type: string, format: uuid }
         order: { type: integer, minimum: 0 }
         stopTaskOnTake: { type: boolean }
-        notifyUrgent: { type: boolean }
+        participationPolicy: { $ref: '#/components/schemas/ParticipationPolicy' }
+        notifyOnPrimaryTake: { type: boolean }
       additionalProperties: false
     WorkQueueRequest:
       type: object
@@ -2114,9 +2227,9 @@ components:
         externalTaskId: { type: string, format: uuid }
         source:
           description: >-
-            Optional immutable source aggregate. At present only a
-            maintenance-service registration may declare a MAINTENANCE_REPAIR
-            source; other source-owned tasks remain without a panel link.
+            Immutable source aggregate for a maintenance repair or a dedicated
+            logistics driver intent. The authenticated source client must own
+            the declared source type.
           oneOf: [{ $ref: '#/components/schemas/TaskSourceReference' }, { type: 'null' }]
         title: { type: string, minLength: 1, maxLength: 256 }
         unitNumber: { oneOf: [{ type: string, maxLength: 64 }, { type: 'null' }] }
@@ -2124,6 +2237,10 @@ components:
         plannedDurationMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
         deadlineAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
         scheduledDate: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        lane:
+          oneOf:
+            - { $ref: '#/components/schemas/TaskLane' }
+            - { type: 'null' }
         priority: { oneOf: [{ type: integer, minimum: 1, maximum: 5 }, { type: 'null' }] }
         dailyCapacity:
           description: >-
@@ -2204,6 +2321,26 @@ components:
         expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
         targetWarehouseId: { type: string, format: uuid }
       additionalProperties: false
+    SetTaskLaneRequest:
+      type: object
+      required: [expectedTaskVersion, lane]
+      properties:
+        expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
+        lane: { $ref: '#/components/schemas/TaskLane' }
+      additionalProperties: false
+    SelectedCompletionEvidence:
+      type: object
+      required: [externalTaskId, taskId, entryId, evidenceId, mediaId, mediaGeneration, warehouseId, recordedAt]
+      properties:
+        externalTaskId: { type: string, format: uuid }
+        taskId: { type: string, format: uuid }
+        entryId: { type: string, format: uuid }
+        evidenceId: { type: string, format: uuid }
+        mediaId: { type: string, format: uuid }
+        mediaGeneration: { type: integer, format: int64, minimum: 1 }
+        warehouseId: { type: string, format: uuid }
+        recordedAt: { type: string, format: date-time }
+      additionalProperties: false
     TakeEntryRequest:
       type: object
       required: [expectedVersion]
@@ -2281,7 +2418,7 @@ components:
       additionalProperties: false
     BoardTaskRegistration:
       type: object
-      required: [taskId, taskVersion, warehouseId, externalTaskId, title, unitNumber, description, status, plannedDurationMinutes, deadlineAt, scheduledDate, priority, pinned, doneAt, route]
+      required: [taskId, taskVersion, warehouseId, externalTaskId, title, unitNumber, description, status, plannedDurationMinutes, deadlineAt, scheduledDate, lane, priority, pinned, doneAt, route]
       properties:
         taskId: { type: string, format: uuid }
         taskVersion: { type: integer, format: int64, minimum: 0 }
@@ -2294,6 +2431,7 @@ components:
         plannedDurationMinutes: { oneOf: [{ type: integer }, { type: 'null' }] }
         deadlineAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
         scheduledDate: { type: string, format: date }
+        lane: { $ref: '#/components/schemas/TaskLane' }
         priority: { type: integer, minimum: 1, maximum: 5 }
         pinned: { type: boolean }
         doneAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
@@ -2344,16 +2482,17 @@ components:
       additionalProperties: false
     WorkerCategory:
       type: object
-      required: [queueId, name, type, sortOrder, audienceModes, resultPhotoMinCount]
+      required: [queueId, name, type, queuePurpose, sortOrder, audienceModes, resultPhotoMinCount]
       properties:
         queueId: { type: string, format: uuid }
         name: { type: string, minLength: 1 }
         type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
+        queuePurpose: { $ref: '#/components/schemas/QueuePurpose' }
         sortOrder: { type: integer }
         audienceModes:
           type: array
           uniqueItems: true
-          items: { type: string, enum: [AVAILABLE, MANDATORY] }
+          items: { type: string, enum: [AVAILABLE, MANDATORY, REQUIRED_JOIN, OPTIONAL_JOIN] }
         resultPhotoMinCount: { type: integer, minimum: 0, maximum: 20 }
       additionalProperties: false
     WorkerOfflineLease:
@@ -2602,14 +2741,15 @@ components:
       additionalProperties: false
     WorkerActionRequest:
       type: object
-      required: [operationId, action, expectedVersion, workerGroupId, occurredAt, offlineLeaseId]
+      required: [operationId, action, expectedVersion, workerGroupId, occurredAt, offlineLeaseId, evidenceId]
       properties:
         operationId: { type: string, format: uuid }
-        action: { type: string, enum: [TAKE, PAUSE, RESUME, COMPLETE] }
+        action: { type: string, enum: [TAKE, JOIN, PAUSE, RESUME, COMPLETE] }
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         workerGroupId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
         occurredAt: { type: string, format: date-time }
         offlineLeaseId: { type: string, format: uuid }
+        evidenceId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
       additionalProperties: false
     WorkerActionAppliedResult:
       type: object
@@ -2659,7 +2799,7 @@ components:
       properties:
         eventId: { type: string, format: uuid }
         revision: { type: integer, format: int64, minimum: 0 }
-        type: { type: string, enum: [CONTEXT_CHANGED, FEED_CHANGED, ENTRY_CHANGED, DEVICE_REVOKED] }
+        type: { type: string, enum: [CONTEXT_CHANGED, FEED_CHANGED, ENTRY_CHANGED, TASK_JOIN_AVAILABLE, DEVICE_REVOKED] }
         entryId: { oneOf: [{ type: string, format: uuid }, { type: 'null' }] }
         occurredAt: { type: string, format: date-time }
       additionalProperties: false
@@ -2719,11 +2859,6 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/WarehouseKpiSettings' }
-    RepairComplexityThresholdsOk:
-      description: Repair complexity thresholds scoped to the selected warehouse
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/RepairComplexityThresholdsResponse' }
     WorkerClassOk:
       description: Worker class
       content:

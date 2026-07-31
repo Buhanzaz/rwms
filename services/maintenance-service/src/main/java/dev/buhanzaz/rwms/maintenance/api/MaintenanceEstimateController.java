@@ -11,6 +11,7 @@ import jakarta.validation.constraints.Min;
 import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -35,19 +36,24 @@ public class MaintenanceEstimateController {
   private final MaintenanceAuthorizer access;
 
   @GetMapping
-  public PageResponse<EstimateResponse> list(
+  public ResponseEntity<PageResponse<EstimateResponse>> list(
       @AuthenticationPrincipal Jwt jwt,
       @RequestParam UUID warehouseId,
       @RequestParam(defaultValue = "0") @Min(0) int page,
       @RequestParam(defaultValue = "50") @Min(1) @Max(200) int size,
       @RequestParam(required = false) EstimateState lifecycle,
-      @RequestParam(required = false) UUID rentalItemId) {
+      @RequestParam(required = false) UUID rentalItemId,
+      @RequestHeader(name = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch) {
     access.requireRead(jwt, warehouseId);
     List<EstimateResponse> values = service.estimates(warehouseId).stream()
         .filter(value -> lifecycle == null || value.lifecycle() == lifecycle)
         .filter(value -> rentalItemId == null || value.rentalItemId().equals(rentalItemId))
         .toList();
-    return page(values, page, size);
+    PageResponse<EstimateResponse> response = page(values, page, size);
+    return ConditionalGet.response(
+        "estimates:" + warehouseId + ':' + page + ':' + size + ':' + lifecycle + ':' + rentalItemId,
+        response,
+        ifNoneMatch);
   }
 
   @PostMapping

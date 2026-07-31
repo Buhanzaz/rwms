@@ -180,7 +180,9 @@ describe("maintenance lifecycle HTTP client", () => {
       estimateId,
       4,
       1,
-      idempotencyKey
+      idempotencyKey,
+      "FIXED_DATE",
+      "2026-08-12"
     )
     await amendMaintenanceEstimate(
       "token",
@@ -224,6 +226,8 @@ describe("maintenance lifecycle HTTP client", () => {
     expect(JSON.parse(String(completeInit.body))).toEqual({
       expectedVersion: 4,
       priority: 1,
+      logisticsPlanningMode: "FIXED_DATE",
+      logisticsScheduledDate: "2026-08-12",
     })
     expect(new Headers(completeInit.headers).get("Idempotency-Key")).toBe(
       idempotencyKey
@@ -270,7 +274,9 @@ describe("maintenance lifecycle HTTP client", () => {
       repairId,
       3,
       2,
-      idempotencyKey
+      idempotencyKey,
+      "AUTO",
+      null
     )
     await createMaintenanceRework(
       "token",
@@ -324,6 +330,8 @@ describe("maintenance lifecycle HTTP client", () => {
     expect(JSON.parse(String(requestAt(fetchMock, 2)[1].body))).toEqual({
       expectedVersion: 3,
       priority: 2,
+      logisticsPlanningMode: "AUTO",
+      logisticsScheduledDate: null,
     })
     expect(String(requestAt(fetchMock, 3)[0])).toContain(`/${repairId}/reworks`)
     expect(JSON.parse(String(requestAt(fetchMock, 3)[1].body))).toMatchObject({

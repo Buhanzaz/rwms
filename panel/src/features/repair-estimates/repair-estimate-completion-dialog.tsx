@@ -1,4 +1,5 @@
 import type {
+  LogisticsPlanningMode,
   RepairEstimateCompletionMode,
   RepairEstimateEditorDraft,
   RepairEstimateTaskPlanDto,
@@ -15,11 +16,15 @@ type RepairEstimateCompletionDialogProps = {
   error: string | null
   mode?: "COMPLETE" | "AMEND"
   initialMovementRequired?: boolean
+  initialLogisticsPlanningMode?: LogisticsPlanningMode
+  initialLogisticsScheduledDate?: string | null
   initialTaskPlans?: RepairEstimateTaskPlanDto[]
   onOpenChange: (open: boolean) => void
   onComplete: (params: {
     completionMode: RepairEstimateCompletionMode
     movementRequired: boolean
+    logisticsPlanningMode: LogisticsPlanningMode
+    logisticsScheduledDate: string | null
     taskPlans: RepairEstimateTaskPlanDto[]
     priority: RepairPriority
   }) => void
@@ -90,6 +95,8 @@ export function RepairEstimateCompletionDialog({
   error,
   mode = "COMPLETE",
   initialMovementRequired,
+  initialLogisticsPlanningMode,
+  initialLogisticsScheduledDate,
   initialTaskPlans,
   onOpenChange,
   onComplete,
@@ -116,6 +123,8 @@ export function RepairEstimateCompletionDialog({
       allowEmpty
       selectPriority={mode === "COMPLETE"}
       initialMovementRequired={initialMovementRequired}
+      initialLogisticsPlanningMode={initialLogisticsPlanningMode}
+      initialLogisticsScheduledDate={initialLogisticsScheduledDate}
       reconcileInitialPlans={
         mode === "AMEND" && initialTaskPlans
           ? (prepared) =>

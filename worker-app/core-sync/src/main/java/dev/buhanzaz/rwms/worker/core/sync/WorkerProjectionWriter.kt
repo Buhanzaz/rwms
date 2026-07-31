@@ -228,6 +228,7 @@ class WorkerProjectionWriter @Inject constructor(
             queueId = queueId,
             name = name,
             type = type,
+            queuePurpose = queuePurpose,
             sortOrder = sortOrder,
             audienceModesKey = normalizedAudienceModesKey(),
             resultPhotoMinCount = resultPhotoMinCount,

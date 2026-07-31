@@ -154,6 +154,8 @@ const completeCommand: CompleteRepairEstimateCommand = {
   priority: 1,
   completionMode: "MANUAL",
   movementRequired: false,
+  logisticsPlanningMode: "AUTO",
+  logisticsScheduledDate: null,
   taskPlans: [
     {
       id: planId,
@@ -236,7 +238,9 @@ describe("maintenance repair estimates adapter", () => {
       estimateId,
       0,
       1,
-      expect.any(String)
+      expect.any(String),
+      "AUTO",
+      null
     )
     expect(lifecycle.create).toHaveBeenCalledWith(
       "token",

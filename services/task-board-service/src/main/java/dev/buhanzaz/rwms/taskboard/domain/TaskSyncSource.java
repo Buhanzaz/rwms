@@ -33,7 +33,9 @@ import org.hibernate.proxy.HibernateProxy;
 @Check(
     name = "ck_task_sync_source_reference",
     constraints =
-        "(source_type is null and source_id is null) or (source_type = 'MAINTENANCE_REPAIR' and source_id is not null)")
+        "(source_type is null and source_id is null) or "
+            + "(source_type in ('MAINTENANCE_REPAIR','LOGISTICS_DRIVER_TASK') "
+            + "and source_id is not null)")
 public class TaskSyncSource {
   @Id
   @NotNull

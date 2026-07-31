@@ -1261,15 +1261,17 @@ class OrderApiIntegrationTest {
     jdbc.update(
         """
         insert into equipment_movement_task(
-          id,version,warehouse_id,external_task_id,unit_number,deadline_at,state,
+          id,version,warehouse_id,external_task_id,unit_number,deadline_at,
+          planned_duration_minutes,state,
           created_by_subject_id,idempotency_key,request_sha256,retry_count,created_at,updated_at)
-        values (?,0,?,?,?,?,?,?,?,?,0,?,?)
+        values (?,0,?,?,?,?,?,?,?,?,?,0,?,?)
         """,
         taskId,
         WAREHOUSE_1,
         UUID.randomUUID(),
         "БЫТ-001",
         createdAt.plusDays(1),
+        60,
         "COMPLETED",
         MANAGER_1,
         UUID.randomUUID(),

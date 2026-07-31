@@ -86,7 +86,7 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
 
   @Test
   @Transactional
-  void bootMigratesAdoptedVersionFourThroughVersionTwentyAndValidatesJpa() {
+  void bootMigratesAdoptedVersionFourThroughVersionTwentyTwoAndValidatesJpa() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(retainedDigests(jdbc)).containsExactlyInAnyOrderEntriesOf(beforeStartup);
     assertThat(
@@ -113,6 +113,29 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
                     + "where version='20' and type='SQL' and success",
                 Integer.class))
         .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history "
+                    + "where version='21' and type='SQL' and success",
+                Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from flyway_schema_history "
+                    + "where version='22' and type='SQL' and success",
+                Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                  from information_schema.columns
+                 where table_schema='public'
+                   and table_name='warehouse_kpi_settings'
+                   and column_name like 'repair_%_boundary_minutes'
+                """,
+                Integer.class))
+        .isZero();
     assertThat(
             jdbc.queryForObject(
                 "select count(*) from flyway_schema_history "
@@ -398,7 +421,7 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
     String json =
         "board_task".equals(table)
             ? "to_jsonb(row_value) - array['completion_deadline_enforced',"
-                + "'scheduled_date','priority','pinned','request_fingerprint']"
+                + "'scheduled_date','task_lane','priority','pinned','request_fingerprint']"
             : "queue_entry".equals(table)
                 ? "to_jsonb(row_value) - array['queue_code','worker_works','worker_materials',"
                     + "'worker_comments','source_media_references','revision_marker',"
@@ -411,7 +434,8 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
                     : "worker_class".equals(table)
                         ? "to_jsonb(row_value) - 'code'"
                     : "work_queue_class_binding".equals(table)
-                        ? "to_jsonb(row_value) - array['binding_order','notify_urgent']"
+                        ? "to_jsonb(row_value) - array['binding_order','notify_urgent',"
+                            + "'participation_policy','notify_on_primary_take']"
                         : "worker_group_member".equals(table)
                             ? "to_jsonb(row_value) - 'role_in_group'"
                             : "worker".equals(table)

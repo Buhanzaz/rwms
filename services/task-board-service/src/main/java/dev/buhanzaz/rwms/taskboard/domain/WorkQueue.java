@@ -91,6 +91,10 @@ public class WorkQueue extends AbstractVersionedEntity {
     return definition.getType();
   }
 
+  public QueuePurpose getPurpose() {
+    return definition.getPurpose();
+  }
+
   public int getSortOrder() {
     return sortOrder;
   }

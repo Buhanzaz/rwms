@@ -9,9 +9,14 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35], manifest = Config.NONE)
 class MaintenanceCatalogHttpParsingTest {
     private lateinit var server: MockWebServer
     private lateinit var api: RwmsApi
@@ -137,7 +142,7 @@ class MaintenanceCatalogHttpParsingTest {
             ),
         )
 
-        val versions = api.catalogVersions("warehouse-1")
+        val versions = requireNotNull(api.catalogVersions("warehouse-1").body())
         val nodes = api.catalogNodes(versions.items.single().id, "warehouse-1")
         val links = api.catalogLinks(versions.items.single().id, "warehouse-1")
 

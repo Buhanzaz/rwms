@@ -35,6 +35,8 @@ import type {
   QueueDefinitionDto,
   QueueDefinitionRequest,
   QueueType,
+  ParticipationPolicy,
+  QualificationRequest,
   WorkerClassDto,
   WorkerClassRequest,
   WorkerDto,
@@ -44,7 +46,10 @@ import type {
   WorkQueueDto,
   WorkQueueRequest,
 } from "@/features/settings/task-board/model/task-board-settings"
-import { queueTypeLabels } from "@/features/settings/task-board/model/task-board-settings"
+import {
+  participationPolicyLabels,
+  queueTypeLabels,
+} from "@/features/settings/task-board/model/task-board-settings"
 
 function optional(value: string) {
   return value.trim() || null
@@ -68,7 +73,13 @@ function normalizeBindings(bindings: QueueBindingRequest[]) {
     ...binding,
     order,
     stopTaskOnTake: order === 0 ? false : binding.stopTaskOnTake,
-    notifyUrgent: order === 0 ? false : binding.notifyUrgent,
+    participationPolicy:
+      order === 0
+        ? ("PRIMARY" as const)
+        : binding.participationPolicy === "PRIMARY"
+          ? ("OPTIONAL" as const)
+          : binding.participationPolicy,
+    notifyOnPrimaryTake: order === 0 ? false : binding.notifyOnPrimaryTake,
   }))
 }
 
@@ -200,6 +211,7 @@ export function QueueDefinitionEditorDialog({
       name: name.trim(),
       description: optional(description),
       type,
+      purpose: definition?.purpose ?? "GENERAL",
     })
   }
 
@@ -286,6 +298,7 @@ export function QueueEditorDialog({
           name: queue.name,
           description: queue.description,
           type: queue.type,
+          purpose: queue.purpose,
         }
       : null)
   const type = definition?.type ?? "REPAIR"
@@ -312,7 +325,8 @@ export function QueueEditorDialog({
           workerClassId: binding.workerClass.id,
           order: binding.order,
           stopTaskOnTake: binding.stopTaskOnTake,
-          notifyUrgent: binding.notifyUrgent,
+          participationPolicy: binding.participationPolicy,
+          notifyOnPrimaryTake: binding.notifyOnPrimaryTake,
         }))
     )
   )
@@ -504,7 +518,9 @@ export function QueueEditorDialog({
                             workerClassId: workerClass.id,
                             order: current.length,
                             stopTaskOnTake: false,
-                            notifyUrgent: false,
+                            participationPolicy:
+                              current.length === 0 ? "PRIMARY" : "OPTIONAL",
+                            notifyOnPrimaryTake: false,
                           },
                         ])
                       }
@@ -597,20 +613,61 @@ export function QueueEditorDialog({
                       >
                         Останавливать текущую работу при взятии
                       </BooleanField>
+                      <Field>
+                        <FieldLabel
+                          htmlFor={`queue-participation-${workerClass.id}`}
+                        >
+                          Участие
+                        </FieldLabel>
+                        <Select
+                          value={binding.participationPolicy}
+                          onValueChange={(value) =>
+                            setBindings((current) =>
+                              current.map((item) =>
+                                item.workerClassId === workerClass.id
+                                  ? {
+                                      ...item,
+                                      participationPolicy:
+                                        value as ParticipationPolicy,
+                                    }
+                                  : item
+                              )
+                            )
+                          }
+                        >
+                          <SelectTrigger
+                            id={`queue-participation-${workerClass.id}`}
+                            className="w-full"
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectGroup>
+                              {(["REQUIRED", "OPTIONAL"] as const).map(
+                                (policy) => (
+                                  <SelectItem key={policy} value={policy}>
+                                    {participationPolicyLabels[policy]}
+                                  </SelectItem>
+                                )
+                              )}
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                      </Field>
                       <BooleanField
-                        id={`queue-urgent-${workerClass.id}`}
-                        checked={binding.notifyUrgent}
+                        id={`queue-notify-on-primary-${workerClass.id}`}
+                        checked={binding.notifyOnPrimaryTake}
                         onCheckedChange={(checked) =>
                           setBindings((current) =>
                             current.map((item) =>
                               item.workerClassId === workerClass.id
-                                ? { ...item, notifyUrgent: checked }
+                                ? { ...item, notifyOnPrimaryTake: checked }
                                 : item
                             )
                           )
                         }
                       >
-                        Оповещать о срочности задания
+                        Уведомлять после принятия основным исполнителем
                       </BooleanField>
                     </FieldGroup>
                   )}
@@ -768,6 +825,28 @@ export function WorkerEditorDialog({
       setValidation("Пароль должен содержать не менее 8 символов.")
       return
     }
+    const editableClassIds = new Set(
+      classes.map((workerClass) => workerClass.id)
+    )
+    const preservedQualifications =
+      item?.qualifications
+        .filter(
+          (qualification) =>
+            qualification.active &&
+            !editableClassIds.has(qualification.workerClass.id)
+        )
+        .map((qualification) => ({
+          workerClassId: qualification.workerClass.id,
+          active: true,
+          comment: qualification.comment,
+        })) ?? []
+    const editableQualifications: QualificationRequest[] = classes
+      .filter((workerClass) => qualified[workerClass.id])
+      .map((workerClass) => ({
+        workerClassId: workerClass.id,
+        active: true,
+        comment: null,
+      }))
     await onSave({
       version: item?.version ?? 0,
       displayName: displayName.trim(),
@@ -778,9 +857,7 @@ export function WorkerEditorDialog({
       comment: optional(comment),
       appLogin: optional(appLogin),
       password: password || null,
-      qualifications: classes
-        .filter((c) => qualified[c.id])
-        .map((c) => ({ workerClassId: c.id, active: true, comment: null })),
+      qualifications: [...editableQualifications, ...preservedQualifications],
     })
   }
   return (

@@ -120,7 +120,13 @@ public class TaskBoardService {
   public TaskBoardSnapshot snapshot(
       UUID warehouseId, LocalDate requestedDate, boolean includeShadow) {
     var columns = new ArrayList<BoardColumnDto>();
-    var allEntries = activeEntries(warehouseId);
+    var allEntries =
+        activeEntries(warehouseId).stream()
+            .filter(
+                entry ->
+                    entry.getQueue() != null
+                        && entry.getQueue().getPurpose() != QueuePurpose.LOGISTICS_DRIVER)
+            .toList();
     List<LocalDate> availableDates =
         allEntries.stream()
             .map(entry -> entry.getTask().getScheduledDate())
@@ -135,7 +141,7 @@ public class TaskBoardService {
     Map<UUID, TaskSourceReferenceDto> sources = sourceReferences(selectedEntries);
     for (var queue :
         queues.findAllActiveOrderedByWarehouseId(warehouseId)) {
-      if (queue.isHidden()) continue;
+      if (queue.isHidden() || queue.getPurpose() == QueuePurpose.LOGISTICS_DRIVER) continue;
       var cards =
           selectedEntries.stream()
               .filter(e -> e.getQueue() != null && e.getQueue().getId().equals(queue.getId()))
@@ -148,6 +154,7 @@ public class TaskBoardService {
               queue.getId(),
               queue.getName(),
               queue.getType(),
+              queue.getPurpose(),
               queue.getSortOrder(),
               cards));
     }
@@ -157,6 +164,77 @@ public class TaskBoardService {
   @Transactional(readOnly = true)
   public TaskBoardSnapshot snapshot(UUID warehouseId, boolean includeShadow) {
     return snapshot(warehouseId, null, includeShadow);
+  }
+
+  @Transactional(readOnly = true)
+  public LogisticsBoardSnapshot logisticsSnapshot(UUID warehouseId) {
+    WorkQueue queue = requireLogisticsDriverQueue(warehouseId);
+    List<QueueEntry> selected =
+        activeEntries(warehouseId).stream()
+            .filter(entry -> entry.getQueue() != null && entry.getQueue().equals(queue))
+            .filter(entry -> entry.getEntryType() == EntryType.REAL)
+            .sorted(Comparator.comparingInt(QueueEntry::getQueuePosition))
+            .toList();
+    Map<UUID, TaskSourceReferenceDto> sources = sourceReferences(selected);
+    List<BoardEntryDto> current =
+        selected.stream()
+            .filter(entry -> entry.getTask().getLane() == TaskLane.CURRENT)
+            .map(entry -> dto(entry, sources.get(entry.getTask().getId())))
+            .toList();
+    List<LogisticsDateColumnDto> dates =
+        selected.stream()
+            .filter(entry -> entry.getTask().getLane() == TaskLane.SCHEDULED)
+            .collect(
+                java.util.stream.Collectors.groupingBy(
+                    entry -> entry.getTask().getScheduledDate(),
+                    java.util.TreeMap::new,
+                    java.util.stream.Collectors.toList()))
+            .entrySet()
+            .stream()
+            .map(
+                item ->
+                    new LogisticsDateColumnDto(
+                        item.getKey(),
+                        item.getValue().stream()
+                            .sorted(Comparator.comparingInt(QueueEntry::getQueuePosition))
+                            .map(entry -> dto(entry, sources.get(entry.getTask().getId())))
+                            .toList()))
+            .toList();
+    return new LogisticsBoardSnapshot(
+        warehouseId, queue.getId(), queue.getVersion(), current, dates);
+  }
+
+  /**
+   * Worker feed keeps the ordinary selected-date view and adds only actionable
+   * logistics entries from the server-controlled current lane.
+   */
+  @Transactional(readOnly = true)
+  public TaskBoardSnapshot workerSnapshot(UUID warehouseId) {
+    TaskBoardSnapshot ordinary = snapshot(warehouseId, null, false);
+    List<BoardColumnDto> columns = new ArrayList<>(ordinary.columns());
+    for (WorkQueue queue : queues.findAllActiveOrderedByWarehouseId(warehouseId)) {
+      if (queue.isHidden() || queue.getPurpose() != QueuePurpose.LOGISTICS_DRIVER) continue;
+      List<QueueEntry> logisticsEntries =
+          activeEntries(warehouseId).stream()
+              .filter(entry -> entry.getQueue() != null && entry.getQueue().equals(queue))
+              .filter(entry -> entry.getEntryType() == EntryType.REAL)
+              .filter(entry -> entry.getTask().getLane() == TaskLane.CURRENT)
+              .sorted(Comparator.comparingInt(QueueEntry::getQueuePosition))
+              .toList();
+      Map<UUID, TaskSourceReferenceDto> sources = sourceReferences(logisticsEntries);
+      columns.add(
+          new BoardColumnDto(
+              queue.getId(),
+              queue.getName(),
+              queue.getType(),
+              queue.getPurpose(),
+              queue.getSortOrder(),
+              logisticsEntries.stream()
+                  .map(entry -> dto(entry, sources.get(entry.getTask().getId())))
+                  .toList()));
+    }
+    return new TaskBoardSnapshot(
+        warehouseId, ordinary.selectedDate(), ordinary.availableDates(), columns);
   }
 
   @Transactional(readOnly = true)
@@ -205,7 +283,8 @@ public class TaskBoardService {
             false,
             null,
             dailyCapacity,
-            source);
+            source,
+            request.lane() == null ? TaskLane.SCHEDULED : request.lane());
     return registrationDto(task);
   }
 
@@ -236,7 +315,10 @@ public class TaskBoardService {
             LOGISTICS_SOURCE_CLIENT_ID,
             false,
             true,
-            equipmentMovementFingerprint(request, normalized));
+            equipmentMovementFingerprint(request, normalized),
+            null,
+            null,
+            TaskLane.SCHEDULED);
     return logisticsTaskMapper.toLogisticsTaskSnapshot(requireEquipmentMovementTask(task));
   }
 
@@ -253,13 +335,34 @@ public class TaskBoardService {
     return candidates.getFirst();
   }
 
+  private WorkQueue requireLogisticsDriverQueue(UUID warehouseId) {
+    List<WorkQueue> candidates =
+        queues.findAllActiveOrderedByWarehouseId(warehouseId).stream()
+            .filter(queue -> !queue.isHidden())
+            .filter(queue -> queue.getPurpose() == QueuePurpose.LOGISTICS_DRIVER)
+            .toList();
+    if (candidates.size() != 1) {
+      throw new ConflictException(
+          "Настройте ровно одну активную видимую очередь «Задания водителей»");
+    }
+    return candidates.getFirst();
+  }
+
   private BoardTask createTask(
       UUID warehouseId,
       CreateBoardTaskRequest request,
       String sourceClientId,
       boolean allowRepeatedQueues) {
     return createTask(
-        warehouseId, request, sourceClientId, allowRepeatedQueues, false, null, null, null);
+        warehouseId,
+        request,
+        sourceClientId,
+        allowRepeatedQueues,
+        false,
+        null,
+        null,
+        null,
+        TaskLane.SCHEDULED);
   }
 
   private BoardTask createTask(
@@ -277,7 +380,8 @@ public class TaskBoardService {
         completionDeadlineEnforced,
         suppliedFingerprint,
         null,
-        null);
+        null,
+        TaskLane.SCHEDULED);
   }
 
   private BoardTask createTask(
@@ -288,7 +392,16 @@ public class TaskBoardService {
       boolean completionDeadlineEnforced,
       String suppliedFingerprint,
       Integer dailyCapacity,
-      TaskSourceReferenceDto sourceReference) {
+      TaskSourceReferenceDto sourceReference,
+      TaskLane taskLane) {
+    TaskLane effectiveLane = taskLane == null ? TaskLane.SCHEDULED : taskLane;
+    if (effectiveLane == TaskLane.CURRENT
+        && (sourceReference == null
+            || sourceReference.type() != TaskSourceType.LOGISTICS_DRIVER_TASK
+            || !LOGISTICS_SOURCE_CLIENT_ID.equals(sourceClientId))) {
+      throw new IllegalArgumentException(
+          "Только logistics-service может создать текущее логистическое задание");
+    }
     if (request.externalTaskId() != null) {
       lock("external-task:" + request.externalTaskId());
       var existing = tasks.findByExternalTaskId(request.externalTaskId());
@@ -304,7 +417,8 @@ public class TaskBoardService {
                         || request.scheduledDate() == null
                         ? task.getScheduledDate()
                         : request.scheduledDate(),
-                    request.priority() == null ? task.getPriority() : priority(request.priority()))
+                    request.priority() == null ? task.getPriority() : priority(request.priority()),
+                    effectiveLane)
                 : suppliedFingerprint;
         if (warehouseId.equals(task.getWarehouseId())
             && task.getRequestFingerprint() != null
@@ -316,8 +430,12 @@ public class TaskBoardService {
       }
     }
     lockQueueMutation(warehouseId);
+    if (effectiveLane == TaskLane.CURRENT) {
+      requireEmptyCurrentLogisticsLane(warehouseId, null);
+    }
     List<ResolvedRouteStep> routeSteps =
         resolveRoute(warehouseId, request.route(), allowRepeatedQueues, sourceClientId);
+    requireRoutePurpose(routeSteps, sourceReference);
     lockQueuePositions(warehouseId, routeSteps.stream().map(ResolvedRouteStep::queue).toList());
     LocalDate scheduledDate = scheduledDate(warehouseId, request, sourceClientId, dailyCapacity);
     Set<QueueEntry> existingEntries = new LinkedHashSet<>();
@@ -333,7 +451,7 @@ public class TaskBoardService {
     int effectivePriority = priority(request.priority());
     String requestFingerprint =
         suppliedFingerprint == null
-            ? fingerprint(warehouseId, request, scheduledDate, effectivePriority)
+            ? fingerprint(warehouseId, request, scheduledDate, effectivePriority, effectiveLane)
             : suppliedFingerprint;
     var task = new BoardTask();
     task.setWarehouseId(warehouseId);
@@ -344,6 +462,7 @@ public class TaskBoardService {
     task.setPlannedDurationMinutes(request.plannedDurationMinutes());
     task.setDeadlineAt(request.deadlineAt());
     task.setScheduledDate(scheduledDate);
+    task.setLane(effectiveLane);
     task.setPriority(effectivePriority);
     task.setPinned(false);
     task.setCompletionDeadlineEnforced(completionDeadlineEnforced);
@@ -517,6 +636,166 @@ public class TaskBoardService {
   }
 
   @Transactional(readOnly = true)
+  public SelectedCompletionEvidenceDto selectedCompletionEvidence(
+      String sourceClientId, UUID externalTaskId) {
+    if (!LOGISTICS_SOURCE_CLIENT_ID.equals(sourceClientId)) {
+      throw new NotFoundException("Задача не найдена");
+    }
+    BoardTask task = ownedExternalTask(sourceClientId, externalTaskId);
+    TaskSyncSource source =
+        taskSyncSources
+            .findById(task.getId())
+            .orElseThrow(() -> new NotFoundException("Задача не найдена"));
+    if (!source.hasSourceReference(
+        TaskSourceType.LOGISTICS_DRIVER_TASK, source.getSourceId())) {
+      throw new NotFoundException("Задача не найдена");
+    }
+    if (task.getStatus() != TaskStatus.DONE) {
+      throw new ConflictException(
+          "Фотография результата доступна только после завершения задания");
+    }
+    List<SelectedCompletionEvidenceDto> selected =
+        jdbc.query(
+            """
+            select evidence.entry_id,
+                   evidence.evidence_id,
+                   evidence.media_id,
+                   evidence.media_generation,
+                   evidence.warehouse_id,
+                   evidence.recorded_at
+              from worker_task_evidence evidence
+              join queue_entry entry on entry.id = evidence.entry_id
+             where entry.task_id = ?
+               and evidence.selected_for_completion
+               and evidence.state = 'READY'
+               and evidence.media_id is not null
+               and evidence.media_generation is not null
+             order by evidence.recorded_at, evidence.evidence_id
+            """,
+            (result, row) ->
+                new SelectedCompletionEvidenceDto(
+                    externalTaskId,
+                    task.getId(),
+                    result.getObject("entry_id", UUID.class),
+                    result.getObject("evidence_id", UUID.class),
+                    result.getObject("media_id", UUID.class),
+                    result.getLong("media_generation"),
+                    result.getObject("warehouse_id", UUID.class),
+                    result.getObject("recorded_at", OffsetDateTime.class)),
+            task.getId());
+    if (selected.size() != 1) {
+      throw new ConflictException(
+          "Для завершённого логистического задания должна быть выбрана одна фотография");
+    }
+    return selected.getFirst();
+  }
+
+  @Transactional
+  public BoardTaskRegistrationDto setExternalTaskLane(
+      String sourceClientId, UUID externalTaskId, SetTaskLaneRequest request) {
+    if (!LOGISTICS_SOURCE_CLIENT_ID.equals(sourceClientId)) {
+      throw new NotFoundException("Задача не найдена");
+    }
+    lock("external-task:" + externalTaskId);
+    BoardTask task = ownedExternalTask(sourceClientId, externalTaskId);
+    TaskSyncSource source =
+        taskSyncSources
+            .findById(task.getId())
+            .orElseThrow(() -> new NotFoundException("Задача не найдена"));
+    if (!source.hasSourceReference(
+        TaskSourceType.LOGISTICS_DRIVER_TASK, source.getSourceId())) {
+      throw new NotFoundException("Задача не найдена");
+    }
+    checkVersion(task.getVersion(), request.expectedTaskVersion(), "Задача");
+    List<QueueEntry> route = entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId());
+    if (route.stream()
+        .anyMatch(
+            entry ->
+                entry.getQueue().getPurpose() != QueuePurpose.LOGISTICS_DRIVER)) {
+      throw new ConflictException("Задача не относится к очереди водителей");
+    }
+    if (task.getStatus() != TaskStatus.ACTIVE
+        || route.stream()
+            .anyMatch(
+                entry ->
+                    entry.getStatus() == EntryStatus.IN_PROGRESS
+                        || entry.getStatus() == EntryStatus.PAUSED)) {
+      throw new ConflictException("Задание в работе нельзя переносить между колонками");
+    }
+    if (task.getLane() == request.lane()) {
+      return registrationDto(task);
+    }
+    if (request.lane() == TaskLane.CURRENT) {
+      lockQueueMutation(task.getWarehouseId());
+      requireEmptyCurrentLogisticsLane(task.getWarehouseId(), task.getId());
+    }
+    long streamVersion = eventSourcing.lock(TaskBoardAggregateType.BOARD_TASK, task.getId());
+    task.setLane(request.lane());
+    task = projectionWriter.saveAndFlush(tasks, task);
+    eventSourcing.taskChanged(
+        task, streamVersion, TaskBoardEventTypes.BOARD_TASK_CHANGED);
+    return registrationDto(task);
+  }
+
+  @Transactional
+  public BoardTaskRegistrationDto moveExternalLogisticsTask(
+      UUID externalTaskId, MoveExternalLogisticsTaskRequest request) {
+    BoardTask task = ownedExternalTask(LOGISTICS_SOURCE_CLIENT_ID, externalTaskId);
+    TaskSyncSource source =
+        taskSyncSources
+            .findById(task.getId())
+            .orElseThrow(() -> new NotFoundException("Задача не найдена"));
+    if (!source.hasSourceReference(
+        TaskSourceType.LOGISTICS_DRIVER_TASK, source.getSourceId())) {
+      throw new NotFoundException("Задача не найдена");
+    }
+    List<QueueEntry> route =
+        entries.findAllByTaskIdOrderByRouteIndexAsc(task.getId()).stream()
+            .filter(entry -> entry.getEntryType() == EntryType.REAL)
+            .toList();
+    if (route.size() != 1
+        || route.getFirst().getQueue().getPurpose() != QueuePurpose.LOGISTICS_DRIVER) {
+      throw new ConflictException("Задача не относится к очереди водителей");
+    }
+    QueueEntry entry = route.getFirst();
+    move(
+        task.getWarehouseId(),
+        entry.getId(),
+        new MoveEntryRequest(
+            request.expectedEntryVersion(),
+            request.expectedTaskVersion(),
+            entry.getQueue().getId(),
+            request.targetIndex(),
+            request.targetDate()));
+    return registrationDto(task);
+  }
+
+  private void requireEmptyCurrentLogisticsLane(UUID warehouseId, UUID excludedTaskId) {
+    Integer current =
+        jdbc.queryForObject(
+            """
+            select count(distinct task.id)::integer
+              from board_task task
+              join queue_entry entry on entry.task_id = task.id
+              join work_queue queue on queue.id = entry.queue_id
+              join queue_definition definition on definition.id = queue.definition_id
+             where task.warehouse_id = ?
+               and task.status = 'ACTIVE'
+               and task.task_lane = 'CURRENT'
+               and definition.queue_purpose = 'LOGISTICS_DRIVER'
+               and (?::uuid is null or task.id <> ?::uuid)
+            """,
+            Integer.class,
+            warehouseId,
+            excludedTaskId,
+            excludedTaskId);
+    if (current != null && current > 0) {
+      throw new ConflictException(
+          "В колонке «Текущее задание» уже находится активное задание");
+    }
+  }
+
+  @Transactional(readOnly = true)
   public LogisticsTaskSnapshot logisticsEquipmentMovementTask(UUID externalTaskId) {
     return logisticsTaskMapper.toLogisticsTaskSnapshot(
         ownedLogisticsEquipmentMovementTask(externalTaskId));
@@ -621,7 +900,12 @@ public class TaskBoardService {
     task.setPlannedDurationMinutes(request.plannedDurationMinutes());
     task.setDeadlineAt(request.deadlineAt());
     task.setRequestFingerprint(
-        fingerprint(warehouseId, replacement, task.getScheduledDate(), task.getPriority()));
+        fingerprint(
+            warehouseId,
+            replacement,
+            task.getScheduledDate(),
+            task.getPriority(),
+            task.getLane()));
     task = projectionWriter.saveAndFlush(tasks, task);
 
     int routeIndex = 0;
@@ -808,12 +1092,18 @@ public class TaskBoardService {
   private TaskSourceReferenceDto sourceReferenceFor(
       String sourceClientId, TaskSourceReferenceDto source) {
     if (source == null) return null;
-    if (source.type() == null
-        || source.sourceId() == null
-        || !MAINTENANCE_SOURCE_CLIENT_ID.equals(sourceClientId)
-        || source.type() != TaskSourceType.MAINTENANCE_REPAIR) {
+    if (source.type() == null || source.sourceId() == null) {
+      throw new IllegalArgumentException("Источник задания заполнен не полностью");
+    }
+    boolean maintenance =
+        MAINTENANCE_SOURCE_CLIENT_ID.equals(sourceClientId)
+            && source.type() == TaskSourceType.MAINTENANCE_REPAIR;
+    boolean logistics =
+        LOGISTICS_SOURCE_CLIENT_ID.equals(sourceClientId)
+            && source.type() == TaskSourceType.LOGISTICS_DRIVER_TASK;
+    if (!maintenance && !logistics) {
       throw new IllegalArgumentException(
-          "Только maintenance-service может регистрировать источник ремонта");
+          "Источник задания не соответствует сервису-владельцу");
     }
     return source;
   }
@@ -952,7 +1242,8 @@ public class TaskBoardService {
       UUID warehouseId,
       CreateBoardTaskRequest request,
       LocalDate scheduledDate,
-      int priority) {
+      int priority,
+      TaskLane lane) {
     ObjectNode payload =
         taskFingerprintPayload(
             warehouseId,
@@ -963,7 +1254,8 @@ public class TaskBoardService {
             request.plannedDurationMinutes(),
             request.deadlineAt(),
             scheduledDate,
-            priority);
+            priority,
+            lane);
     ArrayNode route = payload.putArray("route");
     for (RouteStepRequest step : request.route()) {
       ObjectNode item = route.addObject();
@@ -989,7 +1281,8 @@ public class TaskBoardService {
             task.getPlannedDurationMinutes(),
             task.getDeadlineAt(),
             task.getScheduledDate(),
-            task.getPriority());
+            task.getPriority(),
+            task.getLane());
     ArrayNode route = payload.putArray("route");
     for (QueueEntry entry : routeEntries) {
       ObjectNode item = route.addObject();
@@ -1013,7 +1306,8 @@ public class TaskBoardService {
       Integer plannedDurationMinutes,
       OffsetDateTime deadlineAt,
       LocalDate scheduledDate,
-      int priority) {
+      int priority,
+      TaskLane lane) {
     ObjectNode payload = objectMapper.createObjectNode();
     setFingerprintValue(payload, "warehouseId", warehouseId);
     setFingerprintValue(payload, "externalTaskId", externalTaskId);
@@ -1023,6 +1317,7 @@ public class TaskBoardService {
     setFingerprintValue(payload, "plannedDurationMinutes", plannedDurationMinutes);
     setFingerprintValue(payload, "deadlineEpochMicros", deadlineEpochMicros(deadlineAt));
     setFingerprintValue(payload, "scheduledDate", scheduledDate);
+    setFingerprintValue(payload, "lane", lane);
     setFingerprintValue(payload, "priority", priority);
     return payload;
   }
@@ -1139,6 +1434,23 @@ public class TaskBoardService {
       result.add(new ResolvedRouteStep(step, queue));
     }
     return result;
+  }
+
+  private void requireRoutePurpose(
+      List<ResolvedRouteStep> routeSteps, TaskSourceReferenceDto sourceReference) {
+    boolean logistics =
+        sourceReference != null
+            && sourceReference.type() == TaskSourceType.LOGISTICS_DRIVER_TASK;
+    for (ResolvedRouteStep step : routeSteps) {
+      boolean driverQueue =
+          step.queue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER;
+      if (logistics != driverQueue) {
+        throw new ConflictException(
+            logistics
+                ? "Логистическое задание должно использовать очередь водителей"
+                : "Очередь водителей принимает только задания logistics-service");
+      }
+    }
   }
 
   private WorkQueue resolveRouteQueue(UUID warehouseId, RouteStepRequest step) {
@@ -1292,13 +1604,17 @@ public class TaskBoardService {
       UUID warehouseId, UUID entryId, TakeEntryRequest request, UUID authenticatedWorkerId) {
     var entry = requireEntry(warehouseId, entryId);
     checkVersion(entry.getVersion(), request.expectedVersion(), "Этап");
-    boolean joiningUrgent = entry.getStatus() == EntryStatus.IN_PROGRESS;
+    boolean joiningSecondary = entry.getStatus() == EntryStatus.IN_PROGRESS;
     if (entry.getEntryType() != EntryType.REAL
-        || (!joiningUrgent && entry.getStatus() != EntryStatus.WAITING)) {
+        || (!joiningSecondary && entry.getStatus() != EntryStatus.WAITING)) {
       throw new ConflictException(
-          "Взять можно ожидающий этап или присоединиться к срочному этапу в работе");
+          "Взять можно ожидающий этап или присоединиться к этапу в работе");
     }
-    if (!joiningUrgent) ensureFirstAvailable(entry);
+    if (entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER
+        && entry.getTask().getLane() != TaskLane.CURRENT) {
+      throw new ConflictException("Водитель может взять только текущее логистическое задание");
+    }
+    if (!joiningSecondary) ensureFirstAvailable(entry);
     if (request.workerGroupId() == null && request.workerId() == null)
       throw new ConflictException("Выберите группу или рабочего");
     WorkerGroup group =
@@ -1312,14 +1628,20 @@ public class TaskBoardService {
     if (authenticatedWorkerId != null) {
       if (selected == null || !authenticatedWorkerId.equals(selected.getId()))
         throw new ConflictException("Worker token может взять задачу только на себя");
-      WorkerGroup currentGroup = selected.getCurrentGroup();
-      if (currentGroup == null) {
-        throw new ConflictException("Рабочему не назначена текущая группа");
+      if (entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER) {
+        if (group != null) {
+          throw new ConflictException("Логистическое задание выполняется без бригады");
+        }
+      } else {
+        WorkerGroup currentGroup = selected.getCurrentGroup();
+        if (currentGroup == null) {
+          throw new ConflictException("Рабочему не назначена текущая группа");
+        }
+        if (group != null && !group.equals(currentGroup)) {
+          throw new ConflictException("Задачу можно взять только текущей группой рабочего");
+        }
+        group = currentGroup;
       }
-      if (group != null && !group.equals(currentGroup)) {
-        throw new ConflictException("Задачу можно взять только текущей группой рабочего");
-      }
-      group = currentGroup;
     } else if (group == null && selected != null && selected.getCurrentGroup() != null) {
       group = selected.getCurrentGroup();
     }
@@ -1343,15 +1665,17 @@ public class TaskBoardService {
             .noneMatch(m -> m.getWorker().equals(selected)))
       throw new ConflictException("Рабочий не состоит в группе");
     WorkQueueClassBinding takeBinding =
-        bindingForTake(queueBindings, assignedGroup, selected, joiningUrgent);
+        bindingForTake(queueBindings, assignedGroup, selected, joiningSecondary);
     if (!queueBindings.isEmpty() && takeBinding == null) {
       throw new ConflictException(
-          joiningUrgent
+          joiningSecondary
               ? "Присоединиться может только вторичный класс исполнителей"
               : "Начать задание может только основной класс исполнителей");
     }
-    if (joiningUrgent && (takeBinding == null || !takeBinding.isNotifyUrgent())) {
-      throw new ConflictException("Для этого класса срочное присоединение не настроено");
+    if (joiningSecondary
+        && (takeBinding == null
+            || takeBinding.getParticipationPolicy() == ParticipationPolicy.PRIMARY)) {
+      throw new ConflictException("Для этого класса присоединение не настроено");
     }
     List<Worker> assigned =
         assignedGroup != null
@@ -1409,7 +1733,7 @@ public class TaskBoardService {
     streamsToLock.add(entry);
     var streamVersions = lockEntryStreams(streamsToLock);
     if (stopCurrentWork) autoInterrupt(interruptionPlan, entry, now);
-    if (!joiningUrgent) {
+    if (!joiningSecondary) {
       entry.setStatus(EntryStatus.IN_PROGRESS);
       entry.setActiveStartedAt(now);
       entry.setPausedAt(null);
@@ -1433,8 +1757,8 @@ public class TaskBoardService {
           worker,
           assignedGroup,
           TimeEventType.STARTED,
-          joiningUrgent
-              ? "Рабочий присоединился к срочному заданию"
+          joiningSecondary
+              ? "Рабочий присоединился к заданию"
               : "Задача взята в работу",
           null,
           now);
@@ -1513,7 +1837,7 @@ public class TaskBoardService {
     assertAssigned(entry, authenticatedWorkerId);
     if (entry.getStatus() != EntryStatus.IN_PROGRESS)
       throw new ConflictException("Завершить можно только этап в работе");
-    ensureUrgentSecondaryAssignments(entry);
+    ensureRequiredSecondaryAssignments(entry);
     lockQueuePositions(warehouseId, List.of(entry.getQueue()));
     List<QueueEntry> taskRoute = entries.findAllByTaskIdOrderByRouteIndexAsc(entry.getTask().getId());
     QueueEntry nextEntry =
@@ -1617,6 +1941,9 @@ public class TaskBoardService {
     lockQueueMutation(warehouseId);
     var entry = requireEntry(warehouseId, entryId);
     BoardTask task = entry.getTask();
+    if (task.getLane() == TaskLane.CURRENT) {
+      throw new ConflictException("Текущее логистическое задание перемещает только планировщик");
+    }
     checkVersion(entry.getVersion(), request.expectedVersion(), "Этап");
     checkVersion(task.getVersion(), request.expectedTaskVersion(), "Задача");
     if (!UNFINISHED.contains(entry.getStatus()))
@@ -1983,10 +2310,12 @@ public class TaskBoardService {
             .stream()
             .filter(
                 candidate ->
-                    candidate
-                        .getTask()
-                        .getScheduledDate()
-                        .equals(entry.getTask().getScheduledDate()))
+                    entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER
+                        ? candidate.getTask().getLane() == TaskLane.CURRENT
+                        : candidate
+                            .getTask()
+                            .getScheduledDate()
+                            .equals(entry.getTask().getScheduledDate()))
             .filter(e -> e.getEntryType() == EntryType.REAL)
             .findFirst();
     if (first.isEmpty() || !first.get().equals(entry))
@@ -2009,7 +2338,7 @@ public class TaskBoardService {
       List<WorkQueueClassBinding> queueBindings,
       WorkerGroup group,
       Worker worker,
-      boolean joiningUrgent) {
+      boolean joiningSecondary) {
     Set<UUID> classIds =
         worker == null
             ? Set.of(group.getWorkerClass().getId())
@@ -2019,7 +2348,7 @@ public class TaskBoardService {
     return queueBindings.stream()
         .filter(
             binding ->
-                joiningUrgent
+                joiningSecondary
                     ? binding.getBindingOrder() > 0
                     : binding.getBindingOrder() == 0)
         .filter(binding -> classIds.contains(binding.getWorkerClass().getId()))
@@ -2027,11 +2356,13 @@ public class TaskBoardService {
         .orElse(null);
   }
 
-  private void ensureUrgentSecondaryAssignments(QueueEntry entry) {
+  private void ensureRequiredSecondaryAssignments(QueueEntry entry) {
     List<WorkQueueClassBinding> required =
         bindings.findAllByQueueIdOrderByBindingOrderAscIdAsc(entry.getQueue().getId()).stream()
             .filter(binding -> binding.getBindingOrder() > 0)
-            .filter(WorkQueueClassBinding::isNotifyUrgent)
+            .filter(
+                binding ->
+                    binding.getParticipationPolicy() == ParticipationPolicy.REQUIRED)
             .toList();
     if (required.isEmpty()) return;
     Set<UUID> liveWorkerIds =
@@ -2589,9 +2920,11 @@ public class TaskBoardService {
         t.getUnitNumber(),
         t.getStatus(),
         t.getScheduledDate(),
+        t.getLane(),
         t.getPriority(),
         t.isPinned(),
         id(e.getQueue()),
+        e.getQueue().getPurpose(),
         e.getRouteIndex(),
         e.getQueuePosition(),
         e.getEntryType(),
@@ -2684,6 +3017,7 @@ public class TaskBoardService {
         task.getPlannedDurationMinutes(),
         task.getDeadlineAt(),
         task.getScheduledDate(),
+        task.getLane(),
         task.getPriority(),
         task.isPinned(),
         task.getDoneAt(),

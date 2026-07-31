@@ -670,7 +670,7 @@ function RentalItemsPageState({ warehouseId }: { warehouseId: string }) {
             </Button>
           </div>
         </div>
-      ) : viewMode === "table" ? (
+      ) : viewMode === "table" || items.length === 0 ? (
         <RentalItemsTableView
           schema={tableSchema}
           items={items}

@@ -111,7 +111,8 @@ public class AuthorizationServerConfiguration {
                     "asset.maintenance",
                     "task-board.task-sync",
                     "queue-registry.write",
-                    "media.maintenance");
+                    "media.maintenance",
+                    "logistics.maintenance");
 
     @Bean
     PasswordEncoder passwordEncoder() {

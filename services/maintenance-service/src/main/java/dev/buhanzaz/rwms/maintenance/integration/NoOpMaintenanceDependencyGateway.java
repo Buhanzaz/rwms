@@ -149,6 +149,29 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   }
 
   @Override
+  public DriverTaskSnapshot createDriverTask(
+      UUID key, DriverTaskCommand command) {
+    java.time.LocalDate scheduledDate =
+        command.scheduledDate() == null
+            ? java.time.LocalDate.now(
+                java.time.ZoneId.of("Europe/Moscow"))
+            : command.scheduledDate();
+    return new DriverTaskSnapshot(
+        deterministic("driver-task", key),
+        0,
+        command.warehouseId(),
+        command.cabinId(),
+        command.repairId(),
+        command.sourceType(),
+        command.sourceId(),
+        command.kind(),
+        command.planningMode(),
+        scheduledDate,
+        command.priority(),
+        "SCHEDULED");
+  }
+
+  @Override
   public CatalogRoutingPreflight preflightCatalogRouting(
       List<CatalogRoutingQueueRequirement> queues) {
     return new CatalogRoutingPreflight(
@@ -181,11 +204,6 @@ final class NoOpMaintenanceDependencyGateway implements MaintenanceDependencyGat
                 queue.queueDefinitionId().toString(),
                 queue.type()))
             .toList());
-  }
-
-  @Override
-  public RepairComplexityThresholds repairComplexityThresholds(UUID warehouseId) {
-    return new RepairComplexityThresholds(warehouseId, 0, 60, 180, 360);
   }
 
   @Override

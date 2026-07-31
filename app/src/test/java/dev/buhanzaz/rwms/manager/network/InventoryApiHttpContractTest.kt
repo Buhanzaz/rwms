@@ -12,9 +12,14 @@ import okio.Buffer
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35], manifest = Config.NONE)
 class InventoryApiHttpContractTest {
     private lateinit var server: MockWebServer
     private lateinit var api: RwmsApi
@@ -76,7 +81,10 @@ class InventoryApiHttpContractTest {
             ),
         )
 
-        val active = api.activeInventory(warehouseId)
+        val active = api.activeInventory(
+            warehouseId = warehouseId,
+            ifNoneMatch = "W/\"inventory-revision-9\"",
+        )
         val loaded = api.inventory(inventoryId)
         val findings = api.inventoryFindings(inventoryId, page = 0)
         val equipment = api.equipment(warehouseId)
@@ -106,6 +114,30 @@ class InventoryApiHttpContractTest {
             "/api/asset/v1/equipment?warehouseId=$warehouseId",
             "/api/asset/v1/rental-items?warehouseId=$warehouseId&page=0&size=50",
         ).inOrder()
+        assertThat(requests.first().getHeader("If-None-Match"))
+            .isEqualTo("W/\"inventory-revision-9\"")
+    }
+
+    @Test
+    fun `active inventory preserves a not modified response for the local snapshot`() = runTest {
+        val warehouseId = "11111111-1111-1111-1111-111111111111"
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(304)
+                .setHeader("ETag", "W/\"inventory-revision-9\""),
+        )
+
+        val response = api.activeInventory(
+            warehouseId = warehouseId,
+            ifNoneMatch = "W/\"inventory-revision-9\"",
+        )
+
+        assertThat(response.code()).isEqualTo(304)
+        assertThat(response.headers()["ETag"]).isEqualTo("W/\"inventory-revision-9\"")
+        val request = takeRequest()
+        assertThat(request.path)
+            .isEqualTo("/api/inventory/v1/sessions/active?warehouseId=$warehouseId")
+        assertThat(request.getHeader("If-None-Match")).isEqualTo("W/\"inventory-revision-9\"")
     }
 
     @Test

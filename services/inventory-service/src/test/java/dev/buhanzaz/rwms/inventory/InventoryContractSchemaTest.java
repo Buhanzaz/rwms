@@ -92,6 +92,27 @@ class InventoryContractSchemaTest {
   }
 
   @Test
+  void activeSessionContractSupportsConditionalReadsForBothStates() throws Exception {
+    Map<String, Object> document = yaml("openapi/inventory-service.yaml");
+    Map<String, Object> active =
+        child(child(document, "paths"), "/api/inventory/v1/sessions/active");
+    Map<String, Object> get = child(active, "get");
+
+    assertThat((List<?>) get.get("parameters"))
+        .anySatisfy(
+            parameter ->
+                assertThat(map(parameter).get("$ref"))
+                    .isEqualTo("#/components/parameters/IfNoneMatch"));
+
+    Map<String, Object> responses = child(get, "responses");
+    for (String status : List.of("200", "204", "304")) {
+      Map<String, Object> headers = child(child(responses, status), "headers");
+      assertThat(child(headers, "ETag").get("$ref"))
+          .isEqualTo("#/components/headers/ETag");
+    }
+  }
+
+  @Test
   void inspectionObservationsAndPlanConditionalsValidateRealRequests() throws Exception {
     JsonSchema request = openApiSchema("SaveInspectionRequest");
     JsonNode ready =
@@ -130,6 +151,14 @@ class InventoryContractSchemaTest {
     assertThat(request.validate(stagedWithoutPlan)).isNotEmpty();
     stagedWithoutPlan.set("planSelection", validAutoPlan());
     assertThat(request.validate(stagedWithoutPlan)).isEmpty();
+    ObjectNode automaticWithDate = stagedWithoutPlan.deepCopy();
+    ((ObjectNode) automaticWithDate.required("planSelection"))
+        .put("logisticsScheduledDate", "2026-08-12");
+    assertThat(request.validate(automaticWithDate)).isNotEmpty();
+    ObjectNode fixedWithoutDate = stagedWithoutPlan.deepCopy();
+    ((ObjectNode) fixedWithoutDate.required("planSelection"))
+        .put("logisticsPlanningMode", "FIXED_DATE");
+    assertThat(request.validate(fixedWithoutDate)).isNotEmpty();
   }
 
   @Test
@@ -246,6 +275,7 @@ class InventoryContractSchemaTest {
                 "mode":"MANUAL","catalogVersionId":"00000000-0000-0000-0000-000000000734",
                 "fingerprintSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "priority":3,"coverMediaId":null,
+                "logisticsPlanningMode":"AUTO","logisticsScheduledDate":null,
                 "lines":[{
                   "id":"00000000-0000-0000-0000-000000000736",
                   "sourceKind":"MANUAL","lineType":"WORK","catalogVersionId":null,
@@ -429,7 +459,8 @@ class InventoryContractSchemaTest {
     return (ObjectNode)
         JSON.readTree(
             """
-            {"mode":"AUTO","priority":3,"coverMediaId":null,"lines":[{
+            {"mode":"AUTO","priority":3,"coverMediaId":null,
+              "logisticsPlanningMode":"AUTO","logisticsScheduledDate":null,"lines":[{
               "aggregationKind":"CATALOG",
               "catalogNodeId":"00000000-0000-0000-0000-000000000731",
               "description":null,"type":null,"unit":null,"quantity":"1",

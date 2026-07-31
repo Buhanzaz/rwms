@@ -7,7 +7,10 @@ import {
 } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { ArrowLeft01Icon } from "@hugeicons/core-free-icons"
+import {
+  ArrowLeft01Icon,
+  ArrowLeftDoubleIcon,
+} from "@hugeicons/core-free-icons"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -116,6 +119,28 @@ function uniqueNodes(nodes: readonly RepairEstimateCatalogNodeDto[]) {
   return Array.from(new Map(nodes.map((node) => [node.id, node])).values())
 }
 
+/**
+ * The canvas keeps every block of a category under the category's parent ID so
+ * it can be edited together. The arrows, rather than that flat canvas
+ * membership, define the sequence shown to an estimator. Prefer outgoing
+ * arrows whenever a node has them and retain the parent hierarchy only as a
+ * fallback for catalog branches without arrows.
+ */
+function catalogNavigationNodes(
+  catalog: Pick<
+    ReturnType<typeof createRepairEstimateCatalogIndex>,
+    "getChildren" | "getDependencyNodes" | "getFollowUpNodes"
+  >,
+  node: RepairEstimateCatalogNodeDto
+) {
+  const linkedNodes = uniqueNodes([
+    ...catalog.getFollowUpNodes(node.id),
+    ...catalog.getDependencyNodes(node.id),
+  ])
+
+  return linkedNodes.length > 0 ? linkedNodes : catalog.getChildren(node.id)
+}
+
 export function RepairEstimateCatalogPicker({
   lines,
   readOnly,
@@ -181,11 +206,7 @@ export function RepairEstimateCatalogPicker({
     }
 
     const candidates = currentNode
-      ? uniqueNodes([
-          ...catalog.getDependencyNodes(currentNode.id),
-          ...catalog.getFollowUpNodes(currentNode.id),
-          ...catalog.getChildren(currentNode.id),
-        ])
+      ? catalogNavigationNodes(catalog, currentNode)
       : [...catalog.operationalMenuNodes]
 
     return filterForUsage(candidates).filter((node) => {
@@ -284,15 +305,7 @@ export function RepairEstimateCatalogPicker({
     if (!catalog) {
       return false
     }
-    return (
-      filterForUsage(
-        uniqueNodes([
-          ...catalog.getChildren(node.id),
-          ...catalog.getDependencyNodes(node.id),
-          ...catalog.getFollowUpNodes(node.id),
-        ])
-      ).length > 0
-    )
+    return filterForUsage(catalogNavigationNodes(catalog, node)).length > 0
   }
 
   function nodeActionLabel(node: RepairEstimateCatalogNodeDto) {
@@ -465,25 +478,36 @@ export function RepairEstimateCatalogPicker({
         className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground"
       >
         {path.length > 0 || pendingWork ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            aria-label="Назад по каталогу"
-            onClick={() => {
-              if (pendingMaterial) {
-                setPendingMaterial(null)
-              } else if (pendingWork) {
-                setPendingWork(null)
-              } else {
-                setPath((current) => current.slice(0, -1))
-              }
-              setMessage(null)
-              setPage(0)
-            }}
-          >
-            <HugeiconsIcon icon={ArrowLeft01Icon} />
-          </Button>
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="К корню каталога"
+              onClick={() => navigateToBreadcrumb(0)}
+            >
+              <HugeiconsIcon icon={ArrowLeftDoubleIcon} />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="Назад по каталогу"
+              onClick={() => {
+                if (pendingMaterial) {
+                  setPendingMaterial(null)
+                } else if (pendingWork) {
+                  setPendingWork(null)
+                } else {
+                  setPath((current) => current.slice(0, -1))
+                }
+                setMessage(null)
+                setPage(0)
+              }}
+            >
+              <HugeiconsIcon icon={ArrowLeft01Icon} />
+            </Button>
+          </>
         ) : null}
         {breadcrumbs.map((breadcrumb, index) => (
           <span key={breadcrumb.key} className="flex items-center gap-1">

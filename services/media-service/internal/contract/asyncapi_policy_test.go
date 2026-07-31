@@ -53,6 +53,11 @@ func TestAsyncAPITopicSchemaAndConditionalRecordKeyPolicy(t *testing.T) {
 			payloadRef: "./media/media-inventory-owner-dlt-v1.schema.json",
 			recordKey:  "source finding aggregateId when identity is valid; UUIDv5(OID namespace, SHA-256(raw source bytes)) when invalid",
 		},
+		{
+			name: "cabin cover facts", channel: "cabinPhotoFacts", channelMessage: "cabinCoverChangedV1",
+			message: "CabinCoverChangedV1", address: "rwms.media.cabin-photo.v1",
+			payloadRef: "./media/cabin-photo-facts-v1.schema.json", recordKey: "aggregateId",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -83,15 +88,18 @@ func TestAsyncAPITopicSchemaAndConditionalRecordKeyPolicy(t *testing.T) {
 	assertOperationChannelRef(t, document, "publishProcessingDeadLetter", "processingDeadLetters")
 	assertOperationChannelRef(t, document, "consumeInventoryOwnerFact", "inventoryOwnerFacts")
 	assertOperationChannelRef(t, document, "publishInventoryOwnerDeadLetter", "inventoryOwnerDeadLetters")
+	assertOperationChannelRef(t, document, "publishCabinCoverChangedFact", "cabinPhotoFacts")
 
 	factSchema := decodeJSONContract(t, readContract(t, filepath.Join(events, "media", "media-facts-v1.schema.json")))
 	requestSchema := decodeJSONContract(t, readContract(t, filepath.Join(events, "media", "media-processing-requests-v1.schema.json")))
 	dltSchema := decodeJSONContract(t, readContract(t, filepath.Join(events, "media", "media-processing-dlt-v1.schema.json")))
 	ownerDltSchema := decodeJSONContract(t, readContract(t, filepath.Join(events, "media", "media-inventory-owner-dlt-v1.schema.json")))
+	cabinPhotoSchema := decodeJSONContract(t, readContract(t, filepath.Join(events, "media", "cabin-photo-facts-v1.schema.json")))
 	assertSchemaTopic(t, factSchema, "rwms.media.media.v1")
 	assertSchemaTopic(t, requestSchema, "rwms.media.processing.v1")
 	assertSchemaTopic(t, dltSchema, "rwms.media.processing.v1.media-service-processing-v1.dlt")
 	assertSchemaTopic(t, ownerDltSchema, "rwms.inventory.session.v1.media-service-inventory-owner-v1.dlt")
+	assertSchemaTopic(t, cabinPhotoSchema, "rwms.media.cabin-photo.v1")
 	if got := stringAt(t, factSchema, "x-rwms-record-key"); got != "aggregateId" {
 		t.Fatalf("fact schema record key = %q", got)
 	}

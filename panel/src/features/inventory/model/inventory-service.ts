@@ -156,6 +156,8 @@ export type InventoryFrozenPlan = {
   mode: "AUTO" | "MANUAL"
   priority?: 1 | 2 | 3 | 4 | 5
   coverMediaId?: string | null
+  logisticsPlanningMode: LogisticsPlanningMode
+  logisticsScheduledDate: string | null
   catalogVersionId: string
   fingerprintSha256: string
   lines: InventoryFrozenPlanLine[]
@@ -336,6 +338,8 @@ export type InventoryPlanSelection =
       mode: "AUTO"
       priority: 1 | 2 | 3 | 4 | 5
       coverMediaId: string | null
+      logisticsPlanningMode: LogisticsPlanningMode
+      logisticsScheduledDate: string | null
       lines: InventoryCatalogPlanLine[]
       stages: InventoryPlanStageSelection[]
     }
@@ -343,6 +347,8 @@ export type InventoryPlanSelection =
       mode: "MANUAL"
       priority: 1 | 2 | 3 | 4 | 5
       coverMediaId: string | null
+      logisticsPlanningMode: LogisticsPlanningMode
+      logisticsScheduledDate: string | null
       lines: Array<InventoryCatalogPlanLine | InventoryManualPlanLine>
       stages: InventoryPlanStageSelection[]
     }
@@ -412,3 +418,4 @@ export type InventoryMediaScope = {
   ownerId: string
   warehouseId: string
 }
+import type { LogisticsPlanningMode } from "@/features/repair-estimates/model/repair-estimate"

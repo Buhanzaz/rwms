@@ -41,8 +41,10 @@ class MaintenanceDependencyConfiguration {
         validated, "maintenance-task-board-registry", "queue-registry.write");
     ClientRegistration media = registration(
         validated, "maintenance-media", "media.maintenance");
+    ClientRegistration logistics = registration(
+        validated, "maintenance-logistics", "logistics.maintenance");
     var registrations = new InMemoryClientRegistrationRepository(
-        asset, task, taskRegistry, media);
+        asset, task, taskRegistry, media, logistics);
     var manager = new AuthorizedClientServiceOAuth2AuthorizedClientManager(
         registrations, new InMemoryOAuth2AuthorizedClientService(registrations));
     manager.setAuthorizedClientProvider(OAuth2AuthorizedClientProviderBuilder.builder()

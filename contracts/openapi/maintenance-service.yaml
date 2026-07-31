@@ -41,8 +41,10 @@ paths:
         - name: lifecycle
           in: query
           schema: { $ref: '#/components/schemas/CatalogLifecycle' }
+        - { $ref: '#/components/parameters/IfNoneMatch' }
       responses:
-        '200': { description: Catalog versions., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersionPage' } } } }
+        '200': { description: Catalog versions., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, ETag: { $ref: '#/components/headers/ETag' } }, content: { application/json: { schema: { $ref: '#/components/schemas/CatalogVersionPage' } } } }
+        '304': { description: Requested catalog-version page has not changed., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, ETag: { $ref: '#/components/headers/ETag' } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
     post:
@@ -355,6 +357,104 @@ paths:
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationFailure' }
         '503': { $ref: '#/components/responses/DependencyUnavailable' }
+  /api/internal/maintenance/v1/logistics/repair-places/{warehouseId}:
+    get:
+      tags: [Logistics Integration]
+      operationId: getLogisticsRepairPlaceProjection
+      parameters:
+        - { name: warehouseId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Authoritative repair-place projection enriched with cabin identifiers., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsRepairPlaceProjection' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/internal/maintenance/v1/logistics/repairs/capital:
+    get:
+      tags: [Logistics Integration]
+      operationId: listLogisticsCapitalRepairs
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseIdQuery' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+      responses:
+        '200': { description: Active calculated capital repairs needed by the logistics board., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsCapitalRepairPage' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/internal/maintenance/v1/logistics/repairs/capital/{repairId}:
+    get:
+      tags: [Logistics Integration]
+      operationId: getLogisticsCapitalRepair
+      description: Returns one active calculated capital repair for an atomic logistics command; inactive and non-capital repairs are not exposed.
+      parameters:
+        - { name: repairId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Active calculated capital repair., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsCapitalRepair' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/internal/maintenance/v1/logistics/repair-places/{warehouseId}/allocations/{repairId}/reserve:
+    post:
+      tags: [Logistics Integration]
+      operationId: reserveRepairPlace
+      parameters:
+        - { name: warehouseId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: repairId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceTransitionRequest' } } } }
+      responses:
+        '200': { description: Reserved allocation or an idempotent replay., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceAllocation' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/maintenance/v1/logistics/repair-places/{warehouseId}/allocations/{repairId}/occupy:
+    post:
+      tags: [Logistics Integration]
+      operationId: occupyRepairPlace
+      parameters:
+        - { name: warehouseId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: repairId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceTransitionRequest' } } } }
+      responses:
+        '200': { description: Occupied allocation or an idempotent replay., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceAllocation' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/maintenance/v1/logistics/repair-places/{warehouseId}/allocations/{repairId}/ready-to-release:
+    post:
+      tags: [Logistics Integration]
+      operationId: markRepairPlaceReadyToRelease
+      parameters:
+        - { name: warehouseId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: repairId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceTransitionRequest' } } } }
+      responses:
+        '200': { description: Ready-to-release allocation or an idempotent replay., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceAllocation' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/internal/maintenance/v1/logistics/repair-places/{warehouseId}/allocations/{repairId}/release:
+    post:
+      tags: [Logistics Integration]
+      operationId: releaseRepairPlace
+      parameters:
+        - { name: warehouseId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: repairId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceTransitionRequest' } } } }
+      responses:
+        '200': { description: Released allocation or an idempotent replay., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceAllocation' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/maintenance/v1/estimates:
     get:
       tags: [Estimates]
@@ -370,8 +470,10 @@ paths:
         - name: rentalItemId
           in: query
           schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IfNoneMatch' }
       responses:
-        '200': { description: Estimate page., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/EstimatePage' } } } }
+        '200': { description: Estimate page., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, ETag: { $ref: '#/components/headers/ETag' } }, content: { application/json: { schema: { $ref: '#/components/schemas/EstimatePage' } } } }
+        '304': { description: Requested estimate page has not changed., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, ETag: { $ref: '#/components/headers/ETag' } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
     post:
@@ -476,8 +578,23 @@ paths:
         - name: rentalItemId
           in: query
           schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IfNoneMatch' }
       responses:
-        '200': { description: Repair page., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPage' } } } }
+        '200': { description: Repair page., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, ETag: { $ref: '#/components/headers/ETag' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPage' } } } }
+        '304': { description: Requested repair page has not changed., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, ETag: { $ref: '#/components/headers/ETag' } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/maintenance/v1/repairs/capital:
+    get:
+      tags: [Repairs]
+      operationId: listActiveCapitalRepairs
+      description: Active calculated CAPITAL repairs only; accepted, written-off and cancelled rows are excluded.
+      parameters:
+        - { $ref: '#/components/parameters/WarehouseIdQuery' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Size' }
+      responses:
+        '200': { description: Active capital repair page., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPage' } } } }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /api/maintenance/v1/repairs/direct:
@@ -719,7 +836,7 @@ paths:
       operationId: getRepairCapacitySettings
       description: >-
         Returns the warehouse repair-capacity setting. An absent setting is represented as
-        version 0 with maxRepairsPerDay 6 and null lifecycle timestamps without persisting a row.
+        version 0 with repairPlaceCount 6 and null lifecycle timestamps without persisting a row.
         Requires USER, rwms.write and warehouse MANAGE access.
       responses:
         '200': { description: Repair-capacity setting or its non-persisted default., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairCapacitySettings' } } } }
@@ -739,6 +856,63 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /api/maintenance/v1/settings/repair-complexity/{warehouseId}:
+    parameters:
+      - name: warehouseId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Settings]
+      operationId: getRepairComplexitySettings
+      description: Returns canonical per-warehouse integer-minute boundaries.
+      responses:
+        '200': { description: Repair-complexity settings or defaults 60/180/360., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairComplexitySettings' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    put:
+      tags: [Settings]
+      operationId: replaceRepairComplexitySettings
+      description: Replaces strictly increasing boundaries with optimistic CAS and recalculates active repairs.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ReplaceRepairComplexitySettingsRequest' } } } }
+      responses:
+        '200': { description: Persisted repair-complexity settings., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairComplexitySettings' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/maintenance/v1/settings/repair-complexity/{warehouseId}/task-board-import:
+    parameters:
+      - name: warehouseId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Settings]
+      operationId: importRepairComplexitySettings
+      description: >-
+        One-time cutover command. It records the source task-board version and never becomes a
+        runtime fallback. An identical completed import is idempotent; another import returns 409.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ImportRepairComplexitySettingsRequest' } } } }
+      responses:
+        '200': { description: Imported canonical settings., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairComplexitySettings' } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/maintenance/v1/repair-places/{warehouseId}:
+    parameters:
+      - name: warehouseId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Repairs]
+      operationId: getRepairPlaceProjection
+      responses:
+        '200': { description: Capacity, current allocation counts and allocation audit rows., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceProjection' } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /api/maintenance/v1/settings/repair-complexity-colors:
     parameters:
       - { $ref: '#/components/parameters/WarehouseIdQuery' }
@@ -793,6 +967,11 @@ components:
         An identical canonical request replays the original successful status
         and body; reuse with another request hash returns 409.
       schema: { type: string, format: uuid }
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      schema: { type: string, minLength: 1, maxLength: 512 }
     CatalogVersionId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
     EstimateId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
     RepairId: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -834,6 +1013,9 @@ components:
     Idempotency-Replayed:
       description: Present with value `true` only when the original successful response is replayed.
       schema: { type: string, const: 'true' }
+    ETag:
+      description: Current representation validator for a conditional GET.
+      schema: { type: string, minLength: 1, maxLength: 512 }
   schemas:
     ProblemDetail:
       type: object
@@ -887,10 +1069,13 @@ components:
     RepairKind: { enum: [PRIMARY, REWORK] }
     RepairExecutionState: { enum: [DRAFT, QUEUED, IN_PROGRESS, COMPLETED, CANCELLED] }
     RepairAcceptanceState: { enum: [NOT_READY, PENDING, IN_REWORK, ACCEPTED, WRITTEN_OFF] }
+    RepairReclassificationState: { enum: [STABLE, RECLASSIFYING_CAPITAL, EXTERNAL_CAPITAL] }
     RepairComplexity: { enum: [LIGHT, MEDIUM, COMPLEX, CAPITAL] }
     RepairStageKind: { enum: [REPAIR_WORK, MOVE_TO_REPAIR, MOVE_FROM_REPAIR] }
     RepairStageState: { enum: [PLANNED, QUEUED, IN_PROGRESS, DONE, CANCELLED] }
-    GenerationState: { enum: [PENDING_GENERATION, GENERATED, FAILED] }
+    GenerationState: { enum: [PENDING_GENERATION, GENERATED, NOT_REQUIRED, FAILED] }
+    RepairLogisticsPlanningMode: { enum: [AUTO, FIXED_DATE] }
+    RepairPlaceAllocationState: { enum: [RESERVED, OCCUPIED, READY_TO_RELEASE, RELEASED] }
     InventoryPlanMode: { enum: [AUTO, MANUAL] }
     InventoryPlanLineKind: { enum: [CATALOG, MANUAL] }
     InventoryPlanLineType: { enum: [WORK, MATERIAL] }
@@ -910,7 +1095,18 @@ components:
     PriorityVersionRequest:
       type: object
       additionalProperties: false
-      required: [expectedVersion, priority]
+      required: [expectedVersion, priority, logisticsPlanningMode, logisticsScheduledDate]
+      allOf:
+        - if:
+            properties:
+              logisticsPlanningMode: { const: FIXED_DATE }
+            required: [logisticsPlanningMode]
+          then:
+            properties:
+              logisticsScheduledDate: { type: string, format: date }
+          else:
+            properties:
+              logisticsScheduledDate: { type: 'null' }
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         priority:
@@ -918,25 +1114,150 @@ components:
           minimum: 1
           maximum: 5
           description: 1 is the most urgent and 5 is the least urgent.
+        logisticsPlanningMode:
+          $ref: '#/components/schemas/RepairLogisticsPlanningMode'
+        logisticsScheduledDate:
+          description: Required for FIXED_DATE and null for AUTO.
+          oneOf: [ { type: string, format: date }, { type: 'null' } ]
     ReplaceRepairCapacitySettingsRequest:
       type: object
       additionalProperties: false
-      required: [expectedVersion, maxRepairsPerDay]
+      required: [expectedVersion, repairPlaceCount]
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
-        maxRepairsPerDay: { type: integer, minimum: 1 }
+        repairPlaceCount: { type: integer, minimum: 1 }
     RepairCapacitySettings:
       type: object
       additionalProperties: false
-      required: [warehouseId, version, maxRepairsPerDay, createdAt, updatedAt]
+      required: [warehouseId, version, repairPlaceCount, createdAt, updatedAt]
       properties:
         warehouseId: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
-        maxRepairsPerDay: { type: integer, minimum: 1 }
+        repairPlaceCount: { type: integer, minimum: 1 }
         createdAt:
           oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
         updatedAt:
           oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+    ReplaceRepairComplexitySettingsRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, lightBoundaryMinutes, mediumBoundaryMinutes, complexBoundaryMinutes]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        lightBoundaryMinutes: { type: integer, minimum: 1 }
+        mediumBoundaryMinutes: { type: integer, minimum: 2 }
+        complexBoundaryMinutes: { type: integer, minimum: 3 }
+    ImportRepairComplexitySettingsRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, taskBoardVersion, lightBoundaryMinutes, mediumBoundaryMinutes, complexBoundaryMinutes]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        taskBoardVersion: { type: integer, format: int64, minimum: 0 }
+        lightBoundaryMinutes: { type: integer, minimum: 1 }
+        mediumBoundaryMinutes: { type: integer, minimum: 2 }
+        complexBoundaryMinutes: { type: integer, minimum: 3 }
+    RepairComplexitySettings:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, version, lightBoundaryMinutes, mediumBoundaryMinutes, complexBoundaryMinutes, importedFromTaskBoardVersion, importedAt, createdAt, updatedAt]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        lightBoundaryMinutes: { type: integer, minimum: 1 }
+        mediumBoundaryMinutes: { type: integer, minimum: 2 }
+        complexBoundaryMinutes: { type: integer, minimum: 3 }
+        importedFromTaskBoardVersion:
+          oneOf: [ { type: integer, format: int64, minimum: 0 }, { type: 'null' } ]
+        importedAt:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+        createdAt:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+        updatedAt:
+          oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
+    RepairPlaceTransitionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+    RepairPlaceAllocation:
+      type: object
+      additionalProperties: false
+      required: [id, version, warehouseId, repairId, state, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        warehouseId: { type: string, format: uuid }
+        repairId: { type: string, format: uuid }
+        state: { $ref: '#/components/schemas/RepairPlaceAllocationState' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    RepairPlaceProjection:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, repairPlaceCount, reservedCount, occupiedCount, readyToReleaseCount, availableCount, overCapacity, allocations]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        repairPlaceCount: { type: integer, minimum: 1 }
+        reservedCount: { type: integer, format: int64, minimum: 0 }
+        occupiedCount: { type: integer, format: int64, minimum: 0 }
+        readyToReleaseCount: { type: integer, format: int64, minimum: 0 }
+        availableCount: { type: integer, format: int64, minimum: 0 }
+        overCapacity: { type: boolean }
+        allocations:
+          type: array
+          items: { $ref: '#/components/schemas/RepairPlaceAllocation' }
+    LogisticsRepairPlaceAllocation:
+      type: object
+      additionalProperties: false
+      required: [id, version, warehouseId, repairId, rentalItemId, state, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 0 }
+        warehouseId: { type: string, format: uuid }
+        repairId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        state: { $ref: '#/components/schemas/RepairPlaceAllocationState' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    LogisticsRepairPlaceProjection:
+      type: object
+      additionalProperties: false
+      required: [warehouseId, repairPlaceCount, reservedCount, occupiedCount, readyToReleaseCount, availableCount, overCapacity, allocations]
+      properties:
+        warehouseId: { type: string, format: uuid }
+        repairPlaceCount: { type: integer, minimum: 1 }
+        reservedCount: { type: integer, format: int64, minimum: 0 }
+        occupiedCount: { type: integer, format: int64, minimum: 0 }
+        readyToReleaseCount: { type: integer, format: int64, minimum: 0 }
+        availableCount: { type: integer, format: int64, minimum: 0 }
+        overCapacity: { type: boolean }
+        allocations:
+          type: array
+          items: { $ref: '#/components/schemas/LogisticsRepairPlaceAllocation' }
+    LogisticsCapitalRepair:
+      type: object
+      additionalProperties: false
+      required: [repairId, rentalItemId, warehouseId, priority, complexity, version]
+      properties:
+        repairId: { type: string, format: uuid }
+        rentalItemId: { type: string, format: uuid }
+        warehouseId: { type: string, format: uuid }
+        priority: { type: integer, minimum: 1, maximum: 5 }
+        complexity: { $ref: '#/components/schemas/RepairComplexitySnapshot' }
+        version: { type: integer, format: int64, minimum: 0 }
+    LogisticsCapitalRepairPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, size, totalElements]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/LogisticsCapitalRepair' }
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
     ReplaceRepairComplexityColorsRequest:
       type: object
       additionalProperties: false
@@ -1697,7 +2018,18 @@ components:
     FreezeInventoryPlanRequest:
       type: object
       additionalProperties: false
-      required: [warehouseId, inventoryId, findingId, sourceRevision, mode, lines, plan, mediaReferences, priority, coverMediaId]
+      required: [warehouseId, inventoryId, findingId, sourceRevision, mode, lines, plan, mediaReferences, priority, coverMediaId, logisticsPlanningMode, logisticsScheduledDate]
+      allOf:
+        - if:
+            properties:
+              logisticsPlanningMode: { const: FIXED_DATE }
+            required: [logisticsPlanningMode]
+          then:
+            properties:
+              logisticsScheduledDate: { type: string, format: date }
+          else:
+            properties:
+              logisticsScheduledDate: { type: 'null' }
       properties:
         warehouseId: { type: string, format: uuid }
         inventoryId: { type: string, format: uuid }
@@ -1725,6 +2057,11 @@ components:
         coverMediaId:
           description: Required and contained in aggregate mediaReferences when photos are present; otherwise null.
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        logisticsPlanningMode:
+          $ref: '#/components/schemas/RepairLogisticsPlanningMode'
+        logisticsScheduledDate:
+          description: Required for FIXED_DATE and null for AUTO.
+          oneOf: [ { type: string, format: date }, { type: 'null' } ]
     InventoryPlanLineSnapshot:
       type: object
       additionalProperties: false
@@ -1777,7 +2114,18 @@ components:
     FrozenInventoryPlanSnapshot:
       type: object
       additionalProperties: false
-      required: [catalogVersionId, mode, lines, stages, moveToRepairRequired, moveFromRepairRequired, mediaReferences, priority, coverMediaId]
+      required: [catalogVersionId, mode, lines, stages, moveToRepairRequired, moveFromRepairRequired, mediaReferences, priority, coverMediaId, logisticsPlanningMode, logisticsScheduledDate]
+      allOf:
+        - if:
+            properties:
+              logisticsPlanningMode: { const: FIXED_DATE }
+            required: [logisticsPlanningMode]
+          then:
+            properties:
+              logisticsScheduledDate: { type: string, format: date }
+          else:
+            properties:
+              logisticsScheduledDate: { type: 'null' }
       properties:
         catalogVersionId: { type: string, format: uuid }
         mode: { $ref: '#/components/schemas/InventoryPlanMode' }
@@ -1804,6 +2152,11 @@ components:
           default: 3
         coverMediaId:
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        logisticsPlanningMode:
+          $ref: '#/components/schemas/RepairLogisticsPlanningMode'
+        logisticsScheduledDate:
+          description: Frozen maintenance-owned planning choice; logistics resolves AUTO later.
+          oneOf: [ { type: string, format: date }, { type: 'null' } ]
     FrozenInventoryPlan:
       type: object
       additionalProperties: false
@@ -1943,7 +2296,7 @@ components:
           enum:
             - Лёгкий ремонт
             - Средний ремонт
-            - Сложный ремонт
+            - Тяжёлый ремонт
             - Капитальный ремонт
         color:
           description: Color from the single global estimate setting.
@@ -1958,7 +2311,7 @@ components:
     Repair:
       type: object
       additionalProperties: false
-      required: [id, rootRepairId, sourceRepairId, estimateId, warehouseId, rentalItemId, origin, kind, executionState, acceptanceState, version, dispatchDate, priority, sourceParty, plan, inventorySource, lease, mediaReferences, coverMediaId, complexity, movementToShipment, createdAt, updatedAt, actor]
+      required: [id, rootRepairId, sourceRepairId, estimateId, warehouseId, rentalItemId, origin, kind, executionState, acceptanceState, reclassificationState, version, dispatchDate, priority, sourceParty, plan, inventorySource, lease, mediaReferences, coverMediaId, complexity, movementToShipment, logisticsPlanningMode, logisticsScheduledDate, createdAt, updatedAt, actor]
       properties:
         id: { type: string, format: uuid }
         rootRepairId: { type: string, format: uuid }
@@ -1972,6 +2325,7 @@ components:
         kind: { $ref: '#/components/schemas/RepairKind' }
         executionState: { $ref: '#/components/schemas/RepairExecutionState' }
         acceptanceState: { $ref: '#/components/schemas/RepairAcceptanceState' }
+        reclassificationState: { $ref: '#/components/schemas/RepairReclassificationState' }
         version: { type: integer, format: int64, minimum: 0 }
         dispatchDate: { type: string, format: date }
         priority: { type: integer, minimum: 1, maximum: 5 }
@@ -1987,7 +2341,7 @@ components:
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
         complexity:
           description: >-
-            Recomputed from the current repair lines and current warehouse KPI thresholds on
+            Recomputed from the current repair lines and canonical maintenance warehouse thresholds on
             every read; it is not user-entered cached text.
           $ref: '#/components/schemas/RepairComplexitySnapshot'
         movementToShipment:
@@ -1995,6 +2349,11 @@ components:
             Receiver-selected continuation option. It can be true only when the current warehouse
             has the stable movement/driver queue capability.
           type: boolean
+        logisticsPlanningMode:
+          $ref: '#/components/schemas/RepairLogisticsPlanningMode'
+        logisticsScheduledDate:
+          description: User-selected logistics date; null only while AUTO scheduling is requested.
+          oneOf: [ { type: string, format: date }, { type: 'null' } ]
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
         actor: { $ref: '#/components/schemas/ActorSnapshot' }

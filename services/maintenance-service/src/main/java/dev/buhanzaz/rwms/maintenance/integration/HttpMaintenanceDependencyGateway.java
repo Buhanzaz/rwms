@@ -24,10 +24,12 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   private static final String TASK_CLIENT = "maintenance-task-board";
   private static final String TASK_REGISTRY_CLIENT = "maintenance-task-board-registry";
   private static final String MEDIA_CLIENT = "maintenance-media";
+  private static final String LOGISTICS_CLIENT = "maintenance-logistics";
   private static final String ASSET_SCOPE = "asset.maintenance";
   private static final String TASK_SCOPE = "task-board.task-sync";
   private static final String TASK_REGISTRY_SCOPE = "queue-registry.write";
   private static final String MEDIA_SCOPE = "media.maintenance";
+  private static final String LOGISTICS_SCOPE = "logistics.maintenance";
 
   private final RestClient client;
   private final OAuth2AuthorizedClientManager authorizedClients;
@@ -38,6 +40,7 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   private final String taskWarehouseInternalBase;
   private final String taskRegistryBase;
   private final String mediaOwnerProofUrl;
+  private final String driverTaskIntakeUrl;
 
   HttpMaintenanceDependencyGateway(
       RestClient client,
@@ -59,6 +62,9 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
         + "/api/internal/queue-definitions";
     mediaOwnerProofUrl = strip(properties.mediaBaseUrl().toString())
         + "/api/internal/media/v1/owner-proofs";
+    driverTaskIntakeUrl =
+        strip(properties.logisticsBaseUrl().toString())
+            + "/api/internal/logistics/v1/maintenance/driver-tasks";
   }
 
   @Override
@@ -368,6 +374,54 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
   }
 
   @Override
+  public DriverTaskSnapshot createDriverTask(
+      UUID key, DriverTaskCommand command) {
+    DriverTaskResponse response =
+        post(
+            driverTaskIntakeUrl,
+            key,
+            command,
+            DriverTaskResponse.class,
+            LOGISTICS_CLIENT,
+            LOGISTICS_SCOPE);
+    if (response.id() == null
+        || response.version() < 0
+        || !command.warehouseId().equals(response.warehouseId())
+        || !command.cabinId().equals(response.cabinId())
+        || !command.repairId().equals(response.repairId())
+        || !command.sourceType().equals(response.sourceType())
+        || !command.sourceId().equals(response.sourceId())
+        || !command.kind().equals(response.kind())
+        || command.planningMode() != response.planningMode()
+        || response.scheduledDate() == null
+        || (command.planningMode()
+                    == dev.buhanzaz.rwms.maintenance.domain
+                        .RepairLogisticsPlanningMode.FIXED_DATE
+            && !command
+                .scheduledDate()
+                .equals(response.scheduledDate()))
+        || command.priority() != response.priority()
+        || response.state() == null
+        || response.state().isBlank()) {
+      throw malformed(
+          "Logistics-service returned another driver-task truth");
+    }
+    return new DriverTaskSnapshot(
+        response.id(),
+        response.version(),
+        response.warehouseId(),
+        response.cabinId(),
+        response.repairId(),
+        response.sourceType(),
+        response.sourceId(),
+        response.kind(),
+        response.planningMode(),
+        response.scheduledDate(),
+        response.priority(),
+        response.state());
+  }
+
+  @Override
   public CatalogRoutingPreflight preflightCatalogRouting(
       List<CatalogRoutingQueueRequirement> queues) {
     if (queues == null || queues.isEmpty()) {
@@ -417,25 +471,6 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
           .retrieve()
           .body(RoutingPreflight.class);
       validateRoutingPreflight(response, warehouseId, requestedQueueIds);
-      return response;
-    } catch (RuntimeException exception) {
-      throw dependencyFailure(exception);
-    }
-  }
-
-  @Override
-  public RepairComplexityThresholds repairComplexityThresholds(UUID warehouseId) {
-    try {
-      RepairComplexityThresholds response =
-          client
-              .get()
-              .uri(taskWarehouseInternalBase + "/" + warehouseId + "/repair-complexity")
-              .header(HttpHeaders.AUTHORIZATION, bearer(TASK_CLIENT, TASK_SCOPE))
-              .retrieve()
-              .body(RepairComplexityThresholds.class);
-      if (response == null || !warehouseId.equals(response.warehouseId())) {
-        throw malformed("Task-board returned another warehouse KPI complexity truth");
-      }
       return response;
     } catch (RuntimeException exception) {
       throw dependencyFailure(exception);
@@ -863,6 +898,20 @@ final class HttpMaintenanceDependencyGateway implements MaintenanceDependencyGat
       OffsetDateTime doneAt, List<RouteResponse> route) {}
   private record CancelTaskRequest(long expectedTaskVersion, String reason) {}
   private record RelocateTaskRequest(long expectedTaskVersion, UUID targetWarehouseId) {}
+  private record DriverTaskResponse(
+      UUID id,
+      long version,
+      UUID warehouseId,
+      UUID cabinId,
+      UUID repairId,
+      String sourceType,
+      UUID sourceId,
+      String kind,
+      dev.buhanzaz.rwms.maintenance.domain.RepairLogisticsPlanningMode
+          planningMode,
+      LocalDate scheduledDate,
+      int priority,
+      String state) {}
   private record CancelTaskResponse(
       UUID taskId, UUID externalTaskId, long taskVersion, String status,
       OffsetDateTime cancelledAt) {}

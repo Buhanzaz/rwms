@@ -11,7 +11,7 @@ import java.util.UUID;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
-/** Durable local work item for post-commit asset and task-board effects. */
+/** Durable local work item for post-commit service effects. */
 @Entity
 @Table(
     name = "integration_reconciliation",
@@ -22,7 +22,8 @@ import org.hibernate.type.SqlTypes;
 public class MaintenanceReconciliation {
   private static final OffsetDateTime REVIEW_REQUIRED_NEXT_ATTEMPT =
       OffsetDateTime.parse("9999-12-31T23:59:59Z");
-  private static final Set<String> DEPENDENCIES = Set.of("ASSET", "TASK_BOARD", "MEDIA");
+  private static final Set<String> DEPENDENCIES =
+      Set.of("ASSET", "TASK_BOARD", "MEDIA", "LOGISTICS");
   private static final Set<String> MEDIA_OWNER_TYPES = Set.of(
       "MAINTENANCE_ESTIMATE",
       "MAINTENANCE_REPAIR",

@@ -275,6 +275,17 @@ func (repository *Repository) applyCabinOwnerProof(
 	if err != nil {
 		return CabinOwnerApplyResult{}, translateConstraint(err)
 	}
+	if _, err := tx.Exec(ctx, `update media_cabin_photo
+		set warehouse_id=$2 where cabin_id=$1 and warehouse_id<>$2`,
+		message.AggregateID, proof.WarehouseID); err != nil {
+		return CabinOwnerApplyResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `update media_cabin_photo_library
+		set warehouse_id=$2,updated_at=clock_timestamp()
+		where cabin_id=$1 and warehouse_id<>$2`,
+		message.AggregateID, proof.WarehouseID); err != nil {
+		return CabinOwnerApplyResult{}, err
+	}
 	return CabinOwnerApplyResult{}, nil
 }
 

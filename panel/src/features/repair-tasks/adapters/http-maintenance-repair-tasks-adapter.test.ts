@@ -144,6 +144,8 @@ function repair(
       forcedCapital: false,
     },
     movementToShipment: false,
+    logisticsPlanningMode: "AUTO",
+    logisticsScheduledDate: null,
     createdAt: "2026-07-18T08:00:00Z",
     updatedAt: "2026-07-18T10:00:00Z",
     actor: { actorId: "user-1", actorType: "USER" },
@@ -375,6 +377,8 @@ const writeCommand: RepairTaskWriteCommand = {
   maintenanceMediaReferences: [],
   coverMediaId: null,
   priority: 2,
+  logisticsPlanningMode: "AUTO",
+  logisticsScheduledDate: null,
   subtasks: [
     {
       id: stageId,
@@ -502,6 +506,31 @@ describe("maintenance repair tasks adapter", () => {
       workerGroup: { id: workerGroupId, name: "Бригада 1" },
     })
     expect(task?.subtasks[0]?.assignments[0]?.worker?.name).toBe("Иван")
+  })
+
+  it("keeps logistics stages out of the ordinary repair board projection", async () => {
+    const source = repair()
+    const movementStage = structuredClone(source.plan.stages[0])
+    movementStage.id = "00000000-0000-4000-8000-000000000041"
+    movementStage.kind = "MOVE_TO_REPAIR"
+    movementStage.order = 1
+    movementStage.routing = {
+      queueId: "00000000-0000-4000-8000-000000000042",
+      queueName: "Водители",
+      queueType: "MOVEMENT",
+    }
+    source.plan.stages.push(movementStage)
+    lifecycle.get.mockResolvedValue(source)
+    lifecycle.listAcceptance.mockResolvedValue({ items: [] })
+    const adapter = new HttpMaintenanceRepairTasksAdapter(
+      rentalItemsClient,
+      async () => "token"
+    )
+
+    const task = await adapter.getById(repairId, warehouseId)
+
+    expect(task?.subtasks).toHaveLength(1)
+    expect(task?.subtasks[0]?.kind).toBe("REPAIR_WORK")
   })
 
   it("uses the maintenance category normative when the board entry is no longer visible", async () => {
@@ -904,7 +933,9 @@ describe("maintenance repair tasks adapter", () => {
       repairId,
       3,
       2,
-      expect.any(String)
+      expect.any(String),
+      "AUTO",
+      null
     )
   })
 
@@ -961,7 +992,9 @@ describe("maintenance repair tasks adapter", () => {
       repairId,
       5,
       2,
-      expect.any(String)
+      expect.any(String),
+      "AUTO",
+      null
     )
   })
 
@@ -1065,6 +1098,8 @@ describe("maintenance repair tasks adapter", () => {
     const queuedRepair: MaintenanceRepair = {
       ...repair(),
       executionState: "QUEUED",
+      logisticsPlanningMode: "FIXED_DATE",
+      logisticsScheduledDate: "2026-08-12",
     }
     lifecycle.createDirect.mockResolvedValue(repair())
     lifecycle.queue.mockResolvedValue(
@@ -1076,10 +1111,29 @@ describe("maintenance repair tasks adapter", () => {
       async () => "token",
       wait
     )
+    const fixedDateCommand: RepairTaskWriteCommand = {
+      ...structuredClone(writeCommand),
+      logisticsPlanningMode: "FIXED_DATE",
+      logisticsScheduledDate: "2026-08-12",
+    }
 
-    const task = await adapter.queue(writeCommand)
+    const task = await adapter.queue(fixedDateCommand)
 
-    expect(task.status).toBe("QUEUED")
+    expect(task).toMatchObject({
+      status: "QUEUED",
+      logisticsPlanningMode: "FIXED_DATE",
+      logisticsScheduledDate: "2026-08-12",
+    })
+    expect(lifecycle.queue).toHaveBeenCalledWith(
+      "token",
+      warehouseId,
+      repairId,
+      3,
+      2,
+      expect.any(String),
+      "FIXED_DATE",
+      "2026-08-12"
+    )
     expect(lifecycle.get).not.toHaveBeenCalled()
     expect(wait).not.toHaveBeenCalled()
   })
@@ -1210,7 +1264,9 @@ describe("maintenance repair tasks adapter", () => {
       repairId,
       8,
       2,
-      expect.any(String)
+      expect.any(String),
+      "AUTO",
+      null
     )
     expect(lifecycle.get).toHaveBeenCalledTimes(5)
     expect(wait.mock.calls.map(([delayMs]) => delayMs)).toEqual([

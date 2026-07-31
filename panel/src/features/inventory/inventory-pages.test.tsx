@@ -116,6 +116,8 @@ vi.mock("@/features/repair-estimates/repair-work-completion-dialog", () => ({
     onComplete: (result: {
       completionMode: "AUTO"
       movementRequired: boolean
+      logisticsPlanningMode: "FIXED_DATE"
+      logisticsScheduledDate: string
       taskPlans: []
       priority: 3
     }) => void
@@ -138,6 +140,8 @@ vi.mock("@/features/repair-estimates/repair-work-completion-dialog", () => ({
             onComplete({
               completionMode: "AUTO",
               movementRequired: true,
+              logisticsPlanningMode: "FIXED_DATE",
+              logisticsScheduledDate: "2026-08-12",
               taskPlans: [],
               priority: 3,
             })
@@ -238,6 +242,8 @@ function finding(
     repairCompletionMode: null,
     repairPriority: 3,
     movementRequired: false,
+    logisticsPlanningMode: "AUTO",
+    logisticsScheduledDate: null,
     repairPlans: [],
     publicationStatus: "NOT_REQUIRED",
     publicationOperationKey: null,
@@ -443,7 +449,11 @@ describe("InventorySessionPage inspection", () => {
 
     await waitFor(() =>
       expect(inventoryApi.saveInventoryFinding).toHaveBeenCalledWith(
-        expect.objectContaining({ movementRequired: false })
+        expect.objectContaining({
+          movementRequired: false,
+          logisticsPlanningMode: "AUTO",
+          logisticsScheduledDate: null,
+        })
       )
     )
   })
@@ -490,7 +500,11 @@ describe("InventorySessionPage inspection", () => {
 
     await waitFor(() =>
       expect(inventoryApi.saveInventoryFinding).toHaveBeenCalledWith(
-        expect.objectContaining({ movementRequired: true })
+        expect.objectContaining({
+          movementRequired: true,
+          logisticsPlanningMode: "FIXED_DATE",
+          logisticsScheduledDate: "2026-08-12",
+        })
       )
     )
   })
