@@ -77,6 +77,7 @@ import { InventoryStartDialog } from "@/features/inventory/inventory-start-dialo
 import { InventoryStatistics } from "@/features/inventory/inventory-statistics"
 import {
   inventoryCompletionRiskSignature,
+  inventoryRepairMovementCount,
   reconcileInventoryRepairTaskPlans,
   toInventoryRepairPlanSnapshot,
 } from "@/features/inventory/domain/inventory-domain"
@@ -87,7 +88,6 @@ import type {
 import { RENTAL_ITEM_STATUS_LABEL } from "@/features/rental-items/model/rental-item"
 import type { ReadyMediaReference } from "@/features/media/media-service"
 import type { RepairEstimateLineDto } from "@/features/repair-estimates/model/repair-estimate"
-import { RepairEstimateLinesSnapshot } from "@/features/repair-estimates/repair-estimate-lines-snapshot"
 import {
   RepairWorkCompletionDialog,
   type RepairWorkCompletionResult,
@@ -827,6 +827,35 @@ export function InventoryFinishPage() {
   const withWork = reviewedSession.findings.filter(
     (item) => item.lines.length > 0
   )
+  const repairMovementCount = inventoryRepairMovementCount(
+    reviewedSession.findings
+  )
+  const completionCounters = [
+    ["Всего", reviewedSession.findings.length],
+    [
+      "Ожидалось",
+      reviewedSession.statistics?.expectedCount ??
+        reviewedSession.findings.length,
+    ],
+    [
+      "Проверено",
+      reviewedSession.statistics?.inspectedCount ??
+        reviewedSession.findings.length - notInspected,
+    ],
+    ["Не найдено", reviewedSession.statistics?.missingCount ?? missing],
+    ["Не проверено", notInspected],
+    ["Готовы", reviewedSession.statistics?.readyCount ?? 0],
+    [
+      "С работами",
+      reviewedSession.statistics?.withWorkCount ?? withWork.length,
+    ],
+    ["Добавлено", reviewedSession.statistics?.addedCount ?? 0],
+    [
+      "Конфликты",
+      reviewedSession.statistics?.conflictCount ?? conflictingFindings.length,
+    ],
+    ["Перемещения на ремонт и вывозы", repairMovementCount],
+  ] as const
   const riskSignature = inventoryCompletionRiskSignature(
     reviewedSession.findings
   )
@@ -850,15 +879,11 @@ export function InventoryFinishPage() {
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-wrap gap-2">
-            <Badge variant="secondary">
-              Всего: {reviewedSession.findings.length}
-            </Badge>
-            <Badge variant="secondary">Не найдено: {missing}</Badge>
-            <Badge variant="secondary">Непроверено: {notInspected}</Badge>
-            <Badge variant="secondary">
-              Конфликты: {conflictingFindings.length}
-            </Badge>
-            <Badge variant="secondary">С работами: {withWork.length}</Badge>
+            {completionCounters.map(([label, value]) => (
+              <Badge key={label} variant="secondary">
+                {label}: {value}
+              </Badge>
+            ))}
           </div>
           {confirmationRequired ? (
             <Field orientation="horizontal">
@@ -948,6 +973,7 @@ export function InventoryFinishPage() {
           <InventoryStatistics
             statistics={reviewedSession.statistics}
             findings={reviewedSession.findings}
+            showCounters={false}
           />
         </section>
       ) : null}
@@ -1076,16 +1102,6 @@ export function InventoryFinishPage() {
           )
         }
       />
-      {withWork.map((finding) => (
-        <Card key={finding.id} size="sm">
-          <CardHeader>
-            <CardTitle>{finding.cabinNumber}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <RepairEstimateLinesSnapshot lines={finding.lines} />
-          </CardContent>
-        </Card>
-      ))}
       <Dialog
         open={keepInspectionFinding !== null}
         onOpenChange={(open) => {

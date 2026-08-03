@@ -1,6 +1,6 @@
-import { render, screen, within } from "@testing-library/react"
+import { cleanup, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 
 import { InventoryStatistics } from "@/features/inventory/inventory-statistics"
 import type {
@@ -8,7 +8,9 @@ import type {
   InventoryStatisticsDto,
 } from "@/features/inventory/model/inventory"
 
-function finding(): InventoryFindingDto {
+function finding(
+  overrides: Partial<InventoryFindingDto> = {}
+): InventoryFindingDto {
   return {
     id: "finding-1",
     version: 1,
@@ -63,6 +65,7 @@ function finding(): InventoryFindingDto {
     publicationOperationKey: null,
     publishedRepairTaskId: null,
     publicationError: null,
+    ...overrides,
   }
 }
 
@@ -84,10 +87,70 @@ const statistics: InventoryStatisticsDto = {
   aggregates: [],
 }
 
+afterEach(cleanup)
+
 describe("InventoryStatistics", () => {
+  it("counts a repair delivery and later removal as one movement", () => {
+    render(
+      <InventoryStatistics
+        statistics={statistics}
+        showCounters={false}
+        findings={[
+          finding({
+            movementRequired: false,
+            repairPlans: [
+              {
+                id: "move-to-repair",
+                kind: "MOVE_TO_REPAIR",
+                includedLineIds: [],
+                primaryLineId: null,
+                groupComment: "",
+                queueId: "movement-queue",
+                queueName: "Перемещение",
+                routeQueueKind: "MOVEMENT",
+                sortOrder: 1,
+                plannedDurationMinutes: null,
+                photoRequired: true,
+              },
+              {
+                id: "move-from-repair",
+                kind: "MOVE_FROM_REPAIR",
+                includedLineIds: [],
+                primaryLineId: null,
+                groupComment: "",
+                queueId: "movement-queue",
+                queueName: "Перемещение",
+                routeQueueKind: "MOVEMENT",
+                sortOrder: 2,
+                plannedDurationMinutes: null,
+                photoRequired: true,
+              },
+            ],
+          }),
+        ]}
+      />
+    )
+
+    const movementCard = screen
+      .getByText("Перемещения на ремонт и вывозы")
+      .closest('[data-slot="card"]')
+    if (!(movementCard instanceof HTMLElement)) {
+      throw new Error("Не найдена карточка перемещений")
+    }
+    expect(within(movementCard).getByText("1")).toBeTruthy()
+    expect(
+      within(movementCard).getByText(
+        "1 перемещение = доставка в ремонт и вывоз"
+      )
+    ).toBeTruthy()
+    expect(screen.queryByText("Ожидалось: 1")).toBeNull()
+  })
+
   it("opens the current-session positions and filters work from materials", async () => {
     const user = userEvent.setup()
-    render(<InventoryStatistics statistics={statistics} findings={[finding()]} />)
+    render(
+      <InventoryStatistics statistics={statistics} findings={[finding()]} />
+    )
 
     expect(screen.getByText("Длительность инвентаризации")).toBeTruthy()
     await user.click(
@@ -105,5 +168,33 @@ describe("InventoryStatistics", () => {
 
     expect(within(dialog).getByText("Ремонт каркаса")).toBeTruthy()
     expect(within(dialog).queryByText("Доска")).toBeNull()
+  })
+
+  it("shows the grand total in the aggregate table footer", () => {
+    render(
+      <InventoryStatistics
+        statistics={{
+          ...statistics,
+          aggregates: [
+            {
+              key: "work-1",
+              lineType: "WORK",
+              description: "Ремонт каркаса",
+              catalogNodeId: "catalog-work-1",
+              unit: "шт",
+              unitPrice: "100.00",
+              quantity: 2,
+              total: "200.00",
+            },
+          ],
+        }}
+        findings={[finding()]}
+      />
+    )
+
+    const totalLabel = screen.getByText("Итого", { selector: "td" })
+    const footer = totalLabel.closest("tfoot")
+    expect(footer).not.toBeNull()
+    expect(within(footer!).getByText("200,00 ₽")).toBeTruthy()
   })
 })

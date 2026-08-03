@@ -95,6 +95,25 @@ function session(
 }
 
 describe("inventory history publication presentation", () => {
+  it("keeps the desktop findings table in an opaque isolated surface", () => {
+    const { container } = render(
+      <InventoryFindingsList
+        findings={[finding("СПБ-1", "NOT_REQUIRED")]}
+        canInspect={false}
+        onOpen={vi.fn()}
+      />
+    )
+
+    const tableSurface = container.querySelector(
+      '[data-slot="inventory-findings-table"]'
+    )
+
+    expect(tableSurface).not.toBeNull()
+    expect(tableSurface?.className).toContain("bg-background")
+    expect(tableSurface?.className).toContain("isolate")
+    expect(tableSurface?.className).not.toContain("min-h-full")
+  })
+
   it("shows one compact active-session status instead of inspection and reconciliation badges", () => {
     render(
       <InventoryFindingsList
