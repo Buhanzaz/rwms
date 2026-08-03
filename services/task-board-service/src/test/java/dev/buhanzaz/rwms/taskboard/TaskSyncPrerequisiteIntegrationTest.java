@@ -1,4 +1,5 @@
 package dev.buhanzaz.rwms.taskboard;
+import static dev.buhanzaz.rwms.taskboard.QueueFixtureModels.*;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.CancelTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.PreStartUpdateTaskRequest;
@@ -7,7 +8,6 @@ import static dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueDefinitionRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RegisterExternalTaskRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.RouteStepRequest;
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.TaskSourceReferenceDto;
-import static dev.buhanzaz.rwms.taskboard.api.ApiModels.WorkQueueRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
@@ -64,9 +64,9 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
         registry.createQueueDefinition(
             new QueueDefinitionRequest(0L, "Maintenance", null, QueueType.REPAIR));
     var queue =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             WAREHOUSE,
-            new WorkQueueRequest(
+            new QueueFixtureRequest(
                 0L,
                 definition.id(),
                 true,
@@ -84,9 +84,9 @@ class TaskSyncPrerequisiteIntegrationTest extends PostgresIntegrationTestSupport
             new QueueDefinitionRequest(
                 0L, "Maintenance check", null, QueueType.REPAIR));
     var verificationQueue =
-        registry.createQueue(
+        QueueRegistryTestFixtures.create(registry, jdbc,
             WAREHOUSE,
-            new WorkQueueRequest(
+            new QueueFixtureRequest(
                 0L,
                 verificationDefinition.id(),
                 true,

@@ -236,6 +236,7 @@ public final class LogisticsApiModels {
       LocalDate scheduledDate,
       OffsetDateTime scheduledAt,
       UUID rentalOrderId,
+      UUID rentalShipmentId,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {}
 
@@ -263,6 +264,7 @@ public final class LogisticsApiModels {
       LocalDate scheduledDate,
       OffsetDateTime scheduledAt,
       UUID rentalOrderId,
+      UUID rentalShipmentId,
       List<LogisticsLineView> lines,
       OffsetDateTime createdAt,
       OffsetDateTime updatedAt) {}

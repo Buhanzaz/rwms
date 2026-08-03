@@ -206,7 +206,8 @@ public class TaskBoardService {
 
   /**
    * Worker feed keeps the ordinary selected-date view and adds only actionable
-   * logistics entries from the server-controlled current lane.
+   * logistics entries from the server-controlled current lane.  The lane is an
+   * ordered queue; only its first waiting entry is actionable for a driver.
    */
   @Transactional(readOnly = true)
   public TaskBoardSnapshot workerSnapshot(UUID warehouseId) {
@@ -343,7 +344,7 @@ public class TaskBoardService {
             .toList();
     if (candidates.size() != 1) {
       throw new ConflictException(
-          "Настройте ровно одну активную видимую очередь «Задания водителей»");
+          "Настройте ровно одну активную видимую очередь «Перемещение»");
     }
     return candidates.getFirst();
   }
@@ -430,9 +431,6 @@ public class TaskBoardService {
       }
     }
     lockQueueMutation(warehouseId);
-    if (effectiveLane == TaskLane.CURRENT) {
-      requireEmptyCurrentLogisticsLane(warehouseId, null);
-    }
     List<ResolvedRouteStep> routeSteps =
         resolveRoute(warehouseId, request.route(), allowRepeatedQueues, sourceClientId);
     requireRoutePurpose(routeSteps, sourceReference);
@@ -725,21 +723,60 @@ public class TaskBoardService {
     if (task.getLane() == request.lane()) {
       return registrationDto(task);
     }
-    if (request.lane() == TaskLane.CURRENT) {
-      lockQueueMutation(task.getWarehouseId());
-      requireEmptyCurrentLogisticsLane(task.getWarehouseId(), task.getId());
-    }
-    long streamVersion = eventSourcing.lock(TaskBoardAggregateType.BOARD_TASK, task.getId());
+    lockQueueMutation(task.getWarehouseId());
+    UUID taskWarehouseId = task.getWarehouseId();
+    Set<QueueEntry> positionCandidates = new LinkedHashSet<>(route);
+    route.stream()
+        .map(QueueEntry::getQueue)
+        .filter(Objects::nonNull)
+        .distinct()
+        .forEach(
+            queue -> positionCandidates.addAll(orderedEntries(taskWarehouseId, queue)));
+    Map<UUID, QueueEntryPosition> positionsBefore = positionsOf(positionCandidates);
+    Map<TaskBoardEventStore.StreamRef, Long> streamVersions =
+        lockTaskAndEntryStreams(task, positionCandidates);
     task.setLane(request.lane());
     task = projectionWriter.saveAndFlush(tasks, task);
+    if (request.lane() == TaskLane.CURRENT) {
+      int nextPosition =
+          entries.findAllByQueueIdOrderByQueuePositionAsc(route.getFirst().getQueue().getId()).stream()
+              .filter(value -> value.getTask().getLane() == TaskLane.CURRENT)
+              .filter(value -> UNFINISHED.contains(value.getStatus()))
+              .mapToInt(QueueEntry::getQueuePosition)
+              .max()
+              .orElse(-1)
+          + 1;
+      for (QueueEntry value : route) {
+        value.setQueuePosition(nextPosition++);
+        projectionWriter.save(entries, value);
+      }
+    }
+    normalizeCurrentLogisticsPositions(taskWarehouseId, route);
+    projectionWriter.flush();
+    for (UUID changedId : changedPositionIds(positionCandidates, positionsBefore)) {
+      QueueEntry changed =
+          positionCandidates.stream()
+              .filter(value -> value.getId().equals(changedId))
+              .findFirst()
+              .orElseThrow();
+      eventSourcing.entryChanged(
+          changed,
+          streamVersion(
+              streamVersions, TaskBoardAggregateType.QUEUE_ENTRY, changed.getId()),
+          TaskBoardEventTypes.QUEUE_ENTRY_CHANGED);
+    }
     eventSourcing.taskChanged(
-        task, streamVersion, TaskBoardEventTypes.BOARD_TASK_CHANGED);
+        task,
+        streamVersion(
+            streamVersions, TaskBoardAggregateType.BOARD_TASK, task.getId()),
+        TaskBoardEventTypes.BOARD_TASK_CHANGED);
     return registrationDto(task);
   }
 
   @Transactional
   public BoardTaskRegistrationDto moveExternalLogisticsTask(
       UUID externalTaskId, MoveExternalLogisticsTaskRequest request) {
+    lock("external-task:" + externalTaskId);
     BoardTask task = ownedExternalTask(LOGISTICS_SOURCE_CLIENT_ID, externalTaskId);
     TaskSyncSource source =
         taskSyncSources
@@ -758,6 +795,9 @@ public class TaskBoardService {
       throw new ConflictException("Задача не относится к очереди водителей");
     }
     QueueEntry entry = route.getFirst();
+    if (request.targetLane() == TaskLane.CURRENT) {
+      return moveExternalLogisticsTaskToCurrent(task, entry, request);
+    }
     move(
         task.getWarehouseId(),
         entry.getId(),
@@ -766,33 +806,92 @@ public class TaskBoardService {
             request.expectedTaskVersion(),
             entry.getQueue().getId(),
             request.targetIndex(),
-            request.targetDate()));
+            request.targetDate()),
+        true);
     return registrationDto(task);
   }
 
-  private void requireEmptyCurrentLogisticsLane(UUID warehouseId, UUID excludedTaskId) {
-    Integer current =
-        jdbc.queryForObject(
-            """
-            select count(distinct task.id)::integer
-              from board_task task
-              join queue_entry entry on entry.task_id = task.id
-              join work_queue queue on queue.id = entry.queue_id
-              join queue_definition definition on definition.id = queue.definition_id
-             where task.warehouse_id = ?
-               and task.status = 'ACTIVE'
-               and task.task_lane = 'CURRENT'
-               and definition.queue_purpose = 'LOGISTICS_DRIVER'
-               and (?::uuid is null or task.id <> ?::uuid)
-            """,
-            Integer.class,
-            warehouseId,
-            excludedTaskId,
-            excludedTaskId);
-    if (current != null && current > 0) {
-      throw new ConflictException(
-          "В колонке «Текущее задание» уже находится активное задание");
+  private BoardTaskRegistrationDto moveExternalLogisticsTaskToCurrent(
+      BoardTask task,
+      QueueEntry entry,
+      MoveExternalLogisticsTaskRequest request) {
+    checkVersion(task.getVersion(), request.expectedTaskVersion(), "Задача");
+    checkVersion(entry.getVersion(), request.expectedEntryVersion(), "Этап");
+    if (task.getStatus() != TaskStatus.ACTIVE
+        || entry.getStatus() != EntryStatus.WAITING) {
+      throw new ConflictException("Задание в работе нельзя переставлять");
     }
+    UUID warehouseId = task.getWarehouseId();
+    WorkQueue queue = entry.getQueue();
+    lockQueueMutation(warehouseId);
+    lockQueuePositions(warehouseId, List.of(queue));
+    Set<QueueEntry> positionCandidates =
+        new LinkedHashSet<>(orderedEntries(warehouseId, queue));
+    positionCandidates.add(entry);
+    Map<UUID, QueueEntryPosition> positionsBefore = positionsOf(positionCandidates);
+    Map<QueuePositionScope, List<PinnedQueueOrdinal>> pinnedOrdinals =
+        pinnedQueueOrdinals(positionCandidates);
+    Map<TaskBoardEventStore.StreamRef, Long> streamVersions =
+        lockTaskAndEntryStreams(task, positionCandidates);
+    boolean laneChanged = task.getLane() != TaskLane.CURRENT;
+    if (laneChanged) {
+      task.setLane(TaskLane.CURRENT);
+      task = projectionWriter.saveAndFlush(tasks, task);
+    }
+    List<QueueEntry> current =
+        positionCandidates.stream()
+            .filter(candidate -> !candidate.equals(entry))
+            .filter(candidate -> candidate.getTask().getLane() == TaskLane.CURRENT)
+            .filter(candidate -> UNFINISHED.contains(candidate.getStatus()))
+            .sorted(
+                Comparator.comparingInt(QueueEntry::getQueuePosition)
+                    .thenComparing(candidate -> candidate.getId().toString()))
+            .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+    int protectedPrefix = 0;
+    for (int index = 0; index < current.size(); index++) {
+      QueueEntry candidate = current.get(index);
+      if (candidate.getStatus() == EntryStatus.IN_PROGRESS
+          || candidate.getStatus() == EntryStatus.PAUSED) {
+        protectedPrefix = index + 1;
+      }
+    }
+    int targetIndex =
+        Math.max(protectedPrefix, Math.min(request.targetIndex(), current.size()));
+    current.add(targetIndex, entry);
+    int position = 0;
+    for (QueueEntry candidate : current) {
+      candidate.setQueuePosition(position++);
+      projectionWriter.save(entries, candidate);
+    }
+    normalizePositions(warehouseId, queue);
+    projectionWriter.flush();
+    restorePinnedQueueOrdinals(pinnedOrdinals);
+    projectionWriter.flush();
+    Set<UUID> changedIds = changedPositionIds(positionCandidates, positionsBefore);
+    if (laneChanged) changedIds.add(entry.getId());
+    for (QueueEntry candidate : positionCandidates) {
+      if (!changedIds.contains(candidate.getId())) continue;
+      eventSourcing.entryChanged(
+          candidate,
+          streamVersion(
+              streamVersions,
+              TaskBoardAggregateType.QUEUE_ENTRY,
+              candidate.getId()),
+          candidate.equals(entry)
+              ? TaskBoardEventTypes.QUEUE_ENTRY_MOVED
+              : TaskBoardEventTypes.QUEUE_ENTRY_CHANGED);
+    }
+    if (laneChanged) {
+      eventSourcing.taskChanged(
+          task,
+          streamVersion(
+              streamVersions,
+              TaskBoardAggregateType.BOARD_TASK,
+              task.getId()),
+          TaskBoardEventTypes.BOARD_TASK_CHANGED);
+    }
+    kpiEvidence.refreshWarehouse(warehouseId, now());
+    return registrationDto(task);
   }
 
   @Transactional(readOnly = true)
@@ -1938,10 +2037,28 @@ public class TaskBoardService {
 
   @Transactional
   public TaskBoardSnapshot move(UUID warehouseId, UUID entryId, MoveEntryRequest request) {
+    return move(warehouseId, entryId, request, false);
+  }
+
+  /**
+   * Moves an entry within an ordinary queue.  The logistics adapter is allowed
+   * to move a driver entry out of CURRENT; ordinary browser board commands are
+   * still denied that server-controlled transition.
+   */
+  private TaskBoardSnapshot move(
+      UUID warehouseId,
+      UUID entryId,
+      MoveEntryRequest request,
+      boolean allowCurrentLogistics) {
     lockQueueMutation(warehouseId);
     var entry = requireEntry(warehouseId, entryId);
     BoardTask task = entry.getTask();
-    if (task.getLane() == TaskLane.CURRENT) {
+    boolean currentLogisticsEntry =
+        task.getLane() == TaskLane.CURRENT
+            && entry.getQueue() != null
+            && entry.getQueue().getPurpose() == QueuePurpose.LOGISTICS_DRIVER;
+    if (task.getLane() == TaskLane.CURRENT
+        && (!allowCurrentLogistics || !currentLogisticsEntry)) {
       throw new ConflictException("Текущее логистическое задание перемещает только планировщик");
     }
     checkVersion(entry.getVersion(), request.expectedVersion(), "Этап");
@@ -1988,6 +2105,8 @@ public class TaskBoardService {
     duplicate.ifPresent(positionCandidates::add);
     positionCandidates.addAll(taskEntries);
     Map<UUID, QueueEntryPosition> positionsBefore = positionsOf(positionCandidates);
+    Map<QueuePositionScope, List<PinnedQueueOrdinal>> pinnedOrdinals =
+        pinnedQueueOrdinals(positionCandidates);
     var streamVersions = lockTaskAndEntryStreams(task, positionCandidates);
     Set<UUID> protectedTaskIds = protectedTaskIds(positionCandidates);
     if (duplicate.isPresent()) {
@@ -2007,8 +2126,10 @@ public class TaskBoardService {
       entry.setQueue(target);
     }
     boolean dateChanged = !oldDate.equals(request.targetDate());
-    if (dateChanged) {
+    boolean laneChanged = currentLogisticsEntry;
+    if (dateChanged || laneChanged) {
       task.setScheduledDate(request.targetDate());
+      if (laneChanged) task.setLane(TaskLane.SCHEDULED);
       projectionWriter.saveAndFlush(tasks, task);
     }
     Map<WorkQueue, List<QueueEntry>> routeEntriesByTarget = new java.util.LinkedHashMap<>();
@@ -2028,6 +2149,11 @@ public class TaskBoardService {
           protectedTaskIds);
     }
     affectedQueues.stream().distinct().forEach(queue -> normalizePositions(warehouseId, queue));
+    if (laneChanged) {
+      normalizeCurrentLogisticsPositions(warehouseId, List.of(entry));
+    }
+    projectionWriter.flush();
+    restorePinnedQueueOrdinals(pinnedOrdinals);
     projectionWriter.flush();
     Set<UUID> changedIds = changedPositionIds(positionCandidates, positionsBefore);
     changedIds.add(entry.getId());
@@ -2042,7 +2168,7 @@ public class TaskBoardService {
                 : TaskBoardEventTypes.QUEUE_ENTRY_CHANGED);
       }
     }
-    if (dateChanged) {
+    if (dateChanged || laneChanged) {
       eventSourcing.taskChanged(
           task,
           streamVersion(streamVersions, TaskBoardAggregateType.BOARD_TASK, task.getId()),
@@ -2050,6 +2176,30 @@ public class TaskBoardService {
     }
     kpiEvidence.refreshWarehouse(warehouseId, now());
     return snapshot(warehouseId, request.targetDate(), true);
+  }
+
+  private void normalizeCurrentLogisticsPositions(
+      UUID warehouseId, Collection<QueueEntry> routeEntries) {
+    WorkQueue queue =
+        routeEntries.stream()
+            .map(QueueEntry::getQueue)
+            .filter(Objects::nonNull)
+            .findFirst()
+            .orElse(null);
+    if (queue == null || queue.getPurpose() != QueuePurpose.LOGISTICS_DRIVER) return;
+    List<QueueEntry> current =
+        entries.findAllByQueueIdOrderByQueuePositionAsc(queue.getId()).stream()
+            .filter(value -> value.getTask().getLane() == TaskLane.CURRENT)
+            .filter(value -> UNFINISHED.contains(value.getStatus()))
+            .sorted(
+                Comparator.comparingInt(QueueEntry::getQueuePosition)
+                    .thenComparing(value -> value.getTask().getId().toString()))
+            .toList();
+    int position = 0;
+    for (QueueEntry value : current) {
+      value.setQueuePosition(position++);
+      projectionWriter.save(entries, value);
+    }
   }
 
   /**
@@ -2665,6 +2815,10 @@ public class TaskBoardService {
     Map<LocalDate, List<QueueEntry>> byDate =
         orderedEntries(warehouseId, q).stream()
             .filter(entry -> UNFINISHED.contains(entry.getStatus()))
+            .filter(
+                entry ->
+                    q.getPurpose() != QueuePurpose.LOGISTICS_DRIVER
+                        || entry.getTask().getLane() == TaskLane.SCHEDULED)
             .collect(
                 java.util.stream.Collectors.groupingBy(
                     entry -> entry.getTask().getScheduledDate(),
@@ -2676,6 +2830,9 @@ public class TaskBoardService {
         entry.setQueuePosition(position++);
         projectionWriter.save(entries, entry);
       }
+    }
+    if (q.getPurpose() == QueuePurpose.LOGISTICS_DRIVER) {
+      normalizeCurrentLogisticsPositions(warehouseId, orderedEntries(warehouseId, q));
     }
   }
 
@@ -2712,8 +2869,7 @@ public class TaskBoardService {
     int firstMovable = 0;
     for (int position = 0; position < ordered.size(); position++) {
       QueueEntry candidate = ordered.get(position);
-      if (candidate.getTask().isPinned()
-          || protectedTaskIds.contains(candidate.getTask().getId())) {
+      if (protectedTaskIds.contains(candidate.getTask().getId())) {
         firstMovable = position + 1;
       }
     }
@@ -2727,6 +2883,118 @@ public class TaskBoardService {
       current.setQueuePosition(position++);
       projectionWriter.save(entries, current);
     }
+  }
+
+  /**
+   * Captures the absolute slots occupied by pinned cards before a user-directed queue mutation.
+   * Queue positions are scoped by date for ordinary queues and by lane for the driver queue, so a
+   * pin in a scheduled column never reserves a slot in CURRENT (and vice versa).
+   */
+  private Map<QueuePositionScope, List<PinnedQueueOrdinal>> pinnedQueueOrdinals(
+      Collection<QueueEntry> candidates) {
+    Map<QueuePositionScope, List<QueueEntry>> entriesByScope = new java.util.LinkedHashMap<>();
+    for (QueueEntry candidate : candidates) {
+      if (candidate.getQueue() == null || !UNFINISHED.contains(candidate.getStatus())) continue;
+      entriesByScope
+          .computeIfAbsent(queuePositionScope(candidate), ignored -> new ArrayList<>())
+          .add(candidate);
+    }
+
+    Map<QueuePositionScope, List<PinnedQueueOrdinal>> result = new java.util.LinkedHashMap<>();
+    for (Map.Entry<QueuePositionScope, List<QueueEntry>> scope : entriesByScope.entrySet()) {
+      List<QueueEntry> ordered =
+          scope.getValue().stream().sorted(queuePositionOrder()).toList();
+      List<PinnedQueueOrdinal> pinned = new ArrayList<>();
+      for (int ordinal = 0; ordinal < ordered.size(); ordinal++) {
+        QueueEntry entry = ordered.get(ordinal);
+        if (entry.getTask().isPinned()) {
+          pinned.add(new PinnedQueueOrdinal(entry.getId(), ordinal));
+        }
+      }
+      if (!pinned.isEmpty()) {
+        result.put(scope.getKey(), List.copyOf(pinned));
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Reinstates pinned cards in the slots they occupied before a manual move or priority insertion.
+   * The non-pinned cards retain their requested order and fill the remaining slots. If a command
+   * removes so many cards that an old ordinal can no longer exist, the pin moves only as far as is
+   * mathematically necessary; ordinary completion intentionally does not call this method and is
+   * therefore allowed to advance the queue naturally.
+   */
+  private void restorePinnedQueueOrdinals(
+      Map<QueuePositionScope, List<PinnedQueueOrdinal>> pinnedOrdinals) {
+    for (Map.Entry<QueuePositionScope, List<PinnedQueueOrdinal>> scope : pinnedOrdinals.entrySet()) {
+      List<QueueEntry> ordered = orderedEntries(scope.getKey());
+      if (ordered.isEmpty()) continue;
+
+      Map<UUID, QueueEntry> entriesById = new java.util.LinkedHashMap<>();
+      ordered.forEach(entry -> entriesById.put(entry.getId(), entry));
+      List<PinnedQueueOrdinal> presentPins =
+          scope.getValue().stream()
+              .filter(pin -> entriesById.containsKey(pin.entryId()))
+              .sorted(
+                  Comparator.comparingInt(PinnedQueueOrdinal::ordinal)
+                      .thenComparing(pin -> pin.entryId().toString()))
+              .toList();
+      if (presentPins.isEmpty()) continue;
+
+      List<QueueEntry> restored = new ArrayList<>(java.util.Collections.nCopies(ordered.size(), null));
+      Set<UUID> pinnedEntryIds =
+          presentPins.stream()
+              .map(PinnedQueueOrdinal::entryId)
+              .collect(java.util.stream.Collectors.toSet());
+      List<QueueEntry> unpinned =
+          ordered.stream().filter(entry -> !pinnedEntryIds.contains(entry.getId())).toList();
+
+      int nextSlot = 0;
+      for (int index = 0; index < presentPins.size(); index++) {
+        PinnedQueueOrdinal pin = presentPins.get(index);
+        int latestAvailableSlot = ordered.size() - (presentPins.size() - index);
+        int slot = Math.max(nextSlot, Math.min(pin.ordinal(), latestAvailableSlot));
+        restored.set(slot, entriesById.get(pin.entryId()));
+        nextSlot = slot + 1;
+      }
+
+      int unpinnedIndex = 0;
+      for (int index = 0; index < restored.size(); index++) {
+        if (restored.get(index) == null) {
+          restored.set(index, unpinned.get(unpinnedIndex++));
+        }
+      }
+      for (int index = 0; index < restored.size(); index++) {
+        QueueEntry entry = restored.get(index);
+        if (entry.getQueuePosition() != index) {
+          entry.setQueuePosition(index);
+          projectionWriter.save(entries, entry);
+        }
+      }
+    }
+  }
+
+  private List<QueueEntry> orderedEntries(QueuePositionScope scope) {
+    return entries.findAllByQueueIdOrderByQueuePositionAsc(scope.queueId()).stream()
+        .filter(entry -> UNFINISHED.contains(entry.getStatus()))
+        .filter(entry -> queuePositionScope(entry).equals(scope))
+        .sorted(queuePositionOrder())
+        .toList();
+  }
+
+  private QueuePositionScope queuePositionScope(QueueEntry entry) {
+    WorkQueue queue = entry.getQueue();
+    TaskLane lane =
+        queue.getPurpose() == QueuePurpose.LOGISTICS_DRIVER
+            ? entry.getTask().getLane()
+            : TaskLane.SCHEDULED;
+    return new QueuePositionScope(queue.getId(), entry.getTask().getScheduledDate(), lane);
+  }
+
+  private Comparator<QueueEntry> queuePositionOrder() {
+    return Comparator.comparingInt(QueueEntry::getQueuePosition)
+        .thenComparing(entry -> entry.getId().toString());
   }
 
   private Set<UUID> protectedTaskIds(Collection<QueueEntry> candidates) {
@@ -2751,6 +3019,10 @@ public class TaskBoardService {
       UUID warehouseId, WorkQueue queue, LocalDate scheduledDate) {
     return orderedEntries(warehouseId, queue).stream()
         .filter(entry -> Objects.equals(entry.getTask().getScheduledDate(), scheduledDate))
+        .filter(
+            entry ->
+                queue.getPurpose() != QueuePurpose.LOGISTICS_DRIVER
+                    || entry.getTask().getLane() == TaskLane.SCHEDULED)
         .sorted(Comparator.comparingInt(QueueEntry::getQueuePosition))
         .toList();
   }
@@ -2758,6 +3030,8 @@ public class TaskBoardService {
   private void insertByPriority(UUID warehouseId, QueueEntry entry) {
     WorkQueue queue = entry.getQueue();
     LocalDate date = entry.getTask().getScheduledDate();
+    Map<QueuePositionScope, List<PinnedQueueOrdinal>> pinnedOrdinals =
+        pinnedQueueOrdinals(orderedEntries(warehouseId, queue));
     var ordered =
         new ArrayList<>(
             orderedEntries(warehouseId, queue, date).stream()
@@ -2768,8 +3042,7 @@ public class TaskBoardService {
     for (int index = 0; index < ordered.size(); index++) {
       QueueEntry candidate = ordered.get(index);
       if (candidate.getStatus() == EntryStatus.IN_PROGRESS
-          || candidate.getStatus() == EntryStatus.PAUSED
-          || candidate.getTask().isPinned()) {
+          || candidate.getStatus() == EntryStatus.PAUSED) {
         protectedPrefix = index + 1;
       }
     }
@@ -2784,6 +3057,8 @@ public class TaskBoardService {
       candidate.setQueuePosition(position++);
       projectionWriter.save(entries, candidate);
     }
+    projectionWriter.flush();
+    restorePinnedQueueOrdinals(pinnedOrdinals);
   }
 
   private LocalDate scheduleDate(CreateBoardTaskRequest request) {
@@ -3027,6 +3302,10 @@ public class TaskBoardService {
   private record InterruptedWork(Worker worker, QueueEntry entry) {}
 
   private record QueueEntryPosition(UUID queueId, int position) {}
+
+  private record QueuePositionScope(UUID queueId, LocalDate scheduledDate, TaskLane lane) {}
+
+  private record PinnedQueueOrdinal(UUID entryId, int ordinal) {}
 
   private record ResolvedRouteStep(RouteStepRequest request, WorkQueue queue) {}
 

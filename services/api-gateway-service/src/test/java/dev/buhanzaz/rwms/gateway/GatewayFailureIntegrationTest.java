@@ -39,6 +39,8 @@ class GatewayFailureIntegrationTest {
         exchange -> {
           try {
             if ("/api/worker/v1/events".equals(exchange.getRequestURI().getPath())
+                || "/api/asset/v1/events".equals(exchange.getRequestURI().getPath())
+                || "/api/media/v1/events".equals(exchange.getRequestURI().getPath())
                 || exchange
                     .getRequestURI()
                     .getPath()
@@ -77,9 +79,9 @@ class GatewayFailureIntegrationTest {
     registry.add("rwms.gateway.routes.auth-uri", GatewayFailureIntegrationTest::slowOrigin);
     registry.add("rwms.gateway.routes.task-board-uri", GatewayFailureIntegrationTest::slowOrigin);
     registry.add("rwms.gateway.routes.warehouse-uri", () -> "http://127.0.0.1:9");
-    registry.add("rwms.gateway.routes.asset-uri", () -> "http://127.0.0.1:9");
+    registry.add("rwms.gateway.routes.asset-uri", GatewayFailureIntegrationTest::slowOrigin);
     registry.add("rwms.gateway.routes.maintenance-uri", () -> "http://127.0.0.1:9");
-    registry.add("rwms.gateway.routes.media-uri", () -> "http://127.0.0.1:9");
+    registry.add("rwms.gateway.routes.media-uri", GatewayFailureIntegrationTest::slowOrigin);
     registry.add("rwms.gateway.routes.inventory-uri", () -> "http://127.0.0.1:9");
     registry.add("rwms.gateway.routes.logistics-uri", () -> "http://127.0.0.1:9");
     registry.add("rwms.gateway.routes.dossier-uri", () -> "http://127.0.0.1:9");
@@ -87,7 +89,6 @@ class GatewayFailureIntegrationTest {
     registry.add("rwms.gateway.routes.assistant-uri", GatewayFailureIntegrationTest::slowOrigin);
     registry.add("rwms.gateway.security.issuer", () -> "http://gateway.test/auth");
     registry.add("rwms.gateway.security.audience", () -> "rwms-services");
-    registry.add("rwms.gateway.security.jwk-set-uri", () -> slowOrigin() + "/oauth2/jwks");
     registry.add("rwms.gateway.cors.allowed-origins", () -> "https://panel.example");
   }
 
@@ -120,6 +121,28 @@ class GatewayFailureIntegrationTest {
   @Test
   void workerEventStreamIsNotCutOffByOrdinaryReadDeadline() throws Exception {
     HttpResponse<String> response = request("/api/task-board/worker/v1/events");
+
+    org.assertj.core.api.Assertions.assertThat(response.statusCode()).isEqualTo(200);
+    org.assertj.core.api.Assertions.assertThat(response.headers().firstValue(HttpHeaders.CONTENT_TYPE))
+        .contains("text/event-stream");
+    org.assertj.core.api.Assertions.assertThat(response.body())
+        .contains("id: first", "id: second");
+  }
+
+  @Test
+  void assetEventStreamIsNotCutOffByOrdinaryReadDeadline() throws Exception {
+    HttpResponse<String> response = request("/api/asset/v1/events?warehouseId=warehouse-1");
+
+    org.assertj.core.api.Assertions.assertThat(response.statusCode()).isEqualTo(200);
+    org.assertj.core.api.Assertions.assertThat(response.headers().firstValue(HttpHeaders.CONTENT_TYPE))
+        .contains("text/event-stream");
+    org.assertj.core.api.Assertions.assertThat(response.body())
+        .contains("id: first", "id: second");
+  }
+
+  @Test
+  void mediaEventStreamIsNotCutOffByOrdinaryReadDeadline() throws Exception {
+    HttpResponse<String> response = request("/api/media/v1/events?warehouseId=warehouse-1");
 
     org.assertj.core.api.Assertions.assertThat(response.statusCode()).isEqualTo(200);
     org.assertj.core.api.Assertions.assertThat(response.headers().firstValue(HttpHeaders.CONTENT_TYPE))

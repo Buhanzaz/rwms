@@ -19,6 +19,7 @@ import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceJsonbCanonicalizer;
 import dev.buhanzaz.rwms.maintenance.eventing.MaintenanceProjectionSnapshotFactory;
 import dev.buhanzaz.rwms.maintenance.integration.MaintenanceDependencyGateway;
 import dev.buhanzaz.rwms.maintenance.repository.CatalogNodeRepository;
+import dev.buhanzaz.rwms.maintenance.repository.CatalogLinkRepository;
 import dev.buhanzaz.rwms.maintenance.repository.CatalogVersionRepository;
 import dev.buhanzaz.rwms.maintenance.repository.InventoryRepairSourceOperationRepository;
 import dev.buhanzaz.rwms.maintenance.repository.InventoryRepairSourceRepository;
@@ -58,6 +59,7 @@ class InventoryRepairSnapshotServiceTest {
     service = new InventoryMaintenanceService(
         mock(CatalogVersionRepository.class),
         mock(CatalogNodeRepository.class),
+        mock(CatalogLinkRepository.class),
         mock(InventoryRepairSourceOperationRepository.class),
         mock(InventoryRepairSourceRepository.class),
         mock(RentalItemFactProjectionRepository.class),

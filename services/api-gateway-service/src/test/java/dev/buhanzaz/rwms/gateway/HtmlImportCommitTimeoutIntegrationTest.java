@@ -72,7 +72,6 @@ class HtmlImportCommitTimeoutIntegrationTest {
     registry.add("rwms.gateway.routes.assistant-uri", () -> "http://127.0.0.1:9");
     registry.add("rwms.gateway.security.issuer", () -> "http://gateway.test/auth");
     registry.add("rwms.gateway.security.audience", () -> "rwms-services");
-    registry.add("rwms.gateway.security.jwk-set-uri", () -> assetOrigin() + "/oauth2/jwks");
     registry.add("rwms.gateway.cors.allowed-origins", () -> "https://panel.example");
   }
 

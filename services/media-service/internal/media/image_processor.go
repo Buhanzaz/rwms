@@ -96,11 +96,26 @@ func (processor ImageProcessor) Process(ctx context.Context, request ImageProces
 		return ImageProcessResult{}, fmt.Errorf("decoded image exceeds pixel limit")
 	}
 
-	canonicalBytes, err := bimg.NewImage(source).Process(bimg.Options{
+	// Always resolve the camera's EXIF orientation first.  The rotation stored
+	// on the media aggregate is an explicit user action relative to the
+	// correctly displayed source; letting bimg decide between the two in one
+	// Process call skips EXIF handling whenever Rotation is non-zero.
+	//
+	// The ingress JPEG is deliberately left untouched.  EXIF is consumed only
+	// while creating the canonical derivative, which has its metadata stripped
+	// and therefore has physically upright pixels.
+	autoOrientedSource, err := bimg.NewImage(source).AutoRotate()
+	if err != nil {
+		return ImageProcessResult{}, fmt.Errorf("apply source EXIF orientation: %w", err)
+	}
+
+	canonicalBytes, err := bimg.NewImage(autoOrientedSource).Process(bimg.Options{
 		Type:          bimg.JPEG,
 		Quality:       92,
 		StripMetadata: true,
-		NoAutoRotate:  false,
+		// AutoRotate above has already applied the source EXIF transform.  Do
+		// not perform it a second time while applying the explicit rotation.
+		NoAutoRotate: true,
 		Rotate:        bimg.Angle(request.Rotation),
 	})
 	if err != nil {

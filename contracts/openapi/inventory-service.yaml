@@ -662,21 +662,24 @@ components:
       required: [catalogNodeId, kind, order]
       properties:
         catalogNodeId: { type: string, format: uuid }
-        kind: { type: string, enum: [REPAIR_WORK, MOVE_TO_REPAIR, MOVE_FROM_REPAIR] }
+        kind: { type: string, const: REPAIR_WORK }
         order: { type: integer, minimum: 0 }
     PlanSelection:
       oneOf:
         - type: object
           additionalProperties: false
-          required: [mode, priority, coverMediaId, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
+          required: [mode, priority, coverMediaId, movementToRepair, movementToShipment, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
           properties:
             mode: { type: string, const: AUTO }
             priority: { type: integer, minimum: 1, maximum: 5 }
             coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
-            logisticsPlanningMode: { $ref: '#/components/schemas/LogisticsPlanningMode' }
+            movementToRepair: { type: boolean }
+            movementToShipment: { type: boolean }
+            logisticsPlanningMode:
+              oneOf: [{ $ref: '#/components/schemas/LogisticsPlanningMode' }, { type: 'null' }]
             logisticsScheduledDate:
               oneOf: [{ type: string, format: date }, { type: 'null' }]
-              description: Required only for FIXED_DATE and null for AUTO.
+              description: Required only for inbound FIXED_DATE and null otherwise.
             lines:
               type: array
               minItems: 1
@@ -686,24 +689,34 @@ components:
               type: array
               maxItems: 1000
               items: { $ref: '#/components/schemas/InventoryPlanStageSelection' }
-          oneOf:
-            - properties:
-                logisticsPlanningMode: { const: AUTO }
-                logisticsScheduledDate: { type: 'null' }
-            - properties:
-                logisticsPlanningMode: { const: FIXED_DATE }
-                logisticsScheduledDate: { type: string, format: date }
+          allOf:
+            - oneOf:
+                - properties:
+                    movementToRepair: { const: false }
+                    logisticsPlanningMode: { type: 'null' }
+                    logisticsScheduledDate: { type: 'null' }
+                - properties:
+                    movementToRepair: { const: true }
+                    logisticsPlanningMode: { const: AUTO }
+                    logisticsScheduledDate: { type: 'null' }
+                - properties:
+                    movementToRepair: { const: true }
+                    logisticsPlanningMode: { const: FIXED_DATE }
+                    logisticsScheduledDate: { type: string, format: date }
         - type: object
           additionalProperties: false
-          required: [mode, priority, coverMediaId, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
+          required: [mode, priority, coverMediaId, movementToRepair, movementToShipment, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
           properties:
             mode: { type: string, const: MANUAL }
             priority: { type: integer, minimum: 1, maximum: 5 }
             coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
-            logisticsPlanningMode: { $ref: '#/components/schemas/LogisticsPlanningMode' }
+            movementToRepair: { type: boolean }
+            movementToShipment: { type: boolean }
+            logisticsPlanningMode:
+              oneOf: [{ $ref: '#/components/schemas/LogisticsPlanningMode' }, { type: 'null' }]
             logisticsScheduledDate:
               oneOf: [{ type: string, format: date }, { type: 'null' }]
-              description: Required only for FIXED_DATE and null for AUTO.
+              description: Required only for inbound FIXED_DATE and null otherwise.
             lines:
               type: array
               minItems: 1
@@ -714,13 +727,20 @@ components:
               minItems: 1
               maxItems: 1000
               items: { $ref: '#/components/schemas/InventoryPlanStageSelection' }
-          oneOf:
-            - properties:
-                logisticsPlanningMode: { const: AUTO }
-                logisticsScheduledDate: { type: 'null' }
-            - properties:
-                logisticsPlanningMode: { const: FIXED_DATE }
-                logisticsScheduledDate: { type: string, format: date }
+          allOf:
+            - oneOf:
+                - properties:
+                    movementToRepair: { const: false }
+                    logisticsPlanningMode: { type: 'null' }
+                    logisticsScheduledDate: { type: 'null' }
+                - properties:
+                    movementToRepair: { const: true }
+                    logisticsPlanningMode: { const: AUTO }
+                    logisticsScheduledDate: { type: 'null' }
+                - properties:
+                    movementToRepair: { const: true }
+                    logisticsPlanningMode: { const: FIXED_DATE }
+                    logisticsScheduledDate: { type: string, format: date }
     SaveInspectionRequest:
       oneOf:
         - type: object
@@ -1048,7 +1068,7 @@ components:
     FrozenPlan:
       type: object
       additionalProperties: false
-      required: [mode, catalogVersionId, fingerprintSha256, priority, coverMediaId, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
+      required: [mode, catalogVersionId, fingerprintSha256, priority, coverMediaId, movementToRepair, movementToShipment, logisticsPlanningMode, logisticsScheduledDate, lines, stages]
       properties:
         mode: { type: string, enum: [AUTO, MANUAL] }
         catalogVersionId: { type: string, format: uuid }
@@ -1057,21 +1077,30 @@ components:
           type: integer
           minimum: 1
           maximum: 5
-          description: Defaults to 3 only when reading a legacy frozen snapshot.
         coverMediaId: { $ref: '#/components/schemas/NullableUuid' }
-        logisticsPlanningMode: { $ref: '#/components/schemas/LogisticsPlanningMode' }
+        movementToRepair: { type: boolean }
+        movementToShipment: { type: boolean }
+        logisticsPlanningMode:
+          oneOf: [{ $ref: '#/components/schemas/LogisticsPlanningMode' }, { type: 'null' }]
         logisticsScheduledDate:
           oneOf: [{ type: string, format: date }, { type: 'null' }]
-          description: Required only for FIXED_DATE and null for AUTO.
+          description: Required only for inbound FIXED_DATE and null otherwise.
         lines: { type: array, minItems: 1, maxItems: 2000, items: { $ref: '#/components/schemas/FrozenPlanLine' } }
         stages: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/FrozenPlanStage' } }
-      oneOf:
-        - properties:
-            logisticsPlanningMode: { const: AUTO }
-            logisticsScheduledDate: { type: 'null' }
-        - properties:
-            logisticsPlanningMode: { const: FIXED_DATE }
-            logisticsScheduledDate: { type: string, format: date }
+      allOf:
+        - oneOf:
+            - properties:
+                movementToRepair: { const: false }
+                logisticsPlanningMode: { type: 'null' }
+                logisticsScheduledDate: { type: 'null' }
+            - properties:
+                movementToRepair: { const: true }
+                logisticsPlanningMode: { const: AUTO }
+                logisticsScheduledDate: { type: 'null' }
+            - properties:
+                movementToRepair: { const: true }
+                logisticsPlanningMode: { const: FIXED_DATE }
+                logisticsScheduledDate: { type: string, format: date }
     FrozenPlanLine:
       type: object
       additionalProperties: false
@@ -1092,17 +1121,16 @@ components:
     FrozenPlanStage:
       type: object
       additionalProperties: false
-      required: [id, order, catalogNodeId, catalogNodeName, kind, routingQueueId, routingQueueName, routingQueueType, movementRequired, photoRequired, normativeDurationMinutes]
+      required: [id, order, catalogNodeId, catalogNodeName, kind, routingQueueId, routingQueueName, routingQueueType, photoRequired, normativeDurationMinutes]
       properties:
         id: { type: string, format: uuid }
         order: { type: integer, minimum: 0 }
         catalogNodeId: { type: string, format: uuid }
         catalogNodeName: { type: string, minLength: 1, maxLength: 255 }
-        kind: { type: string, enum: [REPAIR_WORK, MOVE_TO_REPAIR, MOVE_FROM_REPAIR] }
+        kind: { type: string, const: REPAIR_WORK }
         routingQueueId: { type: string, format: uuid }
         routingQueueName: { type: string, minLength: 1, maxLength: 255 }
         routingQueueType: { type: string, minLength: 1, maxLength: 64 }
-        movementRequired: { type: boolean }
         photoRequired: { type: boolean }
         normativeDurationMinutes: { type: integer, minimum: 0 }
     NumberResolution:

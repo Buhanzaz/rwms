@@ -81,8 +81,18 @@ public class DriverLogisticsTask {
   @Column(name = "scheduled_date", nullable = false)
   private LocalDate scheduledDate;
 
+  /**
+   * Operator-selected earliest date for a fixed-date task. The mutable scheduled date mirrors the
+   * task-board placement and may move later when earlier repair buckets are full.
+   */
+  @Column(name = "fixed_date_lower_bound")
+  private LocalDate fixedDateLowerBound;
+
   @Column(name = "priority", nullable = false)
   private int priority;
+
+  @Column(name = "movement_comment", length = 1000)
+  private String comment;
 
   @Column(name = "unit_number", nullable = false, length = 64)
   private String unitNumber;
@@ -136,6 +146,14 @@ public class DriverLogisticsTask {
   @Column(name = "repair_place_effect_applied", nullable = false)
   private boolean repairPlaceEffectApplied;
 
+  /**
+   * A user moved this task out of the current lane and intentionally paused automatic filling for
+   * the warehouse. This is a durable workflow fact, not a browser preference: the relay must not
+   * immediately pull another scheduled cabin into the hole the user just opened before this time.
+   */
+  @Column(name = "manual_promotion_hold_until")
+  private OffsetDateTime manualPromotionHoldUntil;
+
   @Column(name = "created_by_subject_id", nullable = false)
   private UUID createdBySubjectId;
 
@@ -174,6 +192,7 @@ public class DriverLogisticsTask {
       DriverTaskPlanningMode planningMode,
       LocalDate scheduledDate,
       int priority,
+      String comment,
       String unitNumber,
       UUID driverQueueDefinitionId,
       UUID createdBySubjectId,
@@ -197,6 +216,10 @@ public class DriverLogisticsTask {
     if ((kind.consumesRepairPlace() || kind.releasesRepairPlace()) && repairId == null) {
       throw new IllegalArgumentException("Repair movement requires repairId");
     }
+    if ((sourceType == DriverTaskSourceType.MANUAL)
+        != (kind == DriverTaskKind.GENERAL_MOVEMENT)) {
+      throw new IllegalArgumentException("Manual source requires a general movement task");
+    }
     DriverLogisticsTask task = new DriverLogisticsTask();
     task.warehouseId = warehouseId;
     task.cabinId = cabinId;
@@ -206,7 +229,13 @@ public class DriverLogisticsTask {
     task.kind = kind;
     task.planningMode = planningMode;
     task.scheduledDate = scheduledDate;
+    task.fixedDateLowerBound =
+        planningMode == DriverTaskPlanningMode.FIXED_DATE ? scheduledDate : null;
     task.priority = priority;
+    task.comment = optionalComment(comment);
+    if (sourceType == DriverTaskSourceType.MANUAL && task.comment == null) {
+      throw new IllegalArgumentException("Manual movement comment is required");
+    }
     task.unitNumber = requiredText(unitNumber, 64, "unitNumber");
     task.driverQueueDefinitionId = driverQueueDefinitionId;
     task.externalTaskId = UUID.randomUUID();
@@ -274,6 +303,7 @@ public class DriverLogisticsTask {
     scheduledDate = observedScheduledDate;
     if ("CANCELLED".equals(taskStatus)) {
       state = DriverTaskState.CANCELLED;
+      clearRetryFailure();
       nextAttemptAt = null;
       touch();
       return;
@@ -293,7 +323,7 @@ public class DriverLogisticsTask {
     }
     repairPlaceAllocationId = allocationId;
     repairPlaceAllocationVersion = allocationVersion;
-    touch();
+    resumeImmediatelyAfterConfirmation();
   }
 
   public void bindRemovalRepairPlace(UUID allocationId, long allocationVersion) {
@@ -305,7 +335,7 @@ public class DriverLogisticsTask {
     }
     repairPlaceAllocationId = allocationId;
     repairPlaceAllocationVersion = allocationVersion;
-    touch();
+    resumeImmediatelyAfterConfirmation();
   }
 
   public void moveToCurrent(long taskVersion, UUID entryId, String entryStatus) {
@@ -319,8 +349,58 @@ public class DriverLogisticsTask {
     taskBoardEntryId = entryId;
     taskBoardEntryStatus = entryStatus;
     state = DriverTaskState.CURRENT;
-    retryCount = 0;
-    scheduleAfterSeconds(1);
+    manualPromotionHoldUntil = null;
+    resumeAfterSeconds(1);
+  }
+
+  public boolean hasManualPromotionHold() {
+    return manualPromotionHoldUntil != null;
+  }
+
+  public boolean isManualPromotionHeldAt(OffsetDateTime now) {
+    return manualPromotionHoldUntil != null
+        && Objects.requireNonNull(now, "now").isBefore(manualPromotionHoldUntil);
+  }
+
+  public void markManualPromotionHold(int automaticRefillDelayMinutes) {
+    if (state.isTerminal()) {
+      throw new IllegalStateException("A terminal driver task cannot hold scheduling");
+    }
+    if (automaticRefillDelayMinutes < 1 || automaticRefillDelayMinutes > 1_440) {
+      throw new IllegalArgumentException("automaticRefillDelayMinutes is invalid");
+    }
+    manualPromotionHoldUntil = now().plusMinutes(automaticRefillDelayMinutes);
+    scheduleImmediately();
+  }
+
+  public void clearManualPromotionHold() {
+    if (manualPromotionHoldUntil == null) return;
+    manualPromotionHoldUntil = null;
+    touch();
+  }
+
+  public void markFixedDate(LocalDate date) {
+    if (state != DriverTaskState.SCHEDULED || date == null) {
+      throw new IllegalStateException("Only a scheduled task can receive a fixed date");
+    }
+    planningMode = DriverTaskPlanningMode.FIXED_DATE;
+    scheduledDate = date;
+    fixedDateLowerBound = date;
+    touch();
+  }
+
+  public void releaseRepairPlaceReservation(UUID allocationId, long allocationVersion) {
+    if (state != DriverTaskState.SCHEDULED
+        || manualPromotionHoldUntil == null
+        || !kind.consumesRepairPlace()
+        || repairPlaceAllocationId == null
+        || !repairPlaceAllocationId.equals(allocationId)
+        || allocationVersion < repairPlaceAllocationVersion) {
+      throw new IllegalStateException("Manual repair-place release does not match the task");
+    }
+    repairPlaceAllocationId = null;
+    repairPlaceAllocationVersion = null;
+    resumeImmediatelyAfterConfirmation();
   }
 
   public void captureEvidence(
@@ -344,7 +424,7 @@ public class DriverLogisticsTask {
     completionMediaId = mediaId;
     completionMediaGeneration = mediaGeneration;
     completionEntryId = entryId;
-    touch();
+    resumeImmediatelyAfterConfirmation();
   }
 
   public void markCoverApplied() {
@@ -352,7 +432,7 @@ public class DriverLogisticsTask {
       throw new IllegalStateException("Completion evidence must be captured before setting cover");
     }
     coverApplied = true;
-    touch();
+    resumeImmediatelyAfterConfirmation();
   }
 
   public void markRepairPlaceEffect(UUID allocationId, long allocationVersion) {
@@ -368,7 +448,7 @@ public class DriverLogisticsTask {
     repairPlaceAllocationId = allocationId;
     repairPlaceAllocationVersion = allocationVersion;
     repairPlaceEffectApplied = true;
-    touch();
+    resumeImmediatelyAfterConfirmation();
   }
 
   public void complete() {
@@ -377,14 +457,25 @@ public class DriverLogisticsTask {
     }
     state = DriverTaskState.COMPLETED;
     completedAt = now();
-    retryCount = 0;
+    clearRetryFailure();
     nextAttemptAt = null;
     touch();
   }
 
-  public void retryAfterSeconds(long seconds, String code) {
+  /**
+   * Schedules a retry without letting a long-lived dependency outage overflow the persisted retry
+   * counter. The caller owns the bounded delay policy; this aggregate protects the durable fact.
+   */
+  public void retryAfterSeconds(long seconds, String code, int retryCountCeiling) {
     if (state.isTerminal()) return;
-    retryCount = Math.addExact(retryCount, 1);
+    if (retryCountCeiling < 0) {
+      throw new IllegalArgumentException("retryCountCeiling must not be negative");
+    }
+    int normalizedRetryCount = Math.min(Math.max(retryCount, 0), retryCountCeiling);
+    retryCount =
+        normalizedRetryCount < retryCountCeiling
+            ? normalizedRetryCount + 1
+            : retryCountCeiling;
     failureCode = optionalText(code, 96);
     nextAttemptAt = now().plusSeconds(Math.max(1, seconds));
     touch();
@@ -405,16 +496,17 @@ public class DriverLogisticsTask {
         throw new IllegalArgumentException("Completed driver task has no completion time");
       }
       state = DriverTaskState.FINALIZING;
-      retryCount = 0;
-      scheduleImmediately();
+      resumeImmediatelyAfterConfirmation();
       return;
     }
     if (state == DriverTaskState.FINALIZING || state == DriverTaskState.COMPLETED) {
       return;
     }
     state = "CURRENT".equals(lane) ? DriverTaskState.CURRENT : DriverTaskState.SCHEDULED;
-    retryCount = 0;
-    scheduleAfterSeconds(1);
+    if (state == DriverTaskState.CURRENT) {
+      manualPromotionHoldUntil = null;
+    }
+    resumeAfterSeconds(1);
   }
 
   private static void requireBoardSnapshot(
@@ -431,6 +523,21 @@ public class DriverLogisticsTask {
   private void scheduleImmediately() {
     nextAttemptAt = now();
     updatedAt = nextAttemptAt;
+  }
+
+  private void resumeImmediatelyAfterConfirmation() {
+    clearRetryFailure();
+    scheduleImmediately();
+  }
+
+  private void resumeAfterSeconds(long seconds) {
+    clearRetryFailure();
+    scheduleAfterSeconds(seconds);
+  }
+
+  private void clearRetryFailure() {
+    retryCount = 0;
+    failureCode = null;
   }
 
   private void scheduleAfterSeconds(long seconds) {
@@ -459,6 +566,16 @@ public class DriverLogisticsTask {
     String normalized = value.trim();
     if (normalized.isEmpty()) return null;
     return normalized.substring(0, Math.min(normalized.length(), maximum));
+  }
+
+  private static String optionalComment(String value) {
+    if (value == null) return null;
+    String normalized = value.trim();
+    if (normalized.isEmpty()) return null;
+    if (normalized.length() > 1_000) {
+      throw new IllegalArgumentException("comment is invalid");
+    }
+    return normalized;
   }
 
   private static String requireHash(String value) {

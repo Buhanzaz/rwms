@@ -77,6 +77,15 @@ public class WorkQueueController {
     return service.reorder(warehouseId, request);
   }
 
+  @PutMapping("/driver-queue")
+  public WorkQueueDto updateDriverQueue(
+      @AuthenticationPrincipal Jwt jwt,
+      @PathVariable UUID warehouseId,
+      @Valid @RequestBody DriverQueueRequest request) {
+    write(jwt, warehouseId);
+    return service.updateDriverQueue(warehouseId, request);
+  }
+
   private void read(Jwt jwt, UUID id) {
     access.requireUserScope(jwt, "rwms.read");
     access.requireWarehouse(jwt, id, AccessLevel.VIEW, false);

@@ -11,13 +11,21 @@ import java.util.UUID;
 public final class DriverBoardApiModels {
   private DriverBoardApiModels() {}
 
+  public enum DriverBoardLane {
+    SCHEDULED,
+    CURRENT
+  }
+
   public record DriverBoardResponse(
       UUID warehouseId,
+      LocalDate currentDate,
       UUID queueId,
       long queueVersion,
       int repairPlaceCount,
-      long occupiedRepairPlaceCount,
+      long usedRepairPlaceCount,
       long availableRepairPlaceCount,
+      boolean inboundRepairPlaceAvailable,
+      int automaticRefillDelayMinutes,
       boolean repairPlacesOverCapacity,
       List<DriverBoardCardResponse> current,
       List<DriverBoardDateColumnResponse> dates,
@@ -71,6 +79,7 @@ public final class DriverBoardApiModels {
       @NotNull UUID warehouseId,
       @NotNull @Min(0) Long expectedTaskVersion,
       @NotNull @Min(0) Long expectedEntryVersion,
+      @NotNull DriverBoardLane targetLane,
       @NotNull LocalDate targetDate,
       @NotNull @Min(0) Integer targetIndex) {}
 

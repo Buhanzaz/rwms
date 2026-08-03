@@ -7,6 +7,7 @@ import java.util.UUID;
 public record LogisticsRepairPlaceProjectionResponse(
     UUID warehouseId,
     int repairPlaceCount,
+    int automaticRefillDelayMinutes,
     long reservedCount,
     long occupiedCount,
     long readyToReleaseCount,

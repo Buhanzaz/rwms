@@ -1,7 +1,8 @@
 package dev.buhanzaz.rwms.platform.contracts;
 
 /** Minimal immutable actor metadata suitable for audit and event envelopes. */
-public record ActorSnapshot(String actorId, String actorType, String displayName) {
+public record
+ActorSnapshot(String actorId, String actorType, String displayName) {
 
     public ActorSnapshot {
         requireText(actorId, "actorId");

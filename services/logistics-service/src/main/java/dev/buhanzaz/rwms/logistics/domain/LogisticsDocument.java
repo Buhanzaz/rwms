@@ -83,6 +83,10 @@ public class LogisticsDocument {
   @Column(name = "rental_order_id")
   private UUID rentalOrderId;
 
+  /** The shipment that produced a per-shipment rental return, when applicable. */
+  @Column(name = "rental_shipment_id")
+  private UUID rentalShipmentId;
+
   @Column(name = "requested_by_subject_id", nullable = false)
   private UUID requestedBySubjectId;
 
@@ -188,6 +192,24 @@ public class LogisticsDocument {
       String partySnapshot,
       UUID subjectId,
       UUID correlationId) {
+    return createRentalOrderReturn(
+        warehouseId,
+        clientId,
+        rentalOrderId,
+        null,
+        partySnapshot,
+        subjectId,
+        correlationId);
+  }
+
+  public static LogisticsDocument createRentalOrderReturn(
+      UUID warehouseId,
+      UUID clientId,
+      UUID rentalOrderId,
+      UUID rentalShipmentId,
+      String partySnapshot,
+      UUID subjectId,
+      UUID correlationId) {
     LogisticsDocument document =
         createReturn(
             warehouseId,
@@ -197,6 +219,7 @@ public class LogisticsDocument {
             subjectId,
             correlationId);
     document.rentalOrderId = Objects.requireNonNull(rentalOrderId, "rentalOrderId");
+    document.rentalShipmentId = rentalShipmentId;
     return document;
   }
 

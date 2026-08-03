@@ -401,7 +401,7 @@ paths:
         - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceTransitionRequest' } } } }
       responses:
-        '200': { description: Reserved allocation or an idempotent replay., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceAllocation' } } } }
+        '200': { description: Reserved allocation or an idempotent replay., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsRepairPlaceAllocation' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -417,7 +417,7 @@ paths:
         - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceTransitionRequest' } } } }
       responses:
-        '200': { description: Occupied allocation or an idempotent replay., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceAllocation' } } } }
+        '200': { description: Occupied allocation or an idempotent replay., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsRepairPlaceAllocation' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -433,7 +433,7 @@ paths:
         - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceTransitionRequest' } } } }
       responses:
-        '200': { description: Ready-to-release allocation or an idempotent replay., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceAllocation' } } } }
+        '200': { description: Ready-to-release allocation or an idempotent replay., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsRepairPlaceAllocation' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -449,7 +449,7 @@ paths:
         - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceTransitionRequest' } } } }
       responses:
-        '200': { description: Released allocation or an idempotent replay., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairPlaceAllocation' } } } }
+        '200': { description: Released allocation or an idempotent replay., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' }, Idempotency-Replayed: { $ref: '#/components/headers/Idempotency-Replayed' } }, content: { application/json: { schema: { $ref: '#/components/schemas/LogisticsRepairPlaceAllocation' } } } }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -836,7 +836,8 @@ paths:
       operationId: getRepairCapacitySettings
       description: >-
         Returns the warehouse repair-capacity setting. An absent setting is represented as
-        version 0 with repairPlaceCount 6 and null lifecycle timestamps without persisting a row.
+        version 0 with repairPlaceCount 6, automaticRefillDelayMinutes 5 and null lifecycle
+        timestamps without persisting a row.
         Requires USER, rwms.write and warehouse MANAGE access.
       responses:
         '200': { description: Repair-capacity setting or its non-persisted default., headers: { X-Correlation-Id: { $ref: '#/components/headers/X-Correlation-Id' } }, content: { application/json: { schema: { $ref: '#/components/schemas/RepairCapacitySettings' } } } }
@@ -1071,7 +1072,7 @@ components:
     RepairAcceptanceState: { enum: [NOT_READY, PENDING, IN_REWORK, ACCEPTED, WRITTEN_OFF] }
     RepairReclassificationState: { enum: [STABLE, RECLASSIFYING_CAPITAL, EXTERNAL_CAPITAL] }
     RepairComplexity: { enum: [LIGHT, MEDIUM, COMPLEX, CAPITAL] }
-    RepairStageKind: { enum: [REPAIR_WORK, MOVE_TO_REPAIR, MOVE_FROM_REPAIR] }
+    RepairStageKind: { enum: [REPAIR_WORK] }
     RepairStageState: { enum: [PLANNED, QUEUED, IN_PROGRESS, DONE, CANCELLED] }
     GenerationState: { enum: [PENDING_GENERATION, GENERATED, NOT_REQUIRED, FAILED] }
     RepairLogisticsPlanningMode: { enum: [AUTO, FIXED_DATE] }
@@ -1095,17 +1096,23 @@ components:
     PriorityVersionRequest:
       type: object
       additionalProperties: false
-      required: [expectedVersion, priority, logisticsPlanningMode, logisticsScheduledDate]
+      required: [expectedVersion, priority, movementToRepair, movementToShipment, logisticsPlanningMode, logisticsScheduledDate]
       allOf:
         - if:
             properties:
-              logisticsPlanningMode: { const: FIXED_DATE }
-            required: [logisticsPlanningMode]
+              movementToRepair: { const: true }
+            required: [movementToRepair]
           then:
-            properties:
-              logisticsScheduledDate: { type: string, format: date }
+            oneOf:
+              - properties:
+                  logisticsPlanningMode: { const: AUTO }
+                  logisticsScheduledDate: { type: 'null' }
+              - properties:
+                  logisticsPlanningMode: { const: FIXED_DATE }
+                  logisticsScheduledDate: { type: string, format: date }
           else:
             properties:
+              logisticsPlanningMode: { type: 'null' }
               logisticsScheduledDate: { type: 'null' }
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
@@ -1114,26 +1121,34 @@ components:
           minimum: 1
           maximum: 5
           description: 1 is the most urgent and 5 is the least urgent.
+        movementToRepair:
+          description: Request a driver delivery into the repair zone before worker tasks are visible.
+          type: boolean
+        movementToShipment:
+          description: Request an outbound movement after the repair process.
+          type: boolean
         logisticsPlanningMode:
-          $ref: '#/components/schemas/RepairLogisticsPlanningMode'
+          oneOf: [ { $ref: '#/components/schemas/RepairLogisticsPlanningMode' }, { type: 'null' } ]
         logisticsScheduledDate:
-          description: Required for FIXED_DATE and null for AUTO.
+          description: Required only for inbound FIXED_DATE and null without inbound movement.
           oneOf: [ { type: string, format: date }, { type: 'null' } ]
     ReplaceRepairCapacitySettingsRequest:
       type: object
       additionalProperties: false
-      required: [expectedVersion, repairPlaceCount]
+      required: [expectedVersion, repairPlaceCount, automaticRefillDelayMinutes]
       properties:
         expectedVersion: { type: integer, format: int64, minimum: 0 }
         repairPlaceCount: { type: integer, minimum: 1 }
+        automaticRefillDelayMinutes: { type: integer, minimum: 1, maximum: 1440 }
     RepairCapacitySettings:
       type: object
       additionalProperties: false
-      required: [warehouseId, version, repairPlaceCount, createdAt, updatedAt]
+      required: [warehouseId, version, repairPlaceCount, automaticRefillDelayMinutes, createdAt, updatedAt]
       properties:
         warehouseId: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
         repairPlaceCount: { type: integer, minimum: 1 }
+        automaticRefillDelayMinutes: { type: integer, minimum: 1, maximum: 1440 }
         createdAt:
           oneOf: [ { type: string, format: date-time }, { type: 'null' } ]
         updatedAt:
@@ -1203,8 +1218,17 @@ components:
         reservedCount: { type: integer, format: int64, minimum: 0 }
         occupiedCount: { type: integer, format: int64, minimum: 0 }
         readyToReleaseCount: { type: integer, format: int64, minimum: 0 }
-        availableCount: { type: integer, format: int64, minimum: 0 }
-        overCapacity: { type: boolean }
+        availableCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Physically free places after active reservations.
+        overCapacity:
+          type: boolean
+          description: >-
+            True when occupied places plus the larger of reservations and
+            ready removals exceeds capacity; a paired removal and inbound
+            reservation share one ordered scheduling slot.
         allocations:
           type: array
           items: { $ref: '#/components/schemas/RepairPlaceAllocation' }
@@ -1224,15 +1248,29 @@ components:
     LogisticsRepairPlaceProjection:
       type: object
       additionalProperties: false
-      required: [warehouseId, repairPlaceCount, reservedCount, occupiedCount, readyToReleaseCount, availableCount, overCapacity, allocations]
+      required: [warehouseId, repairPlaceCount, automaticRefillDelayMinutes, reservedCount, occupiedCount, readyToReleaseCount, availableCount, overCapacity, allocations]
       properties:
         warehouseId: { type: string, format: uuid }
         repairPlaceCount: { type: integer, minimum: 1 }
+        automaticRefillDelayMinutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+          description: Delay before a manually opened current logistics lane may be refilled automatically.
         reservedCount: { type: integer, format: int64, minimum: 0 }
         occupiedCount: { type: integer, format: int64, minimum: 0 }
         readyToReleaseCount: { type: integer, format: int64, minimum: 0 }
-        availableCount: { type: integer, format: int64, minimum: 0 }
-        overCapacity: { type: boolean }
+        availableCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Physically free places after active reservations.
+        overCapacity:
+          type: boolean
+          description: >-
+            True when occupied places plus the larger of reservations and
+            ready removals exceeds capacity; a paired removal and inbound
+            reservation share one ordered scheduling slot.
         allocations:
           type: array
           items: { $ref: '#/components/schemas/LogisticsRepairPlaceAllocation' }
@@ -2018,17 +2056,23 @@ components:
     FreezeInventoryPlanRequest:
       type: object
       additionalProperties: false
-      required: [warehouseId, inventoryId, findingId, sourceRevision, mode, lines, plan, mediaReferences, priority, coverMediaId, logisticsPlanningMode, logisticsScheduledDate]
+      required: [warehouseId, inventoryId, findingId, sourceRevision, mode, lines, plan, mediaReferences, priority, coverMediaId, movementToRepair, movementToShipment, logisticsPlanningMode, logisticsScheduledDate]
       allOf:
         - if:
             properties:
-              logisticsPlanningMode: { const: FIXED_DATE }
-            required: [logisticsPlanningMode]
+              movementToRepair: { const: true }
+            required: [movementToRepair]
           then:
-            properties:
-              logisticsScheduledDate: { type: string, format: date }
+            oneOf:
+              - properties:
+                  logisticsPlanningMode: { const: AUTO }
+                  logisticsScheduledDate: { type: 'null' }
+              - properties:
+                  logisticsPlanningMode: { const: FIXED_DATE }
+                  logisticsScheduledDate: { type: string, format: date }
           else:
             properties:
+              logisticsPlanningMode: { type: 'null' }
               logisticsScheduledDate: { type: 'null' }
       properties:
         warehouseId: { type: string, format: uuid }
@@ -2057,10 +2101,12 @@ components:
         coverMediaId:
           description: Required and contained in aggregate mediaReferences when photos are present; otherwise null.
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
+        movementToRepair: { type: boolean }
+        movementToShipment: { type: boolean }
         logisticsPlanningMode:
-          $ref: '#/components/schemas/RepairLogisticsPlanningMode'
+          oneOf: [ { $ref: '#/components/schemas/RepairLogisticsPlanningMode' }, { type: 'null' } ]
         logisticsScheduledDate:
-          description: Required for FIXED_DATE and null for AUTO.
+          description: Required only for inbound FIXED_DATE and null without inbound movement.
           oneOf: [ { type: string, format: date }, { type: 'null' } ]
     InventoryPlanLineSnapshot:
       type: object
@@ -2114,17 +2160,23 @@ components:
     FrozenInventoryPlanSnapshot:
       type: object
       additionalProperties: false
-      required: [catalogVersionId, mode, lines, stages, moveToRepairRequired, moveFromRepairRequired, mediaReferences, priority, coverMediaId, logisticsPlanningMode, logisticsScheduledDate]
+      required: [catalogVersionId, mode, lines, stages, movementToRepair, movementToShipment, mediaReferences, priority, coverMediaId, logisticsPlanningMode, logisticsScheduledDate]
       allOf:
         - if:
             properties:
-              logisticsPlanningMode: { const: FIXED_DATE }
-            required: [logisticsPlanningMode]
+              movementToRepair: { const: true }
+            required: [movementToRepair]
           then:
-            properties:
-              logisticsScheduledDate: { type: string, format: date }
+            oneOf:
+              - properties:
+                  logisticsPlanningMode: { const: AUTO }
+                  logisticsScheduledDate: { type: 'null' }
+              - properties:
+                  logisticsPlanningMode: { const: FIXED_DATE }
+                  logisticsScheduledDate: { type: string, format: date }
           else:
             properties:
+              logisticsPlanningMode: { type: 'null' }
               logisticsScheduledDate: { type: 'null' }
       properties:
         catalogVersionId: { type: string, format: uuid }
@@ -2139,8 +2191,8 @@ components:
           minItems: 1
           maxItems: 1000
           items: { $ref: '#/components/schemas/InventoryPlanStageSnapshot' }
-        moveToRepairRequired: { type: boolean }
-        moveFromRepairRequired: { type: boolean }
+        movementToRepair: { type: boolean }
+        movementToShipment: { type: boolean }
         mediaReferences:
           type: array
           maxItems: 100
@@ -2153,7 +2205,7 @@ components:
         coverMediaId:
           oneOf: [ { type: string, format: uuid }, { type: 'null' } ]
         logisticsPlanningMode:
-          $ref: '#/components/schemas/RepairLogisticsPlanningMode'
+          oneOf: [ { $ref: '#/components/schemas/RepairLogisticsPlanningMode' }, { type: 'null' } ]
         logisticsScheduledDate:
           description: Frozen maintenance-owned planning choice; logistics resolves AUTO later.
           oneOf: [ { type: string, format: date }, { type: 'null' } ]
@@ -2311,7 +2363,7 @@ components:
     Repair:
       type: object
       additionalProperties: false
-      required: [id, rootRepairId, sourceRepairId, estimateId, warehouseId, rentalItemId, origin, kind, executionState, acceptanceState, reclassificationState, version, dispatchDate, priority, sourceParty, plan, inventorySource, lease, mediaReferences, coverMediaId, complexity, movementToShipment, logisticsPlanningMode, logisticsScheduledDate, createdAt, updatedAt, actor]
+      required: [id, rootRepairId, sourceRepairId, estimateId, warehouseId, rentalItemId, origin, kind, executionState, acceptanceState, reclassificationState, version, dispatchDate, priority, sourceParty, plan, inventorySource, lease, mediaReferences, coverMediaId, complexity, movementToRepair, movementToShipment, logisticsPlanningMode, logisticsScheduledDate, createdAt, updatedAt, actor]
       properties:
         id: { type: string, format: uuid }
         rootRepairId: { type: string, format: uuid }
@@ -2344,15 +2396,18 @@ components:
             Recomputed from the current repair lines and canonical maintenance warehouse thresholds on
             every read; it is not user-entered cached text.
           $ref: '#/components/schemas/RepairComplexitySnapshot'
+        movementToRepair:
+          description: True while a driver delivery into the repair zone is required before worker tasks may be shown.
+          type: boolean
         movementToShipment:
           description: >-
             Receiver-selected continuation option. It can be true only when the current warehouse
             has the stable movement/driver queue capability.
           type: boolean
         logisticsPlanningMode:
-          $ref: '#/components/schemas/RepairLogisticsPlanningMode'
+          oneOf: [ { $ref: '#/components/schemas/RepairLogisticsPlanningMode' }, { type: 'null' } ]
         logisticsScheduledDate:
-          description: User-selected logistics date; null only while AUTO scheduling is requested.
+          description: User-selected inbound logistics date; null unless inbound FIXED_DATE is selected.
           oneOf: [ { type: string, format: date }, { type: 'null' } ]
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }

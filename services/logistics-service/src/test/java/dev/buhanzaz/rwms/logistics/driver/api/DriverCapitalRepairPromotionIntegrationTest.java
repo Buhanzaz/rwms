@@ -1,0 +1,270 @@
+package dev.buhanzaz.rwms.logistics.driver.api;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import dev.buhanzaz.rwms.logistics.driver.domain.DriverTaskKind;
+import dev.buhanzaz.rwms.logistics.integration.LogisticsDependencyGateway;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.JwtRequestPostProcessor;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.web.servlet.MockMvc;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+
+/**
+ * Exercises the public capital-repair promotion command through MVC, JPA and the actual driver
+ * workflow. The task-board dependency deliberately exposes an empty board snapshot after
+ * registration: the promotion must use the point task snapshot and still enter CURRENT.
+ */
+@SpringBootTest(
+    properties = {
+      "spring.jpa.hibernate.ddl-auto=validate",
+      "rwms.platform.kafka.enabled=false",
+      "AUTH_ISSUER=http://auth.test",
+      "PANEL_ORIGIN=http://panel.test"
+    })
+@AutoConfigureMockMvc
+@ActiveProfiles("test")
+@Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+class DriverCapitalRepairPromotionIntegrationTest {
+  private static final UUID ACTOR = UUID.fromString("00000000-0000-0000-0000-000000009101");
+  private static final UUID WAREHOUSE = UUID.fromString("00000000-0000-0000-0000-000000009201");
+  private static final UUID REPAIR = UUID.fromString("00000000-0000-0000-0000-000000009301");
+  private static final UUID CABIN = UUID.fromString("00000000-0000-0000-0000-000000009401");
+  private static final UUID QUEUE_DEFINITION =
+      UUID.fromString("00000000-0000-0000-0000-000000009501");
+  private static final UUID WORK_QUEUE = UUID.fromString("00000000-0000-0000-0000-000000009601");
+
+  @Container
+  @ServiceConnection
+  static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
+
+  @Autowired MockMvc mvc;
+  @Autowired JdbcTemplate jdbc;
+  @MockitoBean LogisticsDependencyGateway dependencies;
+
+  private final AtomicReference<LogisticsDependencyGateway.DriverBoardTask> boardTask =
+      new AtomicReference<>();
+  private final AtomicInteger registrations = new AtomicInteger();
+
+  @BeforeEach
+  void resetState() {
+    jdbc.execute("truncate table driver_logistics_task");
+    reset(dependencies);
+    boardTask.set(null);
+    registrations.set(0);
+
+    when(dependencies.readWarehouseIdentity(WAREHOUSE))
+        .thenReturn(new LogisticsDependencyGateway.WarehouseIdentity(WAREHOUSE, 0, true, "UTC"));
+    when(dependencies.readWarehouseDriverQueue(WAREHOUSE))
+        .thenReturn(
+            new LogisticsDependencyGateway.WarehouseDriverQueue(
+                WAREHOUSE, QUEUE_DEFINITION, WORK_QUEUE));
+    when(dependencies.readRentalItemSnapshot(CABIN))
+        .thenReturn(
+            new LogisticsDependencyGateway.RentalItemSnapshot(
+                CABIN, 0, WAREHOUSE, "БЫТ-901", "CAPITAL_REPAIR", List.of()));
+    when(dependencies.readCapitalRepair(REPAIR))
+        .thenReturn(
+            new LogisticsDependencyGateway.CapitalRepair(
+                REPAIR,
+                CABIN,
+                WAREHOUSE,
+                2,
+                new LogisticsDependencyGateway.RepairComplexitySnapshot(
+                    "CAPITAL", "Капитальный ремонт", "#AA0000", "720", true),
+                0));
+    when(dependencies.readRepairPlaces(WAREHOUSE))
+        .thenReturn(
+            new LogisticsDependencyGateway.RepairPlaceProjection(
+                WAREHOUSE, 6, 5, 0, 6, 0, 0, false, List.of()));
+
+    // The board list may lag a just-created task. A point lookup is authoritative for explicit
+    // promotion and is deliberately the only read path that contains the registered card here.
+    when(dependencies.readDriverBoard(WAREHOUSE))
+        .thenReturn(
+            new LogisticsDependencyGateway.DriverBoardSnapshot(
+                WAREHOUSE, WORK_QUEUE, 0, List.of(), List.of()));
+    when(dependencies.registerDriverTask(
+            eq(WAREHOUSE),
+            any(),
+            any(),
+            any(),
+            any(),
+            any(),
+            eq(QUEUE_DEFINITION),
+            any(),
+            anyInt()))
+        .thenAnswer(
+            invocation -> {
+              UUID externalTaskId = invocation.getArgument(1);
+              UUID localTaskId = invocation.getArgument(2);
+              LocalDate scheduledDate = invocation.getArgument(7);
+              int priority = invocation.getArgument(8);
+              LogisticsDependencyGateway.DriverBoardTask registered =
+                  new LogisticsDependencyGateway.DriverBoardTask(
+                      UUID.nameUUIDFromBytes(("board:" + localTaskId).getBytes()),
+                      0,
+                      WAREHOUSE,
+                      externalTaskId,
+                      "Переместить бытовку на производство",
+                      "БЫТ-901",
+                      "Переместить бытовку на производство",
+                      "ACTIVE",
+                      scheduledDate,
+                      "SCHEDULED",
+                      priority,
+                      false,
+                      null,
+                      UUID.nameUUIDFromBytes(("entry:" + localTaskId).getBytes()),
+                      0,
+                      "WAITING",
+                      0);
+              boardTask.set(registered);
+              registrations.incrementAndGet();
+              return registered;
+            });
+    when(dependencies.readDriverTask(any()))
+        .thenAnswer(
+            invocation -> {
+              LogisticsDependencyGateway.DriverBoardTask value = boardTask.get();
+              assertThat(value).isNotNull();
+              assertThat(invocation.getArgument(0, UUID.class)).isEqualTo(value.externalTaskId());
+              return value;
+            });
+    when(dependencies.setDriverTaskLane(any(), anyLong(), eq("CURRENT")))
+        .thenAnswer(
+            invocation -> {
+              LogisticsDependencyGateway.DriverBoardTask scheduled = boardTask.get();
+              assertThat(invocation.getArgument(0, UUID.class))
+                  .isEqualTo(scheduled.externalTaskId());
+              assertThat(invocation.getArgument(1, Long.class))
+                  .isEqualTo(scheduled.taskVersion());
+              LogisticsDependencyGateway.DriverBoardTask current =
+                  new LogisticsDependencyGateway.DriverBoardTask(
+                      scheduled.taskId(),
+                      scheduled.taskVersion() + 1,
+                      scheduled.warehouseId(),
+                      scheduled.externalTaskId(),
+                      scheduled.title(),
+                      scheduled.unitNumber(),
+                      scheduled.taskText(),
+                      scheduled.status(),
+                      scheduled.scheduledDate(),
+                      "CURRENT",
+                      scheduled.priority(),
+                      scheduled.pinned(),
+                      scheduled.doneAt(),
+                      scheduled.entryId(),
+                      scheduled.entryVersion() + 1,
+                      scheduled.entryStatus(),
+                      scheduled.queuePosition());
+              boardTask.set(current);
+              return current;
+            });
+  }
+
+  @Test
+  void promotesCapitalRepairToCurrentDespiteFullOrdinaryCapacityAndReplaysTheSameTask()
+      throws Exception {
+    UUID idempotencyKey = UUID.randomUUID();
+
+    mvc.perform(promote(idempotencyKey))
+        .andExpect(status().isCreated())
+        .andExpect(jsonPath("$.sourceType").value("CAPITAL_REPAIR"))
+        .andExpect(jsonPath("$.kind").value("CAPITAL_TO_PRODUCTION"))
+        .andExpect(jsonPath("$.state").value("CURRENT"));
+
+    mvc.perform(promote(idempotencyKey))
+        .andExpect(status().isOk())
+        .andExpect(header().string("Idempotency-Replayed", "true"))
+        .andExpect(jsonPath("$.state").value("CURRENT"));
+
+    assertThat(registrations).hasValue(1);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                  from driver_logistics_task
+                 where source_type = 'CAPITAL_REPAIR'
+                   and source_id = ?
+                   and task_kind = 'CAPITAL_TO_PRODUCTION'
+                """,
+                Long.class,
+                REPAIR))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
+                """
+                select count(*)
+                  from driver_logistics_task
+                 where repair_id = ?
+                   and task_kind = 'DELIVER_TO_REPAIR'
+                """,
+                Long.class,
+                REPAIR))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select state from driver_logistics_task where source_id = ?",
+                String.class,
+                REPAIR))
+        .isEqualTo("CURRENT");
+    verify(dependencies, never())
+        .transitionRepairPlace(any(), any(), any(), anyLong(), any());
+    verify(dependencies, times(1)).setDriverTaskLane(any(), anyLong(), eq("CURRENT"));
+  }
+
+  private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder promote(
+      UUID idempotencyKey) {
+    return post("/api/logistics/v1/driver-board/capital-repairs/{repairId}/promote", REPAIR)
+        .header("Idempotency-Key", idempotencyKey)
+        .contentType(MediaType.APPLICATION_JSON)
+        .content("{\"warehouseId\":\"%s\"}".formatted(WAREHOUSE))
+        .with(actor());
+  }
+
+  private static JwtRequestPostProcessor actor() {
+    return jwt()
+        .jwt(
+            value ->
+                value
+                    .subject(ACTOR.toString())
+                    .claim("principal_type", "USER")
+                    .claim("scope", "rwms.write")
+                    .claim(
+                        "warehouse_access",
+                        List.of(Map.of("warehouseId", WAREHOUSE.toString(), "level", "EDIT"))));
+  }
+}

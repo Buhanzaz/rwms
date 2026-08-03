@@ -109,6 +109,42 @@ func TestImageProcessorAutoRotatesEXIFJPEGBeforeGeneratingVariants(t *testing.T)
 	assertEXIFOrientationSix(t, decodeWebP(t, store.objects[large.ObjectKey]))
 }
 
+func TestImageProcessorAppliesExplicitRotationAfterEXIFOrientation(t *testing.T) {
+	const (
+		sourceWidth  = 80
+		sourceHeight = 40
+	)
+	store := newMemoryObjectStore(map[string][]byte{
+		"media/m-1/source/upload.jpg": testJPEGWithEXIFOrientation(t, sourceWidth, sourceHeight, 6),
+	})
+	result, err := (ImageProcessor{Store: store, Limits: testProcessingLimits()}).Process(context.Background(), ImageProcessRequest{
+		MediaID:         "m-1",
+		SourceObjectKey: "media/m-1/source/upload.jpg",
+		SourceVersionID: "version-1",
+		Generation:      1,
+		Rotation:        Rotation90,
+		Variants: VariantConfiguration{
+			SmallLongEdge:  80,
+			MediumLongEdge: 80,
+			LargeLongEdge:  80,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Process() error = %v", err)
+	}
+
+	// Orientation 6 makes the raw 80x40 frame upright as 40x80.  The
+	// explicit 90 degree action is then applied to that upright frame, not to
+	// the original sideways pixels.
+	if got, want := [2]int{result.Original.Width, result.Original.Height}, [2]int{sourceWidth, sourceHeight}; got != want {
+		t.Fatalf("canonical dimensions = %v, want %v after EXIF and explicit rotation", got, want)
+	}
+	assertQuadrants(t, decodeJPEG(t, store.objects[result.Original.ObjectKey]), []string{
+		"yellow", "blue",
+		"green", "red",
+	})
+}
+
 func processedVariant(t *testing.T, variants []ProcessedVariant, wanted Variant) ProcessedVariant {
 	t.Helper()
 	for _, variant := range variants {
@@ -148,6 +184,17 @@ func assertEXIFOrientationSix(t *testing.T, decoded image.Image) {
 	if got, want := [2]int{bounds.Dx(), bounds.Dy()}, [2]int{40, 80}; got != want {
 		t.Fatalf("decoded dimensions = %v, want %v", got, want)
 	}
+	assertQuadrants(t, decoded, []string{
+		"blue", "red",
+		"yellow", "green",
+	})
+}
+
+func assertQuadrants(t *testing.T, decoded image.Image, wanted []string) {
+	t.Helper()
+	if len(wanted) != 4 {
+		t.Fatalf("quadrant expectations = %d, want 4", len(wanted))
+	}
 
 	tests := []struct {
 		name string
@@ -155,13 +202,14 @@ func assertEXIFOrientationSix(t *testing.T, decoded image.Image) {
 		y    int
 		want string
 	}{
-		{name: "top left", x: 10, y: 20, want: "blue"},
-		{name: "top right", x: 30, y: 20, want: "red"},
-		{name: "bottom left", x: 10, y: 60, want: "yellow"},
-		{name: "bottom right", x: 30, y: 60, want: "green"},
+		{name: "top left", x: decoded.Bounds().Dx() / 4, y: decoded.Bounds().Dy() / 4, want: wanted[0]},
+		{name: "top right", x: 3 * decoded.Bounds().Dx() / 4, y: decoded.Bounds().Dy() / 4, want: wanted[1]},
+		{name: "bottom left", x: decoded.Bounds().Dx() / 4, y: 3 * decoded.Bounds().Dy() / 4, want: wanted[2]},
+		{name: "bottom right", x: 3 * decoded.Bounds().Dx() / 4, y: 3 * decoded.Bounds().Dy() / 4, want: wanted[3]},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			bounds := decoded.Bounds()
 			assertDominantColour(t, decoded.At(bounds.Min.X+test.x, bounds.Min.Y+test.y), test.want)
 		})
 	}

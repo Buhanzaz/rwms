@@ -39,7 +39,7 @@ class GatewayJwtValidationIntegrationTest {
   private static final String ISSUER = "http://gateway.test/auth";
   private static final String AUDIENCE = "rwms-services";
   private static final AtomicInteger DOWNSTREAM_REQUESTS = new AtomicInteger();
-  private static HttpServer jwksServer;
+  private static HttpServer auth;
   private static HttpServer downstream;
   private static KeyPair signingKey;
   private static KeyPair wrongKey;
@@ -50,8 +50,8 @@ class GatewayJwtValidationIntegrationTest {
   static void startServers() throws Exception {
     signingKey = keyPair();
     wrongKey = keyPair();
-    jwksServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-    jwksServer.createContext(
+    auth = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    auth.createContext(
         "/oauth2/jwks",
         exchange -> {
           RSAKey publicJwk =
@@ -64,7 +64,7 @@ class GatewayJwtValidationIntegrationTest {
           exchange.getResponseBody().write(body);
           exchange.close();
         });
-    jwksServer.start();
+    auth.start();
 
     downstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     downstream.createContext(
@@ -79,14 +79,14 @@ class GatewayJwtValidationIntegrationTest {
 
   @AfterAll
   static void stopServers() {
-    jwksServer.stop(0);
+    auth.stop(0);
     downstream.stop(0);
   }
 
   @DynamicPropertySource
   static void properties(DynamicPropertyRegistry registry) {
     registry.add("rwms.gateway.public-base-uri", () -> "http://gateway.test");
-    registry.add("rwms.gateway.routes.auth-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
+    registry.add("rwms.gateway.routes.auth-uri", GatewayJwtValidationIntegrationTest::authOrigin);
     registry.add("rwms.gateway.routes.task-board-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
     registry.add("rwms.gateway.routes.warehouse-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
     registry.add("rwms.gateway.routes.asset-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
@@ -99,9 +99,6 @@ class GatewayJwtValidationIntegrationTest {
     registry.add("rwms.gateway.routes.assistant-uri", GatewayJwtValidationIntegrationTest::downstreamOrigin);
     registry.add("rwms.gateway.security.issuer", () -> ISSUER);
     registry.add("rwms.gateway.security.audience", () -> AUDIENCE);
-    registry.add(
-        "rwms.gateway.security.jwk-set-uri",
-        () -> "http://127.0.0.1:" + jwksServer.getAddress().getPort() + "/oauth2/jwks");
     registry.add("rwms.gateway.cors.allowed-origins", () -> "https://panel.example");
   }
 
@@ -188,6 +185,10 @@ class GatewayJwtValidationIntegrationTest {
 
   private static String downstreamOrigin() {
     return "http://127.0.0.1:" + downstream.getAddress().getPort();
+  }
+
+  private static String authOrigin() {
+    return "http://127.0.0.1:" + auth.getAddress().getPort();
   }
 
 }

@@ -47,18 +47,18 @@ public final class ApiModels {
       String description,
       String comment,
       int sortOrder,
-      boolean active) {}
+      boolean active,
+      boolean logisticsPrimary) {}
 
   public record QueueBindingRequest(
       @NotNull UUID workerClassId,
       @Min(0) int order,
       boolean stopTaskOnTake,
-      ParticipationPolicy participationPolicy,
+      @NotNull ParticipationPolicy participationPolicy,
       boolean notifyOnPrimaryTake) {
     public QueueBindingRequest(UUID workerClassId, boolean stopTaskOnTake) {
       this(workerClassId, 0, stopTaskOnTake, ParticipationPolicy.PRIMARY, false);
     }
-
   }
 
   public record QueueDefinitionRequest(
@@ -81,6 +81,7 @@ public final class ApiModels {
       QueueType type,
       QueuePurpose purpose) {}
 
+  /** A warehouse-local connection to one immutable shared queue definition. */
   public record WorkQueueRequest(
       @NotNull @Min(0) Long version,
       @NotNull UUID definitionId,
@@ -92,6 +93,17 @@ public final class ApiModels {
       boolean notifyWhenThresholdReached,
       @Min(0) @Max(20) Integer resultPhotoMinCount,
       List<@Valid QueueBindingRequest> bindings) {}
+
+  public record DriverQueueRequest(
+      @NotNull @Min(0) Long expectedVersion,
+      boolean active,
+      boolean hidden,
+      boolean collapsed,
+      @Min(0) Integer holdingPeriodMinutes,
+      @Min(0) Integer notificationThreshold,
+      boolean notifyWhenThresholdReached,
+      @NotNull @Min(0) @Max(20) Integer resultPhotoMinCount,
+      @NotNull List<@Valid QueueBindingRequest> bindings) {}
 
   public record QueueBindingDto(
       UUID id,
@@ -643,6 +655,7 @@ public final class ApiModels {
   public record MoveExternalLogisticsTaskRequest(
       @NotNull @Min(0) Long expectedTaskVersion,
       @NotNull @Min(0) Long expectedEntryVersion,
+      @NotNull TaskLane targetLane,
       @NotNull LocalDate targetDate,
       @NotNull @Min(0) Integer targetIndex) {}
 

@@ -33,8 +33,8 @@ class PlannedDurationInvariantTest {
         new MaintenanceDependencyGateway.TaskStage(
             UUID.randomUUID(),
             0,
-            RepairStageKind.MOVE_TO_REPAIR,
-            "Move",
+            RepairStageKind.REPAIR_WORK,
+            "Repair",
             UUID.randomUUID(),
             null,
             List.of(),
@@ -52,8 +52,8 @@ class PlannedDurationInvariantTest {
         new MaintenanceDependencyGateway.TaskStage(
             UUID.randomUUID(),
             0,
-            RepairStageKind.MOVE_TO_REPAIR,
-            "Move",
+            RepairStageKind.REPAIR_WORK,
+            "Repair",
             UUID.randomUUID(),
             null,
             List.of(),

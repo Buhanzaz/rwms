@@ -54,6 +54,9 @@ class LogisticsContractFoundationTest {
             "/api/logistics/v1/orders",
             "/api/logistics/v1/orders/{orderId}",
             "/api/logistics/v1/orders/{orderId}/save",
+            "/api/logistics/v1/orders/{orderId}/rental-terms",
+            "/api/logistics/v1/orders/{orderId}/rental-terms/extend",
+            "/api/logistics/v1/orders/{orderId}/shipments",
             "/api/logistics/v1/orders/{orderId}/available-units",
             "/api/logistics/v1/orders/{orderId}/units",
             "/api/logistics/v1/orders/{orderId}/units/{unitId}/desired-equipment",
@@ -89,6 +92,12 @@ class LogisticsContractFoundationTest {
             "CreateOrderRequest",
             "OrderDetail",
             "OrderUnit",
+            "OrderRentalTerm",
+            "OrderRentalTermInput",
+            "SetOrderRentalTermsRequest",
+            "OrderRentalTermExtensionInput",
+            "ExtendOrderRentalTermsRequest",
+            "CreateOrderRentalShipmentRequest",
             "OrderDesiredEquipment",
             "SetOrderUnitDesiredEquipmentRequest",
             "OrderHistoryEvent",
@@ -188,6 +197,9 @@ class LogisticsContractFoundationTest {
             "updateOrder",
             "cancelOrder",
             "saveOrder",
+            "setOrderRentalTerms",
+            "extendOrderRentalTerms",
+            "createOrderRentalShipment",
             "searchOrderClients",
             "createOrderClient",
             "selectOrderWarehouse",
@@ -405,7 +417,7 @@ class LogisticsContractFoundationTest {
 
     Map<String, Object> orderUnit = child(schemas, "OrderUnit");
     assertThat(child(orderUnit, "properties"))
-        .containsOnlyKeys("reservationId", "added", "unit", "desiredContents");
+        .containsOnlyKeys("reservationId", "added", "unit", "desiredContents", "rentalTerm");
     Map<String, Object> history = child(schemas, "OrderHistoryEvent");
     assertThat(child(history, "properties"))
         .containsKeys("actorSubjectId", "occurredAt")

@@ -45,9 +45,6 @@ public class FindingPlanStage {
   @Column(name = "routing_queue_type", nullable = false, length = 64)
   private String routingQueueType;
 
-  @Column(name = "movement_required", nullable = false)
-  private boolean movementRequired;
-
   @Column(name = "photo_required", nullable = false)
   private boolean photoRequired;
 
@@ -67,13 +64,12 @@ public class FindingPlanStage {
       UUID routingQueueId,
       String routingQueueName,
       String routingQueueType,
-      boolean movementRequired,
       boolean photoRequired,
       String safeSnapshot) {
     if (findingId == null
         || findingRevision < 0
         || stageNo < 0
-        || blank(stageKind, 32)
+        || !"REPAIR_WORK".equals(stageKind)
         || catalogNodeId == null
         || blank(catalogNodeName, 255)
         || routingQueueId == null
@@ -91,7 +87,6 @@ public class FindingPlanStage {
     this.routingQueueId = routingQueueId;
     this.routingQueueName = routingQueueName.trim();
     this.routingQueueType = routingQueueType.trim();
-    this.movementRequired = movementRequired;
     this.photoRequired = photoRequired;
     this.safeSnapshot = safeSnapshot;
   }
@@ -110,7 +105,6 @@ public class FindingPlanStage {
   public UUID getRoutingQueueId() { return routingQueueId; }
   public String getRoutingQueueName() { return routingQueueName; }
   public String getRoutingQueueType() { return routingQueueType; }
-  public boolean isMovementRequired() { return movementRequired; }
   public boolean isPhotoRequired() { return photoRequired; }
   public String getSafeSnapshot() { return safeSnapshot; }
 }

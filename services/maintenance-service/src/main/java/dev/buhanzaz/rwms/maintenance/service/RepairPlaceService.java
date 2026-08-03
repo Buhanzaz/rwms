@@ -73,21 +73,23 @@ public class RepairPlaceService {
         count(values, RepairPlaceAllocationState.OCCUPIED);
     long ready =
         count(values, RepairPlaceAllocationState.READY_TO_RELEASE);
-    long consumed = reserved + occupied + ready;
+    long physicalLoad = reserved + occupied + ready;
+    long schedulingLoad = schedulingLoad(reserved, occupied, ready);
     return new RepairPlaceProjectionResponse(
         warehouseId,
         placeCount,
         reserved,
         occupied,
         ready,
-        Math.max(0, placeCount - consumed),
-        consumed > placeCount,
+        Math.max(0, placeCount - physicalLoad),
+        schedulingLoad > placeCount,
         values);
   }
 
   @Transactional(readOnly = true)
   public LogisticsRepairPlaceProjectionResponse logisticsProjection(UUID warehouseId) {
-    int placeCount = capacity.get(warehouseId).repairPlaceCount();
+    var settings = capacity.get(warehouseId);
+    int placeCount = settings.repairPlaceCount();
     List<RepairPlaceAllocation> allocationEntities =
         allocations.findAllByWarehouseIdAndStateInOrderByCreatedAtAscIdAsc(
             warehouseId, CONSUMING_STATES);
@@ -117,16 +119,27 @@ public class RepairPlaceService {
     long occupied = countLogistics(values, RepairPlaceAllocationState.OCCUPIED);
     long ready =
         countLogistics(values, RepairPlaceAllocationState.READY_TO_RELEASE);
-    long consumed = reserved + occupied + ready;
+    long physicalLoad = reserved + occupied + ready;
+    long schedulingLoad = schedulingLoad(reserved, occupied, ready);
     return new LogisticsRepairPlaceProjectionResponse(
         warehouseId,
         placeCount,
+        settings.automaticRefillDelayMinutes(),
         reserved,
         occupied,
         ready,
-        Math.max(0, placeCount - consumed),
-        consumed > placeCount,
+        Math.max(0, placeCount - physicalLoad),
+        schedulingLoad > placeCount,
         values);
+  }
+
+  @Transactional(readOnly = true)
+  public boolean isOccupied(UUID warehouseId, UUID repairId) {
+    if (warehouseId == null || repairId == null) {
+      throw new IllegalArgumentException("Repair-place identity is required");
+    }
+    return allocations.existsByWarehouseIdAndRepairIdAndState(
+        warehouseId, repairId, RepairPlaceAllocationState.OCCUPIED);
   }
 
   @Transactional
@@ -151,23 +164,36 @@ public class RepairPlaceService {
               allocations.findByRepairIdForUpdate(repairId).orElse(null);
           if (existing != null) {
             return requireIdempotent(
-                existing, RepairPlaceAllocationState.RESERVED, expectedVersion);
+                existing,
+                repair.getRentalItemId(),
+                RepairPlaceAllocationState.RESERVED,
+                expectedVersion);
           }
           if (expectedVersion != 0) {
             throw versionConflict(repairId, expectedVersion, null);
           }
-          long consumed =
-              allocations.countByWarehouseIdAndStateIn(warehouseId, CONSUMING_STATES);
+          long reserved =
+              allocations.countByWarehouseIdAndState(
+                  warehouseId, RepairPlaceAllocationState.RESERVED);
+          long occupied =
+              allocations.countByWarehouseIdAndState(
+                  warehouseId, RepairPlaceAllocationState.OCCUPIED);
+          long ready =
+              allocations.countByWarehouseIdAndState(
+                  warehouseId, RepairPlaceAllocationState.READY_TO_RELEASE);
           int limit = capacity.get(warehouseId).repairPlaceCount();
-          if (consumed >= limit) {
+          long loadAfterReservation =
+              schedulingLoad(reserved + 1, occupied, ready);
+          if (loadAfterReservation > limit) {
             throw new MaintenanceConflictException(
                 "MAINTENANCE_STATE_CONFLICT",
-                "Warehouse %s has no available repair place (%d/%d)"
-                    .formatted(warehouseId, consumed, limit));
+                "Warehouse %s has no available or paired repair place (%d/%d)"
+                    .formatted(warehouseId, loadAfterReservation, limit));
           }
-          return response(
+          return logisticsResponse(
               allocations.saveAndFlush(
-                  RepairPlaceAllocation.reserve(warehouseId, repair.getId())));
+                  RepairPlaceAllocation.reserve(warehouseId, repair.getId())),
+              repair.getRentalItemId());
         });
   }
 
@@ -231,11 +257,14 @@ public class RepairPlaceService {
     }
     if (value.getState() == RepairPlaceAllocationState.OCCUPIED) {
       value.readyToRelease();
-      allocations.saveAndFlush(value);
+      // Do not flush the whole persistence context here. This method joins the
+      // repair completion transaction, whose aggregate event must observe one
+      // coherent repair version after every completion mutation is applied.
+      allocations.save(value);
     }
   }
 
-  private RepairPlaceAllocationResponse transition(
+  private LogisticsRepairPlaceAllocationResponse transition(
       UUID warehouseId,
       UUID repairId,
       long expectedVersion,
@@ -256,7 +285,7 @@ public class RepairPlaceService {
       throw versionConflict(repairId, expectedVersion, value.getVersion());
     }
     if (value.getState() == target) {
-      return response(value);
+      return logisticsResponse(value, repair.getRentalItemId());
     }
     try {
       switch (target) {
@@ -270,15 +299,16 @@ public class RepairPlaceService {
       throw new MaintenanceConflictException(
           "MAINTENANCE_STATE_CONFLICT", exception.getMessage());
     }
-    return response(allocations.saveAndFlush(value));
+    return logisticsResponse(allocations.saveAndFlush(value), repair.getRentalItemId());
   }
 
-  private RepairPlaceAllocationResponse requireIdempotent(
+  private LogisticsRepairPlaceAllocationResponse requireIdempotent(
       RepairPlaceAllocation value,
+      UUID rentalItemId,
       RepairPlaceAllocationState target,
       long expectedVersion) {
     if (value.getState() == target && value.getVersion() == expectedVersion) {
-      return response(value);
+      return logisticsResponse(value, rentalItemId);
     }
     if (value.getState() == target) {
       throw versionConflict(value.getRepairId(), expectedVersion, value.getVersion());
@@ -333,13 +363,23 @@ public class RepairPlaceService {
     return values.stream().filter(value -> value.state() == state).count();
   }
 
+  /**
+   * A ready-to-release cabin and the inbound cabin queued immediately behind
+   * its removal share one scheduling slot. Both remain explicit allocations,
+   * while the ordered logistics lane guarantees that removal is actionable
+   * first.
+   */
+  private static long schedulingLoad(long reserved, long occupied, long ready) {
+    return occupied + Math.max(reserved, ready);
+  }
+
   private TransitionResult command(
       String operation,
       UUID warehouseId,
       UUID repairId,
       long expectedVersion,
       UUID idempotencyKey,
-      java.util.function.Supplier<RepairPlaceAllocationResponse> action) {
+      java.util.function.Supplier<LogisticsRepairPlaceAllocationResponse> action) {
     String scope =
         "rp.%s:%s".formatted(operationCode(operation), repairId);
     String requestHash =
@@ -350,9 +390,9 @@ public class RepairPlaceService {
         idempotency.replay(
             LOGISTICS_SERVICE_SUBJECT, scope, idempotencyKey, requestHash);
     if (replay.isPresent()) {
-      return new TransitionResult(read(replay.orElseThrow()), true);
+      return new TransitionResult(read(replay.orElseThrow(), warehouseId, repairId), true);
     }
-    RepairPlaceAllocationResponse response = action.get();
+    LogisticsRepairPlaceAllocationResponse response = action.get();
     idempotency.store(
         LOGISTICS_SERVICE_SUBJECT,
         scope,
@@ -363,9 +403,22 @@ public class RepairPlaceService {
     return new TransitionResult(response, false);
   }
 
-  private RepairPlaceAllocationResponse read(JsonNode value) {
+  private LogisticsRepairPlaceAllocationResponse read(
+      JsonNode value, UUID warehouseId, UUID repairId) {
     try {
-      return mapper.treeToValue(value, RepairPlaceAllocationResponse.class);
+      LogisticsRepairPlaceAllocationResponse response =
+          mapper.treeToValue(value, LogisticsRepairPlaceAllocationResponse.class);
+      if (response.rentalItemId() != null) return response;
+      MaintenanceRepair repair = requireRepairIdentity(warehouseId, repairId);
+      return new LogisticsRepairPlaceAllocationResponse(
+          response.id(),
+          response.version(),
+          response.warehouseId(),
+          response.repairId(),
+          repair.getRentalItemId(),
+          response.state(),
+          response.createdAt(),
+          response.updatedAt());
     } catch (JacksonException exception) {
       throw new IllegalStateException(
           "Stored repair-place transition response is invalid", exception);
@@ -382,8 +435,9 @@ public class RepairPlaceService {
     };
   }
 
-  private RepairPlaceAllocationResponse response(RepairPlaceAllocation value) {
-    return responseMapper.toResponse(value);
+  private LogisticsRepairPlaceAllocationResponse logisticsResponse(
+      RepairPlaceAllocation value, UUID rentalItemId) {
+    return responseMapper.toLogisticsResponse(value, rentalItemId);
   }
 
   private static MaintenanceConflictException versionConflict(
@@ -396,5 +450,5 @@ public class RepairPlaceService {
   }
 
   public record TransitionResult(
-      RepairPlaceAllocationResponse response, boolean replayed) {}
+      LogisticsRepairPlaceAllocationResponse response, boolean replayed) {}
 }

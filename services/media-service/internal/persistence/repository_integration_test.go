@@ -232,6 +232,10 @@ func TestRepositoryConcurrencyOwnerProofCursorAndOutboxIntegration(t *testing.T)
 	if err != nil || firstJob.Duplicate {
 		t.Fatalf("first processing claim = %#v, %v", firstJob, err)
 	}
+	if firstJob.Job.OwnerType != OwnerTypeInventoryFinding || firstJob.Job.OwnerID != ownerID.String() {
+		t.Fatalf("processing claim owner = %s/%s, want %s/%s", firstJob.Job.OwnerType,
+			firstJob.Job.OwnerID, OwnerTypeInventoryFinding, ownerID)
+	}
 	assertReplayParity(t, ctx, repository, command.MediaID)
 	if err := repository.ReleaseProcessingLeases(ctx, "integration-worker-1"); err != nil {
 		t.Fatalf("ReleaseProcessingLeases(): %v", err)

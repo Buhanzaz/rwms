@@ -1,4 +1,5 @@
 package dev.buhanzaz.rwms.taskboard;
+import static dev.buhanzaz.rwms.taskboard.QueueFixtureModels.*;
 
 import static dev.buhanzaz.rwms.taskboard.api.ApiModels.*;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -81,7 +82,7 @@ class MaintenanceRoutingPrerequisiteIntegrationTest extends PostgresIntegrationT
         registry.createQueueDefinition(
             new QueueDefinitionRequest(
                 0L, "Внутренние работы", null, QueueType.REPAIR));
-    var binding = registry.createQueue(MSK, binding(definition.id(), true, false));
+    var binding = QueueRegistryTestFixtures.create(registry, jdbc, MSK, binding(definition.id(), true, false));
 
     mvc.perform(
             post(WAREHOUSE_PREFLIGHT)
@@ -118,7 +119,7 @@ class MaintenanceRoutingPrerequisiteIntegrationTest extends PostgresIntegrationT
         .andExpect(jsonPath("$.missingWarehouseBindingDefinitionIds[0]")
             .value(definition.id().toString()));
 
-    var binding = registry.createQueue(MSK, binding(definition.id(), false, true));
+    var binding = QueueRegistryTestFixtures.create(registry, jdbc, MSK, binding(definition.id(), false, true));
     mvc.perform(
             post(WAREHOUSE_PREFLIGHT)
                 .with(exactMaintenanceJwt())
@@ -135,28 +136,30 @@ class MaintenanceRoutingPrerequisiteIntegrationTest extends PostgresIntegrationT
   }
 
   @Test
-  void catalogReferenceBelongsToDefinitionAndDoesNotBlockWarehouseDetach() {
+  void catalogReferenceBlocksGlobalDefinitionDeleteAndKeepsWarehouseProjection() {
     var definition =
         registry.createQueueDefinition(
             new QueueDefinitionRequest(0L, "Сварка", null, QueueType.REPAIR));
-    var binding = registry.createQueue(SPB, binding(definition.id(), true, false));
+    var binding = QueueRegistryTestFixtures.create(registry, jdbc, SPB, binding(definition.id(), true, false));
     var reference =
         registry.registerReference(
             definition.id(),
             new QueueReferenceRequest(
                 QueueReferenceType.CATALOG_POSITION, "catalog-position-1"));
 
-    registry.deleteQueue(SPB, binding.id(), binding.version());
-    assertThat(registry.listQueues(SPB)).isEmpty();
     assertThatThrownBy(
             () ->
                 registry.deleteQueueDefinition(
                     definition.id(), definition.version()))
         .isInstanceOf(ConflictException.class)
         .hasMessageContaining("каталог");
+    assertThat(registry.listQueues(SPB))
+        .extracting(WorkQueueDto::id)
+        .containsExactly(binding.id());
 
     registry.deleteReference(
         reference.type(), reference.externalReferenceId(), reference.version());
+    registry.deleteQueue(SPB, binding.id(), binding.version());
     registry.deleteQueueDefinition(definition.id(), definition.version());
     assertThat(registry.listQueueDefinitions()).isEmpty();
   }
@@ -188,8 +191,8 @@ class MaintenanceRoutingPrerequisiteIntegrationTest extends PostgresIntegrationT
         .andExpect(status().isForbidden());
   }
 
-  private WorkQueueRequest binding(UUID definitionId, boolean active, boolean hidden) {
-    return new WorkQueueRequest(
+  private QueueFixtureRequest binding(UUID definitionId, boolean active, boolean hidden) {
+    return new QueueFixtureRequest(
         0L,
         definitionId,
         active,

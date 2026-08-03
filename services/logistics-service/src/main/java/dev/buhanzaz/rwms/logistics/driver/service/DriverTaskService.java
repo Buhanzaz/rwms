@@ -91,10 +91,35 @@ public class DriverTaskService {
   @Transactional
   public CreateResult ensureRemovalTask(
       UUID warehouseId, UUID repairId, UUID cabinId) {
+    if (warehouseId == null || repairId == null || cabinId == null) {
+      throw new IllegalArgumentException("Removal task warehouse, repair and cabin are required");
+    }
     UUID idempotencyKey =
         UUID.nameUUIDFromBytes(
             ("driver-removal:" + warehouseId + ":" + repairId)
                 .getBytes(StandardCharsets.UTF_8));
+    tasks.acquireTransactionLock(
+        "driver-task:create:"
+            + DriverTaskSourceType.REPAIR_PLACE
+            + ":"
+            + repairId
+            + ":"
+            + DriverTaskKind.REMOVE_FROM_REPAIR);
+    DriverLogisticsTask existing =
+        tasks.findByCreatedBySubjectIdAndIdempotencyKey(SYSTEM_ACTOR, idempotencyKey).orElse(null);
+    if (existing == null) {
+      existing =
+          tasks
+              .findBySourceTypeAndSourceIdAndKind(
+                  DriverTaskSourceType.REPAIR_PLACE,
+                  repairId,
+                  DriverTaskKind.REMOVE_FROM_REPAIR)
+              .orElse(null);
+    }
+    if (existing != null) {
+      requireMatchingRemovalContext(existing, warehouseId, repairId, cabinId);
+      return new CreateResult(mapper.toResponse(existing), true, false);
+    }
     return createInternal(
         SYSTEM_ACTOR,
         idempotencyKey,
@@ -108,7 +133,21 @@ public class DriverTaskService {
             DriverTaskPlanningMode.AUTO,
             null,
             3,
-            false));
+            false,
+            null));
+  }
+
+  private static void requireMatchingRemovalContext(
+      DriverLogisticsTask task, UUID warehouseId, UUID repairId, UUID cabinId) {
+    if (task.getSourceType() != DriverTaskSourceType.REPAIR_PLACE
+        || task.getKind() != DriverTaskKind.REMOVE_FROM_REPAIR
+        || !warehouseId.equals(task.getWarehouseId())
+        || !repairId.equals(task.getSourceId())
+        || !repairId.equals(task.getRepairId())
+        || !cabinId.equals(task.getCabinId())) {
+      throw new LogisticsConflictException(
+          "Существующее задание на вывоз не совпадает с фактическим ремонтным местом");
+    }
   }
 
   @Transactional
@@ -136,7 +175,8 @@ public class DriverTaskService {
             DriverTaskPlanningMode.AUTO,
             null,
             repair.priority(),
-            true));
+            true,
+            null));
   }
 
   private CreateResult createInternal(
@@ -214,6 +254,7 @@ public class DriverTaskService {
                 request.planningMode(),
                 scheduledDate,
                 request.priority(),
+                request.comment(),
                 cabin.number(),
                 queue.queueDefinitionId(),
                 actorSubjectId,
@@ -223,6 +264,14 @@ public class DriverTaskService {
   }
 
   private static void validateSource(CreateDriverTaskRequest request) {
+    boolean manualMovement = request.sourceType() == DriverTaskSourceType.MANUAL;
+    if (manualMovement != (request.kind() == DriverTaskKind.GENERAL_MOVEMENT)) {
+      throw new IllegalArgumentException(
+          "MANUAL source is allowed only for GENERAL_MOVEMENT");
+    }
+    if (manualMovement && (request.comment() == null || request.comment().isBlank())) {
+      throw new IllegalArgumentException("Manual movement comment is required");
+    }
     if (request.kind() == DriverTaskKind.CAPITAL_TO_PRODUCTION
         && request.sourceType() != DriverTaskSourceType.CAPITAL_REPAIR) {
       throw new IllegalArgumentException(
@@ -259,8 +308,14 @@ public class DriverTaskService {
                 ? "<auto>"
                 : scheduledDate.toString(),
             request.priority().toString(),
+            normalizedComment(request.comment()),
             unitNumber,
             queueDefinitionId.toString()));
+  }
+
+  private static String normalizedComment(String value) {
+    if (value == null || value.isBlank()) return null;
+    return value.trim();
   }
 
   public record CreateResult(

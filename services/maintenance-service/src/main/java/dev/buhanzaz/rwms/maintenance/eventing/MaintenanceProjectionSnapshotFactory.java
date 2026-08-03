@@ -237,10 +237,14 @@ public class MaintenanceProjectionSnapshotFactory {
     result.put("sourceParty", value.getSourceParty());
     result.put("coverMediaId", text(value.getCoverMediaId()));
     result.put(
+        "movementToRepair", value.isMovementToRepair());
+    result.put(
         "movementToShipment", value.isMovementToShipment());
     result.put(
         "logisticsPlanningMode",
-        value.getLogisticsPlanningMode().name());
+        value.getLogisticsPlanningMode() == null
+            ? null
+            : value.getLogisticsPlanningMode().name());
     result.put(
         "logisticsScheduledDate",
         text(value.getLogisticsScheduledDate()));

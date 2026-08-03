@@ -22,6 +22,7 @@ import (
 	"dev.buhanzaz.rwms/media-service/internal/auth"
 	"dev.buhanzaz.rwms/media-service/internal/media"
 	"dev.buhanzaz.rwms/media-service/internal/persistence"
+	"dev.buhanzaz.rwms/media-service/internal/realtime"
 	"dev.buhanzaz.rwms/media-service/internal/storage"
 	"github.com/google/uuid"
 )
@@ -157,14 +158,20 @@ func (reader *boundedUploadReader) Read(buffer []byte) (int, error) {
 }
 
 type Server struct {
-	repository   repository
-	database     readiness
-	auth         tokenValidator
-	store        objectStore
-	config       Configuration
-	assetImports assetImportService
-	logger       *slog.Logger
-	mux          *http.ServeMux
+	repository    repository
+	database      readiness
+	auth          tokenValidator
+	store         objectStore
+	config        Configuration
+	assetImports  assetImportService
+	logger        *slog.Logger
+	mux           *http.ServeMux
+	invalidations invalidationStream
+}
+
+type invalidationStream interface {
+	realtime.Publisher
+	ServeHTTP(http.ResponseWriter, *http.Request, uuid.UUID)
 }
 
 func NewServer(repository repository, database readiness, validator tokenValidator, store objectStore, configuration Configuration, logger *slog.Logger) (*Server, error) {
@@ -174,7 +181,7 @@ func NewServer(repository repository, database readiness, validator tokenValidat
 	if configuration.MaxUploadBytes <= 0 || configuration.UploadExpiry <= 0 || len(configuration.AllowedMIMETypes) == 0 {
 		return nil, fmt.Errorf("media API limits and allowlist are required")
 	}
-	server := &Server{repository: repository, database: database, auth: validator, store: store, config: configuration, assetImports: configuration.AssetImports, logger: logger, mux: http.NewServeMux()}
+	server := &Server{repository: repository, database: database, auth: validator, store: store, config: configuration, assetImports: configuration.AssetImports, logger: logger, mux: http.NewServeMux(), invalidations: realtime.NewHub()}
 	server.routes()
 	return server, nil
 }
@@ -183,9 +190,16 @@ func (server *Server) Handler() http.Handler {
 	return server.correlation(server.recover(server.mux))
 }
 
+// Invalidations exposes the process-local publisher to asynchronous media
+// workers. The HTTP server remains the sole owner of subscriber lifecycles.
+func (server *Server) Invalidations() realtime.Publisher {
+	return server.invalidations
+}
+
 func (server *Server) routes() {
 	server.mux.HandleFunc("GET /health/live", server.live)
 	server.mux.HandleFunc("GET /health/ready", server.ready)
+	server.mux.HandleFunc("GET /api/media/v1/events", server.events)
 	server.mux.HandleFunc("POST /api/media/v1/upload-sessions", server.createUpload)
 	server.mux.HandleFunc("PUT /api/media/v1/upload-sessions/{uploadSessionId}/content", server.uploadSessionContent)
 	server.mux.HandleFunc("POST /api/media/v1/upload-sessions/{uploadSessionId}/complete", server.finalizeUpload)
@@ -207,6 +221,7 @@ func (server *Server) routes() {
 	server.mux.HandleFunc("GET /api/internal/media/v1/logistics/cabin-presentations/assets/{mediaId}/variants/{variant}/content", server.getLogisticsCabinPresentationVariantContent)
 	server.mux.HandleFunc("/health/live", server.methodNotAllowed)
 	server.mux.HandleFunc("/health/ready", server.methodNotAllowed)
+	server.mux.HandleFunc("/api/media/v1/events", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/upload-sessions", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/upload-sessions/{uploadSessionId}/content", server.methodNotAllowed)
 	server.mux.HandleFunc("/api/media/v1/upload-sessions/{uploadSessionId}/complete", server.methodNotAllowed)
@@ -238,6 +253,26 @@ func (server *Server) notFound(response http.ResponseWriter, request *http.Reque
 
 func (server *Server) live(response http.ResponseWriter, request *http.Request) {
 	writeJSON(response, http.StatusOK, map[string]string{"status": "UP"})
+}
+
+func (server *Server) events(response http.ResponseWriter, request *http.Request) {
+	principal, ok := server.principal(response, request)
+	if !ok {
+		return
+	}
+	warehouseID, err := uuid.Parse(strings.TrimSpace(request.URL.Query().Get("warehouseId")))
+	if err != nil || warehouseID == uuid.Nil {
+		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid warehouse ID")
+		return
+	}
+	if err := principal.Require("rwms.read", warehouseID, auth.View); err != nil {
+		server.problem(response, request, http.StatusForbidden, "MEDIA_FORBIDDEN", "Access is denied")
+		return
+	}
+	// The server keeps a bounded write deadline for every ordinary media
+	// response. Only this authenticated SSE response is allowed to stay open.
+	_ = http.NewResponseController(response).SetWriteDeadline(time.Time{})
+	server.invalidations.ServeHTTP(response, request, warehouseID)
 }
 
 func (server *Server) ready(response http.ResponseWriter, request *http.Request) {
@@ -461,6 +496,9 @@ func (server *Server) setCabinCoverFromTaskEvidence(response http.ResponseWriter
 	if err != nil {
 		server.repositoryProblem(response, request, err)
 		return
+	}
+	if !replayed {
+		server.publishCabinCoverChange(record)
 	}
 	status := http.StatusCreated
 	if replayed {
@@ -712,6 +750,9 @@ func (server *Server) createUpload(response http.ResponseWriter, request *http.R
 		server.repositoryProblem(response, request, err)
 		return
 	}
+	if !replayed {
+		server.publishMediaChange(asset, "MEDIA_CHANGED")
+	}
 	status := http.StatusCreated
 	if replayed {
 		status = http.StatusOK
@@ -840,6 +881,9 @@ func (server *Server) uploadSessionContent(response http.ResponseWriter, request
 	if err != nil {
 		server.repositoryProblem(response, request, err)
 		return
+	}
+	if !replayed {
+		server.publishMediaChange(asset, "MEDIA_CHANGED")
 	}
 	status := http.StatusCreated
 	if replayed {
@@ -1000,6 +1044,9 @@ func (server *Server) finalizeUpload(response http.ResponseWriter, request *http
 	if err != nil {
 		server.repositoryProblem(response, request, err)
 		return
+	}
+	if !replayed {
+		server.publishMediaChange(asset, "MEDIA_CHANGED")
 	}
 	status := http.StatusAccepted
 	if replayed {
@@ -1383,6 +1430,9 @@ func (server *Server) rotate(response http.ResponseWriter, request *http.Request
 		server.repositoryProblem(response, request, err)
 		return
 	}
+	if !replayed {
+		server.publishMediaChange(asset, "MEDIA_CHANGED")
+	}
 	status := http.StatusAccepted
 	if replayed {
 		status = http.StatusOK
@@ -1424,7 +1474,7 @@ func (server *Server) deleteAsset(response http.ResponseWriter, request *http.Re
 		server.problem(response, request, http.StatusBadRequest, "MEDIA_INVALID_REQUEST", "Invalid deletion request")
 		return
 	}
-	asset, _, err := server.repository.Delete(request.Context(), persistence.DeleteCommand{
+	asset, replayed, err := server.repository.Delete(request.Context(), persistence.DeleteCommand{
 		MediaID: mediaID, OwnerType: ownerType, OwnerID: ownerID, WarehouseID: warehouseID,
 		SubjectID: principal.SubjectID, IdempotencyKey: idempotencyKey,
 		RequestSHA256: requestFingerprint(map[string]any{
@@ -1436,6 +1486,9 @@ func (server *Server) deleteAsset(response http.ResponseWriter, request *http.Re
 	if err != nil {
 		server.repositoryProblem(response, request, err)
 		return
+	}
+	if !replayed {
+		server.publishMediaChange(asset, "MEDIA_CHANGED")
 	}
 	response.Header().Set("Cache-Control", "no-store")
 	writeJSON(response, http.StatusOK, assetResponse(asset, nil))
@@ -1568,6 +1621,32 @@ func assetResponse(asset persistence.AssetRecord, variants []any) map[string]any
 		"sortOrder": asset.SortOrder, "sizeBytes": asset.SizeBytes, "createdAt": asset.CreatedAt,
 		"variants": variants,
 	}
+}
+
+func (server *Server) publishMediaChange(asset persistence.AssetRecord, scope string) {
+	if server.invalidations == nil || asset.WarehouseID == uuid.Nil {
+		return
+	}
+	ownerType, ownerID := "", ""
+	if asset.OwnerType == persistence.OwnerTypeCabin {
+		ownerType, ownerID = asset.OwnerType, asset.OwnerID
+	}
+	server.invalidations.Publish(realtime.Event{
+		EventID: uuid.New(), WarehouseID: asset.WarehouseID, Scope: scope,
+		MediaID: asset.ID, OwnerType: ownerType, OwnerID: ownerID,
+		Generation: asset.Generation, Revision: asset.Version, OccurredAt: time.Now().UTC(),
+	})
+}
+
+func (server *Server) publishCabinCoverChange(record persistence.CabinCoverChangeRecord) {
+	if server.invalidations == nil || record.WarehouseID == uuid.Nil {
+		return
+	}
+	server.invalidations.Publish(realtime.Event{
+		EventID: uuid.New(), WarehouseID: record.WarehouseID, Scope: "CABIN_COVER_CHANGED",
+		MediaID: record.MediaID, OwnerType: persistence.OwnerTypeCabin, OwnerID: record.CabinID.String(),
+		Generation: record.Generation, Revision: record.Version, OccurredAt: record.ChangedAt,
+	})
 }
 
 // mediaPrincipal accepts a normal USER token for the established public media

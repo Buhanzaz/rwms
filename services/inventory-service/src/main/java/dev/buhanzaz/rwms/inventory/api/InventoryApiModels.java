@@ -1,5 +1,7 @@
 package dev.buhanzaz.rwms.inventory.api;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import dev.buhanzaz.rwms.inventory.domain.FindingOrigin;
 import dev.buhanzaz.rwms.inventory.domain.ConflictResolutionStrategy;
 import dev.buhanzaz.rwms.inventory.domain.InspectionState;
@@ -61,34 +63,26 @@ public final class InventoryApiModels {
 
   public record PlanStageSelection(
       @NotNull UUID catalogNodeId,
-      @NotBlank @Pattern(regexp = "^(REPAIR_WORK|MOVE_TO_REPAIR|MOVE_FROM_REPAIR)$") String kind,
+      @NotBlank @Pattern(regexp = "^REPAIR_WORK$") String kind,
       @Min(0) int order) {}
 
   public record PlanSelection(
       @NotBlank @Pattern(regexp = "^(AUTO|MANUAL)$") String mode,
       @NotNull @Min(1) @Max(5) Integer priority,
       UUID coverMediaId,
-      @NotNull LogisticsPlanningMode logisticsPlanningMode,
-      LocalDate logisticsScheduledDate,
+      @JsonProperty(required = true) boolean movementToRepair,
+      @JsonProperty(required = true) boolean movementToShipment,
+      @JsonProperty(required = true) LogisticsPlanningMode logisticsPlanningMode,
+      @JsonProperty(required = true) LocalDate logisticsScheduledDate,
       @NotNull @Size(min = 1, max = 2000) List<@Valid PlanLineInput> lines,
       @NotNull @Size(max = 1000) List<@Valid PlanStageSelection> stages) {
-    @AssertTrue(message = "logistics planning must match movement stages")
+    @AssertTrue(
+        message =
+            "inbound logistics planning must be present only when movementToRepair is selected")
+    @JsonIgnore
     public boolean isLogisticsPlanningValid() {
-      if (logisticsPlanningMode == null || stages == null) return false;
-      boolean movementRequired =
-          stages.stream()
-              .anyMatch(
-                  stage ->
-                      "MOVE_TO_REPAIR".equals(stage.kind())
-                          || "MOVE_FROM_REPAIR".equals(stage.kind()));
-      if (!movementRequired) {
-        return logisticsPlanningMode == LogisticsPlanningMode.AUTO
-            && logisticsScheduledDate == null;
-      }
-      return (logisticsPlanningMode == LogisticsPlanningMode.AUTO
-              && logisticsScheduledDate == null)
-          || (logisticsPlanningMode == LogisticsPlanningMode.FIXED_DATE
-              && logisticsScheduledDate != null);
+      return LogisticsPlanningMode.validInboundPlanning(
+          movementToRepair, logisticsPlanningMode, logisticsScheduledDate);
     }
   }
 
@@ -279,6 +273,8 @@ public final class InventoryApiModels {
       String fingerprintSha256,
       int priority,
       UUID coverMediaId,
+      boolean movementToRepair,
+      boolean movementToShipment,
       LogisticsPlanningMode logisticsPlanningMode,
       LocalDate logisticsScheduledDate,
       List<FrozenPlanLineView> lines,
@@ -307,7 +303,6 @@ public final class InventoryApiModels {
       UUID routingQueueId,
       String routingQueueName,
       String routingQueueType,
-      boolean movementRequired,
       boolean photoRequired,
       int normativeDurationMinutes) {}
 

@@ -4,20 +4,26 @@ import dev.buhanzaz.rwms.asset.domain.AssetAggregateType;
 import dev.buhanzaz.rwms.asset.domain.AssetEventType;
 import dev.buhanzaz.rwms.asset.service.AssetChecksum;
 import dev.buhanzaz.rwms.asset.service.AssetConflictException;
+import dev.buhanzaz.rwms.asset.service.AssetInvalidationHub;
 import dev.buhanzaz.rwms.platform.contracts.DomainEventEnvelopeV2;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.JsonNode;
@@ -32,14 +38,17 @@ public class AssetEventStore {
   private final AssetEventPayloadPolicy payloads;
   private final AssetCorrelationContextProvider correlations;
   private final AssetActorReferenceProvider actors;
+  private final AssetInvalidationHub invalidations;
 
   public AssetEventStore(JdbcTemplate jdbc, ObjectMapper mapper, AssetEventPayloadPolicy payloads,
-      AssetCorrelationContextProvider correlations, AssetActorReferenceProvider actors) {
+      AssetCorrelationContextProvider correlations, AssetActorReferenceProvider actors,
+      AssetInvalidationHub invalidations) {
     this.jdbc = jdbc;
     this.mapper = mapper;
     this.payloads = payloads;
     this.correlations = correlations;
     this.actors = actors;
+    this.invalidations = invalidations;
   }
 
   @Transactional(propagation = Propagation.MANDATORY)
@@ -124,7 +133,115 @@ public class AssetEventStore {
         on conflict (projection_name,aggregate_type,aggregate_id) do update set aggregate_version=excluded.aggregate_version,
           projection_sha256=excluded.projection_sha256,updated_at=excluded.updated_at
         """, PROJECTION, type.name(), id.toString(), version, snapshotHash, recorded);
+    registerInvalidation(eventId, type, id, version, eventType, rawPayload, rawSnapshot, recorded);
   }
+
+  void registerInvalidation(
+      UUID eventId,
+      AssetAggregateType aggregateType,
+      UUID aggregateId,
+      long revision,
+      AssetEventType eventType,
+      Map<String, ?> payload,
+      Map<String, ?> snapshot,
+      OffsetDateTime recorded) {
+    String scope = scope(aggregateType);
+    if (scope == null || invalidations == null) return;
+    Set<UUID> warehouses = new HashSet<>();
+    collectWarehouseIds(payload, warehouses);
+    collectWarehouseIds(snapshot, warehouses);
+    if (eventType == AssetEventType.RENTAL_ITEM_WAREHOUSE_CHANGED && revision > 0) {
+      jdbc.query(
+              "select state ->> 'warehouseId' from aggregate_snapshot where aggregate_type=? and aggregate_id=? and aggregate_version=?",
+              (resultSet, rowNumber) -> resultSet.getString(1),
+              aggregateType.name(),
+              aggregateId.toString(),
+              revision - 1)
+          .forEach(previousWarehouseId -> addWarehouse(previousWarehouseId, warehouses));
+    }
+    if (warehouses.isEmpty()) {
+      if (aggregateType == AssetAggregateType.EQUIPMENT_CATALOG) {
+        var event = new AssetInvalidationHub.AssetInvalidationEvent(
+            eventId,
+            null,
+            scope,
+            eventType.value(),
+            aggregateType,
+            aggregateId,
+            revision,
+            recorded.toInstant());
+        afterCommit(() -> invalidations.publishGlobal(event));
+      }
+      return;
+    }
+    List<AssetInvalidationHub.AssetInvalidationEvent> events = warehouses.stream()
+        .map(warehouseId -> new AssetInvalidationHub.AssetInvalidationEvent(
+            eventId,
+            warehouseId,
+            scope,
+            eventType.value(),
+            aggregateType,
+            aggregateId,
+            revision,
+            recorded.toInstant()))
+        .toList();
+    afterCommit(() -> events.forEach(invalidations::publish));
+  }
+
+  private void afterCommit(Runnable action) {
+    if (TransactionSynchronizationManager.isSynchronizationActive()) {
+      TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+        @Override
+        public void afterCommit() {
+          action.run();
+        }
+      });
+    } else {
+      action.run();
+    }
+  }
+
+  private static String scope(AssetAggregateType aggregateType) {
+    return switch (aggregateType) {
+      case RENTAL_ITEM -> "RENTAL_ITEMS_CHANGED";
+      case EQUIPMENT_CATALOG -> "EQUIPMENT_CATALOG_CHANGED";
+      case EQUIPMENT_BALANCE, EQUIPMENT_MOVEMENT, EQUIPMENT_ALLOCATION_HOLD -> "EQUIPMENT_CHANGED";
+      default -> null;
+    };
+  }
+
+  private static void collectWarehouseIds(Object value, Set<UUID> result) {
+    if (!(value instanceof Map<?, ?> map)) return;
+    // Facts and snapshots carry warehouse scope at their top level. Do not
+    // recurse into user-controlled passport/equipment JSON: a nested field
+    // named warehouseId must never grant an unrelated warehouse an update
+    // signal.
+    for (Map.Entry<?, ?> entry : map.entrySet()) {
+      String key = String.valueOf(entry.getKey()).toLowerCase(java.util.Locale.ROOT);
+      if (key.equals("warehouseid")
+          || key.equals("sourcewarehouseid")
+          || key.equals("targetwarehouseid")
+          || key.equals("originwarehouseid")
+          || key.equals("destinationwarehouseid")) {
+        addWarehouse(entry.getValue(), result);
+      }
+    }
+  }
+
+  private static void addWarehouse(Object value, Set<UUID> result) {
+    if (value instanceof UUID uuid && !uuid.equals(UUID_NIL)) {
+      result.add(uuid);
+    } else if (value instanceof String text) {
+      try {
+        UUID uuid = UUID.fromString(text);
+        if (!uuid.equals(UUID_NIL)) result.add(uuid);
+      } catch (IllegalArgumentException ignored) {
+        // A non-UUID warehouse field is not an access scope.
+      }
+    }
+  }
+
+  private static final UUID UUID_NIL = new UUID(0L, 0L);
 
   private OffsetDateTime databaseNow() {
     OffsetDateTime value = jdbc.queryForObject("select clock_timestamp()", OffsetDateTime.class);

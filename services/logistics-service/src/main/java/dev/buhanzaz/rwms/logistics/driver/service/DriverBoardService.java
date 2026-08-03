@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.logistics.driver.service;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.CapitalRepairCardResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardCardResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardDateColumnResponse;
+import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardLane;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.DriverBoardResponse;
 import dev.buhanzaz.rwms.logistics.driver.api.DriverBoardApiModels.MoveDriverBoardTaskRequest;
 import dev.buhanzaz.rwms.logistics.driver.domain.DriverLogisticsTask;
@@ -19,6 +20,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
@@ -28,8 +30,12 @@ public class DriverBoardService {
   private final DriverLogisticsTaskRepository tasks;
   private final LogisticsDependencyGateway dependencies;
   private final DriverTaskWorkflowStore workflowStore;
+  private final DriverTaskProcessor processor;
+  private final DriverQueueScheduler scheduler;
 
   public DriverBoardResponse board(UUID warehouseId) {
+    LogisticsDependencyGateway.WarehouseIdentity warehouse =
+        dependencies.readWarehouseIdentity(warehouseId);
     LogisticsDependencyGateway.DriverBoardSnapshot board =
         dependencies.readDriverBoard(warehouseId);
     LogisticsDependencyGateway.RepairPlaceProjection places =
@@ -40,11 +46,14 @@ public class DriverBoardService {
 
     return new DriverBoardResponse(
         warehouseId,
+        warehouseToday(warehouse),
         board.queueId(),
         board.queueVersion(),
         places.repairPlaceCount(),
-        places.reservedCount() + places.occupiedCount() + places.readyToReleaseCount(),
+        DriverQueueScheduler.usedRepairPlaceCount(places),
         places.availableCount(),
+        DriverQueueScheduler.inboundRepairPlaceAvailable(places),
+        places.automaticRefillDelayMinutes(),
         places.overCapacity(),
         board.current().stream()
             .map(value -> card(value, localTasks.get(value.externalTaskId())))
@@ -61,8 +70,10 @@ public class DriverBoardService {
         capitalRepairs);
   }
 
+  @Transactional
   public DriverBoardCardResponse move(
       UUID externalTaskId, MoveDriverBoardTaskRequest request) {
+    tasks.acquireTransactionLock("driver-queue:" + request.warehouseId());
     LogisticsDependencyGateway.DriverBoardTask current =
         dependencies.readDriverTask(externalTaskId);
     if (!request.warehouseId().equals(current.warehouseId())) {
@@ -79,20 +90,82 @@ public class DriverBoardService {
       throw new IllegalArgumentException(
           "Дата логистического задания не может быть в прошлом");
     }
+    DriverLogisticsTask local =
+        tasks.findByExternalTaskId(externalTaskId)
+            .orElseThrow(
+                () ->
+                    new LogisticsConflictException(
+                        "Для задания отсутствует единый логистический workflow"));
+    if (request.targetLane() == DriverBoardLane.CURRENT) {
+      return moveToCurrent(local, current, request);
+    }
     LogisticsDependencyGateway.DriverBoardTask moved =
         dependencies.moveDriverTask(
             externalTaskId,
             request.expectedTaskVersion(),
             request.expectedEntryVersion(),
+            request.targetLane().name(),
             request.targetDate(),
             request.targetIndex());
-    DriverLogisticsTask local =
-        tasks.findByExternalTaskId(externalTaskId).orElse(null);
-    if (local != null) {
-      workflowStore.confirmStatus(local.getId(), moved);
+    workflowStore.confirmStatus(local.getId(), moved);
+    local = tasks.findById(local.getId()).orElseThrow();
+    if ("CURRENT".equals(current.lane()) && "SCHEDULED".equals(moved.lane())) {
+      LogisticsDependencyGateway.RepairPlaceProjection places =
+          dependencies.readRepairPlaces(request.warehouseId());
+      // A manual date choice is durable scheduling intent. The timed hold prevents an immediate
+      // refill; FIXED_DATE prevents the rolling reflow from pulling this exact task back to today.
+      local.markFixedDate(moved.scheduledDate());
+      local.markManualPromotionHold(places.automaticRefillDelayMinutes());
+      tasks.saveAndFlush(local);
+      processor.processUntilIdle(local.getId());
+      local = tasks.findById(local.getId()).orElseThrow();
+    }
+    if ("SCHEDULED".equals(current.lane())
+        && "SCHEDULED".equals(moved.lane())
+        && !current.scheduledDate().equals(moved.scheduledDate())) {
+      local.markFixedDate(moved.scheduledDate());
+      tasks.saveAndFlush(local);
       local = tasks.findById(local.getId()).orElseThrow();
     }
     return card(moved, local);
+  }
+
+  private DriverBoardCardResponse moveToCurrent(
+      DriverLogisticsTask local,
+      LogisticsDependencyGateway.DriverBoardTask current,
+      MoveDriverBoardTaskRequest request) {
+    if (current.taskVersion() != request.expectedTaskVersion()
+        || current.entryVersion() != request.expectedEntryVersion()) {
+      throw new LogisticsConflictException(
+          "Очередь перемещений уже изменилась");
+    }
+    LogisticsDependencyGateway.DriverBoardTask promoted = current;
+    if (!"CURRENT".equals(current.lane())) {
+      scheduler.promoteRequested(local.getId());
+      promoted = dependencies.readDriverTask(current.externalTaskId());
+    }
+    LogisticsDependencyGateway.DriverBoardTask moved =
+        dependencies.moveDriverTask(
+            promoted.externalTaskId(),
+            promoted.taskVersion(),
+            promoted.entryVersion(),
+            DriverBoardLane.CURRENT.name(),
+            request.targetDate(),
+            request.targetIndex());
+    workflowStore.confirmStatus(local.getId(), moved);
+    DriverLogisticsTask refreshed =
+        tasks.findById(local.getId()).orElseThrow();
+    return card(moved, refreshed);
+  }
+
+  private static LocalDate warehouseToday(
+      LogisticsDependencyGateway.WarehouseIdentity warehouse) {
+    try {
+      return LocalDate.now(ZoneId.of(warehouse.timeZone()));
+    } catch (RuntimeException exception) {
+      throw new LogisticsConflictException(
+          "Для склада не настроен корректный часовой пояс");
+    }
   }
 
   private Map<UUID, DriverLogisticsTask> localTasks(UUID warehouseId) {

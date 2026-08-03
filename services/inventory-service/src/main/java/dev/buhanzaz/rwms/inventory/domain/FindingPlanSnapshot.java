@@ -24,8 +24,12 @@ public class FindingPlanSnapshot {
   @Id @Column(name = "finding_revision", nullable = false) private long findingRevision;
   @Column(name = "inventory_id", nullable = false) private UUID inventoryId;
   @Column(name = "plan_mode", nullable = false, length = 16) private String planMode;
+  @Column(name = "movement_to_repair", nullable = false)
+  private boolean movementToRepair;
+  @Column(name = "movement_to_shipment", nullable = false)
+  private boolean movementToShipment;
   @Enumerated(EnumType.STRING)
-  @Column(name = "logistics_planning_mode", nullable = false, length = 16)
+  @Column(name = "logistics_planning_mode", length = 16)
   private LogisticsPlanningMode logisticsPlanningMode;
   @Column(name = "logistics_scheduled_date") private LocalDate logisticsScheduledDate;
   @Column(name = "catalog_version_id", nullable = false) private UUID catalogVersionId;
@@ -43,6 +47,8 @@ public class FindingPlanSnapshot {
       long findingRevision,
       UUID inventoryId,
       String planMode,
+      boolean movementToRepair,
+      boolean movementToShipment,
       LogisticsPlanningMode logisticsPlanningMode,
       LocalDate logisticsScheduledDate,
       UUID catalogVersionId,
@@ -52,7 +58,9 @@ public class FindingPlanSnapshot {
     this.findingRevision = findingRevision;
     this.inventoryId = inventoryId;
     this.planMode = planMode;
-    validateLogisticsPlanning(logisticsPlanningMode, logisticsScheduledDate);
+    validateLogisticsPlanning(movementToRepair, logisticsPlanningMode, logisticsScheduledDate);
+    this.movementToRepair = movementToRepair;
+    this.movementToShipment = movementToShipment;
     this.logisticsPlanningMode = logisticsPlanningMode;
     this.logisticsScheduledDate = logisticsScheduledDate;
     this.catalogVersionId = catalogVersionId;
@@ -81,6 +89,14 @@ public class FindingPlanSnapshot {
     return planMode;
   }
 
+  public boolean isMovementToRepair() {
+    return movementToRepair;
+  }
+
+  public boolean isMovementToShipment() {
+    return movementToShipment;
+  }
+
   public LogisticsPlanningMode getLogisticsPlanningMode() {
     return logisticsPlanningMode;
   }
@@ -94,10 +110,9 @@ public class FindingPlanSnapshot {
   }
 
   private static void validateLogisticsPlanning(
-      LogisticsPlanningMode mode, LocalDate scheduledDate) {
-    if (mode == null
-        || (mode == LogisticsPlanningMode.AUTO && scheduledDate != null)
-        || (mode == LogisticsPlanningMode.FIXED_DATE && scheduledDate == null)) {
+      boolean movementToRepair, LogisticsPlanningMode mode, LocalDate scheduledDate) {
+    if (!LogisticsPlanningMode.validInboundPlanning(
+        movementToRepair, mode, scheduledDate)) {
       throw new IllegalArgumentException("Inventory logistics planning is invalid");
     }
   }

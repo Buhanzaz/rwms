@@ -37,6 +37,8 @@ type WorkerJob struct {
 	JobID           uuid.UUID
 	MediaID         uuid.UUID
 	WarehouseID     uuid.UUID
+	OwnerType       string
+	OwnerID         string
 	MediaKind       media.Kind
 	ProcessingKind  media.ProcessingKind
 	Generation      int
@@ -169,13 +171,13 @@ func (repository *Repository) ClaimProcessingJob(ctx context.Context, message Pr
 		  and media_asset_is_available(a.media_id)
 		  and not exists (select 1 from media_recovery_quarantine quarantine
 		      where quarantine.source_table='media_processing_job' and quarantine.source_id=job.processing_job_id)
-		returning job.media_id,a.warehouse_id,a.media_kind,job.processing_kind,
+		returning job.media_id,a.warehouse_id,a.owner_type,a.owner_id,a.media_kind,job.processing_kind,
 			job.generation,job.requested_rotation_degrees,a.source_object_key,
 			job.source_version_id,job.source_checksum_sha256,
 			coalesce(a.finalized_content_type,a.original_content_type),
 			job.attempt_count,job.lease_fence`,
 		job.JobID, owner, job.LeaseToken, lease.String()).Scan(
-		&job.MediaID, &job.WarehouseID, &job.MediaKind, &job.ProcessingKind,
+		&job.MediaID, &job.WarehouseID, &job.OwnerType, &job.OwnerID, &job.MediaKind, &job.ProcessingKind,
 		&job.Generation, &job.Rotation, &job.SourceObjectKey, &job.SourceVersionID,
 		&job.SourceChecksum, &job.ContentType, &job.Attempt, &job.LeaseFence)
 	if errors.Is(err, pgx.ErrNoRows) {

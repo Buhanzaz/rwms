@@ -60,6 +60,5 @@ rwms:
     security:
       issuer: ${AUTH_ISSUER}
       audience: ${AUTH_AUDIENCE:rwms-services}
-      jwk-set-uri: ${AUTH_JWK_SET_URI}
     cors:
       allowed-origins: ${PANEL_ORIGIN}

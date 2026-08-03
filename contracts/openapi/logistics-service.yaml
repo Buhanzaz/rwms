@@ -212,6 +212,11 @@ paths:
       - $ref: "#/components/parameters/DocumentId"
       - $ref: "#/components/parameters/ExpectedVersion"
       - $ref: "#/components/parameters/IdempotencyKey"
+      - name: keepScheduledDate
+        in: query
+        required: false
+        description: Explicitly keep a planned calendar date when the physical departure is recorded today.
+        schema: { type: boolean, default: false }
     post:
       operationId: confirmShipmentPreparation
       responses:
@@ -504,7 +509,7 @@ paths:
         sub=client_id=maintenance-service, audience rwms-services, and exactly
         the logistics.maintenance scope. It creates the same logistics-owned
         driver task as the public board and never bypasses repair-place
-        capacity or the singleton CURRENT scheduler.
+        capacity or the ordered CURRENT queue.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -536,9 +541,11 @@ paths:
     post:
       operationId: promoteDriverTask
       description: >-
-        Moves this exact scheduled task into the singleton CURRENT lane. Repair
-        delivery first reserves a factual repair place; an occupied current lane
-        or missing capacity fails without a queue fallback.
+        Manually moves this exact scheduled task into the ordered CURRENT
+        lane, regardless of its planned calendar date. Repair delivery first
+        reserves a free repair place or pairs with an earlier ready-to-release
+        removal in the same ordered lane; missing capacity fails without a
+        queue fallback.
       responses:
         "202": { $ref: "#/components/responses/DriverTask" }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -550,9 +557,10 @@ paths:
     get:
       operationId: getDriverBoard
       description: >-
-        Returns the warehouse's dedicated driver queue with one CURRENT lane,
-        its finite ordered non-empty date columns, factual repair-place capacity
-        and active capital repairs not yet moved to production.
+        Returns the warehouse's dedicated driver queue with the warehouse-local
+        current date, an ordered CURRENT lane, finite ordered non-empty date
+        columns, factual repair-place capacity and active capital repairs not
+        yet moved to production.
       parameters:
         - $ref: "#/components/parameters/WarehouseIdQuery"
       responses:
@@ -574,9 +582,9 @@ paths:
     post:
       operationId: moveDriverBoardTask
       description: >-
-        Reorders a SCHEDULED driver task inside a date or moves it to another
-        calendar date. The task-board versions are mandatory; CURRENT or
-        already-running tasks are rejected.
+        Reorders a driver task inside a date or moves a CURRENT task back to a
+        calendar date. The task-board versions are mandatory; already-running
+        tasks are rejected.
       requestBody:
         required: true
         content:
@@ -776,10 +784,86 @@ paths:
     post:
       operationId: saveOrder
       description: >-
-        Locks a non-empty DRAFT order and atomically creates its DRAFT shipment
-        without a driver or shipment date. A saved order is no longer editable.
+        Locks a non-empty DRAFT order whose complete rental-duration vector is configured. Saving
+        does not implicitly choose a shipment batch; create one explicitly with selected unitIds.
       responses:
         "200": { $ref: "#/components/responses/OrderDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/orders/{orderId}/rental-terms:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+    put:
+      operationId: setOrderRentalTerms
+      description: >-
+        Replaces the complete rental-duration vector for the order cabins. It is accepted for a
+        DRAFT order and for a SAVED order while every existing rental shipment is still an
+        untouched draft. A term already assigned to a shipment is immutable here: cancel that
+        draft shipment before changing it, or use the extension command after SHIPPED.
+        shipmentDate and returnDate remain null until a cabin is assigned to a shipment.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetOrderRentalTermsRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/OrderDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/orders/{orderId}/rental-terms/extend:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+    post:
+      operationId: extendOrderRentalTerms
+      description: >-
+        Extends only the selected cabins whose shipment is SHIPPED. Each selected cabin keeps its
+        original shipmentDate and its returnDate moves forward by additionalMonths.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ExtendOrderRentalTermsRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/OrderDetail" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/logistics/v1/orders/{orderId}/shipments:
+    parameters:
+      - $ref: "#/components/parameters/OrderId"
+    post:
+      operationId: createOrderRentalShipment
+      description: >-
+        Creates one DRAFT shipment for exactly the selected unitIds. The driver and calendar date
+        are saved immediately; preparation starts only when the shipment plan command is called.
+        A cabin cannot be selected by another non-cancelled shipment. When this shipment reaches
+        SHIPPED, logistics creates one cabin-level return document per shipped line, each linked by
+        rentalShipmentId, so return dates and drivers can be changed independently.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateOrderRentalShipmentRequest" }
+      responses:
+        "201": { $ref: "#/components/responses/CreatedDocument" }
+        "200": { $ref: "#/components/responses/CreatedDocument" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1432,6 +1516,7 @@ components:
           scheduledDate,
           scheduledAt,
           rentalOrderId,
+          rentalShipmentId,
           lines,
           createdAt,
           updatedAt,
@@ -1509,6 +1594,12 @@ components:
             type: [string, "null"],
             format: uuid,
             description: Order whose shipment/return lifecycle owns this document.,
+          }
+        rentalShipmentId:
+          {
+            type: [string, "null"],
+            format: uuid,
+          description: Shipment that produced this cabin-level rental return; null for shipments and generic documents.,
           }
         lines:
           type: array
@@ -1734,10 +1825,10 @@ components:
     DriverTaskKind:
       type: string
       enum:
-        [DELIVER_TO_REPAIR, REMOVE_FROM_REPAIR, CAPITAL_TO_PRODUCTION, MOVE_TO_SHIPMENT]
+        [DELIVER_TO_REPAIR, REMOVE_FROM_REPAIR, CAPITAL_TO_PRODUCTION, MOVE_TO_SHIPMENT, GENERAL_MOVEMENT]
     DriverTaskSourceType:
       type: string
-      enum: [REPAIR, ESTIMATE, INVENTORY, REPAIR_PLACE, CAPITAL_REPAIR]
+      enum: [REPAIR, ESTIMATE, INVENTORY, REPAIR_PLACE, CAPITAL_REPAIR, MANUAL]
     DriverTaskPlanningMode:
       type: string
       enum: [AUTO, FIXED_DATE]
@@ -1765,7 +1856,11 @@ components:
         priority: { type: integer, minimum: 1, maximum: 5 }
         activateNow:
           type: boolean
-          description: Used by an explicit drag into CURRENT; capacity and singleton-lane checks still apply.
+          description: Used by an explicit drag into CURRENT; DELIVER_TO_REPAIR still requires a free or paired repair place.
+        comment:
+          type: [string, "null"]
+          maxLength: 1000
+          description: Required and nonblank for MANUAL / GENERAL_MOVEMENT; optional for other task sources.
     DriverTask:
       type: object
       additionalProperties: false
@@ -1782,6 +1877,7 @@ components:
           planningMode,
           scheduledDate,
           priority,
+          comment,
           unitNumber,
           driverQueueDefinitionId,
           externalTaskId,
@@ -1814,6 +1910,7 @@ components:
         planningMode: { $ref: "#/components/schemas/DriverTaskPlanningMode" }
         scheduledDate: { type: string, format: date }
         priority: { type: integer, minimum: 1, maximum: 5 }
+        comment: { type: [string, "null"], maxLength: 1000 }
         unitNumber: { type: string, minLength: 1, maxLength: 64 }
         driverQueueDefinitionId: { type: string, format: uuid }
         externalTaskId: { type: string, format: uuid }
@@ -1910,18 +2007,32 @@ components:
       type: object
       additionalProperties: false
       required:
-        [warehouseId, queueId, queueVersion, repairPlaceCount, occupiedRepairPlaceCount, availableRepairPlaceCount, repairPlacesOverCapacity, current, dates, capitalRepairs]
+        [warehouseId, currentDate, queueId, queueVersion, repairPlaceCount, usedRepairPlaceCount, availableRepairPlaceCount, inboundRepairPlaceAvailable, automaticRefillDelayMinutes, repairPlacesOverCapacity, current, dates, capitalRepairs]
       properties:
         warehouseId: { type: string, format: uuid }
+        currentDate: { type: string, format: date }
         queueId: { type: string, format: uuid }
         queueVersion: { type: integer, format: int64, minimum: 0 }
         repairPlaceCount: { type: integer, minimum: 1 }
-        occupiedRepairPlaceCount: { type: integer, format: int64, minimum: 0 }
+        usedRepairPlaceCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Capacity-aware repair-place usage: occupied plus the larger of reservations and ready
+            removals, so one paired removal/delivery uses one place.
         availableRepairPlaceCount: { type: integer, format: int64, minimum: 0 }
+        inboundRepairPlaceAvailable:
+          type: boolean
+          description: True when a delivery can use a free place or pair with a ready removal.
+        automaticRefillDelayMinutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+          description: Maintenance-owned delay before a manually opened CURRENT hole may be refilled automatically.
         repairPlacesOverCapacity: { type: boolean }
         current:
           type: array
-          maxItems: 1
           items: { $ref: "#/components/schemas/DriverBoardCard" }
         dates:
           type: array
@@ -1932,11 +2043,12 @@ components:
     MoveDriverBoardTaskRequest:
       type: object
       additionalProperties: false
-      required: [warehouseId, expectedTaskVersion, expectedEntryVersion, targetDate, targetIndex]
+      required: [warehouseId, expectedTaskVersion, expectedEntryVersion, targetLane, targetDate, targetIndex]
       properties:
         warehouseId: { type: string, format: uuid }
         expectedTaskVersion: { type: integer, format: int64, minimum: 0 }
         expectedEntryVersion: { type: integer, format: int64, minimum: 0 }
+        targetLane: { type: string, enum: [SCHEDULED, CURRENT] }
         targetDate: { type: string, format: date }
         targetIndex: { type: integer, minimum: 0 }
     PromoteCapitalRepairRequest:
@@ -2372,6 +2484,58 @@ components:
           type: array
           maxItems: 100
           items: { $ref: "#/components/schemas/OrderDesiredEquipmentInput" }
+    OrderRentalTermInput:
+      type: object
+      additionalProperties: false
+      required: [unitId, rentalMonths]
+      properties:
+        unitId: { type: string, format: uuid }
+        rentalMonths: { type: integer, format: int64, minimum: 1 }
+    SetOrderRentalTermsRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, terms]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        terms:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/OrderRentalTermInput" }
+    OrderRentalTermExtensionInput:
+      type: object
+      additionalProperties: false
+      required: [unitId, additionalMonths]
+      properties:
+        unitId: { type: string, format: uuid }
+        additionalMonths: { type: integer, format: int64, minimum: 1 }
+    ExtendOrderRentalTermsRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, terms]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        terms:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/OrderRentalTermExtensionInput" }
+    CreateOrderRentalShipmentRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, driverSnapshot, scheduledDate, unitIds]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 0 }
+        driverSnapshot: { type: string, minLength: 1, maxLength: 512 }
+        scheduledDate: { type: string, format: date }
+        unitIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+          items: { type: string, format: uuid }
     OrderClient:
       type: object
       additionalProperties: false
@@ -2461,6 +2625,14 @@ components:
         equipmentId: { type: string, format: uuid }
         equipmentName: { type: string, minLength: 1, maxLength: 512 }
         quantity: { type: integer, format: int64, minimum: 1 }
+    OrderRentalTerm:
+      type: object
+      additionalProperties: false
+      required: [rentalMonths, shipmentDate, returnDate]
+      properties:
+        rentalMonths: { type: integer, format: int64, minimum: 1 }
+        shipmentDate: { type: [string, "null"], format: date }
+        returnDate: { type: [string, "null"], format: date }
     OrderRentalItem:
       type: object
       additionalProperties: false
@@ -2503,7 +2675,7 @@ components:
     OrderUnit:
       type: object
       additionalProperties: false
-      required: [reservationId, added, unit, desiredContents]
+      required: [reservationId, added, unit, desiredContents, rentalTerm]
       properties:
         reservationId: { type: [string, "null"], format: uuid }
         added: { type: boolean }
@@ -2511,6 +2683,10 @@ components:
         desiredContents:
           type: array
           items: { $ref: "#/components/schemas/OrderDesiredEquipment" }
+        rentalTerm:
+          anyOf:
+            - { $ref: "#/components/schemas/OrderRentalTerm" }
+            - { type: "null" }
     OrderUnitPage:
       type: object
       additionalProperties: false

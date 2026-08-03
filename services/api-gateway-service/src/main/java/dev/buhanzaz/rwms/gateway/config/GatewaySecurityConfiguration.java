@@ -104,7 +104,9 @@ public class GatewaySecurityConfiguration {
   JwtDecoder gatewayJwtDecoder(
       GatewayProperties properties, JwtAudienceValidatorFactory audienceValidators) {
     NimbusJwtDecoder decoder =
-        NimbusJwtDecoder.withJwkSetUri(properties.getSecurity().getJwkSetUri().toString()).build();
+        NimbusJwtDecoder.withJwkSetUri(
+                properties.getRoutes().getAuthUri().resolve("/oauth2/jwks").toString())
+            .build();
     decoder.setJwtValidator(
         new DelegatingOAuth2TokenValidator<>(
             new JwtTimestampValidator(),
