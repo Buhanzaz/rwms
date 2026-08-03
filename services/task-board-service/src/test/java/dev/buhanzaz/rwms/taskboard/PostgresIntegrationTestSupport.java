@@ -43,7 +43,7 @@ abstract class PostgresIntegrationTestSupport {
             task_auto_interruption, task_time_event, task_assignment,
             task_relocation_receipt, task_sync_source, queue_entry, board_task,
             queue_usage_reference,
-            work_queue_class_binding, worker_deletion_intent,
+            queue_definition_class_binding, work_queue_class_binding, worker_deletion_intent,
             worker_group_member, worker_class_assignment,
             worker_group, worker, work_queue, queue_definition, worker_class
           restart identity cascade

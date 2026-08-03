@@ -75,7 +75,7 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
     cleanTaskBoardFixtures(jdbc);
     var definition =
         registry.createQueueDefinition(
-            new QueueDefinitionRequest(
+            QueueRegistryTestFixtures.globalDefinition(
                 0L, "Перемещение мебели", null, QueueType.FURNITURE_MOVEMENT));
     furnitureQueue =
         QueueRegistryTestFixtures.create(registry, jdbc,
@@ -222,7 +222,7 @@ class LogisticsEquipmentMovementTaskIntegrationTest extends PostgresIntegrationT
   void onlyEquipmentMovementTaskCompletionIsFencedAtDeadline() {
     var definition =
         registry.createQueueDefinition(
-            new QueueDefinitionRequest(0L, "Movement", null, QueueType.MOVEMENT));
+            QueueRegistryTestFixtures.globalDefinition(0L, "Movement", null, QueueType.MOVEMENT));
     var queue =
         QueueRegistryTestFixtures.create(registry, jdbc,
             WAREHOUSE,

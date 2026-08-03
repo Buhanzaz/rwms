@@ -19,11 +19,10 @@ paths:
     get:
       operationId: listQueueDefinitions
       description: >-
-        Returns the shared system queue catalog, including the driver
-        definition. Definitions are never copied into a warehouse
-        automatically; a manager explicitly attaches a GENERAL definition as
-        a warehouse work queue, while the driver definition is configured via
-        the logistics endpoint.
+        Returns the shared system queue catalog. GENERAL definitions are the
+        one task-board standard: every active warehouse receives a derived
+        physical queue projection with the same order, state and classes.
+        LOGISTICS_DRIVER remains configured by the logistics endpoint.
       responses:
         '200': { $ref: '#/components/responses/QueueDefinitionListOk' }
         '401': { $ref: '#/components/responses/Unauthorized' }
@@ -68,6 +67,23 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /queue-definitions/order:
+    put:
+      operationId: reorderQueueDefinitions
+      description: >-
+        Reorders the single GENERAL task-board standard for every warehouse.
+        HOLDING queues remain terminal.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/QueueDefinitionOrderRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/QueueDefinitionListOk' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /warehouses/{warehouseId}/work-queues:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -77,65 +93,6 @@ paths:
         '200': { $ref: '#/components/responses/WorkQueueListOk' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
-    post:
-      operationId: createWorkQueue
-      description: >-
-        Explicitly attaches one GENERAL catalog definition to this warehouse.
-        The resulting order, runtime settings and class bindings are owned by
-        this warehouse only.
-      requestBody:
-        $ref: '#/components/requestBodies/WorkQueue'
-      responses:
-        '201': { $ref: '#/components/responses/WorkQueueCreated' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { $ref: '#/components/responses/Conflict' }
-  /warehouses/{warehouseId}/work-queues/{id}:
-    parameters:
-      - $ref: '#/components/parameters/WarehouseId'
-      - $ref: '#/components/parameters/Id'
-    put:
-      operationId: updateWorkQueue
-      description: >-
-        Updates runtime settings and bindings of one existing warehouse
-        connection. definitionId is immutable.
-      requestBody:
-        $ref: '#/components/requestBodies/WorkQueue'
-      responses:
-        '200': { $ref: '#/components/responses/WorkQueueOk' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-    delete:
-      operationId: deleteWorkQueue
-      parameters:
-        - $ref: '#/components/parameters/ExpectedVersion'
-      responses:
-        '204': { $ref: '#/components/responses/NoContent' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
-  /warehouses/{warehouseId}/work-queue-order:
-    parameters:
-      - $ref: '#/components/parameters/WarehouseId'
-    put:
-      operationId: reorderWorkQueues
-      description: Reorders only the current warehouse's complete selected queue set.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/QueueOrderRequest' }
-      responses:
-        '200': { $ref: '#/components/responses/WorkQueueListOk' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '409': { $ref: '#/components/responses/Conflict' }
   /warehouses/{warehouseId}/driver-queue:
     parameters:
       - $ref: '#/components/parameters/WarehouseId'
@@ -1424,11 +1381,6 @@ components:
         operationId in the request body.
       schema: { type: string, format: uuid }
   requestBodies:
-    WorkQueue:
-      required: true
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/WorkQueueRequest' }
     WorkerClass:
       required: true
       content:
@@ -1580,7 +1532,7 @@ components:
       items: { $ref: '#/components/schemas/WorkerClass' }
     QueueDefinition:
       type: object
-      required: [id, version, name, description, type, purpose]
+      required: [id, version, name, description, type, purpose, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, resultPhotoMinCount, bindings]
       properties:
         id: { type: string, format: uuid }
         version: { type: integer, format: int64, minimum: 0 }
@@ -1588,13 +1540,24 @@ components:
         description: { oneOf: [{ type: string, maxLength: 1000 }, { type: 'null' }] }
         type: { type: string, enum: [MOVEMENT, REPAIR, HOLDING, FURNITURE_MOVEMENT] }
         purpose: { $ref: '#/components/schemas/QueuePurpose' }
+        sortOrder: { type: integer, minimum: 0 }
+        active: { type: boolean }
+        hidden: { type: boolean }
+        collapsed: { type: boolean }
+        holdingPeriodMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        notificationThreshold: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        notifyWhenThresholdReached: { type: boolean }
+        resultPhotoMinCount: { type: integer, minimum: 0, maximum: 20 }
+        bindings:
+          type: array
+          items: { $ref: '#/components/schemas/QueueBinding' }
       additionalProperties: false
     QueueDefinitionList:
       type: array
       items: { $ref: '#/components/schemas/QueueDefinition' }
     QueueDefinitionRequest:
       type: object
-      required: [version, name, type, purpose]
+      required: [version, name, type, purpose, sortOrder, active, hidden, collapsed, holdingPeriodMinutes, notificationThreshold, notifyWhenThresholdReached, resultPhotoMinCount, bindings]
       properties:
         version: { type: integer, format: int64, minimum: 0 }
         name: { type: string, minLength: 1, maxLength: 128 }
@@ -1604,6 +1567,32 @@ components:
           type: string
           enum: [GENERAL]
           description: Global CRUD never creates or edits LOGISTICS_DRIVER.
+        sortOrder: { type: integer, minimum: 0 }
+        active: { type: boolean }
+        hidden: { type: boolean }
+        collapsed: { type: boolean }
+        holdingPeriodMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        notificationThreshold: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
+        notifyWhenThresholdReached: { type: boolean }
+        resultPhotoMinCount: { type: integer, minimum: 0, maximum: 20 }
+        bindings:
+          type: array
+          items: { $ref: '#/components/schemas/QueueBindingRequest' }
+      additionalProperties: false
+    QueueDefinitionOrderRequest:
+      type: object
+      required: [definitions]
+      properties:
+        definitions:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [definitionId, expectedVersion]
+            properties:
+              definitionId: { type: string, format: uuid }
+              expectedVersion: { type: integer, format: int64, minimum: 0 }
+            additionalProperties: false
       additionalProperties: false
     QueuePurpose:
       type: string
@@ -2040,50 +2029,6 @@ components:
         stopTaskOnTake: { type: boolean }
         participationPolicy: { $ref: '#/components/schemas/ParticipationPolicy' }
         notifyOnPrimaryTake: { type: boolean }
-      additionalProperties: false
-    WorkQueueRequest:
-      type: object
-      required: [version, definitionId]
-      properties:
-        version: { type: integer, format: int64, minimum: 0 }
-        definitionId:
-          type: string
-          format: uuid
-          description: Stable GENERAL queue definition attached to this warehouse.
-        active: { type: boolean }
-        hidden: { type: boolean }
-        collapsed: { type: boolean }
-        holdingPeriodMinutes: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
-        notificationThreshold: { oneOf: [{ type: integer, minimum: 0 }, { type: 'null' }] }
-        notifyWhenThresholdReached: { type: boolean }
-        resultPhotoMinCount:
-          oneOf:
-            - { type: integer, minimum: 0, maximum: 20 }
-            - { type: 'null' }
-          description: >-
-            Required READY result photos before completion. When omitted on
-            create, the service defaults MOVEMENT and REPAIR to 1 and HOLDING
-            to 0.
-        bindings:
-          oneOf:
-            - type: array
-              items: { $ref: '#/components/schemas/QueueBindingRequest' }
-            - type: 'null'
-      additionalProperties: false
-    QueueOrderRequest:
-      type: object
-      required: [queues]
-      properties:
-        queues:
-          type: array
-          minItems: 1
-          items:
-            type: object
-            required: [queueId, expectedVersion]
-            properties:
-              queueId: { type: string, format: uuid }
-              expectedVersion: { type: integer, format: int64, minimum: 0 }
-            additionalProperties: false
       additionalProperties: false
     DriverQueueRequest:
       type: object
@@ -2961,11 +2906,6 @@ components:
           schema: { $ref: '#/components/schemas/QueueDefinitionList' }
     WorkQueueOk:
       description: Work queue
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/WorkQueue' }
-    WorkQueueCreated:
-      description: Work queue created
       content:
         application/json:
           schema: { $ref: '#/components/schemas/WorkQueue' }

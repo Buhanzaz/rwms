@@ -323,6 +323,15 @@ function queueFixture(
     description: null,
     type: "REPAIR",
     purpose: "GENERAL",
+    sortOrder: 0,
+    active: true,
+    hidden: false,
+    collapsed: false,
+    holdingPeriodMinutes: null,
+    notificationThreshold: null,
+    notifyWhenThresholdReached: false,
+    resultPhotoMinCount: 1,
+    bindings: [],
     ...overrides,
   }
 }

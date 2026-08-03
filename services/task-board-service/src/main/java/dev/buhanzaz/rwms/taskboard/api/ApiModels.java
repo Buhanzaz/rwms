@@ -66,12 +66,16 @@ public final class ApiModels {
       @NotBlank @Size(max = 128) String name,
       @Size(max = 1000) String description,
       @NotNull QueueType type,
-      @NotNull QueuePurpose purpose) {
-    public QueueDefinitionRequest(
-        Long version, String name, String description, QueueType type) {
-      this(version, name, description, type, QueuePurpose.GENERAL);
-    }
-  }
+      @NotNull QueuePurpose purpose,
+      @Min(0) int sortOrder,
+      boolean active,
+      boolean hidden,
+      boolean collapsed,
+      @Min(0) Integer holdingPeriodMinutes,
+      @Min(0) Integer notificationThreshold,
+      boolean notifyWhenThresholdReached,
+      @NotNull @Min(0) @Max(20) Integer resultPhotoMinCount,
+      @NotNull List<@Valid QueueBindingRequest> bindings) {}
 
   public record QueueDefinitionDto(
       UUID id,
@@ -79,20 +83,22 @@ public final class ApiModels {
       String name,
       String description,
       QueueType type,
-      QueuePurpose purpose) {}
-
-  /** A warehouse-local connection to one immutable shared queue definition. */
-  public record WorkQueueRequest(
-      @NotNull @Min(0) Long version,
-      @NotNull UUID definitionId,
+      QueuePurpose purpose,
+      int sortOrder,
       boolean active,
       boolean hidden,
       boolean collapsed,
-      @Min(0) Integer holdingPeriodMinutes,
-      @Min(0) Integer notificationThreshold,
+      Integer holdingPeriodMinutes,
+      Integer notificationThreshold,
       boolean notifyWhenThresholdReached,
-      @Min(0) @Max(20) Integer resultPhotoMinCount,
-      List<@Valid QueueBindingRequest> bindings) {}
+      int resultPhotoMinCount,
+      List<QueueBindingDto> bindings) {}
+
+  public record QueueDefinitionOrderItem(
+      @NotNull UUID definitionId, @NotNull @Min(0) Long expectedVersion) {}
+
+  public record QueueDefinitionOrderRequest(
+      @NotEmpty List<@Valid QueueDefinitionOrderItem> definitions) {}
 
   public record DriverQueueRequest(
       @NotNull @Min(0) Long expectedVersion,
@@ -134,11 +140,6 @@ public final class ApiModels {
       boolean notifyWhenThresholdReached,
       int resultPhotoMinCount,
       List<QueueBindingDto> bindings) {}
-
-  public record QueueOrderItem(
-      @NotNull UUID queueId, @NotNull @Min(0) Long expectedVersion) {}
-
-  public record QueueOrderRequest(@NotEmpty List<@Valid QueueOrderItem> queues) {}
 
   public record QualificationRequest(
       @NotNull UUID workerClassId, boolean active, @Size(max = 1000) String comment) {}

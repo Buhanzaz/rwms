@@ -64,6 +64,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   private static final UUID W1 = UUID.fromString("00000000-0000-0000-0000-000000000101");
   private static final UUID W2 = UUID.fromString("00000000-0000-0000-0000-000000000102");
   @org.springframework.beans.factory.annotation.Autowired RegistryService registry;
+  @org.springframework.beans.factory.annotation.Autowired
+  GlobalQueueProjectionService globalQueueProjections;
   @org.springframework.beans.factory.annotation.Autowired WorkforceService workforce;
   @org.springframework.beans.factory.annotation.Autowired TaskBoardService board;
   @org.springframework.beans.factory.annotation.Autowired WorkerTaskBoardService workerBoard;
@@ -112,25 +114,18 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .containsExactly(repair.id(), secondRepair.id(), holding.id());
     assertThatThrownBy(
             () ->
-                registry.updateQueue(
-                    W1,
-                    repair.id(),
-                    new WorkQueueRequest(
-                        repair.version() + 99,
-                        repair.definitionId(),
-                        true,
-                        false,
-                        false,
+                registry.updateQueueDefinition(
+                    repair.definitionId(),
+                    globalDefinitionRequest(
+                        registry.dto(registry.requireQueueDefinition(repair.definitionId())),
+                        "REPAIR",
                         null,
-                        null,
-                        false,
-                        null,
-                        List.of())))
+                        repair.definitionVersion() + 99)))
         .isInstanceOf(StaleVersionException.class);
   }
 
   @Test
-  void globalDefinitionsAreSharedWhileWarehouseBindingsAndOrderRemainLocal() {
+  void globalDefinitionsShareOrderAndStatusAcrossEveryWarehouse() {
     var firstW1 =
         QueueRegistryTestFixtures.create(
             registry, jdbc, W1, queue("GLOBAL_EXTERNAL", QueueType.REPAIR, List.of()));
@@ -143,43 +138,40 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
 
     assertThat(firstW1.definitionId()).isEqualTo(firstW2.definitionId());
     assertThat(firstW1.id()).isNotEqualTo(firstW2.id());
-    assertThat(registry.listQueues(W2)).extracting(WorkQueueDto::definitionId)
-        .containsExactly(firstW2.definitionId());
+    assertThat(registry.listQueues(W2))
+        .extracting(WorkQueueDto::definitionId)
+        .containsExactly(firstW2.definitionId(), secondW1.definitionId());
     assertThat(registry.listQueues(UUID.randomUUID())).isEmpty();
     assertThat(registry.listQueueDefinitions())
         .extracting(QueueDefinitionDto::id)
         .containsExactlyInAnyOrder(firstW1.definitionId(), secondW1.definitionId());
-    assertThatThrownBy(
-            () ->
-                registry.createQueue(
-                    W1,
-                    new WorkQueueRequest(
-                        0L,
-                        firstW1.definitionId(),
-                        true,
-                        false,
-                        false,
-                        null,
-                        null,
-                        false,
-                        null,
-                        List.of())))
-        .isInstanceOf(ConflictException.class);
+    assertThat(registry.listQueues(W1))
+        .filteredOn(queue -> queue.definitionId().equals(firstW1.definitionId()))
+        .hasSize(1);
 
-    var w1Before = registry.listQueues(W1);
-    QueueRegistryTestFixtures.reorder(registry, jdbc,
-        W1,
-        new QueueFixtureOrderRequest(
+    var beforeReorder = registry.listQueueDefinitions();
+    QueueDefinitionDto firstDefinition =
+        beforeReorder.stream()
+            .filter(candidate -> candidate.id().equals(firstW1.definitionId()))
+            .findFirst()
+            .orElseThrow();
+    QueueDefinitionDto secondDefinition =
+        beforeReorder.stream()
+            .filter(candidate -> candidate.id().equals(secondW1.definitionId()))
+            .findFirst()
+            .orElseThrow();
+    registry.reorderQueueDefinitions(
+        new QueueDefinitionOrderRequest(
             List.of(
-                new QueueFixtureOrderItem(secondW1.id(), versionOf(w1Before, secondW1.id())),
-                new QueueFixtureOrderItem(firstW1.id(), versionOf(w1Before, firstW1.id())))));
+                new QueueDefinitionOrderItem(secondDefinition.id(), secondDefinition.version()),
+                new QueueDefinitionOrderItem(firstDefinition.id(), firstDefinition.version()))));
 
     assertThat(registry.listQueues(W1))
         .extracting(WorkQueueDto::definitionId)
         .containsExactly(secondW1.definitionId(), firstW1.definitionId());
     assertThat(registry.listQueues(W2))
         .extracting(WorkQueueDto::definitionId)
-        .containsExactly(firstW2.definitionId());
+        .containsExactly(secondW1.definitionId(), firstW2.definitionId());
 
     QueueDefinitionDto definition =
         registry.listQueueDefinitions().stream()
@@ -188,11 +180,8 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             .orElseThrow();
     registry.updateQueueDefinition(
         definition.id(),
-        new QueueDefinitionRequest(
-            definition.version(),
-            "Общие внешние работы",
-            "Изменение общего каталога",
-            definition.type()));
+        globalDefinitionRequest(
+            definition, "Общие внешние работы", "Изменение общего каталога"));
 
     assertThat(registry.listQueues(W1))
         .filteredOn(queue -> queue.definitionId().equals(definition.id()))
@@ -205,25 +194,12 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
   }
 
   @Test
-  void globalDefinitionUpdateDoesNotProvisionOrRewriteWarehouseConnections() {
+  void globalDefinitionConfigAndClassesMaterializeForEveryActiveWarehouse() {
     var definition =
         registry.createQueueDefinition(
-            new QueueDefinitionRequest(0L, "GLOBAL_SETTINGS", null, QueueType.REPAIR));
+            QueueRegistryTestFixtures.globalDefinition(
+                0L, "GLOBAL_SETTINGS", null, QueueType.REPAIR));
     var workerClass = registry.createClass(workerClass("GLOBAL_SETTINGS_PRIMARY"));
-    assertThat(registry.listQueues(W1)).isEmpty();
-    assertThat(registry.listQueues(W2)).isEmpty();
-
-    var renamed =
-        registry.updateQueueDefinition(
-            definition.id(),
-            new QueueDefinitionRequest(
-                definition.version(),
-                "GLOBAL_SETTINGS_RENAMED",
-                "Каталог",
-                QueueType.REPAIR));
-    assertThat(registry.listQueues(W1)).isEmpty();
-    assertThat(registry.listQueues(W2)).isEmpty();
-
     var first =
         QueueRegistryTestFixtures.create(
             registry,
@@ -231,7 +207,25 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             W1,
             new QueueFixtureRequest(
                 0L,
-                renamed.id(),
+                definition.id(),
+                true,
+                true,
+                true,
+                null,
+                null,
+                false,
+                2,
+                List.of(
+                    new QueueBindingRequest(
+                        workerClass.id(), 0, true, ParticipationPolicy.PRIMARY, false))));
+    var second =
+        QueueRegistryTestFixtures.create(
+            registry,
+            jdbc,
+            W2,
+            new QueueFixtureRequest(
+                0L,
+                definition.id(),
                 true,
                 true,
                 true,
@@ -243,23 +237,67 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                     new QueueBindingRequest(
                         workerClass.id(), 0, true, ParticipationPolicy.PRIMARY, false))));
 
+    QueueDefinitionDto configured = registry.dto(registry.requireQueueDefinition(definition.id()));
     registry.updateQueueDefinition(
-        renamed.id(),
-        new QueueDefinitionRequest(
-            renamed.version(),
-            "GLOBAL_SETTINGS_RENAMED_AGAIN",
-            "Каталог 2",
-            QueueType.REPAIR));
+        configured.id(),
+        globalDefinitionRequest(
+            configured, "GLOBAL_SETTINGS_RENAMED_AGAIN", "Каталог 2"));
 
-    WorkQueueDto connection = registry.listQueues(W1).getFirst();
-    assertThat(connection.id()).isEqualTo(first.id());
-    assertThat(connection.active()).isTrue();
-    assertThat(connection.hidden()).isTrue();
-    assertThat(connection.collapsed()).isTrue();
-    assertThat(connection.resultPhotoMinCount()).isEqualTo(2);
-    assertThat(connection.bindings()).extracting(binding -> binding.workerClass().id())
-        .containsExactly(workerClass.id());
-    assertThat(registry.listQueues(W2)).isEmpty();
+    WorkQueueDto firstProjection = registry.listQueues(W1).getFirst();
+    WorkQueueDto secondProjection = registry.listQueues(W2).getFirst();
+    assertThat(firstProjection.id()).isEqualTo(first.id());
+    assertThat(secondProjection.id()).isEqualTo(second.id()).isNotEqualTo(first.id());
+    assertThat(List.of(firstProjection, secondProjection)).allSatisfy(connection -> {
+      assertThat(connection.name()).isEqualTo("GLOBAL_SETTINGS_RENAMED_AGAIN");
+      assertThat(connection.description()).isEqualTo("Каталог 2");
+      assertThat(connection.active()).isTrue();
+      assertThat(connection.hidden()).isTrue();
+      assertThat(connection.collapsed()).isTrue();
+      assertThat(connection.resultPhotoMinCount()).isEqualTo(2);
+      assertThat(connection.bindings()).extracting(binding -> binding.workerClass().id())
+          .containsExactly(workerClass.id());
+    });
+  }
+
+  @Test
+  void globalTemplateRepairsAnExistingWarehouseBindingWithAnotherPrimaryClass() {
+    var primaryClass = registry.createClass(workerClass("GLOBAL_TEMPLATE_PRIMARY"));
+    var secondaryClass = registry.createClass(workerClass("GLOBAL_TEMPLATE_SECONDARY"));
+    List<QueueBindingRequest> template =
+        List.of(
+            new QueueBindingRequest(
+                primaryClass.id(), 0, false, ParticipationPolicy.PRIMARY, false),
+            new QueueBindingRequest(
+                secondaryClass.id(), 1, true, ParticipationPolicy.REQUIRED, true));
+    var first =
+        QueueRegistryTestFixtures.create(
+            registry, jdbc, W1, queue("GLOBAL_TEMPLATE_BINDINGS", QueueType.REPAIR, template));
+    var second =
+        QueueRegistryTestFixtures.create(
+            registry, jdbc, W2, queue("GLOBAL_TEMPLATE_BINDINGS", QueueType.REPAIR, template));
+
+    jdbc.update("delete from work_queue_class_binding where queue_id = ?", second.id());
+    jdbc.update(
+        """
+        insert into work_queue_class_binding(
+          id, version, queue_id, worker_class_id, stop_task_on_take,
+          binding_order, participation_policy, notify_on_primary_take)
+        values (?, 0, ?, ?, false, 0, 'PRIMARY', false)
+        """,
+        UUID.randomUUID(),
+        second.id(),
+        secondaryClass.id());
+
+    globalQueueProjections.synchronizeDefinition(first.definitionId());
+
+    WorkQueueDto repaired = registry.dto(registry.requireQueue(W2, second.id()));
+    assertThat(repaired.id()).isEqualTo(second.id());
+    assertThat(repaired.bindings())
+        .extracting(binding -> binding.workerClass().id())
+        .containsExactly(primaryClass.id(), secondaryClass.id());
+    assertThat(repaired.bindings())
+        .extracting(QueueBindingDto::participationPolicy)
+        .containsExactly(ParticipationPolicy.PRIMARY, ParticipationPolicy.REQUIRED);
   }
 
   @Test
@@ -277,23 +315,6 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .filteredOn(definition -> definition.purpose() == QueuePurpose.LOGISTICS_DRIVER)
         .extracting(QueueDefinitionDto::id)
         .containsExactly(movementW1.definitionId());
-    assertThatThrownBy(
-            () ->
-                registry.createQueue(
-                    W2,
-                    new WorkQueueRequest(
-                        0L,
-                        movementW1.definitionId(),
-                        true,
-                        false,
-                        false,
-                        null,
-                        null,
-                        false,
-                        1,
-                        List.of())))
-        .isInstanceOf(NotFoundException.class);
-
     assertThat(registry.queueCapabilities(W1).movementToShipmentAvailable()).isTrue();
     assertThat(registry.queueCapabilities(W1).movementQueueDefinitions())
         .containsExactly(
@@ -770,11 +791,10 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
             List.of()));
     registry.updateQueueDefinition(
         queue.definitionId(),
-        new QueueDefinitionRequest(
-            queue.definitionVersion(),
+        globalDefinitionRequest(
+            registry.dto(registry.requireQueueDefinition(queue.definitionId())),
             "Переименованная очередь",
-            queue.description(),
-            queue.type()));
+            queue.description()));
     var replayed = board.createTask(W1, equivalent);
 
     assertThat(replayed.columns())
@@ -1466,11 +1486,10 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(kafkaOutboxCount(TaskBoardEventTypes.BOARD_TASK_CANCELLED)).isZero();
     registry.updateQueueDefinition(
         current.definitionId(),
-        new QueueDefinitionRequest(
-            current.definitionVersion(),
+        globalDefinitionRequest(
+            registry.dto(registry.requireQueueDefinition(current.definitionId())),
             "Renamed repair",
-            null,
-            QueueType.REPAIR));
+            null));
     var renamed = registry.listQueues(W1).getFirst();
     assertThat(renamed.id()).isEqualTo(current.id());
     assertThat(renamed.name()).isEqualTo("Renamed repair");
@@ -1494,9 +1513,9 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(registry.listQueues(W1)).extracting(WorkQueueDto::id).containsExactly(queue.id());
     registry.deleteReference(
         reference.type(), reference.externalReferenceId(), reference.version());
-    registry.deleteQueue(W1, queue.id(), queue.version());
-    registry.deleteQueueDefinition(
-        queue.definitionId(), queue.definitionVersion());
+    QueueDefinitionDto currentDefinition =
+        registry.dto(registry.requireQueueDefinition(queue.definitionId()));
+    registry.deleteQueueDefinition(queue.definitionId(), currentDefinition.version());
     assertThat(registry.listQueues(W1)).isEmpty();
   }
 
@@ -3134,7 +3153,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
                 Integer.class,
                 W2,
                 sourceCompleted.definitionId()))
-        .isZero();
+        .isOne();
     assertThat(relocated.route())
         .extracting(
             RegisteredRouteStepDto::status,
@@ -4022,7 +4041,7 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
               .orElseGet(
                   () ->
                       registry.createQueueDefinition(
-                          new QueueDefinitionRequest(0L, name, null, type, purpose)));
+                          QueueRegistryTestFixtures.globalDefinition(0L, name, null, type)));
     }
     return new QueueFixtureRequest(
         0L,
@@ -4150,6 +4169,39 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .mapToLong(WorkQueueDto::version)
         .findFirst()
         .orElseThrow();
+  }
+
+  private QueueDefinitionRequest globalDefinitionRequest(
+      QueueDefinitionDto definition, String name, String description) {
+    return globalDefinitionRequest(definition, name, description, definition.version());
+  }
+
+  private QueueDefinitionRequest globalDefinitionRequest(
+      QueueDefinitionDto definition, String name, String description, long version) {
+    return new QueueDefinitionRequest(
+        version,
+        name,
+        description,
+        definition.type(),
+        QueuePurpose.GENERAL,
+        definition.sortOrder(),
+        definition.active(),
+        definition.hidden(),
+        definition.collapsed(),
+        definition.holdingPeriodMinutes(),
+        definition.notificationThreshold(),
+        definition.notifyWhenThresholdReached(),
+        definition.resultPhotoMinCount(),
+        definition.bindings().stream()
+            .map(
+                binding ->
+                    new QueueBindingRequest(
+                        binding.workerClass().id(),
+                        binding.order(),
+                        binding.stopTaskOnTake(),
+                        binding.participationPolicy(),
+                        binding.notifyOnPrimaryTake()))
+            .toList());
   }
 
   private BoardEntryDto entry(LocalDate date, String title) {

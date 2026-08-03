@@ -114,7 +114,7 @@ class TaskBoardOpenApiParityTest {
   }
 
   @Test
-  void queueAndBrigadeSchemasKeepGlobalDefinitionsSeparateFromWarehouseConnections()
+  void queueCatalogSchemaOwnsTheGlobalTaskBoardStandard()
       throws Exception {
     Map<String, Object> document = openApiDocument();
     Map<String, Object> schemas = child(child(document, "components"), "schemas");
@@ -128,8 +128,12 @@ class TaskBoardOpenApiParityTest {
 
     Map<String, Object> queueDefinitionRequest = child(schemas, "QueueDefinitionRequest");
     assertThat(child(queueDefinitionRequest, "properties"))
-        .containsKeys("version", "name", "description", "type", "purpose")
-        .doesNotContainKeys(
+        .containsKeys(
+            "version",
+            "name",
+            "description",
+            "type",
+            "purpose",
             "sortOrder",
             "active",
             "hidden",
@@ -138,28 +142,17 @@ class TaskBoardOpenApiParityTest {
             "notificationThreshold",
             "notifyWhenThresholdReached",
             "resultPhotoMinCount",
-            "bindings",
-            "groupBindings");
+            "bindings")
+        .doesNotContainKey("groupBindings");
     assertThat(schemas).containsKey("DriverQueueRequest");
-    assertThat(schemas).containsKeys("WorkQueueRequest", "QueueOrderRequest");
-    assertThat(schemas).doesNotContainKey("QueueOrderItem");
-    assertThat(child(child(schemas, "WorkQueueRequest"), "properties"))
-        .containsKeys(
-            "version",
-            "definitionId",
-            "active",
-            "hidden",
-            "collapsed",
-            "holdingPeriodMinutes",
-            "notificationThreshold",
-            "notifyWhenThresholdReached",
-            "resultPhotoMinCount",
-            "bindings");
+    assertThat(schemas)
+        .containsKey("QueueDefinitionOrderRequest")
+        .doesNotContainKeys("WorkQueueRequest", "QueueOrderRequest", "QueueOrderItem");
     assertThat(child(paths, "/warehouses/{warehouseId}/work-queues"))
-        .containsKeys("get", "post");
+        .containsOnlyKeys("get", "parameters");
     assertThat(paths)
-        .containsKey("/warehouses/{warehouseId}/driver-queue")
-        .containsKeys(
+        .containsKeys("/queue-definitions/order", "/warehouses/{warehouseId}/driver-queue")
+        .doesNotContainKeys(
             "/warehouses/{warehouseId}/work-queues/{id}",
             "/warehouses/{warehouseId}/work-queue-order");
 

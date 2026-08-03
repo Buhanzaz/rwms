@@ -86,7 +86,7 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
 
   @Test
   @Transactional
-  void bootMigratesAdoptedVersionFourThroughVersionTwentyFourAndValidatesJpa() {
+  void bootMigratesAdoptedVersionFourThroughVersionTwentyFiveAndValidatesJpa() {
     assertThat(entityManagerFactory.isOpen()).isTrue();
     assertThat(retainedDigests(jdbc)).containsExactlyInAnyOrderEntriesOf(beforeStartup);
     assertThat(
@@ -133,8 +133,14 @@ class TaskBoardAdoptedV4JpaValidationIntegrationTest {
         .isOne();
     assertThat(
             jdbc.queryForObject(
+                "select count(*) from flyway_schema_history "
+                    + "where version='25' and type='SQL' and success",
+                Integer.class))
+        .isOne();
+    assertThat(
+            jdbc.queryForObject(
                 "select to_regclass('public.queue_definition_class_binding')", String.class))
-        .isNull();
+        .isEqualTo("queue_definition_class_binding");
     assertThat(
             jdbc.queryForObject(
                 """

@@ -576,7 +576,7 @@ class TaskBoardContractIntegrationTest extends PostgresIntegrationTestSupport {
   private WorkQueueDto createQueue(String name) {
     var definition =
         registry.createQueueDefinition(
-            new QueueDefinitionRequest(0L, name, null, QueueType.REPAIR));
+            QueueRegistryTestFixtures.globalDefinition(0L, name, null, QueueType.REPAIR));
     return QueueRegistryTestFixtures.create(registry, jdbc,
         WAREHOUSE,
         new QueueFixtureRequest(

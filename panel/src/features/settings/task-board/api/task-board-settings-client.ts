@@ -9,10 +9,12 @@ import type {
   WorkerGroupRequest,
   WorkerRequest,
   WorkQueueDto,
-  WorkQueueRequest,
 } from "@/features/settings/task-board/model/task-board-settings"
 
-export type QueueOrderItem = { queueId: string; expectedVersion: number }
+export type QueueDefinitionOrderItem = {
+  definitionId: string
+  expectedVersion: number
+}
 
 export interface TaskBoardSettingsClient {
   listQueueDefinitions(token: string): Promise<QueueDefinitionDto[]>
@@ -30,30 +32,12 @@ export interface TaskBoardSettingsClient {
     id: string,
     expectedVersion: number
   ): Promise<void>
+  reorderQueueDefinitions(
+    token: string,
+    definitions: QueueDefinitionOrderItem[]
+  ): Promise<QueueDefinitionDto[]>
 
   listQueues(token: string, warehouseId: string): Promise<WorkQueueDto[]>
-  createQueue(
-    token: string,
-    warehouseId: string,
-    request: WorkQueueRequest
-  ): Promise<WorkQueueDto>
-  updateQueue(
-    token: string,
-    warehouseId: string,
-    id: string,
-    request: WorkQueueRequest
-  ): Promise<WorkQueueDto>
-  deleteQueue(
-    token: string,
-    warehouseId: string,
-    id: string,
-    expectedVersion: number
-  ): Promise<void>
-  reorderQueues(
-    token: string,
-    warehouseId: string,
-    queues: QueueOrderItem[]
-  ): Promise<WorkQueueDto[]>
   updateDriverQueue(
     token: string,
     warehouseId: string,

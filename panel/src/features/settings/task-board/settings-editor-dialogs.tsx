@@ -43,8 +43,6 @@ import type {
   WorkerGroupDto,
   WorkerGroupRequest,
   WorkerRequest,
-  WorkQueueDto,
-  WorkQueueRequest,
 } from "@/features/settings/task-board/model/task-board-settings"
 import {
   participationPolicyLabels,
@@ -184,12 +182,14 @@ function EditorShell({
 
 export function QueueDefinitionEditorDialog({
   definition,
+  classes,
   pending,
   error,
   onClose,
   onSave,
 }: {
   definition: QueueDefinitionDto | null
+  classes: WorkerClassDto[]
   pending: boolean
   error: string | null
   onClose: () => void
@@ -197,12 +197,47 @@ export function QueueDefinitionEditorDialog({
 }) {
   const [name, setName] = useState(definition?.name ?? "")
   const [type, setType] = useState<QueueType>(definition?.type ?? "REPAIR")
+  const [active, setActive] = useState(definition?.active ?? true)
+  const [hidden, setHidden] = useState(definition?.hidden ?? false)
+  const [collapsed, setCollapsed] = useState(definition?.collapsed ?? false)
+  const [holdingPeriod, setHoldingPeriod] = useState(
+    String(definition?.holdingPeriodMinutes ?? "")
+  )
+  const [threshold, setThreshold] = useState(
+    String(definition?.notificationThreshold ?? "")
+  )
+  const [notify, setNotify] = useState(
+    definition?.notifyWhenThresholdReached ?? false
+  )
+  const [resultPhotoMinCount, setResultPhotoMinCount] = useState(
+    String(definition?.resultPhotoMinCount ?? defaultResultPhotoMinCount(type))
+  )
+  const [bindings, setBindings] = useState<QueueBindingRequest[]>(() =>
+    normalizeBindings(
+      [...(definition?.bindings ?? [])]
+        .sort((left, right) => left.order - right.order)
+        .map((binding) => ({
+          workerClassId: binding.workerClass.id,
+          order: binding.order,
+          stopTaskOnTake: binding.stopTaskOnTake,
+          participationPolicy: binding.participationPolicy,
+          notifyOnPrimaryTake: binding.notifyOnPrimaryTake,
+        }))
+    )
+  )
   const [validation, setValidation] = useState<string | null>(null)
+  const resultPhotoMinCountInvalid =
+    !isValidResultPhotoMinCount(resultPhotoMinCount)
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!name.trim()) {
       setValidation("Укажите название общей очереди.")
+      return
+    }
+    const photoMinCount = numberOrNull(resultPhotoMinCount)
+    if (photoMinCount === null || resultPhotoMinCountInvalid) {
+      setValidation("Минимум фотографий должен быть целым числом от 0 до 20.")
       return
     }
     await onSave({
@@ -211,13 +246,24 @@ export function QueueDefinitionEditorDialog({
       description: definition?.description ?? null,
       type,
       purpose: "GENERAL",
+      sortOrder: definition?.sortOrder ?? 0,
+      active,
+      hidden,
+      collapsed,
+      holdingPeriodMinutes:
+        type === "HOLDING" ? numberOrNull(holdingPeriod) : null,
+      notificationThreshold:
+        type === "HOLDING" ? numberOrNull(threshold) : null,
+      notifyWhenThresholdReached: type === "HOLDING" && notify,
+      resultPhotoMinCount: photoMinCount,
+      bindings: normalizeBindings(bindings),
     })
   }
 
   return (
     <EditorShell
-      title={definition ? "Общая очередь" : "Новая общая очередь"}
-      description="Название и тип задаются один раз для всей системы. Складские настройки настраиваются отдельно."
+      title={definition ? "Очередь каталога" : "Новая очередь каталога"}
+      description="Параметры очереди задаются один раз для всей системы."
       pending={pending}
       error={validation ?? error}
       onClose={onClose}
@@ -238,16 +284,22 @@ export function QueueDefinitionEditorDialog({
           <FieldLabel htmlFor="queue-definition-type">Тип</FieldLabel>
           <Select
             value={type}
-            onValueChange={(value) => setType(value as QueueType)}
+            onValueChange={(value) => {
+              const nextType = value as QueueType
+              setType(nextType)
+              if (!definition) {
+                setResultPhotoMinCount(
+                  String(defaultResultPhotoMinCount(nextType))
+                )
+              }
+            }}
           >
             <SelectTrigger id="queue-definition-type" className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                {(Object.keys(queueTypeLabels) as QueueType[])
-                  .filter((value) => value !== "MOVEMENT")
-                  .map((value) => (
+                {(Object.keys(queueTypeLabels) as QueueType[]).map((value) => (
                     <SelectItem key={value} value={value}>
                       {queueTypeLabels[value]}
                     </SelectItem>
@@ -255,147 +307,6 @@ export function QueueDefinitionEditorDialog({
               </SelectGroup>
             </SelectContent>
           </Select>
-        </Field>
-      </FieldGroup>
-    </EditorShell>
-  )
-}
-
-export function QueueEditorDialog({
-  queue,
-  definitions,
-  classes,
-  pending,
-  error,
-  onClose,
-  onSave,
-}: {
-  queue: WorkQueueDto | null
-  definitions: QueueDefinitionDto[]
-  classes: WorkerClassDto[]
-  pending: boolean
-  error: string | null
-  onClose: () => void
-  onSave: (request: WorkQueueRequest) => Promise<void>
-}) {
-  const [definitionId, setDefinitionId] = useState(queue?.definitionId ?? "")
-  const selectedDefinition = definitions.find(
-    (item) => item.id === definitionId
-  )
-  const type = selectedDefinition?.type ?? queue?.type ?? "REPAIR"
-  const definitionName = selectedDefinition?.name ?? queue?.name ?? ""
-  const [active, setActive] = useState(queue?.active ?? true)
-  const [hidden, setHidden] = useState(queue?.hidden ?? false)
-  const [collapsed, setCollapsed] = useState(queue?.collapsed ?? false)
-  const [holdingPeriod, setHoldingPeriod] = useState(
-    String(queue?.holdingPeriodMinutes ?? "")
-  )
-  const [threshold, setThreshold] = useState(
-    String(queue?.notificationThreshold ?? "")
-  )
-  const [notify, setNotify] = useState(
-    queue?.notifyWhenThresholdReached ?? false
-  )
-  const [resultPhotoMinCount, setResultPhotoMinCount] = useState(
-    String(queue?.resultPhotoMinCount ?? defaultResultPhotoMinCount(type))
-  )
-  const [bindings, setBindings] = useState<QueueBindingRequest[]>(() =>
-    normalizeBindings(
-      [...(queue?.bindings ?? [])]
-        .sort((left, right) => left.order - right.order)
-        .map((binding) => ({
-          workerClassId: binding.workerClass.id,
-          order: binding.order,
-          stopTaskOnTake: binding.stopTaskOnTake,
-          participationPolicy: binding.participationPolicy,
-          notifyOnPrimaryTake: binding.notifyOnPrimaryTake,
-        }))
-    )
-  )
-  const [validation, setValidation] = useState<string | null>(null)
-  const resultPhotoMinCountInvalid =
-    !isValidResultPhotoMinCount(resultPhotoMinCount)
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!definitionId) {
-      setValidation("Выберите общую очередь.")
-      return
-    }
-    const photoMinCount = numberOrNull(resultPhotoMinCount)
-    if (photoMinCount === null || resultPhotoMinCountInvalid) {
-      setValidation("Минимум фотографий должен быть целым числом от 0 до 20.")
-      return
-    }
-    await onSave({
-      version: queue?.version ?? 0,
-      definitionId,
-      active,
-      hidden,
-      collapsed,
-      holdingPeriodMinutes:
-        type === "HOLDING" ? numberOrNull(holdingPeriod) : null,
-      notificationThreshold:
-        type === "HOLDING" ? numberOrNull(threshold) : null,
-      notifyWhenThresholdReached: type === "HOLDING" && notify,
-      resultPhotoMinCount: photoMinCount,
-      bindings: normalizeBindings(bindings),
-    })
-  }
-
-  return (
-    <EditorShell
-      title={queue ? "Очередь склада" : "Добавить очередь склада"}
-      description="Общая очередь подключается к выбранному складу без копирования названия и типа."
-      pending={pending}
-      error={validation ?? error}
-      onClose={onClose}
-      onSubmit={(event) => void submit(event)}
-    >
-      <FieldGroup>
-        <Field>
-          <FieldLabel htmlFor="warehouse-queue-definition">
-            Общая очередь
-          </FieldLabel>
-          {queue ? (
-            <>
-              <Input
-                id="warehouse-queue-definition"
-                value={definitionName}
-                disabled
-              />
-              <FieldDescription>
-                {queueTypeLabels[type]}. Название и тип изменяются в общем
-                каталоге.
-              </FieldDescription>
-            </>
-          ) : (
-            <Select
-              value={definitionId}
-              onValueChange={(value) => {
-                setDefinitionId(value)
-                const nextType =
-                  definitions.find((item) => item.id === value)?.type ??
-                  "REPAIR"
-                setResultPhotoMinCount(
-                  String(defaultResultPhotoMinCount(nextType))
-                )
-              }}
-            >
-              <SelectTrigger id="warehouse-queue-definition" className="w-full">
-                <SelectValue placeholder="Выберите очередь" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {definitions.map((item) => (
-                    <SelectItem key={item.id} value={item.id}>
-                      {item.name} · {queueTypeLabels[item.type]}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          )}
         </Field>
         <Field data-invalid={resultPhotoMinCountInvalid || undefined}>
           <FieldLabel htmlFor="queue-result-photo-min-count">

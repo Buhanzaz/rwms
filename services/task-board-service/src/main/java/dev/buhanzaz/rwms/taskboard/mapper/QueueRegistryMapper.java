@@ -6,6 +6,7 @@ import dev.buhanzaz.rwms.taskboard.api.ApiModels.QueueReferenceDto;
 import dev.buhanzaz.rwms.taskboard.api.ApiModels.WorkQueueDto;
 import dev.buhanzaz.rwms.taskboard.api.ApiModels.WorkerClassDto;
 import dev.buhanzaz.rwms.taskboard.domain.QueueDefinition;
+import dev.buhanzaz.rwms.taskboard.domain.QueueDefinitionClassBinding;
 import dev.buhanzaz.rwms.taskboard.domain.QueueUsageReference;
 import dev.buhanzaz.rwms.taskboard.domain.WorkQueue;
 import dev.buhanzaz.rwms.taskboard.domain.WorkQueueClassBinding;
@@ -25,7 +26,11 @@ import org.mapstruct.ReportingPolicy;
     injectionStrategy = InjectionStrategy.CONSTRUCTOR,
     unmappedTargetPolicy = ReportingPolicy.ERROR)
 public interface QueueRegistryMapper {
-  QueueDefinitionDto toQueueDefinitionDto(QueueDefinition definition);
+  @Mapping(target = "bindings", source = "definitionBindings")
+  QueueDefinitionDto toQueueDefinitionDto(
+      QueueDefinition definition,
+      List<QueueDefinitionClassBinding> definitionBindings,
+      @Context Set<UUID> logisticsPrimaryClassIds);
 
   @Mapping(
       target = "logisticsPrimary",
@@ -37,6 +42,11 @@ public interface QueueRegistryMapper {
   @Mapping(target = "primary", expression = "java(binding.getBindingOrder() == 0)")
   QueueBindingDto toQueueBindingDto(
       WorkQueueClassBinding binding, @Context Set<UUID> logisticsPrimaryClassIds);
+
+  @Mapping(target = "order", source = "bindingOrder")
+  @Mapping(target = "primary", expression = "java(binding.getBindingOrder() == 0)")
+  QueueBindingDto toQueueBindingDto(
+      QueueDefinitionClassBinding binding, @Context Set<UUID> logisticsPrimaryClassIds);
 
   @Mapping(target = "definitionId", source = "queue.definition.id")
   @Mapping(target = "definitionVersion", source = "queue.definition.version")

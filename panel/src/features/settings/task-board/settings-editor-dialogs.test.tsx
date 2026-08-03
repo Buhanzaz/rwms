@@ -15,7 +15,6 @@ import {
   GroupAvailabilityDialog,
   GroupEditorDialog,
   QueueDefinitionEditorDialog,
-  QueueEditorDialog,
   WorkerEditorDialog,
 } from "@/features/settings/task-board/settings-editor-dialogs"
 import type {
@@ -23,7 +22,6 @@ import type {
   WorkerClassDto,
   WorkerDto,
   WorkerGroupDto,
-  WorkQueueDto,
 } from "@/features/settings/task-board/model/task-board-settings"
 
 function workerClass(
@@ -53,41 +51,6 @@ const movementDefinition: QueueDefinitionDto = {
   description: null,
   type: "REPAIR",
   purpose: "GENERAL",
-}
-
-const movementBindings: WorkQueueDto["bindings"] = [
-  {
-    id: "binding-driver",
-    version: 3,
-    workerClass: driverClass,
-    order: 0,
-    primary: true,
-    stopTaskOnTake: false,
-    participationPolicy: "PRIMARY",
-    notifyOnPrimaryTake: false,
-  },
-  {
-    id: "binding-slinger",
-    version: 3,
-    workerClass: slingerClass,
-    order: 1,
-    primary: false,
-    stopTaskOnTake: true,
-    participationPolicy: "REQUIRED",
-    notifyOnPrimaryTake: true,
-  },
-]
-
-const movementQueue: WorkQueueDto = {
-  id: "queue-movement",
-  version: 5,
-  warehouseId: "warehouse-1",
-  definitionId: movementDefinition.id,
-  definitionVersion: movementDefinition.version,
-  name: movementDefinition.name,
-  description: movementDefinition.description,
-  type: movementDefinition.type,
-  purpose: "GENERAL",
   sortOrder: 10,
   active: true,
   hidden: false,
@@ -96,7 +59,28 @@ const movementQueue: WorkQueueDto = {
   notificationThreshold: null,
   notifyWhenThresholdReached: false,
   resultPhotoMinCount: 1,
-  bindings: movementBindings,
+  bindings: [
+    {
+      id: "binding-driver",
+      version: 3,
+      workerClass: driverClass,
+      order: 0,
+      primary: true,
+      stopTaskOnTake: false,
+      participationPolicy: "PRIMARY",
+      notifyOnPrimaryTake: false,
+    },
+    {
+      id: "binding-slinger",
+      version: 3,
+      workerClass: slingerClass,
+      order: 1,
+      primary: false,
+      stopTaskOnTake: true,
+      participationPolicy: "REQUIRED",
+      notifyOnPrimaryTake: true,
+    },
+  ],
 }
 
 function worker(
@@ -222,13 +206,14 @@ afterAll(() => {
 afterEach(cleanup)
 
 describe("QueueDefinitionEditorDialog", () => {
-  it("edits the shared name and type independently from warehouse settings", async () => {
+  it("owns the global queue settings and existing class bindings", async () => {
     const user = userEvent.setup()
     const onSave = vi.fn(async () => undefined)
 
     render(
       <QueueDefinitionEditorDialog
         definition={movementDefinition}
+        classes={[driverClass, slingerClass]}
         pending={false}
         error={null}
         onClose={vi.fn()}
@@ -247,28 +232,48 @@ describe("QueueDefinitionEditorDialog", () => {
       description: null,
       type: "REPAIR",
       purpose: "GENERAL",
+      sortOrder: movementDefinition.sortOrder,
+      active: true,
+      hidden: false,
+      collapsed: false,
+      holdingPeriodMinutes: null,
+      notificationThreshold: null,
+      notifyWhenThresholdReached: false,
+      resultPhotoMinCount: 1,
+      bindings: [
+        {
+          workerClassId: driverClass.id,
+          order: 0,
+          stopTaskOnTake: false,
+          participationPolicy: "PRIMARY",
+          notifyOnPrimaryTake: false,
+        },
+        {
+          workerClassId: slingerClass.id,
+          order: 1,
+          stopTaskOnTake: true,
+          participationPolicy: "REQUIRED",
+          notifyOnPrimaryTake: true,
+        },
+      ],
     })
     expect(screen.queryByRole("textbox", { name: "Описание" })).toBeNull()
     await user.click(screen.getByRole("combobox", { name: "Тип" }))
+    expect(screen.getByRole("option", { name: "Перемещение" })).toBeTruthy()
+    await user.click(screen.getByRole("option", { name: "Ремонт" }))
     expect(
-      screen.queryByRole("option", { name: "Перемещение" })
-    ).toBeNull()
-    expect(screen.queryByText("Классы исполнителей")).toBeNull()
-    expect(
-      screen.queryByRole("spinbutton", { name: "Минимум фото результата" })
-    ).toBeNull()
+      screen.getByRole("spinbutton", { name: "Минимум фото результата" })
+    ).toBeTruthy()
+    expect(screen.getByText("Классы исполнителей")).toBeTruthy()
   })
-})
 
-describe("QueueEditorDialog warehouse settings", () => {
-  it("preserves the primary/secondary participation and notification behavior", async () => {
+  it("allows choosing and reordering global class bindings", async () => {
     const user = userEvent.setup()
     const onSave = vi.fn(async () => undefined)
 
     render(
-      <QueueEditorDialog
-        queue={movementQueue}
-        definitions={[movementDefinition]}
+      <QueueDefinitionEditorDialog
+        definition={null}
         classes={[driverClass, slingerClass]}
         pending={false}
         error={null}
@@ -277,67 +282,7 @@ describe("QueueEditorDialog warehouse settings", () => {
       />
     )
 
-    expect(screen.getByText("Основной")).toBeTruthy()
-    expect(screen.getByText("Вторичный")).toBeTruthy()
-    expect(
-      screen
-        .getByRole("checkbox", {
-          name: "Останавливать текущую работу при взятии",
-        })
-        .getAttribute("data-state")
-    ).toBe("checked")
-    expect(
-      screen
-        .getByRole("checkbox", {
-          name: "Уведомлять после принятия основным исполнителем",
-        })
-        .getAttribute("data-state")
-    ).toBe("checked")
-
-    await user.click(screen.getByRole("button", { name: "Сохранить" }))
-
-    expect(onSave).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bindings: [
-          {
-            workerClassId: driverClass.id,
-            order: 0,
-            stopTaskOnTake: false,
-            participationPolicy: "PRIMARY",
-            notifyOnPrimaryTake: false,
-          },
-          {
-            workerClassId: slingerClass.id,
-            order: 1,
-            stopTaskOnTake: true,
-            participationPolicy: "REQUIRED",
-            notifyOnPrimaryTake: true,
-          },
-        ],
-      })
-    )
-  })
-
-  it("allows choosing and reordering class bindings", async () => {
-    const user = userEvent.setup()
-    const onSave = vi.fn(async () => undefined)
-
-    render(
-      <QueueEditorDialog
-        queue={null}
-        definitions={[movementDefinition]}
-        classes={[driverClass, slingerClass]}
-        pending={false}
-        error={null}
-        onClose={vi.fn()}
-        onSave={onSave}
-      />
-    )
-
-    await user.click(screen.getByRole("combobox", { name: "Общая очередь" }))
-    await user.click(
-      screen.getByRole("option", { name: "Внутренние работы · Ремонт" })
-    )
+    await user.type(screen.getByRole("textbox", { name: "Название" }), "Монтаж")
     await user.click(screen.getByRole("checkbox", { name: driverClass.name }))
     await user.click(screen.getByRole("checkbox", { name: slingerClass.name }))
     await user.click(screen.getAllByRole("button", { name: "Выше" })[1])
@@ -355,7 +300,9 @@ describe("QueueEditorDialog warehouse settings", () => {
 
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({
-        definitionId: movementDefinition.id,
+        version: 0,
+        name: "Монтаж",
+        sortOrder: 0,
         bindings: [
           {
             workerClassId: slingerClass.id,
@@ -380,9 +327,8 @@ describe("QueueEditorDialog warehouse settings", () => {
     const onSave = vi.fn(async () => undefined)
 
     render(
-      <QueueEditorDialog
-        queue={movementQueue}
-        definitions={[movementDefinition]}
+      <QueueDefinitionEditorDialog
+        definition={movementDefinition}
         classes={[driverClass, slingerClass]}
         pending={false}
         error={null}
