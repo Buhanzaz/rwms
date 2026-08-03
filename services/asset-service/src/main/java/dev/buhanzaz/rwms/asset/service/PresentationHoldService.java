@@ -3,6 +3,7 @@ package dev.buhanzaz.rwms.asset.service;
 import static dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.*;
 
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.CabinCatalogValueResponse;
+import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemPage;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.OrderAssetApiModels.OrderUnitReservationView;
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservation;
@@ -55,6 +56,7 @@ public class PresentationHoldService {
   private final CabinCompositionService cabinComposition;
   private final OrderAssetService orders;
   private final AssetIdempotencyStore idempotency;
+  private final RentalAvailabilityInvalidationPublisher availabilityInvalidations;
   private final ObjectMapper json;
 
   @Transactional
@@ -103,6 +105,7 @@ public class PresentationHoldService {
     Map<UUID, CabinCompositionService.CabinComposition> compositions =
         cabinComposition.compositionsFor(available);
     Set<UUID> allocated = new HashSet<>();
+    Set<UUID> changedAvailability = new LinkedHashSet<>();
     List<CabinSearchGroupResult> results = new ArrayList<>();
     for (CabinSearchGroup group : request.groups()) {
       List<AvailableCabin> cabins =
@@ -171,8 +174,11 @@ public class PresentationHoldService {
                   timestamp);
           current.add(own);
           currentByItem.put(rentalItemId, own);
+          changedAvailability.add(rentalItemId);
         } else if (own.getExpiresAt().isBefore(request.expiresAt())) {
-          own.renew(request.expiresAt(), timestamp);
+          if (own.renew(request.expiresAt(), timestamp)) {
+            changedAvailability.add(rentalItemId);
+          }
         }
       }
       try {
@@ -181,6 +187,8 @@ public class PresentationHoldService {
         throw conflict(
             "UNIT_PRESENTATION_HELD", "Бытовка уже показана другому клиенту");
       }
+      availabilityInvalidations.publishAfterCommit(
+          request.warehouseId(), changedAvailability);
     }
     return new CabinSearchResponse(
         request.warehouseId(), request.expiresAt(), List.copyOf(results));
@@ -228,6 +236,32 @@ public class PresentationHoldService {
                 })
             .toList();
     return new CabinAvailabilityResponse(request.warehouseId(), response);
+  }
+
+  @Transactional
+  public RentalItemPage availableRentalItems(
+      UUID warehouseId, int page, int size, String search) {
+    UUID requiredWarehouseId = Objects.requireNonNull(warehouseId, "warehouseId");
+    if (page < 0 || size < 1 || size > 200) {
+      throw new IllegalArgumentException("Invalid page request");
+    }
+    String needle = normalize(search);
+    OffsetDateTime timestamp = now();
+    holds.expireDue(timestamp);
+    List<RentalItem> available =
+        availableItems(requiredWarehouseId, null, timestamp, false).stream()
+            .filter(item -> needle.isEmpty() || normalize(item.getNumber()).contains(needle))
+            .toList();
+    long offset = (long) page * size;
+    int from = (int) Math.min(offset, available.size());
+    int to = Math.min(from + size, available.size());
+    List<RentalItemResponse> content =
+        available.subList(from, to).stream()
+            .map(item -> assets.rentalItem(item.getId()))
+            .toList();
+    long pages =
+        available.isEmpty() ? 0 : (available.size() + (long) size - 1) / size;
+    return new RentalItemPage(content, page, size, available.size(), pages);
   }
 
   @Transactional(readOnly = true)
@@ -303,9 +337,12 @@ public class PresentationHoldService {
         current.stream()
             .collect(Collectors.toMap(PresentationUnitHold::getRentalItemId, Function.identity()));
     Set<UUID> requested = Set.copyOf(requestedIds);
+    Set<UUID> changedAvailability = new LinkedHashSet<>();
 
     for (PresentationUnitHold hold : current) {
-      if (!requested.contains(hold.getRentalItemId())) hold.release(timestamp);
+      if (!requested.contains(hold.getRentalItemId()) && hold.release(timestamp)) {
+        changedAvailability.add(hold.getRentalItemId());
+      }
     }
     for (UUID rentalItemId : requestedIds) {
       RentalItem item = items.get(rentalItemId);
@@ -327,6 +364,7 @@ public class PresentationHoldService {
       if (existing != null && !existing.getPresentationId().equals(presentationId)) {
         if (existing.expire(timestamp)) {
           holds.save(existing);
+          changedAvailability.add(rentalItemId);
         } else {
           throw conflict(
               "UNIT_PRESENTATION_HELD", "Бытовка уже показана другому клиенту");
@@ -343,8 +381,11 @@ public class PresentationHoldService {
                 request.actorSubjectId(),
                 request.actorRole(),
                 timestamp));
+        changedAvailability.add(rentalItemId);
       } else {
-        own.renew(request.expiresAt(), timestamp);
+        if (own.renew(request.expiresAt(), timestamp)) {
+          changedAvailability.add(rentalItemId);
+        }
       }
     }
     try {
@@ -367,6 +408,8 @@ public class PresentationHoldService {
         fingerprint,
         200,
         response);
+    availabilityInvalidations.publishAfterCommit(
+        request.warehouseId(), changedAvailability);
     return new AssetService.CreateResult<>(response, false);
   }
 
@@ -386,7 +429,11 @@ public class PresentationHoldService {
     holds.acquireTransactionLock("presentation-holds:" + presentationId);
     List<PresentationUnitHold> active =
         holds.findAllActiveForUpdate(presentationId, PresentationUnitHoldState.ACTIVE);
-    active.forEach(value -> value.release(timestamp));
+    Set<UUID> changedAvailability = new LinkedHashSet<>();
+    active.forEach(
+        value -> {
+          if (value.release(timestamp)) changedAvailability.add(value.getRentalItemId());
+        });
     holds.saveAllAndFlush(active);
     ReplacePresentationHoldsResponse response =
         new ReplacePresentationHoldsResponse(presentationId, null, List.of());
@@ -397,6 +444,16 @@ public class PresentationHoldService {
         fingerprint,
         200,
         response);
+    Map<UUID, List<UUID>> changesByWarehouse =
+        active.stream()
+            .filter(value -> changedAvailability.contains(value.getRentalItemId()))
+            .collect(
+                Collectors.groupingBy(
+                    PresentationUnitHold::getWarehouseId,
+                    LinkedHashMap::new,
+                    Collectors.mapping(
+                        PresentationUnitHold::getRentalItemId, Collectors.toList())));
+    changesByWarehouse.forEach(availabilityInvalidations::publishAfterCommit);
     return new AssetService.CreateResult<>(response, false);
   }
 
@@ -503,21 +560,26 @@ public class PresentationHoldService {
         fingerprint,
         200,
         response);
+    availabilityInvalidations.publishAfterCommit(
+        request.warehouseId(),
+        current.stream().map(PresentationUnitHold::getRentalItemId).toList());
     return new AssetService.CreateResult<>(response, false);
-  }
-
-  private List<RentalItem> availableItems(UUID warehouseId) {
-    OffsetDateTime timestamp = now();
-    holds.expireDue(timestamp);
-    return availableItems(warehouseId, null, timestamp);
   }
 
   private List<RentalItem> availableItems(
       UUID warehouseId, UUID ownHoldScopeId, OffsetDateTime timestamp) {
+    return availableItems(warehouseId, ownHoldScopeId, timestamp, true);
+  }
+
+  private List<RentalItem> availableItems(
+      UUID warehouseId,
+      UUID ownHoldScopeId,
+      OffsetDateTime timestamp,
+      boolean boundSearchPool) {
     List<RentalItem> pool =
         rentalItems.findAllByWarehouseIdAndStatusInOrderByIdentityMatchKeyAscIdAsc(
             warehouseId, RENTABLE_STATUSES);
-    if (pool.size() > MAX_SEARCH_POOL) {
+    if (boundSearchPool && pool.size() > MAX_SEARCH_POOL) {
       pool = pool.subList(0, MAX_SEARCH_POOL);
     }
     List<UUID> ids = pool.stream().map(RentalItem::getId).toList();

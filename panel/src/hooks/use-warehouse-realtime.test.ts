@@ -50,4 +50,22 @@ describe("warehouse SSE payloads", () => {
       parseWarehouseInvalidation({ id: null, event: "message", data: "{}" })
     ).toBeNull()
   })
+
+  it("keeps the dedicated rental availability scope for booking refreshes", () => {
+    expect(
+      parseWarehouseInvalidation({
+        id: "event-availability",
+        event: "warehouse-invalidation",
+        data: JSON.stringify({
+          scope: "RENTAL_AVAILABILITY_CHANGED",
+          aggregateType: "RENTAL_ITEM",
+          aggregateId: "cabin-1",
+        }),
+      })
+    ).toMatchObject({
+      scope: "RENTAL_AVAILABILITY_CHANGED",
+      aggregateType: "RENTAL_ITEM",
+      aggregateId: "cabin-1",
+    })
+  })
 })

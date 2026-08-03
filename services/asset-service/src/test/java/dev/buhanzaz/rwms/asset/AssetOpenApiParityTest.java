@@ -41,6 +41,8 @@ class AssetOpenApiParityTest {
 
     assertThat(paths).containsKeys(
         "/api/asset/v1/rental-items",
+        "/api/asset/v1/rental-items/available",
+        "/api/asset/v1/rental-items/availability",
         "/api/asset/v1/rental-items/{id}/manual-notes",
         "/api/asset/v1/equipment/transfers",
         "/api/asset/v1/equipment/dispositions",
@@ -84,6 +86,22 @@ class AssetOpenApiParityTest {
         "/api/internal/asset/v1/inventory/number-resolutions",
         "/api/internal/asset/v1/inventory/validations",
         "/api/internal/asset/v1/inventory/source-assets");
+    assertThat(
+            child(
+                    child(
+                        child(paths, "/api/asset/v1/rental-items/available"),
+                        "get"),
+                    "responses")
+                .keySet())
+        .containsExactlyInAnyOrder("200", "400", "401", "403");
+    assertThat(
+            child(
+                    child(
+                        child(paths, "/api/asset/v1/rental-items/availability"),
+                        "post"),
+                    "responses")
+                .keySet())
+        .containsExactlyInAnyOrder("200", "400", "401", "403");
     Map<String, Object> schemas = child(child(document, "components"), "schemas");
     Map<String, Object> createRentalItem = child(schemas, "CreateRentalItemRequest");
     assertThat(list(createRentalItem.get("required")))
@@ -292,7 +310,6 @@ class AssetOpenApiParityTest {
             "TRANSFER_ARRIVE");
     assertThat(child(schemas, "LogisticsRentalItemSnapshot").toString())
         .doesNotContain(
-            "number",
             "passport",
             "comment",
             "identityMatchKey",

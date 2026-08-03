@@ -130,7 +130,7 @@ describe("resolveHeaderBreadcrumbs", () => {
     ])
   })
 
-  it("shows the booking number for an open booking", () => {
+  it("shows the order number for an open order", () => {
     expect(
       resolveHeaderBreadcrumbs(
         "/orders/33333333-3333-4333-8333-333333333333",
@@ -139,9 +139,15 @@ describe("resolveHeaderBreadcrumbs", () => {
         null,
         "ORD-000001"
       )
+    ).toEqual([{ title: "Заказы", to: "/orders" }, { title: "ORD-000001" }])
+  })
+
+  it("keeps the booking continuation under the booking catalog", () => {
+    expect(
+      resolveHeaderBreadcrumbs("/booking/continue", "", null, null)
     ).toEqual([
-      { title: "Бронирование", to: "/orders" },
-      { title: "ORD-000001" },
+      { title: "Бронирование", to: "/booking" },
+      { title: "Продолжение" },
     ])
   })
 })
