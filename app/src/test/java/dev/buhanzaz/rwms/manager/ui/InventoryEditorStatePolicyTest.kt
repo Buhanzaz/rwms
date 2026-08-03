@@ -63,6 +63,21 @@ class InventoryEditorStatePolicyTest {
     }
 
     @Test
+    fun `empty serialized characteristics do not become a visible bracket placeholder`() {
+        val parsedArray = parseInventoryCharacteristics(emptyList<String>())
+        val parsedLegacyText = parseInventoryCharacteristics("[]")
+
+        assertThat(parsedArray.selected).isEmpty()
+        assertThat(parsedLegacyText.selected).isEmpty()
+        assertThat(inventoryCharacteristicsDisplayValue(parsedArray.selected)).isEmpty()
+        assertThat(
+            inventoryCharacteristicsDisplayValue(
+                listOf("[]", "Пластиковое окно", "Пластиковое окно"),
+            ),
+        ).isEqualTo("Пластиковое окно")
+    }
+
+    @Test
     fun `creation validation requires complete server values and photo`() {
         val incomplete = creationEditor().withInventoryCreationOrigin("ADDED_USED")
         assertThat(incomplete.inventoryCreationValidationError(hasCreationPhoto = false))
@@ -229,6 +244,22 @@ class InventoryEditorStatePolicyTest {
                 persisted = emptyList(),
             ),
         ).containsExactly(titleReference, firstReference).inOrder()
+    }
+
+    @Test
+    fun `each ready upload is retained before the rest of the batch completes`() {
+        val title = "content://title"
+        val remaining = "content://remaining"
+        val titleReference = MediaReferenceDto("title-media", 3)
+        val editor = creationEditor().copy(
+            photoUris = listOf(title, remaining),
+            coverPhotoUri = title,
+        )
+
+        val afterTitle = editor.retainUploadedInventoryPhoto(title, titleReference)
+
+        assertThat(afterTitle.uploadedPhotoMedia).containsExactly(title, titleReference)
+        assertThat(afterTitle.pendingInventoryPhotoUris()).containsExactly(remaining)
     }
 
     @Test

@@ -135,7 +135,7 @@ class MaintenanceEditorStatePolicyTest {
     }
 
     @Test
-    fun `new local title is first before existing ready media after upload`() {
+    fun `new local title is first in durable background upload order`() {
         val firstLocal = "content://rwms/first.jpg"
         val titleLocal = "content://rwms/title.jpg"
         val editor = editor().copy(
@@ -148,21 +148,7 @@ class MaintenanceEditorStatePolicyTest {
         )
         val orderedLocalUris = orderedMaintenanceLocalPhotoUris(editor)
 
-        val combined = orderedMaintenanceMediaReferences(
-            editor = editor,
-            uploadedReferences = listOf(
-                MediaReferenceDto("uploaded-title", 3),
-                MediaReferenceDto("uploaded-first", 4),
-            ),
-        )
-
         assertThat(orderedLocalUris).containsExactly(titleLocal, firstLocal).inOrder()
-        assertThat(combined.map(MediaReferenceDto::mediaId)).containsExactly(
-            "uploaded-title",
-            "uploaded-first",
-            "ready-1",
-            "ready-2",
-        ).inOrder()
     }
 
     @Test
@@ -181,7 +167,7 @@ class MaintenanceEditorStatePolicyTest {
         )
 
         assertThat(
-            orderedMaintenanceMediaReferences(readyEditor, emptyList())
+            orderedMaintenanceReadyMedia(readyEditor)
                 .map(MediaReferenceDto::mediaId),
         ).containsExactly("ready-title", "ready-1").inOrder()
 
@@ -189,42 +175,6 @@ class MaintenanceEditorStatePolicyTest {
         assertThat(removed.photoUris).doesNotContain(titleUri)
         assertThat(removed.coverPhotoKey).isNull()
         assertThat(maintenanceHasCoverPhoto(removed)).isFalse()
-    }
-
-    @Test
-    fun `completed maintenance upload is retained when the following command must be retried`() {
-        val ordinaryUri = "content://rwms/ordinary.jpg"
-        val titleUri = "content://rwms/title.jpg"
-        val beforeCommand = editor().copy(
-            photoUris = listOf(ordinaryUri, titleUri),
-            readyMedia = listOf(MediaReferenceDto("existing", 1)),
-            readyPhotoUris = mapOf("existing" to "https://example.test/existing.jpg"),
-            coverPhotoKey = maintenanceLocalPhotoKey(titleUri),
-        )
-        val uploadOrder = orderedMaintenanceLocalPhotoUris(beforeCommand)
-
-        val retained = retainCompletedMaintenanceUploads(
-            editor = beforeCommand,
-            uploadedLocalUris = uploadOrder,
-            uploadedReferences = listOf(
-                MediaReferenceDto("uploaded-title", 2),
-                MediaReferenceDto("uploaded-ordinary", 3),
-            ),
-        )
-
-        assertThat(uploadOrder).containsExactly(titleUri, ordinaryUri).inOrder()
-        assertThat(retained.photoUris).isEmpty()
-        assertThat(orderedMaintenanceLocalPhotoUris(retained)).isEmpty()
-        assertThat(retained.readyMedia.map(MediaReferenceDto::mediaId)).containsExactly(
-            "uploaded-title",
-            "uploaded-ordinary",
-            "existing",
-        ).inOrder()
-        assertThat(retained.readyPhotoUris).containsEntry("uploaded-title", titleUri)
-        assertThat(retained.readyPhotoUris).containsEntry("uploaded-ordinary", ordinaryUri)
-        assertThat(retained.coverPhotoKey)
-            .isEqualTo(maintenanceReadyPhotoKey("uploaded-title"))
-        assertThat(maintenanceHasCoverPhoto(retained)).isTrue()
     }
 
     @Test

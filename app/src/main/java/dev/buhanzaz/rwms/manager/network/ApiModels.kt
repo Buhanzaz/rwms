@@ -204,6 +204,11 @@ data class InventoryPlanStageSelectionDto(
 data class InventoryPlanSelectionDto(
     val mode: String,
     val priority: Int = 3,
+    @param:ExplicitNull val coverMediaId: String? = null,
+    val movementToRepair: Boolean,
+    val movementToShipment: Boolean,
+    @param:ExplicitNull val logisticsPlanningMode: String?,
+    @param:ExplicitNull val logisticsScheduledDate: String? = null,
     val lines: List<InventoryPlanLineInputDto>,
     val stages: List<InventoryPlanStageSelectionDto>,
 )
@@ -232,7 +237,6 @@ data class InventoryFrozenPlanStageDto(
     val routingQueueId: String,
     val routingQueueName: String,
     val routingQueueType: String,
-    val movementRequired: Boolean,
     val photoRequired: Boolean,
     val normativeDurationMinutes: Int,
 )
@@ -242,6 +246,11 @@ data class InventoryFrozenPlanDto(
     val catalogVersionId: String,
     val fingerprintSha256: String,
     val priority: Int = 3,
+    val coverMediaId: String? = null,
+    val movementToRepair: Boolean = false,
+    val movementToShipment: Boolean = false,
+    val logisticsPlanningMode: String? = null,
+    val logisticsScheduledDate: String? = null,
     val lines: List<InventoryFrozenPlanLineDto> = emptyList(),
     val stages: List<InventoryFrozenPlanStageDto> = emptyList(),
 )
@@ -795,6 +804,10 @@ data class AmendEstimateRequest(
 data class PriorityVersionRequest(
     val expectedVersion: Long,
     val priority: Int,
+    val movementToRepair: Boolean,
+    val movementToShipment: Boolean,
+    @param:ExplicitNull val logisticsPlanningMode: String?,
+    @param:ExplicitNull val logisticsScheduledDate: String?,
 )
 
 data class DeliverySnapshotDto(
@@ -874,6 +887,10 @@ data class RepairDto(
     val dispatchDate: String,
     val priority: Int = 3,
     val sourceParty: String? = null,
+    val movementToRepair: Boolean = false,
+    val movementToShipment: Boolean = false,
+    val logisticsPlanningMode: String? = null,
+    val logisticsScheduledDate: String? = null,
     val plan: RepairPlanDto,
     val inventorySource: InventorySourceReferenceDto? = null,
     val lease: LeaseSnapshotDto? = null,

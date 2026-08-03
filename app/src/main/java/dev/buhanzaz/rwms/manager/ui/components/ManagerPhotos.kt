@@ -4,9 +4,6 @@ import android.Manifest
 import android.content.ContentResolver
 import android.content.Context
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Matrix
 import android.media.MediaActionSound
 import android.net.Uri
 import android.os.Build
@@ -14,6 +11,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
+import android.view.Surface as AndroidSurface
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -66,7 +64,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -94,7 +91,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
-import androidx.exifinterface.media.ExifInterface
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
@@ -327,6 +323,7 @@ private fun ManagerPhotoCamera(
                 playCaptureFeedback(context, shutterSound)
                 captureDirectPhoto(
                     imageCapture = imageCapture,
+                    previewView = previewView,
                     cacheDir = context.cacheDir,
                     mainExecutor = mainExecutor,
                     onCaptured = onPhotoCaptured,
@@ -347,9 +344,18 @@ private fun ManagerPhotoCamera(
                 ?: return@startVideo
             val outputOptions = FileOutputOptions.Builder(file).build()
             var pendingRecording = capture.output.prepareRecording(context, outputOptions)
-            if (audioPermissionGranted) {
+            if (audioPermissionGranted &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+            ) {
                 // PendingRecording is immutable: retain the audio-enabled instance.
-                pendingRecording = pendingRecording.withAudioEnabled()
+                pendingRecording = try {
+                    pendingRecording.withAudioEnabled()
+                } catch (security: SecurityException) {
+                    // Permission can still be revoked between the check and CameraX call.
+                    Log.w("ManagerPhotoCamera", "Audio permission was revoked", security)
+                    pendingRecording
+                }
             }
             videoState = ManagerVideoCaptureState.Starting
             activeRecording = pendingRecording.start(mainExecutor) { event ->
@@ -771,13 +777,12 @@ fun ManagerPhotoPreview(
 @Composable
 private fun managerPhotoImageModel(
     photoUri: String,
-    localRevision: Int = 0,
 ): ImageRequest {
     val context = LocalContext.current
     val cacheRevision = managerLocalPhotoFile(photoUri)
         ?.lastModified()
         ?.takeIf { it > 0L }
-        ?: localRevision.toLong()
+        ?: 0L
     return remember(context, photoUri, cacheRevision) {
         ImageRequest.Builder(context)
             .data(photoUri)
@@ -790,7 +795,6 @@ private fun managerPhotoImageModel(
 private fun ManagerZoomablePhoto(
     photoUri: String,
     rotationDegrees: Int,
-    localPreviewRevision: Int,
     contentDescription: String,
     onZoomStateChanged: (Boolean) -> Unit,
 ) {
@@ -822,7 +826,7 @@ private fun ManagerZoomablePhoto(
         contentAlignment = Alignment.Center,
     ) {
         AsyncImage(
-            model = managerPhotoImageModel(photoUri, localPreviewRevision),
+            model = managerPhotoImageModel(photoUri),
             contentDescription = contentDescription,
             modifier = Modifier
                 .fillMaxSize()
@@ -893,7 +897,6 @@ fun ManagerPhotoGalleryDialog(
         // A virtual page range keeps the carousel circular without copying photo data.
         pageCount = { if (photoUris.size > 1) Int.MAX_VALUE else 1 },
     )
-    var localPreviewRevision by remember(photoUris) { mutableIntStateOf(0) }
     var currentPhotoZoomed by remember { mutableStateOf(false) }
     val currentLogicalIndex = managerPhotoGalleryLogicalIndex(
         pagerState.currentPage,
@@ -942,7 +945,6 @@ fun ManagerPhotoGalleryDialog(
                             ManagerZoomablePhoto(
                                 photoUri = uri,
                                 rotationDegrees = photoRotationDegrees(uri),
-                                localPreviewRevision = localPreviewRevision,
                                 contentDescription = "Фотография ${logicalIndex + 1}",
                                 onZoomStateChanged = { zoomed ->
                                     if (logicalIndex == currentLogicalIndex) {
@@ -1007,19 +1009,9 @@ fun ManagerPhotoGalleryDialog(
                             },
                     )
                     val current = photoUris.getOrNull(currentLogicalIndex)
-                    if (current != null &&
-                        !isManagerVideoUri(current) &&
-                        (isManagerLocalImageUri(current) || onRotatePhotoUri != null)
-                    ) {
+                    if (current != null && !isManagerVideoUri(current) && onRotatePhotoUri != null) {
                         TextButton(
-                            onClick = {
-                                val result = rotateManagerPhotoInPlace(current)
-                                if (result.localInPlaceHandled) {
-                                    localPreviewRevision += 1
-                                } else {
-                                    onRotatePhotoUri?.invoke(current)
-                                }
-                            },
+                            onClick = { onRotatePhotoUri(current) },
                         ) {
                             Text("Повернуть", color = Color.White)
                         }
@@ -1038,11 +1030,15 @@ fun ManagerPhotoGalleryDialog(
 
 private fun captureDirectPhoto(
     imageCapture: ImageCapture?,
+    previewView: PreviewView,
     cacheDir: File,
     mainExecutor: java.util.concurrent.Executor,
     onCaptured: (String) -> Unit,
 ) {
     val capture = imageCapture ?: return
+    // CameraX stores this orientation in the JPEG's EXIF metadata.  Keep the original bytes
+    // untouched afterwards; media-service is the sole canonical image processor.
+    capture.targetRotation = managerCaptureTargetRotation(previewView.display?.rotation)
     val file = createManagerMediaFile(cacheDir, "capture") ?: return
     val outputOptions = ImageCapture.OutputFileOptions.Builder(file).build()
     capture.takePicture(
@@ -1060,6 +1056,17 @@ private fun captureDirectPhoto(
             }
         },
     )
+}
+
+/** Returns a valid CameraX target rotation even while the preview is attaching to the window. */
+internal fun managerCaptureTargetRotation(displayRotation: Int?): Int = when (displayRotation) {
+    AndroidSurface.ROTATION_0,
+    AndroidSurface.ROTATION_90,
+    AndroidSurface.ROTATION_180,
+    AndroidSurface.ROTATION_270,
+    -> displayRotation
+
+    else -> AndroidSurface.ROTATION_0
 }
 
 /** Copies a gallery original to an app-owned cache path that MediaUploader can read later. */
@@ -1084,124 +1091,11 @@ private fun createManagerMediaFile(cacheDir: File, prefix: String, extension: St
         File(directory, "$prefix-${UUID.randomUUID()}.$extension").apply { createNewFile() }
     }.getOrNull()
 
-/** Signals whether the app-owned original was physically rewritten in place. */
-internal data class ManagerPhotoRotationResult(
-    val localInPlaceHandled: Boolean,
-)
-
-/**
- * Rotates an app-owned file URI by rewriting the same path.  The returned URI never changes,
- * so the exact bytes that later reach MediaUploader are the pixels the user previewed.
- */
-internal fun rotateManagerPhotoInPlace(uriText: String): ManagerPhotoRotationResult {
-    val original = managerLocalPhotoFile(uriText)
-        ?: return ManagerPhotoRotationResult(localInPlaceHandled = false)
-    val source = runCatching { BitmapFactory.decodeFile(original.path) }.getOrNull()
-        ?: return ManagerPhotoRotationResult(localInPlaceHandled = false)
-    val normalized = runCatching {
-        managerNormalizeExifOrientation(source, managerExifOrientation(original))
-    }.getOrNull()
-    if (normalized == null) {
-        source.recycle()
-        return ManagerPhotoRotationResult(localInPlaceHandled = false)
-    }
-    val rotated = runCatching {
-        Bitmap.createBitmap(
-            normalized,
-            0,
-            0,
-            normalized.width,
-            normalized.height,
-            Matrix().apply { postRotate(90f) },
-            true,
-        )
-    }.getOrNull()
-    if (rotated == null) {
-        if (normalized !== source) normalized.recycle()
-        source.recycle()
-        return ManagerPhotoRotationResult(localInPlaceHandled = false)
-    }
-    try {
-        val written = runCatching {
-            original.outputStream().use { output ->
-                rotated.compress(managerPhotoCompressFormat(original), 95, output).also { compressed ->
-                    if (compressed) output.flush()
-                }
-            }
-        }.getOrDefault(false)
-        if (!written) return ManagerPhotoRotationResult(localInPlaceHandled = false)
-        if (original.extension.equals("jpg", ignoreCase = true) ||
-            original.extension.equals("jpeg", ignoreCase = true)
-        ) {
-            runCatching {
-                ExifInterface(original.absolutePath).apply {
-                    setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL.toString())
-                    saveAttributes()
-                }
-            }
-        }
-        return ManagerPhotoRotationResult(localInPlaceHandled = true)
-    } finally {
-        if (rotated !== normalized) rotated.recycle()
-        if (normalized !== source) normalized.recycle()
-        source.recycle()
-    }
-}
-
 private fun managerLocalPhotoFile(uriText: String): File? = runCatching {
     val uri = Uri.parse(uriText)
     if (uri.scheme != ContentResolver.SCHEME_FILE) return@runCatching null
     uri.path?.let(::File)?.takeIf(File::isFile)
 }.getOrNull()
-
-private fun isManagerLocalImageUri(uriText: String): Boolean =
-    managerLocalPhotoFile(uriText) != null
-
-private fun managerPhotoCompressFormat(file: File): Bitmap.CompressFormat = when (
-    file.extension.lowercase(Locale.ROOT)
-) {
-    "png" -> Bitmap.CompressFormat.PNG
-    "webp" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        Bitmap.CompressFormat.WEBP_LOSSLESS
-    } else {
-        @Suppress("DEPRECATION")
-        Bitmap.CompressFormat.WEBP
-    }
-    else -> Bitmap.CompressFormat.JPEG
-}
-
-private fun managerExifOrientation(file: File): Int = runCatching {
-    ExifInterface(file.absolutePath).getAttributeInt(
-        ExifInterface.TAG_ORIENTATION,
-        ExifInterface.ORIENTATION_NORMAL,
-    )
-}.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
-
-private fun managerNormalizeExifOrientation(source: Bitmap, orientation: Int): Bitmap {
-    val matrix = Matrix().apply {
-        when (orientation) {
-            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> postScale(-1f, 1f)
-            ExifInterface.ORIENTATION_ROTATE_180 -> postRotate(180f)
-            ExifInterface.ORIENTATION_FLIP_VERTICAL -> postScale(1f, -1f)
-            ExifInterface.ORIENTATION_TRANSPOSE -> {
-                postRotate(90f)
-                postScale(-1f, 1f)
-            }
-            ExifInterface.ORIENTATION_ROTATE_90 -> postRotate(90f)
-            ExifInterface.ORIENTATION_TRANSVERSE -> {
-                postRotate(-90f)
-                postScale(-1f, 1f)
-            }
-            ExifInterface.ORIENTATION_ROTATE_270 -> postRotate(-90f)
-            else -> Unit
-        }
-    }
-    return if (matrix.isIdentity) {
-        source
-    } else {
-        Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
-    }
-}
 
 private fun isManagerVideoUri(uriText: String): Boolean = Uri.parse(uriText)
     .path

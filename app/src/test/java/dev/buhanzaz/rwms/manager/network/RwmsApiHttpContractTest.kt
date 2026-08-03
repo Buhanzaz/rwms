@@ -209,13 +209,12 @@ class RwmsApiHttpContractTest {
     }
 
     @Test
-    fun `inventory work staged inspection carries cover catalog priority and movement stages`() =
+    fun `inventory work staged inspection carries logistics intent without legacy movement stages`() =
         runTest {
             val inventoryId = "10101010-1010-1010-1010-101010101010"
             val findingId = "20202020-2020-2020-2020-202020202020"
             val mediaId = "30303030-3030-3030-3030-303030303030"
             val workNodeId = "40404040-4040-4040-4040-404040404040"
-            val moveNodeId = "50505050-5050-5050-5050-505050505050"
 
             val inspection = captureRequest {
                 api.saveInventoryInspection(
@@ -233,6 +232,11 @@ class RwmsApiHttpContractTest {
                         planSelection = InventoryPlanSelectionDto(
                             mode = "MANUAL",
                             priority = 2,
+                            coverMediaId = mediaId,
+                            movementToRepair = true,
+                            movementToShipment = false,
+                            logisticsPlanningMode = "FIXED_DATE",
+                            logisticsScheduledDate = "2026-08-04",
                             lines = listOf(
                                 InventoryPlanLineInputDto(
                                     aggregationKind = "CATALOG",
@@ -249,19 +253,9 @@ class RwmsApiHttpContractTest {
                             ),
                             stages = listOf(
                                 InventoryPlanStageSelectionDto(
-                                    catalogNodeId = moveNodeId,
-                                    kind = "MOVE_TO_REPAIR",
-                                    order = 0,
-                                ),
-                                InventoryPlanStageSelectionDto(
                                     catalogNodeId = workNodeId,
                                     kind = "REPAIR_WORK",
-                                    order = 1,
-                                ),
-                                InventoryPlanStageSelectionDto(
-                                    catalogNodeId = moveNodeId,
-                                    kind = "MOVE_FROM_REPAIR",
-                                    order = 2,
+                                    order = 0,
                                 ),
                             ),
                         ),
@@ -273,7 +267,7 @@ class RwmsApiHttpContractTest {
                 method = "PUT",
                 path = "/api/inventory/v1/sessions/$inventoryId/findings/$findingId/inspection",
                 idempotencyKey = null,
-                body = """{"expectedSessionRevision":4,"expectedFindingRevision":2,"inspection":"WORK_STAGED","comment":"Требуется ремонт","passportObservation":{"presence":"ABSENT","value":null},"equipmentObservation":{"presence":"ABSENT","value":null},"media":[{"mediaId":"$mediaId","generation":1}],"coverMediaId":"$mediaId","planSelection":{"mode":"MANUAL","priority":2,"lines":[{"aggregationKind":"CATALOG","catalogNodeId":"$workNodeId","description":null,"type":null,"unit":null,"quantity":"1","unitPriceMinor":null,"normativeMinutes":null,"groupComment":"Каркас","mediaReferences":[{"mediaId":"$mediaId","generation":1}]}],"stages":[{"catalogNodeId":"$moveNodeId","kind":"MOVE_TO_REPAIR","order":0},{"catalogNodeId":"$workNodeId","kind":"REPAIR_WORK","order":1},{"catalogNodeId":"$moveNodeId","kind":"MOVE_FROM_REPAIR","order":2}]}}""",
+                body = """{"expectedSessionRevision":4,"expectedFindingRevision":2,"inspection":"WORK_STAGED","comment":"Требуется ремонт","passportObservation":{"presence":"ABSENT","value":null},"equipmentObservation":{"presence":"ABSENT","value":null},"media":[{"mediaId":"$mediaId","generation":1}],"coverMediaId":"$mediaId","planSelection":{"mode":"MANUAL","priority":2,"coverMediaId":"$mediaId","movementToRepair":true,"movementToShipment":false,"logisticsPlanningMode":"FIXED_DATE","logisticsScheduledDate":"2026-08-04","lines":[{"aggregationKind":"CATALOG","catalogNodeId":"$workNodeId","description":null,"type":null,"unit":null,"quantity":"1","unitPriceMinor":null,"normativeMinutes":null,"groupComment":"Каркас","mediaReferences":[{"mediaId":"$mediaId","generation":1}]}],"stages":[{"catalogNodeId":"$workNodeId","kind":"REPAIR_WORK","order":0}]}}""",
             )
         }
 
@@ -406,7 +400,14 @@ class RwmsApiHttpContractTest {
                 estimateId = estimateId,
                 warehouseId = warehouseId,
                 idempotencyKey = "estimate-complete-1",
-                request = PriorityVersionRequest(expectedVersion = 8, priority = 2),
+                request = PriorityVersionRequest(
+                    expectedVersion = 8,
+                    priority = 2,
+                    movementToRepair = false,
+                    movementToShipment = false,
+                    logisticsPlanningMode = null,
+                    logisticsScheduledDate = null,
+                ),
             )
         }
         val amendment = captureRequest {
@@ -437,7 +438,7 @@ class RwmsApiHttpContractTest {
             method = "POST",
             path = "/api/maintenance/v1/estimates/$estimateId/complete?warehouseId=$warehouseId",
             idempotencyKey = "estimate-complete-1",
-            body = """{"expectedVersion":8,"priority":2}""",
+            body = """{"expectedVersion":8,"priority":2,"movementToRepair":false,"movementToShipment":false,"logisticsPlanningMode":null,"logisticsScheduledDate":null}""",
         )
         amendment.assertJsonCommand(
             method = "POST",
@@ -510,7 +511,14 @@ class RwmsApiHttpContractTest {
                 repairId = repairId,
                 warehouseId = warehouseId,
                 idempotencyKey = "direct-repair-queue-1",
-                request = PriorityVersionRequest(expectedVersion = 4, priority = 1),
+                request = PriorityVersionRequest(
+                    expectedVersion = 4,
+                    priority = 1,
+                    movementToRepair = false,
+                    movementToShipment = false,
+                    logisticsPlanningMode = null,
+                    logisticsScheduledDate = null,
+                ),
             )
         }
 
@@ -524,7 +532,7 @@ class RwmsApiHttpContractTest {
             method = "POST",
             path = "/api/maintenance/v1/repairs/$repairId/plan?warehouseId=$warehouseId",
             idempotencyKey = "direct-repair-queue-1",
-            body = """{"expectedVersion":4,"priority":1}""",
+            body = """{"expectedVersion":4,"priority":1,"movementToRepair":false,"movementToShipment":false,"logisticsPlanningMode":null,"logisticsScheduledDate":null}""",
         )
     }
 

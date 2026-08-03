@@ -23,6 +23,8 @@ import dev.buhanzaz.rwms.manager.ui.components.ManagerScreenScaffold
 @Composable
 fun ManagerMainMenuScreen(
     onLogout: () -> Unit,
+    pendingUploadCount: Int,
+    onOpenUploads: () -> Unit,
     onOpenLogistics: () -> Unit,
     onOpenInventory: () -> Unit,
     onOpenMaintenance: () -> Unit,
@@ -46,7 +48,7 @@ fun ManagerMainMenuScreen(
             contentPadding = PaddingValues(14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            items(managerMenuItems) { item ->
+            items(managerMenuItems(pendingUploadCount)) { item ->
                 ManagerMenuCard(
                     title = item.title,
                     description = item.description,
@@ -55,6 +57,7 @@ fun ManagerMainMenuScreen(
                         ManagerMenuDestination.Logistics -> onOpenLogistics
                         ManagerMenuDestination.Inventory -> onOpenInventory
                         ManagerMenuDestination.Maintenance -> onOpenMaintenance
+                        ManagerMenuDestination.Uploads -> onOpenUploads
                     },
                 )
             }
@@ -69,9 +72,19 @@ private data class ManagerMenuItem(
     val destination: ManagerMenuDestination,
 )
 
-private enum class ManagerMenuDestination { Logistics, Inventory, Maintenance }
+private enum class ManagerMenuDestination { Uploads, Logistics, Inventory, Maintenance }
 
-private val managerMenuItems = listOf(
+private fun managerMenuItems(pendingUploadCount: Int) = listOf(
+    ManagerMenuItem(
+        title = "Загрузки",
+        description = if (pendingUploadCount == 0) {
+            "Нет ожидающих отправок"
+        } else {
+            "Операций в работе: $pendingUploadCount"
+        },
+        accent = Color(0xFF0069A8),
+        destination = ManagerMenuDestination.Uploads,
+    ),
     ManagerMenuItem(
         title = "Логистика",
         description = "Возвраты, приемка и документы",

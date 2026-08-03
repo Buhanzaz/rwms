@@ -28,42 +28,38 @@ class MaintenanceRoutingPolicyTest {
     }
 
     @Test
-    fun `movement pair is available only for a single live movement queue`() {
-        val unique = listOf(board(column("move", "Перемещение", "MOVEMENT")))
-        val ambiguous = listOf(
-            board(
-                column("move-a", "Перемещение А", "MOVEMENT"),
-                column("move-b", "Перемещение Б", "MOVEMENT"),
-            ),
-        )
-
-        assertThat(unique.singleMaintenanceMovementRouting())
-            .isEqualTo(RoutingSnapshotDto("move", "Перемещение", "MOVEMENT"))
-        assertThat(unique.maintenanceMovementRoutingProblem()).isNull()
-        assertThat(ambiguous.singleMaintenanceMovementRouting()).isNull()
-        assertThat(ambiguous.maintenanceMovementRoutingProblem()).contains("несколько")
-    }
-
-    @Test
-    fun `movement checkbox wraps work stages without replacing them`() {
+    fun `movement to repair keeps selected driver priority and never injects board stages`() {
         val workRoute = RoutingSnapshotDto("repair", "Ремонт", "REPAIR")
-        val moveRoute = RoutingSnapshotDto("move", "Перемещение", "MOVEMENT")
-        val editor = editorWithWork(workRoute).withRepairMovementStages(
-            required = true,
-            movementRouting = moveRoute,
-        )
+        val editor = editorWithWork(workRoute)
+            .copy(priority = 5)
+            .withMovementToRepair(required = true)
+            .withLogisticsPlanningMode(LOGISTICS_PLANNING_MODE_FIXED_DATE)
+            .withLogisticsScheduledDate("2026-08-03")
 
         val stages = planMaintenanceStages(editor, MaintenanceLineEditorState::customRouting)
 
-        assertThat(stages.map { stage -> stage.kind }).containsExactly(
-            "MOVE_TO_REPAIR",
-            "REPAIR_WORK",
-            "MOVE_FROM_REPAIR",
-        ).inOrder()
-        assertThat(stages[1].includedLineIds).containsExactly("work-1")
-        assertThat(stages[0].routing).isEqualTo(moveRoute)
-        assertThat(stages[2].routing).isEqualTo(moveRoute)
-        assertThat(editor.withRepairMovementStages(false, null).stages).isEmpty()
+        assertThat(stages.map { stage -> stage.kind }).containsExactly("REPAIR_WORK")
+        assertThat(stages.single().includedLineIds).containsExactly("work-1")
+        assertThat(editor.movementToRepair).isTrue()
+        assertThat(editor.logisticsPlanningMode).isEqualTo(LOGISTICS_PLANNING_MODE_FIXED_DATE)
+        assertThat(editor.logisticsScheduledDate).isEqualTo("2026-08-03")
+        assertThat(editor.priority).isEqualTo(5)
+        assertThat(editor.logisticsPlanningValidationError()).isNull()
+        assertThat(editor.withMovementToRepair(false).run {
+            listOf(movementToRepair, logisticsPlanningMode, logisticsScheduledDate)
+        }).containsExactly(false, null, null)
+    }
+
+    @Test
+    fun `fixed logistics date is required only for movement to repair`() {
+        val missingDate = editorWithWork(RoutingSnapshotDto("repair", "Ремонт", "REPAIR"))
+            .withMovementToRepair(true)
+            .withLogisticsPlanningMode(LOGISTICS_PLANNING_MODE_FIXED_DATE)
+
+        assertThat(missingDate.logisticsPlanningValidationError())
+            .isEqualTo("Выберите дату перемещения в формате ГГГГ-ММ-ДД")
+        assertThat(missingDate.withLogisticsPlanningMode(LOGISTICS_PLANNING_MODE_AUTO)
+            .logisticsPlanningValidationError()).isNull()
     }
 
     @Test

@@ -11,11 +11,14 @@ import java.time.LocalTime
 import java.time.OffsetDateTime
 import java.time.Duration
 import java.time.ZonedDateTime
-import java.util.UUID
 import kotlin.math.pow
 
 internal const val DIRECT_REPAIR_SOURCE_PARTY = "app-приложение"
+/** Default selection for the shared repair/logistics priority scale. */
+internal const val DEFAULT_MAINTENANCE_PRIORITY = 3
 internal val MAINTENANCE_CATALOG_SYNC_TIME: LocalTime = LocalTime.of(9, 0)
+internal const val LOGISTICS_PLANNING_MODE_AUTO = "AUTO"
+internal const val LOGISTICS_PLANNING_MODE_FIXED_DATE = "FIXED_DATE"
 
 /**
  * Kept in lockstep with the public asset contract. Estimate selection is deliberately
@@ -108,53 +111,6 @@ internal fun orderedMaintenanceReadyMedia(
     return editor.readyMedia.sortedBy { reference ->
         if (maintenanceReadyPhotoKey(reference.mediaId) == coverKey) 0 else 1
     }
-}
-
-internal fun orderedMaintenanceMediaReferences(
-    editor: MaintenanceEditorState,
-    uploadedReferences: List<MediaReferenceDto>,
-): List<MediaReferenceDto> {
-    val localUris = orderedMaintenanceLocalPhotoUris(editor)
-    require(localUris.size == uploadedReferences.size) {
-        "Сервис вернул неполный набор загруженных фотографий"
-    }
-    val ready = orderedMaintenanceReadyMedia(editor)
-    val uploaded = localUris.zip(uploadedReferences)
-        .associate { (uri, reference) -> uri to reference }
-    val orderedUploaded = localUris.map(uploaded::getValue)
-    val combined = if (editor.coverPhotoKey?.startsWith("local:") == true) {
-        orderedUploaded + ready
-    } else {
-        ready + orderedUploaded
-    }
-    return combined.distinctBy(MediaReferenceDto::mediaId)
-}
-
-/**
- * Promotes completed local uploads into the editor before the maintenance command runs.
- * This keeps READY media reusable when the following replace/amend command fails.
- */
-internal fun retainCompletedMaintenanceUploads(
-    editor: MaintenanceEditorState,
-    uploadedLocalUris: List<String>,
-    uploadedReferences: List<MediaReferenceDto>,
-): MaintenanceEditorState {
-    require(uploadedLocalUris.size == uploadedReferences.size) {
-        "Медиасервис вернул неполный результат загрузки"
-    }
-    val uploadedByUri = uploadedLocalUris.zip(uploadedReferences).toMap()
-    val coverReference = editor.photoUris
-        .firstOrNull { maintenanceLocalPhotoKey(it) == editor.coverPhotoKey }
-        ?.let(uploadedByUri::get)
-    return editor.copy(
-        readyMedia = orderedMaintenanceMediaReferences(editor, uploadedReferences),
-        readyPhotoUris = editor.readyPhotoUris +
-            uploadedByUri.map { (uri, reference) -> reference.mediaId to uri },
-        photoUris = editor.photoUris.filterNot(uploadedByUri::containsKey),
-        coverPhotoKey = coverReference
-            ?.let { maintenanceReadyPhotoKey(it.mediaId) }
-            ?: editor.coverPhotoKey,
-    )
 }
 
 internal fun catalogMaintenanceLineType(nodeType: String): String = when (nodeType) {
@@ -255,31 +211,6 @@ internal fun List<TaskBoardSnapshotDto>.maintenanceWorkRoutingOptions(): List<Ro
         )
         .toList()
 
-internal fun List<TaskBoardSnapshotDto>.maintenanceMovementRoutingOptions(): List<RoutingSnapshotDto> =
-    asSequence()
-        .flatMap { board -> board.columns.asSequence() }
-        .filter { column -> column.queueType == "MOVEMENT" }
-        .map(TaskBoardColumnDto::toMaintenanceRouting)
-        .filter(RoutingSnapshotDto::isUsableMaintenanceRouting)
-        .distinctBy(RoutingSnapshotDto::queueId)
-        .sortedWith(
-            compareBy(String.CASE_INSENSITIVE_ORDER, RoutingSnapshotDto::queueName)
-                .thenBy(RoutingSnapshotDto::queueId),
-        )
-        .toList()
-
-/** A move stage is unambiguous only when the live board contains one movement queue. */
-internal fun List<TaskBoardSnapshotDto>.singleMaintenanceMovementRouting(): RoutingSnapshotDto? =
-    maintenanceMovementRoutingOptions().singleOrNull()
-
-internal fun List<TaskBoardSnapshotDto>.maintenanceMovementRoutingProblem(): String? = when (
-    maintenanceMovementRoutingOptions().size
-) {
-    0 -> "В активной доске нет очереди перемещений."
-    1 -> null
-    else -> "В активной доске несколько очередей перемещений. Выберите одну в настройках панели."
-}
-
 private fun TaskBoardColumnDto.toMaintenanceRouting(): RoutingSnapshotDto = RoutingSnapshotDto(
     queueId = queueId,
     queueName = queueName,
@@ -289,62 +220,98 @@ private fun TaskBoardColumnDto.toMaintenanceRouting(): RoutingSnapshotDto = Rout
 private fun RoutingSnapshotDto.isUsableMaintenanceRouting(): Boolean =
     queueId.isNotBlank() && queueName.isNotBlank() && queueType.isNotBlank()
 
-private const val MOVE_TO_REPAIR_STAGE_KIND = "MOVE_TO_REPAIR"
-private const val MOVE_FROM_REPAIR_STAGE_KIND = "MOVE_FROM_REPAIR"
-
-internal fun MaintenanceEditorState.hasRepairMovementStages(): Boolean =
-    stages.any { stage -> stage.kind == MOVE_TO_REPAIR_STAGE_KIND } &&
-        stages.any { stage -> stage.kind == MOVE_FROM_REPAIR_STAGE_KIND }
-
 /**
- * Mirrors the panel's optional movement pair. Only the movement stages are added or removed;
- * existing work stages, their IDs, comments and deadlines are retained.
+ * A movement-to-repair is a logistics command, not a task-board stage.  Keeping its intent in
+ * the repair command lets the server schedule it through the warehouse's logistics queue.
  */
-internal fun MaintenanceEditorState.withRepairMovementStages(
+internal fun MaintenanceEditorState.withMovementToRepair(
     required: Boolean,
-    movementRouting: RoutingSnapshotDto?,
-): MaintenanceEditorState {
-    val retained = stages.filterNot { stage ->
-        stage.kind == MOVE_TO_REPAIR_STAGE_KIND || stage.kind == MOVE_FROM_REPAIR_STAGE_KIND
-    }
-    if (!required) return copy(stages = retained)
-
-    val routing = requireNotNull(movementRouting) {
-        "Для перемещения нужна единственная активная очередь перемещений"
-    }
-    require(routing.isUsableMaintenanceRouting()) {
-        "Для перемещения нужна корректная очередь"
-    }
-    val existingTo = stages.firstOrNull { it.kind == MOVE_TO_REPAIR_STAGE_KIND }
-    val existingFrom = stages.firstOrNull { it.kind == MOVE_FROM_REPAIR_STAGE_KIND }
-    val moveTo = (existingTo ?: MaintenanceStageEditorState(
-        id = UUID.randomUUID().toString(),
-        kind = MOVE_TO_REPAIR_STAGE_KIND,
-        routing = routing,
-        includedLineIds = emptyList(),
-        primaryLineId = null,
-        groupComment = "",
-        originalOrder = Int.MIN_VALUE,
-    )).copy(
-        routing = routing,
-        includedLineIds = emptyList(),
-        primaryLineId = null,
+): MaintenanceEditorState = if (required) {
+    copy(
+        movementToRepair = true,
+        logisticsPlanningMode = logisticsPlanningMode
+            ?.takeIf { mode -> mode in logisticsPlanningModes }
+            ?: LOGISTICS_PLANNING_MODE_AUTO,
+        logisticsScheduledDate = logisticsScheduledDate
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?.takeIf { logisticsPlanningMode == LOGISTICS_PLANNING_MODE_FIXED_DATE },
     )
-    val moveFrom = (existingFrom ?: MaintenanceStageEditorState(
-        id = UUID.randomUUID().toString(),
-        kind = MOVE_FROM_REPAIR_STAGE_KIND,
-        routing = routing,
-        includedLineIds = emptyList(),
-        primaryLineId = null,
-        groupComment = "",
-        originalOrder = Int.MAX_VALUE,
-    )).copy(
-        routing = routing,
-        includedLineIds = emptyList(),
-        primaryLineId = null,
+} else {
+    copy(
+        movementToRepair = false,
+        logisticsPlanningMode = null,
+        logisticsScheduledDate = null,
     )
-    return copy(stages = retained + moveTo + moveFrom)
 }
+
+internal fun MaintenanceEditorState.withLogisticsPlanningMode(
+    mode: String,
+): MaintenanceEditorState {
+    require(mode in logisticsPlanningModes) { "Неподдерживаемый режим планирования логистики" }
+    if (!movementToRepair) return this
+    return copy(
+        logisticsPlanningMode = mode,
+        logisticsScheduledDate = if (mode == LOGISTICS_PLANNING_MODE_FIXED_DATE) {
+            logisticsScheduledDate?.trim()?.takeIf(String::isNotEmpty)
+        } else {
+            null
+        },
+    )
+}
+
+internal fun MaintenanceEditorState.withLogisticsScheduledDate(
+    date: String,
+): MaintenanceEditorState = if (movementToRepair) {
+    copy(logisticsScheduledDate = date.trim().takeIf(String::isNotEmpty))
+} else {
+    this
+}
+
+/** Normalizes the nullable transport fields before every command. */
+internal fun MaintenanceEditorState.normalizedLogisticsPlanning(): MaintenanceEditorState {
+    if (!movementToRepair) {
+        return copy(logisticsPlanningMode = null, logisticsScheduledDate = null)
+    }
+    val mode = logisticsPlanningMode
+        ?.takeIf { it in logisticsPlanningModes }
+        ?: LOGISTICS_PLANNING_MODE_AUTO
+    return copy(
+        logisticsPlanningMode = mode,
+        logisticsScheduledDate = if (mode == LOGISTICS_PLANNING_MODE_FIXED_DATE) {
+            logisticsScheduledDate?.trim()?.takeIf(String::isNotEmpty)
+        } else {
+            null
+        },
+    )
+}
+
+internal fun MaintenanceEditorState.logisticsPlanningValidationError(): String? {
+    if (!movementToRepair) return null
+    val normalized = normalizedLogisticsPlanning()
+    return when (normalized.logisticsPlanningMode) {
+        LOGISTICS_PLANNING_MODE_AUTO -> null
+        LOGISTICS_PLANNING_MODE_FIXED_DATE -> {
+            val date = normalized.logisticsScheduledDate
+            if (date == null || !isIsoLogisticsDate(date)) {
+                "Выберите дату перемещения в формате ГГГГ-ММ-ДД"
+            } else {
+                null
+            }
+        }
+
+        else -> "Выберите способ добавления в очередь перемещений"
+    }
+}
+
+private val logisticsPlanningModes = setOf(
+    LOGISTICS_PLANNING_MODE_AUTO,
+    LOGISTICS_PLANNING_MODE_FIXED_DATE,
+)
+
+private fun isIsoLogisticsDate(value: String): Boolean = runCatching {
+    LocalDate.parse(value).toString() == value
+}.getOrDefault(false)
 
 /** Parses only the RGB values accepted by the shared catalog settings. */
 internal fun catalogDisplayColorArgb(value: String?): Long? {

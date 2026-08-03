@@ -3,8 +3,14 @@ package dev.buhanzaz.rwms.manager.media
 import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.network.MediaAssetDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
+import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.sync.Semaphore
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Test
@@ -13,6 +19,153 @@ import retrofit2.Response
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MediaUploaderRetryTest {
+    @Test
+    fun `parallel owner batches share one three-upload transport limit`() = runTest {
+        val permits = Semaphore(MEDIA_UPLOAD_PARALLELISM)
+        val release = CompletableDeferred<Unit>()
+        var activeUploads = 0
+        var maximumActiveUploads = 0
+
+        val batches = (0..1).map { batch ->
+            async {
+                uploadBoundedParallelOrdered(
+                    inputs = (0..2).map { index -> batch to index },
+                    permits = permits,
+                    upload = { input ->
+                        activeUploads += 1
+                        maximumActiveUploads = maxOf(maximumActiveUploads, activeUploads)
+                        try {
+                            release.await()
+                            input
+                        } finally {
+                            activeUploads -= 1
+                        }
+                    },
+                    onReady = { _, _ -> },
+                )
+            }
+        }
+        runCurrent()
+
+        assertThat(activeUploads).isEqualTo(MEDIA_UPLOAD_PARALLELISM)
+        assertThat(maximumActiveUploads).isEqualTo(MEDIA_UPLOAD_PARALLELISM)
+
+        release.complete(Unit)
+        advanceUntilIdle()
+        batches.forEach { it.await() }
+
+        assertThat(maximumActiveUploads).isEqualTo(MEDIA_UPLOAD_PARALLELISM)
+    }
+
+    @Test
+    fun `bounded uploads run three at a time but publish ready items in source order`() = runTest {
+        val releaseFirstBatch = CompletableDeferred<Unit>()
+        val started = mutableListOf<Int>()
+        val callbacks = mutableListOf<Int>()
+        var activeUploads = 0
+        var maximumActiveUploads = 0
+
+        val results = async {
+            uploadBoundedParallelOrdered(
+                inputs = (0..3).toList(),
+                upload = { index ->
+                    started += index
+                    activeUploads += 1
+                    maximumActiveUploads = maxOf(maximumActiveUploads, activeUploads)
+                    try {
+                        if (index < MEDIA_UPLOAD_PARALLELISM) {
+                            releaseFirstBatch.await()
+                        }
+                        "media-$index"
+                    } finally {
+                        activeUploads -= 1
+                    }
+                },
+                onReady = { index, _ -> callbacks += index },
+            )
+        }
+        runCurrent()
+
+        assertThat(started).containsExactly(0, 1, 2).inOrder()
+        assertThat(activeUploads).isEqualTo(MEDIA_UPLOAD_PARALLELISM)
+        assertThat(maximumActiveUploads).isEqualTo(MEDIA_UPLOAD_PARALLELISM)
+
+        releaseFirstBatch.complete(Unit)
+        advanceUntilIdle()
+
+        assertThat(results.await()).containsExactly(
+            "media-0",
+            "media-1",
+            "media-2",
+            "media-3",
+        ).inOrder()
+        assertThat(callbacks).containsExactly(0, 1, 2, 3).inOrder()
+    }
+
+    @Test
+    fun `one failed upload does not discard ready references from its peers`() = runTest {
+        val callbacks = mutableListOf<Int>()
+
+        val failure = runCatching {
+            uploadBoundedParallelOrdered(
+                inputs = listOf(0, 1, 2),
+                upload = { index ->
+                    if (index == 1) error("broken photo")
+                    "media-$index"
+                },
+                onReady = { index, _ -> callbacks += index },
+            )
+        }.exceptionOrNull()
+
+        assertThat(failure).hasMessageThat().isEqualTo("broken photo")
+        assertThat(callbacks).containsExactly(0, 2).inOrder()
+    }
+
+    @Test
+    fun `upload identity is stable per local uri and does not collapse same bytes from another uri`() {
+        val owner = MediaOwner(
+            ownerType = "INVENTORY_FINDING",
+            ownerId = "44444444-4444-4444-4444-444444444444",
+            warehouseId = "33333333-3333-3333-3333-333333333333",
+            context = "INSPECTION",
+        )
+        val payload = PhotoPayload.exactJpeg(
+            fileName = "inspection.jpg",
+            bytes = byteArrayOf(0xff.toByte(), 0xd8.toByte(), 0xff.toByte(), 0xd9.toByte()),
+        )
+
+        val firstAttempt = mediaUploadIdentity(
+            owner = owner,
+            localUri = "file:///cache/first.jpg",
+            photo = payload,
+            sortOrder = 1,
+        )
+        val retry = mediaUploadIdentity(
+            owner = owner,
+            localUri = "file:///cache/first.jpg",
+            photo = payload,
+            sortOrder = 1,
+        )
+        val differentLocalPhotoWithSameBytes = mediaUploadIdentity(
+            owner = owner,
+            localUri = "file:///cache/second.jpg",
+            photo = payload,
+            sortOrder = 1,
+        )
+
+        assertThat(retry).isEqualTo(firstAttempt)
+        assertThat(differentLocalPhotoWithSameBytes.folderId).isNotEqualTo(firstAttempt.folderId)
+        assertThat(differentLocalPhotoWithSameBytes.createSessionKey)
+            .isNotEqualTo(firstAttempt.createSessionKey)
+        assertThat(firstAttempt.createSessionKey)
+            .isNotEqualTo(firstAttempt.contentAndFinalizeKey)
+        listOf(
+            firstAttempt.folderId,
+            firstAttempt.createSessionKey,
+            firstAttempt.contentAndFinalizeKey,
+        ).forEach(UUID::fromString)
+    }
+
     @Test
     fun `media reference is returned only after owner projection reports ready generation`() =
         runTest {

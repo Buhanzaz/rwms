@@ -30,6 +30,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
@@ -86,11 +87,9 @@ import dev.buhanzaz.rwms.manager.ui.MaintenanceLineEditorState
 import dev.buhanzaz.rwms.manager.ui.ManagerUiState
 import dev.buhanzaz.rwms.manager.ui.catalogDisplayColorArgb
 import dev.buhanzaz.rwms.manager.ui.catalogDisplayColorNeedsLightContent
-import dev.buhanzaz.rwms.manager.ui.hasRepairMovementStages
 import dev.buhanzaz.rwms.manager.ui.isEmptyMaintenanceEstimate
 import dev.buhanzaz.rwms.manager.ui.isEmptyMaintenanceOutcome
 import dev.buhanzaz.rwms.manager.ui.maintenanceDocumentAlreadySubmitted
-import dev.buhanzaz.rwms.manager.ui.maintenanceMovementRoutingProblem
 import dev.buhanzaz.rwms.manager.ui.maintenanceWorkRoutingOptions
 import dev.buhanzaz.rwms.manager.ui.maintenanceHasCoverPhoto
 import dev.buhanzaz.rwms.manager.ui.maintenanceHasPhotos
@@ -99,8 +98,7 @@ import dev.buhanzaz.rwms.manager.ui.maintenanceLocalPhotoKey
 import dev.buhanzaz.rwms.manager.ui.maintenanceReadyPhotoKey
 import dev.buhanzaz.rwms.manager.ui.removeMaintenanceLocalPhoto
 import dev.buhanzaz.rwms.manager.ui.routingLabel
-import dev.buhanzaz.rwms.manager.ui.singleMaintenanceMovementRouting
-import dev.buhanzaz.rwms.manager.ui.withRepairMovementStages
+import dev.buhanzaz.rwms.manager.ui.logisticsPlanningValidationError
 import dev.buhanzaz.rwms.manager.ui.components.EmptyState
 import dev.buhanzaz.rwms.manager.ui.components.ManagerMenuCard
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPanel
@@ -349,8 +347,7 @@ fun MaintenanceEditorScreen(
     onUpdateAssetSearch: (String) -> Unit,
     onSearchAssets: () -> Unit,
     onSelectAsset: (RentalItemDto) -> Unit,
-    onToggleCatalogNode: (CatalogNodeDto) -> Unit,
-    onAddCatalogNodes: (List<CatalogNodeDto>, String, String) -> Unit,
+    onAddCatalogNodes: (List<CatalogNodeDto>, String, String, String?) -> Boolean,
     onToggleReworkCandidate: (ReworkCandidateDto) -> Unit,
     onRefreshCatalog: () -> Unit,
     onEdit: ((MaintenanceEditorState) -> MaintenanceEditorState) -> Unit,
@@ -377,8 +374,6 @@ fun MaintenanceEditorScreen(
     }
     val step = if (editor.readOnly) readOnlyStep else maintenanceWizardStep(editor.step)
     val canSubmit = maintenanceCanSubmit(editor)
-    val movementRouting = uiState.repairTaskBoards.singleMaintenanceMovementRouting()
-    val movementRoutingProblem = uiState.repairTaskBoards.maintenanceMovementRoutingProblem()
     val moveToStep: (Int) -> Unit = { targetStep ->
         val normalizedStep = maintenanceWizardStep(targetStep)
         if (editor.readOnly) {
@@ -457,7 +452,6 @@ fun MaintenanceEditorScreen(
             3 -> MaintenanceCatalogStep(
                 editor = editor,
                 uiState = uiState,
-                onToggleCatalogNode = onToggleCatalogNode,
                 onAddCatalogNodes = onAddCatalogNodes,
                 onToggleReworkCandidate = onToggleReworkCandidate,
                 onRefreshCatalog = onRefreshCatalog,
@@ -468,8 +462,6 @@ fun MaintenanceEditorScreen(
 
             else -> MaintenanceReviewStep(
                 editor = editor,
-                movementRouting = movementRouting,
-                movementRoutingProblem = movementRoutingProblem,
                 onEdit = onEdit,
                 canSubmit = canSubmit,
                 busy = uiState.busy,
@@ -861,8 +853,7 @@ private fun MaintenanceAssetSearchFeedback(feedback: MaintenanceSearchFeedback) 
 internal fun MaintenanceCatalogStep(
     editor: MaintenanceEditorState,
     uiState: ManagerUiState,
-    onToggleCatalogNode: (CatalogNodeDto) -> Unit,
-    onAddCatalogNodes: (List<CatalogNodeDto>, String, String) -> Unit,
+    onAddCatalogNodes: (List<CatalogNodeDto>, String, String, String?) -> Boolean,
     onToggleReworkCandidate: (ReworkCandidateDto) -> Unit = {},
     onRefreshCatalog: () -> Unit,
     onEdit: ((MaintenanceEditorState) -> MaintenanceEditorState) -> Unit,
@@ -878,6 +869,9 @@ internal fun MaintenanceCatalogStep(
     var page by remember(editor.entityId, editor.mode) { mutableIntStateOf(0) }
     var addContext by remember(editor.entityId, editor.mode) {
         mutableStateOf<MaintenanceCatalogAddContext?>(null)
+    }
+    var existingWorkContext by remember(editor.entityId, editor.mode) {
+        mutableStateOf<MaintenanceCatalogExistingWorkContext?>(null)
     }
     var catalogMessage by remember(editor.entityId, editor.mode) { mutableStateOf<String?>(null) }
     var expandedCatalogLabel by remember(editor.entityId, editor.mode) {
@@ -914,7 +908,6 @@ internal fun MaintenanceCatalogStep(
     }
     val canGoToPreviousPage = currentPage > 0
     val canGoToNextPage = currentPage < pageCount - 1
-    val selectedIds = editor.lines.map(MaintenanceLineEditorState::catalogNodeId).toSet()
     val canContinue = editor.readOnly || maintenanceCanAdvance(editor, step = 3)
 
     LaunchedEffect(pageCount) {
@@ -933,7 +926,6 @@ internal fun MaintenanceCatalogStep(
     fun openAdd(
         nodes: List<CatalogNodeDto>,
         quantityNode: CatalogNodeDto,
-        continuationNode: CatalogNodeDto,
     ) {
         if (nodes.none(CatalogNodeDto::isOperationalMaintenanceCatalogNode)) {
             catalogMessage = "Эта позиция не настроена для добавления в смету или ремонт."
@@ -942,8 +934,20 @@ internal fun MaintenanceCatalogStep(
         addContext = MaintenanceCatalogAddContext(
             nodes = nodes.distinctBy(CatalogNodeDto::id),
             quantityNode = quantityNode,
-            continuationNode = continuationNode,
         )
+    }
+
+    fun completeAdd(
+        context: MaintenanceCatalogAddContext,
+        quantity: String,
+        comment: String,
+        existingWorkLineId: String?,
+    ) {
+        if (!onAddCatalogNodes(context.nodes, quantity, comment, existingWorkLineId)) return
+        addContext = null
+        existingWorkContext = null
+        resetNavigation()
+        catalogMessage = "Позиция добавлена в выбранные строки."
     }
 
     fun navigateBackInsideCatalog() {
@@ -964,13 +968,6 @@ internal fun MaintenanceCatalogStep(
 
     fun selectNode(node: CatalogNodeDto) {
         page = 0
-        if (node.id in selectedIds) {
-            if (!editor.readOnly) {
-                onToggleCatalogNode(node)
-                catalogMessage = "Позиция удалена из выбранных строк."
-            }
-            return
-        }
         when {
             node.nodeType in maintenanceCatalogContainerTypes -> {
                 path = path + node.id
@@ -999,7 +996,6 @@ internal fun MaintenanceCatalogStep(
                     openAdd(
                         nodes = listOf(pendingWork, pendingMaterial),
                         quantityNode = pendingMaterial,
-                        continuationNode = node,
                     )
                 }
             }
@@ -1025,7 +1021,6 @@ internal fun MaintenanceCatalogStep(
                     else -> openAdd(
                         nodes = listOf(node),
                         quantityNode = node,
-                        continuationNode = node,
                     )
                 }
             }
@@ -1045,7 +1040,6 @@ internal fun MaintenanceCatalogStep(
                         openAdd(
                             nodes = listOf(pendingWork, node),
                             quantityNode = node,
-                            continuationNode = node,
                         )
                     }
                 } else {
@@ -1061,7 +1055,6 @@ internal fun MaintenanceCatalogStep(
                     openAdd(
                         nodes = linkedWorks + node,
                         quantityNode = node,
-                        continuationNode = node,
                     )
                 }
             }
@@ -1104,20 +1097,43 @@ internal fun MaintenanceCatalogStep(
             context = context,
             onDismiss = { addContext = null },
             onConfirm = { quantity, comment ->
-                onAddCatalogNodes(context.nodes, quantity, comment)
-                val followUps = maintenanceCatalogNodesForUsage(
-                    catalog.followUpNodesOf(context.continuationNode.id),
-                    catalog,
-                    excludeFurniture,
+                val existingWorks = maintenanceCatalogExistingWorkCandidates(
+                    editor = editor,
+                    nodes = context.nodes,
                 )
-                addContext = null
-                pendingWorkId = null
-                pendingMaterialId = null
-                page = 0
-                catalogMessage = "Позиция добавлена в выбранные строки."
-                if (followUps.isNotEmpty()) {
-                    path = path + context.continuationNode.id
+                if (existingWorks.isEmpty()) {
+                    completeAdd(context, quantity, comment, existingWorkLineId = null)
+                } else {
+                    addContext = null
+                    existingWorkContext = MaintenanceCatalogExistingWorkContext(
+                        addContext = context,
+                        quantity = quantity,
+                        comment = comment,
+                        candidates = existingWorks,
+                    )
                 }
+            },
+        )
+    }
+    existingWorkContext?.let { context ->
+        MaintenanceCatalogExistingWorkDialog(
+            context = context,
+            onDismiss = { existingWorkContext = null },
+            onChooseExisting = { lineId ->
+                completeAdd(
+                    context.addContext,
+                    context.quantity,
+                    context.comment,
+                    existingWorkLineId = lineId,
+                )
+            },
+            onCreateNew = {
+                completeAdd(
+                    context.addContext,
+                    context.quantity,
+                    context.comment,
+                    existingWorkLineId = null,
+                )
             },
         )
     }
@@ -1284,7 +1300,6 @@ internal fun MaintenanceCatalogStep(
                         gridItems(pagedVisibleNodes, key = CatalogNodeDto::id) { node ->
                             CompactCatalogNodeButton(
                                 node = node,
-                                selected = node.id in selectedIds,
                                 enabled = !uiState.busy && !editor.readOnly,
                                 onClick = { selectNode(node) },
                                 onShowFullLabel = { expandedCatalogLabel = node.name },
@@ -1424,7 +1439,6 @@ private fun ReworkCandidateRow(
 @Composable
 private fun CompactCatalogNodeButton(
     node: CatalogNodeDto,
-    selected: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
     onShowFullLabel: () -> Unit,
@@ -1472,7 +1486,6 @@ private fun CompactCatalogNodeButton(
             .semantics(mergeDescendants = true) {
                 role = Role.Button
                 contentDescription = node.name
-                this.selected = selected
                 if (enabled) {
                     onClick(label = "Выбрать ${node.name}") {
                         onClick()
@@ -1489,15 +1502,11 @@ private fun CompactCatalogNodeButton(
         shape = MaterialTheme.shapes.medium,
         color = when {
             !enabled -> MaterialTheme.colorScheme.surface
-            configuredColor != null && selected -> configuredColor.copy(alpha = 0.82f)
             configuredColor != null -> configuredColor
-            selected -> MaterialTheme.colorScheme.primaryContainer
             else -> MaterialTheme.colorScheme.surface
         },
         contentColor = if (configuredColor != null && enabled) {
             configuredContentColor
-        } else if (selected) {
-            MaterialTheme.colorScheme.onPrimaryContainer
         } else if (enabled) {
             MaterialTheme.colorScheme.onSurface
         } else {
@@ -1505,11 +1514,7 @@ private fun CompactCatalogNodeButton(
         },
         border = BorderStroke(
             width = 1.dp,
-            color = if (selected) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.outline.copy(alpha = if (enabled) 0.55f else 0.25f)
-            },
+            color = MaterialTheme.colorScheme.outline.copy(alpha = if (enabled) 0.55f else 0.25f),
         ),
     ) {
         Box(
@@ -1679,8 +1684,83 @@ private fun MaintenanceCatalogBreadcrumbs(
 private data class MaintenanceCatalogAddContext(
     val nodes: List<CatalogNodeDto>,
     val quantityNode: CatalogNodeDto,
-    val continuationNode: CatalogNodeDto,
 )
+
+private data class MaintenanceCatalogExistingWorkContext(
+    val addContext: MaintenanceCatalogAddContext,
+    val quantity: String,
+    val comment: String,
+    val candidates: List<MaintenanceLineEditorState>,
+)
+
+internal fun maintenanceCatalogSelectionHasWork(nodes: List<CatalogNodeDto>): Boolean =
+    nodes.any { node -> node.nodeType == "WORK" }
+
+internal fun maintenanceCatalogExistingWorkCandidates(
+    editor: MaintenanceEditorState,
+    nodes: List<CatalogNodeDto>,
+): List<MaintenanceLineEditorState> {
+    val workNodeIds = nodes
+        .asSequence()
+        .filter { node -> node.nodeType == "WORK" }
+        .map(CatalogNodeDto::id)
+        .toSet()
+    return editor.lines.filter { line ->
+        line.lineType == "WORK" && line.catalogNodeId in workNodeIds
+    }
+}
+
+@Composable
+private fun MaintenanceCatalogExistingWorkDialog(
+    context: MaintenanceCatalogExistingWorkContext,
+    onDismiss: () -> Unit,
+    onChooseExisting: (String) -> Unit,
+    onCreateNew: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Работа уже добавлена") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Выберите работу, к которой добавить количество, или создайте отдельную работу.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                context.candidates.forEachIndexed { index, line ->
+                    OutlinedButton(
+                        onClick = { onChooseExisting(line.id) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text("Добавить к работе ${index + 1}")
+                            Text(
+                                buildString {
+                                    append(line.description)
+                                    append(" · ")
+                                    append(line.quantity)
+                                    append(' ')
+                                    append(line.unit.ifBlank { "ед." })
+                                    line.comment.trim().takeIf(String::isNotEmpty)?.let { comment ->
+                                        append(" · ")
+                                        append(comment)
+                                    }
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onCreateNew) { Text("Создать новую работу") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Отмена") }
+        },
+    )
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1691,7 +1771,9 @@ private fun MaintenanceCatalogAddSheet(
 ) {
     var quantity by remember(context.quantityNode.id) { mutableStateOf("1") }
     var comment by remember(context.quantityNode.id) { mutableStateOf("") }
+    val hasWork = maintenanceCatalogSelectionHasWork(context.nodes)
     val validQuantity = maintenanceQuantity(quantity)?.let { it > BigDecimal.ZERO } == true
+    val validComment = !hasWork || comment.trim().length <= 2_000
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
@@ -1706,7 +1788,7 @@ private fun MaintenanceCatalogAddSheet(
             ) {
                 item {
                     Text(
-                        if (context.quantityNode.nodeType == "WORK") {
+                        if (hasWork) {
                             "Добавить работу"
                         } else {
                             "Добавить материал"
@@ -1732,19 +1814,30 @@ private fun MaintenanceCatalogAddSheet(
                         isError = quantity.isNotBlank() && !validQuantity,
                     )
                 }
-                item {
-                    OutlinedTextField(
-                        value = comment,
-                        onValueChange = { comment = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Комментарий") },
-                        minLines = 2,
-                    )
+                if (hasWork) {
+                    item {
+                        OutlinedTextField(
+                            value = comment,
+                            onValueChange = { comment = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Комментарий") },
+                            minLines = 2,
+                            isError = !validComment,
+                            supportingText = if (validComment) null else {
+                                { Text("Комментарий не может быть длиннее 2000 символов") }
+                            },
+                        )
+                    }
                 }
                 item {
                     Button(
-                        onClick = { onConfirm(quantity.trim(), comment.trim()) },
-                        enabled = validQuantity,
+                        onClick = {
+                            onConfirm(
+                                quantity.trim(),
+                                comment.trim().takeIf { hasWork }.orEmpty(),
+                            )
+                        },
+                        enabled = validQuantity && validComment,
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("Добавить") }
                 }
@@ -2595,8 +2688,6 @@ private fun MaintenancePhotoGridCard(
 @Composable
 private fun MaintenanceReviewStep(
     editor: MaintenanceEditorState,
-    movementRouting: RoutingSnapshotDto?,
-    movementRoutingProblem: String?,
     onEdit: ((MaintenanceEditorState) -> MaintenanceEditorState) -> Unit,
     canSubmit: Boolean,
     busy: Boolean,
@@ -2611,7 +2702,6 @@ private fun MaintenanceReviewStep(
     val alreadySubmitted = maintenanceDocumentAlreadySubmitted(editor)
     val repairCount = editor.lines.count { line -> line.lineType == "WORK" }
     val materialCount = editor.lines.count { line -> line.lineType == "MATERIAL" }
-    val movementSelected = editor.hasRepairMovementStages()
     LazyColumn(
         modifier = modifier,
         contentPadding = PaddingValues(16.dp),
@@ -2637,9 +2727,26 @@ private fun MaintenanceReviewStep(
         if (!emptyOutcome) {
             item {
                 ManagerPanel {
-                    Text("Приоритет", style = MaterialTheme.typography.titleMedium)
+                    RepairMovementLogisticsOptions(
+                        editor = editor,
+                        enabled = !editor.readOnly && !alreadySubmitted,
+                        onEdit = onEdit,
+                    )
                     Text(
-                        "Выберите приоритет ремонта от 1 до 5.",
+                        if (editor.movementToRepair) {
+                            "Приоритет перемещения"
+                        } else {
+                            "Приоритет ремонта"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        if (editor.movementToRepair) {
+                            "Определяет позицию задания водителя. После доставки ремонт " +
+                                "появится в очереди работ с системным приоритетом 1."
+                        } else {
+                            "Выберите приоритет ремонта от 1 до 5."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -2655,33 +2762,6 @@ private fun MaintenanceReviewStep(
                                 label = { Text(priority.toString()) },
                             )
                         }
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Checkbox(
-                            checked = movementSelected,
-                            onCheckedChange = { required ->
-                                onEdit { current ->
-                                    current.withRepairMovementStages(required, movementRouting)
-                                }
-                            },
-                            enabled = !editor.readOnly && !alreadySubmitted &&
-                                (movementSelected || movementRouting != null),
-                        )
-                        Text(
-                            "Создать перемещение на ремонт и возврат",
-                            modifier = Modifier.padding(start = 4.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                    movementRoutingProblem?.let { problem ->
-                        Text(
-                            problem,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
                     }
                 }
             }
@@ -2864,7 +2944,8 @@ internal fun maintenanceCanSubmit(editor: MaintenanceEditorState): Boolean {
         (emptyOutcome ||
             (editor.lines.isNotEmpty() &&
                 editor.lines.all(::maintenanceLineIsValid))) &&
-        editor.priority in 1..5
+        editor.priority in 1..5 &&
+        editor.logisticsPlanningValidationError() == null
 }
 
 private fun maintenanceDetailsAreValid(editor: MaintenanceEditorState): Boolean =
@@ -2908,7 +2989,13 @@ private fun maintenanceSubmitValidationMessage(editor: MaintenanceEditorState): 
         "Выберите титульную фотографию."
     !isEmptyMaintenanceOutcome(editor) && editor.lines.any { !maintenanceLineIsValid(it) } ->
         "Проверьте количество и цену в строках."
-    editor.priority !in 1..5 -> "Выберите приоритет от 1 до 5."
+    editor.priority !in 1..5 -> if (editor.movementToRepair) {
+        "Выберите приоритет перемещения от 1 до 5."
+    } else {
+        "Выберите приоритет ремонта от 1 до 5."
+    }
+    editor.logisticsPlanningValidationError() != null ->
+        requireNotNull(editor.logisticsPlanningValidationError())
     else -> "Проверьте данные перед сохранением."
 }
 
