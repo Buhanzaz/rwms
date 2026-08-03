@@ -2,6 +2,8 @@ package dev.buhanzaz.rwms.asset;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.verify;
 import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.CHARACTERISTIC_ELECTRICS_KK;
 import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.CATEGORY_NEW;
 import static dev.buhanzaz.rwms.asset.CabinCompositionTestIds.CATEGORY_ORDINARY;
@@ -15,16 +17,22 @@ import dev.buhanzaz.rwms.asset.api.AssetApiModels.RentalItemResponse;
 import dev.buhanzaz.rwms.asset.api.AssetApiModels.UpdateStatusRequest;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinSearchGroup;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinSearchRequest;
+import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.CabinAvailabilityRequest;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.ConvertPresentationHoldsRequest;
 import dev.buhanzaz.rwms.asset.api.PresentationHoldApiModels.ReplacePresentationHoldsRequest;
+import dev.buhanzaz.rwms.asset.domain.OperationLease;
 import dev.buhanzaz.rwms.asset.domain.OrderUnitReservationState;
+import dev.buhanzaz.rwms.asset.domain.OrderUnitReservation;
 import dev.buhanzaz.rwms.asset.domain.PresentationUnitHoldState;
 import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
+import dev.buhanzaz.rwms.asset.repository.OperationLeaseRepository;
 import dev.buhanzaz.rwms.asset.repository.OrderUnitReservationRepository;
 import dev.buhanzaz.rwms.asset.repository.PresentationUnitHoldRepository;
 import dev.buhanzaz.rwms.asset.service.AssetService;
+import dev.buhanzaz.rwms.asset.service.AssetInvalidationHub;
 import dev.buhanzaz.rwms.asset.service.OrderUnitReservationConflictException;
 import dev.buhanzaz.rwms.asset.service.PresentationHoldService;
+import dev.buhanzaz.rwms.asset.service.RentalAvailabilityInvalidationPublisher;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -38,6 +46,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 @SpringBootTest(
@@ -59,8 +68,10 @@ class PresentationHoldServiceIntegrationTest {
 
   @Autowired PresentationHoldService presentationHolds;
   @Autowired AssetService assets;
+  @MockitoSpyBean AssetInvalidationHub invalidations;
   @Autowired PresentationUnitHoldRepository holdRepository;
   @Autowired OrderUnitReservationRepository orderReservations;
+  @Autowired OperationLeaseRepository operationLeases;
   @Autowired JdbcTemplate jdbc;
 
   @DynamicPropertySource
@@ -151,6 +162,119 @@ class PresentationHoldServiceIntegrationTest {
         .isEqualTo(second.id());
     assertThat(holdRepository.findById(firstHoldId).orElseThrow().getState())
         .isEqualTo(PresentationUnitHoldState.RELEASED);
+  }
+
+  @Test
+  void publicAvailablePageExcludesHeldReservedAndLeasedFreeCabins() {
+    UUID actorSubjectId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    RentalItemResponse available = freeRental(actorSubjectId, warehouseId, "AVAILABLE-MATCH");
+    RentalItemResponse held = freeRental(actorSubjectId, warehouseId, "HELD-MATCH");
+    RentalItemResponse reserved = freeRental(actorSubjectId, warehouseId, "RESERVED-MATCH");
+    RentalItemResponse leased = freeRental(actorSubjectId, warehouseId, "LEASED-MATCH");
+    RentalItemResponse notFree = freeRental(actorSubjectId, warehouseId, "NOT-FREE-MATCH");
+    assets.updateStatus(
+        notFree.id(), new UpdateStatusRequest(notFree.version(), RentalItemStatus.REPAIR));
+    presentationHolds.replace(
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        replaceRequest(
+            warehouseId,
+            List.of(held.id()),
+            OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(30),
+            actorSubjectId));
+    orderReservations.saveAndFlush(
+        OrderUnitReservation.create(
+            UUID.randomUUID(),
+            reserved.id(),
+            warehouseId,
+            actorSubjectId,
+            "RENTAL_MANAGER"));
+    OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+    operationLeases.saveAndFlush(
+        OperationLease.acquire(
+            leased.id(),
+            "TEST",
+            UUID.randomUUID().toString(),
+            1,
+            UUID.randomUUID(),
+            now,
+            now.plusMinutes(30)));
+
+    var page = presentationHolds.availableRentalItems(warehouseId, 0, 200, "match");
+
+    assertThat(page.content())
+        .extracting(RentalItemResponse::id)
+        .containsExactly(available.id());
+    assertThat(page.totalElements()).isEqualTo(1);
+    assertThat(page.totalPages()).isEqualTo(1);
+    assertThat(
+            presentationHolds
+                .availableRentalItems(warehouseId, Integer.MAX_VALUE, 200, null)
+                .content())
+        .isEmpty();
+    assertThat(
+            presentationHolds
+                .availability(
+                    new CabinAvailabilityRequest(
+                        warehouseId,
+                        List.of(
+                            available.id(),
+                            held.id(),
+                            reserved.id(),
+                            leased.id(),
+                            notFree.id())))
+                .items())
+        .extracting(value -> value.rentalItemId(), value -> value.reason())
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(available.id(), "AVAILABLE"),
+            org.assertj.core.groups.Tuple.tuple(held.id(), "PRESENTATION_HELD"),
+            org.assertj.core.groups.Tuple.tuple(reserved.id(), "ORDER_RESERVED"),
+            org.assertj.core.groups.Tuple.tuple(leased.id(), "OPERATION_LEASED"),
+            org.assertj.core.groups.Tuple.tuple(notFree.id(), "STATUS"));
+  }
+
+  @Test
+  void replacingPresentationSelectionPublishesAvailabilityForReleasedAndAcquiredCabins() {
+    UUID actorSubjectId = UUID.randomUUID();
+    UUID warehouseId = UUID.randomUUID();
+    UUID presentationId = UUID.randomUUID();
+    RentalItemResponse released = freeRental(actorSubjectId, warehouseId, "SSE-RELEASED");
+    RentalItemResponse acquired = freeRental(actorSubjectId, warehouseId, "SSE-ACQUIRED");
+    presentationHolds.replace(
+        UUID.randomUUID(),
+        presentationId,
+        replaceRequest(
+            warehouseId,
+            List.of(released.id()),
+            OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(30),
+            actorSubjectId));
+    clearInvocations(invalidations);
+
+    presentationHolds.replace(
+        UUID.randomUUID(),
+        presentationId,
+        replaceRequest(
+            warehouseId,
+            List.of(acquired.id()),
+            OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(30),
+            actorSubjectId));
+
+    var events =
+        org.mockito.ArgumentCaptor.forClass(
+            AssetInvalidationHub.AssetInvalidationEvent.class);
+    verify(invalidations, org.mockito.Mockito.times(2)).publish(events.capture());
+    assertThat(events.getAllValues())
+        .allSatisfy(
+            event -> {
+              assertThat(event.warehouseId()).isEqualTo(warehouseId);
+              assertThat(event.scope())
+                  .isEqualTo(RentalAvailabilityInvalidationPublisher.CHANGE_TYPE);
+              assertThat(event.changeType())
+                  .isEqualTo(RentalAvailabilityInvalidationPublisher.CHANGE_TYPE);
+            })
+        .extracting(AssetInvalidationHub.AssetInvalidationEvent::aggregateId)
+        .containsExactlyInAnyOrder(released.id(), acquired.id());
   }
 
   @Test

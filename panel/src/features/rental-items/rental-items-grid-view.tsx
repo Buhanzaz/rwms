@@ -30,6 +30,7 @@ export type RentalItemsGridViewProps = {
   accessToken: string
   mediaCovers: ReadonlyMap<string, CabinCoverProjection>
   coverAvailability?: RentalItemCoverAvailability
+  renderPhotoOverlay?: (item: RentalItemDto) => ReactNode
   renderItemActions?: (item: RentalItemDto) => ReactNode
 }
 
@@ -141,6 +142,7 @@ export function RentalItemsGridView({
   accessToken,
   mediaCovers,
   coverAvailability = "available",
+  renderPhotoOverlay,
   renderItemActions,
 }: RentalItemsGridViewProps) {
   const parentRef = useRef<HTMLDivElement | null>(null)
@@ -271,7 +273,7 @@ export function RentalItemsGridView({
                     className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card"
                   >
                     <div
-                      className="shrink-0 overflow-hidden"
+                      className="relative shrink-0 overflow-hidden"
                       style={{ height: `${photoHeight}px` }}
                     >
                       <RentalItemCardPhoto
@@ -281,6 +283,7 @@ export function RentalItemsGridView({
                         coverAvailability={coverAvailability}
                         onOpenPhotos={onOpenPhotos}
                       />
+                      {renderPhotoOverlay?.(item)}
                     </div>
 
                     <div className="flex min-h-0 min-w-0 flex-1 items-stretch">

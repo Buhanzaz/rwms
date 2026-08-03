@@ -191,15 +191,21 @@ describe("AppSidebar collapsed desktop navigation", () => {
     expect(screen.queryByText("Задания водителей")).toBeNull()
   })
 
-  it("groups Chat above Booking in the Rental section for every signed-in user", () => {
+  it("groups Chat, Booking and Orders in the Rental section for every signed-in user", () => {
     const first = renderSidebar()
     expect(screen.getByText("Аренда")).toBeTruthy()
     const chat = screen.getByRole("link", { name: "Чат" })
     const booking = screen.getByRole("link", { name: "Бронирование" })
+    const orders = screen.getByRole("link", { name: "Заказы" })
 
     expect(
       chat.compareDocumentPosition(booking) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
+    expect(
+      booking.compareDocumentPosition(orders) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(booking.getAttribute("href")).toBe("/booking")
+    expect(orders.getAttribute("href")).toBe("/orders")
 
     first.unmount()
     renderSidebar({
@@ -209,6 +215,7 @@ describe("AppSidebar collapsed desktop navigation", () => {
     expect(screen.getByText("Аренда")).toBeTruthy()
     expect(screen.getByRole("link", { name: "Чат" })).toBeTruthy()
     expect(screen.getByRole("link", { name: "Бронирование" })).toBeTruthy()
+    expect(screen.getByRole("link", { name: "Заказы" })).toBeTruthy()
   })
 
   it("restores the desktop sidebar state after a reload", async () => {
@@ -269,7 +276,7 @@ describe("AppSidebar collapsed desktop navigation", () => {
     expect(writeOffsButton.className).toContain(
       "group-data-[collapsible=icon]:h-9!"
     )
-    const ordersButton = screen.getByRole("link", { name: "Бронирование" })
+    const ordersButton = screen.getByRole("link", { name: "Заказы" })
     expect(ordersButton.className).toContain(
       "group-data-[collapsible=icon]:w-9!"
     )

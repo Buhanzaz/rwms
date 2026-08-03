@@ -179,7 +179,7 @@ const navGroups: SidebarNavGroup[] = [
 
 const settingsNavItems: SidebarNavItem[] = [
   {
-    title: "Аренда и представления",
+    title: "Бронирование и чат",
     url: "/settings/rental",
     icon: Clock01Icon,
   },
@@ -820,6 +820,32 @@ function AssistantSidebarMenu({
   )
 }
 
+function BookingSidebarMenu({
+  currentPath,
+  onNavigate,
+}: {
+  currentPath: string
+  onNavigate: () => void
+}) {
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        asChild
+        isActive={isActiveUrl(currentPath, "/booking")}
+        tooltip="Бронирование"
+        className="h-10 py-1"
+      >
+        <Link to="/booking" onClick={onNavigate}>
+          <span className="flex size-8 shrink-0 items-center justify-center group-data-[collapsible=icon]:size-9">
+            <HugeiconsIcon icon={ClipboardPenLineIcon} strokeWidth={2} />
+          </span>
+          <span>Бронирование</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  )
+}
+
 export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
   const location = useLocation()
   const { selectedWarehouse } = useWarehouse()
@@ -959,6 +985,10 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
           <SidebarGroupContent>
             <SidebarMenu>
               <AssistantSidebarMenu
+                currentPath={location.pathname}
+                onNavigate={handleNavigationClick}
+              />
+              <BookingSidebarMenu
                 currentPath={location.pathname}
                 onNavigate={handleNavigationClick}
               />

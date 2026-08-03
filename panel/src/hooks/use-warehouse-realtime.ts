@@ -57,6 +57,18 @@ export function useWarehouseRealtime({
         queryKey: ["rental-items", subject, warehouseId],
       })
     }
+    const invalidateBookingAvailability = () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["rental-booking-available", subject, warehouseId],
+      })
+      void queryClient.invalidateQueries({
+        queryKey: [
+          "rental-booking-selected-availability",
+          subject,
+          warehouseId,
+        ],
+      })
+    }
     const invalidateCovers = () => {
       void queryClient.invalidateQueries({
         queryKey: [...RENTAL_ITEM_COVERS_QUERY_KEY, subject, warehouseId],
@@ -72,6 +84,7 @@ export function useWarehouseRealtime({
     }
     const invalidateEverything = () => {
       invalidateRentalItems()
+      invalidateBookingAvailability()
       invalidateCovers()
       invalidateEquipment()
     }
@@ -151,6 +164,12 @@ export function useWarehouseRealtime({
       if (payload.scope === "RESYNC") {
         const hasWarehouseData =
           hasCachedData(["rental-items", subject, warehouseId]) ||
+          hasCachedData(["rental-booking-available", subject, warehouseId]) ||
+          hasCachedData([
+            "rental-booking-selected-availability",
+            subject,
+            warehouseId,
+          ]) ||
           hasCachedData(["equipment-items"]) ||
           hasCachedData(["equipment"])
         if (assetResync(hasWarehouseData)) {
@@ -161,9 +180,13 @@ export function useWarehouseRealtime({
         payload.aggregateType === "RENTAL_ITEM" &&
         payload.aggregateId
       ) {
+        invalidateBookingAvailability()
         void refreshRentalItem(payload.aggregateId, payload.changeType)
       } else if (payload.scope === "RENTAL_ITEMS_CHANGED") {
         invalidateRentalItems()
+        invalidateBookingAvailability()
+      } else if (payload.scope === "RENTAL_AVAILABILITY_CHANGED") {
+        invalidateBookingAvailability()
       } else if (
         payload.scope === "EQUIPMENT_CHANGED" ||
         payload.scope === "EQUIPMENT_CATALOG_CHANGED"

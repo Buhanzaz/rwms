@@ -32,6 +32,11 @@ import { OrdersRoutes } from "@/features/orders/orders-routes"
 import { AssistantPage } from "@/features/assistant/pages/assistant-page"
 import { RentalSettingsPage } from "@/features/assistant/pages/rental-settings-page"
 import {
+  BookingCatalogPage,
+  BookingContinuePage,
+  BookingSelectionProvider,
+} from "@/features/booking"
+import {
   InventoryEntryPage,
   InventoryFinishPage,
   InventoryHistoryDetailPage,
@@ -227,118 +232,125 @@ function AppLayout() {
         <SiteHeader />
 
         <div className="min-h-0 flex-1 overflow-hidden p-4 lg:p-3">
-          <Routes>
-            <Route
-              path="/warehouse/:rentalItemId"
-              element={<RentalItemDetailPage />}
-            />
-            <Route path="/equipment" element={<EquipmentPage />} />
-            <Route path="/kpi" element={<KpiPage />} />
-            <Route path="/warehouse" element={<RentalItemsPage />} />
-            <Route path="/inventory" element={<InventoryEntryPage />} />
-            <Route
-              path="/inventory/history"
-              element={<InventoryHistoryPage />}
-            />
-            <Route
-              path="/inventory/history/:inventoryId"
-              element={<InventoryHistoryDetailPage />}
-            />
-            <Route
-              path="/inventory/:inventoryId/finish"
-              element={<InventoryFinishPage />}
-            />
-            <Route
-              path="/inventory/:inventoryId"
-              element={<InventorySessionPage />}
-            />
-            <Route path="/estimates" element={<RepairEstimatesPage />} />
-            <Route path="/repairs" element={<RepairsPage />} />
-            <Route path="/task-board" element={<TaskBoardPage />} />
-            <Route path="/acceptance" element={<AcceptancePage />} />
-            <Route path="/logistics/tasks" element={<DriverBoardPage />} />
-            <Route
-              path="/logistics/order-tasks"
-              element={<LogisticsOrderTasksPage />}
-            />
-            <Route
-              path="/logistics/returns"
-              element={<LogisticsReturnsPage />}
-            />
-            <Route
-              path="/logistics/shipments"
-              element={<LogisticsShipmentsPage />}
-            />
-            <Route
-              path="/logistics/transfers"
-              element={<WarehouseTransfersPage />}
-            />
-            <Route path="/orders/*" element={<OrdersRoutes />} />
-            <Route path="/assistant" element={<AssistantPage />} />
-            <Route path="/write-offs" element={<WriteOffsPage />} />
-            <Route
-              path="/write-offs/equipment"
-              element={<EquipmentWriteOffsPage />}
-            />
-            <Route path="/settings/kpi" element={<KpiSettingsPage />} />
-            <Route
-              path="/settings/estimates-repairs"
-              element={<EstimatesRepairsSettingsPage />}
-            />
-            <Route path="/settings/users" element={<UsersPage />} />
-            <Route
-              path="/settings/warehouses"
-              element={<WarehouseSettingsPage />}
-            />
-            <Route
-              path="/settings/task-board"
-              element={<TaskBoardSettingsPage />}
-            />
-            <Route
-              path="/settings/logistics"
-              element={<LogisticsSettingsPage />}
-            />
-            <Route
-              path="/settings/cabins"
-              element={<CabinCompositionSettingsPage />}
-            />
-            <Route path="/settings/rental" element={<RentalSettingsPage />} />
+          <BookingSelectionProvider>
+            <Routes>
+              <Route
+                path="/warehouse/:rentalItemId"
+                element={<RentalItemDetailPage />}
+              />
+              <Route path="/booking" element={<BookingCatalogPage />} />
+              <Route
+                path="/booking/continue"
+                element={<BookingContinuePage />}
+              />
+              <Route path="/equipment" element={<EquipmentPage />} />
+              <Route path="/kpi" element={<KpiPage />} />
+              <Route path="/warehouse" element={<RentalItemsPage />} />
+              <Route path="/inventory" element={<InventoryEntryPage />} />
+              <Route
+                path="/inventory/history"
+                element={<InventoryHistoryPage />}
+              />
+              <Route
+                path="/inventory/history/:inventoryId"
+                element={<InventoryHistoryDetailPage />}
+              />
+              <Route
+                path="/inventory/:inventoryId/finish"
+                element={<InventoryFinishPage />}
+              />
+              <Route
+                path="/inventory/:inventoryId"
+                element={<InventorySessionPage />}
+              />
+              <Route path="/estimates" element={<RepairEstimatesPage />} />
+              <Route path="/repairs" element={<RepairsPage />} />
+              <Route path="/task-board" element={<TaskBoardPage />} />
+              <Route path="/acceptance" element={<AcceptancePage />} />
+              <Route path="/logistics/tasks" element={<DriverBoardPage />} />
+              <Route
+                path="/logistics/order-tasks"
+                element={<LogisticsOrderTasksPage />}
+              />
+              <Route
+                path="/logistics/returns"
+                element={<LogisticsReturnsPage />}
+              />
+              <Route
+                path="/logistics/shipments"
+                element={<LogisticsShipmentsPage />}
+              />
+              <Route
+                path="/logistics/transfers"
+                element={<WarehouseTransfersPage />}
+              />
+              <Route path="/orders/*" element={<OrdersRoutes />} />
+              <Route path="/assistant" element={<AssistantPage />} />
+              <Route path="/write-offs" element={<WriteOffsPage />} />
+              <Route
+                path="/write-offs/equipment"
+                element={<EquipmentWriteOffsPage />}
+              />
+              <Route path="/settings/kpi" element={<KpiSettingsPage />} />
+              <Route
+                path="/settings/estimates-repairs"
+                element={<EstimatesRepairsSettingsPage />}
+              />
+              <Route path="/settings/users" element={<UsersPage />} />
+              <Route
+                path="/settings/warehouses"
+                element={<WarehouseSettingsPage />}
+              />
+              <Route
+                path="/settings/task-board"
+                element={<TaskBoardSettingsPage />}
+              />
+              <Route
+                path="/settings/logistics"
+                element={<LogisticsSettingsPage />}
+              />
+              <Route
+                path="/settings/cabins"
+                element={<CabinCompositionSettingsPage />}
+              />
+              <Route path="/settings/rental" element={<RentalSettingsPage />} />
 
-            {pages
-              .filter(
-                (page) =>
-                  ![
-                    "/warehouse",
-                    "/equipment",
-                    "/kpi",
-                    "/inventory",
-                    "/estimates",
-                    "/repairs",
-                    "/task-board",
-                    "/acceptance",
-                    "/logistics/tasks",
-                    "/logistics/order-tasks",
-                    "/logistics/returns",
-                    "/logistics/shipments",
-                    "/logistics/transfers",
-                    "/write-offs",
-                    "/write-offs/equipment",
-                    "/settings/kpi",
-                    "/settings/estimates-repairs",
-                    "/settings/warehouses",
-                    "/settings/task-board",
-                    "/settings/logistics",
-                    "/settings/cabins",
-                  ].includes(page.path)
-              )
-              .map((page) => (
-                <Route
-                  key={page.path}
-                  path={page.path}
-                  element={<EmptyPage title={page.title} />}
-                />
-              ))}
-          </Routes>
+              {pages
+                .filter(
+                  (page) =>
+                    ![
+                      "/warehouse",
+                      "/equipment",
+                      "/kpi",
+                      "/inventory",
+                      "/estimates",
+                      "/repairs",
+                      "/task-board",
+                      "/acceptance",
+                      "/logistics/tasks",
+                      "/logistics/order-tasks",
+                      "/logistics/returns",
+                      "/logistics/shipments",
+                      "/logistics/transfers",
+                      "/write-offs",
+                      "/write-offs/equipment",
+                      "/settings/kpi",
+                      "/settings/estimates-repairs",
+                      "/settings/warehouses",
+                      "/settings/task-board",
+                      "/settings/logistics",
+                      "/settings/cabins",
+                    ].includes(page.path)
+                )
+                .map((page) => (
+                  <Route
+                    key={page.path}
+                    path={page.path}
+                    element={<EmptyPage title={page.title} />}
+                  />
+                ))}
+            </Routes>
+          </BookingSelectionProvider>
         </div>
       </SidebarInset>
     </SidebarProvider>

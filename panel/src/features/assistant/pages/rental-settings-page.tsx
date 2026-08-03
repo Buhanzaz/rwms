@@ -138,10 +138,10 @@ export function RentalSettingsPage() {
           <div className="mb-2 flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
             <HugeiconsIcon icon={Clock01Icon} className="size-5" />
           </div>
-          <CardTitle>Аренда и представления для клиентов</CardTitle>
+          <CardTitle>Бронирование и чат</CardTitle>
           <CardDescription>
-            Глобальные сроки резерва бытовок в черновике бронирования, чате и
-            после создания публичного представления.
+            Общие сроки удержания бытовок для ручного бронирования, чата,
+            клиентского представления и созданного черновика заказа.
           </CardDescription>
         </CardHeader>
         <CardContent>

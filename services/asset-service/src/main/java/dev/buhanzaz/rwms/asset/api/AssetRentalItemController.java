@@ -6,9 +6,11 @@ import dev.buhanzaz.rwms.asset.domain.RentalItemStatus;
 import dev.buhanzaz.rwms.asset.security.AssetAuthorizer;
 import dev.buhanzaz.rwms.asset.service.AssetService;
 import dev.buhanzaz.rwms.asset.service.CabinCompositionService;
+import dev.buhanzaz.rwms.asset.service.PresentationHoldService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Size;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -35,6 +37,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AssetRentalItemController {
   private final AssetService service;
   private final CabinCompositionService composition;
+  private final PresentationHoldService presentationHolds;
   private final AssetAuthorizer access;
 
   @GetMapping
@@ -49,6 +52,25 @@ public class AssetRentalItemController {
     access.requireRead(jwt, warehouseId);
     return service.listRentalItems(
         warehouseId, page, size, search, excludedStatuses);
+  }
+
+  @GetMapping("/available")
+  public RentalItemPage available(
+      @AuthenticationPrincipal Jwt jwt,
+      @RequestParam UUID warehouseId,
+      @RequestParam(defaultValue = "0") @Min(0) int page,
+      @RequestParam(defaultValue = "50") @Min(1) @Max(200) int size,
+      @RequestParam(required = false) @Size(max = 128) String search) {
+    access.requireRead(jwt, warehouseId);
+    return presentationHolds.availableRentalItems(warehouseId, page, size, search);
+  }
+
+  @PostMapping("/availability")
+  public PresentationHoldApiModels.CabinAvailabilityResponse availability(
+      @AuthenticationPrincipal Jwt jwt,
+      @Valid @RequestBody PresentationHoldApiModels.CabinAvailabilityRequest request) {
+    access.requireRead(jwt, request.warehouseId());
+    return presentationHolds.availability(request);
   }
 
   @GetMapping("/creation-options")
