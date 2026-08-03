@@ -112,6 +112,9 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(registry.listQueues(W1))
         .extracting(WorkQueueDto::id)
         .containsExactly(repair.id(), secondRepair.id(), holding.id());
+    assertThat(registry.listQueues(W1))
+        .extracting(WorkQueueDto::sortOrder)
+        .containsExactly(1, 2, 3);
     assertThatThrownBy(
             () ->
                 registry.updateQueueDefinition(
@@ -145,6 +148,9 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(registry.listQueueDefinitions())
         .extracting(QueueDefinitionDto::id)
         .containsExactlyInAnyOrder(firstW1.definitionId(), secondW1.definitionId());
+    assertThat(registry.listQueueDefinitions())
+        .extracting(QueueDefinitionDto::sortOrder)
+        .containsExactly(1, 2);
     assertThat(registry.listQueues(W1))
         .filteredOn(queue -> queue.definitionId().equals(firstW1.definitionId()))
         .hasSize(1);
@@ -172,6 +178,12 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
     assertThat(registry.listQueues(W2))
         .extracting(WorkQueueDto::definitionId)
         .containsExactly(secondW1.definitionId(), firstW2.definitionId());
+    assertThat(registry.listQueues(W1))
+        .extracting(WorkQueueDto::sortOrder)
+        .containsExactly(1, 2);
+    assertThat(registry.listQueues(W2))
+        .extracting(WorkQueueDto::sortOrder)
+        .containsExactly(1, 2);
 
     QueueDefinitionDto definition =
         registry.listQueueDefinitions().stream()
@@ -417,7 +429,15 @@ class TaskBoardServiceIntegrationTest extends PostgresIntegrationTestSupport {
         .filteredOn(workerClass -> workerClass.id().equals(repairClass.id()))
         .extracting(WorkerClassDto::logisticsPrimary)
         .containsExactly(false);
-    assertThat(registry.listQueues(W1).getFirst().bindings().getFirst().workerClass().logisticsPrimary())
+    assertThat(
+            registry.listQueues(W1).stream()
+                .filter(queue -> queue.purpose() == QueuePurpose.LOGISTICS_DRIVER)
+                .findFirst()
+                .orElseThrow()
+                .bindings()
+                .getFirst()
+                .workerClass()
+                .logisticsPrimary())
         .isTrue();
   }
 

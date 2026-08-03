@@ -67,10 +67,10 @@ class TaskBoardEventStoreMigrationIntegrationTest {
   }
 
   @Test
-  void cleanInstallAppliesV4ThroughV25AndRepeatIsNoOp() {
+  void cleanInstallAppliesV4ThroughV26AndRepeatIsNoOp() {
     Flyway flyway = flyway(MIGRATION_LOCATION);
 
-    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(22);
+    assertThat(flyway.migrate().migrationsExecuted).isEqualTo(23);
     flyway.validate();
     assertThat(flyway.migrate().migrationsExecuted).isZero();
 
@@ -220,6 +220,13 @@ class TaskBoardEventStoreMigrationIntegrationTest {
                     + "where version='25'"))
         .containsEntry("version", "25")
         .containsEntry("script", "V25__global_task_board_queue_standard.sql")
+        .containsEntry("success", true);
+    assertThat(
+            jdbc.queryForMap(
+                "select version, description, script, success from flyway_schema_history "
+                    + "where version='26'"))
+        .containsEntry("version", "26")
+        .containsEntry("script", "V26__use_contiguous_global_queue_positions.sql")
         .containsEntry("success", true);
     assertThat(
             jdbc.queryForList(
@@ -665,7 +672,7 @@ class TaskBoardEventStoreMigrationIntegrationTest {
             .baselineDescription("Task-board post-F2 schema")
             .load();
     adopted.baseline();
-    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(21);
+    assertThat(adopted.migrate().migrationsExecuted).isEqualTo(22);
     adopted.validate();
     assertThat(adopted.migrate().migrationsExecuted).isZero();
     assertThat(retainedContentDigests()).containsExactlyInAnyOrderEntriesOf(before);
