@@ -107,9 +107,11 @@ export function InventoryFindingsList({
 }) {
   return (
     <>
-      <div className="hidden min-h-full min-w-0 flex-1 md:block">
+      <div
+        data-slot="inventory-findings-table"
+        className="relative isolate hidden min-w-0 flex-1 bg-background md:block"
+      >
         <OperationsListGrid
-          className="min-h-full"
           items={findings}
           columns={[
             {
