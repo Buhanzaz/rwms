@@ -4,6 +4,9 @@ import com.google.common.truth.Truth.assertThat
 import dev.buhanzaz.rwms.manager.network.CatalogLinkDto
 import dev.buhanzaz.rwms.manager.network.CatalogNodeDto
 import dev.buhanzaz.rwms.manager.network.FurnitureEquipmentReferenceDto
+import dev.buhanzaz.rwms.manager.ui.MaintenanceEditorMode
+import dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState
+import dev.buhanzaz.rwms.manager.ui.MaintenanceLineEditorState
 import org.junit.Test
 
 class MaintenanceCatalogUiPolicyTest {
@@ -22,6 +25,23 @@ class MaintenanceCatalogUiPolicyTest {
     @Test
     fun `full catalog label requires a two second hold`() {
         assertThat(MAINTENANCE_CATALOG_LABEL_HOLD_MILLIS).isEqualTo(2_000L)
+    }
+
+    @Test
+    fun `catalog add exposes every matching work and keeps material-only adds commentless`() {
+        val work = node(id = "work", type = "WORK")
+        val material = node(id = "material", type = "MATERIAL")
+        val editor = editorWithLines(
+            line(id = "work-1", catalogNodeId = work.id, type = "WORK", comment = "Первая"),
+            line(id = "work-2", catalogNodeId = work.id, type = "WORK", comment = "Вторая"),
+            line(id = "material-1", catalogNodeId = material.id, type = "MATERIAL"),
+        )
+
+        assertThat(maintenanceCatalogExistingWorkCandidates(editor, listOf(work)).map { it.id })
+            .containsExactly("work-1", "work-2")
+            .inOrder()
+        assertThat(maintenanceCatalogSelectionHasWork(listOf(work))).isTrue()
+        assertThat(maintenanceCatalogSelectionHasWork(listOf(material))).isFalse()
     }
 
     @Test
@@ -234,5 +254,37 @@ class MaintenanceCatalogUiPolicyTest {
         toNodeId = toNodeId,
         linkType = type,
         sortOrder = 0,
+    )
+
+    private fun editorWithLines(vararg lines: MaintenanceLineEditorState) = MaintenanceEditorState(
+        mode = MaintenanceEditorMode.ESTIMATE,
+        entityId = null,
+        expectedVersion = null,
+        readOnly = false,
+        selectedAsset = null,
+        dispatchDate = "2026-08-03",
+        sourceParty = "",
+        lines = lines.toList(),
+        photoUris = emptyList(),
+        readyMedia = emptyList(),
+        priority = 3,
+        step = 3,
+    )
+
+    private fun line(
+        id: String,
+        catalogNodeId: String,
+        type: String,
+        comment: String = "",
+    ) = MaintenanceLineEditorState(
+        id = id,
+        catalogNodeId = catalogNodeId,
+        description = id,
+        lineType = type,
+        unit = "шт.",
+        quantity = "1",
+        unitPrice = "0.00",
+        normativeMinutes = if (type == "WORK") 30 else 0,
+        comment = comment,
     )
 }

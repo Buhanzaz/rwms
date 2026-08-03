@@ -279,7 +279,7 @@ private fun AcceptanceStage(
 ) {
     ManagerPanel {
         Text(
-            "Этап ${stage.order + 1}: ${repairStageKindLabel(stage.kind)}",
+            "Этап ${stage.order + 1}: Ремонтные работы",
             style = MaterialTheme.typography.titleMedium,
         )
         AcceptanceInfoRow("Очередь", stage.routing.queueName)
@@ -358,11 +358,6 @@ private fun repairOriginLabel(value: String): String = when (value) {
     else -> "Прямой ремонт"
 }
 
-private fun repairStageKindLabel(value: String): String = when (value) {
-    "MOVE_TO_REPAIR" -> "Перемещение в ремонт"
-    "MOVE_FROM_REPAIR" -> "Возврат после ремонта"
-    else -> "Ремонтные работы"
-}
 
 private fun repairStageStateLabel(value: String): String = when (value) {
     "PLANNED" -> "Запланирован"

@@ -7,6 +7,7 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dev.buhanzaz.rwms.manager.auth.ManagerAuthConfiguration
 import dev.buhanzaz.rwms.manager.auth.ManagerAuthRepository
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -30,6 +31,13 @@ class RwmsBackend(
         .build()
     private val authenticatedClient = OkHttpClient.Builder()
         .addInterceptor(BearerTokenInterceptor(auth))
+        // A camera original can be several megabytes.  The default ten-second write timeout is
+        // too short for a normal 4G upload, and turns a completed server-side upload into an
+        // indistinguishable "no connection" retry on the device.
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(2, TimeUnit.MINUTES)
+        .readTimeout(2, TimeUnit.MINUTES)
+        .callTimeout(3, TimeUnit.MINUTES)
         .build()
 
     val api: RwmsApi = Retrofit.Builder()

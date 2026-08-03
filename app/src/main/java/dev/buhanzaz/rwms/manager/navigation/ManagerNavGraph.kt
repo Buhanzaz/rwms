@@ -38,6 +38,7 @@ import dev.buhanzaz.rwms.manager.ui.components.EmptyState
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPhotoCaptureScreen
 import dev.buhanzaz.rwms.manager.ui.components.LocalManagerHeaderState
 import dev.buhanzaz.rwms.manager.ui.components.ManagerHeaderState
+import dev.buhanzaz.rwms.manager.ui.screens.BackgroundUploadsScreen
 import dev.buhanzaz.rwms.manager.ui.screens.InventoryDashboardScreen
 import dev.buhanzaz.rwms.manager.ui.screens.InventoryEditorScreen
 import dev.buhanzaz.rwms.manager.ui.screens.InventoryFurnitureDecisionScreen
@@ -156,6 +157,7 @@ private fun AuthenticatedManagerNavGraph(
     uiState: ManagerUiState,
     viewModel: ManagerViewModel,
 ) {
+    val uploadOperations by viewModel.uploadOperations.collectAsStateWithLifecycle()
     CompositionLocalProvider(
         LocalManagerHeaderState provides ManagerHeaderState(
             warehouses = uiState.warehouses,
@@ -170,11 +172,21 @@ private fun AuthenticatedManagerNavGraph(
         composable(ManagerRoute.Home.route) {
             ManagerMainMenuScreen(
                 onLogout = viewModel::logout,
+                pendingUploadCount = uploadOperations.size,
+                onOpenUploads = { navController.navigate(ManagerRoute.Uploads.route) },
                 onOpenLogistics = { navController.navigate(ManagerRoute.Logistics.route) },
                 onOpenInventory = { navController.navigate(ManagerRoute.Inventory.route) },
                 onOpenMaintenance = {
                     navController.navigate(ManagerRoute.Maintenance.route) { launchSingleTop = true }
                 },
+            )
+        }
+        composable(ManagerRoute.Uploads.route) {
+            BackgroundUploadsScreen(
+                operations = uploadOperations,
+                onBack = navController::popManagerBackStack,
+                onRetryOperation = viewModel::retryBackgroundUpload,
+                onRetryPhoto = viewModel::retryBackgroundPhoto,
             )
         }
         composable(ManagerRoute.Logistics.route) {
@@ -393,7 +405,6 @@ private fun AuthenticatedManagerNavGraph(
                 editor = uiState.inventoryEditor,
                 uiState = uiState,
                 onBack = navController::popManagerBackStack,
-                onToggleCatalogNode = viewModel::toggleInventoryCatalogNode,
                 onAddCatalogNodes = viewModel::addInventoryCatalogNodes,
                 onRefreshCatalog = viewModel::refreshMaintenanceCatalog,
                 onEditPlan = viewModel::editInventoryPlan,
@@ -407,7 +418,6 @@ private fun AuthenticatedManagerNavGraph(
         composable(ManagerRoute.InventoryConfirmation.route) {
             InventoryConfirmationScreen(
                 editor = uiState.inventoryEditor,
-                uiState = uiState,
                 busy = uiState.busy,
                 onBack = navController::popManagerBackStack,
                 onEditPlan = viewModel::editInventoryPlan,
@@ -543,7 +553,6 @@ private fun AuthenticatedManagerNavGraph(
                 onUpdateAssetSearch = viewModel::updateAssetSearch,
                 onSearchAssets = viewModel::searchAssets,
                 onSelectAsset = viewModel::selectMaintenanceAsset,
-                onToggleCatalogNode = viewModel::toggleMaintenanceCatalogNode,
                 onAddCatalogNodes = viewModel::addMaintenanceCatalogNodes,
                 onToggleReworkCandidate = viewModel::toggleReworkCandidate,
                 onRefreshCatalog = viewModel::refreshMaintenanceCatalog,

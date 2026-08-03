@@ -9,14 +9,8 @@ import com.squareup.moshi.JsonDataException
 import dev.buhanzaz.rwms.manager.auth.ManagerAuthState
 import dev.buhanzaz.rwms.manager.media.MediaOwner
 import dev.buhanzaz.rwms.manager.media.MediaDownloader
-import dev.buhanzaz.rwms.manager.media.MediaUploader
-import dev.buhanzaz.rwms.manager.media.PhotoPayloadReader
-import dev.buhanzaz.rwms.manager.media.retryInventoryCommitAfterMediaReady
 import dev.buhanzaz.rwms.manager.media.retryMediaReadAfterOwnerProof
-import dev.buhanzaz.rwms.manager.network.AcceptReturnLineRequest
-import dev.buhanzaz.rwms.manager.network.AcceptReturnRequest
 import dev.buhanzaz.rwms.manager.network.AmendEstimateRequest
-import dev.buhanzaz.rwms.manager.network.ArriveTransferLineRequest
 import dev.buhanzaz.rwms.manager.network.CatalogLinkDto
 import dev.buhanzaz.rwms.manager.network.CatalogNodeDto
 import dev.buhanzaz.rwms.manager.network.CatalogNodeSnapshotDto
@@ -44,7 +38,6 @@ import dev.buhanzaz.rwms.manager.network.InventoryPlanLineInputDto
 import dev.buhanzaz.rwms.manager.network.InventoryPlanSelectionDto
 import dev.buhanzaz.rwms.manager.network.InventoryPlanStageSelectionDto
 import dev.buhanzaz.rwms.manager.network.LogisticsDocumentDto
-import dev.buhanzaz.rwms.manager.network.MediaAssetDto
 import dev.buhanzaz.rwms.manager.network.MediaReferenceDto
 import dev.buhanzaz.rwms.manager.network.MoveTaskBoardEntryRequest
 import dev.buhanzaz.rwms.manager.network.ObservationInput
@@ -52,20 +45,16 @@ import dev.buhanzaz.rwms.manager.network.CabinCatalogValueDto
 import dev.buhanzaz.rwms.manager.network.RentalItemCreationOptionsDto
 import dev.buhanzaz.rwms.manager.network.RentalItemDto
 import dev.buhanzaz.rwms.manager.network.RepairDto
-import dev.buhanzaz.rwms.manager.network.RepairDecisionRequest
 import dev.buhanzaz.rwms.manager.network.RepairStageDto
 import dev.buhanzaz.rwms.manager.network.ReworkCandidateDto
 import dev.buhanzaz.rwms.manager.network.ReworkLineInputDto
 import dev.buhanzaz.rwms.manager.network.ReconcileLogisticsRequest
 import dev.buhanzaz.rwms.manager.network.ReplaceEstimateRequest
 import dev.buhanzaz.rwms.manager.network.ReplaceRepairPlanRequest
-import dev.buhanzaz.rwms.manager.network.RequestReturnEstimateLine
-import dev.buhanzaz.rwms.manager.network.RequestReturnEstimateRequest
 import dev.buhanzaz.rwms.manager.network.ResolveInventoryConflictRequest
 import dev.buhanzaz.rwms.manager.network.ResolveNumberRequest
 import dev.buhanzaz.rwms.manager.network.RoutingSnapshotDto
 import dev.buhanzaz.rwms.manager.network.RwmsBackend
-import dev.buhanzaz.rwms.manager.network.SaveInspectionRequest
 import dev.buhanzaz.rwms.manager.network.StartInventoryRequest
 import dev.buhanzaz.rwms.manager.network.ShipmentFurnitureReadinessDto
 import dev.buhanzaz.rwms.manager.network.ShipmentPlanRequest
@@ -77,9 +66,24 @@ import dev.buhanzaz.rwms.manager.network.TransferFurnitureReplacementRequest
 import dev.buhanzaz.rwms.manager.network.CabinFurnitureRequirementDto
 import dev.buhanzaz.rwms.manager.network.TransferLineRequest
 import dev.buhanzaz.rwms.manager.network.WarehouseDto
+import dev.buhanzaz.rwms.manager.uploads.AcceptanceUploadCommand
+import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadArea
+import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadCoordinator
+import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadDraft
+import dev.buhanzaz.rwms.manager.uploads.BackgroundUploadOperation
+import dev.buhanzaz.rwms.manager.uploads.InventoryFurnitureUploadCommand
+import dev.buhanzaz.rwms.manager.uploads.InventoryUploadCommand
+import dev.buhanzaz.rwms.manager.uploads.MaintenanceReplaceKind
+import dev.buhanzaz.rwms.manager.uploads.MaintenanceUploadCommand
+import dev.buhanzaz.rwms.manager.uploads.PendingBackgroundPhoto
+import dev.buhanzaz.rwms.manager.uploads.ReturnUploadAction
+import dev.buhanzaz.rwms.manager.uploads.ReturnUploadCommand
+import dev.buhanzaz.rwms.manager.uploads.ReturnUploadLineCommand
+import dev.buhanzaz.rwms.manager.uploads.TransferArrivalUploadCommand
 import java.io.IOException
 import java.math.BigDecimal
 import java.math.RoundingMode
+import java.net.SocketTimeoutException
 import java.time.LocalDate
 import java.time.ZonedDateTime
 import java.util.UUID
@@ -211,6 +215,12 @@ data class MaintenanceEditorState(
     val readyMedia: List<MediaReferenceDto>,
     val readyPhotoUris: Map<String, String> = emptyMap(),
     val priority: Int,
+    /** Inbound delivery to the repair zone is owned by logistics, not by a board stage. */
+    val movementToRepair: Boolean = false,
+    /** Kept independent from inbound delivery for the maintenance command contract. */
+    val movementToShipment: Boolean = false,
+    val logisticsPlanningMode: String? = null,
+    val logisticsScheduledDate: String? = null,
     val step: Int,
     val stages: List<MaintenanceStageEditorState> = emptyList(),
     val createIdempotencyKey: String = UUID.randomUUID().toString(),
@@ -303,15 +313,13 @@ data class InventoryEditorState(
      */
     val furnitureDisposition: InventoryFurnitureDisposition =
         InventoryFurnitureDisposition.KEEP_IN_CABIN,
-    /**
-     * A successful inspection is never repeated just because its follow-up movement task had a
-     * transient failure. Keeping the exact request and idempotency key lets the confirmation
-     * screen retry only that task.
-     */
-    val pendingFurnitureMoveToStock: PendingInventoryFurnitureMove? = null,
     val planLines: List<MaintenanceLineEditorState> = emptyList(),
     val planStages: List<MaintenanceStageEditorState> = emptyList(),
     val planPriority: Int = DEFAULT_MAINTENANCE_PRIORITY,
+    val planMovementToRepair: Boolean = false,
+    val planMovementToShipment: Boolean = false,
+    val planLogisticsPlanningMode: String? = null,
+    val planLogisticsScheduledDate: String? = null,
 ) {
     val isCreation: Boolean
         get() = outcome == "NOT_FOUND"
@@ -350,13 +358,12 @@ class ManagerViewModel(
     private val preference = WarehousePreference(application)
     private val maintenanceCatalogCache = MaintenanceCatalogCache(application)
     private val managerReadCache = ManagerReadCache(application)
-    private val uploader = MediaUploader(
-        backend.api,
-        PhotoPayloadReader(application.contentResolver),
-    )
     private val mediaDownloader = MediaDownloader(backend.api, application.cacheDir)
+    private val backgroundUploads = BackgroundUploadCoordinator(application)
     private val mutableState = MutableStateFlow(ManagerUiState())
     val state: StateFlow<ManagerUiState> = mutableState.asStateFlow()
+    val uploadOperations: StateFlow<List<BackgroundUploadOperation>> =
+        backgroundUploads.operations
     private var maintenanceCatalogWarehouseId: String? = null
     private var maintenanceCatalogNodesById: Map<String, CatalogNodeDto> = emptyMap()
     private var maintenanceCatalogRevision: ActiveMaintenanceCatalogRevision? = null
@@ -377,9 +384,11 @@ class ManagerViewModel(
             backend.auth.state.collectLatest { authState ->
                 mutableState.update { it.copy(authState = authState) }
                 if (authState == ManagerAuthState.SignedIn) {
+                    backgroundUploads.resumePending()
                     loadWorkspace()
                     startConnectivityMonitor()
                 } else if (authState == ManagerAuthState.SignedOut) {
+                    backgroundUploads.pause()
                     stopConnectivityMonitor()
                     clearMaintenanceCatalogMemory()
                     mutableState.value = ManagerUiState(authState = authState)
@@ -394,6 +403,7 @@ class ManagerViewModel(
 
     fun logout() {
         viewModelScope.launch {
+            backgroundUploads.pause()
             stopConnectivityMonitor()
             backend.auth.logout()
             clearMaintenanceCatalogMemory()
@@ -404,6 +414,14 @@ class ManagerViewModel(
 
     fun dismissMessage() {
         mutableState.update { it.copy(message = null) }
+    }
+
+    fun retryBackgroundUpload(operationId: String) {
+        backgroundUploads.retry(operationId)
+    }
+
+    fun retryBackgroundPhoto(operationId: String, photoId: String) {
+        backgroundUploads.retryPhoto(operationId, photoId)
     }
 
     fun checkServerConnection() {
@@ -515,7 +533,7 @@ class ManagerViewModel(
             .map { it.equipment }
             .inventoryFurnitureCatalog()
         val parsedCharacteristics = parseInventoryCharacteristics(
-            passport.text("characteristics"),
+            passport["characteristics"],
         )
         val planContent = finding.inventoryPlanEditorContent()
         mutableState.update {
@@ -551,6 +569,10 @@ class ManagerViewModel(
                     planStages = planContent.stages,
                     planPriority = finding?.frozenPlan?.priority
                         ?: DEFAULT_MAINTENANCE_PRIORITY,
+                    planMovementToRepair = finding?.frozenPlan?.movementToRepair ?: false,
+                    planMovementToShipment = finding?.frozenPlan?.movementToShipment ?: false,
+                    planLogisticsPlanningMode = finding?.frozenPlan?.logisticsPlanningMode,
+                    planLogisticsScheduledDate = finding?.frozenPlan?.logisticsScheduledDate,
                 ),
             )
         }
@@ -577,7 +599,7 @@ class ManagerViewModel(
             .map { it.equipment }
             .inventoryFurnitureCatalog()
         val parsedCharacteristics = parseInventoryCharacteristics(
-            passport.text("characteristics"),
+            passport["characteristics"],
         )
         val planContent = latest.inventoryPlanEditorContent()
         mutableState.update {
@@ -603,6 +625,10 @@ class ManagerViewModel(
                     planLines = planContent.lines,
                     planStages = planContent.stages,
                     planPriority = latest.frozenPlan?.priority ?: DEFAULT_MAINTENANCE_PRIORITY,
+                    planMovementToRepair = latest.frozenPlan?.movementToRepair ?: false,
+                    planMovementToShipment = latest.frozenPlan?.movementToShipment ?: false,
+                    planLogisticsPlanningMode = latest.frozenPlan?.logisticsPlanningMode,
+                    planLogisticsScheduledDate = latest.frozenPlan?.logisticsScheduledDate,
                 ),
             )
         }
@@ -795,17 +821,19 @@ class ManagerViewModel(
         nodes: List<CatalogNodeDto>,
         quantity: String,
         comment: String,
-    ) {
+        existingWorkLineId: String? = null,
+    ): Boolean {
+        val inventory = mutableState.value.inventoryEditor ?: return false
         val canonicalQuantity = runCatching {
             canonicalMaintenanceQuantity(quantity)
         }.getOrElse { failure ->
             message(failure.message ?: "Проверьте количество")
-            return
+            return false
         }
         val canonicalComment = comment.trim()
         if (canonicalComment.length > 2_000) {
             message("Комментарий строки не может быть длиннее 2000 символов")
-            return
+            return false
         }
         val canonicalNodes = nodes
             .mapNotNull { node -> maintenanceCatalogNodesById[node.id] }
@@ -819,7 +847,15 @@ class ManagerViewModel(
             .distinctBy(CatalogNodeDto::id)
         if (canonicalNodes.isEmpty()) {
             message("Выбранные позиции больше недоступны в активном каталоге")
-            return
+            return false
+        }
+        if (!inventory.toMaintenancePlanEditor().hasSelectedCatalogWork(
+                nodes = canonicalNodes,
+                lineId = existingWorkLineId,
+            )
+        ) {
+            message("Выбранная работа уже изменилась. Выберите её снова.")
+            return false
         }
         editInventoryPlan { editor ->
             applyMaintenanceCatalogNodes(
@@ -827,26 +863,10 @@ class ManagerViewModel(
                 nodes = canonicalNodes,
                 quantity = canonicalQuantity,
                 comment = canonicalComment,
+                existingWorkLineId = existingWorkLineId,
             )
         }
-    }
-
-    fun toggleInventoryCatalogNode(node: CatalogNodeDto) {
-        val canonicalNode = maintenanceCatalogNodesById[node.id]
-        if (canonicalNode == null || !canonicalNode.isOperationalEstimateNode()) {
-            message("Эта позиция больше недоступна в активном каталоге")
-            return
-        }
-        editInventoryPlan { editor ->
-            val existing = editor.lines.firstOrNull {
-                it.catalogNodeId == canonicalNode.id
-            }
-            if (existing != null) {
-                editor.copy(lines = editor.lines.filterNot { it.id == existing.id })
-            } else {
-                editor.copy(lines = editor.lines + canonicalNode.toNewMaintenanceLine())
-            }
-        }
+        return true
     }
 
     fun chooseInventoryOrigin(origin: String) {
@@ -855,13 +875,7 @@ class ManagerViewModel(
     }
 
     fun chooseInventoryFurnitureDisposition(disposition: InventoryFurnitureDisposition) {
-        editInventory { editor ->
-            // Once the inspection itself has been persisted, only its already-prepared movement
-            // may be retried. Changing the option at that point would make the UI describe a
-            // different command from the one that was actually saved.
-            if (editor.pendingFurnitureMoveToStock != null) editor
-            else editor.copy(furnitureDisposition = disposition)
-        }
+        editInventory { editor -> editor.copy(furnitureDisposition = disposition) }
     }
 
     fun addInventoryPhoto(uri: String) {
@@ -905,12 +919,6 @@ class ManagerViewModel(
             ?: throw IllegalStateException("Активная инвентаризация не найдена")
         val editor = mutableState.value.inventoryEditor
             ?: throw IllegalStateException("Бытовка не выбрана")
-        editor.pendingFurnitureMoveToStock?.let { pendingMove ->
-            // The inspection has already reached inventory-service. Retry only the independent,
-            // idempotent logistics command instead of sending the old finding revision again.
-            completePendingInventoryFurnitureMove(editor, pendingMove, onSaved)
-            return@command
-        }
         if (!editor.canInspect) {
             throw IllegalStateException(
                 editor.finding?.conflicts?.joinToString { it.message }
@@ -965,27 +973,16 @@ class ManagerViewModel(
         } else {
             null
         }
-        val pendingPhotoUris = editor.pendingInventoryPhotoUris()
+        val orderedPhotoUris = editor.inventoryPhotoUrisForUpload()
+        val pendingPhotoUris = orderedPhotoUris.filterNot(editor.uploadedPhotoMedia::containsKey)
+        val photoSortOrderByUri = orderedPhotoUris.withIndex().associate { (index, uri) ->
+            uri to index
+        }
         val owner = MediaOwner(
             ownerType = "INVENTORY_FINDING",
             ownerId = attached.id,
             warehouseId = session.warehouseId,
             context = "INSPECTION",
-        )
-        val newlyUploaded = if (pendingPhotoUris.isEmpty()) {
-            emptyList()
-        } else {
-            uploader.upload(
-                owner = owner,
-                photoUris = pendingPhotoUris,
-            )
-        }
-        val uploadedByUri = editor.uploadedPhotoMedia +
-            pendingPhotoUris.zip(newlyUploaded)
-        val orientedMediaByUri = rotateInventoryPhotoMedia(
-            editor = editor,
-            owner = owner,
-            uploadedByUri = uploadedByUri,
         )
         val readyPersistedMedia = attached.media.takeIf { it.isNotEmpty() }
             ?.let { persisted ->
@@ -1004,38 +1001,59 @@ class ManagerViewModel(
                 inventoryReadyPersistedMediaReferences(persisted, readyReferences)
             }
             .orEmpty()
-        val media = inventoryMediaReferencesForEditor(
-            editor = editor,
-            uploadedByUri = orientedMediaByUri,
-            persisted = readyPersistedMedia,
-        )
-        val coverMediaId = editor.coverPhotoUri
-            ?.let(orientedMediaByUri::get)
+        val existingMedia = (readyPersistedMedia + editor.uploadedPhotoMedia.values)
+            .distinctBy(MediaReferenceDto::mediaId)
+        val existingCoverMediaId = editor.coverPhotoUri
+            ?.let(editor.uploadedPhotoMedia::get)
             ?.mediaId
             ?: attached.coverMediaId
-            ?: media.firstOrNull()?.mediaId
+            ?: existingMedia.firstOrNull()?.mediaId
         val planSelection = inventoryPlanSelection(
             editor = editor,
-            mediaReferences = media,
+            mediaReferences = existingMedia,
+            coverMediaId = existingCoverMediaId,
         )
-        if (newlyUploaded.isNotEmpty() || orientedMediaByUri != editor.uploadedPhotoMedia) {
-            mutableState.update { current ->
-                current.copy(
-                    inventoryEditor = current.inventoryEditor?.takeIf {
-                        it.findingId == editor.findingId
-                    }?.copy(
-                        finding = attached,
-                        uploadedPhotoMedia = orientedMediaByUri,
-                    ) ?: current.inventoryEditor,
-                )
+        val furnitureMove = if (desiredFurnitureContents != null) {
+            val rentalItemId = requireNotNull(furnitureRentalItemId) {
+                "Задание по комплектации мебели не было подготовлено"
             }
-        }
-        val savedFinding = retryInventoryCommitAfterMediaReady {
-            backend.api.saveInventoryInspection(
+            val scheduledDate = LocalDate.now().toString()
+            val pendingMove = inventoryFurnitureMovePlan(
+                disposition = editor.furnitureDisposition,
                 inventoryId = session.id,
                 findingId = attached.id,
-                request = SaveInspectionRequest(
-                    expectedSessionRevision = session.sessionRevision,
+                rentalItemId = rentalItemId,
+                warehouseId = session.warehouseId,
+                scheduledDate = scheduledDate,
+                observedContents = desiredFurnitureContents,
+            )
+            InventoryFurnitureUploadCommand(
+                rentalItemId = pendingMove.rentalItemId,
+                warehouseId = pendingMove.warehouseId,
+                scheduledDate = pendingMove.scheduledDate,
+                idempotencyKey = pendingMove.idempotencyKey,
+                desiredContents = pendingMove.desiredContents,
+            )
+        } else {
+            null
+        }
+        backgroundUploads.enqueue(
+            BackgroundUploadDraft(
+                area = BackgroundUploadArea.INVENTORY,
+                title = "Проверка бытовки ${editor.number}",
+                subtitle = "Инвентаризация",
+                photos = pendingPhotoUris.map { uri ->
+                    PendingBackgroundPhoto(
+                        uri = uri,
+                        owner = owner,
+                        sortOrder = requireNotNull(photoSortOrderByUri[uri]),
+                        cover = uri == editor.coverPhotoUri,
+                        rotationDegrees = editor.photoRotationDegrees[uri] ?: 0,
+                    )
+                },
+                inventory = InventoryUploadCommand(
+                    inventoryId = session.id,
+                    findingId = attached.id,
                     expectedFindingRevision = attached.findingRevision,
                     inspection = if (planSelection == null) "READY" else "WORK_STAGED",
                     comment = editor.comment.trim(),
@@ -1045,105 +1063,14 @@ class ManagerViewModel(
                         ObservationInput("PRESENT", editor.observationPassport())
                     },
                     equipmentObservation = equipmentObservation,
-                    media = media,
-                    coverMediaId = coverMediaId,
+                    existingMedia = existingMedia,
+                    existingCoverMediaId = existingCoverMediaId,
                     planSelection = planSelection,
+                    furnitureMove = furnitureMove,
                 ),
-            )
-        }
-        createSignature?.let(commandKeys::complete)
-        if (desiredFurnitureContents != null) {
-            val rentalItemId = furnitureRentalItemId
-                ?: error("Задание по комплектации мебели не было подготовлено")
-            val scheduledDate = LocalDate.now().toString()
-            val pendingMove = inventoryFurnitureMovePlan(
-                disposition = editor.furnitureDisposition,
-                inventoryId = session.id,
-                findingId = savedFinding.id,
-                rentalItemId = rentalItemId,
-                warehouseId = session.warehouseId,
-                scheduledDate = scheduledDate,
-                observedContents = desiredFurnitureContents,
-            )
-            mutableState.update { current ->
-                current.copy(
-                    inventoryEditor = current.inventoryEditor?.takeIf {
-                        it.findingId == editor.findingId
-                    }?.copy(
-                        finding = savedFinding,
-                        pendingFurnitureMoveToStock = pendingMove,
-                    ) ?: current.inventoryEditor,
-                )
-            }
-            completePendingInventoryFurnitureMove(editor, pendingMove, onSaved)
-        } else {
-            finishInventoryInspection(
-                editor = editor,
-                messageText = if (editor.isCreation) {
-                    "Бытовка добавлена и сразу отмечена проверенной"
-                } else {
-                    "Проверка бытовки сохранена в истории"
-                },
-                onSaved = onSaved,
-            )
-        }
-    }
-
-    /**
-     * The finding save and movement task belong to different owning services, so there is no
-     * cross-service transaction to roll back. We persist the finding first, then retain this
-     * exact command in UI state until logistics acknowledges the stable idempotency key. A
-     * network or server failure therefore leaves a truthful retry state rather than re-saving a
-     * stale inventory revision or pretending the movement exists.
-     */
-    private suspend fun completePendingInventoryFurnitureMove(
-        editor: InventoryEditorState,
-        pendingMove: PendingInventoryFurnitureMove,
-        onSaved: () -> Unit,
-    ) {
-        val currentSession = mutableState.value.inventorySession
-            ?: throw IllegalStateException("Активная инвентаризация не найдена")
-        require(pendingMove.inventoryId == currentSession.id) {
-            "Инвентаризация изменилась. Откройте бытовку заново"
-        }
-        require(pendingMove.findingId == editor.findingId) {
-            "Проверка бытовки изменилась. Откройте её заново"
-        }
-        require(requireWarehouseId() == pendingMove.warehouseId) {
-            "Для перемещения мебели выбран другой склад"
-        }
-        requireWarehouseAccess(pendingMove.warehouseId, "EDIT")
-        val result = backend.api.createCabinFurnitureTask(
-            rentalItemId = pendingMove.rentalItemId,
-            idempotencyKey = pendingMove.idempotencyKey,
-            request = CreateCabinFurnitureTaskRequest(
-                warehouseId = pendingMove.warehouseId,
-                scheduledDate = pendingMove.scheduledDate,
-                // Logistics compares this complete desired composition with the current asset
-                // ledger and creates only the physical delta as a worker task.
-                contents = pendingMove.desiredContents,
             ),
         )
-        require(result.rentalItemId == pendingMove.rentalItemId) {
-            "Сервис логистики вернул задание другой бытовки"
-        }
-        finishInventoryInspection(
-            editor = editor,
-            messageText = if (result.taskId == null) {
-                "Проверка сохранена: комплектация мебели уже соответствует осмотру"
-            } else {
-                "Проверка сохранена, создано задание по комплектации мебели"
-            },
-            onSaved = onSaved,
-        )
-    }
-
-    private suspend fun finishInventoryInspection(
-        editor: InventoryEditorState,
-        messageText: String,
-        onSaved: () -> Unit,
-    ) {
-        refreshInventory()
+        createSignature?.let(commandKeys::complete)
         mutableState.update { current ->
             current.copy(
                 inventoryEditor = current.inventoryEditor?.takeUnless {
@@ -1151,35 +1078,8 @@ class ManagerViewModel(
                 },
             )
         }
-        message(messageText)
+        message("Проверка добавлена в фоновые загрузки")
         onSaved()
-    }
-
-    /**
-     * Uses media-service's rotation command for the existing media ID.  The device URI remains
-     * the same; only the canonical original generation referenced by the inspection changes.
-     */
-    private suspend fun rotateInventoryPhotoMedia(
-        editor: InventoryEditorState,
-        owner: MediaOwner,
-        uploadedByUri: Map<String, MediaReferenceDto>,
-    ): Map<String, MediaReferenceDto> {
-        if (editor.photoRotationDegrees.isEmpty()) return uploadedByUri
-        val assetsById = retryMediaReadAfterOwnerProof {
-            backend.api.ownerMedia(
-                ownerType = owner.ownerType,
-                ownerId = owner.ownerId,
-                warehouseId = owner.warehouseId,
-                context = owner.context,
-            ).items.associateBy(MediaAssetDto::id)
-        }
-        return uploadedByUri.mapValues { (uri, reference) ->
-            val requestedRotation = editor.photoRotationDegrees[uri] ?: return@mapValues reference
-            val asset = requireNotNull(assetsById[reference.mediaId]) {
-                "Не удалось найти загруженную фотографию для поворота"
-            }
-            uploader.rotate(owner, asset, requestedRotation)
-        }
     }
 
     fun loadReturns() = command {
@@ -1658,51 +1558,42 @@ class ManagerViewModel(
         val line = document.lines.firstOrNull { it.id == lineId }
             ?: throw IllegalArgumentException("Строка перемещения не найдена")
         val localUris = mutableState.value.transferPhotoUris
-        val uploaded = if (localUris.isEmpty()) {
-            emptyList()
-        } else {
-            uploader.upload(
-                owner = MediaOwner(
-                    ownerType = "LOGISTICS_TRANSFER",
-                    documentId = document.id,
-                    lineId = line.id,
-                    warehouseId = requireNotNull(document.destinationWarehouseId),
-                    context = "TRANSFER",
-                ),
-                photoUris = localUris,
-            )
-        }
-        val references = (mutableState.value.transferReadyMedia + uploaded)
+        val existingMedia = mutableState.value.transferReadyMedia
             .distinctBy(MediaReferenceDto::mediaId)
-        require(references.isNotEmpty()) {
+        require(existingMedia.isNotEmpty() || localUris.isNotEmpty()) {
             "Добавьте хотя бы одну фотографию приёмки"
         }
-        require(references.size <= 20) {
+        require(existingMedia.size + localUris.size <= 20) {
             "Для строки можно приложить не больше 20 фотографий"
         }
-        mutableState.update {
-            it.copy(
-                transferReadyMedia = references,
-                transferPhotoUris = emptyList(),
-            )
-        }
-        val signature = buildString {
-            append("transfer-arrive:${document.id}:${document.version}:${line.id}:${line.version}:")
-            append(references.joinToString { "${it.mediaId}:${it.generation}" })
-        }
-        val updated = backend.api.arriveTransferLine(
+        val owner = MediaOwner(
+            ownerType = "LOGISTICS_TRANSFER",
             documentId = document.id,
             lineId = line.id,
-            expectedVersion = document.version,
-            expectedLineVersion = line.version,
-            idempotencyKey = logisticsCommandKey(signature),
-            request = ArriveTransferLineRequest(references),
+            warehouseId = requireNotNull(document.destinationWarehouseId),
+            context = "TRANSFER",
         )
-        commandKeys.complete(signature)
-        applyTransferProjection(updated)
-        refreshTransferReadiness(updated)
+        backgroundUploads.enqueue(
+            BackgroundUploadDraft(
+                area = BackgroundUploadArea.LOGISTICS,
+                title = "Приёмка перемещения",
+                subtitle = mutableState.value.logisticsAssetLabels[line.assetId]
+                    ?: line.assetId,
+                photos = localUris.mapIndexed { index, uri ->
+                    PendingBackgroundPhoto(uri = uri, owner = owner, sortOrder = index)
+                },
+                transferArrival = TransferArrivalUploadCommand(
+                    documentId = document.id,
+                    lineId = line.id,
+                    expectedDocumentVersion = document.version,
+                    expectedLineVersion = line.version,
+                    existingMedia = existingMedia,
+                    idempotencyKey = UUID.randomUUID().toString(),
+                ),
+            ),
+        )
         closeTransferArrival()
-        message("Бытовка принята на складе назначения")
+        message("Приёмка перемещения добавлена в фоновые загрузки")
         onSaved()
     }
 
@@ -1877,35 +1768,12 @@ class ManagerViewModel(
                 "Подтвердите комплектность мебели для строки ${missingConfirmation.lineNumber}",
             )
         }
-        val references = uploadReturnPhotos(document)
-        val signature = buildString {
-            append("return-accept:${document.id}:${document.version}:")
-            document.lines.forEach { line ->
-                append("${line.id}:confirmed:")
-                references.getValue(line.id).forEach { media ->
-                    append("${media.mediaId}:${media.generation},")
-                }
-            }
-        }
-        backend.api.acceptReturn(
-            documentId = document.id,
-            expectedVersion = document.version,
-            idempotencyKey = logisticsCommandKey(signature),
-            request = AcceptReturnRequest(
-                document.lines.map { line ->
-                    AcceptReturnLineRequest(
-                        lineId = line.id,
-                        equipmentConfirmed = true,
-                        references = references.getValue(line.id),
-                    )
-                },
-            ),
+        enqueueReturnUpload(
+            document = document,
+            action = ReturnUploadAction.ACCEPT,
         )
-        commandKeys.complete(signature)
         closeReturn()
-        val documents = backend.api.returns(requireWarehouseId())
-        mutableState.update { it.copy(returns = documents) }
-        message("Возврат принят без сметы")
+        message("Приёмка возврата добавлена в фоновые загрузки")
         onSaved()
     }
 
@@ -1939,37 +1807,13 @@ class ManagerViewModel(
                 )
             line.id to EquipmentShortageRequest(equipment.id, quantity)
         }
-        val references = uploadReturnPhotos(document)
-        val lines = document.lines.map { line ->
-            RequestReturnEstimateLine(
-                lineId = line.id,
-                shortages = listOf(shortageInputs.getValue(line.id)),
-                references = references.getValue(line.id),
-            )
-        }
-        val signature = buildString {
-            append("return-estimate:${document.id}:${document.version}:")
-            lines.forEach { line ->
-                append("${line.lineId}:")
-                line.shortages.forEach { shortage ->
-                    append("${shortage.equipmentId}:${shortage.missingQuantity},")
-                }
-                line.references.forEach { media ->
-                    append("${media.mediaId}:${media.generation},")
-                }
-            }
-        }
-        backend.api.requestReturnEstimate(
-            documentId = document.id,
-            expectedVersion = document.version,
-            idempotencyKey = logisticsCommandKey(signature),
-            request = RequestReturnEstimateRequest(lines),
+        enqueueReturnUpload(
+            document = document,
+            action = ReturnUploadAction.REQUEST_ESTIMATE,
+            shortages = shortageInputs,
         )
-        commandKeys.complete(signature)
         closeReturn()
-        val documents = backend.api.returns(requireWarehouseId())
-        mutableState.update { it.copy(returns = documents) }
-        message("Запрос на смету создан")
+        message("Запрос на смету добавлен в фоновые загрузки")
         onSaved()
     }
 
@@ -2167,49 +2011,42 @@ class ManagerViewModel(
     }
 
     fun acceptMaintenanceRepair(onSaved: () -> Unit) = command {
-        var editor = requireNotNull(mutableState.value.acceptanceEditor) {
+        val editor = requireNotNull(mutableState.value.acceptanceEditor) {
             "Откройте ремонт для приёмки"
         }
         val localUris = editor.photoUris
-        if (localUris.isNotEmpty()) {
-            val uploaded = uploader.upload(
-                owner = MediaOwner(
-                    ownerType = "MAINTENANCE_ACCEPTANCE",
-                    ownerId = editor.repair.id,
-                    warehouseId = requireWarehouseId(),
-                    context = "ACCEPTANCE",
-                ),
-                photoUris = localUris,
-            )
-            val references = (editor.readyMedia + uploaded)
-                .distinctBy(MediaReferenceDto::mediaId)
-            mutableState.update { current ->
-                current.copy(
-                    acceptanceEditor = current.acceptanceEditor?.copy(
-                        readyMedia = references,
-                        photoUris = emptyList(),
-                    ),
-                )
-            }
-            editor = requireNotNull(mutableState.value.acceptanceEditor)
-        }
-        require(editor.readyMedia.isNotEmpty()) {
+        val existingMedia = editor.readyMedia.distinctBy(MediaReferenceDto::mediaId)
+        require(existingMedia.isNotEmpty() || localUris.isNotEmpty()) {
             "Добавьте хотя бы одно фото приёмки перед принятием"
         }
-        backend.api.acceptRepair(
-            repairId = editor.repair.id,
-            warehouseId = requireWarehouseId(),
-            idempotencyKey = editor.idempotencyKey,
-            request = RepairDecisionRequest(
-                expectedVersion = editor.repair.version,
-                comment = editor.comment.trim().takeIf(String::isNotEmpty),
-                mediaReferences = editor.readyMedia,
+        val warehouseId = requireWarehouseId()
+        val owner = MediaOwner(
+            ownerType = "MAINTENANCE_ACCEPTANCE",
+            ownerId = editor.repair.id,
+            warehouseId = warehouseId,
+            context = "ACCEPTANCE",
+        )
+        backgroundUploads.enqueue(
+            BackgroundUploadDraft(
+                area = BackgroundUploadArea.ACCEPTANCE,
+                title = "Приёмка ремонта",
+                subtitle = mutableState.value.maintenanceAssetLabels[editor.repair.rentalItemId]
+                    ?: editor.repair.rentalItemId,
+                photos = localUris.mapIndexed { index, uri ->
+                    PendingBackgroundPhoto(uri = uri, owner = owner, sortOrder = index)
+                },
+                acceptance = AcceptanceUploadCommand(
+                    repairId = editor.repair.id,
+                    warehouseId = warehouseId,
+                    expectedVersion = editor.repair.version,
+                    comment = editor.comment.trim().takeIf(String::isNotEmpty),
+                    existingMedia = existingMedia,
+                    idempotencyKey = editor.idempotencyKey,
+                ),
             ),
         )
-        refreshMaintenance()
-        refreshAcceptance()
         closeAcceptance()
-        message("Бытовка принята, ремонтный цикл завершён")
+        message("Приёмка добавлена в фоновые загрузки")
         onSaved()
     }
 
@@ -2479,8 +2316,14 @@ class ManagerViewModel(
                     readyMedia = estimate.mediaReferences,
                     readyPhotoUris = readyPhotoUris,
                     priority = linkedRepair?.priority ?: DEFAULT_MAINTENANCE_PRIORITY,
+                    movementToRepair = linkedRepair?.movementToRepair ?: false,
+                    movementToShipment = linkedRepair?.movementToShipment ?: false,
+                    logisticsPlanningMode = linkedRepair?.logisticsPlanningMode,
+                    logisticsScheduledDate = linkedRepair?.logisticsScheduledDate,
                     step = 1,
-                    stages = revision.plan.map { stage -> stage.toMaintenanceStageEditor() },
+                    stages = revision.plan
+                        .filter { stage -> stage.kind == "REPAIR_WORK" }
+                        .map { stage -> stage.toMaintenanceStageEditor() },
                     documentState = estimate.lifecycle,
                     linkedRepairExpectedVersion = linkedRepair?.version,
                     coverPhotoKey = estimate.coverMediaId
@@ -2556,6 +2399,10 @@ class ManagerViewModel(
                     readyMedia = readyReferences,
                     readyPhotoUris = readyPhotoUris,
                     priority = repair.priority,
+                    movementToRepair = repair.movementToRepair,
+                    movementToShipment = repair.movementToShipment,
+                    logisticsPlanningMode = repair.logisticsPlanningMode,
+                    logisticsScheduledDate = repair.logisticsScheduledDate,
                     step = 1,
                     stages = content.stages,
                     documentState = repair.executionState,
@@ -2862,19 +2709,21 @@ class ManagerViewModel(
         nodes: List<CatalogNodeDto>,
         quantity: String,
         comment: String,
-    ) {
+        existingWorkLineId: String? = null,
+    ): Boolean {
+        val activeEditor = mutableState.value.maintenanceEditor ?: return false
         val canonicalQuantity = runCatching {
             canonicalMaintenanceQuantity(quantity)
         }.getOrElse { failure ->
             message(failure.message ?: "Проверьте количество")
-            return
+            return false
         }
         val canonicalComment = comment.trim()
         if (canonicalComment.length > 2_000) {
             message("Комментарий строки не может быть длиннее 2000 символов")
-            return
+            return false
         }
-        val editorMode = mutableState.value.maintenanceEditor?.mode ?: return
+        val editorMode = activeEditor.mode
         val canonicalNodes = nodes
             .mapNotNull { node -> maintenanceCatalogNodesById[node.id] }
             .filter(CatalogNodeDto::isOperationalEstimateNode)
@@ -2887,7 +2736,15 @@ class ManagerViewModel(
             .distinctBy(CatalogNodeDto::id)
         if (canonicalNodes.isEmpty()) {
             message("Выбранные позиции больше недоступны в активном каталоге")
-            return
+            return false
+        }
+        if (!activeEditor.hasSelectedCatalogWork(
+                nodes = canonicalNodes,
+                lineId = existingWorkLineId,
+            )
+        ) {
+            message("Выбранная работа уже изменилась. Выберите её снова.")
+            return false
         }
 
         editMaintenance { editor ->
@@ -2896,26 +2753,10 @@ class ManagerViewModel(
                 nodes = canonicalNodes,
                 quantity = canonicalQuantity,
                 comment = canonicalComment,
+                existingWorkLineId = existingWorkLineId,
             )
         }
-    }
-
-    fun toggleMaintenanceCatalogNode(node: CatalogNodeDto) {
-        val canonicalNode = maintenanceCatalogNodesById[node.id]
-        if (canonicalNode == null || !canonicalNode.isOperationalEstimateNode()) {
-            message("Эта позиция больше недоступна в активном каталоге")
-            return
-        }
-        editMaintenance { editor ->
-            val existing = editor.lines.firstOrNull { it.catalogNodeId == canonicalNode.id }
-            if (existing != null) {
-                editor.copy(lines = editor.lines.filterNot { it.id == existing.id })
-            } else {
-                editor.copy(
-                    lines = editor.lines + canonicalNode.toNewMaintenanceLine(),
-                )
-            }
-        }
+        return true
     }
 
     fun toggleReworkCandidate(candidate: ReworkCandidateDto) {
@@ -2950,11 +2791,27 @@ class ManagerViewModel(
 
     fun saveMaintenanceDraft(onSaved: () -> Unit) = command {
         val existingDocument = maintenanceDocumentAlreadySubmitted(requireMaintenanceEditor())
-        val editor = persistMaintenanceDraft()
-        refreshMaintenance()
-        if (editor.repairKind == "REWORK") refreshAcceptance()
+        val current = requireMaintenanceEditor()
+        val queued = if (orderedMaintenanceLocalPhotoUris(current).isNotEmpty()) {
+            enqueueMaintenanceBackground(submit = false)
+        } else {
+            null
+        }
+        val editor = queued ?: persistMaintenanceDraft()
+        if (queued == null) {
+            refreshMaintenance()
+            if (editor.repairKind == "REWORK") refreshAcceptance()
+        } else {
+            closeMaintenanceEditor()
+        }
         message(
-            if (existingDocument && editor.mode == MaintenanceEditorMode.ESTIMATE) {
+            if (queued != null) {
+                if (editor.mode == MaintenanceEditorMode.ESTIMATE) {
+                    "Смета добавлена в фоновые загрузки"
+                } else {
+                    "Ремонт добавлен в фоновые загрузки"
+                }
+            } else if (existingDocument && editor.mode == MaintenanceEditorMode.ESTIMATE) {
                 "Изменения сметы сохранены"
             } else if (existingDocument) {
                 "Изменения ремонта сохранены"
@@ -2970,66 +2827,33 @@ class ManagerViewModel(
     }
 
     fun submitMaintenance(onSaved: () -> Unit) = command {
-        val beforeSave = requireMaintenanceEditor()
+        val beforeSave = requireMaintenanceEditor().normalizedLogisticsPlanning()
+        mutableState.update { current ->
+            current.copy(maintenanceEditor = beforeSave)
+        }
         validateMaintenanceSubmit(beforeSave)
         if (maintenanceDocumentAlreadySubmitted(beforeSave)) {
-            val saved = persistMaintenanceDraft()
-            refreshMaintenance()
+            val saved = enqueueMaintenanceBackground(submit = false)
             closeMaintenanceEditor()
             message(
                 if (saved.mode == MaintenanceEditorMode.ESTIMATE) {
-                    "Изменения сметы сохранены"
+                    "Изменения сметы добавлены в фоновые загрузки"
                 } else {
-                    "Изменения ремонта сохранены"
+                    "Изменения ремонта добавлены в фоновые загрузки"
                 },
             )
             onSaved()
             return@command
         }
-        val saved = persistMaintenanceDraft()
-        val entityId = requireNotNull(saved.entityId) { "Не удалось сохранить черновик" }
-        val expectedVersion = requireNotNull(saved.expectedVersion) {
-            "Сервис не вернул версию черновика"
-        }
-        val idempotencyKey = saved.submitIdempotencyKey ?: UUID.randomUUID().toString()
-        if (saved.submitIdempotencyKey == null) {
-            mutableState.update { current ->
-                current.copy(
-                    maintenanceEditor = current.maintenanceEditor?.copy(
-                        submitIdempotencyKey = idempotencyKey,
-                    ),
-                )
-            }
-        }
-        val warehouseId = requireWarehouseId()
-        when (saved.mode) {
-            MaintenanceEditorMode.ESTIMATE -> backend.api.completeEstimate(
-                estimateId = entityId,
-                warehouseId = warehouseId,
-                idempotencyKey = idempotencyKey,
-                request = PriorityVersionRequest(expectedVersion, saved.priority),
-            )
-
-            MaintenanceEditorMode.REPAIR -> backend.api.queueRepairPlan(
-                repairId = entityId,
-                warehouseId = warehouseId,
-                idempotencyKey = idempotencyKey,
-                request = PriorityVersionRequest(expectedVersion, saved.priority),
-            )
-        }
-        refreshMaintenance()
-        if (saved.repairKind == "REWORK") {
-            refreshAcceptance()
-            refreshRepairTaskBoards()
-        }
+        val saved = enqueueMaintenanceBackground(submit = true)
         closeMaintenanceEditor()
         message(
             if (saved.mode == MaintenanceEditorMode.ESTIMATE) {
-                "Смета завершена"
+                "Смета добавлена в фоновые загрузки"
             } else if (saved.repairKind == "REWORK") {
-                "Доработка поставлена в очередь"
+                "Доработка добавлена в фоновые загрузки"
             } else {
-                "Ремонт поставлен в очередь"
+                "Ремонт добавлен в фоновые загрузки"
             },
         )
         onSaved()
@@ -3209,30 +3033,46 @@ class ManagerViewModel(
                     ?.toCatalogSnapshot(),
             )
         }
-        val linesByCatalogNode = lines
+        val remainingLinesByCatalogNode = lines
             .filter { it.catalogNodeId != null }
-            .associateBy { requireNotNull(it.catalogNodeId) }
-        val stages = plan.stages.sortedBy { it.order }.map { stage ->
-            val primary = linesByCatalogNode[stage.catalogNodeId]
-            MaintenanceStageEditorState(
-                id = stage.id,
-                kind = stage.kind,
-                routing = RoutingSnapshotDto(
-                    queueId = stage.routingQueueId,
-                    queueName = stage.routingQueueName,
-                    queueType = stage.routingQueueType,
-                ),
-                includedLineIds = primary?.let { listOf(it.id) }.orEmpty(),
-                primaryLineId = primary?.id,
-                groupComment = primary?.comment.orEmpty(),
-                originalOrder = stage.order,
-            )
-        }
+            .groupBy { requireNotNull(it.catalogNodeId) }
+            .mapValues { (_, matchingLines) -> matchingLines.toMutableList() }
+        val stages = plan.stages
+            .asSequence()
+            .filter { stage -> stage.kind == "REPAIR_WORK" }
+            .sortedBy { it.order }
+            .map { stage ->
+                val primary = remainingLinesByCatalogNode[stage.catalogNodeId]
+                    ?.let { matchingLines ->
+                        if (matchingLines.isEmpty()) null else matchingLines.removeAt(0)
+                    }
+                    ?: throw IllegalArgumentException(
+                        "Сервис вернул этап инвентаризации без соответствующей строки каталога",
+                    )
+                MaintenanceStageEditorState(
+                    id = stage.id,
+                    kind = stage.kind,
+                    routing = RoutingSnapshotDto(
+                        queueId = stage.routingQueueId,
+                        queueName = stage.routingQueueName,
+                        queueType = stage.routingQueueType,
+                    ),
+                    includedLineIds = listOf(primary.id),
+                    primaryLineId = primary.id.takeIf { primary.lineType == "WORK" },
+                    groupComment = primary.comment,
+                    originalOrder = stage.order,
+                )
+            }
+            .toList()
         return RepairEditorContent(lines, stages)
     }
 
     private fun repairEditorContent(repair: RepairDto): RepairEditorContent {
-        val stages = repair.plan.stages.sortedBy(RepairStageDto::order)
+        val stages = repair.plan.stages
+            .asSequence()
+            .filter { stage -> stage.kind == "REPAIR_WORK" }
+            .sortedBy(RepairStageDto::order)
+            .toList()
         val linesById = linkedMapOf<String, EstimateLineDto>()
         val routingByLineId = linkedMapOf<String, RoutingSnapshotDto>()
         stages.forEach { stage ->
@@ -3797,8 +3637,129 @@ class ManagerViewModel(
         return item
     }
 
+    private suspend fun enqueueMaintenanceBackground(
+        submit: Boolean,
+    ): MaintenanceEditorState {
+        var editor = requireMaintenanceEditor().normalizedLogisticsPlanning()
+        mutableState.update { current -> current.copy(maintenanceEditor = editor) }
+        if (editor.readOnly) {
+            throw IllegalStateException("Документ нельзя изменить после начала работы")
+        }
+        var content = maintenanceDraftContent(editor)
+        val wasNew = editor.entityId == null
+        if (wasNew) {
+            val created = createMaintenanceEntity(editor, content)
+            updateMaintenanceEditorAfterSave(created)
+            editor = requireMaintenanceEditor()
+            content = maintenanceDraftContent(editor)
+        }
+
+        val entityId = requireNotNull(editor.entityId) { "Не удалось сохранить черновик" }
+        val expectedVersion = requireNotNull(editor.expectedVersion) {
+            "Сервис не вернул версию черновика"
+        }
+        val warehouseId = requireWarehouseId()
+        val localPhotoUris = orderedMaintenanceLocalPhotoUris(editor)
+        val owner = MediaOwner(
+            ownerType = if (editor.mode == MaintenanceEditorMode.ESTIMATE) {
+                "MAINTENANCE_ESTIMATE"
+            } else {
+                "MAINTENANCE_REPAIR"
+            },
+            ownerId = entityId,
+            warehouseId = warehouseId,
+            context = if (editor.mode == MaintenanceEditorMode.ESTIMATE) {
+                "ESTIMATE"
+            } else {
+                "REPAIR"
+            },
+        )
+        val existingMedia = orderedMaintenanceReadyMedia(editor)
+        val existingCoverMediaId = editor.coverPhotoKey
+            ?.takeIf { it.startsWith("media:") }
+            ?.removePrefix("media:")
+            ?.takeIf { mediaId -> existingMedia.any { it.mediaId == mediaId } }
+        val submittedDocument = maintenanceDocumentAlreadySubmitted(editor)
+        val replaceKind = when {
+            wasNew && localPhotoUris.isEmpty() -> MaintenanceReplaceKind.NONE
+            editor.mode == MaintenanceEditorMode.ESTIMATE && submittedDocument ->
+                MaintenanceReplaceKind.ESTIMATE_AMENDMENT
+            editor.mode == MaintenanceEditorMode.ESTIMATE -> MaintenanceReplaceKind.ESTIMATE
+            else -> MaintenanceReplaceKind.REPAIR
+        }
+        val submitRequest = if (submit) {
+            PriorityVersionRequest(
+                expectedVersion = expectedVersion,
+                priority = editor.priority,
+                movementToRepair = editor.movementToRepair,
+                movementToShipment = editor.movementToShipment,
+                logisticsPlanningMode = editor.logisticsPlanningMode,
+                logisticsScheduledDate = editor.logisticsScheduledDate,
+            )
+        } else {
+            null
+        }
+        backgroundUploads.enqueue(
+            BackgroundUploadDraft(
+                area = BackgroundUploadArea.MAINTENANCE,
+                title = if (editor.mode == MaintenanceEditorMode.ESTIMATE) {
+                    "Смета ${content.asset.number}"
+                } else {
+                    "Ремонт ${content.asset.number}"
+                },
+                subtitle = if (submit) "Отправка в очередь" else "Сохранение",
+                photos = localPhotoUris.mapIndexed { index, uri ->
+                    PendingBackgroundPhoto(
+                        uri = uri,
+                        owner = owner,
+                        sortOrder = existingMedia.size + index,
+                        cover = editor.coverPhotoKey == maintenanceLocalPhotoKey(uri),
+                    )
+                },
+                maintenance = MaintenanceUploadCommand(
+                    mode = editor.mode.name,
+                    entityId = entityId,
+                    warehouseId = warehouseId,
+                    expectedVersion = expectedVersion,
+                    dispatchDate = content.dispatchDate,
+                    sourceParty = content.sourceParty,
+                    lines = content.lines,
+                    stages = content.stages,
+                    existingMedia = existingMedia,
+                    existingCoverMediaId = existingCoverMediaId,
+                    replaceKind = replaceKind,
+                    expectedLinkedRepairVersion = editor.linkedRepairExpectedVersion,
+                    amendmentIdempotencyKey = if (
+                        replaceKind == MaintenanceReplaceKind.ESTIMATE_AMENDMENT
+                    ) {
+                        editor.amendmentIdempotencyKey ?: UUID.randomUUID().toString()
+                    } else {
+                        null
+                    },
+                    amendmentReason = if (
+                        replaceKind == MaintenanceReplaceKind.ESTIMATE_AMENDMENT
+                    ) {
+                        MAINTENANCE_AMENDMENT_REASON
+                    } else {
+                        null
+                    },
+                    submitRequest = submitRequest,
+                    submitIdempotencyKey = if (submit) {
+                        editor.submitIdempotencyKey ?: UUID.randomUUID().toString()
+                    } else {
+                        null
+                    },
+                ),
+            ),
+        )
+        return editor
+    }
+
     private suspend fun persistMaintenanceDraft(): MaintenanceEditorState {
-        var editor = requireMaintenanceEditor()
+        var editor = requireMaintenanceEditor().normalizedLogisticsPlanning()
+        mutableState.update { current ->
+            current.copy(maintenanceEditor = editor)
+        }
         if (editor.readOnly) {
             throw IllegalStateException("Документ нельзя изменить после начала работы")
         }
@@ -3811,62 +3772,15 @@ class ManagerViewModel(
         }
 
         val localPhotoUris = orderedMaintenanceLocalPhotoUris(editor)
-        if (localPhotoUris.isNotEmpty()) {
-            val uploaded = uploader.upload(
-                owner = MediaOwner(
-                    ownerType = if (editor.mode == MaintenanceEditorMode.ESTIMATE) {
-                        "MAINTENANCE_ESTIMATE"
-                    } else {
-                        "MAINTENANCE_REPAIR"
-                    },
-                    ownerId = requireNotNull(editor.entityId),
-                    warehouseId = requireWarehouseId(),
-                    context = if (editor.mode == MaintenanceEditorMode.ESTIMATE) {
-                        "ESTIMATE"
-                    } else {
-                        "REPAIR"
-                    },
-                ),
-                photoUris = localPhotoUris,
-            )
-            retainMaintenanceUploads(
-                editorId = requireNotNull(editor.entityId),
-                uploadedLocalUris = localPhotoUris,
-                uploadedReferences = uploaded,
-            )
-            editor = requireMaintenanceEditor()
-            content = maintenanceDraftContent(editor)
-            val replaced = replaceMaintenanceEntity(editor, content)
-            updateMaintenanceEditorAfterSave(
-                persisted = replaced,
-                uploadedLocalUris = localPhotoUris,
-                uploadedReferences = uploaded,
-            )
-            editor = requireMaintenanceEditor()
-        } else if (!wasNew) {
+        require(localPhotoUris.isEmpty()) {
+            "Фотографии должны отправляться через фоновые загрузки"
+        }
+        if (!wasNew) {
             val replaced = replaceMaintenanceEntity(editor, content)
             updateMaintenanceEditorAfterSave(replaced)
             editor = requireMaintenanceEditor()
         }
         return editor
-    }
-
-    private fun retainMaintenanceUploads(
-        editorId: String,
-        uploadedLocalUris: List<String>,
-        uploadedReferences: List<MediaReferenceDto>,
-    ) {
-        mutableState.update { current ->
-            val editor = current.maintenanceEditor
-            if (editor == null || editor.entityId != editorId) return@update current
-            current.copy(
-                maintenanceEditor = retainCompletedMaintenanceUploads(
-                    editor = editor,
-                    uploadedLocalUris = uploadedLocalUris,
-                    uploadedReferences = uploadedReferences,
-                ),
-            )
-        }
     }
 
     private fun maintenanceDraftContent(
@@ -3951,7 +3865,16 @@ class ManagerViewModel(
             throw IllegalArgumentException("Выберите титульную фотографию")
         }
         if (editor.priority !in 1..5) {
-            throw IllegalArgumentException("Выберите приоритет от 1 до 5")
+            throw IllegalArgumentException(
+                if (editor.movementToRepair) {
+                    "Выберите приоритет перемещения от 1 до 5"
+                } else {
+                    "Выберите приоритет ремонта от 1 до 5"
+                },
+            )
+        }
+        editor.logisticsPlanningValidationError()?.let { error ->
+            throw IllegalArgumentException(error)
         }
         val content = maintenanceDraftContent(editor)
         if (editor.lines.isNotEmpty() &&
@@ -4025,19 +3948,25 @@ class ManagerViewModel(
     private fun inventoryPlanSelection(
         editor: InventoryEditorState,
         mediaReferences: List<MediaReferenceDto>,
+        coverMediaId: String?,
     ): InventoryPlanSelectionDto? {
         if (editor.planLines.isEmpty()) {
-            require(editor.planStages.none {
-                it.kind == "MOVE_TO_REPAIR" || it.kind == "MOVE_FROM_REPAIR"
-            }) {
+            require(!editor.planMovementToRepair) {
                 "Нельзя создать перемещение без работ или материалов"
             }
             return null
         }
-        require(editor.planPriority in 1..5) {
-            "Выберите приоритет ремонта от 1 до 5"
+        val maintenanceEditor = editor.toMaintenancePlanEditor().normalizedLogisticsPlanning()
+        require(maintenanceEditor.priority in 1..5) {
+            if (maintenanceEditor.movementToRepair) {
+                "Выберите приоритет перемещения от 1 до 5"
+            } else {
+                "Выберите приоритет ремонта от 1 до 5"
+            }
         }
-        val maintenanceEditor = editor.toMaintenancePlanEditor()
+        maintenanceEditor.logisticsPlanningValidationError()?.let { error ->
+            throw IllegalArgumentException(error)
+        }
         val normalizedLines = maintenanceEditor.lines.associateBy(
             MaintenanceLineEditorState::id,
         )
@@ -4111,21 +4040,6 @@ class ManagerViewModel(
                         "Для пользовательской строки не найден единственный маршрут каталога",
                     )
 
-                "MOVE_TO_REPAIR", "MOVE_FROM_REPAIR" ->
-                    maintenanceCatalogNodesById.values
-                        .asSequence()
-                        .filter { node ->
-                            node.active &&
-                                node.nodeType == "LOCATION" &&
-                                node.routing?.routingKey() == stage.routing.routingKey()
-                        }
-                        .map(CatalogNodeDto::id)
-                        .distinct()
-                        .singleOrNull()
-                        ?: throw IllegalArgumentException(
-                            "Для перемещения не найдено единственное расположение каталога",
-                        )
-
                 else -> throw IllegalArgumentException("Неподдерживаемый этап инвентаризации")
             }
             InventoryPlanStageSelectionDto(
@@ -4136,7 +4050,12 @@ class ManagerViewModel(
         }
         return InventoryPlanSelectionDto(
             mode = "MANUAL",
-            priority = editor.planPriority,
+            priority = maintenanceEditor.priority,
+            coverMediaId = coverMediaId,
+            movementToRepair = maintenanceEditor.movementToRepair,
+            movementToShipment = maintenanceEditor.movementToShipment,
+            logisticsPlanningMode = maintenanceEditor.logisticsPlanningMode,
+            logisticsScheduledDate = maintenanceEditor.logisticsScheduledDate,
             lines = lines,
             stages = inventoryStages,
         )
@@ -4410,9 +4329,10 @@ class ManagerViewModel(
         }
 
     private fun normalizeMaintenanceEditor(editor: MaintenanceEditorState): MaintenanceEditorState {
-        val rebuiltStages = runCatching { buildMaintenanceStages(editor) }.getOrNull()
-            ?: return editor
-        return editor.copy(
+        val normalized = editor.normalizedLogisticsPlanning()
+        val rebuiltStages = runCatching { buildMaintenanceStages(normalized) }.getOrNull()
+            ?: return normalized
+        return normalized.copy(
             stages = rebuiltStages.map { stage ->
                 MaintenanceStageEditorState(
                     id = stage.id,
@@ -4728,41 +4648,61 @@ class ManagerViewModel(
         }
     }
 
-    private suspend fun uploadReturnPhotos(
+    private suspend fun enqueueReturnUpload(
         document: LogisticsDocumentDto,
-    ): Map<String, List<MediaReferenceDto>> {
-        val referencesByLine = document.lines.associate { line ->
+        action: ReturnUploadAction,
+        shortages: Map<String, EquipmentShortageRequest> = emptyMap(),
+    ) {
+        val photos = document.lines.flatMap { line ->
             val existing = mutableState.value.returnReadyMedia[line.id].orEmpty()
             val local = mutableState.value.returnPhotoUris[line.id].orEmpty()
-            val uploaded = if (local.isEmpty()) {
-                emptyList()
-            } else {
-                uploader.upload(
-                    owner = MediaOwner(
-                        ownerType = "LOGISTICS_RETURN",
-                        documentId = document.id,
-                        lineId = line.id,
-                        warehouseId = document.warehouseId,
-                        context = "RETURN_INSPECTION",
-                    ),
-                    photoUris = local,
-                )
-            }
-            val references = (existing + uploaded).distinctBy { it.mediaId }
-            if (references.isEmpty()) {
+            if (existing.isEmpty() && local.isEmpty()) {
                 throw IllegalArgumentException(
                     "Добавьте фотографию для строки ${line.lineNumber}",
                 )
             }
-            line.id to references
-        }
-        mutableState.update {
-            it.copy(
-                returnReadyMedia = it.returnReadyMedia + referencesByLine,
-                returnPhotoUris = it.returnPhotoUris.mapValues { emptyList() },
+            val owner = MediaOwner(
+                ownerType = "LOGISTICS_RETURN",
+                documentId = document.id,
+                lineId = line.id,
+                warehouseId = document.warehouseId,
+                context = "RETURN_INSPECTION",
             )
+            local.mapIndexed { index, uri ->
+                PendingBackgroundPhoto(
+                    uri = uri,
+                    owner = owner,
+                    sortOrder = existing.size + index,
+                )
+            }
         }
-        return referencesByLine
+        backgroundUploads.enqueue(
+            BackgroundUploadDraft(
+                area = BackgroundUploadArea.LOGISTICS,
+                title = if (action == ReturnUploadAction.ACCEPT) {
+                    "Приёмка возврата"
+                } else {
+                    "Возврат со сметой"
+                },
+                subtitle = "${document.lines.size} бытовок",
+                photos = photos,
+                returnAction = ReturnUploadCommand(
+                    documentId = document.id,
+                    warehouseId = document.warehouseId,
+                    expectedVersion = document.version,
+                    action = action,
+                    lines = document.lines.map { line ->
+                        ReturnUploadLineCommand(
+                            lineId = line.id,
+                            equipmentConfirmed = true,
+                            shortages = shortages[line.id]?.let(::listOf).orEmpty(),
+                            existingMedia = mutableState.value.returnReadyMedia[line.id].orEmpty(),
+                        )
+                    },
+                    idempotencyKey = UUID.randomUUID().toString(),
+                ),
+            ),
+        )
     }
 
     private suspend fun currentReturnInspectionDocument(
@@ -4815,6 +4755,8 @@ class ManagerViewModel(
     private suspend fun handleFailure(failure: Throwable) {
         val text = when (failure) {
             is HttpException -> backend.problemMessage(failure)
+            is SocketTimeoutException ->
+                "Не удалось передать фотографию вовремя. Проверьте сеть и повторите сохранение"
             is IOException -> "Нет связи с RWMS. Проверьте подключение"
             is JsonDataException ->
                 "RWMS вернул данные старого формата. Обновите страницу и повторите операцию"
@@ -5046,23 +4988,36 @@ internal data class ParsedInventoryCharacteristics(
 private val sanitaryCharacteristicPattern =
     Regex("""^(Туалеты|Раковины|Душевые):\s*(\d+)$""", RegexOption.IGNORE_CASE)
 
-internal fun parseInventoryCharacteristics(value: String): ParsedInventoryCharacteristics {
+/**
+ * The asset projection may contain characteristics as a JSON array, a comma-separated string,
+ * or no value at all. In particular, an empty JSON array must remain an empty selection rather
+ * than becoming the literal characteristic `[]` in the editor.
+ */
+internal fun parseInventoryCharacteristics(value: Any?): ParsedInventoryCharacteristics {
     var toilets = 0
     var sinks = 0
     var showers = 0
+    val rawValues = when (value) {
+        null -> emptyList()
+        is Iterable<*> -> value.mapNotNull { item -> item?.toString() }
+        is Array<*> -> value.mapNotNull { item -> item?.toString() }
+        else -> listOf(value.toString())
+    }
     val selected = buildList {
-        value.split(',').forEach { rawValue ->
-            val characteristic = rawValue.trim()
-            if (characteristic.isEmpty()) return@forEach
-            val match = sanitaryCharacteristicPattern.matchEntire(characteristic)
-            if (match == null) {
-                add(characteristic)
-            } else {
-                val count = match.groupValues[2].toIntOrNull() ?: 0
-                when (match.groupValues[1].lowercase()) {
-                    "туалеты" -> toilets = count
-                    "раковины" -> sinks = count
-                    "душевые" -> showers = count
+        rawValues.forEach { rawValue ->
+            rawValue.split(',').forEach tokenLoop@ { token ->
+                val characteristic = token.trim()
+                if (characteristic.isEmpty() || characteristic == "[]") return@tokenLoop
+                val match = sanitaryCharacteristicPattern.matchEntire(characteristic)
+                if (match == null) {
+                    add(characteristic)
+                } else {
+                    val count = match.groupValues[2].toIntOrNull() ?: 0
+                    when (match.groupValues[1].lowercase()) {
+                        "туалеты" -> toilets = count
+                        "раковины" -> sinks = count
+                        "душевые" -> showers = count
+                    }
                 }
             }
         }
@@ -5084,6 +5039,15 @@ internal fun InventoryEditorState.inventoryCharacteristics(): List<String> =
             add("Душевые: ${sanitaryShowers.coerceAtLeast(0)}")
         }
     }
+
+/** Text shown in the selector. An empty selection deliberately renders as an empty field. */
+internal fun inventoryCharacteristicsDisplayValue(characteristics: List<String>): String =
+    characteristics.asSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .filterNot { it == "[]" }
+        .distinct()
+        .joinToString()
 
 internal fun InventoryEditorState.withInventoryCreationOrigin(
     origin: String,
@@ -5282,6 +5246,16 @@ internal fun InventoryEditorState.inventoryPhotoUrisForUpload(): List<String> {
 
 internal fun InventoryEditorState.pendingInventoryPhotoUris(): List<String> =
     inventoryPhotoUrisForUpload().filterNot(uploadedPhotoMedia::containsKey)
+
+/** Retains one server-confirmed original without changing the user-selected URI order. */
+internal fun InventoryEditorState.retainUploadedInventoryPhoto(
+    uri: String,
+    reference: MediaReferenceDto,
+): InventoryEditorState = if (uri in photoUris) {
+    copy(uploadedPhotoMedia = uploadedPhotoMedia + (uri to reference))
+} else {
+    this
+}
 
 /**
  * The URI continues to identify the original device file.  This only records the absolute
@@ -5641,32 +5615,84 @@ private fun CatalogNodeDto.toNewMaintenanceLine(): MaintenanceLineEditorState =
         comment = "",
     )
 
+private fun MaintenanceEditorState.hasSelectedCatalogWork(
+    nodes: List<CatalogNodeDto>,
+    lineId: String?,
+): Boolean {
+    if (lineId == null) return true
+    val selectedWorkNodeIds = nodes
+        .asSequence()
+        .filter { node -> node.nodeType == "WORK" }
+        .map(CatalogNodeDto::id)
+        .toSet()
+    return lines.any { line ->
+        line.id == lineId &&
+            line.lineType == "WORK" &&
+            line.catalogNodeId in selectedWorkNodeIds
+    }
+}
+
 internal fun applyMaintenanceCatalogNodes(
     editor: MaintenanceEditorState,
     nodes: List<CatalogNodeDto>,
     quantity: String,
     comment: String,
+    existingWorkLineId: String? = null,
 ): MaintenanceEditorState {
     val nextLines = editor.lines.toMutableList()
-    nodes.distinctBy(CatalogNodeDto::id).forEach { node ->
-        val existingIndex = nextLines.indexOfFirst { line ->
-            line.catalogNodeId == node.id
+    val selectedNodes = nodes.distinctBy(CatalogNodeDto::id)
+    val selectedWorkNodeIds = selectedNodes
+        .asSequence()
+        .filter { node -> node.nodeType == "WORK" }
+        .map(CatalogNodeDto::id)
+        .toSet()
+    val existingWorkIndex = existingWorkLineId?.let { lineId ->
+        nextLines.indexOfFirst { line -> line.id == lineId }
+    } ?: -1
+    if (existingWorkLineId != null) {
+        require(existingWorkIndex >= 0) {
+            "Выбранная работа больше не существует в документе"
         }
-        if (existingIndex >= 0) {
-            val existing = nextLines[existingIndex]
-            val nextQuantity = BigDecimal(existing.quantity)
-                .add(BigDecimal(quantity))
-                .stripTrailingZeros()
-                .toPlainString()
-            nextLines[existingIndex] = existing.copy(
-                quantity = nextQuantity,
-                comment = mergeMaintenanceLineComments(existing.comment, comment),
-            )
+        val existing = nextLines[existingWorkIndex]
+        require(existing.lineType == "WORK" && existing.catalogNodeId in selectedWorkNodeIds) {
+            "Выбранная работа не соответствует позиции каталога"
+        }
+    }
+
+    selectedNodes.forEach { node ->
+        if (node.nodeType == "WORK") {
+            val matchingExistingWorkIndex = existingWorkIndex.takeIf { index ->
+                index >= 0 && nextLines[index].catalogNodeId == node.id
+            }
+            if (matchingExistingWorkIndex != null) {
+                val existing = nextLines[matchingExistingWorkIndex]
+                nextLines[matchingExistingWorkIndex] = existing.copy(
+                    quantity = accumulatedMaintenanceQuantity(existing.quantity, quantity),
+                    comment = mergeMaintenanceLineComments(existing.comment, comment),
+                )
+            } else {
+                nextLines += node.toNewMaintenanceLine().copy(
+                    quantity = quantity,
+                    comment = comment,
+                )
+            }
         } else {
-            nextLines += node.toNewMaintenanceLine().copy(
-                quantity = quantity,
-                comment = comment,
-            )
+            val existingMaterialIndex = nextLines.indexOfFirst { line ->
+                line.catalogNodeId == node.id && line.lineType == "MATERIAL"
+            }
+            if (existingMaterialIndex >= 0) {
+                val existing = nextLines[existingMaterialIndex]
+                // A catalog-add comment belongs to its work. Materials remain an aggregate
+                // quantity and keep any comment that was explicitly authored on the material.
+                nextLines[existingMaterialIndex] = existing.copy(
+                    quantity = accumulatedMaintenanceQuantity(existing.quantity, quantity),
+                )
+            } else {
+                nextLines += node.toNewMaintenanceLine().copy(
+                    quantity = quantity,
+                    comment = "",
+                )
+            }
         }
     }
     return editor.copy(lines = nextLines)
@@ -5738,6 +5764,10 @@ internal fun InventoryEditorState.toMaintenancePlanEditor(): MaintenanceEditorSt
         photoUris = emptyList(),
         readyMedia = emptyList(),
         priority = planPriority,
+        movementToRepair = planMovementToRepair,
+        movementToShipment = planMovementToShipment,
+        logisticsPlanningMode = planLogisticsPlanningMode,
+        logisticsScheduledDate = planLogisticsScheduledDate,
         step = 3,
         stages = planStages,
         repairKind = "PRIMARY",
@@ -5749,6 +5779,10 @@ internal fun InventoryEditorState.withMaintenancePlanEditor(
     planLines = editor.lines,
     planStages = editor.stages,
     planPriority = editor.priority,
+    planMovementToRepair = editor.movementToRepair,
+    planMovementToShipment = editor.movementToShipment,
+    planLogisticsPlanningMode = editor.logisticsPlanningMode,
+    planLogisticsScheduledDate = editor.logisticsScheduledDate,
 )
 
 private fun normalizeReworkEditorLines(
@@ -5794,85 +5828,131 @@ internal fun planMaintenanceStages(
     editor: MaintenanceEditorState,
     routingForLine: (MaintenanceLineEditorState) -> RoutingSnapshotDto?,
 ): List<PlanStageInputDto> {
-    data class LineGroup(
+    data class RoutedLine(
+        val line: MaintenanceLineEditorState,
         val routing: RoutingSnapshotDto,
-        val lines: MutableList<MaintenanceLineEditorState>,
+        val index: Int,
     )
 
-    val groupsByRouting = linkedMapOf<String, LineGroup>()
-    editor.lines.forEach { line ->
+    data class LineGroup(
+        val key: String,
+        val routing: RoutingSnapshotDto,
+        val lines: MutableList<RoutedLine> = mutableListOf(),
+    )
+
+    data class PlannedStage(
+        val originalOrder: Int,
+        val generatedOrder: Int,
+        val stage: PlanStageInputDto,
+    )
+
+    val routedLines = editor.lines.mapIndexed { index, line ->
         line.effectiveLineType()
         val routing = routingForLine(line)
             ?: throw IllegalArgumentException("Для каждой строки назначьте маршрут")
         if (!routing.isValidMaintenanceRouting()) {
             throw IllegalArgumentException("Для каждой строки назначьте корректный маршрут")
         }
-        groupsByRouting.getOrPut(routing.routingKey()) {
-            LineGroup(routing = routing, lines = mutableListOf())
-        }.lines += line
+        RoutedLine(line = line, routing = routing, index = index)
+    }
+    val groupsByKey = linkedMapOf<String, LineGroup>()
+    val groupKeyByWorkLineId = mutableMapOf<String, String>()
+
+    fun groupFor(key: String, routing: RoutingSnapshotDto): LineGroup =
+        groupsByKey.getOrPut(key) {
+            LineGroup(key = key, routing = routing)
+    }
+
+    routedLines.filter { routed -> routed.line.lineType == "WORK" }.forEach { routed ->
+        val key = "work:${routed.line.id}"
+        groupFor(key, routed.routing).lines += routed
+        groupKeyByWorkLineId[routed.line.id] = key
     }
 
     val previousWorkStages = editor.stages
         .filter { it.kind == "REPAIR_WORK" }
         .toMutableList()
-    val planned = groupsByRouting.values.map { group ->
-        val includedLineIds = group.lines.map(MaintenanceLineEditorState::id)
-        val primaryLineId = group.lines
-            .firstOrNull { line -> line.effectiveLineType() == "WORK" }
+
+    routedLines.filter { routed -> routed.line.lineType == "MATERIAL" }.forEach { material ->
+        val routeKey = material.routing.routingKey()
+        val groupFromExistingStage = editor.stages
+            .firstOrNull { stage ->
+                stage.kind == "REPAIR_WORK" && material.line.id in stage.includedLineIds
+            }
+            ?.primaryLineId
+            ?.let(groupKeyByWorkLineId::get)
+            ?.let(groupsByKey::get)
+            ?.takeIf { group -> group.routing.routingKey() == routeKey }
+        val groupsForRoute = groupsByKey.values.filter { group ->
+            group.routing.routingKey() == routeKey
+        }
+        val routeGroup = groupsByKey["route:$routeKey"]
+        val precedingWorkGroup = groupsForRoute
+            .asSequence()
+            .filter { group -> group.lines.any { it.line.lineType == "WORK" } }
+            .mapNotNull { group ->
+                group.lines
+                    .asSequence()
+                    .filter { line -> line.line.lineType == "WORK" && line.index < material.index }
+                    .maxByOrNull(RoutedLine::index)
+                    ?.let { precedingLine -> group to precedingLine.index }
+            }
+            .maxByOrNull { (_, lineIndex) -> lineIndex }
+            ?.first
+        val target = groupFromExistingStage
+            ?: routeGroup
+            ?: precedingWorkGroup
+            ?: groupsForRoute.singleOrNull()
+            ?: groupFor("route:$routeKey", material.routing)
+        target.lines += material
+    }
+
+    val planned = groupsByKey.values.mapIndexed { generatedOrder, group ->
+        val groupedLines = group.lines.sortedBy(RoutedLine::index)
+        val includedLineIds = groupedLines.map { routed -> routed.line.id }
+        val primaryLineId = groupedLines
+            .firstOrNull { routed -> routed.line.lineType == "WORK" }
+            ?.line
             ?.id
         val previousIndex = previousWorkStages.indexOfFirst { stage ->
-            (primaryLineId != null && stage.primaryLineId == primaryLineId) ||
-                (stage.primaryLineId == primaryLineId &&
-                    stage.includedLineIds == includedLineIds)
+            stage.routing.routingKey() == group.routing.routingKey() &&
+                if (primaryLineId != null) {
+                    stage.primaryLineId == primaryLineId
+                } else {
+                    stage.primaryLineId == null && stage.includedLineIds == includedLineIds
+                }
         }
         val previous = if (previousIndex >= 0) {
             previousWorkStages.removeAt(previousIndex)
         } else {
             null
         }
-        (previous?.originalOrder ?: Int.MAX_VALUE) to
-            PlanStageInputDto(
+        PlannedStage(
+            originalOrder = previous?.originalOrder ?: Int.MAX_VALUE,
+            generatedOrder = generatedOrder,
+            stage = PlanStageInputDto(
                 id = previous?.id ?: UUID.randomUUID().toString(),
                 kind = "REPAIR_WORK",
                 order = 0,
                 routing = group.routing,
                 includedLineIds = includedLineIds,
                 primaryLineId = primaryLineId,
-                groupComment = group.lines.commentsForMaintenanceStage()
+                groupComment = groupedLines
+                    .map(RoutedLine::line)
+                    .commentsForMaintenanceStage()
                     .ifBlank { previous?.groupComment.orEmpty() },
                 taskDeadline = previous?.taskDeadline,
-            )
-    }.toMutableList()
+            ),
+        )
+    }
 
     val orderedWorkStages = planned
-        .sortedBy { (originalOrder) -> originalOrder }
-        .map { (_, stage) -> stage }
-    val movementStages = editor.stages.filter { stage ->
-        stage.kind == "MOVE_TO_REPAIR" || stage.kind == "MOVE_FROM_REPAIR"
-    }
-    if (movementStages.isEmpty()) {
-        return orderedWorkStages.mapIndexed { index, stage -> stage.copy(order = index) }
-    }
-
-    val moveTo = movementStages.singleOrNull { stage -> stage.kind == "MOVE_TO_REPAIR" }
-        ?: throw IllegalArgumentException("План перемещения должен содержать один этап в ремонт")
-    val moveFrom = movementStages.singleOrNull { stage -> stage.kind == "MOVE_FROM_REPAIR" }
-        ?: throw IllegalArgumentException("План перемещения должен содержать один этап возврата")
-    if (!moveTo.routing.isValidMaintenanceRouting() || !moveFrom.routing.isValidMaintenanceRouting()) {
-        throw IllegalArgumentException("У сохранённого этапа перемещения отсутствует маршрут")
-    }
-    fun MaintenanceStageEditorState.toPlanInput(): PlanStageInputDto = PlanStageInputDto(
-        id = id,
-        kind = kind,
-        order = 0,
-        routing = routing,
-        includedLineIds = emptyList(),
-        primaryLineId = null,
-        groupComment = groupComment,
-        taskDeadline = taskDeadline,
-    )
-    return (listOf(moveTo.toPlanInput()) + orderedWorkStages + listOf(moveFrom.toPlanInput()))
-        .mapIndexed { index, stage -> stage.copy(order = index) }
+        .sortedWith(
+            compareBy<PlannedStage>(PlannedStage::originalOrder)
+                .thenBy(PlannedStage::generatedOrder),
+        )
+        .map(PlannedStage::stage)
+    return orderedWorkStages.mapIndexed { index, stage -> stage.copy(order = index) }
 }
 
 private fun MaintenanceLineEditorState.effectiveLineType(): String =
@@ -5901,6 +5981,12 @@ private fun mergeMaintenanceLineComments(existing: String, added: String): Strin
         .distinct()
         .joinToString("; ")
 
+private fun accumulatedMaintenanceQuantity(existing: String, added: String): String =
+    BigDecimal(existing)
+        .add(BigDecimal(added))
+        .stripTrailingZeros()
+        .toPlainString()
+
 private fun canonicalMaintenanceQuantity(value: String): String {
     val normalized = value.trim().replace(',', '.')
     if (!MAINTENANCE_QUANTITY_PATTERN.matches(normalized)) {
@@ -5925,7 +6011,6 @@ private fun canonicalMaintenanceMoney(value: String): String {
     return money.setScale(2, RoundingMode.UNNECESSARY).toPlainString()
 }
 
-private const val DEFAULT_MAINTENANCE_PRIORITY = 3
 private const val SERVER_CONNECTIVITY_CHECK_MILLIS = 30_000L
 private const val MAINTENANCE_AMENDMENT_REASON = "Изменение работ до начала ремонта"
 private val PRE_START_REPAIR_STATES = setOf("DRAFT", "QUEUED")

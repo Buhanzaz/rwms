@@ -75,13 +75,13 @@ import dev.buhanzaz.rwms.manager.ui.InventoryEditorState
 import dev.buhanzaz.rwms.manager.ui.InventoryFurnitureDisposition
 import dev.buhanzaz.rwms.manager.ui.InventorySemanticChange
 import dev.buhanzaz.rwms.manager.ui.ManagerUiState
-import dev.buhanzaz.rwms.manager.ui.hasRepairMovementStages
 import dev.buhanzaz.rwms.manager.ui.canCompleteInventory
 import dev.buhanzaz.rwms.manager.ui.inventoryBlockingCompletionRisks
 import dev.buhanzaz.rwms.manager.ui.inventoryBusinessStatus
 import dev.buhanzaz.rwms.manager.ui.inventoryBusinessStatusLabel
 import dev.buhanzaz.rwms.manager.ui.inventoryCategoryOptions
 import dev.buhanzaz.rwms.manager.ui.inventoryCharacteristicOptions
+import dev.buhanzaz.rwms.manager.ui.inventoryCharacteristicsDisplayValue
 import dev.buhanzaz.rwms.manager.ui.inventoryCompletionRiskCounts
 import dev.buhanzaz.rwms.manager.ui.inventoryCompletionRiskLabel
 import dev.buhanzaz.rwms.manager.ui.inventoryCreationValidationError
@@ -98,10 +98,8 @@ import dev.buhanzaz.rwms.manager.ui.inventoryRentalTypeOptions
 import dev.buhanzaz.rwms.manager.ui.inventorySemanticChanges
 import dev.buhanzaz.rwms.manager.ui.hasExactInventoryRentalItemNumber
 import dev.buhanzaz.rwms.manager.ui.withInventoryRentalType
-import dev.buhanzaz.rwms.manager.ui.maintenanceMovementRoutingProblem
-import dev.buhanzaz.rwms.manager.ui.singleMaintenanceMovementRouting
+import dev.buhanzaz.rwms.manager.ui.logisticsPlanningValidationError
 import dev.buhanzaz.rwms.manager.ui.toMaintenancePlanEditor
-import dev.buhanzaz.rwms.manager.ui.withRepairMovementStages
 import dev.buhanzaz.rwms.manager.ui.components.EmptyState
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPanel
 import dev.buhanzaz.rwms.manager.ui.components.ManagerPhotoPreview
@@ -1622,7 +1620,7 @@ private fun InventoryCharacteristicsSelector(
         modifier = Modifier.fillMaxWidth(),
     ) {
         OutlinedTextField(
-            value = editor.characteristics.joinToString(),
+            value = inventoryCharacteristicsDisplayValue(editor.characteristics),
             onValueChange = {},
             modifier = Modifier
                 .fillMaxWidth()
@@ -2118,8 +2116,7 @@ fun InventoryCatalogScreen(
     editor: InventoryEditorState?,
     uiState: ManagerUiState,
     onBack: () -> Unit,
-    onToggleCatalogNode: (CatalogNodeDto) -> Unit,
-    onAddCatalogNodes: (List<CatalogNodeDto>, String, String) -> Unit,
+    onAddCatalogNodes: (List<CatalogNodeDto>, String, String, String?) -> Boolean,
     onRefreshCatalog: () -> Unit,
     onEditPlan: ((dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState) ->
         dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState) -> Unit,
@@ -2139,7 +2136,6 @@ fun InventoryCatalogScreen(
         MaintenanceCatalogStep(
             editor = editor.toMaintenancePlanEditor(),
             uiState = uiState,
-            onToggleCatalogNode = onToggleCatalogNode,
             onAddCatalogNodes = onAddCatalogNodes,
             onRefreshCatalog = onRefreshCatalog,
             onEdit = onEditPlan,
@@ -2152,7 +2148,6 @@ fun InventoryCatalogScreen(
 @Composable
 fun InventoryConfirmationScreen(
     editor: InventoryEditorState?,
-    uiState: ManagerUiState,
     busy: Boolean,
     onBack: () -> Unit,
     onEditPlan: ((dev.buhanzaz.rwms.manager.ui.MaintenanceEditorState) ->
@@ -2169,29 +2164,27 @@ fun InventoryConfirmationScreen(
         }
         return
     }
-    val pendingFurnitureMove = editor.pendingFurnitureMoveToStock
     val maintenancePlan = editor.toMaintenancePlanEditor()
-    val movementRouting = uiState.repairTaskBoards.singleMaintenanceMovementRouting()
-    val movementRoutingProblem = uiState.repairTaskBoards.maintenanceMovementRoutingProblem()
-    val movementSelected = maintenancePlan.hasRepairMovementStages()
-    val validationError = if (pendingFurnitureMove == null) {
-        val creationError = editor.inventoryCreationValidationError(
-            hasCreationPhoto = editor.photoUris.isNotEmpty(),
-            hasCoverPhoto = editor.coverPhotoUri in editor.photoUris,
-        )
-        val photoError = editor.inventoryPhotoValidationError()
-        val furnitureError = editor.inventoryEquipmentObservationValidationError()
-        val planError = when {
-            editor.planLines.isEmpty() -> null
-            !maintenanceCanAdvance(maintenancePlan, step = 3) ->
-                "Проверьте количество, цену и маршрут работ и материалов"
-            editor.planPriority !in 1..5 -> "Выберите приоритет ремонта от 1 до 5"
-            else -> null
+    val creationError = editor.inventoryCreationValidationError(
+        hasCreationPhoto = editor.photoUris.isNotEmpty(),
+        hasCoverPhoto = editor.coverPhotoUri in editor.photoUris,
+    )
+    val photoError = editor.inventoryPhotoValidationError()
+    val furnitureError = editor.inventoryEquipmentObservationValidationError()
+    val planError = when {
+        editor.planLines.isEmpty() -> null
+        !maintenanceCanAdvance(maintenancePlan, step = 3) ->
+            "Проверьте количество, цену и маршрут работ и материалов"
+        editor.planPriority !in 1..5 -> if (maintenancePlan.movementToRepair) {
+            "Выберите приоритет перемещения от 1 до 5"
+        } else {
+            "Выберите приоритет ремонта от 1 до 5"
         }
-        photoError ?: furnitureError ?: creationError ?: planError
-    } else {
-        null
+        maintenancePlan.logisticsPlanningValidationError() != null ->
+            requireNotNull(maintenancePlan.logisticsPlanningValidationError())
+        else -> null
     }
+    val validationError = photoError ?: furnitureError ?: creationError ?: planError
     ManagerScreenScaffold(title = "Подтверждение проверки", onBack = onBack) { padding ->
         Column(
             modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp),
@@ -2206,30 +2199,43 @@ fun InventoryConfirmationScreen(
                 Text(
                     "Материалы: ${editor.planLines.count { it.lineType == "MATERIAL" }} единиц",
                 )
-                if (pendingFurnitureMove != null) {
-                    Text(
-                        "Проверка уже сохранена. Осталось создать задание по комплектации мебели.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    Text(
-                        when (editor.equipmentObservationRequested) {
-                            true -> when (editor.furnitureDisposition) {
-                                InventoryFurnitureDisposition.KEEP_IN_CABIN ->
-                                    "После сохранения будет создано задание по комплектации мебели"
-                                InventoryFurnitureDisposition.MOVE_TO_STOCK ->
-                                    "После сохранения будет создано задание перемещения мебели на склад"
-                            }
-                            false -> "Мебель не проверялась"
-                            null -> "Не выбран вариант мебели"
-                        },
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                Text(
+                    when (editor.equipmentObservationRequested) {
+                        true -> when (editor.furnitureDisposition) {
+                            InventoryFurnitureDisposition.KEEP_IN_CABIN ->
+                                "После сохранения будет создано задание по комплектации мебели"
+                            InventoryFurnitureDisposition.MOVE_TO_STOCK ->
+                                "После сохранения будет создано задание перемещения мебели на склад"
+                        }
+                        false -> "Мебель не проверялась"
+                        null -> "Не выбран вариант мебели"
+                    },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             if (editor.planLines.isNotEmpty()) {
                 ManagerPanel {
-                    Text("Приоритет", style = MaterialTheme.typography.titleMedium)
+                    RepairMovementLogisticsOptions(
+                        editor = maintenancePlan,
+                        enabled = !busy,
+                        onEdit = onEditPlan,
+                    )
+                    Text(
+                        if (maintenancePlan.movementToRepair) {
+                            "Приоритет перемещения"
+                        } else {
+                            "Приоритет ремонта"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    if (maintenancePlan.movementToRepair) {
+                        Text(
+                            "После доставки ремонт появится в очереди работ с системным " +
+                                "приоритетом 1.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Row(
                         modifier = Modifier.horizontalScroll(
                             androidx.compose.foundation.rememberScrollState(),
@@ -2249,35 +2255,6 @@ fun InventoryConfirmationScreen(
                             )
                         }
                     }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Checkbox(
-                            checked = movementSelected,
-                            onCheckedChange = { checked ->
-                                onEditPlan { current ->
-                                    current.withRepairMovementStages(
-                                        checked,
-                                        movementRouting,
-                                    )
-                                }
-                            },
-                            enabled = !busy &&
-                                (movementSelected || movementRouting != null),
-                        )
-                        Text(
-                            "Создать перемещение на ремонт и возврат",
-                            modifier = Modifier.padding(start = 4.dp),
-                        )
-                    }
-                    movementRoutingProblem?.let { problem ->
-                        Text(
-                            problem,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
                 }
             }
             validationError?.let { error ->
@@ -2288,15 +2265,7 @@ fun InventoryConfirmationScreen(
                 enabled = validationError == null && !busy,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(
-                    if (pendingFurnitureMove != null) {
-                        "Повторить создание задания"
-                    } else if (editor.isCreation) {
-                        "Подтвердить добавление"
-                    } else {
-                        "Подтвердить проверку"
-                    },
-                )
+                Text(if (editor.isCreation) "Подтвердить добавление" else "Подтвердить проверку")
             }
         }
     }
